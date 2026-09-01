@@ -1,0 +1,1829 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hivemind</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="logo">HIVE<span>MIND</span></div>
+  <span id="h-author" title="by Luzo">by Luzo</span>
+  <div id="h-dot" title="Connection status"></div>
+  <div class="h-sep"></div>
+  <div id="h-mode">auto</div>
+  <div id="h-tools"></div>
+  <div id="h-complexity"></div>
+  <div id="h-tasktype"></div>
+  <div id="h-iters" style="display:none"><span class="iters-lbl">ITER</span><span id="h-iters-val">2</span></div>
+  <div id="h-elapsed"><span class="elapsed-lbl">⏱</span><span id="h-elapsed-val">0s</span></div>
+  <div id="h-phases"></div>
+  <div class="h-sep"></div>
+  <div id="h-agentmap"></div>
+  <div class="h-sep"></div>
+  <span id="h-preset-label">no preset</span>
+  <div class="h-sep"></div>
+  <button id="skip-btn" class="hbtn" onclick="skipCurrentStep()" title="Skip current phase (Planner/Coder/Critic/Test — does not abort the whole run)" style="display:none">⏭ Skip</button>
+  <button id="h-sidebar-btn" class="hbtn active" onclick="toggleSidebar()" title="Toggle sidebar">&#9776; Panel</button>
+  <button id="h-code-btn" onclick="toggleCodePanel()" title="Toggle live code panel">⌨ Code</button>
+  <button class="hbtn ml" onclick="newChat()">+ New Chat</button>
+</header>
+<div class="chat-col">
+  <div id="perf-bar" style="display:none"></div>
+<div id="chat"></div>
+<div id="perf-bar-bottom"></div>
+<div id="input-wrap">
+    <div id="composer-tool-status" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 4px 4px;color:var(--tx3);cursor:pointer;user-select:none;line-height:1.4" onclick="openChatToolsSection()" title="Tool status of the current mode — click to open the Chat Tools section"></div>
+    <div id="img-preview"></div>
+    <div id="input-row">
+      <button class="ibtn" onclick="document.getElementById('file-in').click()" title="Image">&#128444;</button>
+      <input type="file" id="file-in" accept="image/*" multiple style="display:none" onchange="handleImgs(this)">
+      <textarea id="input" placeholder="Message..." rows="1"></textarea>
+      <button id="pause-btn" onclick="handlePauseClick()" title="Pause"></button>
+      <button id="stop-btn" onclick="handleStopClick()" title="Abort run">&#9632;</button>
+      <button id="send" onclick="sendMsg()">&#8593;</button>
+    </div>
+  </div>
+</div>
+<div id="code-panel">
+  <div id="code-panel-hdr">
+    <div id="code-panel-empty" style="padding:10px 16px;flex-direction:row;height:auto;justify-content:flex-start">
+      <span>⌨</span><span>Waiting for coder output…</span>
+    </div>
+    <button id="code-panel-close" onclick="toggleCodePanel()" title="Close panel">×</button>
+  </div>
+  <div id="code-panel-body"></div>
+</div>
+<div id="sidebar">
+  <div class="tabs">
+    <button class="tab on" data-p="agents">Agents</button>
+    <button class="tab" data-p="presets">Presets</button>
+    <button class="tab" data-p="configs">Configs</button>
+    <button class="tab" data-p="memory">Memory</button>
+    <button class="tab" data-p="soul" style="color:var(--purple)">Soul</button>
+    <button class="tab" data-p="models" style="color:#3a9960">Models</button>
+    <button class="tab" data-p="chats" style="color:var(--green)">Chats</button>
+    <button id="sb-close-btn" onclick="toggleSidebar()" title="Collapse sidebar">&#171;</button>
+  </div>
+  <!-- AGENTS -->
+  <div class="panel on" id="p-agents">
+    <div class="sec">Mode</div>
+    <div class="mode-btns" id="mode-btns-row">
+      <div class="mbtn on" data-mode="auto" onclick="setMode('auto',this)" title="Auto — judge routes by complexity; tool requests run in the Direct chat loop (when Chat Tools on)">Auto</div>
+      <div class="mbtn" data-mode="simple" onclick="setMode('simple',this)" title="Chat (Direct) — fast single-model chat. Chat Tools (read/python/web) available when enabled">Chat</div>
+      <div class="mbtn" data-mode="pipeline" onclick="setMode('pipeline',this)" title="Pipeline — Analyst → Refiner → Critic → Synthesizer (multi-agent)">Pipeline</div>
+      <div class="mbtn" data-mode="automap" onclick="setMode('automap',this)" style="color:var(--blue);border-color:rgba(72,120,192,.4)" title="AutoMap — judge picks a model per task type">AutoMap</div>
+      <div class="mbtn" data-mode="code_duo" onclick="setMode('code_duo',this)" style="color:#20b0a0;border-color:rgba(32,176,160,.35)" title="Code-Duo — iterative coder+critic loop, 2 models in parallel in VRAM">&#8644; Code-Duo</div>
+    </div>
+    <div id="mode-desc" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin:-4px 0 9px;line-height:1.5"></div>
+
+    <!-- Chat Tools (Direct/Auto) — only visible in simple/auto (2026-09-01).
+         Works in auto/simple; in Code-Duo/Pipeline/Map the respective
+         agent tools apply instead of this direct-chat loop, hence hidden there. -->
+    <div id="chat-tools-section">
+    <div class="sec" style="margin-top:4px">Chat Tools <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx3);font-weight:400;text-transform:none;letter-spacing:0">(Direct / Auto)</span></div>
+    <div class="cfl-row" style="margin-bottom:8px">
+      <span class="cfl-label" style="flex:1">&#x1F527; Chat Tools enabled</span>
+      <label class="cfl-sw" style="margin:0">
+        <input type="checkbox" id="direct-tools-toggle"
+          onchange="S.directToolsEnabled=this.checked;postSettings({direct_tools_enabled:S.directToolsEnabled});updateDirectToolsHint();updateChatToolsBadge();updateComposerToolStatus()">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div id="direct-tools-opts" style="display:none;padding:0 2px 10px">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:4px">Tool tier</div>
+      <div class="segmented-control" style="align-self:stretch">
+        <input type="radio" name="direct_tools_tier" id="dt-tier-off" value="off" onchange="setDirectToolsTier(this.value)">
+        <label for="dt-tier-off" title="Pure chat — no tools">Off</label>
+        <input type="radio" name="direct_tools_tier" id="dt-tier-readonly" value="readonly" onchange="setDirectToolsTier(this.value)">
+        <label for="dt-tier-readonly" title="Read + web search">Read</label>
+        <input type="radio" name="direct_tools_tier" id="dt-tier-python" value="python" onchange="setDirectToolsTier(this.value)">
+        <label for="dt-tier-python" title="Read + run_python">Python</label>
+        <input type="radio" name="direct_tools_tier" id="dt-tier-full" value="full" onchange="setDirectToolsTier(this.value)">
+        <label for="dt-tier-full" title="Read/Write/Exec (edit_file, run_bash)">Full</label>
+      </div>
+      <div id="direct-tools-tier-hint" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx3);margin-top:6px;line-height:1.5"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);white-space:nowrap">Rounds</span>
+        <input type="range" id="direct-tools-rounds" min="1" max="300" step="1" value="12"
+          style="flex:1;accent-color:#60a0e0"
+          oninput="document.getElementById('direct-tools-rounds-v').textContent=this.value"
+          onchange="S.directToolsRounds=parseInt(this.value);postSettings({direct_tools_max_rounds:S.directToolsRounds});updateComposerToolStatus()">
+        <span id="direct-tools-rounds-v" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#60a0e0;min-width:14px;text-align:right">12</span>
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-top:6px;line-height:1.5">
+        Tool calls in chat use file/code read, web search and optional Python.<br>
+        Coding requests with edit_file/run_bash need the <b>"Full" tier</b>.<br>
+        Pure knowledge questions are answered directly (no tool round).
+      </div>
+    </div>
+    </div>
+
+    <div id="automap-adv-panel" class="automap-adv" style="display:none">
+      <div class="automap-adv-hdr">
+        <span class="automap-adv-title">AutoMap Advanced</span>
+        <span class="automap-adv-badge" id="automap-adv-mode-badge">Map-only</span>
+      </div>
+
+      <div class="automap-adv-row">
+        <div class="automap-adv-left">
+          <span class="automap-adv-name">Code tasks -> Duo</span>
+          <span class="automap-adv-desc">AutoMap routes task-type code into the Duo loop instead of the pipeline.</span>
+        </div>
+        <label class="cfl-sw" style="margin:0">
+          <input type="checkbox" id="automap-code-duo-toggle" onchange="setAutomapCodeDuo(this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+
+      <div id="automap-duo-sub" class="automap-adv-sub disabled">
+        <div class="automap-adv-row">
+          <div class="automap-adv-left">
+            <span class="automap-adv-name">Pre-Explore</span>
+            <span class="automap-adv-desc">Explorer pass before the first coder pass.</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="automap-duo-preexplore-toggle" onchange="setAutomapDuoPreExplore(this.checked)">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div class="automap-adv-row">
+          <div class="automap-adv-left">
+            <span class="automap-adv-name">Parallel Worker</span>
+            <span class="automap-adv-desc">Partitions pre-explore across multiple worker slots.</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="automap-duo-parallel-toggle" onchange="setAutomapDuoParallel(this.checked)">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+      </div>
+
+      <div class="automap-adv-row">
+        <div class="automap-adv-left">
+          <span class="automap-adv-name">Websearch in Direct/Pipeline</span>
+          <span class="automap-adv-desc">Active only in AutoMap mode (simple + complex path).</span>
+        </div>
+        <label class="cfl-sw" style="margin:0">
+          <input type="checkbox" id="automap-pipeline-websearch-toggle" onchange="setAutomapPipelineWebsearch(this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+
+      <div id="automap-websearch-hint" class="automap-adv-note" style="display:none">
+        SearXNG must be reachable. <span class="automap-adv-note-link" onclick="checkWebsearchStatus()">Check status</span>
+        <span id="automap-ws-status-dot"></span>
+      </div>
+    </div>
+
+    <!-- Duo Optionen — nur wenn code_duo aktiv -->
+    <div class="duo-row" id="duo-pair-row" style="flex-direction:column;align-items:stretch;gap:5px">
+      <!-- Planner Model -->
+      <div style="display:flex;align-items:center;gap:7px">
+        <span class="duo-row-lbl" style="min-width:58px;flex-shrink:0;color:#9a74dc">🧠 Planner</span>
+        <select id="duo-planner-model-sel" onchange="onDuoPlannerModelChange(this.value)" title="Model for the planner"
+          style="flex:1;background:#10131a;border:1px solid rgba(136,88,192,.4);border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4">
+          <option value="">– no planner –</option>
+        </select>
+      </div>
+      <!-- Coder Model -->
+      <div style="display:flex;align-items:center;gap:7px">
+        <span class="duo-row-lbl" style="min-width:58px;flex-shrink:0;color:#20b0a0">⚙ Coder</span>
+        <select id="duo-coder-model-sel" onchange="onDuoCoderModelChange(this.value)" title="Model for the coder"
+          style="flex:1;background:#10131a;border:1px solid rgba(32,176,160,.4);border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4">
+          <option value="">– choose model –</option>
+        </select>
+      </div>
+      <div id="duo-pair-hint" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:2px 0 0;line-height:1.45"></div>
+    </div>
+    <!-- Duo Modus Accordion -->
+<div id="duo-mode-accordion" style="display:none;background:#0a1a14;border:1px solid rgba(32,176,160,.25);border-radius:7px;margin-top:6px;overflow:hidden">
+  <div onclick="toggleDuoModeAccordion()" style="display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;user-select:none">
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:#20b0a0">Code</span>
+    <span id="duo-mode-badge" style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid rgba(32,176,160,.4);color:#20b0a0;background:rgba(32,176,160,.07)">CRITIC</span>
+    <span id="duo-mode-chevron" style="margin-left:auto;font-size:10px;color:#7a8fa8;transition:transform .2s">&#9660;</span>
+  </div>
+  <div id="duo-mode-body" style="display:none;padding:0 12px 12px;border-top:1px solid rgba(32,176,160,.15)">
+
+    <!-- Modus-Auswahl -->
+    <div style="display:flex;gap:4px;margin:10px 0 8px">
+      <button id="dmo-critic-btn" class="ghost" style="flex:1;font-size:10px;border-color:rgba(32,176,160,.6);color:#20b0a0" onclick="setDuoSubMode('critic')">&#8644; Critic-Duo</button>
+      <button id="dmo-agent-btn" class="ghost" style="flex:1;font-size:10px" onclick="setDuoSubMode('agentic')">&#9889; Agentic</button>
+    </div>
+    <div id="duo-mode-desc" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx3);line-height:1.5;margin-bottom:10px">
+      Coder writes → Critic reviews → Coder fixes. Tool calls optional.
+    </div>
+
+    <!-- Critic-Duo Optionen -->
+    <div id="dmo-critic-opts">
+
+      <!-- ── Coder ────────────────────────────────── -->
+      <div class="opt-group">
+        <div class="opt-group-label">Coder</div>
+
+        <div class="opt-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Tool rounds</span>
+            <span class="opt-hint">Coder may use tools (0 = off)</span>
+          </div>
+          <select id="duo-tool-rounds-sel" onchange="S.duoToolRounds=parseInt(this.value);postSettings({duo_tool_rounds:S.duoToolRounds});updateAgenticHint()"
+            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:64px;flex-shrink:0">
+            <option value="0">Off</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
+        </div>
+
+        <div class="opt-row" style="margin-top:4px">
+          <div class="opt-row-left">
+            <span class="opt-name">Pipeline after</span>
+            <span class="opt-hint">Full pipeline as final quality stage</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-pipeline-toggle" onchange="S.duoUsePipeline=this.checked;postSettings({duo_use_pipeline:S.duoUsePipeline})">
+            <span class="sl"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- ── Critic ────────────────────────────────── -->
+      <div class="opt-group" style="margin-top:8px">
+        <div class="opt-group-label">Critic</div>
+
+        <div class="opt-row" id="duo-critic-tools-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Tool access</span>
+            <span class="opt-hint">Critic reads files &amp;amp; runs tests</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-critic-tools-toggle"
+              onchange="S.duoCriticTools=this.checked;postSettings({duo_critic_tools:S.duoCriticTools});updateCriticToolsHint()">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div id="duo-critic-tools-hint" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;padding:4px 4px 2px;line-height:1.5">
+          ⚠ Requires a model with tool-call support.<br>Max 3 rounds · read_file, list_dir, find_files, search_code, run_bash
+          <br><span style="color:#5a6a7a">The critic deliberately does NOT get web_search - only coder/planner have it (toggle below).</span>
+        </div>
+      </div>
+
+    </div>
+
+
+    <!-- Agentic Optionen -->
+    <div id="dmo-agent-opts" style="display:none;min-width:0;width:100%;box-sizing:border-box">
+
+      <!-- ── Execution ────────────────────────────── -->
+      <div class="opt-group">
+        <div class="opt-group-label">Execution</div>
+
+        <div class="opt-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Pre-Explore</span>
+            <span class="opt-hint">Read the codebase before implementing</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-preexplore-toggle" onchange="S.duoPreExplore=this.checked;postSettings({duo_pre_explore:S.duoPreExplore});updatePreExploreAdv();updateParallelPreexploreWrap();updateAgenticCombinedWarn()">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div class="opt-sub">
+          <div class="opt-row">
+            <div class="opt-row-left">
+              <span class="opt-name">Workspace</span>
+              <span class="opt-hint">Repo path for new chats (empty = batch/env; saved chats keep theirs)</span>
+            </div>
+            <input type="text" id="workspace-input" placeholder="C:\path\to\project"
+                   style="flex:1;min-width:180px;max-width:280px;font-size:11px;padding:3px 6px;background:#1a1f2a;color:#dde4ee;border:1px solid #2c3444;border-radius:4px"
+                   onchange="S.workspace=this.value.trim();commitWorkspaceInput()">
+          </div>
+          <div class="opt-row">
+            <div class="opt-row-left">
+              <span class="opt-name">&#128205; Force UI Workspace</span>
+              <span class="opt-hint">Pinned: the path above applies to ALL runs &mdash; paths in the prompt are ignored. Off = prompt may steer (task path &gt; chat &gt; this field).</span>
+            </div>
+            <input type="checkbox" id="ws-force-toggle"
+                   onchange="S.wsForceUi=this.checked;postSettings({workspace_force_ui:this.checked})">
+          </div>
+        </div>
+
+        <div id="duo-pass-files-wrap" style="display:none" class="opt-sub">
+          <div class="opt-row">
+            <div class="opt-row-left">
+              <span class="opt-name">↳ Files to coder</span>
+              <span class="opt-hint">Pass pre-explore file contents to the coder</span>
+            </div>
+            <div style="display:flex;gap:3px">
+              <button id="dpf-all" class="ghost" style="flex:1;font-size:10px" onclick="setPassFiles('all')">all</button>
+              <button id="dpf-touched" class="ghost" style="flex:1;font-size:10px" onclick="setPassFiles('touched')">important</button>
+              <button id="dpf-none" class="ghost" style="flex:1;font-size:10px" onclick="setPassFiles('none')">none</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="duo-parallel-preexplore-wrap" style="display:none" class="opt-sub">
+          <div class="opt-row">
+            <div class="opt-row-left">
+              <span class="opt-name">↳ Parallel</span>
+              <span class="opt-hint">Split the workspace into partitions</span>
+            </div>
+            <label class="cfl-sw" style="margin:0">
+              <input type="checkbox" id="duo-parallel-preexplore-toggle" onchange="setDuoParallelPreexplore(this.checked)">
+              <span class="sl"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="opt-row" style="margin-top:4px">
+          <div class="opt-row-left">
+            <span class="opt-name" id="planner-opt-name">Planner</span>
+            <span class="opt-hint">Analyzes the task before the coder</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-planner-toggle"
+              onchange="S.duoPlannerEnabled=this.checked;postSettings({duo_planner_enabled:S.duoPlannerEnabled});updatePlannerHint()">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div class="opt-row" style="margin-top:4px" id="duo-chunking-row">
+          <div class="opt-row-left">
+            <span class="opt-name">↳ Chunking</span>
+            <span class="opt-hint">Planner creates N subtasks instead of one briefing</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-chunking-toggle"
+              onchange="S.duoChunking=this.checked;postSettings({duo_chunking:S.duoChunking});onChunkingChange();updateAgenticCombinedWarn()">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div class="opt-row" style="margin-top:2px;padding-left:10px;border-left:2px solid rgba(58,153,96,.25);display:none" id="duo-test-feedback-chunk-row">
+          <div class="opt-row-left">
+            <span class="opt-name">↳ Tests per chunk</span>
+            <span class="opt-hint">Auto-test after each chunk, re-inject failures</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-test-feedback-chunk-toggle"
+              onchange="S.duoTestFeedbackChunk=this.checked;postSettings({duo_test_feedback_chunk:S.duoTestFeedbackChunk})">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div class="opt-row" style="margin-top:4px">
+          <div class="opt-row-left">
+            <span class="opt-name">🔁 Until Finished</span>
+            <span class="opt-hint">Runs until tests pass &mdash; unlimited budget</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-until-finished-toggle" onchange="S.duoUntilFinished=this.checked;postSettings({until_finished:S.duoUntilFinished,duo_until_finished_cap:S.duoUntilFinished?999999:300});updateCtxScopeHint()">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div class="opt-row" style="margin-top:2px" id="duo-test-feedback-final-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Final test</span>
+            <span class="opt-hint">Verify all changes after the run</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-test-feedback-final-toggle"
+              onchange="S.duoTestFeedbackFinal=this.checked;postSettings({duo_test_feedback_final:S.duoTestFeedbackFinal})">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+      </div>
+
+      <!-- ── Thinking ──────────────────────────────── -->
+      <div class="opt-group" style="margin-top:8px">
+        <div class="opt-group-label">🧠 Thinking</div>
+
+        <div class="opt-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Planner Thinking</span>
+            <span class="opt-hint">Planner thinks through the task before output</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-agentic-thinking-toggle"
+              onchange="S.duoAgenticThinking=this.checked;postSettings({duo_agentic_thinking:S.duoAgenticThinking});updateAgenticCombinedWarn()">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div class="opt-row" style="margin-top:4px">
+          <div class="opt-row-left">
+            <span class="opt-name">Planner Max Tokens</span>
+            <span class="opt-hint">Output budget incl. thinking · 0 = context as limit</span>
+          </div>
+          <input type="number" id="duo-planner-maxtokens-inp" min="0" step="500" value="8000"
+            style="width:90px;background:var(--bg);border:1px solid var(--b2);border-radius:3px;padding:3px 6px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px"
+            onchange="S.duoPlannerMaxTokens=parseInt(this.value)||0;postSettings({duo_planner_max_tokens:S.duoPlannerMaxTokens})">
+        </div>
+
+        <div class="opt-row" style="margin-top:4px" id="duo-thinking-per-chunk-wrap">
+          <div class="opt-row-left">
+            <span class="opt-name" id="tpc-label" style="opacity:.4">Per Chunk</span>
+            <span class="opt-hint" id="tpc-hint" style="opacity:.4">Think before each subtask — requires chunking</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-thinking-per-chunk-toggle" disabled onchange="S.duoThinkingPerChunk=this.checked;postSettings({duo_thinking_per_chunk:S.duoThinkingPerChunk})">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div style="margin-top:4px" id="duo-coder-tool-thinking-wrap">
+          <div class="opt-row">
+            <div class="opt-row-left">
+              <span class="opt-name">Thinking with tool use</span>
+              <span class="opt-hint">Always think on tool calls</span>
+            </div>
+            <label class="cfl-sw" style="margin:0">
+              <input type="checkbox" id="duo-tool-thinking-toggle"
+                onchange="S.duoToolThinkingAlways=this.checked;postSettings({duo_coder_tool_thinking:S.duoToolThinkingAlways,duo_coder_tool_thinking_auto_mode:S.duoToolThinkingAlways?'always':S.duoToolThinkingMode})">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <div id="duo-tool-thinking-mode-wrap" style="margin-top:4px">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);flex:1">Escalation</span>
+            </div>
+            <div class="segmented-control" style="align-self:stretch">
+              <input type="radio" name="tt_mode" id="ttm_off" value="off" onchange="onDuoToolThinkingModeChange(this.value)">
+              <label for="ttm_off">off</label>
+              <input type="radio" name="tt_mode" id="ttm_on_fail" value="on_fail" onchange="onDuoToolThinkingModeChange(this.value)">
+              <label for="ttm_on_fail">on fail</label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ──── Subagent (2026-08-24) ──── -->
+      <div class="opt-group" style="margin-top:8px">
+        <div class="opt-group-label">Subagent</div>
+
+        <div class="opt-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Research subagent</span>
+            <span class="opt-hint">Delegate multi-file research to a small model &mdash; own short-lived context, read-only, &le;700 token summary. Off = tool invisible to the coder.</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="subagent-lite-toggle" onchange="S.subagentLite=this.checked;postSettings({subagent_lite_enabled:S.subagentLite});syncSubagentUI()">
+            <span class="sl"></span>
+          </label>
+        </div>
+
+        <div id="subagent-lite-body" style="margin-top:6px">
+          <div class="opt-row" style="margin-bottom:2px">
+            <div class="opt-row-left">
+              <span class="opt-hint">Model ladder &mdash; rank 1 = default; any indexed model (needs native tool-calls), comma separated</span>
+            </div>
+          </div>
+          <input class="sinput" type="text" id="subagent-ladder-inp"
+            placeholder="lfm2.5:2.6b, qwen3.5:0.8b-ud"
+            style="margin-bottom:6px;height:28px;font-size:10px"
+            onchange="postSettings({subagent_lite_model_ladder:this.value.split(',').map(s=>s.trim()).filter(Boolean)})">
+          <div class="opt-row">
+            <div class="opt-row-left">
+              <span class="opt-hint">Context size</span>
+            </div>
+            <input type="number" id="subagent-ctx-inp" min="2048" step="1024" value="8192"
+              style="width:70px;background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4"
+              onchange="postSettings({subagent_lite_ctx_default:parseInt(this.value)||8192})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;padding:4px 4px 0;line-height:1.5">
+            RAM/VRAM gate before every call: no ladder model fits &rarr; soft inline fallback (no hard-fail).
+            Delegate reads do NOT pollute coder context (own guard sets).
+          </div>
+        </div>
+      </div>
+
+      <!-- ──── Tool Sandbox (2026-08-24) ──── -->
+      <div class="opt-group" style="margin-top:8px">
+        <div class="opt-group-label">Tool Sandbox</div>
+        <div class="opt-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Sandbox tool spawns</span>
+            <span class="opt-hint">run_bash/run_python/background run inside Windows Job Objects (KILL_ON_JOB_CLOSE) &mdash; no orphan processes on timeout. Off = plain spawn.</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="tool-sandbox-toggle" onchange="S.duoToolSandbox=this.checked;postSettings({duo_tool_sandbox:S.duoToolSandbox})">
+            <span class="sl"></span>
+          </label>
+        </div>
+      </div>
+
+      <div id="duo-all3-warn" class="ui-hint warn" style="display:none;margin-top:6px">
+        <b>Slowest mode active:</b> Pre-Explore + Chunking + Per-Chunk-Thinking run in parallel — expect high latency.
+      </div>
+      <div id="duo-agentic-hint" class="ui-hint" style="display:none;margin-top:6px"></div>
+    </div>
+
+    <!-- Gemeinsame Optionen -->
+    <div style="border-top:1px solid rgba(32,176,160,.1);padding-top:8px;margin-top:2px">
+
+      <!-- Preset-Routing / Override -->
+      <div class="opt-row" style="margin-top:6px">
+        <div class="opt-row-left">
+          <span class="opt-name">&#128260; Use Presets</span>
+          <span class="opt-hint">Preset picks model family + ctx/timeout/review</span>
+        </div>
+        <label class="cfl-sw" style="margin:0">
+          <input type="checkbox" id="duo-use-presets-toggle" onchange="toggleDuoPresetsUI(this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div id="duo-presets-panel" style="display:none;padding:0 4px 8px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);white-space:nowrap">Runtime profile</span>
+          <select id="duo-runtime-profile" onchange="onDuoRuntimeProfileChange(this.value)"
+            style="flex:1;background:#10131a;border:1px solid rgba(136,88,192,.4);border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4">
+            <option value="auto">auto</option>
+            <option value="fast">fast</option>
+            <option value="balanced">balanced</option>
+            <option value="critical">critical</option>
+          </select>
+        </div>
+        <div class="opt-row" style="margin-top:2px">
+          <div class="opt-row-left">
+            <span class="opt-name">Lock profile</span>
+            <span class="opt-hint">Profile stays fixed — no auto-escalation</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-runtime-profile-lock-override" onchange="onDuoRuntimeProfileLockOverrideChange(this.checked)">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div class="opt-row" style="margin-top:2px">
+          <div class="opt-row-left">
+            <span class="opt-name">Preset models</span>
+            <span class="opt-hint">Preset model replaces the dropdown model</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-use-preset-models-toggle" onchange="onDuoUsePresetModelsChange(this.checked)">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div id="duo-runtime-profile-hint" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:4px 4px 0;line-height:1.5"></div>
+      </div>
+
+      <div class="opt-row" style="margin-top:6px">
+        <div class="opt-row-left">
+          <span class="opt-name">&#x1F50D; Websearch</span>
+          <span class="opt-hint">Coder + planner can call web_search</span>
+        </div>
+        <label class="cfl-sw" style="margin:0">
+          <input type="checkbox" id="duo-websearch-toggle"
+            onchange="S.duoWebsearch=this.checked;postSettings({duo_websearch_enabled:S.duoWebsearch});updateWebsearchHint()">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div id="duo-websearch-hint" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:0 4px 6px;line-height:1.5">
+        &#x26A0; SearXNG (<span id="ws-searxng-host" style="color:var(--amber)">localhost:8888</span>) must be running.
+        <span style="cursor:pointer;color:var(--blue);text-decoration:underline" onclick="checkWebsearchStatus()">Check status</span>
+        <span id="ws-status-dot"></span>
+      </div>
+      <div id="ws-timeout-opts" style="display:none;padding:0 4px 8px">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:4px">Websearch Timeout <span id="ws-timeout-v" style="color:#60a0e0">20</span>s</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#5a6a7a">5s</span>
+          <input type="range" id="ws-timeout-slider" min="5" max="60" step="1" value="20"
+            style="flex:1;accent-color:#60a0e0"
+            oninput="document.getElementById('ws-timeout-v').textContent=this.value"
+            onchange="postSettings({duo_websearch_timeout_seconds:parseFloat(this.value)})">
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#5a6a7a">60s</span>
+        </div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-top:6px;margin-bottom:2px">SearXNG Host</div>
+        <input type="text" id="searxng-host-inp" placeholder="http://localhost:8888"
+          style="width:100%;background:var(--bg);border:1px solid var(--b2);border-radius:3px;padding:3px 6px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px"
+          onchange="postSettings({searxng_host:this.value})">
+      </div>
+
+      <!-- Direct Chat Tools (2026-08-31) → moved to its own "Chat Tools" section
+           at the top of the Agents tab (directly under the mode buttons). Stays
+           visible there for auto/simple instead of only in the Code-Duo accordion. -->
+
+      <!-- Git Integration Toggle -->
+      <div class="opt-row" style="margin-top:6px">
+        <div class="opt-row-left">
+          <span class="opt-name">&#x1F500; Git Integration</span>
+          <span class="opt-hint">Auto-commit after each chunk</span>
+        </div>
+        <label class="cfl-sw" style="margin:0">
+          <input type="checkbox" id="duo-git-autocommit-toggle"
+            onchange="S.duoGitAutocommit=this.checked;postSettings({duo_git_autocommit:S.duoGitAutocommit});updateGitIntegrationUI()">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div id="git-branch-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(58,153,96,.25);margin-left:10px;margin-top:2px">
+        <div class="opt-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Branch</span>
+            <span class="opt-hint" id="git-branch-hint">Configure git in Settings</span>
+          </div>
+          <select id="git-branch-sel" onchange="postSettings({git_branch:this.value})"
+            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:120px;flex-shrink:0">
+            <option value="">main</option>
+          </select>
+        </div>
+        <div id="git-status-line" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:2px 4px;line-height:1.5">
+          <span id="git-auth-status">&#x26A0; No git configured</span>
+        </div>
+      </div>
+      <!-- Advanced: ctx + timeout -->
+      <div onclick="toggleDuoCtxAdv()" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;padding:7px 0 3px;margin-top:2px">
+        <span id="duo-ctx-arrow" style="font-size:11px;color:#4a8a9a;transition:transform .2s">&#9654;</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#4a8a9a;letter-spacing:.06em;text-transform:uppercase">Advanced</span>
+      </div>
+      <div id="duo-ctx-body" style="display:none;padding:10px 11px 8px;background:rgba(0,0,0,.25);border-radius:5px;border:1px solid rgba(32,176,160,.15);margin-top:2px">
+
+        <!-- Tool-Runden / Loop + Compression -->
+        <div style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.05)">
+          <div style="display:flex;align-items:center;gap:7px;margin-bottom:4px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);flex:1;font-weight:600">Max tool rounds / loop</span>
+            <input type="number" min="4" max="9999" step="1" id="duo-max-tool-rounds"
+              style="width:56px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--tx1);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;padding:3px 5px;text-align:center;outline:none"
+              onchange="postSettings({duo_max_tool_rounds:parseInt(this.value)||64})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);line-height:1.55;margin-bottom:8px">
+            Normal agentic: tool iterations per coder pass.<br>
+            Capped by the <span style="color:var(--txh)">runtime cap</span> (below).
+          </div>
+          <div style="display:flex;align-items:center;gap:7px;margin-bottom:4px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#4a8a9a;flex:1;font-weight:600">Runtime Cap (Hard Limit)</span>
+            <input type="number" min="1" max="9999" step="10" id="duo-max-tool-rounds-runtime-cap"
+              style="width:56px;background:var(--bg2);border:1px solid rgba(74,138,154,.4);border-radius:4px;color:#6aafca;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;padding:3px 5px;text-align:center;outline:none"
+              onchange="postSettings({duo_max_tool_rounds_runtime_cap:parseInt(this.value)||300})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);line-height:1.55;margin-bottom:8px">
+            Hard limit for normal agentic. Default <span style="color:var(--txh)">100</span>.<br>
+            Until-finished uses an unlimited tool budget (no hardcap).
+          </div>
+          <div style="display:flex;align-items:center;gap:7px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);flex:1;font-weight:600">Compression Limit (0=Auto 80%)</span>
+            <input type="number" min="0" max="100000" step="1000" id="duo-compress-threshold"
+              style="width:64px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--tx1);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;padding:3px 5px;text-align:center;outline:none"
+              onchange="postSettings({duo_compress_threshold:parseInt(this.value)||0})">
+          </div>
+          <div style="display:flex;align-items:center;gap:7px;margin-top:10px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);flex:1;font-weight:600">Planner Max Steps (0=Auto)</span>
+            <input type="number" min="0" max="100" step="1" id="duo-planner-max-steps"
+              style="width:56px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--tx1);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;padding:3px 5px;text-align:center;outline:none"
+              onchange="postSettings({duo_planner_max_steps:parseInt(this.value)||0})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);line-height:1.55;margin-top:4px">
+            0 = auto: planner decides the number of steps itself.<br>
+            &gt;0 = hard cap on parsed plan steps.
+          </div>
+        </div>
+
+        <!-- Max Tool-Calls Explore -->
+        <div id="preexplore-adv-wrap" style="margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Max Tool-Calls (Explore)</span>
+            <input type="number" min="4" max="999" step="1" id="duo-preexplore-max-tools"
+              style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="S.duoPreExploreMaxTools=parseInt(this.value)||20;postSettings({duo_pre_explore_max_tools:S.duoPreExploreMaxTools})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+            Tool calls for pre-explore (read-only).<br>
+            Used once pre-explore is active. Default 12; raise to 20&ndash;30 for large projects.
+          </div>
+        </div>
+
+        <div id="duo-ctx-scope-hint" style="margin-bottom:10px;padding:8px;background:rgba(239,108,0,0.1);border-left:3px solid var(--amber);color:var(--amber);font-size:12px;font-family:'IBM Plex Mono',monospace;display:none;"></div>
+
+        <!-- Ctx Agentic (Coder) -->
+        <div id="wrapper-ctx-agentic" style="margin-bottom:10px; display:none;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Context Coder (Agentic)</span>
+            <input type="number" min="1024" step="1024" id="duo-ctx-agentic" value="16384"
+              style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxAgentic=v;S.duoCtxUntilFinished=v;postSettings({duo_coder_ctx_agentic:v,duo_coder_ctx_until_finished:v});setDuoSubMode(S.duoAgenticMode?'agentic':'critic');updateCtxScopeHint();refreshVram();_vramEstimate(S.duoCoderModel,v,'vram-est-agentic')">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+            Applies to coder (agentic/solo + until-finished).<br>
+            <span id="vram-est-agentic" style="color:var(--amber);font-size:9px"></span>
+          </div>
+        </div>
+
+        <!-- Planner = Coder Toggle (nur Agentic) -->
+        <div id="wrapper-planner-coder-toggle" style="margin-bottom:4px; display:none;">
+          <div style="display:flex;align-items:center;gap:6px">
+            <label class="cfl-sw" style="margin:0">
+              <input type="checkbox" id="duo-planner-use-coder-ctx" checked
+                onchange="togglePlannerUseCoderCtx(this.checked)">
+              <span class="sl"></span>
+            </label>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9a74dc;cursor:pointer" onclick="var cb=document.getElementById('duo-planner-use-coder-ctx');cb.checked=!cb.checked;togglePlannerUseCoderCtx(cb.checked)">Planner = coder (same context)</span>
+          </div>
+        </div>
+
+        <!-- Ctx Planner (separat) -->
+        <div id="wrapper-ctx-planner" style="margin-bottom:10px; display:none;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a74dc;flex:1;font-weight:600">Context Planner</span>
+            <input type="number" min="1024" step="1024" id="duo-ctx-planner" value="16384"
+              style="width:76px;background:var(--bg2);border:1px solid rgba(136,88,192,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxPlanner=v;postSettings({duo_planner_ctx_target:v});refreshVram();_vramEstimate(S.duoPlannerModel,v,'vram-est-planner')">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+            <span id="vram-est-planner" style="color:#b090e0;font-size:9px"></span><br>
+            num_ctx for the planner call (separate override).<br>
+            <span style="color:var(--tx2)">No cap - UI value passed through directly.</span>
+          </div>
+        </div>
+
+        <!-- Ctx Duo Normal -->
+        <div id="wrapper-ctx-normal" style="margin-bottom:10px; display:none;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Context (Coder + Critic Dual)</span>
+            <input type="number" min="1024" step="1024" id="duo-ctx-normal" value="8192"
+              style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="postSettings({duo_coder_ctx_normal:parseInputAsOptionalInt(this.value,8192)});S.duoCtxNormal=parseInputAsOptionalInt(this.value,8192);updateCtxScopeHint();refreshVram()">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+            num_ctx while coder + critic run in VRAM together.<br>
+            <span style="color:var(--tx2)">8192&ndash;12288 recommended. Values &gt;16384 force CPU offload.</span>
+          </div>
+        </div>
+
+        <!-- Ctx Critic (separat, nur in Critic-Duo) -->
+        <div id="wrapper-ctx-critic" style="margin-bottom:10px; display:none;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#e08840;flex:1;font-weight:600">Context Critic</span>
+            <input type="number" min="1024" step="1024" id="duo-ctx-critic" value="8192"
+              style="width:76px;background:var(--bg2);border:1px solid rgba(224,136,64,.4);border-radius:4px;color:#e0a060;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="var v=parseInputAsOptionalInt(this.value,8192);S.duoCtxCritic=v;postSettings({duo_critic_ctx:v});updateCtxScopeHint();refreshVram()">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+            Separate context for the critic (Critic-Duo only).<br>
+            <span style="color:var(--tx2)">8192&ndash;12288 recommended. Default = coder context.</span>
+          </div>
+        </div>
+
+        <!-- MoE CPU Expert Override -->
+        <div id="wrapper-moe-experts" style="margin-bottom:10px; display:none;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#b090e0;flex:1;font-weight:600">MoE CPU Experts</span>
+            <select id="moe-model-select" onchange="onMoeModelSelect(this.value)"
+              style="max-width:150px;background:var(--bg2);border:1px solid rgba(168,126,242,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 4px;outline:none"></select>
+            <input type="number" min="0" max="99" step="1" id="moe-cpu-experts" value="0"
+              style="width:56px;background:var(--bg2);border:1px solid rgba(168,126,242,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="onMoeExpertsChange(this.value)">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+            Per-model override for <code>--n-cpu-moe</code>. 0 = table default.<br>
+            Offload MoE experts to CPU. Higher = more RAM, less GPU VRAM.
+          </div>
+          <div id="moe-default-hint" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#9a74dc;margin-top:4px;line-height:1.5"></div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+            <input type="checkbox" id="llama-mlock-toggle" onchange="S.llamaMlock=this.checked;postSettings({llama_mlock:S.llamaMlock});updateMlockHint()">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);font-weight:600">Lock in RAM (--load-mode mmap+mlock)</span>
+            <span id="mlock-hint" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2)"></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+            <input type="number" id="llama-cache-reuse-input" min="0" max="4096" step="64" value="256"
+              style="width:64px;background:var(--bg2);border:1px solid rgba(168,126,242,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="S.llamaCacheReuse=parseInt(this.value)||0;postSettings({llama_cache_reuse:S.llamaCacheReuse})">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);font-weight:600">Cache Reuse (--cache-reuse)</span>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);line-height:1.4">
+            KV-shift reuse after mid-context edits. 0 = off, 256 = recommended. Applies on next model load.
+          </div>
+        </div>
+
+        <!-- Read Timeout -->
+        <div style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.05)">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Read Timeout (s)</span>
+            <input type="number" min="60" max="600" step="30" id="duo-read-timeout" value="300"
+              style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="postSettings({duo_read_timeout:parseInt(this.value)||300})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+            LLM stream read timeout &mdash; time between two streamed tokens during coder tool calls.<br>
+            <span style="color:var(--txh)">Not</span> build duration: builds run via run_bash
+            (<span style="color:var(--amber)">duo_run_bash_build_timeout_s</span>, Default 600s).
+          </div>
+        </div>
+
+        <!-- TTL Planner / Coder -->
+        <div style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.05)">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#4a8a9a;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px;font-weight:600">TTL — Generation Timeout</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a74dc;flex:1;font-weight:600">Planner TTL (s)</span>
+            <input type="number" min="0" step="30" id="duo-planner-ttl" value="0"
+              style="width:76px;background:var(--bg2);border:1px solid rgba(136,88,192,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="var v=parseInt(this.value)||0;S.duoPlannerTtl=v;postSettings({duo_planner_ttl_seconds:v})">
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#20b0a0;flex:1;font-weight:600">Coder TTL (s)</span>
+            <input type="number" min="0" step="30" id="duo-coder-ttl" value="0"
+              style="width:76px;background:var(--bg2);border:1px solid rgba(32,176,160,.4);border-radius:4px;color:#20b0a0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="var v=parseInt(this.value)||0;S.duoCoderTtl=v;postSettings({duo_coder_ttl_seconds:v})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+            Max. seconds for planner/coder response.<br>
+            <span style="color:var(--txh)">0 = no separate timeout (server default)</span>
+          </div>
+        </div>
+
+
+        <!-- Pre-Explore / Planner Overrides -->
+        <div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#4a8a9a;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Pre-Explore &amp; Planner</div>
+
+          <!-- Max Files / Partition -->
+          <div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.05)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Max Files / Partition</span>
+              <input type="number" min="2" max="60" step="1" id="duo-partition-max-files" value="30"
+                style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+                onchange="S.duoPartitionMaxFiles=parseInt(this.value)||30;postSettings({duo_partition_max_files:S.duoPartitionMaxFiles})">
+            </div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+              Override: max files per pre-explore partition.<br>
+              <span style="color:var(--txh)">2B-Worker: 3&ndash;5</span> &middot; 4B: 6&ndash;10 &middot; 8B+: 12&ndash;20. budget formula takes precedence when lower.
+            </div>
+          </div>
+
+          <!-- Static Repo-Map Char-Budget -->
+          <div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.05)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Static Map Char Budget</span>
+              <input type="number" min="0" max="100000" step="500" id="duo-static-map-chars" value="0"
+                style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+                onchange="postSettings({duo_static_map_chars:parseInt(this.value)||0})">
+            </div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+              Char budget of the deterministic static repo-map (characters, not tokens).<br>
+              <span style="color:var(--txh)">0 = Auto (Tier-derived, rich: 8000)</span> &middot; &gt;0 = explicit budget (e.g. 14000 for denser hub files after PageRank selection).<br>
+              In the coder the map is capped to the <span style="color:var(--txh)">coder explore window</span> (next field).
+            </div>
+          </div>
+
+          <!-- Coder Explore-Fenster -->
+          <div style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.05)">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Coder Explore Window (chars)</span>
+              <input type="number" min="0" max="100000" step="1000" id="duo-coder-explore-chars" value="0"
+                style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+                onchange="postSettings({duo_coder_explore_chars:parseInt(this.value)||0})">
+            </div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+              Total window for static map + contracts in the coder prompt (chars).<br>
+              <span style="color:var(--txh)">0 = Auto (&asymp;14% of coder ctx, 8k&ndash;24k)</span> &middot; &gt;0 = explicit (map first, contracts = rest).
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+  </div>
+  </div>
+    <!-- Complexity Force Override -->
+    <div class="force-section">
+      <div class="sec-row">
+        <div class="sec" style="margin:0">Complexity</div>
+        <span id="force-badge" class="force-active-badge">OVERRIDE ON</span>
+      </div>
+      <div class="complexity-force">
+        <div class="cforce-btn on-auto" id="cf-auto" onclick="setComplexityForce('auto',this)" title="judge decides (normal)">Auto</div>
+        <div class="cforce-btn" id="cf-simple" onclick="setComplexityForce('simple',this)" title="always direct answer, no pipeline">Simple</div>
+        <div class="cforce-btn" id="cf-complex" onclick="setComplexityForce('complex',this)" title="always force full pipeline">Complex</div>
+      </div>
+      <!-- Judge-Bias -->
+      <div class="judge-bias-row">
+        <label>Judge-Bias</label>
+        <input type="range" id="judge-bias" min="0" max="100" value="50"
+          oninput="setJudgeBias(this.value)"
+          title="0 = judge leans simple, 100 = leans complex">
+        <span class="judge-bias-val" id="judge-bias-val">50</span>
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:10px;line-height:1.5">
+        &lt;50 = simple-leaning &nbsp; 50 = neutral &nbsp; &gt;50 = complex-leaning
+      </div>
+    </div>
+
+    <!-- Pipeline agents -->
+    <div id="pipeline-agents-sec">
+      <div class="sec-row">
+        <div class="sec" style="margin:0">Pipeline agents</div>
+        <button onclick="resetAgentForce()" style="background:none;border:none;font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);cursor:pointer;text-transform:uppercase;letter-spacing:.06em" title="reset all agents">Reset</button>
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:6px;line-height:1.5">
+        Click = enable/disable for next run
+      </div>
+      <div class="force-agent-row" id="force-agent-btns">
+        <!-- Built by JS -->
+      </div>
+    </div>
+
+    <!-- Constraint Feedback Loop -->
+    <div class="cfl-row">
+      <span class="cfl-label">Constraint Feedback Loop</span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="cfl-toggle" checked onchange="setConstraintMode(this.checked)">
+        <span class="sl"></span>
+      </label>
+          </div>
+      <div class="cfl-row" style="margin-top:6px">
+      <span class="cfl-label" title="Analyst searches before analyzing (SearXNG)">&#x1F50D; Websearch Pipeline</span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="pipeline-websearch-toggle"
+          onchange="S.pipelineWebsearch=this.checked;postSettings({pipeline_websearch_enabled:S.pipelineWebsearch});updateWebsearchHint()">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:2px 4px 6px;line-height:1.5">
+      ON = analyst searches before analysis (first iteration only)<br>
+      OFF = no automatic websearch
+    </div>
+    <!-- Image description: full pipeline -->
+    <div class="cfl-row" style="margin-top:6px">
+      <span class="cfl-label">Full img-desc</span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="img-pipeline-toggle"
+          onchange="postSettings({image_desc_full_pipeline:this.checked});">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div style="font-size:9px;color:var(--tx3);padding:0 4px 6px;line-height:1.5">ON = image description to all agents (refiner+critic)<br>OFF = only analyst gets the image description</div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:10px;line-height:1.6">
+      Critic provides tune-constraints &#8594; refiner gets hard constraints.<br>
+      <span style="color:var(--amber)">&#9889; Adversarial Loop</span> instead of stylistic refinement.
+    </div>
+    <!-- Image Processing -->
+    <div id="vision-accordion" style="background:#10131a;border:1px solid #222a38;border-radius:7px;margin-bottom:10px;overflow:hidden">
+      <div onclick="toggleVisionAccordion()" style="display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;user-select:none" id="vision-accordion-hdr">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:#c8d4e4">Image Processing</span>
+        <span id="vision-active-badge" class="vision-model-badge" style="display:none">ON</span>
+        <span id="vision-model-preview" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#7a8fa8;margin-left:2px"></span>
+        <span id="vision-accordion-arrow" style="margin-left:auto;font-size:10px;color:#7a8fa8;transition:transform .2s">&#9660;</span>
+      </div>
+      <div id="vision-accordion-body" style="display:none;padding:0 12px 12px;border-top:1px solid #222a38">
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-top:10px;margin-bottom:8px;line-height:1.6">
+          Choose how images are processed when you attach one:
+        </div>
+
+        <div id="image-mode-row" style="display:flex;gap:4px;margin-bottom:8px">
+          <button id="im-direct" class="ghost" style="flex:1;font-size:10px" onclick="setImageMode('direct')" title="Multimodal models get the raw image directly">Direct</button>
+          <button id="im-preprocess" class="ghost" style="flex:1;font-size:10px" onclick="setImageMode('preprocess')" title="A dedicated vision model describes the image as text before the run">Preprocessor</button>
+          <button id="im-pipeline" class="ghost" style="flex:1;font-size:10px" onclick="setImageMode('pipeline')" title="The pipeline's vision-agent analyzes the image">Pipeline</button>
+        </div>
+
+        <div id="vision-flow-card" style="font-family:'IBM Plex Mono',monospace;font-size:9px;line-height:1.6;border:1px solid #1e2a38;border-radius:5px;padding:8px 10px;margin-bottom:10px;color:#8fa5bf"></div>
+
+        <div id="im-direct-sec" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:8px">
+          Multimodal models (qwen3.5/3.6, hermes, gemma-4) receive the raw image directly.<br>
+          Text-only models skip the image. No extra model is loaded.
+        </div>
+
+        <div id="im-preprocess-sec" style="display:none">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:6px">
+            A dedicated vision model turns the image into a text description <b>before</b> the run.<br>
+            Every agent stays text-based &mdash; works with any model.
+          </div>
+          <div class="row" style="margin-bottom:4px">
+            <select id="vision-model-sel" style="flex:1" onchange="setVisionModel(this.value)"></select>
+            <button class="ghost" onclick="testVisionModel()" id="vision-test-btn" title="Test model">&#9654;</button>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;min-height:14px">
+            <span id="vision-test-result"></span>
+          </div>
+          <div id="vision-prepro-warn" style="display:none;font-size:9px;color:#c88a00;margin-top:2px;font-family:'IBM Plex Mono',monospace">
+            ⚠ This model is not on the preprocessing allowlist
+          </div>
+        </div>
+
+        <div id="im-pipeline-sec" style="display:none">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:6px">
+            The pipeline's <b>vision-agent</b> analyzes the image and passes a text description to the other agents.<br>
+            You can additionally send raw images to multimodal pipeline agents.
+          </div>
+          <div class="vision-row">
+            <span class="cfl-label" style="font-size:11px">Vision Agent enabled</span>
+            <label class="cfl-sw">
+              <input type="checkbox" id="va-enabled-toggle" onchange="setVisionAgentEnabled(this.checked)">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:4px">Model</div>
+          <div class="row" style="margin-bottom:8px">
+            <select id="va-model-sel" style="flex:1" onchange="setVisionAgentModel(this.value)">
+              <option value="">&#8212; choose model &#8212;</option>
+            </select>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:4px">Mode</div>
+          <div style="display:flex;gap:4px;margin-bottom:6px">
+            <button id="va-mode-seq" class="ghost" style="flex:1;font-size:10px" onclick="setVisionAgentMode('sequential')">&#9654; Sequential</button>
+            <button id="va-mode-par" class="ghost" style="flex:1;font-size:10px" onclick="setVisionAgentMode('parallel')">&#9654;&#9654; Parallel</button>
+          </div>
+          <div id="va-mode-desc" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx3);line-height:1.4"></div>
+          <div style="margin-top:8px;border-top:1px solid #1e2a38;padding-top:8px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:6px">Raw image to roles (multimodal only)</div>
+            <div class="vision-row" style="margin-bottom:4px">
+              <span class="cfl-label" style="font-size:11px">Analyst</span>
+              <label class="cfl-sw">
+                <input type="checkbox" id="pv-role-analyst" onchange="setPipelineVisionRole('analyst',this.checked)">
+                <span class="sl"></span>
+              </label>
+            </div>
+            <div class="vision-row" style="margin-bottom:4px">
+              <span class="cfl-label" style="font-size:11px">Refiner</span>
+              <label class="cfl-sw">
+                <input type="checkbox" id="pv-role-refiner" onchange="setPipelineVisionRole('refiner',this.checked)">
+                <span class="sl"></span>
+              </label>
+            </div>
+            <div class="vision-row" style="margin-bottom:4px">
+              <span class="cfl-label" style="font-size:11px">Critic</span>
+              <label class="cfl-sw">
+                <input type="checkbox" id="pv-role-critic" onchange="setPipelineVisionRole('critic',this.checked)">
+                <span class="sl"></span>
+              </label>
+            </div>
+            <div class="vision-row" style="margin-bottom:4px">
+              <span class="cfl-label" style="font-size:11px">Synthesizer</span>
+              <label class="cfl-sw">
+                <input type="checkbox" id="pv-role-synthesizer" onchange="setPipelineVisionRole('synthesizer',this.checked)">
+                <span class="sl"></span>
+              </label>
+            </div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5">
+              Only roles whose model is <b>multimodal</b> actually receive the raw image.<br>
+              All other roles get the text description from the vision-agent.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="sec">Iterations <span style="float:right;font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2)">(Pipeline)</span></div>
+    <div class="iters-row">
+      <label>Deliberation cycles</label>
+      <input type="number" id="iters-in" min="1" max="5" value="2" oninput="setIters(this.value)" onchange="setIters(this.value)">
+    </div>
+    <div class="sec">Set all to one model</div>
+    <div class="row" style="margin-bottom:10px">
+      <select id="g-model" style="flex:1"></select>
+      <button class="ghost" onclick="applyAll()">All</button>
+    </div>
+    <div class="sec-row" style="cursor:pointer" onclick="toggleAgentConfig()">
+      <div class="sec" style="margin:0">Agent Configuration</div>
+      <span id="agent-config-arrow" style="font-size:10px;color:#7a8fa8;transition:transform .2s">&#9660;</span>
+    </div>
+    <!-- FIX: loading indicator directly in HTML, replaced by JS -->
+    <div id="agent-config-body">
+      <div id="agent-cards"><div class="loading-msg">Loading agents...</div></div>
+    </div>
+
+    <!-- Special Agents accordion -->
+    <div id="special-agents-accordion" style="background:#0e1218;border:1px solid #1e2a38;border-radius:7px;margin-top:10px;overflow:hidden">
+      <div onclick="toggleSpecialAgents()" style="display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;user-select:none">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:#7a8fa8">Special Agents</span>
+        <span id="special-agents-active-chips" style="display:flex;gap:4px"></span>
+        <span id="special-agents-arrow" style="margin-left:auto;font-size:10px;color:#7a8fa8;transition:transform .2s">&#9660;</span>
+      </div>
+      <div id="special-agents-body" style="display:none;padding:0 10px 12px;border-top:1px solid #1e2a38">
+
+        <!-- Intent Agent -->
+        <div id="intent-card" class="acard" style="margin-top:10px;border-color:#1a3030;background:#0d1a1a">
+          <div class="acard-hdr">
+            <div style="width:7px;height:7px;border-radius:50%;flex-shrink:0;background:#20b0a0"></div>
+            <div class="acard-name" style="color:#20b0a0">Intent Agent</div>
+            <span id="intent-active-chip" style="display:none;font-size:8px;padding:1px 6px;border-radius:3px;border:1px solid rgba(32,176,160,.45);color:#9adfda;background:rgba(32,176,160,.18);font-family:'IBM Plex Mono',monospace">ON</span>
+            <div class="acard-role">Keyword router: @Agent / Remember / Evolve <span id="intent-model-preview" style="color:#9bcfff"></span></div>
+            <label class="cfl-sw" style="margin-left:auto">
+              <input type="checkbox" id="intent-enabled" onchange="setIntentEnabled(this.checked)">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <!-- Routen kompakt -->
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;margin-bottom:7px;line-height:1.7">
+            <span id="intent-mem-dot" style="color:#334">&#11044;</span> "Remember that..." → Memory &nbsp;
+            <span id="intent-evo-dot" style="color:#334">&#9670;</span> "Evolve yourself..." → Soul &nbsp;
+            <span style="color:#20b0a0">&#9881;</span> "@Analyst: ..." → direct routing
+          </div>
+          <div class="fl">Model</div>
+          <div class="row" style="margin-bottom:6px">
+            <select id="intent-model-sel" style="flex:1"></select>
+            <button id="intent-test-btn" class="ghost" onclick="testIntentModel()" title="quick intent routing test" style="width:34px;padding:0">&#9654;</button>
+          </div>
+          <div id="intent-test-result" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;min-height:14px;margin-top:-2px;margin-bottom:6px"></div>
+          <div class="fl">Temperature</div>
+          <div class="sl-row" style="margin-bottom:6px">
+            <input type="range" min="0" max="1" step="0.05" value="0.1" id="intent-temp-sl"
+              oninput="document.getElementById('intent-tv').textContent=parseFloat(this.value).toFixed(2)">
+            <div class="sl-val" id="intent-tv">0.10</div>
+          </div>
+          <button class="apply" onclick="applySpecialAgent('intent',this)">Apply</button>
+        </div>
+
+        <!-- Soul-Evolve Agent -->
+        <div class="acard" style="margin-top:8px;border-color:#2a1a3a;background:#110d1a">
+          <div class="acard-hdr">
+            <div style="width:7px;height:7px;border-radius:50%;flex-shrink:0;background:#8858c0"></div>
+            <div class="acard-name" style="color:#8858c0">Soul-Evolve Agent</div>
+            <div class="acard-role">Analyzes runs &rarr; writes soul</div>
+            <label class="cfl-sw" style="margin-left:auto">
+              <input type="checkbox" id="soul-evolve-agent-enabled" onchange="setSoulEvolveAgentEnabled(this.checked)">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;margin-bottom:7px;line-height:1.6">
+            Separate from judge / analyst &mdash; dedicated model for soul reflection.<br>
+            Used by "trigger evolution" and language intent.
+          </div>
+          <div class="fl">Model</div>
+          <div class="row" style="margin-bottom:6px">
+            <select id="soul-evolve-model-sel" style="flex:1"></select>
+          </div>
+          <div class="fl">Temperature</div>
+          <div class="sl-row" style="margin-bottom:6px">
+            <input type="range" min="0" max="1" step="0.05" value="0.65" id="soul-evolve-temp-sl"
+              oninput="document.getElementById('soul-evolve-tv').textContent=parseFloat(this.value).toFixed(2)">
+            <div class="sl-val" id="soul-evolve-tv">0.65</div>
+          </div>
+          <div class="fl">Max Tokens</div>
+          <div class="sl-row" style="margin-bottom:6px">
+            <input type="range" min="200" max="2000" step="50" value="800" id="soul-evolve-tok-sl"
+              oninput="document.getElementById('soul-evolve-tk').textContent=this.value">
+            <div class="sl-val" id="soul-evolve-tk">800</div>
+          </div>
+          <button class="apply" onclick="applySpecialAgent('soul_evolve',this)">Apply</button>
+        </div>
+
+        <!-- Soul Skill Distillation + Skill Writing Toggles -->
+        <div style="margin-top:8px;padding:6px 8px;border:1px solid #2a1a3a;border-radius:6px;background:#0d0a14">
+          <div class="cfl-row" style="margin:0 0 4px;padding:0 2px">
+            <label>Soul Skill Distillation</label>
+            <label class="cfl-sw">
+              <input type="checkbox" id="soul-distillation-toggle"
+                onchange="postSettings({soul_skill_distillation:this.checked})">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;margin-bottom:8px">
+            Insights are covered, merged and thinned out per soul cycle.
+          </div>
+          <div class="cfl-row" style="margin-bottom:4px;padding:0 2px">
+            <label>Skill Writing</label>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:8px;padding:1px 4px;border-radius:2px;background:rgba(224,144,48,.15);color:#e09030;border:1px solid rgba(224,144,48,.3);margin-left:4px">OPT-IN</span>
+            <label class="cfl-sw">
+              <input type="checkbox" id="soul-skill-writing-toggle"
+                onchange="postSettings({soul_skill_writing:this.checked})">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;margin-bottom:4px">
+            Top-20 skills are written as .md into learning_logs/skills/.
+          </div>
+          <div class="cfl-row" style="margin:6px 0 4px;padding:0 2px">
+            <label>Peer-Ratings (Agentic)</label>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:8px;padding:1px 4px;border-radius:2px;background:rgba(224,144,48,.15);color:#e09030;border:1px solid rgba(224,144,48,.3);margin-left:4px">OPT-IN</span>
+            <label class="cfl-sw">
+              <input type="checkbox" id="duo-peer-ratings-agentic-toggle"
+                onchange="postSettings({duo_peer_ratings_agentic:this.checked})">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;margin-bottom:4px">
+            Also rates coder output in agentic mode (data source for soul evolution). Costs VRAM (rater load after each run).
+          </div>
+        </div>
+
+        <!-- Skills (C-6, Phase 1) -->
+        <div class="acard" style="margin-top:8px;border-color:#1a2a3a;background:#0d1117">
+          <div class="acard-hdr">
+            <div style="width:7px;height:7px;border-radius:50%;flex-shrink:0;background:#3a7aba"></div>
+            <div class="acard-name" style="color:#3a7aba">Skills</div>
+            <div class="acard-role">Reusable patterns — .hivemind/skills/*.md</div>
+            <button onclick="loadSkillsUI()" style="margin-left:auto;font-size:10px;padding:2px 8px;background:transparent;border:0.5px solid #3a7aba;color:#3a7aba;border-radius:4px;cursor:pointer">&#8635;</button>
+          </div>
+          <div id="skills-list" style="display:flex;flex-direction:column;gap:4px;margin:6px 0">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8">No skills loaded.</div>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5">
+            Triggers: keywords (prompt) + path globs (file access). Toggle = load/don't load.
+          </div>
+        </div>
+
+        <!-- Exploration Workers -->
+        <div class="acard" style="margin-top:8px;border-color:#1a2a1a;background:#0d150d">
+          <div class="acard-hdr">
+            <div style="width:7px;height:7px;border-radius:50%;flex-shrink:0;background:#3a9a4a"></div>
+            <div class="acard-name" style="color:#3a9a4a">Exploration Workers</div>
+            <div class="acard-role">Parallel pre-explore — N small models simultaneously</div>
+            <label class="cfl-sw" style="margin-left:auto">
+              <input type="checkbox" id="exploration-agent-enabled" onchange="setExplorationAgentEnabled(this.checked)">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;margin-bottom:7px;line-height:1.6">
+            Each worker reads one partition in parallel.<br>
+            2&times; qwen3.5:2b = ~5.4 GB — coder loads <em>afterwards</em>, no VRAM conflict.
+          </div>
+          <!-- Worker-Slot-Liste -->
+          <div id="exploration-workers-list" style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px"></div>
+          <button onclick="addExplorationWorker()" style="font-size:10px;padding:2px 10px;margin-bottom:8px;background:transparent;border:0.5px solid #3a9a4a;color:#3a9a4a;border-radius:4px;cursor:pointer">+ Worker</button>
+          <!-- Context je Worker -->
+          <div class="fl">Context per worker <span style="color:#555;font-size:9px">tokens</span></div>
+          <div class="sl-row" style="margin-bottom:6px">
+            <input type="range" min="2048" max="65536" step="1024" value="4096" id="exploration-ctx-sl"
+              oninput="document.getElementById('exploration-ctx-v').textContent=this.value">
+            <div class="sl-val" id="exploration-ctx-v">4096</div>
+          </div>
+          <!-- Summary-Tokens (war 400 → abgeschnitten) -->
+          <div class="fl">Summary Tokens</div>
+          <div class="sl-row" style="margin-bottom:8px">
+            <input type="range" min="300" max="3000" step="100" value="700" id="exploration-tok-sl"
+              oninput="document.getElementById('exploration-tok-v').textContent=this.value">
+            <div class="sl-val" id="exploration-tok-v">700</div>
+          </div>
+          <button class="apply" onclick="applyExplorationWorkers(this)">Apply</button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+  <!-- PRESETS -->
+  <div class="panel" id="p-presets">
+    <div class="sec">Save new preset</div>
+    <div style="display:flex;gap:6px;margin-bottom:4px">
+      <input class="sinput" type="text" id="preset-name-in" placeholder="Name..." style="flex:1;height:32px">
+      <button class="amber-btn" onclick="savePreset()">Save</button>
+    </div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:12px">
+      Saves the current agent configuration + prompts. Use <b>Save</b> on an existing
+      preset below to overwrite it without retyping the name.
+    </div>
+    <div class="sec">Saved presets</div>
+    <div id="preset-list"></div>
+    <div id="prompt-editor-section" style="display:none">
+      <div class="sec" style="display:flex;align-items:center;gap:8px">
+        Prompt Editor
+        <span class="custom-badge" id="custom-badge" style="display:none">Modified</span>
+      </div>
+      <div class="row" style="margin-bottom:6px">
+        <select id="prompt-agent-sel" style="flex:1" onchange="loadPrompt()"></select>
+        <button class="ghost" onclick="resetPrompt()">Reset</button>
+      </div>
+      <textarea class="prompt-editor" id="prompt-textarea" rows="10"
+        placeholder="Prompt will be loaded..." oninput="promptChanged()"></textarea>
+      <button class="amber-btn" style="width:100%;margin-top:6px" onclick="savePrompt()">Save prompt</button>
+    </div>
+  </div>
+  <!-- CONFIGS -->
+  <div class="panel" id="p-configs">
+    <!-- Learning Preset Mode -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">Learning Preset Mode <span class="cfl-badge" style="color:var(--purple);border-color:rgba(136,88,192,.4)">BETA</span></div>
+      <div class="tgl-row">
+        <span class="tgl-text">Active</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="lpm-toggle" onchange="setLearningMode(this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div id="lpm-info" class="fld-hint" style="display:none">
+        <span style="color:var(--purple)">&#9670; Learned configs</span> are layered on top of base configs.<br>
+        Pipeline runs are logged automatically.
+      </div>
+    </div>
+
+    <!-- Startup Preload -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">Startup Preload <span class="cfl-badge" style="color:var(--amber);border-color:rgba(200,150,50,.4)">BOOT</span></div>
+      <div class="tgl-row">
+        <span class="tgl-text">Preload at startup</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="startup-preload-toggle" onchange="setStartupPreload(this.checked)" checked>
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Judge is preloaded at startup &mdash; no cold start.</div>
+      <div id="preload-judge-agentic-row" class="tgl-sub">
+        <div class="tgl-row">
+          <span class="tgl-text">Preload judge in agentic <em>(2.1GB VRAM)</em></span>
+          <label class="cfl-sw">
+            <input type="checkbox" id="startup-preload-judge-agentic-toggle" checked
+              onchange="postSettings({startup_preload_judge_in_agentic:this.checked})">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div class="fld-hint">OFF = judge is not loaded at startup when agentic is active &mdash; frees ~2GB for worker slots.</div>
+      </div>
+      <div id="preload-analyst-row" class="tgl-sub">
+        <div class="tgl-row">
+          <span class="tgl-text">Preload analyst <em>(if VRAM allows)</em></span>
+          <label class="cfl-sw">
+            <input type="checkbox" id="startup-preload-analyst-toggle" onchange="setStartupPreloadAnalyst(this.checked)">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div id="preload-analyst-hint" class="fld-hint">Only if judge + analyst &le; 85% VRAM budget.</div>
+      </div>
+      <div id="preload-coder-row" class="tgl-sub">
+        <div class="tgl-row">
+          <span class="tgl-text">Preload coder worker <em>(exec_mdl warm immediately)</em></span>
+          <label class="cfl-sw">
+            <input type="checkbox" id="startup-preload-coder-toggle" onchange="postSettings({startup_preload_coder:this.checked})">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div class="fld-hint">Loads the exec_mdl worker immediately at startup. Avoids cold-start delay on the first run.</div>
+      </div>
+    </div>
+
+    <!-- Keep-Alive / Pinning -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">Keep-Alive / Pinning</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Pin direct <em>(after response)</em></span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="pin-direct-toggle"
+            onchange="postSettings({pin_direct_after_response:this.checked});">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">ON = direct model stays in VRAM after a simple answer (no reload on next request).<br>Useful only in chat mode &mdash; in pipeline mode VRAM is needed by agents.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Keep judge warm <em>(after response)</em></span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="judge-keepalive-toggle" checked
+            onchange="postSettings({judge_keepalive_enabled:this.checked})">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">OFF = judge is not re-pinned after each answer &mdash; saves VRAM if judge is rarely used.</div>
+    </div>
+
+    <!-- Smart Preload -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">Smart Preload <span class="cfl-badge" style="color:var(--green);border-color:rgba(58,153,96,.4)">VRAM</span></div>
+      <div class="tgl-row">
+        <span class="tgl-text">Automatic preload</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="smart-preload-toggle" onchange="setSmartPreload(this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="tgl-row">
+        <span class="tgl-text" title="Pre-explore workers are loaded only AFTER the run ends (before that it would unload the coder). Prevents a worker load from killing the running run.">Keep workers warm after run <em style="color:var(--amber)">OPT-IN</em></span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="workers-after-run-toggle" onchange="setWorkersAfterRun(this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div id="prefetch-cfg" style="display:none;background:var(--bg);border:1px solid var(--b);border-radius:6px;padding:11px 13px;margin-top:8px">
+        <div class="fld-hint">
+          Next model is loaded <b style="color:var(--amber)" id="prefetch-lead-val">8.0</b>s before agent end.<br>
+          <span style="color:var(--tx3);font-size:9px">Adapts automatically to agent runtimes.</span>
+        </div>
+        <div class="fld-label">Prefetch Lead</div>
+        <div class="sl-row" style="margin-bottom:9px">
+          <input type="range" min="2" max="30" step="0.5" value="8" id="prefetch-lead-sl"
+            oninput="var v=parseFloat(this.value).toFixed(1);
+document.getElementById('pfl-val2').textContent=v+'s';
+document.getElementById('prefetch-lead-val').textContent=v;">
+          <div class="sl-val" id="pfl-val2">8.0s</div>
+        </div>
+        <button class="btn full" onclick="savePrefetchLead()">&#10003; Save</button>
+        <div id="prefetch-avg-display" style="margin-top:9px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);line-height:1.8"></div>
+        <div class="fld-label" style="margin-top:10px">VRAM Refresh <em id="vram-refresh-label">8s</em></div>
+        <div class="sl-row">
+          <input type="range" min="2" max="60" step="1" value="8" id="vram-refresh-sl"
+            oninput="var v=parseInt(this.value); document.getElementById('vram-refresh-label').textContent=v+'s'; document.getElementById('vram-refresh-val').textContent=v+'s'; setVramRefreshInterval(v*1000); postSettings({vram_refresh_interval_s: v});">
+          <div class="sl-val" id="vram-refresh-val">8s</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Model selector for configs -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">Model Config</div>
+      <div class="fld-row" style="margin-bottom:11px">
+        <select class="fld-input" id="cfg-model-sel" onchange="loadModelConfigs()"></select>
+        <button class="btn" onclick="refreshCfgModelList()" title="Reload">&#8635;</button>
+      </div>
+
+      <!-- Tabs: Base / Learned / Log -->
+      <div style="display:flex;gap:4px;margin-bottom:11px">
+        <div class="mbtn on" id="cfgtab-base" onclick="switchCfgTab('base',this)">Base</div>
+        <div class="mbtn" id="cfgtab-learned" onclick="switchCfgTab('learned',this)">Learned</div>
+        <div class="mbtn" id="cfgtab-log" onclick="switchCfgTab('log',this)">Log</div>
+      </div>
+
+      <!-- Base configs view (read-only) -->
+      <div id="cfg-base-panel">
+        <div class="fld-hint" style="padding:6px 8px;background:rgba(176,64,64,.08);border:1px solid rgba(176,64,64,.2);border-radius:4px">
+          &#128274; Read-only. Base defaults, never changed automatically.
+        </div>
+        <div id="base-cfg-list"></div>
+      </div>
+
+      <!-- Learned configs editor -->
+      <div id="cfg-learned-panel" style="display:none">
+        <div class="fld-hint" style="padding:6px 8px;background:rgba(136,88,192,.08);border:1px solid rgba(136,88,192,.3);border-radius:4px">
+          &#9998; Model-specific overrides. Applied on top of the base config AND the agentic-tab
+          agent settings when Learning Preset Mode is active (learned value wins).
+        </div>
+        <div id="learned-cfg-list"></div>
+        <div class="fld-label" style="margin-top:14px">Create new override</div>
+        <div class="fld-row" style="margin-bottom:9px">
+          <select class="fld-input" id="cfg-agent-sel"></select>
+        </div>
+        <div class="fld-label">Temperature <em id="lcfg-tv">0.30</em></div>
+        <div class="sl-row" style="margin-bottom:6px">
+          <input type="range" min="0" max="1" step="0.05" value="0.3" id="lcfg-temp-sl"
+            oninput="var v=parseFloat(this.value).toFixed(2);document.getElementById('lcfg-tv').textContent=v;document.getElementById('lcfg-tv2').textContent=v">
+          <div class="sl-val" id="lcfg-tv2">0.30</div>
+        </div>
+        <div class="fld-label">Max Tokens <em id="lcfg-tk">400</em></div>
+        <div class="sl-row" style="margin-bottom:6px">
+          <input type="range" min="100" max="32768" step="50" value="400" id="lcfg-tok-sl"
+            oninput="document.getElementById('lcfg-tk').textContent=this.value;document.getElementById('lcfg-tk2').textContent=this.value">
+          <div class="sl-val" id="lcfg-tk2">400</div>
+        </div>
+        <div class="fld-label" style="margin-top:6px">System Prompt Override</div>
+        <textarea id="lcfg-prompt" class="fld-input prompt-editor" rows="4"
+          placeholder="Leave empty = use base prompt..."></textarea>
+        <div class="fld-label" style="margin-top:6px">Notes</div>
+        <input class="fld-input" type="text" id="lcfg-notes" placeholder="e.g. Better at code tasks..." style="margin-bottom:9px">
+        <button class="btn primary full" onclick="saveLearned()">Save override</button>
+        <button class="btn full" style="margin-top:6px" onclick="resetLearnedModel()">Reset all overrides</button>
+      </div>
+
+      <!-- Learning log viewer -->
+      <div id="cfg-log-panel" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div class="fld-label" style="margin:0">Recent events</div>
+          <button class="btn danger" onclick="clearLog()" style="padding:2px 9px">Clear</button>
+        </div>
+        <div id="log-list"></div>
+        <!-- Config Evaluator -->
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--b)">
+          <div class="fld-hint">
+            &#9883; Auto-evaluator analyzes the log and recommends config adjustments.
+          </div>
+          <button id="cfg-eval-btn" class="btn full" onclick="runConfigEval()"
+            style="border-color:var(--amber);color:var(--amber);font-weight:600;letter-spacing:.05em">
+            &#9889; Config Eval
+          </button>
+          <div id="cfg-eval-result" style="margin-top:10px;display:none"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Energie / Keep-Awake (2026-08-24) -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">Energy</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Keep PC awake during runs</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="keepawake-toggle" onchange="postSettings({keep_awake_during_run:this.checked})">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Prevents system sleep while a run is active (sleep mid-run would break the stream). Display may turn off. Applies to all /stream runs.</div>
+    </div>
+
+    <!-- Git Integration -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">Git Integration</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Auto-Commit <em>DUO</em></span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="git-autocommit-cfg-toggle" onchange="S.duoGitAutocommit=this.checked;postSettings({duo_git_autocommit:S.duoGitAutocommit});syncGitToggles()">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Commits automatically after each chunk in duo/agentic mode.<br>Requires a valid git configuration below.</div>
+      <div class="cfg-grid" style="margin-top:6px">
+        <div class="fld">
+          <div class="fld-label">Repository URL <em id="git-repo-preview" style="color:var(--amber)"></em></div>
+          <input class="fld-input" type="text" id="git-repo-url" placeholder="https://github.com/user/repo.git"
+            onchange="postSettings({git_repo_url:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Username</div>
+          <input class="fld-input" type="text" id="git-username" placeholder="git username"
+            onchange="postSettings({git_username:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Token / Password</div>
+          <input class="fld-input" type="password" id="git-token" placeholder="Personal Access Token"
+            onchange="postSettings({git_token:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Branch</div>
+          <input class="fld-input" type="text" id="git-branch-inp" placeholder="main"
+            onchange="postSettings({git_branch:this.value})">
+        </div>
+      </div>
+      <div class="fld-row" style="margin-bottom:6px">
+        <button class="btn" onclick="testGitConfig()" id="git-test-btn">Test connection</button>
+        <button class="btn" onclick="initGitRepo()" id="git-init-btn" style="color:var(--green);border-color:rgba(58,153,96,.3)">Create repo</button>
+        <span id="git-test-result" class="fld-hint" style="margin:0;line-height:30px"></span>
+      </div>
+      <div id="git-init-status" class="fld-hint" style="font-size:9px;margin-bottom:4px"></div>
+      <!-- Git Operations v0.96.5 -->
+      <div class="fld-label" style="margin-top:10px">Git Operations</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
+        <button class="btn" onclick="gitStash('push')" style="font-size:9px;padding:3px 9px">Stash</button>
+        <button class="btn" onclick="gitStash('pop')" style="font-size:9px;padding:3px 9px">Stash Pop</button>
+        <button class="btn" onclick="gitStash('list')" style="font-size:9px;padding:3px 9px">Stash List</button>
+        <button class="btn" onclick="gitReset(false)" style="font-size:9px;padding:3px 9px;color:var(--amber);border-color:rgba(224,144,48,.3)">Soft Reset</button>
+        <button class="btn danger" onclick="gitReset(true)" style="font-size:9px;padding:3px 9px">Hard Reset</button>
+      </div>
+      <div id="git-ops-status" class="fld-hint" style="font-size:9px;margin-bottom:4px"></div>
+      <!-- Git Auto-Push + Email + Branch Default -->
+      <div class="tgl-row" style="margin-top:6px">
+        <span class="tgl-text">Auto-Push</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="git-auto-push-toggle" onchange="postSettings({git_auto_push:this.checked})">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="cfg-grid" style="margin-top:6px">
+        <div class="fld">
+          <div class="fld-label">Email</div>
+          <input class="fld-input" type="text" id="git-email" placeholder="user@example.com"
+            onchange="postSettings({git_email:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Commit Prefix</div>
+          <input class="fld-input" type="text" id="git-commit-prefix" placeholder="hivemind:"
+            onchange="postSettings({git_commit_prefix:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Default Branch</div>
+          <input class="fld-input" type="text" id="git-default-branch-inp" placeholder="main"
+            onchange="postSettings({git_default_branch:this.value})">
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- SUBAGENT-LITE: controls now live in the Agentic tab (opt-group "Subagent",
+       at the very bottom) — where the Coder/Critic tool layers are also controlled.
+       2026-08-24: Config-tab variant removed. -->
+  <!-- MEMORY -->
+  <div class="panel" id="p-memory">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="sec" style="margin:0">Long-term Memory</div>
+      <button onclick="loadMemory()" style="background:none;border:none;color:var(--tx2);cursor:pointer;font-size:16px">&#8635;</button>
+    </div>
+    <!-- Add memory manually -->
+    <div style="display:flex;gap:5px;margin-bottom:8px">
+      <input id="mem-add-key" type="text" placeholder="Key" autocomplete="off"
+        style="flex:0 0 88px;background:var(--bg);border:1px solid var(--b2);border-radius:4px;padding:5px 7px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px;outline:none"
+        onkeydown="if(event.key==='Enter')document.getElementById('mem-add-val').focus()">
+      <input id="mem-add-val" type="text" placeholder="Value..." autocomplete="off"
+        style="flex:1;background:var(--bg);border:1px solid var(--b2);border-radius:4px;padding:5px 7px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px;outline:none"
+        onkeydown="if(event.key==='Enter')addMem()">
+      <button onclick="addMem()"
+        style="background:var(--bg3);border:1px solid rgba(224,144,48,.4);border-radius:4px;padding:4px 10px;color:var(--amber);cursor:pointer;font-size:13px;font-family:'IBM Plex Mono',monospace">+</button>
+    </div>
+    <div id="memory-list"></div>
+    <div class="sec" style="margin-top:16px">Session History</div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:8px">
+      Context of the current conversation (cleared on new chat)
+    </div>
+    <button class="ghost" style="width:100%" onclick="clearSession()">Clear Session History</button>
+  </div>
+
+  <!-- SOUL -->
+  <!-- FIX: soul panel is only visible when active (display:none by default via .panel) -->
+  <div class="panel" id="p-soul">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="sec" style="margin:0">Soul System</div>
+      <button onclick="loadSoulStatus()" style="background:none;border:none;color:var(--tx2);cursor:pointer;font-size:16px">&#8635;</button>
+    </div>
+
+    <!-- Source badge + stats -->
+    <div id="soul-source-badge" class="soul-source-badge original">ORIGINAL ACTIVE</div>
+    <div id="soul-stats" style="background:var(--bg3);border:1px solid var(--b);border-radius:5px;padding:8px 10px;margin-bottom:10px">
+      <div class="soul-stat-row"><span class="soul-stat-label">Version</span><span class="soul-stat-val" id="soul-ver">&#8212;</span></div>
+      <div class="soul-stat-row"><span class="soul-stat-label">Runs (learning)</span><span class="soul-stat-val" id="soul-runs">&#8212;</span></div>
+      <div class="soul-stat-row"><span class="soul-stat-label">Evolutions</span><span class="soul-stat-val" id="soul-evos">&#8212;</span></div>
+      <!-- FIX: fehlende <div> oeffnung war hier im Original -->
+      <div class="soul-stat-row"><span class="soul-stat-label">Last Reason</span><span class="soul-stat-val" id="soul-reason" style="font-size:9px;max-width:160px;text-align:right;word-break:break-word">&#8212;</span></div>
+    </div>
+
+    <!-- Tabs: View / Edit / History / Skills / Insights / Tokens -->
+    <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap" id="soul-sub-tabs">
+      <button onclick="setSoulTab('view',this)" class="ghost on" style="flex:1;font-size:10px">View</button>
+      <button onclick="setSoulTab('edit',this)" class="ghost" style="flex:1;font-size:10px;color:var(--purple)" id="soul-edit-btn">Edit</button>
+      <button onclick="setSoulTab('history',this)" class="ghost" style="flex:1;font-size:10px">History</button>
+      <button onclick="setSoulTab('skills',this)" class="ghost" style="flex:1;font-size:10px;color:#20b0a0">Skills</button>
+      <button onclick="setSoulTab('insights',this)" class="ghost" style="flex:1;font-size:10px;color:#e09030">Insights</button>
+      <button onclick="setSoulTab('tokens',this)" class="ghost" style="flex:1;font-size:10px;color:#60a0e0">Tokens</button>
+    </div>
+    <!-- Force Evolution Button -->
+    <button onclick="triggerSoulEvolution(false)" class="ghost"
+      style="width:100%;margin-bottom:4px;font-size:10px;color:var(--amber);border-color:rgba(224,144,48,.35)"
+      id="soul-evolve-btn" title="Normal evolution (needs enough runs)">
+      &#9670; Trigger Evolution
+    </button>
+    <button onclick="triggerSoulEvolution(true)" class="ghost"
+      style="width:100%;margin-bottom:8px;font-size:10px;color:#c06060;border-color:rgba(192,96,96,.35)"
+      id="soul-force-btn" title="Force evolution even if counters are not reached">
+      &#9888; Evolution FORCE
+    </button>
+    <div id="soul-evolve-status" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:6px;min-height:12px"></div>
+
+    <!-- View -->
+    <div id="soul-tab-view">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:4px">Active Soul:</div>
+      <div id="soul-text-display" class="soul-text-box">Loading...</div>
+    </div>
+
+    <!-- Edit (learned only) -->
+    <div id="soul-tab-edit" style="display:none">
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--purple);margin-bottom:6px">
+        &#9888; Editable only in Learning Mode. The original is never touched.
+      </div>
+      <textarea id="soul-edit-area" class="soul-edit-area" placeholder="Learned Soul Text..."></textarea>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="soul-edit-reason" type="text" placeholder="Reason (optional)" style="flex:1;background:var(--bg);border:1px solid var(--b2);border-radius:4px;padding:5px 8px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px;outline:none">
+        <button class="ghost" onclick="saveLearnesSoul()" style="border-color:var(--purple);color:var(--purple)">Save</button>
+      </div>
+      <button class="ghost" onclick="resetLearnedSoul()" style="width:100%;margin-top:6px;color:var(--tx2);font-size:10px">Reset to Seed</button>
+    </div>
+
+    <!-- History -->
+    <div id="soul-tab-history" style="display:none">
+      <div id="soul-history-list"><div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2)">No evolutions yet.</div></div>
+    </div>
+
+    <!-- Skills -->
+    <div id="soul-tab-skills" class="soul-tab-content" style="display:none">
+      <div id="skills-list" style="padding:8px 0"></div>
+    </div>
+
+    <!-- Insights -->
+    <div id="soul-tab-insights" class="soul-tab-content" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#e09030">Repo Insights</span>
+        <div style="display:flex;gap:4px">
+          <button onclick="loadSoulInsights()" class="ghost" style="font-size:9px;padding:2px 8px">&#8635;</button>
+          <button onclick="resetInsights()" class="ghost" style="font-size:9px;padding:2px 8px;color:#c06060;border-color:rgba(192,96,96,.3)">&#10060; Reset</button>
+        </div>
+      </div>
+      <div id="insights-total" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:6px"></div>
+      <div id="insights-list" style="padding:4px 0"></div>
+    </div>
+
+    <!-- Token Stats -->
+    <div id="soul-tab-tokens" class="soul-tab-content" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#60a0e0">Token Statistics</span>
+        <div style="display:flex;gap:4px">
+          <button onclick="loadTokenStats()" class="ghost" style="font-size:9px;padding:2px 8px">&#8635;</button>
+          <button onclick="resetTokenStats()" class="ghost" style="font-size:9px;padding:2px 8px;color:#c06060;border-color:rgba(192,96,96,.3)">&#10060; Reset</button>
+        </div>
+      </div>
+      <div id="token-stats-summary" style="background:var(--bg3);border:1px solid var(--b);border-radius:5px;padding:8px 10px;margin-bottom:10px"></div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:4px">Daily overview (last 14 days)</div>
+      <div id="token-daily-list" style="padding:4px 0"></div>
+    </div>
+  </div>
+  <!-- MODELS -->
+  <div class="panel" id="p-models">
+    <!-- VRAM Monitor -->
+    <div class="vram-panel" id="vram-panel">
+      <div class="vram-header" onclick="toggleVramPanel()">
+        <span class="vram-title">&#9632; VRAM / models</span>
+        <span id="vram-count-badge" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#e09030">—</span>
+        <button onclick="event.stopPropagation();refreshVram()" style="background:none;border:none;color:#7a8fa8;cursor:pointer;font-size:13px;padding:0 2px" title="Refresh">&#8635;</button>
+        <span id="vram-arrow" style="font-size:10px;color:#7a8fa8;transition:transform .2s">&#9660;</span>
+      </div>
+      <div id="vram-body">
+        <!-- Segmented bar: each model = its own color -->
+        <div id="vram-seg-bar" style="display:flex;height:10px;border-radius:4px;overflow:hidden;margin-bottom:4px;background:#1a2030">
+        </div>
+        <!-- Alt bar hidden: for mmBar compatibility -->
+        <div class="vram-bar-wrap" style="display:none"><div class="vram-bar" id="vram-bar" style="width:0%"></div></div>
+        <div id="vram-model-list"><div class="vram-empty">Loading...</div></div>
+        <div class="keep-alive-row">
+          <span class="keep-alive-lbl">VRAM TTL</span>
+          <div class="keep-alive-btns">
+            <button class="ka-btn" data-ka="5m" onclick="setKeepAlive('5m',this)">5m</button>
+            <button class="ka-btn on" data-ka="10m" onclick="setKeepAlive('10m',this)">10m</button>
+            <button class="ka-btn" data-ka="30m" onclick="setKeepAlive('30m',this)">30m</button>
+            <button class="ka-btn" data-ka="-1" onclick="setKeepAlive('-1',this)">&#8734;</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:5px;margin-top:8px">
+          <button class="vram-load-btn preload" style="flex:1" onclick="preloadPipelineModels()">
+            &#9654; Load pipeline
+          </button>
+          <button class="vram-load-btn" style="flex:1" onclick="unloadAllModels()">
+            &#9632; Unload all
+          </button>
+          <button id="force-kill-btn" class="vram-load-btn" title="Kills all llama-server processes - even if the UI shows nothing (orphans after restart)" style="border-color:#b04040;color:#b04040;display:none" onclick="forceKillAll(this)">
+            &#9888; Force Kill
+          </button>
+        </div>
+    </div>
+
+    <!-- Available models -->
+    <div class="sec" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between">
+      <span>Available models</span>
+      <button onclick="refreshAvailableModels()" style="background:none;border:1px solid var(--b);border-radius:4px;color:var(--tx2);font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;cursor:pointer" title="Reload list">&#8635; Refresh</button>
+    </div>
+    <div style="display:flex;gap:5px;margin-bottom:6px">
+      <input id="model-filter-input" type="text" placeholder="Filter..."
+        oninput="filterAvailableModels(this.value)"
+        style="flex:1;background:#1a2030;border:1px solid #2a3548;border-radius:4px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:4px 7px;outline:none"/>
+      <select id="model-keepalive-sel" style="width:58px;background:#1a2030;border:1px solid #2a3548;border-radius:4px;color:var(--tx2);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 4px">
+        <option value="-1">&#8734;</option>
+        <option value="30m">30m</option>
+        <option value="10m" selected>10m</option>
+        <option value="5m">5m</option>
+      </select>
+    </div>
+    <div id="available-models-list" style="max-height:260px;overflow-y:auto;margin-bottom:8px">
+      <div class="vram-empty">Open tab to load</div>
+    </div>
+
+    <!-- Automap Assignments -->
+    <div class="sec" style="margin-top:14px;display:flex;align-items:center;justify-content:space-between">
+      <span>Current assignments</span>
+      <button onclick="refreshModelsAutomap()" style="background:none;border:none;color:var(--tx2);cursor:pointer;font-size:13px;padding:0">&#8635;</button>
+    </div>
+    <div id="models-automap-panel" style="margin-bottom:10px">
+      <div class="vram-empty">Open tab to load</div>
+    </div>
+
+    <!-- VRAM Budget -->
+    <div class="sec" style="margin-top:4px">VRAM budget</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+      <input type="number" id="vram-budget-inp" value="7.0" min="2" max="96" step="0.5"
+        style="width:68px;background:var(--bg2);border:1px solid var(--b);border-radius:5px;
+        padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--txh);outline:none">
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2)">GB effective</span>
+      <button onclick="saveVramBudget()" class="vram-load-btn" style="margin-left:auto">Save</button>
+    </div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);line-height:1.55;background:#10131a;border:1px solid #1e2435;border-radius:5px;padding:7px 9px">
+      <span style="color:#e09030">Why Taskmanager != GUI?</span><br>
+      Task manager: RAM of the llama process (GPU+RAM+KV-cache).<br>
+      GPU tools (nvidia-smi/radeontop): VRAM only.<br>
+      This bar: GPU-VRAM only. Hover the GB number for details.
+    </div>
+
+    <!-- MoE CPU Experts Override (Config-Tab) -->
+    <div id="config-moe-experts" style="display:none;margin-top:8px">
+      <div class="sec" style="margin-top:4px">MoE CPU experts (per model)</div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <select id="config-moe-model-select" onchange="onMoeModelSelect(this.value)"
+          style="flex:1;min-width:0;background:var(--bg);border:1px solid var(--b);border-radius:5px;padding:5px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txh);outline:none"></select>
+        <input type="number" id="config-moe-cpu-experts" value="0" min="0" max="99" step="1"
+          onchange="onMoeExpertsChange(this.value)"
+          style="width:56px;background:var(--bg2);border:1px solid var(--b);border-radius:5px;
+          padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--txh);outline:none">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2)">CPU layers</span>
+      </div>
+      <div id="config-moe-default-hint" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#9a74dc;margin-bottom:6px;line-height:1.5"></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="config-mlock-toggle" onchange="S.llamaMlock=this.checked;postSettings({llama_mlock:S.llamaMlock});updateMlockHint()">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);font-weight:600">Lock in RAM (--load-mode mmap+mlock)</span>
+        <span id="config-mlock-hint" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2)"></span>
+      </div>
+    </div>
+
+  </div><!-- /vram-panel -->
+  </div><!-- /p-models -->
+  <div class="panel" id="p-chats">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="sec" style="margin:0">Chat History</div>
+      <button onclick="loadChatHistory()" style="background:none;border:none;color:var(--tx2);cursor:pointer;font-size:16px">&#8635;</button>
+    </div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:10px;line-height:1.5">
+      Chats are saved automatically. Click to load a chat.
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:8px;cursor:pointer">
+      <input type="checkbox" id="chat-autosave-toggle" checked onchange="chatAutosaveToggle(this)">
+      Auto-save chats
+    </label>
+    <button onclick="saveCurrentChat()" class="amber-btn" style="width:100%;margin-bottom:10px">
+      &#9660; Save current chat
+    </button>
+    <div id="chat-history-list"><div class="empty">No saved chats yet.</div></div>
+  </div>
+</div>
+<button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

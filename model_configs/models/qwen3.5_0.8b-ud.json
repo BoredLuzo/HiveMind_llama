@@ -1,0 +1,22 @@
+{
+  "model": "qwen3.5:0.8b-ud",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 4096,
+  "num_ctx_analyst": 8192,
+  "num_ctx_duo_coder": null,
+  "num_ctx_vision": null,
+  "chat_template": "chat_template22.4.jinja",
+  "jinja": true,
+  "reasoning": "off",
+  "distilled": false,
+  "moe_cpu_experts": 0,
+  "mtp": false,
+  "gpu_layers": null,
+  "mmproj_filename": null,
+  "vram_gb_override": 0.6
+}

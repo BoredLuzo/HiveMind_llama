@@ -1,0 +1,22 @@
+{
+  "model": "qwen3.5:9b-ud",
+  "capabilities": {
+    "thinking": true,
+    "vision": true,
+    "tool_call": true
+  },
+  "vision_preprocessing": true,
+  "num_ctx": 4096,
+  "num_ctx_analyst": 8192,
+  "num_ctx_duo_coder": 8192,
+  "num_ctx_vision": 8192,
+  "chat_template": "chat_template22.4.jinja",
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": true,
+  "moe_cpu_experts": 0,
+  "mtp": false,
+  "gpu_layers": null,
+  "mmproj_filename": "mmproj-Qwen3.5-9B-F16.gguf",
+  "vram_gb_override": 5.6
+}

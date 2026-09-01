@@ -1,0 +1,29 @@
+{
+  "default_8gb_v1": {
+    "description": "8 GB VRAM — conservative limits for stable operation",
+    "vram_budget_gb": 7.5,
+    "max_concurrent_models": 2,
+    "duo_runtime_profile": "balanced",
+    "duo_coder_ctx_agentic": 16384,
+    "duo_coder_ctx_until_finished": 16384,
+    "duo_coder_ctx_normal": 8192,
+    "default_keep_alive": "10m",
+    "smart_preload_keep_alive": "10m",
+    "model_overrides": {
+      "analyst": {"model": "qwen3.5:4b-ud", "max_tokens": 1100},
+      "refiner": {"model": "qwen3.5:2b",      "max_tokens": 400},
+      "critic":  {"model": "qwen3.5:4b-ud", "max_tokens": 600},
+      "synthesizer": {"model": "qwen3.5:4b-ud", "max_tokens": 900},
+      "direct":  {"model": "qwen3.5:9b-ud",      "max_tokens": 600},
+      "judge":   {"model": "lfm2.5:2.6b",      "max_tokens": 120},
+      "duo_coder":  {"model": "qwen3.5:9b-ud"},
+      "duo_critic": {"model": "qwen3.5:4b-ud", "max_tokens": 600}
+    },
+    "guardrails": {
+      "allow_cpu_offload": true,
+      "warn_on_cpu_offload": true,
+      "max_model_size_gb": 6.0,
+      "prefer_smaller_models": true
+    }
+  }
+}

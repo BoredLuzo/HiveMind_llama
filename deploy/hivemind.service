@@ -1,0 +1,25 @@
+[Unit]
+Description=HiveMind AI Coding Assistant
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hivemind
+Group=hivemind
+WorkingDirectory=/opt/hivemind
+ExecStart=/opt/hivemind/venv/bin/python run.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+Environment=PYTHONUNBUFFERED=1
+
+MemoryMax=12G
+TasksMax=64
+
+StandardOutput=append:/var/log/hivemind/hivemind.log
+StandardError=append:/var/log/hivemind/hivemind.log
+
+[Install]
+WantedBy=multi-user.target
