@@ -14,15 +14,6 @@ echo    H I V E M I N D
 echo    by: Luzo  ^|  v1.0.1
 echo.
 
-choice /c YN /n /m "Press Y to start"
-if errorlevel 2 (
-    echo.
-    echo  Aborted - nothing was started.
-    echo.
-    exit /b 0
-)
-echo.
-
 REM Resolve server port: settings.json "server_port" (set by install.bat), default 8001.
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$j = Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if ($j.server_port) { $j.server_port } else { '8001' }"`) do set HM_PORT=%%P
 if not defined HM_PORT set "HM_PORT=8001"
