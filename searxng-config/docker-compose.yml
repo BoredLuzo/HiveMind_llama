@@ -1,0 +1,11 @@
+services:
+  searxng:
+    build: .
+    image: hivemind-searxng:latest
+    container_name: hivemind-searxng
+    ports:
+      - "127.0.0.1:8888:8080"
+    restart: unless-stopped
+    environment:
+      - SEARXNG_SECRET=CHANGE_ME_42f0b9c1
+      - SEARXNG_BASE_URL=http://localhost:8888

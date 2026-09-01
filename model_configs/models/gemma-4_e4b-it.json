@@ -1,0 +1,22 @@
+{
+  "model": "gemma-4:e4b-it",
+  "capabilities": {
+    "thinking": false,
+    "vision": true,
+    "tool_call": true
+  },
+  "vision_preprocessing": true,
+  "num_ctx": 4096,
+  "num_ctx_analyst": null,
+  "num_ctx_duo_coder": null,
+  "num_ctx_vision": 8192,
+  "chat_template": null,
+  "jinja": false,
+  "reasoning": null,
+  "distilled": false,
+  "moe_cpu_experts": 0,
+  "mtp": false,
+  "gpu_layers": null,
+  "mmproj_filename": "mmproj-BF16.gguf",
+  "vram_gb_override": 3.0
+}
