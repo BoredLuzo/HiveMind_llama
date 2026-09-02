@@ -7,6 +7,7 @@ populates models.json with all GGUFs found in the models folder.
 Recommended set (as of release, = default-settings alignment 2026-08-26):
   gemma-4:e4b-it          Q4_K_M        — Direct/Vision/Allrounder
   qwen3.6:35b-a3b-ud      UD-Q4_K_XL    — Coder/Planner (MoE, needs ~16GB RAM)
+  hermes3.6:…-genesis-v12-mtp-apex-compact  APEX-Compact  — Coder/Hermes agent (MoE+MTP)
   lfm2.5:2.6b             Q4_K_M        — Subagent/Worker + Judge
   qwen3.5:0.8b-ud         UD-Q4_K_XL    — Subagent ladder (smallest tier)
   qwen3.5:2b              Q4_K_M        — Refiner
@@ -178,6 +179,28 @@ SPECS: list[dict] = [
         "mmproj_regex": [
             r"(?i)^mmproj[-_.]bf16\.gguf$",
             r"(?i)^mmproj[-_.]f16\.gguf$",
+        ],
+    },
+    # ── Hermes3.6 Genesis V12 "Hermes compact" (2026-09-02) ───────────────
+    # Recommended Coder/Hermes agent: MoE 35B-A3B with MTP head, quantized as
+    # "APEX-Compact" (~17 GB, experts offloaded to CPU). The per-model config
+    # (model_configs/models/hermes3.6_..._v12_mtp_apex-compact.json) enables
+    # the MTP head + 35 CPU experts, so the DOWNLOAD must be the MTP variant —
+    # no non-MTP fallback regex here (it would register a different tag).
+    # Quant files verified 2026-09-02 in
+    # burningfeet/backup-2026-08-31-Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V12-GGUF.
+    {
+        "key": "hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact",
+        "desc": "Hermes3.6 Genesis V12 MTP-APEX-Compact (Coder/Hermes agent, MoE+MTP, ~17GB download)",
+        "search": "Qwen3.6 35B A3B Uncensored Genesis Hermes V12 GGUF",
+        "author_pref": ["burningfeet", "LuffyTheFox"],
+        "file_regex": [
+            r"(?i)hermes3\.6[-_.]35b[-_.]a3b[-_.]uncensored[-_.]genesis[-_.]v12[-_.]mtp[-_.]apex[-_.]compact\.gguf$",
+            r"(?i)35b[-_.]a3b[-_.]uncensored[-_.]genesis[-_.]v12[-_.]mtp.*compact\.gguf$",
+        ],
+        "mmproj_regex": [
+            r"(?i)mmproj[-_.]hermes3\.6[-_.]35b.*genesis[-_.]f16\.gguf$",
+            r"(?i)mmproj.*(f16|bf16)\.gguf$",
         ],
     },
 ]

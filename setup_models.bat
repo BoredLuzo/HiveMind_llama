@@ -56,6 +56,7 @@ echo    4. Qwen3.5 9B UD           Q4_K_XL    ~6 GB    Direct/Duo-Coder
 echo    5. Qwen3.5 2B              Q4_K_M     ~1.3 GB  Refiner
 echo    6. LFM2.5 2.6B             Q4_K_M     ~2 GB    Subagent/Judge (+DSpark drafter)
 echo    7. Qwen3.5 0.8B UD         Q4_K_XL    ~0.6 GB  Subagent ladder
+echo    8. Hermes3.6 V12 MTP-APEX-Compact  APEX-Compact ~17 GB   Coder/Hermes (MoE+MTP)
 echo.
 echo    LFM2.5 2.6B automatically also downloads the DSpark spec-dec drafter.
 echo.
@@ -83,6 +84,7 @@ echo    4. qwen3.5:0.8b-ud       Subagent ladder
 echo    5. qwen3.5:2b            Refiner
 echo    6. qwen3.5:4b-ud         Analyst/Critic/Speed
 echo    7. qwen3.5:9b-ud         Direct/Duo-Coder
+echo    8. hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact  Coder/Hermes (MoE+MTP)
 echo.
 set "MODELS_SEL="
 set /p "MODELS_SEL=Numbers: "
