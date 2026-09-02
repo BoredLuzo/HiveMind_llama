@@ -5,6 +5,24 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-09-02
+
+### Changed
+
+- **Agentic/Duo context is now user-controlled**: the per-agent **Context**
+  setting (agent card → `ctx_overrides`) is honoured in the duo/agentic paths,
+  and the 16k agentic floor is only a *minimum* — a larger model/role default is
+  used when no override is set. The agent-card context slider now goes up to
+  128k.
+- **Websearch status** no longer lists the search engines in the UI.
+- **`pip` installs** (`install_package` and the Python language install) now use
+  `python -m pip`, so a stale `pip.exe` (e.g. a leftover Python 3.11 script)
+  cannot fail silently with `exit 1` on Windows.
+
+### Fixed
+
+- Removed the stale "History Note" from the changelog header.
+
 ## [1.0.4] - 2026-09-02
 
 ### Added

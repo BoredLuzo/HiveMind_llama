@@ -1,4 +1,4 @@
-# HiveMind v1.0.4
+# HiveMind v1.0.5
 
 Local multi-agent AI coding assistant powered by **llama.cpp**. Runs entirely on
 your own hardware — no cloud, no API keys, no data leaving your machine.
