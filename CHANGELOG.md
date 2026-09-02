@@ -38,6 +38,11 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`_inject_tool_error_hints` used `workspace_lock` without the parameter),
   which previously crashed every tool round that hit an
   `EDIT_FILE_NO_BLOCKS_APPLIED` hint and was then auto-stopped as a loop.
+- **Tool-thinking is off by default** (`duo_coder_tool_thinking_auto_mode` now
+  defaults to `"off"` instead of `"on_fail"`) — no automatic thinking for tool
+  calls unless the user enables it.
+- **MoE CPU experts dropdown** now shows the full model key (no more short,
+  ambiguous/duplicate labels like several `hermes3.6` variants).
 
 ## [1.0.4] - 2026-09-02
 

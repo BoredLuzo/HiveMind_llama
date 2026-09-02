@@ -1165,7 +1165,7 @@ async def stream(req: Request):
     duo_test_feedback_final = _as_bool(_body_or_settings("duo_test_feedback_final", default=_duo_tf_legacy))
     _duo_coder_tool_thinking_explicit = "duo_coder_tool_thinking" in body
     duo_coder_tool_thinking = _as_bool(_body_or_settings("duo_coder_tool_thinking", default=False))
-    duo_coder_tool_thinking_auto_mode = str(_body_or_settings("duo_coder_tool_thinking_auto_mode", default="on_fail")).strip().lower()
+    duo_coder_tool_thinking_auto_mode = str(_body_or_settings("duo_coder_tool_thinking_auto_mode", default="off")).strip().lower()
     chat_id                = body.get("chat_id") or None
     until_finished         = _as_bool(_body_or_settings("until_finished",          default=False))
     duo_runtime_profile    = body.get("duo_runtime_profile") or settings.get("duo_runtime_profile") or "balanced"

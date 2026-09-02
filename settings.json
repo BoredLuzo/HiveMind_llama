@@ -148,7 +148,7 @@
   "duo_coder_ctx_until_finished": null,
   "duo_coder_ctx_normal": null,
   "duo_coder_tool_thinking": false,
-  "duo_coder_tool_thinking_auto_mode": "on_fail",
+  "duo_coder_tool_thinking_auto_mode": "off",
   "duo_write_chars_per_token": 2.5,
   "duo_coder_fallback_model": "qwen3.5:4b-ud",
   "duo_critic_ctx": null,
