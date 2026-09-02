@@ -34,6 +34,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Each run now also sends the context chosen in the frontend **with the
   `/stream` request** and applies it to that run — the displayed/used context
   can no longer silently stay on a stale default (e.g. 16k).
+- Fixed `NameError: workspace_lock is not defined` in the tool loop
+  (`_inject_tool_error_hints` used `workspace_lock` without the parameter),
+  which previously crashed every tool round that hit an
+  `EDIT_FILE_NO_BLOCKS_APPLIED` hint and was then auto-stopped as a loop.
 
 ## [1.0.4] - 2026-09-02
 
