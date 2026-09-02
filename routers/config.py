@@ -40,7 +40,13 @@ def _preset_snapshot() -> dict:
             continue
         snap[key] = copy.deepcopy(value)
     snap["agents"] = {
-        k: {"model": a.model, "temperature": a.temperature, "max_tokens": a.max_tokens}
+        k: {
+            "model": a.model,
+            "temperature": a.temperature,
+            "max_tokens": a.max_tokens,
+            "thinking": bool(getattr(a, "thinking", False)),
+            "thinking_budget": int(getattr(a, "thinking_budget", 0) or 0),
+        }
         for k, a in _state.pipeline.agents.items()
     } if _state.pipeline else {}
     snap["prompts"] = {}
