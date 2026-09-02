@@ -46,6 +46,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **llama.cpp updater** no longer dies with a raw traceback inside the
   installer — transient failures now print a clear message with retry and
   manual-install instructions.
+- **llama.cpp CUDA nightlies (b10760+)** split the CUDA runtime into a separate
+  `cudart-llama-bin-win-cuda-<ver>-x64.zip`. The updater now downloads that
+  extra zip too and places the runtime DLLs next to `llama-server.exe`, so the
+  CUDA build installs successfully again.
 
 ## [1.0.4] - 2026-09-02
 

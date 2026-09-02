@@ -318,6 +318,42 @@ def main() -> int:
         nested = list(target.glob("*/llama-server.exe"))
         exe = nested[0] if nested else exe
 
+    # CUDA-RUNTIME-SPLIT (2026-09-02): recent llama.cpp nightlies (b10760+)
+    # stopped bundling the CUDA runtime DLLs in the main
+    # `llama-bNNNN-bin-win-cuda-<ver>-x64.zip`. They now ship in a SEPARATE
+    # `cudart-llama-bin-win-cuda-<ver>-x64.zip` on the same release. Download it
+    # (matching the main asset's CUDA version) and extract the DLLs next to the
+    # exe, otherwise the server fails to start / the installer errors out.
+    if args.backend == "cuda" and releases:
+        _cuda_ver = ""
+        _m_ver = re.match(r"^llama-b\d+-bin-win-cuda-([\d.]+)-x64\.zip$", str(asset.get("name") or ""), re.IGNORECASE)
+        if _m_ver:
+            _cuda_ver = _m_ver.group(1)
+        _cudart = None
+        for _a in (releases[0].get("assets") or []):
+            _an = str(_a.get("name") or "")
+            _mm = re.match(r"^cudart-llama-bin-win-cuda-([\d.]+)-x64\.zip$", _an, re.IGNORECASE)
+            if _mm and (not _cuda_ver or _mm.group(1) == _cuda_ver):
+                _cudart = _a
+                break
+        if _cudart and _cudart.get("browser_download_url"):
+            _cu_zip = Path(tempfile.gettempdir()) / str(_cudart["name"])
+            print(f"       CUDA runtime split detected - downloading {_cudart['name']} ...")
+            try:
+                download(str(_cudart["browser_download_url"]), _cu_zip)
+                with zipfile.ZipFile(_cu_zip) as _zf:
+                    _bad = _zf.testzip()
+                    if _bad is not None:
+                        raise zipfile.BadZipFile(f"corrupt member: {_bad}")
+                    _zf.extractall(exe.parent)
+                print("       CUDA runtime DLLs installed next to llama-server.exe")
+            except Exception as _cud_err:
+                print(f"       [WARNING] CUDA runtime DLL download/extract failed: {_cud_err}")
+            finally:
+                _cu_zip.unlink(missing_ok=True)
+        elif not _cudart:
+            print("       (no separate cudart zip on this release - runtime DLLs expected in the main build)")
+
     # DLL-VERIFY (2026-08-27): `--device CUDA0` needs the bundled CUDA runtime
     # DLLs next to the exe. A ZIP without them would install a build that
     # "finds no devices" — fail here with a clear message instead.
