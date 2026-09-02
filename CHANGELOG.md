@@ -43,6 +43,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls unless the user enables it.
 - **MoE CPU experts dropdown** now shows the full model key (no more short,
   ambiguous/duplicate labels like several `hermes3.6` variants).
+- **llama.cpp updater** no longer dies with a raw traceback inside the
+  installer — transient failures now print a clear message with retry and
+  manual-install instructions.
 
 ## [1.0.4] - 2026-09-02
 
