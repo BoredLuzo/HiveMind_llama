@@ -17,6 +17,7 @@
   "moe_cpu_experts": 0,
   "mtp": false,
   "gpu_layers": 99,
+  "dspark_draft_filename": "LFM2.5-2.6B-DSpark-Q4_K_M.gguf",
   "mmproj_filename": null,
   "vram_gb_override": 2.0
 }
