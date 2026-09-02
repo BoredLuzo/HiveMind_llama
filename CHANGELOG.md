@@ -25,6 +25,8 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Duo/agentic context now honours a user-set per-agent **Context** override
   (`ctx_overrides`) even when a persisted `duo_*` context default exists —
   raising the context actually takes effect now.
+- llama.cpp updater now fetches the **newest `bXXXX` nightly** directly from the
+  releases list (the stable `nightly-tag.txt` pointer lagged ~100 builds).
 
 ## [1.0.4] - 2026-09-02
 
