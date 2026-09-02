@@ -24,6 +24,41 @@ from hive_functions.ctx_utils import compute_char_caps, extract_known_files
 
 logger = logging.getLogger("hivemind.planner")
 
+# ── PLANNER-OVERRUN-GUARD (2026-09-02) ─────────────────────────────────────────
+# Some models (observed live: LFM2.5 in duo-agentic) keep generating past the
+# actual plan — they append an "Implementation …" heading + a code block at the
+# end of the plan (no EOS at plan end). Cut the streamed plan there so that code
+# does not spill into the plan bubble. Requires a blank line before the runaway
+# section so a plan that merely *mentions* implementation as a numbered step is
+# never truncated.
+_PLAN_OVERRUN_LINE = re.compile(
+    r'\s*(?:#{1,4}\s+)?(?:implementation|implementing)\b'
+    r'|^\s*```\s*[a-zA-Z0-9_+#-]*\s*$',
+    re.IGNORECASE,
+)
+_PLAN_HOLD_CHARS = 96  # withhold window so the marker is seen before streaming
+
+
+def _plan_overrun_index(full: str, committed_len: int) -> int | None:
+    """Index in `full` where the plan switches into an implementation block,
+    or None. `full` = already-emitted plan text + withheld tail."""
+    if len(full) < 8:
+        return None
+    base = max(0, committed_len - 4)
+    seg = full[base:]
+    for m in re.finditer(r'(?m)^', seg):
+        p = base + m.start()
+        if p == 0:
+            continue
+        # line must follow a blank line (previous line empty)
+        if p < 2 or full[p - 2:p] != '\n\n':
+            continue
+        line = full[p:full.find('\n', p) if full.find('\n', p) != -1 else len(full)]
+        if _PLAN_OVERRUN_LINE.match(line):
+            return p
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  MODEL SIZE ESTIMATION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -726,6 +761,8 @@ async def _llm_stream(
 
     thinking_chunks: list[str] = []
     content_chunks: list[str] = []
+    _plan_hold = ""  # withheld plan tail for the overrun guard
+    _plan_overrun = False  # plan cut early because the model ran into implementation
     in_think = False
     hit_timeout = False
 
@@ -896,12 +933,32 @@ async def _llm_stream(
                             if "</think" in cont_tok:
                                 in_think = False
                         else:
-                            content_chunks.append(cont_tok)
-                            if emit_fn:
-                                try:
-                                    await emit_fn({"type": "planner_plan_token", "content": cont_tok})
-                                except Exception:
-                                    pass
+                            # PLANNER-OVERRUN-GUARD: withhold a short tail, cut the
+                            # plan if the model starts an "Implementation" section.
+                            _plan_hold += cont_tok
+                            _full_plan = "".join(content_chunks) + _plan_hold
+                            _cut = _plan_overrun_index(_full_plan, len("".join(content_chunks)))
+                            if _cut is not None:
+                                _plan_overrun = True
+                                logger.info(
+                                    "[Planner] plan overrun cut at %d chars — dropped implementation spill",
+                                    _cut,
+                                )
+                                break
+                            if len(_plan_hold) > _PLAN_HOLD_CHARS:
+                                _nl = _plan_hold.rfind("\n")
+                                if _nl >= 0 and len(_plan_hold) - (_nl + 1) <= _PLAN_HOLD_CHARS:
+                                    _seg = _plan_hold[:_nl + 1]
+                                    _plan_hold = _plan_hold[_nl + 1:]
+                                else:
+                                    _seg = _plan_hold[:len(_plan_hold) - _PLAN_HOLD_CHARS]
+                                    _plan_hold = _plan_hold[len(_plan_hold) - _PLAN_HOLD_CHARS:]
+                                content_chunks.append(_seg)
+                                if emit_fn:
+                                    try:
+                                        await emit_fn({"type": "planner_plan_token", "content": _seg})
+                                    except Exception:
+                                        pass
 
                     # THINKING-BUDGET-GUARD (2026-08-31): while NO plan content has
                     # started yet and the streamed thinking clearly exceeds the budget,
@@ -910,6 +967,7 @@ async def _llm_stream(
                     if (
                         _think_cap_est > 0
                         and not content_chunks
+                        and not _plan_hold
                         and (_think_chars // 3) > _think_cap_est
                     ):
                         logger.warning(
@@ -930,6 +988,18 @@ async def _llm_stream(
                     await emit_fn({"type": "usage_meta", "phase": "planner", **_p_usage_final})
                 except Exception:
                     pass
+
+            # Flush the withheld tail (kept back for the overrun guard) — unless
+            # the plan was cut at an implementation overrun.
+            if _plan_hold:
+                if not _plan_overrun:
+                    content_chunks.append(_plan_hold)
+                    if emit_fn:
+                        try:
+                            await emit_fn({"type": "planner_plan_token", "content": _plan_hold})
+                        except Exception:
+                            pass
+                _plan_hold = ""
 
     thinking_text = "".join(thinking_chunks).strip()
     thinking_text = re.sub(r"</?thinking?>", "", thinking_text, flags=re.IGNORECASE).strip()
