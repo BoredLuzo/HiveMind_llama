@@ -42,6 +42,36 @@ from core.tool_exec_helpers import (
 _logger = logging.getLogger("tool_executor")
 
 
+def _render_tool_menu(tool_mode: str, duo_ws: bool, max_items: int = 30) -> str:
+    """BASH-LOOP-REINJECT (2026-09-02): build a compact list of the tools that
+    are actually available in this mode, so a bash-looping model is reminded of
+    its full toolset instead of being aborted."""
+    try:
+        from tools.definitions import _get_inline_tools as _gt
+        _tools = _gt(include_websearch=duo_ws, mode=tool_mode) or []
+    except Exception:
+        return ""
+    _lines = []
+    for _t in _tools[:max_items]:
+        try:
+            _fn = _t.get("function", {})
+            _name = _fn.get("name", "")
+            _desc = str(_fn.get("description", "") or "").replace("\n", " ").strip()
+            if not _name:
+                continue
+            if _desc:
+                # first meaningful sentence as one-line purpose
+                _first = re.split(r"(?<=[.!?])\s", _desc)[0].strip()
+                if len(_first) > 160:
+                    _first = _first[:160] + "…"
+                _lines.append(f"  - {_name}: {_first}")
+            else:
+                _lines.append(f"  - {_name}")
+        except Exception:
+            continue
+    return "\n".join(_lines)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Hooks  —  callbacks duo_runner must provide
 # ═══════════════════════════════════════════════════════════════════════════
@@ -574,6 +604,24 @@ async def execute_tool_round(
                 "3x identical" if _last3_identical
                 else ("ABAB pattern" if _period2_loop else "ABCABC pattern")
             )
+            if _dname == "run_bash":
+                # BASH-LOOP-REINJECT (2026-09-02): repeated run_bash calls in a
+                # loop must NOT abort the run. Instead re-inject the full tool
+                # list so the model can pick a different tool, then let the round
+                # continue (round budget still bounds the loop).
+                _menu = _render_tool_menu(tool_mode, duo_ws)
+                await hooks.emit({"type": "token", "content": f"\n[Tool loop: {_loop_label} — re-injecting all tools]\n"})
+                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                    f"[LOOP DETECTED] run_bash was called repeatedly with the same or "
+                    f"equivalent command ({_loop_label}). The result will not change, so "
+                    f"DO NOT call run_bash again with the same approach.\n"
+                    f"STOP and pick a DIFFERENT tool. Your full toolset:\n{_menu}\n"
+                    f"Re-read the actual files (read_file), inspect the failing test file "
+                    f"directly, or call task_complete(status='blocked', reason='...') if you "
+                    f"are genuinely stuck. Choose a non-run_bash action now."
+                )})
+                trs.call_sigs.clear()
+                break
             await hooks.emit({"type": "token", "content": f"\n[Tool loop: {_loop_label} — aborted]\n"})
             dtool_msgs.append({"role": "tool", "content": "[loop-detection: aborted]",
                                 "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})

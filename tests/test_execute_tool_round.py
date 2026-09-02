@@ -201,14 +201,27 @@ res, hooks, msgs, rs, seen, ltl = run_round([
 ])
 check("task_complete_called after verified bash", res.task_complete_called is True)
 
-# ── 10. Loop-Detection ABAB ─────────────────────────────────────────────
+# ── 10. Loop-Detection ──────────────────────────────────────────────────
+# 10a. run_bash ABAB loop -> BASH-LOOP-REINJECT: NOT aborted, all tools
+#      re-injected into the message stream (new behaviour 2026-09-02).
 _HANDLERS["run_bash"] = "ok"
 res, hooks, msgs, rs, seen, ltl = run_round([
     tc("run_bash", {"cmd": "a"}), tc("run_bash", {"cmd": "b"}),
     tc("run_bash", {"cmd": "a"}), tc("run_bash", {"cmd": "b"}),
 ])
-check("loop ABAB detected", res.loop_detected is True)
-check("loop aborted msg", any("loop-detection: aborted" in str(m.get("content", "")) for m in msgs))
+check("run_bash loop NOT aborted", res.loop_detected is False)
+check("run_bash loop re-inject tools", any("LOOP DETECTED" in str(m.get("content", "")) and
+                                           "full toolset" in str(m.get("content", "")) for m in msgs))
+check("run_bash loop non-bash hint", any("Choose a non-run_bash action" in str(m.get("content", "")) for m in msgs))
+
+# 10b. Non-bash ABAB loop -> still aborts (unchanged behaviour).
+_HANDLERS["read_file"] = "file content"
+res, hooks, msgs, rs, seen, ltl = run_round([
+    tc("read_file", {"path": "a.py"}), tc("read_file", {"path": "b.py"}),
+    tc("read_file", {"path": "a.py"}), tc("read_file", {"path": "b.py"}),
+])
+check("non-bash loop detected", res.loop_detected is True)
+check("non-bash loop aborted msg", any("loop-detection: aborted" in str(m.get("content", "")) for m in msgs))
 
 # ── 11. File-change tracking (write_file) ───────────────────────────────
 _HANDLERS["write_file"] = "[write_file: created 'x.txt' (+3 lines)]"
