@@ -135,6 +135,15 @@ async def _phase_pre_explore_bootstrap(ctx, state: dict):
     """P1: Entry-Reads, Inits, Resume-Check, Workspace/Tree-Scout, Follow-up-
     Hint, Static-Repo-Map-only — aus _phase_pre_explore extrahiert (mechanisch).
     Produkte landen in state; der Parent liest sie zurueck."""
+    # AGENTIC-FIX (2026-09-02): _phase_pre_explore_bootstrap was extracted from
+    # _phase_pre_explore but lost the local `exec_mdl`. Every bare `exec_mdl`
+    # reference below (NameError: name 'exec_mdl' is not defined) crashed every
+    # code_duo run. Read it from state (set by _phase_vram) like the parent does.
+    exec_mdl = state.get("exec_mdl", "") or ""
+    # PHASE-FIX (2026-09-02): same extraction loss — tree-scout limits live in
+    # state (set by _phase_vram); provide defaults so the tree scout never raises.
+    _MAX_TREE_DEPTH = int(state.get("_MAX_TREE_DEPTH") or 4)
+    _MAX_TREE_FILES = int(state.get("_MAX_TREE_FILES") or 200)
     _explore_ctx: str = ""
     _pre_explore_msgs: list = []
     _tree_ctx: str = ""
@@ -353,6 +362,20 @@ async def _phase_pre_explore_bootstrap(ctx, state: dict):
 
 async def _phase_pre_explore_cache(ctx, state: dict):
     """P2: Pre-Explore-Cache-Hit (own Guard) — aus _phase_pre_explore extrahiert."""
+    # PHASE-FIX (2026-09-02): this phase was extracted from _phase_pre_explore but
+    # lost its locals. Unpack them from state (like _phase_pre_explore_finalize
+    # does) so the function no longer raises UnboundLocalError when the
+    # `pre_explore` branch is skipped (e.g. pre_explore=False).
+    exec_mdl = state.get("exec_mdl", "") or ""
+    _ws_str = state.get("_ws_str", "") or ""
+    _resume_data = state.get("_resume_data")
+    _explore_ctx = state.get("_explore_ctx", "") or ""
+    _pre_explore_msgs = list(state.get("_pre_explore_msgs") or [])
+    _contracts_raw = state.get("_contracts_raw") or []
+    _plan_tracker = state.get("_plan_tracker")
+    _touched_paths = state.get("_touched_paths") or set()
+    _ck = state.get("_ck", "")
+    _xexplore_mdl_early = state.get("_xexplore_mdl_early") or exec_mdl
     if ctx.duo_config.pre_explore:
         #
         _xexplore_cfg_early = ctx.settings.get("exploration_agent") or {}
@@ -433,6 +456,14 @@ async def _phase_pre_explore_cache(ctx, state: dict):
 
 async def _phase_pre_explore_prepare(ctx, state: dict):
     """P3: Setup (ctx/opts/budgets/msgs/tools/tree) — aus _phase_pre_explore extrahiert."""
+    # PHASE-FIX (2026-09-02): unpack locals from state (lost during extraction).
+    _xexplore_mdl_early = state.get("_xexplore_mdl_early") or ""
+    _ws_str = state.get("_ws_str", "") or ""
+    exec_mdl = state.get("exec_mdl", "") or ""
+    _xtools_ws = state.get("_xtools_ws") or []
+    _duo_ws = bool(state.get("_duo_ws"))
+    _MAX_TREE_DEPTH = int(state.get("_MAX_TREE_DEPTH") or 4)
+    _MAX_TREE_FILES = int(state.get("_MAX_TREE_FILES") or 200)
     logger.warning(
         "[PRE-EXPLORE-CACHE-MISS] No valid cache - starting fresh explore: mdl=%s ws=%r",
         _xexplore_mdl_early, (_ws_str or "")[:50]
@@ -635,6 +666,7 @@ async def _phase_pre_explore_finalize(ctx, state: dict):
     _pre_explore_msgs = state.get("_pre_explore_msgs")
     _chat_ctx_loaded = state.get("_chat_ctx_loaded")
     _xmsgs = state.get("_xmsgs")
+    _touched_paths = state.get("_touched_paths") or set()
 
     if _static_map_task is not None:
         try:
@@ -1010,6 +1042,9 @@ async def _phase_pre_explore(ctx, state: dict):
         _tree_ctx = state["_tree_ctx"]
         _xexplore_t = state["_xexplore_t"]
         _use_parallel = state["_use_parallel"]
+        # PHASE-FIX (2026-09-02): local `_xexplore_cfg` was lost during the
+        # phase extraction — recompute it (same source as _phase_pre_explore_prepare).
+        _xexplore_cfg = ctx.settings.get("exploration_agent") or {}
 
         try:
             from backend.llama_server_manager import manager as _lsm2

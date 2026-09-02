@@ -13,6 +13,191 @@ or versioning discipline. Release intent started with v1: clean up, rewire,
 pay down technical debt. This changelog starts **now** and only documents
 deliberate changes/features, not internal patchwork.
 
+## [1.0.4] - 2026-09-02
+
+### Added
+
+- **Direct-chat tool tiers redesigned**: the "read" tier is now **Websearch**
+  (`web_search`/`web_fetch` only, no file reads); the "python" tier is
+  "read + python". Ladder: off → Websearch → read+python → full.
+- **`web_fetch` sends a real browser User-Agent** to reduce HTTP 403s (e.g.
+  Wikipedia). Strict sites may still block — `web_search` is preferred.
+- **Semantic LRU reclaims more context** (`hive_functions/memory.py`,
+  `context/compression.py`):
+  - Stale `read_file` outputs are evicted **immediately** after a successful
+    edit/write/patch of the same path — the model no longer carries outdated
+    file content (semantic safety + token win).
+  - A repeated **full** read of an already-read file dedupes the older full
+    copies (recall marker), keeping only the newest; partial (line-range)
+    reads are untouched.
+  - Path-less outputs (`run_bash`/`run_python`/web) now age out via half-rate
+    TTL decay instead of staying fresh forever; the newest path-less result
+    is kept alive like a focus-refresh. Error outputs keep their doubled TTL.
+
+### Fixed
+
+- **run.py missing-file guard blocked startup on a fresh install**
+  (`run.py`): the guard still required a plain `hive_functions/pre_explore.py`
+  FILE, but `pre_explore` was refactored into a package
+  (`hive_functions/pre_explore/__init__.py` re-exports `run_pre_explore`). A
+  clean extraction therefore aborted with
+  `[ERROR] Missing files: hive_functions/pre_explore.py`. The guard now checks
+  for the package entry point `pre_explore/__init__.py` instead.
+- **Agentic coder crashed on every code_duo run** (`core/duo/_pre_explore.py`):
+  the extracted pre-explore phases lost several locals; each phase now reads
+  them from `state`.
+- **8 GB setup works out of the box**: `direct`/`duo_coder` default to
+  `lfm2.5:2.6b`, the `default_8gb_v1` profile no longer forces the 9B model,
+  and a model chosen on the Agent-tab card always wins.
+- **VRAM pre-flight block now suggests fitting models** instead of a generic
+  "ctx senken" hint.
+- **llama.cpp download is resumable + CRC-verified**; `install.bat` no longer
+  dies on parenthesized install folders.
+
+## [1.0.3] - 2026-09-01
+
+### Fixed
+
+- **Installer crashed silently when the install folder contained parentheses**
+  (`install.bat`, `setup_models.bat`): a `for /f` over `%~dp0...` breaks when
+  the path contains `( )` (e.g. `Downloads\...\HiveMind_v1.0.3 (3)\`) — cmd
+  eats the `)` as the end of the for-block and the batch dies without a
+  message right after the llama.cpp step. The recursive file checks now run
+  via PowerShell reading the path from an ENV var (the parens never pass
+  through cmd's for-block parser). Verified with a folder containing `(3)`.
+- **SearXNG stale-container bind-mount error persisted after `docker rm`**
+  (`searxng.bat`, `searxng_repair.bat`): a leftover container from an OLD
+  HiveMind install (different folder, e.g. `HiveMindv3`) kept its stale
+  bind-mount config even after `docker rm -f` — `docker compose up` again
+  failed with `invalid mount config for type "bind"`. The `:compose_up`
+  fallback now runs `docker compose down --remove-orphans` (removes container
+  AND the compose network) before retrying, so the mount error cannot persist.
+- **Installer could close the window without a message**
+  (`install.bat`, `deploy/fetch_llamacpp.py`, `deploy/fetch_models.py`,
+  `deploy/add_model.py`):
+  - `install.bat` now writes every step to `install.log` (start, llama.cpp
+    exit code, models step, setup_models exit) so a hidden crash is always
+    diagnosable; the llama.cpp return code is captured before any logging.
+  - `fetch_llamacpp.py` wraps download + extract in try/except (a corrupt
+    partial ZIP used to raise `BadZipFile` and hard-close the window); all
+    three installer scripts have a top-level crash guard that prints the
+    error and waits for a key instead of silently closing.
+- **VRAM budget silently reset to 7.5 GB despite the installer's 8 GB**
+  (`hive_functions/safe_profile_policy.py`): the `default_8gb_v1` safety
+  policy overwrote the user-configured `vram_budget_gb` (8.0 → 7.5) on every
+  server start. The policy value is now a SAFETY CEILING: an explicitly set
+  higher budget (e.g. 8.0) is respected.
+- **PRE-FLIGHT VRAM block on high context** (`backend/manager_load.py`): a
+  leftover `ctx_overrides` of 32768 (or any too-large ctx) made model loads
+  fail hard on 8 GB GPUs. Before raising `VRAMPreFlightError`, the loader now
+  auto-downgrades the context (16384 → 8192 → 4096) and rewrites the
+  `--ctx-size` flag if a smaller window fits.
+- **llama.cpp updater failed on freshly-published nightlies**
+  (`deploy/fetch_llamacpp.py`): `_latest_nightly_release()` now only picks a
+  build that already exposes a matching asset for the requested backend and
+  falls back to the next lower build otherwise. The error message reports the
+  actual nightly tag instead of the stable release (v0.3.0).
+- **Agent-card temperature was ignored** (`core/tool_loop.py`,
+  `core/duo_runner.py`): in the tool-loop / duo coder / critic payloads the
+  model sampling profile always overwrote the temperature set in the Agent
+  cards. Now an explicitly set Agent temperature wins; otherwise the model
+  sampling profile supplies the value. `ToolLoopConfig.temperature` default
+  is `None` (= use profile).
+- **"Run completed" divider too loud in simple chat** (`static/app.js`):
+  in simple/direct mode a successful run now renders a subtle centered line
+  instead of a large green banner; error/abort states and multi-agent modes
+  keep the full marker.
+- **Agent-card context slider capped at 32k** (`static/app.js`): raised to
+  65536 so larger contexts (thinking traces + full repo context) can be set.
+
+### Changed
+
+- **Hermes3.6 V12 "Hermes compact" config aligned to the qwen3.5:9b-ud launch
+  parameters** (`model_configs/models/hermes3.6_..._v12_mtp_apex-compact.json`):
+  `num_ctx` 8192→4096 and `num_ctx_duo_coder` 16384→8192 so the 35B MoE runs
+  on an 8 GB GPU (MoE CPU offload 35 + MTP head stay as required).
+- **Sampling profiles aligned to the official Qwen model cards**
+  (`core/model_sampling.py`): `sampling_text` non-thinking general
+  `temp 0.6→0.7`, `top_p 0.95→0.8`; `sampling_thinking_code` precise coding
+  `presence_penalty 1.5→0.0`; QWEN35 `non_thinking` alias now matches
+  Instruct general. Hermes3.6 V12 sampling unchanged (only temperature +
+  top_k active, everything else disabled, seed 42).
+
+## [1.0.2] - 2026-09-01
+
+### Added
+
+- `tests/test_release_integrity.py` — deterministic release guard (no LLM):
+  run.py missing-file check accepts the pre_explore package layout, the
+  searxng engine lists are consistent across `settings.py` /
+  `tools/websearch.py` / `settings.json` / `searxng-config/settings.yml`, and
+  the SearXNG config is valid YAML with a real secret placeholder. Registered
+  in `tests/run_regressions.py` (24 suites total). README documents the
+  regression-suite workflow (`python tests\run_regressions.py`).
+
+### Fixed
+
+- **"Folder 'models' is missing" note shown despite a configured models folder**
+  (`start_hivemind.bat`): the NOTE is now suppressed when
+  `settings.json → models_dir` is set (previously only `models\` +
+  `HIVEMIND_MODELS_DIR` were checked).
+- **VRAM budget display sync** (app.js): after saving, the budget input is
+  refilled from the server response and the "GB effective" value matches what
+  was persisted; `_vramBudgetGb` now falls back to the saved value on load.
+- **MoE CPU experts dropdown showed duplicate entries** (app.js): the model
+  list is now deduplicated by base name, so `qwen3.6:35b-a3b` +
+  `qwen3.6:35b-a3b-uncensored` (and hermes v7/v10/v12, tiel-coder ±mtp) appear
+  once instead of several identical labels.
+- **SearXNG install fails on a stale container** (`searxng.bat`,
+  `searxng_repair.bat`): `docker compose up` now uses `--force-recreate` and,
+  on failure, removes the leftover `hivemind-searxng` container and retries.
+  A container created by an OLD HiveMind install carried a stale bind-mount
+  config (old WSL2 path) that made `up --build` fail with
+  `invalid mount config for type "bind": bind source path does not exist`.
+  The current `docker-compose.yml` has no bind mounts; `--force-recreate`
+  rebuilds from it. Quick manual fix: `docker rm -f hivemind-searxng`.
+- **run.py missing-file guard** now accepts `hive_functions/pre_explore/` as a
+  PACKAGE (the old file check blocked server startup with
+  "[ERROR] Missing files: hive_functions/pre_explore.py" after the
+  module→package refactor).
+
+### Changed
+
+- **Websearch engines**: default engine list is now
+  `brave,bing,github,wikipedia,mojeek,stackoverflow,pypi`. Google was removed
+  (captcha/rate-limit prone from datacenter IPs); mojeek added (captcha-free).
+  Updated in `settings.py`, `settings.json`, `tools/websearch.py` and
+  `searxng-config/settings.yml`.
+- **Frontend websearch status**: turning a websearch toggle ON now triggers
+  `checkWebsearchStatus()` immediately (previously the dot stayed empty until a
+  manual "Check status" click); the host input value is read live so the
+  "Unreachable" text shows the current host.
+- **Preload defaults OFF** (Configs tab / `settings.py` / `settings.json`):
+  `startup_preload_enabled`, `startup_preload_judge_in_agentic`,
+  `smart_preload_enabled` and `judge_keepalive_enabled` now default to `false`.
+  No model is loaded at boot that isn't needed immediately; prefetch without
+  learned timing data (`prefetch_agent_avgs`) is off. Server-side
+  `settings.get(..., True)` fallbacks aligned to `False`.
+- **Configs tab regrouped** (index.html): three semantic sections — "Modell-
+  Vorladen & VRAM" (Startup Preload, Keep-Alive/Pinning, Smart Preload),
+  "Lernen & Modell-Config" (Learning Preset Mode, Model Config), "System"
+  (Energy, Git Integration).
+- **Git single source of truth**: the duplicated Auto-Commit toggle in the
+  Agents tab was removed; git config now lives only in the Configs tab. The
+  Agents tab shows a "Git in Configs →" link instead.
+- **Preload sub-toggle cascade** (app.js): turning the Startup Preload master
+  toggle OFF also clears the judge-in-agentic / analyst / coder sub-toggles.
+- **"Use Presets" panel removed from the Agentic coder** (index.html): the
+  runtime-profile / lock-profile / preset-models toggles are gone. The user
+  picks the planner + coder model directly in the Duo options and Agent cards.
+  `duo_runtime_profile` stays `"balanced"` as the fixed backend default
+  (still used for run timeouts / important-task escalation).
+- **Composer tool-status line removed** (index.html + app.js): the status text
+  above the input (e.g. "⇄ Code-Duo: coder tools off") is gone; the header
+  Chat-Tools badge remains the single indicator.
+- `run.py`/UI default semantics for the four changed settings now read
+  `=== true` instead of `!== false` so the new OFF default renders correctly.
+
 ## [1.0.1] - 2026-09-01
 
 ### Added
@@ -28,6 +213,44 @@ deliberate changes/features, not internal patchwork.
   (settings: `duo_tool_sandbox_max_mem_mb`, `duo_tool_sandbox_max_procs`);
   on non-Windows, tool subprocesses start in their own process group and are
   fully terminated via `killpg` on timeout (instead of a bare `kill()`).
+- **Hermes3.6 Genesis V12 "Hermes compact" (MTP-APEX-Compact)** added to the
+  model downloader (`deploy/fetch_models.py` spec,
+  `setup_models.bat` list, per-model config
+  `model_configs/models/hermes3.6_..._v12-mtp-apex-compact.json`, MoE/MTP
+  launch entries in `backend/llama_config.py`). Source:
+  https://huggingface.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V12-GGUF
+- **Hermes V12 default sampling = strict (producer recommendation)** — only
+  `temperature` + `top_k` active; `top_p`/`min_p`/`presence_penalty`/
+  `repetition_penalty` disabled (Noise-Gate entfernt → stabil). The per-model
+  `sampling` block overrides repeatable 1.05→1.0 from the model card.
+- **llama.cpp updater fix** (`deploy/fetch_llamacpp.py`): the nightly build is
+  now resolved from the GitHub releases list by the HIGHEST `bXXXX` build
+  number instead of the stale `nightly-tag.txt` of the stable release
+  (v0.3.0 pointed to b10621 while the newest nightly was b10742). Old
+  `nightly-tag.txt` logic stays as fallback.
+- **`searxng_repair.bat`** — new SearXNG repair script (+ `searxng.bat repair`
+  dispatch): starts Docker Desktop automatically if the engine is down, waits
+  up to 120s for the engine, recreates/restarts the `hivemind-searxng`
+  container and verifies `/healthz`. If the container runs a stale baked-in
+  config (no HTTP 200), it rebuilds the image and re-checks.
+- **SearXNG config bugfix** (`searxng-config/Dockerfile` +
+  `docker-compose.yml`): the base image's `/etc/searxng` is a Docker volume
+  that shadowed the baked `settings.yml` (stale/empty file → HTTP 500 /
+  `KeyError: default_doi_resolver`). The settings are now installed to
+  `/usr/local/searxng/settings-hivemind.yml` and selected via
+  `SEARXNG_SETTINGS_PATH`, which uses the custom config as the FULL app
+  config instead of the template from `/etc/searxng`. Verified: `/healthz`
+  HTTP 200 with the HiveMind engine set (brave/bing/github/wikipedia).
+- **Per-model sampling stats** (`sampling` block in
+  `model_configs/models/*.json`): per-mode llama.cpp sampling parameters
+  (temperature/top_p/top_k/min_p/seed/presence_penalty/repetition_penalty),
+  keyed by the runtime mode keys (`thinking`, `non_thinking`,
+  `sampling_thinking_code`, `sampling_thinking_text`, `sampling_text`).
+  Highest priority over the built-in family profiles
+  (`core/model_sampling.py`), generic for any model. Collected by the
+  `[C]ustom` wizard in `deploy/add_model.py` and the `--json` path.
+- `seed` support in the OpenAI payload builders (tool loop, duo coder/critic,
+  pre-explore) so a configured `seed` is actually sent to llama-server.
 
 ### Changed
 

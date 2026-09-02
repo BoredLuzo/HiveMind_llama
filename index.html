@@ -98,7 +98,7 @@
         <input type="radio" name="direct_tools_tier" id="dt-tier-off" value="off" onchange="setDirectToolsTier(this.value)">
         <label for="dt-tier-off" title="Pure chat — no tools">Off</label>
         <input type="radio" name="direct_tools_tier" id="dt-tier-readonly" value="readonly" onchange="setDirectToolsTier(this.value)">
-        <label for="dt-tier-readonly" title="Read + web search">Read</label>
+        <label for="dt-tier-readonly" title="Web search only (no file read)">Websearch</label>
         <input type="radio" name="direct_tools_tier" id="dt-tier-python" value="python" onchange="setDirectToolsTier(this.value)">
         <label for="dt-tier-python" title="Read + run_python">Python</label>
         <input type="radio" name="direct_tools_tier" id="dt-tier-full" value="full" onchange="setDirectToolsTier(this.value)">
@@ -1307,7 +1307,7 @@
       <div class="tgl-row">
         <span class="tgl-text">Preload at startup</span>
         <label class="cfl-sw">
-          <input type="checkbox" id="startup-preload-toggle" onchange="setStartupPreload(this.checked)" checked>
+          <input type="checkbox" id="startup-preload-toggle" onchange="setStartupPreload(this.checked)">
           <span class="sl"></span>
         </label>
       </div>
@@ -1316,7 +1316,7 @@
         <div class="tgl-row">
           <span class="tgl-text">Preload judge in agentic <em>(2.1GB VRAM)</em></span>
           <label class="cfl-sw">
-            <input type="checkbox" id="startup-preload-judge-agentic-toggle" checked
+            <input type="checkbox" id="startup-preload-judge-agentic-toggle"
               onchange="postSettings({startup_preload_judge_in_agentic:this.checked})">
             <span class="sl"></span>
           </label>
@@ -1360,7 +1360,7 @@
       <div class="tgl-row">
         <span class="tgl-text">Keep judge warm <em>(after response)</em></span>
         <label class="cfl-sw">
-          <input type="checkbox" id="judge-keepalive-toggle" checked
+          <input type="checkbox" id="judge-keepalive-toggle"
             onchange="postSettings({judge_keepalive_enabled:this.checked})">
           <span class="sl"></span>
         </label>

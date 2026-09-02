@@ -6,7 +6,7 @@ import httpx
 import re
 import time
 from typing import Callable
-from hive_functions.memory import ToolContextLRU
+from hive_functions.memory import ToolContextLRU, _recall_marker
 from utils.token import estimate_ctx_tokens as _estimate_ctx_tokens
 from utils.patterns import _RE_PATH_KEY
 
@@ -37,6 +37,50 @@ def init_compression(settings_obj=None, registry_get_fn=None,
         _registry_get = registry_get_fn
     if pipeline_chat_stream_fn:
         _pipeline_chat_stream = pipeline_chat_stream_fn
+
+def evict_stale_reads_for_path(
+    *,
+    messages: list[dict],
+    lru: ToolContextLRU,
+    path: str,
+    exclude_idx: int | None = None,
+) -> int:
+    """
+    LRU-A: immediately evict read_file outputs for a path that was just
+    edited/written - the cached content is stale and misleading. Replaces the
+    tool-message payload in-place with a recall marker (keeps message indices
+    stable) and marks the LRU entries evicted.
+
+    LRU-B: when a NEW read_file for the same path is registered, *exclude_idx*
+    keeps that newest copy alive while the older full duplicates are evicted.
+
+    Returns the number of tool messages evicted.
+    """
+    if not messages or not path:
+        return 0
+    evicted = 0
+    # oldest first -> keep the newest read of the path alive
+    for entry in lru.alive_by_path(path, kind="read_file"):
+        idx = int(entry.get("idx", -1))
+        if idx < 0 or idx >= len(messages):
+            continue
+        if exclude_idx is not None and idx == int(exclude_idx):
+            continue
+        msg = messages[idx]
+        if msg.get("role") != "tool" or msg.get("name") != "read_file":
+            continue
+        old = str(msg.get("content", ""))
+        if not old or old.startswith("[System: Content of"):
+            lru.mark_evicted(idx)
+            continue
+        messages[idx] = {
+            **msg,
+            "content": _recall_marker(entry.get("path", "") or path),
+        }
+        lru.mark_evicted(idx)
+        evicted += 1
+    return evicted
+
 
 def _evict_stale_tool_outputs(
     *,
@@ -75,10 +119,7 @@ def _evict_stale_tool_outputs(
             continue
 
         p = entry.get("path", "") or msg.get("name", "tool output")
-        placeholder = (
-            f"[System: Content of {p} evicted to save context. "
-            "Use read_file or rerun the tool if needed again.]"
-        )
+        placeholder = _recall_marker(p)
         messages[idx] = {
             **msg,
             "content": placeholder,

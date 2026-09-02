@@ -1,4 +1,4 @@
-# HiveMind v1.0.1
+# HiveMind v1.0.4
 
 Local multi-agent AI coding assistant powered by **llama.cpp**. Runs entirely on
 your own hardware — no cloud, no API keys, no data leaving your machine.
@@ -41,7 +41,7 @@ three layers — two of them are pure code analysis (no LLM, fast, deterministic
    regex fallback), a cross-partition dependency graph, and a token-budgeted
    map that is injected into the Planner and Coder context. **On by default**
    (`duo_static_map_chars=0` → auto-budget).
-3. **LLM Pre-Explore** (`hive_functions/pre_explore.py`) — *optional* deep read:
+3. **LLM Pre-Explore** (`hive_functions/pre_explore/`) — *optional* deep read:
    parallel worker models read the codebase and emit structured TOML contracts
    (exports, dependencies, entry points, complexity). **Off by default**
    (`duo_pre_explore=false`) — enable it when the static map is not enough.
@@ -63,6 +63,22 @@ learned insights about the repository.
 Mode buttons live in the sidebar ("Agents" tab). AutoMap routing is
 conservative by default (`automap_mode="conservative"`) and can learn from
 run outcomes (`routing_weights.json`).
+
+### Direct chat tool tiers
+
+In **Simple / Direct** chat the model can use real tools through a tier
+(`direct_tools_tier`, UI: "Tool tier"):
+
+| Tier | Tools |
+|------|-------|
+| **Off** | pure chat — no tools |
+| **Websearch** | `web_search`, `web_fetch` only (no file read) |
+| **Python** | read tools + `web_search`/`web_fetch` + `run_python` |
+| **Full** | read/write/exec — `edit_file`, `run_bash`, background, git, … |
+
+The tier only escalates what the model is allowed to call; `full` is needed
+for real edit/build requests. When SearXNG is not reachable the Websearch
+tier degrades to pure chat.
 
 ### Code Duo (Critic-Duo / Agentic)
 
@@ -171,7 +187,11 @@ precedence: config file → hardcoded profiles → heuristics.
   "mtp": false,
   "gpu_layers": null,
   "mmproj_filename": null,
-  "vram_gb_override": null
+  "vram_gb_override": null,
+  "sampling": {
+    "thinking": { "temperature": 0.6, "top_k": 20, "seed": 42, "repetition_penalty": 1.0 },
+    "non_thinking": { "temperature": 0.95, "top_k": 20, "seed": 42 }
+  }
 }
 ```
 
@@ -195,6 +215,15 @@ Field notes:
 - **`gpu_layers`** — `--n-gpu-layers` override.
 - **`mmproj_filename`** — explicit vision-projector file for this model.
 - **`vram_gb_override`** — VRAM estimate override (display + planning).
+- **`sampling`** — *optional* per-mode sampling stats, highest priority over the
+  built-in family profiles. Keys are the same mode keys used at runtime
+  (`thinking`, `non_thinking`, `sampling_thinking_code`, `sampling_thinking_text`,
+  `sampling_text`); each value is a llama.cpp sampling dict (`temperature`,
+  `top_p`, `top_k`, `min_p`, `seed`, `presence_penalty`, `repetition_penalty`).
+  **llama.cpp "disabled" semantics:** `top_p=1.0`, `min_p=0.0`,
+  `presence_penalty=0.0`, `repetition_penalty=1.0`. Only entered fields are
+  stored; missing fields fall back to the family default. The `setup_models.bat`
+  → `[C]ustom` wizard collects this block interactively (generic for any model).
 
 > A config file whose name is only the base (e.g. `qwen3.5.json`) applies to
 > **all** tags of that base; a `qwen3.5_9b-ud.json` file applies only to that
@@ -233,6 +262,7 @@ Prefix a key with `_` to skip it (e.g. notes). `TODO:` paths are ignored.
 |-------|------|----------|------|
 | `gemma-4:e4b-it` (Q4_K_M) | Allrounder/Vision | ~3 GB | ~3 GB |
 | `qwen3.6:35b-a3b-ud` (UD-Q4_K_XL) | Coder/Planner (MoE) | ~20 GB | ~5 GB (experts in RAM) |
+| `hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact` (APEX-Compact) | Coder/Hermes agent (MoE, MTP) | ~17 GB | ~6 GB (experts in RAM) |
 | `qwen3.5:4b-ud` (UD-Q4_K_XL) | Analyst/Critic/Speed | ~3 GB | ~3 GB |
 | `qwen3.5:9b-ud` (UD-Q4_K_XL) | Direct/Duo-Coder | ~6 GB | ~6 GB |
 | `qwen3.5:2b` (Q4_K_M) | Refiner | ~1.3 GB | ~1.5 GB |
@@ -363,10 +393,27 @@ Standalone: `setup_models.bat [custom models folder]`
 ```bat
 searxng.bat install [port]   # generate secret, build image, start (default 8888)
 searxng.bat start|stop|restart|status
+searxng.bat repair           # fix a broken/stopped install (searxng_repair.bat)
+searxng_repair.bat [port]    # start Docker Desktop if down, rebuild + health-check
 ```
 
-`settings.yml` is baked into the image (no host bind mounts). Container uses
-`restart: unless-stopped`. Without Docker, web search stays disabled.
+`settings.yml` is baked into the image and selected via `SEARXNG_SETTINGS_PATH`
+(no host bind mounts — avoids Docker Desktop WSL2 path translation errors).
+The base image's `/etc/searxng` volume is intentionally NOT used for the config
+(it would shadow the baked file with a stale template). Container uses
+`restart: unless-stopped`. Without Docker, web search stays disabled — or point
+HiveMind at an already-running instance with `searxng.bat external URL`.
+
+> **SearXNG not reachable?** Run `searxng_repair.bat` (or `searxng.bat repair`).
+> It starts Docker Desktop automatically if the engine is down, waits for it,
+> recreates/restarts the container and re-verifies `/healthz`. If the container
+> runs an old baked-in config, it rebuilds the image automatically.
+>
+> **Stale-container error** (`invalid mount config for type "bind"`): a leftover
+> `hivemind-searxng` container from an older HiveMind version carries a stale
+> bind-mount config. `searxng.bat`/`searxng_repair.bat` now use
+> `--force-recreate` and auto-remove it on failure. Manual fix:
+> `docker rm -f hivemind-searxng` then run the repair again.
 
 ### Other scripts
 
@@ -379,6 +426,7 @@ searxng.bat start|stop|restart|status
 | `setup_models.bat` | Download / register / **add custom** models |
 | `start_mcp.bat` | MCP HTTP server for IDEs on port 8090 |
 | `searxng.bat` | SearXNG manager |
+| `searxng_repair.bat` | Fix SearXNG (starts Docker Desktop, rebuilds container, health-check) |
 
 ## Configuration
 
@@ -427,6 +475,13 @@ then backend match, then CUDA version). Re-run `install.bat` step 5 or
 `python deploy\fetch_llamacpp.py --backend vulkan`. Override explicitly with
 `HIVEMIND_LLAMA_BIN`. A model is "not found" when its GGUF is neither in
 `models\` nor mapped in `models.json` — use `setup_models.bat` → `[C]`/`[R]`.
+
+### `web_fetch` returns `HTTP 403`
+
+Some sites (e.g. Wikipedia, openai.com) block automated requests even with a
+browser User-Agent. HiveMind ships a real browser UA, but strict sites may
+still answer `403`. Prefer `web_search` (via SearXNG) over `web_fetch` for
+research; `web_fetch` works best on sites that do not hard-block bots.
 
 ### Port 8001 already in use
 
@@ -477,6 +532,22 @@ taskkill /F /PID <pid>
   auto-restart after crash/OOM/power loss).
 - Health monitoring: llama-server `/health` pings with auto-slot restart,
   orphan-process rehabilitation on startup.
+
+## Testing
+
+HiveMind ships a **deterministic regression suite** — no LLM, no running
+server, no models needed. It guards release-blocking behavior (tool dispatch,
+context budgets, sandboxing, planner/coder wiring, model registry, workspace
+guards, release integrity):
+
+```bat
+python tests\run_regressions.py
+```
+
+Add a new test as `tests\test_<area>.py` (standalone script, exit 0/1) and
+register it in `tests\run_regressions.py`. For a release, run the suite and a
+quick smoke test (start `run.py`, open `http://localhost:8001`, check
+`/websearch/status`).
 
 ## Use Cases
 

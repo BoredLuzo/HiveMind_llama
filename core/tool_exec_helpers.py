@@ -14,7 +14,10 @@ import json
 import re
 import re
 import os
+import logging
 from pathlib import Path
+
+logger = logging.getLogger("hivemind.tool_exec_helpers")
 
 from tools.runner import _run_inline_tool
 from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed, run_bash_failed as _run_bash_failed
@@ -507,14 +510,37 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
 
 # ── Batch 3: emit-heavy sections (from execute_tool_round) ─────────────────
 
-async def _handle_ask_user(_dargs, hooks, exec_model, cached_coder_port, run_id_global):
-    """S6: ask_user - evict_model + agent_asking/status emits (from execute_tool_round)."""
+async def _handle_ask_user(_dname, _dargs, hooks, exec_model, cached_coder_port, run_id_global):
+    """S6: ask_user - evict_model + agent_asking/status emits (from execute_tool_round).
+
+    ASK-USER-TOOL-GUARD (2026-09-02): only the actual ask_user tool call may
+    announce/pause. Every other tool (write_file, read_file, edit_file, ...)
+    executes normally and must NOT emit a spurious "Your input is needed".
+    """
+    if _dname != "ask_user":
+        return
     if hooks.evict_model is not None:
         try:
             await hooks.evict_model(exec_model)
             cached_coder_port[0] = None
         except Exception:
             pass
+    # ASK-USER-GATE-FIX (2026-09-02): only announce the pause when the run will
+    # actually block (gate == "open"). In until_finished / throttled mode the
+    # real handler (tools/runner.py) answers autonomously and the run keeps
+    # going — emitting "Your input is needed" here was misleading.
+    try:
+        from tools.runner import _ask_user_gate as _ask_gate_cv
+        _ask_gate_val = _ask_gate_cv.get("open")
+        _ask_pauses = _ask_gate_val == "open"
+    except Exception:
+        _ask_gate_val = "?"
+        _ask_pauses = True
+    import logging as _ask_s6_log
+    _ask_s6_log.getLogger("hivemind.tools").info(
+        "[ASK-DIAG] S6 gate=%s pauses=%s run_id=%s", _ask_gate_val, _ask_pauses, run_id_global)
+    if not _ask_pauses:
+        return
     # Emit agent_asking for duo_runner (runner.py only emits via _tool_loop_emit)
     # initiate_pause + wait_for_resume handled by runner.py's _handle_ask_user
     await hooks.emit({"type": "agent_asking",
@@ -848,7 +874,13 @@ async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
                 result.changed_since_failure.add(_fc_path)
 
 def _register_context_lru(dtool_msgs, tool_ctx_lru, _focus_path, _dname, _dresult):
-    """S16: context LRU registration (from execute_tool_round)."""
+    """S16: context LRU registration (from execute_tool_round).
+
+    LRU-B (dedupe): when a NEW read_file output for a path already present in
+    the context is registered, the older full copies of the same path are
+    stale/redundant - evict them immediately (recall marker) so repeated reads
+    of one file do not occupy multiple copies of the context window.
+    """
     _tool_msg_idx = -1
     if dtool_msgs and dtool_msgs[-1].get("role") == "tool":
         _tool_msg_idx = len(dtool_msgs) - 1
@@ -862,6 +894,24 @@ def _register_context_lru(dtool_msgs, tool_ctx_lru, _focus_path, _dname, _dresul
             size_chars=len(str(_dresult or "")),
             kind=_dname,
             ttl_override=_weighted_ttl(str(_dresult or ""), tool_ctx_lru.default_ttl))
+        if _dname == "read_file" and _focus_path:
+            # Only dedupe when the NEW read is a FULL read ("total lines: N"
+            # header). Partial reads (start_line/end_line windows of the same
+            # file) carry different content and are NOT duplicates - keep them.
+            _res_str = str(_dresult or "")
+            _is_full_read = re.match(r"\[[^\]]* total lines: \d+\]", _res_str) is not None
+            if _is_full_read:
+                from context.compression import evict_stale_reads_for_path as _evict_dup
+                _evicted_dup = _evict_dup(
+                    messages=dtool_msgs,
+                    lru=tool_ctx_lru,
+                    path=_focus_path,
+                    exclude_idx=_tool_msg_idx,  # keep the newest copy
+                )
+                if _evicted_dup:
+                    logger.debug(
+                        "[LRU-DEDUP] read_file dedupe: evicted %d older full copies of %s",
+                        _evicted_dup, _focus_path)
 
 
 @dataclass

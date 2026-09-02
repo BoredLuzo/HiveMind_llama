@@ -1,0 +1,77 @@
+{
+  "model": "hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact",
+  "capabilities": {
+    "thinking": true,
+    "vision": true,
+    "tool_call": true
+  },
+  "vision_preprocessing": true,
+  "num_ctx": 4096,
+  "num_ctx_analyst": 8192,
+  "num_ctx_duo_coder": 8192,
+  "num_ctx_vision": 8192,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 35,
+  "mtp": true,
+  "gpu_layers": null,
+  "mmproj_filename": "mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf",
+  "vram_gb_override": null,
+  "sampling": {
+    "thinking": {
+      "temperature": 0.6,
+      "top_p": 1.0,
+      "top_k": 20,
+      "min_p": 0.0,
+      "seed": 42,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "non_thinking": {
+      "temperature": 0.95,
+      "top_p": 1.0,
+      "top_k": 20,
+      "min_p": 0.0,
+      "seed": 42,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.6,
+      "top_p": 1.0,
+      "top_k": 20,
+      "min_p": 0.0,
+      "seed": 42,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_code_precise": {
+      "temperature": 0.6,
+      "top_p": 1.0,
+      "top_k": 20,
+      "min_p": 0.0,
+      "seed": 42,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_thinking_text": {
+      "temperature": 0.95,
+      "top_p": 1.0,
+      "top_k": 20,
+      "min_p": 0.0,
+      "seed": 42,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    },
+    "sampling_text": {
+      "temperature": 0.95,
+      "top_p": 1.0,
+      "top_k": 20,
+      "min_p": 0.0,
+      "seed": 42,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0
+    }
+  }
+}

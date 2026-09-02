@@ -17,14 +17,26 @@ _DIRECT_WS_NOTE = (
     "cannot answer from your training data. Call the tools BEFORE answering."
 )
 
-_DIRECT_TOOLS_NOTE = (
-    "\n\nTOOLS ARE AVAILABLE: you can inspect files and code in the workspace "
-    "(read_file, get_signatures, find_references, list_dir, find_files, search_code) "
-    "and search the web (web_search / web_fetch) when the tier allows it. "
-    "Use tools ONLY when they actually help — for pure knowledge, conversation, "
-    "math or general questions answer directly from your knowledge. "
-    "Never call a tool if a direct answer suffices."
-)
+def _direct_tools_note(tool_mode: str, ws_ok: bool = False) -> str:
+    """TIER-AWARE (2026-09-02): only advertise tools the selected direct tier
+    actually provides. The old note always listed read_file + web, which was
+    wrong for the Websearch-only tier (models then called read_file and hit
+    TOOL_NOT_ALLOWED)."""
+    if tool_mode == "direct":
+        _list = ("web_search / web_fetch" if ws_ok
+                 else "no tools (web search is currently unavailable)")
+    elif tool_mode == "direct_python":
+        _list = ("read_file, list_dir, find_files, search_code, get_signatures, "
+                 "find_references, run_python" + (", web_search / web_fetch" if ws_ok else ""))
+    else:  # direct_full
+        _list = ("read/write/edit tools (read_file, edit_file, write_file, ...), "
+                 "run_python, run_bash" + (", web_search / web_fetch" if ws_ok else ""))
+    return (
+        "\n\nTOOLS ARE AVAILABLE: " + _list + ".\n"
+        "Use tools ONLY when they actually help — for pure knowledge, conversation, "
+        "math or general questions answer directly from your knowledge. "
+        "Never call a tool that is not listed above."
+    )
 
 _DIRECT_TIME_NOTE = (
     "\n\nCURRENT DATE/TIME (local, set by the system):\n"
@@ -303,7 +315,8 @@ async def run_direct(ctx):
                 and "WEB SEARCH IS AVAILABLE" not in sys_p:
             sys_p += _DIRECT_WS_NOTE
         if _direct_tools_active:
-            sys_p += _DIRECT_TOOLS_NOTE
+            sys_p += _direct_tools_note(_direct_tool_mode,
+                                        ws_ok=bool(ctx.websearch_available))
         messages = ctx.make_messages(ctx.pipeline, sys_p, direct_input, _direct_images, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
         # FIX (2026-09-01): emit the "Answer" agent event BEFORE the direct
         # tools loop. Otherwise the ToolLoop streams its token events before the

@@ -65,7 +65,8 @@ if not os.path.isdir(_hf_dir):
     _missing.append("hive_functions/")
 else:
     _required_hf = ["__init__.py", "planner.py", "pipeline.py", "memory.py",
-                    "pre_explore.py", "prompts.py", "soul_engine.py", "skill_distiller.py"]
+                    "pre_explore/__init__.py", "prompts.py", "soul_engine.py",
+                    "skill_distiller.py"]
     for f in _required_hf:
         if not os.path.exists(os.path.join(_hf_dir, f)):
             _missing.append(f"hive_functions/{f}")

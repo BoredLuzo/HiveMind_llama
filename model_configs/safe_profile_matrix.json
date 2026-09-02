@@ -14,9 +14,9 @@
       "refiner": {"model": "qwen3.5:2b",      "max_tokens": 400},
       "critic":  {"model": "qwen3.5:4b-ud", "max_tokens": 600},
       "synthesizer": {"model": "qwen3.5:4b-ud", "max_tokens": 900},
-      "direct":  {"model": "qwen3.5:9b-ud",      "max_tokens": 600},
+      "direct":  {"model": "lfm2.5:2.6b",      "max_tokens": 600},
       "judge":   {"model": "lfm2.5:2.6b",      "max_tokens": 120},
-      "duo_coder":  {"model": "qwen3.5:9b-ud"},
+      "duo_coder":  {"model": "lfm2.5:2.6b"},
       "duo_critic": {"model": "qwen3.5:4b-ud", "max_tokens": 600}
     },
     "guardrails": {

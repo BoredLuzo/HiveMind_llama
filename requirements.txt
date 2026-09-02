@@ -18,4 +18,4 @@ tree-sitter-language-pack>=0.2   # static repo-map (tree-sitter parser)
 pyyaml>=6.0                # skills frontmatter
 
 # Optional (only for browser_tool; afterwards: playwright install chromium)
-# playwright>=1.45
+playwright>=1.45

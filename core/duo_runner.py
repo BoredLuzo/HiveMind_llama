@@ -139,6 +139,26 @@ _DUO_HEARTBEAT_KEY = "duo_heartbeat_seconds"
 _DUO_HEARTBEAT_DEFAULT = 10
 
 
+def _build_os_hint() -> str:
+    """OS-HINT (2026-09-02): platform-specific run_bash guidance, appended to the
+    coder system prompt. The static coder prompt blocks are OS-neutral now, so
+    Linux/other platforms never receive Windows-only instructions."""
+    import sys as _sys
+    if _sys.platform == "win32":
+        return (
+            "\nCRITICAL - Windows PowerShell. Use PowerShell-native commands in "
+            "run_bash - NOT bash/Linux commands. Example mappings: "
+            "'ls' -> 'Get-ChildItem', 'cat' -> 'Get-Content', 'rm' -> 'Remove-Item', "
+            "'&&' -> '; if ($?) {'. Use PowerShell syntax ONLY.\n"
+        )
+    if _sys.platform.startswith("linux") or _sys.platform == "darwin":
+        return (
+            "\nRUNTIME SHELL: bash/sh on Unix. Use bash commands in run_bash "
+            "(ls, cat, grep, ...) - not PowerShell.\n"
+        )
+    return ""
+
+
 def _read_hb_interval(settings: dict | None) -> int:
     try:
         _iv = int((settings or {}).get(_DUO_HEARTBEAT_KEY, _DUO_HEARTBEAT_DEFAULT) or _DUO_HEARTBEAT_DEFAULT)
@@ -2144,11 +2164,12 @@ async def run_code_duo(ctx):
                 # _dtool_sys_eff: Coder-Prompt + OS-Hint + Workspace.
                 # Workflow instructions are already in the modular prompt blocks
                 # (DUO_CODER_EXPLORED / DUO_CODER_UNEXPLORED) — no ad-hoc concat.
-                if _explore_ctx:
-                    _os_hint = "\nCRITICAL — Windows PowerShell. NEVER use Unix commands: 'ls'→'dir', 'cat'→'type', 'rm'→'del', '&&'→'; if ($?) {'. Use PowerShell syntax ONLY.\n" if sys.platform == "win32" else ""
-                else:
-                    _os_hint = "\nCRITICAL — Windows PowerShell. NEVER use Unix commands: 'ls'→'dir', 'cat'→'type', 'rm'→'del', '&&'→'; if ($?) {'. Use PowerShell syntax ONLY.\n" if sys.platform == "win32" else ""
-                _dtool_sys_eff = _duo_coder_sys + _os_hint + f"\n\nWorkspace (project root): {_ws_str}\nALWAYS use this absolute path in tool calls.\n"
+                _os_hint = _build_os_hint()
+                _dtool_sys_eff = _duo_coder_sys + _os_hint + (
+                    f"\n\nWorkspace root: {str(_ws_str).replace(chr(92), '/')}\n"
+                    "Prefix every file path in tool calls with this exact absolute "
+                    "path, written with forward slashes.\n"
+                )
                 # (see _apply_thinking_kwargs when building the tool payload below).
                 # TOKEN BUDGET:
                 #
@@ -2233,12 +2254,13 @@ async def run_code_duo(ctx):
                             f"Files already read (avoid re-reading unless a tool error requires it):\n{_already_read_str}\n\n"
                             f"Task: {ctx.user_input}\n\n"
                             f"Plan from exploration:\n{_bridge_explore}\n\n"
-                            f"Workspace (project root): {_ws_str}\n"
-                            f"ALWAYS use this absolute path in all tool calls.\n\n"
+                            f"Workspace root: {str(_ws_str).replace(chr(92), '/')}\n"
+                            f"Prefix every file path in tool calls with this exact "
+                            f"absolute path, written with forward slashes.\n\n"
                             f"Rules:\n"
-                            f"- write_file is ONLY for creating NEW files that do not exist yet. "
-                            f"NEVER use write_file to modify an existing file.\n"
-                            f"- To modify an EXISTING file, use edit_file with SEARCH/REPLACE blocks (preferred):\n"
+                            f"- write_file(path, edits) writes a file's FULL content — use it to create a NEW file "
+                            f"or to overwrite an existing file completely.\n"
+                            f"- To change only PART of an existing file, use edit_file with SEARCH/REPLACE blocks (preferred):\n"
                             f"    edit_file(path=<file>, edits=\"<<<<<<< SEARCH\\n<exact old code>\\n=======\\n<new code>\\n>>>>>>> REPLACE\")\n"
                             f"  For a single small exact-text change, patch_file(path=<file>, old_str=<exact>, new_str=<new>) is also OK.\n"
                             f"- If a tool returns READ_REQUIRED: call read_file once on that path, then retry.\n"
@@ -2800,7 +2822,12 @@ async def run_code_duo(ctx):
                     # chat_template_kwargs.enable_thinking im Tool-Payload unten.
                     # Set run_id ContextVar for ask_user tool handler
                     from tools.runner import _current_run_id, _pause_timeout_s, _web_search_count, _install_count
-                    _run_id_global = ctx.chat_id
+                    # ASK-USER-RUN-ID-FALLBACK (2026-09-02): agentic/workspace runs
+                    # have chat_id=None (RUN-ENTRY logs chat_id=None) yet carry a
+                    # real run_id that the UI uses for pause/resume. Keying the
+                    # ask_user pause on chat_id alone left run_id=None -> no pause
+                    # event under the UI's run_id -> /resume returned 404.
+                    _run_id_global = ctx.chat_id or ctx.run_id
                     _current_run_id.set(_run_id_global)
                     _pause_timeout_s.set(ctx.duo_config.pause_timeout_s)
                     _web_search_count.set([0])
@@ -3329,7 +3356,9 @@ async def run_code_duo(ctx):
                             # A-P2-7: real eval_counts from the llama.cpp server (usage
                             "stream_options": {"include_usage": True},
                             "tool_choice": "auto",
-                            "temperature": _profile.get("temperature", 0.6),
+                            # TEMP-PRIORITY (2026-09-01): the Agent-card temperature
+                            # (_duo_coder_temp) wins over the model sampling profile.
+                            "temperature": _duo_coder_temp if _duo_coder_temp is not None else _profile.get("temperature", 0.6),
                             "top_p": _profile.get("top_p", 0.95),
                             "top_k": _profile.get("top_k", 20),
                             "presence_penalty": _profile.get("presence_penalty", 1.5),
@@ -3339,6 +3368,8 @@ async def run_code_duo(ctx):
                             "thinking": _thinking,
                             "thinking_budget": max(0, _tool_thinking_budget),
                         }
+                        if _profile.get("seed") is not None:
+                            _tool_payload["seed"] = int(_profile["seed"])
                         if _profile.get("min_p", 0.0) != 0.0:
                             _tool_payload["min_p"] = _profile["min_p"]
                         if _profile.get("cache_prompt"):
@@ -4430,22 +4461,25 @@ async def run_code_duo(ctx):
                         for _critic_post_attempt in range(3):
                             try:
                                 _c_gen_t0 = time.monotonic()  # GEN-TIME: critic POST duration
+                                _critic_tc_payload = {
+                                    "model": critic_mdl,
+                                    "messages": _critic_tc_msgs,
+                                    "tools": _CRITIC_VERIFY_TOOLS,
+                                    "stream": False,
+                                    "tool_choice": "auto",
+                                    "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
+                                    "top_p": _critic_profile.get("top_p", 0.95),
+                                    "top_k": _critic_profile.get("top_k", 20),
+                                    "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
+                                    "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
+                                    "max_tokens": _duo_critic_tok,
+                                }
+                                if _critic_profile.get("seed") is not None:
+                                    _critic_tc_payload["seed"] = int(_critic_profile["seed"])
                                 _cresp = await _chttpc.post(
                                         f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
-                                 json={
-                                     "model": critic_mdl,
-                                     "messages": _critic_tc_msgs,
-                                     "tools": _CRITIC_VERIFY_TOOLS,
-                                     "stream": False,
-                                     "tool_choice": "auto",
-                                     "temperature": _critic_profile.get("temperature", _duo_critic_temp),
-                                     "top_p": _critic_profile.get("top_p", 0.95),
-                                     "top_k": _critic_profile.get("top_k", 20),
-                                     "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
-                                     "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
-                                     "max_tokens": _duo_critic_tok,
-                                 }
-                                     )
+                                 json=_critic_tc_payload
+                                        )
                                 if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
                                     await _cresp.aread()
                                     await asyncio.sleep(2.0)
@@ -4507,13 +4541,15 @@ async def run_code_duo(ctx):
                     "messages": _critic_msgs,
                     "tools": [],
                     "stream": False,
-                    "temperature": _critic_profile.get("temperature", _duo_critic_temp),
+                    "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
                     "top_p": _critic_profile.get("top_p", 0.95),
                     "top_k": _critic_profile.get("top_k", 20),
                     "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
                     "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
                     "max_tokens": _duo_critic_tok,
                 }
+                if _critic_profile.get("seed") is not None:
+                    _critic_plain_payload["seed"] = int(_critic_profile["seed"])
                 if _critic_profile.get("min_p", 0.0) != 0.0:
                     _critic_plain_payload["min_p"] = _critic_profile["min_p"]
                 if _critic_profile.get("cache_prompt"):

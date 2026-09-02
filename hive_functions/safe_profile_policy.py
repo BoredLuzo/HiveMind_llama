@@ -234,6 +234,29 @@ def apply_safe_profile_policy(settings: dict, workspace_root: Path) -> dict:
         }
 
     patch = _policy_patch(policy)
+
+    # CARDS-WIN (2026-09-01): a safe-profile model_override is only a DEFAULT.
+    # If the user picked a different model on the Agent-tab card (anything != the
+    # shipped default), keep the user's choice and drop the policy's model
+    # override for that role (other keys like max_tokens still apply).
+    try:
+        from settings import DEFAULT_AGENT_CFG as _DEFAULT_AGENTS
+    except Exception:
+        _DEFAULT_AGENTS = {}
+    _agent_patch = patch.get("agents")
+    if isinstance(_agent_patch, dict):
+        for _role, _entry in list(_agent_patch.items()):
+            if not isinstance(_entry, dict) or "model" not in _entry:
+                continue
+            _cur = (settings.get("agents", {}).get(_role, {}) or {}).get("model", "")
+            _dfl = (_DEFAULT_AGENTS.get(_role, {}) or {}).get("model", "")
+            if _cur and _cur != _dfl:
+                _agent_patch[_role] = {k: v for k, v in _entry.items() if k != "model"}
+                if not _agent_patch[_role]:
+                    del _agent_patch[_role]
+                if _role in _DUO_ROLE_SETTINGS:
+                    patch.pop(_DUO_ROLE_SETTINGS[_role], None)
+
     updated_keys: list[str] = []
 
     for key, value in patch.items():

@@ -8,7 +8,8 @@ Contents:
   planner.py            — Task planning, inloop planner, plan steps
   prompts.py            — All LLM system / user prompt strings
   pipeline.py           — Run pipeline orchestration
-  pre_explore.py        — Pre-explore entry point + file reading
+  pre_explore/          — Pre-explore entry point + partition workers
+                         (facade re-exports run_pre_explore from runner.py)
   tree_scout.py         — Workspace tree scanning + TOML contracts
   chunking.py           — Chunked task decomposition + resume
   memory.py             — Agent memory read/write

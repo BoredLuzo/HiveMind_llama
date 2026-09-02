@@ -116,7 +116,7 @@ async def smart_preload_if_needed(model: str, loaded_set: set) -> tuple[bool, se
 async def _refresh_judge_keepalive():
     if _settings is None:
         return
-    if not _settings.get("judge_keepalive_enabled", True):
+    if not _settings.get("judge_keepalive_enabled", False):
         return
     _judge = _registry.get("judge", "")
     if not _judge:

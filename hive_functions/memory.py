@@ -68,6 +68,15 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return float(sum(x * y for x, y in zip(a, b)))
 
 
+def _recall_marker(path: str = '') -> str:
+    """Recall marker used when a tool output is evicted from context."""
+    _p = _norm_path(path) or 'tool output'
+    return (
+        f"[System: Content of {_p} evicted to save context. "
+        "Use read_file or rerun the tool if needed again.]"
+    )
+
+
 class ToolContextLRU:
     """
     Tracks tool-output relevance for semantic context eviction.
@@ -77,16 +86,27 @@ class ToolContextLRU:
     - only tool-output entries are TTL-decayed and evicted first
     """
 
-    def __init__(self, default_ttl: int = 3):
+    def __init__(self, default_ttl: int = 3, pathless_ttl: int | None = None):
         self.default_ttl = max(1, int(default_ttl or 3))
+        # Path-less outputs (run_bash/run_python/web) live twice as long as
+        # file-read outputs before they are decay-eligible - they cannot be
+        # refreshed via a focus path, but stale large payloads still age out.
+        self.pathless_ttl = max(1, int(pathless_ttl or (self.default_ttl * 2)))
         self._entries: list[dict] = []
         self._turn = 0
 
     def register(self, message_index: int, path: str = '', size_chars: int = 0, kind: str = 'tool_output', ttl_override: int | None = None):
+        _p = _norm_path(path)
+        if ttl_override is not None:
+            _ttl = max(1, int(ttl_override or 1))
+        elif _p:
+            _ttl = self.default_ttl
+        else:
+            _ttl = self.pathless_ttl
         self._entries.append({
             'idx': int(message_index),
-            'path': _norm_path(path),
-            'ttl': ttl_override if ttl_override is not None else self.default_ttl,
+            'path': _p,
+            'ttl': _ttl,
             'size_chars': max(0, int(size_chars or 0)),
             'kind': str(kind or 'tool_output'),
             'evicted': False,
@@ -96,22 +116,67 @@ class ToolContextLRU:
     def decay(self, focus_path: str = ''):
         self._turn += 1
         f = _norm_path(focus_path)
+        # The most recent path-less output stays fresh (like a focus refresh);
+        # older path-less outputs age at half rate so they eventually become
+        # evictable instead of blocking budget forever.
+        newest_pathless: dict | None = None
         for e in self._entries:
             if e.get('evicted'):
                 continue
             ep = e.get('path', '')
-            if not ep:
-                continue
             if f and ep == f:
                 e['ttl'] = self.default_ttl
                 e['turn'] = self._turn
-            else:
+            elif not ep:
+                # newest = highest turn, then highest message index (later
+                # messages are appended later even within the same turn)
+                if newest_pathless is None:
+                    newest_pathless = e
+                else:
+                    _newer_turn = int(e.get('turn', 0)) > int(newest_pathless.get('turn', 0))
+                    _same_turn_newer_idx = (
+                        int(e.get('turn', 0)) == int(newest_pathless.get('turn', 0))
+                        and int(e.get('idx', 0)) > int(newest_pathless.get('idx', 0))
+                    )
+                    if _newer_turn or _same_turn_newer_idx:
+                        newest_pathless = e
+        if newest_pathless is not None:
+            newest_pathless['ttl'] = self.pathless_ttl
+            newest_pathless['turn'] = self._turn
+        for e in self._entries:
+            if e.get('evicted'):
+                continue
+            ep = e.get('path', '')
+            if ep:
+                if f and ep == f:
+                    continue  # already refreshed above
                 e['ttl'] = max(0, int(e.get('ttl', self.default_ttl)) - 1)
+            else:
+                if e is newest_pathless:
+                    continue  # fresh path-less output kept
+                # half-rate ageing for older path-less outputs
+                if (self._turn - int(e.get('turn', 0))) % 2 == 0:
+                    e['ttl'] = max(0, int(e.get('ttl', self.pathless_ttl)) - 1)
 
     def mark_evicted(self, message_index: int):
         for e in self._entries:
             if e.get('idx') == int(message_index):
                 e['evicted'] = True
+
+    def alive_by_path(self, path: str, kind: str | None = None) -> list[dict]:
+        """Alive (not yet evicted) entries for one normalized path.
+
+        Returned oldest-registered first - so callers evict the earliest
+        duplicate / stale read first.
+        """
+        _p = _norm_path(path)
+        hits = [
+            e for e in self._entries
+            if not e.get('evicted') and e.get('path') == _p
+            and (kind is None or e.get('kind') == kind)
+        ]
+        hits.sort(key=lambda e: (int(e.get('turn', 0)), int(e.get('idx', 0))))
+        return hits
 
     def candidates(self) -> list[dict]:
         """Lowest TTL first, then oldest, then largest payload."""
