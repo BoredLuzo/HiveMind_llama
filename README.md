@@ -281,6 +281,12 @@ Standard configs:
 | **Standard (default install)** | `qwen3.5:9b-ud` (Coder) + `qwen3.5:4b-ud` (Analyst/Critic/Synth) + `qwen3.5:2b` (Refiner) + `lfm2.5:2.6b` (Judge/Subagent) | Default agent configuration | ~7–8GB |
 | **Quality** | + `qwen3.6:35b-a3b-ud` (heavy Coder/Planner) + `gemma-4:e4b-it` (Vision) | Full pipeline + Vision | ~10GB |
 
+> **8 GB VRAM / 32 GB RAM tip:** for an 8 GB GPU with 32 GB system RAM (≥ ~17 GB
+> free), `qwen3.6:35b-a3b-ud` as the **solo agentic model** is the best choice.
+> It is a MoE (35B total, ~3B active) that runs with expert offloading to CPU, so
+> it fits the 8 GB VRAM budget while delivering far better quality than the 9B
+> coder for solo agentic coding.
+
 **Multimodal (images):** gemma-4 has a built-in vision encoder; qwen3.5/qwen3.6/
 tiel-coder use `mmproj-BF16.gguf` (auto-downloaded by `setup_models.bat` or
 pinned via `models.json` / `mmproj_filename`). Non-multimodal models fall back
