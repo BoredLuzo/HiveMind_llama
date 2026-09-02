@@ -46,6 +46,13 @@ _GUARDRAIL_SETTINGS = {
     "prefer_smaller_models": "prefer_smaller_models",
 }
 
+# User preferences the safe-profile policy must NEVER force-overwrite: they
+# are runtime choices (e.g. the user's saved VRAM budget), not hard safety
+# limits. A value in the matrix for these keys is only informational/documentation
+# and is not applied. Mirrors the existing "CARDS-WIN / user choice wins"
+# philosophy used for agent models.
+_USER_PREF_KEYS = {"vram_budget_gb"}
+
 
 def _as_float(value, default=None):
     try:
@@ -261,6 +268,10 @@ def apply_safe_profile_policy(settings: dict, workspace_root: Path) -> dict:
 
     for key, value in patch.items():
         if key == "agents":
+            continue
+        if key in _USER_PREF_KEYS:
+            # USER-WINS (2026-09-02): never clobber a saved user preference
+            # (e.g. vram_budget_gb). The policy default stays informational.
             continue
         if settings.get(key) != value:
             settings[key] = value
