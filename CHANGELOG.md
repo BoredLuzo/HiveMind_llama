@@ -5,6 +5,44 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-09-02
+
+### Added
+
+- **Tool-Loop Bash-Reinjection** (`core/tool_executor.py`): when the loop
+  detector catches repeated `run_bash` calls (3× identical, ABAB or ABCABC
+  pattern), the run is **no longer aborted**. Instead the full toolset that is
+  actually available in the current tool phase is re-injected as a menu message
+  and the loop signature is reset, so the model can pick a different tool
+  (e.g. `read_file`, `run_tests`, `browser`) instead of retrying the same shell
+  command. Non-`run_bash` loops (e.g. repeated `read_file` ABAB) keep the
+  previous abort behaviour. The round budget still bounds the loop.
+- **Tiel-Coder 35B-A3B MTP models by
+  [BoredLuzo](https://huggingface.co/BoredLuzo) are now recommended**
+  (`deploy/fetch_models.py`, `setup_models.bat` options `9` and `10`): the two
+  self-quantized GGUFs `Tiel-Coder-35B-A3B-MTP-Compact.gguf` (~18 GB) and
+  `Tiel-Coder-35B-A3B-MTP-APEX.gguf` (~26 GB). Per-model start-configs ship as
+  `model_configs/models/tiel-coder_35b-a3b-mtp-compact.json` (MTP head,
+  32 CPU experts) and `model_configs/models/tiel-coder_35b-a3b-mtp-apex.json`
+  (MTP head, 35 CPU experts), so once a GGUF is registered/auto-detected the
+  launch settings apply automatically. Tiel-Coder follows the upstream author's
+  guidance ([peculiar-ragdoll](https://huggingface.co/peculiar-ragdoll)):
+  launch with `--jinja` + the GGUF's own embedded chat template (not the qwen
+  custom templates), `-ngl 99` style full offload, sampling temperature 1.0 /
+  top_p 0.95 / top_k 20 (0.6 for agentic coding), and vision via its own
+  shared `mmproj-BF16.gguf` projector (Ornith-1.5 vision tower, original BF16,
+  untouched by quantization).
+
+### Fixed
+
+- **safe-profile policy never overwrites the user's saved `vram_budget_gb`**
+  (`hive_functions/safe_profile_policy.py`): `vram_budget_gb` is a
+  user-preference key, so `apply_safe_profile_policy()` no longer forces the
+  matrix default (7.5) back over the value the user saved on every settings
+  reload. The policy default is informational only; the user's saved budget
+  persists (USER-WINS, same philosophy as the existing agent-model
+  CARDS-WIN logic).
+
 ## [1.0.6] - 2026-09-02
 
 ### Changed
