@@ -22,7 +22,10 @@ _DANGEROUS_PATTERNS = [
 
 _INSTALL_CMDS = {
     "npm":      "npm install {pkgs}",
-    "pip":      "pip install {pkgs}",
+    # Use the active interpreter (python on PATH / venv) — a bare `pip` can
+    # point at a broken/removed Python (e.g. leftover Python311\Scripts\pip.exe)
+    # that exits 1 silently on Windows.
+    "pip":      "python -m pip install {pkgs}",
     "cargo":    "cargo add {pkgs}",
     "go":       "go get {pkgs}",
     "dotnet":   "dotnet add package {pkgs}",
