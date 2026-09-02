@@ -71,6 +71,13 @@ _MAX_RESULTS_DEFAULT = 5
 _FETCH_TIMEOUT       = 10.0
 _SEARCH_TIMEOUT      = 8.0
 
+# UA-FALLBACK (2026-09-02): some sites (Wikipedia) return 403 for browser UAs on
+# certain IPs but accept a descriptive bot UA. Used as the second web_fetch
+# attempt when the browser UA gets an HTTP 403.
+_FETCH_UA_FALLBACK = [
+    "Mozilla/5.0 (compatible; HiveMind/1.0; +https://github.com/BoredLuzo/HiveMind_llama)",
+]
+
 _SEARCH_CACHE: dict[str, tuple[float, str]] = {}
 _CACHE_TTL = 300
 
@@ -240,7 +247,9 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
     if _gerr0:
         return f"[web_fetch blocked] {_gerr0}"
 
-    for _attempt in range(2):
+    _ua_rounds = [None] + _FETCH_UA_FALLBACK
+    for _attempt, _ua in enumerate(_ua_rounds):
+        _req_headers = {"User-Agent": _ua} if _ua else None
         try:
             _hop_url = url
             resp = None
@@ -252,6 +261,7 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
                 client = await _get_client_async()
                 resp = await client.get(
                     _hop_url,
+                    headers=_req_headers,
                     timeout=_httpx.Timeout(
                         connect=5.0, read=_FETCH_TIMEOUT, write=10.0, pool=5.0
                     ),
@@ -270,12 +280,19 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
         except _httpx.ConnectError:
             return f"[web_fetch: connection error - {url}]"
         except _httpx.TimeoutException:
-            if _attempt == 0:
-                logger.warning("web_fetch: timeout attempt 1 - retry: %s", url)
+            if _attempt < len(_ua_rounds) - 1:
+                logger.warning("web_fetch: timeout attempt %d - retry: %s", _attempt + 1, url)
                 continue
-            return f"[web_fetch: timeout after {_FETCH_TIMEOUT}s (2 attempts) - {url}]"
+            return f"[web_fetch: timeout after {_FETCH_TIMEOUT}s ({len(_ua_rounds)} attempts) - {url}]"
         except _httpx.HTTPStatusError as e:
-            return f"[web_fetch: HTTP {e.response.status_code} - {url}]"
+            _code = e.response.status_code
+            if _code == 403 and _attempt < len(_ua_rounds) - 1:
+                logger.warning(
+                    "web_fetch: HTTP 403 (%s) - retry with fallback UA: %s",
+                    url, _ua_rounds[_attempt + 1],
+                )
+                continue
+            return f"[web_fetch: HTTP {_code} - {url}]"
         except Exception as e:
             return f"[web_fetch: {type(e).__name__}: {str(e)[:200]}]"
     else:
