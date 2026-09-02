@@ -5,6 +5,27 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-09-02
+
+### Changed
+
+- **MoE CPU experts dropdown lists only installed models** (`static/app.js`):
+  it previously offered every MoE model from the defaults table regardless of
+  whether it was actually present on this machine. The list is now built from
+  the installed/configured models only, and `-ud` variants are stored/read via
+  the backend-compatible key (so an override set for `…-ud` really applies at
+  load time instead of silently being ignored).
+
+### Added
+
+- **Hermes3.6 Genesis V12 MTP-APEX-Compact is a recommended downloader model
+  again** (`deploy/fetch_models.py` spec, `setup_models.bat` list): the GGUF
+  (`Hermes3.6-35B-A3B-Uncensored-Genesis-V12-MTP-APEX-Compact.gguf`, ~17 GB)
+  plus its `mmproj` are fetched from Hugging Face like the other recommended
+  models, and the per-model config
+  (`model_configs/models/hermes3.6_…_v12-mtp-apex-compact.json`) ships with the
+  release so the MoE/MTP launch settings apply.
+
 ## [1.0.5] - 2026-09-02
 
 ### Added

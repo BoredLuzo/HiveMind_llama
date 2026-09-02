@@ -857,6 +857,8 @@ function refreshAllSelects() {
     isel.innerHTML = o;
     if (S.intentModel) isel.value = S.intentModel;
   }
+  // MoE model dropdowns follow the actually installed model set.
+  rebuildMoeModelDropdowns();
 }
 
 async function loadSettings() {
@@ -6860,6 +6862,26 @@ function _isMoeModel(m) {
   return /(^|[-._:])a\d+b([-._]|$)/.test(m);
 }
 
+// Backend-compatible per-model key — mirrors manager_load._moe_model_key
+// (slot-alias "#N" and the "-ud" suffix are stripped before the override /
+// table lookup). Storing overrides under this key guarantees they match at
+// model-load time, also for -ud variants of the same base model.
+function _moeKey(model) {
+  return String(model || '').trim().replace(/#\d+$/, '').replace(/-ud/i, '');
+}
+
+function _moeOverride(model) {
+  var m = S.moeCpuExpertsMap || {};
+  var k = _moeKey(model);
+  return parseInt((k && m[k] != null) ? m[k] : m[model], 10) || 0;
+}
+
+function _moeDefaultCount(model) {
+  var defaults = S.moeExpertDefaults || {};
+  var k = _moeKey(model);
+  return (k && defaults[k] != null) ? defaults[k] : defaults[model];
+}
+
 function updateMoeVisibility() {
   // MOE-AUTODETECT (2026-08-27): panel visibility no longer depends only
   // on "a3b/moe" in the name, but on _isMoeModel (defaults table +
@@ -6872,19 +6894,22 @@ function updateMoeVisibility() {
 }
 
 function _moeModelList() {
+  // The override only matters for models the user actually runs, so the
+  // dropdown must offer the INSTALLED MoE models — not every entry of the
+  // defaults table (many of those are not present on this machine and only
+  // confused the list). Active duo models come first, then the rest.
   var list = [];
   var seen = {};
   function add(m) {
     m = String(m || '').trim();
-    if (!m || seen[m]) return;
-    seen[m] = true;
+    if (!m || !_isMoeModel(m)) return;
+    var k = _moeKey(m);
+    if (seen[k]) return;   // one entry per effective key (e.g. -ud variants)
+    seen[k] = true;
     list.push(m);
   }
-  Object.keys(S.moeExpertDefaults || {}).forEach(add);
-  Object.keys(S.moeCpuExpertsMap || {}).forEach(add);
-  [S.duoCoderModel, S.duoPlannerModel].forEach(function(m) {
-    if (_isMoeModel(m)) add(m);
-  });
+  [S.duoCoderModel, S.duoPlannerModel].forEach(add);
+  (S.models || []).forEach(add);
   return list;
 }
 
@@ -6905,7 +6930,7 @@ function rebuildMoeModelDropdowns() {
 }
 
 function _syncMoeInputs() {
-  var v = (S.moeCpuExpertsMap[S.moeSelectedModel] || 0);
+  var v = _moeOverride(S.moeSelectedModel);
   ['moe-cpu-experts', 'config-moe-cpu-experts'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.value = v;
@@ -6924,22 +6949,25 @@ function onMoeModelSelect(model) {
 
 function onMoeExpertsChange(val) {
   var v = parseInt(val, 10) || 0;
-  if (!S.moeSelectedModel) return;
-  if (v > 0) S.moeCpuExpertsMap[S.moeSelectedModel] = v;
-  else delete S.moeCpuExpertsMap[S.moeSelectedModel];
+  var model = S.moeSelectedModel;
+  if (!model) return;
+  var key = _moeKey(model);
+  if (key && key !== model) delete S.moeCpuExpertsMap[model];  // stale spelling
+  if (v > 0) S.moeCpuExpertsMap[key || model] = v;
+  else if (key) delete S.moeCpuExpertsMap[key];
   _syncMoeInputs();
   postSettings({moe_cpu_experts: S.moeCpuExpertsMap});
   updateMoeExpertDefaultHint();
 }
 
 function updateMoeExpertDefaultHint() {
-  var defaults = S.moeExpertDefaults || {};
   var autodetect = S.moeAutodetect || {};
   var model = S.moeSelectedModel || S.duoCoderModel || S.duoPlannerModel || '';
-  var _ovr = parseInt((S.moeCpuExpertsMap || {})[model], 10) || 0;
-  var _modelShort = model.split(':')[0];
-  var _def = defaults[model];
-  var _auto = !!autodetect[model];
+  var key = _moeKey(model);
+  var _ovr = _moeOverride(model);
+  var _modelShort = (key || model).split(':')[0];
+  var _def = _moeDefaultCount(model);
+  var _auto = !!(autodetect[key] || (key && key !== model && autodetect[model]));
   var _defTxt = '';
   if (_def) _defTxt = _def + ' experts' + (_auto ? ' (autodetected from model name)' : ' (table)');
   else if (model) _defTxt = 'no default (experts stay on GPU)';
