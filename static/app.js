@@ -1820,7 +1820,7 @@ function renderAgentCards(agents) {
     const ctxRow = document.createElement('div');
     ctxRow.className = 'sl-row';
     const ctxSlider = document.createElement('input');
-    ctxSlider.type = 'range'; ctxSlider.min = '0'; ctxSlider.max = '32768'; ctxSlider.step = '1024';
+    ctxSlider.type = 'range'; ctxSlider.min = '0'; ctxSlider.max = '131072'; ctxSlider.step = '1024';
     ctxSlider.value = ctxOverride;
     ctxSlider.dataset.ctx = key;
     ctxSlider.addEventListener('input', (function(id, refresh) {
