@@ -3915,6 +3915,23 @@ var _TOOL_ICONS = {
   ask_user:'\u2753', browser:'\uD83C\uDF10', undo_last:'\u21A9'
 };
 
+// Tool-cluster anchor (2026-09-02): chips / WRITE badges / result details stay
+// contiguous; streaming think blocks are appended AFTER the whole tool cluster,
+// so a think block can never sit between a tool chip and its result.
+function _toolClusterAnchor(body) {
+  if (!body) return null;
+  var els = body.querySelectorAll(
+    '.tool-call-row, .tool-act, .tool-result-block, .fc-preview, .write-sep, .tool-sep'
+  );
+  return els.length ? els[els.length - 1] : null;
+}
+function _appendToolEl(body, el) {
+  if (!body) { if (el && el.parentNode) el.parentNode.removeChild(el); return; }
+  var anchor = _toolClusterAnchor(body);
+  if (anchor) { anchor.insertAdjacentElement('afterend', el); }
+  else { body.appendChild(el); }
+}
+
 function handleEvent(d) {
   if (d.type === 'run_id') {
     S.currentRunId = d.run_id;
@@ -5450,7 +5467,7 @@ function handleEvent(d) {
       _tcLine.className = 'tool-act';
       _tcLine.innerHTML = '<span class="tool-act-op ' + _tcOp + '">' + _tcLabel + '</span>'
         + '<span class="tool-act-path" title="' + esc(d.path) + '">' + esc(_tcShort) + '</span>';
-      _tcBody.appendChild(_tcLine);
+      _appendToolEl(_tcBody, _tcLine);
       // 1b. file content as expandable preview (2026-08-25: starts COLLAPSED
       //     — no auto-open/auto-close anymore; clicking "📄 N lines · X KB" opens it)
       if (d.content) {
@@ -5465,7 +5482,7 @@ function handleEvent(d) {
         var _fcPre = document.createElement('pre');
         _fcPre.textContent = d.content;
         _fcPreview.appendChild(_fcPre);
-        _tcBody.appendChild(_fcPreview);
+        _appendToolEl(_tcBody, _fcPreview);
       }
       scrollBtmIfNearBottom(80);
     }
@@ -5855,7 +5872,7 @@ function handleEvent(d) {
       _trPre.innerHTML = _dsTbl;
       _trBlock.appendChild(_trSumDs);
       _trBlock.appendChild(_trPre);
-      _trBody.appendChild(_trBlock);
+      _appendToolEl(_trBody, _trBlock);
       _liveMdReset(_trBody);
       scrollBtmIfNearBottom(60);
       return;
@@ -5892,7 +5909,7 @@ function handleEvent(d) {
       _trSum.innerHTML = _trTcBadge + _trNameHtml;
       _trBlock.appendChild(_trSum);
       _trBlock.appendChild(_trPre);
-      _trBody.appendChild(_trBlock);
+      _appendToolEl(_trBody, _trBlock);
       _liveMdReset(_trBody);
       scrollBtmIfNearBottom(60);
       return;
@@ -5929,7 +5946,7 @@ function handleEvent(d) {
     }
     _trBlock.appendChild(_trSum);
     _trBlock.appendChild(_trPre); // BUG-1 FIX: always append, open= controls visibility
-    _trBody.appendChild(_trBlock);
+    _appendToolEl(_trBody, _trBlock);
     _liveMdReset(_trBody);  // next text token starts a fresh live-md segment after this result
     scrollBtmIfNearBottom(60);
   }
