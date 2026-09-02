@@ -3849,6 +3849,12 @@ async function sendMsg() {
                 duo_coder_tool_thinking_auto_mode: S.duoToolThinkingAlways ? 'always' : (S.duoToolThinkingMode || 'off'),
                 chat_id: S.currentChatId || undefined,
         until_finished: !!S.duoUntilFinished,
+        // CTX-WITH-RUN: send the currently chosen context so the run uses it
+        // even if the settings.json write lagged/failed.
+        duo_coder_ctx_agentic: (function(){var e=document.getElementById('duo-ctx-agentic'); if(!e)return undefined; var v=parseInt(e.value,10); return (isFinite(v)&&v>0)?v:undefined;})(),
+        duo_coder_ctx_until_finished: (function(){var e=document.getElementById('duo-ctx-agentic'); if(!e)return undefined; var v=parseInt(e.value,10); return (isFinite(v)&&v>0)?v:undefined;})(),
+        duo_coder_ctx_normal: (function(){var e=document.getElementById('duo-ctx-normal'); if(!e)return undefined; var v=parseInt(e.value,10); return (isFinite(v)&&v>0)?v:undefined;})(),
+        duo_planner_ctx_target: (function(){var e=document.getElementById('duo-ctx-planner'); if(!e||e.disabled)return undefined; var v=parseInt(e.value,10); return (isFinite(v)&&v>0)?v:undefined;})(),
       })
     });
     const reader = res.body.getReader();
