@@ -156,7 +156,7 @@ DEFAULT_SETTINGS = {
     "duo_coder_ctx_until_finished": None,
     "duo_coder_ctx_normal":    None,
     "duo_coder_tool_thinking": False,
-    "duo_coder_tool_thinking_auto_mode": "on_fail",
+    "duo_coder_tool_thinking_auto_mode": "off",
     # am Output-Token-Limit abgeschnitten (finish_reason=length → DROPPED → Loop),
     # Token-Budget gekoppelt: max_chars ≈ budget_tokens * Faktor - Overhead.
     # Sprung; Deckel 3.3 (dokumentierter Realwert).

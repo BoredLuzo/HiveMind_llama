@@ -6748,8 +6748,7 @@ function rebuildMoeModelDropdowns() {
     var sel = document.getElementById(id);
     if (!sel) return;
     sel.innerHTML = list.map(function(m) {
-      var short = m.split(':')[0];
-      return '<option value="' + esc(m) + '">' + esc(short) + '</option>';
+      return '<option value="' + esc(m) + '">' + esc(m) + '</option>';
     }).join('');
     sel.value = S.moeSelectedModel;
   });
