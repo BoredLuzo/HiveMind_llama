@@ -153,7 +153,13 @@ def _live_ctx_override(model_name: str, role: str) -> int | None:
 
 def resolve_ctx(explicit_value, model_name: str, role: str = "coder") -> int:
 
-    # 1. explicit settings key (duo_coder_ctx_agentic / duo_planner_ctx_target …)
+    # 1. The per-agent/per-model override (agent card → ctx_overrides) is the
+    #    most specific user intent and wins over generic duo_* keys — otherwise
+    #    a persisted default (e.g. 16384) would silently beat a raised override.
+    _user_ctx = _live_ctx_override(model_name, role)
+    if _user_ctx:
+        return _user_ctx
+    # 2. explicit settings key (duo_coder_ctx_agentic / duo_planner_ctx_target …)
     if explicit_value is not None:
         try:
             _ev = int(explicit_value)
@@ -161,10 +167,6 @@ def resolve_ctx(explicit_value, model_name: str, role: str = "coder") -> int:
             _ev = 0
         if _ev > 0:
             return _ev
-    # 2. user-chosen per-agent/per-model context (agent card → ctx_overrides)
-    _user_ctx = _live_ctx_override(model_name, role)
-    if _user_ctx:
-        return _user_ctx
     # 3. agentic: at least the floor, but never clamp a bigger model default
     if role == "agentic":
         _gnc = get_num_ctx(model_name, "duo_coder")
