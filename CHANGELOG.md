@@ -7,6 +7,15 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.0.5] - 2026-09-02
 
+### Added
+
+- **Presets are back** (user-config snapshots): save/load/delete named
+  configurations incl. per-agent prompts (Prompt Editor), shown in a dedicated
+  "Presets" tab. **Load replaces the whole configuration — and only on an
+  explicit click.** There is no auto-load at startup and no preset override of
+  model/context/behaviour in the agentic coder anymore; `git_token` is never
+  stored in a preset.
+
 ### Changed
 
 - **Agentic/Duo context is now user-controlled**: the per-agent **Context**

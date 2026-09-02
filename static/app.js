@@ -4,10 +4,12 @@ let S = {
   models: [],
   mode: 'auto',
   iters: 2,
+  activePreset: null,
   pendingImgs: [],
   streaming: false,
   curAgent: null,
   _coderElapsed: null,
+  editingPreset: null,
   constraintMode: true,
   currentAssignments: {},
   forcedComplexity: 'auto',
@@ -537,6 +539,7 @@ async function init() {
   await loadAgentMap();
   await loadSettings();    // renderAgentCards now uses S.currentAssignments
   if (S.duoWebsearch || S.pipelineWebsearch || S.automapPipelineWebsearch) checkWebsearchStatus();
+  await loadPresets();
   await loadMemory();
   await loadVisionConfig();
   await loadSpecialAgentsConfig();
@@ -862,9 +865,11 @@ async function loadSettings() {
 
     S.iters          = s.max_iterations || 2;
     S.mode           = s.mode || 'automap';
+    S.activePreset   = s.active_preset || '';
     S.constraintMode = s.constraint_mode !== false;
     S.smartPreload   = s.smart_preload_enabled !== false;  // FIX: default true (was false)
 
+    _setPresetHeader();
     document.getElementById('iters-in').value = S.iters;
     document.getElementById('h-iters-val').textContent = S.iters;
     document.getElementById('cfl-toggle').checked = S.constraintMode;
@@ -2071,6 +2076,148 @@ async function applyAll() {
   await loadSettings();
 }
 
+// -- Presets ----------------------------------------------------
+function _setPresetHeader() {
+  var el = document.getElementById('h-preset-label');
+  if (el) el.textContent = S.activePreset || 'no preset';
+}
+
+async function loadPresets() {
+  try {
+    const d = await (await fetch('/presets')).json();
+    renderPresets(d);
+    var sel = document.getElementById('prompt-agent-sel');
+    if (sel) {
+      sel.innerHTML = '';
+      Object.entries(AGENT_META || {}).forEach(function(e) {
+        if (e[0] === 'judge') return;
+        var opt = document.createElement('option');
+        opt.value = e[0];
+        opt.textContent = (e[1] && e[1].label) || e[0];
+        sel.appendChild(opt);
+      });
+    }
+  } catch(e) {}
+}
+
+function renderPresets(presets) {
+  var c = document.getElementById('preset-list');
+  if (!c) return;
+  var keys = Object.keys(presets || {});
+  if (!keys.length) { c.innerHTML = '<div class="empty">No presets saved</div>'; return; }
+  c.innerHTML = '';
+  keys.forEach(function(name) {
+    var isActive = name === S.activePreset;
+    var item = document.createElement('div');
+    item.className = 'preset-item';
+    var nd = document.createElement('div');
+    nd.className = 'preset-name';
+    nd.textContent = name;
+    if (isActive) {
+      var dot = document.createElement('span');
+      dot.className = 'preset-active';
+      dot.textContent = ' \u25CF active';
+      nd.appendChild(dot);
+    }
+    var bp = document.createElement('button'); bp.className = 'ghost'; bp.textContent = 'Prompts';
+    var bs = document.createElement('button'); bs.className = 'pload'; bs.textContent = 'Save';
+    bs.title = 'Overwrite this preset with the current config';
+    var bl = document.createElement('button'); bl.className = 'pload'; bl.textContent = 'Load';
+    var bd = document.createElement('button'); bd.className = 'pdel'; bd.textContent = '\u00D7';
+    (function(n) {
+      bp.addEventListener('click', function() { openPromptEditor(n); });
+      bs.addEventListener('click', function() { savePresetAs(n); });
+      bl.addEventListener('click', function() { loadPreset(n); });
+      bd.addEventListener('click', function() { delPreset(n); });
+    })(name);
+    item.appendChild(nd); item.appendChild(bp); item.appendChild(bs); item.appendChild(bl); item.appendChild(bd);
+    c.appendChild(item);
+  });
+}
+
+async function savePreset() {
+  var name = (document.getElementById('preset-name-in').value || '').trim();
+  if (!name) return;
+  await savePresetAs(name);
+  document.getElementById('preset-name-in').value = '';
+  await loadPresets();
+}
+
+async function savePresetAs(name) {
+  if (!name) return;
+  await fetch('/presets/' + encodeURIComponent(name), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+  });
+  await loadPresets();
+}
+
+async function loadPreset(name) {
+  var r = await fetch('/presets/' + encodeURIComponent(name) + '/load', { method: 'POST' });
+  var d = await r.json();
+  if (d.ok) {
+    S.activePreset = name;
+    _setPresetHeader();
+    await loadSettings();
+    await loadPresets();
+  }
+}
+
+async function delPreset(name) {
+  if (!confirm('Delete preset "' + name + '"?')) return;
+  await fetch('/presets/' + encodeURIComponent(name), { method: 'DELETE' });
+  if (S.activePreset === name) { S.activePreset = null; _setPresetHeader(); }
+  var pe = document.getElementById('prompt-editor-section');
+  if (pe) pe.style.display = 'none';
+  await loadPresets();
+}
+
+// -- Prompt Editor ----------------------------------------------
+async function openPromptEditor(name) {
+  S.editingPreset = name;
+  var pe = document.getElementById('prompt-editor-section');
+  if (pe) pe.style.display = 'block';
+  await loadPrompt();
+}
+
+async function loadPrompt() {
+  if (!S.editingPreset) return;
+  var agent = document.getElementById('prompt-agent-sel').value;
+  try {
+    var d = await (await fetch('/presets/' + encodeURIComponent(S.editingPreset) + '/prompts/' + agent)).json();
+    var ta = document.getElementById('prompt-textarea');
+    if (ta) ta.value = d.content || '';
+    var cb = document.getElementById('custom-badge');
+    if (cb) cb.style.display = d.is_custom ? 'inline' : 'none';
+  } catch(e) {}
+}
+
+function promptChanged() {
+  var cb = document.getElementById('custom-badge');
+  if (cb) cb.style.display = 'inline';
+}
+
+async function savePrompt() {
+  if (!S.editingPreset) return;
+  var agent = document.getElementById('prompt-agent-sel').value;
+  var ta = document.getElementById('prompt-textarea');
+  await fetch('/presets/' + encodeURIComponent(S.editingPreset) + '/prompts/' + agent, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: ta ? ta.value : '' })
+  });
+  var cb = document.getElementById('custom-badge');
+  if (cb) cb.style.display = 'inline';
+}
+
+async function resetPrompt() {
+  if (!S.editingPreset) return;
+  var agent = document.getElementById('prompt-agent-sel').value;
+  var d = await (await fetch('/presets/' + encodeURIComponent(S.editingPreset) + '/prompts/' + agent)).json();
+  var ta = document.getElementById('prompt-textarea');
+  if (ta) ta.value = d.content || '';
+  var cb = document.getElementById('custom-badge');
+  if (cb) cb.style.display = d.is_custom ? 'inline' : 'none';
+}
+
 // -- Memory -----------------------------------------------------
 async function loadMemory() {
   try {
@@ -2167,6 +2314,7 @@ async function newChat() {
   setPauseBtnState('idle');
   setStopBtnState('idle');
   stopAskUserCountdown();
+  _setPresetHeader();
   document.getElementById('h-complexity').style.display = 'none';
   showInfo('New chat started.');
 }
@@ -6034,6 +6182,7 @@ document.querySelectorAll('.tab').forEach(function(btn) {
     if (btn.dataset.p === 'models') { _vramOpen = true; refreshVram(); refreshModelsAutomap(); loadModels(); refreshAvailableModels(); }
     if (btn.dataset.p === 'agents') { loadModels(); }
     if (btn.dataset.p === 'memory') loadMemory();
+    if (btn.dataset.p === 'presets') loadPresets();
     if (btn.dataset.p === 'configs') initConfigsPanel();
     if (btn.dataset.p === 'soul')   loadSoulStatus();
     if (btn.dataset.p === 'chats')  loadChatHistory();
