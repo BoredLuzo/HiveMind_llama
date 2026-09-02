@@ -27,6 +27,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   raising the context actually takes effect now.
 - llama.cpp updater now fetches the **newest `bXXXX` nightly** directly from the
   releases list (the stable `nightly-tag.txt` pointer lagged ~100 builds).
+- Duo context inputs (**Context Coder (Agentic) / Normal / Planner**) persist
+  immediately while typing (`oninput`/Enter) — a typed value without blur/Enter
+  is no longer lost. The effective context is logged at run start
+  (`[CTX-EFFECTIVE] …`).
 
 ## [1.0.4] - 2026-09-02
 

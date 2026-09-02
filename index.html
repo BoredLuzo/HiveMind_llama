@@ -656,7 +656,7 @@
         <div id="wrapper-ctx-agentic" style="margin-bottom:10px; display:none;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Context Coder (Agentic)</span>
-            <input type="number" min="1024" step="1024" id="duo-ctx-agentic" value="16384"
+            <input type="number" min="1024" step="1024" id="duo-ctx-agentic" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
               style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
               onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxAgentic=v;S.duoCtxUntilFinished=v;postSettings({duo_coder_ctx_agentic:v,duo_coder_ctx_until_finished:v});setDuoSubMode(S.duoAgenticMode?'agentic':'critic');updateCtxScopeHint();refreshVram();_vramEstimate(S.duoCoderModel,v,'vram-est-agentic')">
           </div>
@@ -682,7 +682,7 @@
         <div id="wrapper-ctx-planner" style="margin-bottom:10px; display:none;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a74dc;flex:1;font-weight:600">Context Planner</span>
-            <input type="number" min="1024" step="1024" id="duo-ctx-planner" value="16384"
+            <input type="number" min="1024" step="1024" id="duo-ctx-planner" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
               style="width:76px;background:var(--bg2);border:1px solid rgba(136,88,192,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
               onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxPlanner=v;postSettings({duo_planner_ctx_target:v});refreshVram();_vramEstimate(S.duoPlannerModel,v,'vram-est-planner')">
           </div>
@@ -697,7 +697,7 @@
         <div id="wrapper-ctx-normal" style="margin-bottom:10px; display:none;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Context (Coder + Critic Dual)</span>
-            <input type="number" min="1024" step="1024" id="duo-ctx-normal" value="8192"
+            <input type="number" min="1024" step="1024" id="duo-ctx-normal" value="8192" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
               style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
               onchange="postSettings({duo_coder_ctx_normal:parseInputAsOptionalInt(this.value,8192)});S.duoCtxNormal=parseInputAsOptionalInt(this.value,8192);updateCtxScopeHint();refreshVram()">
           </div>
