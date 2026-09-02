@@ -25,6 +25,7 @@ SOURCES: list[str] = [
     "sessions",
     "memory.json",
     "soul.json",
+    "presets.json",
     "settings.json",
     "model_configs/learned",
     "learning_logs",

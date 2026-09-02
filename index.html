@@ -23,6 +23,8 @@
   <div class="h-sep"></div>
   <div id="h-agentmap"></div>
   <div class="h-sep"></div>
+  <span id="h-preset-label">no preset</span>
+  <div class="h-sep"></div>
   <button id="skip-btn" class="hbtn" onclick="skipCurrentStep()" title="Skip current phase (Planner/Coder/Critic/Test — does not abort the whole run)" style="display:none">⏭ Skip</button>
   <button id="h-sidebar-btn" class="hbtn active" onclick="toggleSidebar()" title="Toggle sidebar">&#9776; Panel</button>
   <button id="h-code-btn" onclick="toggleCodePanel()" title="Toggle live code panel">⌨ Code</button>
@@ -56,8 +58,9 @@
 </div>
 <div id="sidebar">
   <div class="tabs">
-    <button class="tab on" data-p="agents">Agents</button>
-    <button class="tab" data-p="configs">Configs</button>
+  <button class="tab on" data-p="agents">Agents</button>
+  <button class="tab" data-p="presets">Presets</button>
+  <button class="tab" data-p="configs">Configs</button>
     <button class="tab" data-p="memory">Memory</button>
     <button class="tab" data-p="soul" style="color:var(--purple)">Soul</button>
     <button class="tab" data-p="models" style="color:#3a9960">Models</button>
@@ -1206,6 +1209,33 @@
         </div>
 
       </div>
+    </div>
+  </div>
+  <!-- PRESETS -->
+  <div class="panel" id="p-presets">
+    <div class="sec">Save new preset</div>
+    <div style="display:flex;gap:6px;margin-bottom:4px">
+      <input class="sinput" type="text" id="preset-name-in" placeholder="Name..." style="flex:1;height:32px">
+      <button class="amber-btn" onclick="savePreset()">Save</button>
+    </div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:12px">
+      Saves the current agent configuration + prompts. Loading a preset replaces
+      the whole configuration — use <b>Load</b> explicitly; nothing auto-applies.
+    </div>
+    <div class="sec">Saved presets</div>
+    <div id="preset-list"></div>
+    <div id="prompt-editor-section" style="display:none">
+      <div class="sec" style="display:flex;align-items:center;gap:8px">
+        Prompt Editor
+        <span class="custom-badge" id="custom-badge" style="display:none">Modified</span>
+      </div>
+      <div class="row" style="margin-bottom:6px">
+        <select id="prompt-agent-sel" style="flex:1" onchange="loadPrompt()"></select>
+        <button class="ghost" onclick="resetPrompt()">Reset</button>
+      </div>
+      <textarea class="prompt-editor" id="prompt-textarea" rows="10"
+        placeholder="Prompt will be loaded..." oninput="promptChanged()"></textarea>
+      <button class="amber-btn" style="width:100%;margin-top:6px" onclick="savePrompt()">Save prompt</button>
     </div>
   </div>
   <!-- CONFIGS -->

@@ -1083,7 +1083,12 @@ async def stream(req: Request):
     images = body.get("images", [])
     mode = body.get("mode", settings.get("mode", "auto"))
     iters = body.get("iterations", body.get("iters", 1))
-    preset = ""  # presets removed (2026-09-02) — prompts come from built-ins only
+    preset = ""  # prompts come from built-ins unless a preset was explicitly Loaded
+    try:
+        if settings.get("active_preset"):
+            preset = str(settings.get("active_preset"))
+    except Exception:
+        pass
     cmode = body.get("constraint_mode", body.get("cmode", False))
     force_complexity = body.get("force_complexity")
     skip_agents = body.get("skip_agents", [])

@@ -9,20 +9,77 @@ from fastapi.responses import JSONResponse
 
 from settings import (
     load_settings, save_settings,
+    load_presets, save_presets,
+    get_custom_prompt, save_custom_prompt,
+    delete_custom_prompts_for_preset, copy_prompts_to_preset,
     DEFAULT_AGENT_CFG, DEFAULT_SETTINGS,
 )
+from hive_functions.prompts import PROMPTS
+from vram.loader import _bk_load
 import core.state as _state
 from core.state import (
     settings, registry_all,
-    registry_set,
+    registry_set, registry_sync_from_pipeline,
     apply_settings_to_pipeline,
     _refresh_safe_profile_policy,
-    _ws_configure,
+    _ws_configure, _get_num_ctx,
 )
 
 logger = logging.getLogger("hivemind.server")
 
 router = APIRouter(prefix="", tags=["Config"])
+
+# Secrets are never stored into / loaded from a preset snapshot.
+_PRESET_NEVER_KEYS = {"git_token", "_registry"}
+
+
+def _preset_snapshot() -> dict:
+    snap = {}
+    for key, value in settings.items():
+        if key in _PRESET_NEVER_KEYS:
+            continue
+        snap[key] = copy.deepcopy(value)
+    snap["agents"] = {
+        k: {"model": a.model, "temperature": a.temperature, "max_tokens": a.max_tokens}
+        for k, a in _state.pipeline.agents.items()
+    } if _state.pipeline else {}
+    snap["prompts"] = {}
+    return snap
+
+
+async def _apply_preset_internal(name: str, *, persist: bool = True) -> bool:
+    """Explicit preset Load — replaces the whole user configuration (models,
+    context, options, mode, prompts). Never runs automatically at startup."""
+    presets = load_presets()
+    if name not in presets:
+        return False
+    p = presets[name]
+    if "agents" in p:
+        _agents_cfg = p["agents"]
+        if isinstance(_agents_cfg, dict) and "agents" in _agents_cfg and isinstance(_agents_cfg["agents"], dict):
+            _agents_cfg = _agents_cfg["agents"]
+        if isinstance(_agents_cfg, dict) and _agents_cfg:
+            settings["agents"] = copy.deepcopy(_agents_cfg)
+    for key, value in p.items():
+        if key in {"agents", "prompts", "active_preset"}:
+            continue
+        if key in _PRESET_NEVER_KEYS:
+            continue
+        settings[key] = copy.deepcopy(value)
+    apply_settings_to_pipeline(settings)
+    settings["active_preset"] = name
+    if _state._WEBSEARCH_AVAILABLE:
+        _ws_configure(
+            host=settings.get("searxng_host", "http://localhost:8888"),
+            enabled=settings.get("pipeline_websearch_enabled", False)
+            or settings.get("duo_websearch_enabled", False),
+            engines=settings.get("searxng_engines"),
+            language=settings.get("searxng_language"),
+        )
+    if persist:
+        await asyncio.to_thread(save_settings, settings)
+    registry_sync_from_pipeline()
+    return True
 
 
 @router.get("/settings")
@@ -272,6 +329,63 @@ async def set_all_model(req: Request):
 @router.get("/registry")
 async def get_registry():
     return registry_all()
+
+
+@router.get("/presets")
+async def get_presets():
+    return load_presets()
+
+
+@router.post("/presets/{name}")
+async def save_preset_ep(name: str, req: Request):
+    presets = load_presets()
+    presets[name] = _preset_snapshot()
+    if _state.pipeline:
+        copy_prompts_to_preset(
+            src_preset=None, dst_preset=name,
+            agent_keys=list(_state.pipeline.agents.keys()), base_prompts=PROMPTS
+        )
+    save_presets(presets)
+    return {"ok": True, "name": name}
+
+
+@router.post("/presets/{name}/load")
+async def load_preset_ep(name: str):
+    if not await _apply_preset_internal(name):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    try:
+        if _state.pipeline:
+            judge_agent = _state.pipeline.agents.get("judge")
+            if judge_agent:
+                _wm3_ctx = _get_num_ctx(judge_agent.model)
+                await _bk_load(judge_agent.model, keep_alive="10m", num_ctx=_wm3_ctx or None)
+    except Exception:
+        pass
+    return {"ok": True, "name": name}
+
+
+@router.delete("/presets/{name}")
+async def del_preset(name: str):
+    presets = load_presets()
+    if name in presets:
+        del presets[name]
+        delete_custom_prompts_for_preset(name)
+        save_presets(presets)
+    return {"ok": True}
+
+
+@router.get("/presets/{name}/prompts/{agent}")
+async def get_prompt(name: str, agent: str):
+    custom = get_custom_prompt(name, agent)
+    default = PROMPTS.get(agent, "")
+    return {"content": custom or default, "is_custom": custom is not None}
+
+
+@router.post("/presets/{name}/prompts/{agent}")
+async def set_prompt(name: str, agent: str, req: Request):
+    d = await req.json()
+    save_custom_prompt(name, agent, d.get("content", ""))
+    return {"ok": True}
 
 
 @router.get("/memory")
