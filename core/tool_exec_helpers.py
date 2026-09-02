@@ -171,7 +171,8 @@ async def _handle_too_large(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
     await hooks.emit({"type": "token", "content": f"\n[⚠ {_dname}: too large — forcing split mode]\n"})
 
 def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
-                              attempts_per_file, tool_error_retries) -> tuple[str, bool]:
+                              attempts_per_file, tool_error_retries,
+                              workspace_lock: str | None = None) -> tuple[str, bool]:
     """U2: tool-specific error hints (from execute_tool_round).
     Returns (new _dresult, matched).
     """

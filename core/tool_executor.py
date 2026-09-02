@@ -283,7 +283,8 @@ async def execute_tool_round(
                                     trs.last_too_large_path, round_state, hooks)
         else:
             _dresult, _hint_matched = _inject_tool_error_hints(
-                _dname, _dargs, _dresult, _dtc_call, dtool_msgs, trs.attempts_per_file, trs.tool_error_retries)
+                _dname, _dargs, _dresult, _dtc_call, dtool_msgs, trs.attempts_per_file, trs.tool_error_retries,
+                workspace_lock=workspace_lock)
             if _hint_matched:
                 pass
             elif _dname == "task_complete":
