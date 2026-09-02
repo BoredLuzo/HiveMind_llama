@@ -64,6 +64,10 @@ Mode buttons live in the sidebar ("Agents" tab). AutoMap routing is
 conservative by default (`automap_mode="conservative"`) and can learn from
 run outcomes (`routing_weights.json`).
 
+> **Status:** `Auto` and `AutoMap` routing are currently **untested** and not
+> recommended for real work yet. HiveMind is most reliable in **Direct / Chat**
+> (`simple`) and **Code-Duo agentic** modes — use those for actual tasks.
+
 ### Direct chat tool tiers
 
 In **Simple / Direct** chat the model can use real tools through a tier
@@ -266,7 +270,7 @@ Prefix a key with `_` to skip it (e.g. notes). `TODO:` paths are ignored.
 | `qwen3.5:4b-ud` (UD-Q4_K_XL) | Analyst/Critic/Speed | ~3 GB | ~3 GB |
 | `qwen3.5:9b-ud` (UD-Q4_K_XL) | Direct/Duo-Coder | ~6 GB | ~6 GB |
 | `qwen3.5:2b` (Q4_K_M) | Refiner | ~1.3 GB | ~1.5 GB |
-| `lfm2.5:2.6b` (Q4_K_M) | Subagent/Judge | ~2 GB | ~2 GB |
+| `lfm2.5:2.6b` (Q4_K_M) | Subagent/Judge | ~2 GB (+0.2 GB DSpark drafter) | ~2 GB |
 | `qwen3.5:0.8b-ud` (UD-Q4_K_XL) | Subagent ladder | ~0.6 GB | ~0.6 GB |
 
 Standard configs:
@@ -281,6 +285,12 @@ Standard configs:
 tiel-coder use `mmproj-BF16.gguf` (auto-downloaded by `setup_models.bat` or
 pinned via `models.json` / `mmproj_filename`). Non-multimodal models fall back
 to the vision-agent/preprocessing path.
+
+**DSpark drafter:** `setup_models.bat` auto-downloads the LFM2.5-2.6B-DSpark
+speculative-decoding drafter (Q4_K_M, ~190 MB) together with `lfm2.5:2.6b`.
+HiveMind launches lfm2.5 models with `--jinja` (native ChatML/tool role) and
+attaches the drafter via `--model-draft` / `--spec-type draft-dspark` when the
+sidecar GGUF is present.
 
 ## User Experience & Control
 
@@ -393,8 +403,7 @@ Standalone: `setup_models.bat [custom models folder]`
 ```bat
 searxng.bat install [port]   # generate secret, build image, start (default 8888)
 searxng.bat start|stop|restart|status
-searxng.bat repair           # fix a broken/stopped install (searxng_repair.bat)
-searxng_repair.bat [port]    # start Docker Desktop if down, rebuild + health-check
+searxng.bat external URL     # point at an already-running SearXNG (no Docker)
 ```
 
 `settings.yml` is baked into the image and selected via `SEARXNG_SETTINGS_PATH`
@@ -404,16 +413,14 @@ The base image's `/etc/searxng` volume is intentionally NOT used for the config
 `restart: unless-stopped`. Without Docker, web search stays disabled — or point
 HiveMind at an already-running instance with `searxng.bat external URL`.
 
-> **SearXNG not reachable?** Run `searxng_repair.bat` (or `searxng.bat repair`).
-> It starts Docker Desktop automatically if the engine is down, waits for it,
-> recreates/restarts the container and re-verifies `/healthz`. If the container
-> runs an old baked-in config, it rebuilds the image automatically.
+> **SearXNG not reachable?** Make sure Docker Desktop is running, then rebuild:
+> `searxng.bat install <port>` (uses `--force-recreate --renew-anon-volumes`, so
+> a stale baked config is replaced automatically).
 >
-> **Stale-container error** (`invalid mount config for type "bind"`): a leftover
-> `hivemind-searxng` container from an older HiveMind version carries a stale
-> bind-mount config. `searxng.bat`/`searxng_repair.bat` now use
-> `--force-recreate` and auto-remove it on failure. Manual fix:
-> `docker rm -f hivemind-searxng` then run the repair again.
+> **Stale-container error** (`invalid mount config for type "bind"`, or JSON
+> searches return HTTP 403/empty): a leftover `hivemind-searxng` container from an
+> older HiveMind version carries an old config that shadows the current image.
+> Fix: `docker rm -f hivemind-searxng`, then `searxng.bat install` again.
 
 ### Other scripts
 
@@ -425,8 +432,7 @@ HiveMind at an already-running instance with `searxng.bat external URL`.
 | `update_llama.bat` | Update llama.cpp to the latest nightly |
 | `setup_models.bat` | Download / register / **add custom** models |
 | `start_mcp.bat` | MCP HTTP server for IDEs on port 8090 |
-| `searxng.bat` | SearXNG manager |
-| `searxng_repair.bat` | Fix SearXNG (starts Docker Desktop, rebuilds container, health-check) |
+| `searxng.bat` | SearXNG manager (install/start/stop/restart/status/external) |
 
 ## Configuration
 
@@ -478,10 +484,13 @@ then backend match, then CUDA version). Re-run `install.bat` step 5 or
 
 ### `web_fetch` returns `HTTP 403`
 
-Some sites (e.g. Wikipedia, openai.com) block automated requests even with a
-browser User-Agent. HiveMind ships a real browser UA, but strict sites may
-still answer `403`. Prefer `web_search` (via SearXNG) over `web_fetch` for
-research; `web_fetch` works best on sites that do not hard-block bots.
+Some sites (e.g. Wikipedia, stackoverflow.com, openai.com) block plain HTTP
+fetches. HiveMind sends a real browser User-Agent first and — on HTTP 403 —
+automatically retries with a descriptive bot User-Agent, which fixes
+Wikipedia-style 403s. Cloudflare-protected sites (StackOverflow, OpenAI) still
+require JavaScript and keep returning `403`. Prefer `web_search` (SearXNG
+snippets) over `web_fetch` for those; `web_fetch` works best on sites that do
+not hard-block bots.
 
 ### Port 8001 already in use
 
