@@ -99,9 +99,19 @@ SPECS: list[dict] = [
             r"(?i)2\.6b.*q4_0\.gguf$",
         ],
         "mmproj_regex": [],
+        # DSpark speculative-decoding drafter (sidecar GGUF, paired with the
+        # target model). It is NOT registered as a standalone model (see
+        # write_models_json / llama_models dspark exclusion).
+        "sidecar": [
+            {
+                "repo": "LiquidAI/LFM2.5-2.6B-DSpark-GGUF",
+                "path": "LFM2.5-2.6B-DSpark-Q4_K_M.gguf",
+                "note": "DSpark spec-dec drafter (Q4_K_M, ~190MB)",
+            },
+        ],
     },
     # ── qwen3.5 family: default agent models (settings alignment 2026-08-26) ──
-    # The default settings (settings.py / presets.json) reference these tags.
+    # The default settings (settings.py) reference these tags.
     # Every entry must match a tag in DEFAULT_SETTINGS with `key` —
     # safeguarded by T10 in tests/test_installer_setup.py.
     # NAMING (live check 2026-08-26, unsloth/Qwen3.5-*-GGUF): UD variants only
@@ -275,6 +285,8 @@ def write_models_json(models_dir: Path) -> int:
     for g in ggufs:
         if "mmproj" in g.name.lower():
             continue
+        if "dspark" in g.name.lower():
+            continue
         names = _parse_gguf_filename(g.name)
         if names:
             mapping[names[0]] = str(g)
@@ -427,6 +439,20 @@ def main() -> int:
                     print(f"    Would download (Vision): {mm['path']}")
                 else:
                     download_file(repo, mm, mdir, args.yes)
+
+        for _sc in (spec.get("sidecar") or []):
+            _sc_name = Path(_sc["path"]).name.lower()
+            if args.only_missing and _sc_name in local_files:
+                print(f"    Sidecar present: {Path(_sc['path']).name} — skipping (--only-missing)")
+                continue
+            if args.list_only:
+                print(f"    Would download (sidecar): {_sc['path']} [{_sc.get('note', '')}]")
+                continue
+            try:
+                if download_file(_sc["repo"], {"path": _sc["path"], "size": 0}, mdir, args.yes):
+                    local_files[_sc_name] = mdir / Path(_sc["path"]).name
+            except Exception as e:
+                print(f"    [WARNING] Sidecar download failed ({e})")
 
     if args.list_only:
         return 0

@@ -4,12 +4,10 @@ let S = {
   models: [],
   mode: 'auto',
   iters: 2,
-  activePreset: null,
   pendingImgs: [],
   streaming: false,
   curAgent: null,
   _coderElapsed: null,
-  editingPreset: null,
   constraintMode: true,
   currentAssignments: {},
   forcedComplexity: 'auto',
@@ -46,10 +44,6 @@ let S = {
   duoPair: 'focused',
   duoToolRounds: 0,
   duoUsePipeline: false,
-  duoRuntimeProfile: 'auto',
-  duoRuntimeProfileLockOverride: false,
-  duoUsePresetModels: false,
-  duoUsePresets: true,
   duoProfileSpeedModel: 'qwen3.5:4b',
   duoProfileQualityModel: 'qwen3.5:9b-ud',
   duoCriticTools: false,
@@ -208,7 +202,6 @@ function setComplexityForce(val, el) {
   } else {
     document.getElementById('h-complexity').style.display = 'none';
   }
-  updateDuoRuntimeProfileHint();
 }
 
 function updateComplexityVisibility() {
@@ -242,40 +235,6 @@ function setJudgeBias(val) {
   document.getElementById('judge-bias-val').textContent = val;
 }
 
-function onDuoRuntimeProfileChange(val) {
-  S.duoRuntimeProfile = val || 'auto';
-  postSettings({duo_runtime_profile: S.duoRuntimeProfile});
-  updateDuoRuntimeProfileHint();
-  if (typeof updateCtxScopeHint === 'function') updateCtxScopeHint();
-}
-
-function onDuoRuntimeProfileLockOverrideChange(v) {
-  S.duoRuntimeProfileLockOverride = !!v;
-  postSettings({duo_runtime_profile_lock_override: S.duoRuntimeProfileLockOverride});
-  updateDuoRuntimeProfileHint();
-  if (typeof updateCtxScopeHint === 'function') updateCtxScopeHint();
-}
-
-function onDuoUsePresetModelsChange(v) {
-  S.duoUsePresetModels = !!v;
-  postSettings({duo_use_preset_models: S.duoUsePresetModels});
-  updateDuoRuntimeProfileHint();
-}
-
-function resolveDuoRuntimeProfileForRequest() {
-  var p = (S.duoRuntimeProfile || 'auto').toLowerCase();
-  if (p !== 'auto') return p;
-  // auto-mapping onto the existing complexity-override logic
-  if (S.forcedComplexity === 'simple') return 'fast';
-  if (S.forcedComplexity === 'complex') return 'critical';
-  return 'on_fail';
-}
-
-function resolveImportantTaskForRequest() {
-  // important-task toggle deliberately removed; profile control runs via dropdown.
-  return false;
-}
-
 function normalizeToolThinkingMode(v) {
   var mode = String(v || 'off').toLowerCase();
   // Legacy migration: critical/balanced → on_fail
@@ -298,46 +257,6 @@ function onDuoToolThinkingModeChange(v) {
 }
 
 // removed: updateToolThinkingModeVis — segmented control is always visible
-
-function updateDuoRuntimeProfileHint() {
-  var el = document.getElementById('duo-runtime-profile-hint');
-  if (!el) return;
-  var eff = resolveDuoRuntimeProfileForRequest();
-  var speedModel = S.duoProfileSpeedModel || 'qwen3.5:4b';
-  var qualityModel = S.duoProfileQualityModel || 'qwen3.5:9b-ud';
-  var isDropdownOverride = (S.duoPair === 'free');
-  var overrideModel = ((S.currentAssignments || {}).duo_coder || {}).model || '';
-  var src = (S.duoRuntimeProfile === 'auto')
-    ? ('Auto source: ' + (S.forcedComplexity === 'auto' ? 'neutral' : S.forcedComplexity))
-    : 'Manual override';
-  var lockTxt = S.duoRuntimeProfileLockOverride
-    ? 'Lock: ON (profile stays fixed, no auto-escalation)'
-    : 'Lock: OFF (can escalate to CRITICAL on until-finished/important)';
-  var presetModelTxt = S.duoUsePresetModels
-    ? 'Preset models: ON (dropdown model is replaced)'
-    : 'Preset models: OFF (dropdown model stays active)';
-  var detail = 'Balanced: quality routing + self-review (ctx-clamped).';
-  if (eff === 'fast') detail = 'Fast: speed-first routing, no post-review.';
-  if (eff === 'critical') detail = 'Quality: strongest routing + self-review + context injection.';
-  var route = 'Routing: preset picks model family + ctx.';
-  if (isDropdownOverride && S.duoUsePresetModels) {
-    route = 'Routing: preset models active - dropdown model is ignored, preset model is forced.';
-  } else if (isDropdownOverride) {
-    route = 'Routing: dropdown override active'
-      + (overrideModel ? (' (' + overrideModel + ')') : '')
-      + ' - preset controls only ctx/timeout/review.';
-  }
-  el.innerHTML = 'Effective: <span style="color:var(--txh)">' + eff.toUpperCase() + '</span>'
-    + '<br><span style="color:var(--tx2)">' + src + '</span>'
-    + '<br><span style="color:var(--tx2)">' + lockTxt + '</span>'
-    + '<br><span style="color:var(--tx2)">' + presetModelTxt + '</span>'
-    + '<br><span style="color:var(--tx2)">Preset models:</span>'
-    + '<br><span style="color:var(--tx2)">FAST → <b>' + esc(speedModel) + '</b></span>'
-    + '<br><span style="color:var(--tx2)">BALANCED → <b>' + esc(qualityModel) + '</b></span>'
-    + '<br><span style="color:var(--tx2)">CRITICAL → <b>' + esc(qualityModel) + '</b></span>'
-    + '<br><span style="color:var(--tx2)">' + detail + '</span>'
-    + '<br><span style="color:var(--tx2)">' + route + '</span>';
-}
 
 function updateWebsearchHint() {
   var h = document.getElementById('duo-websearch-hint');
@@ -586,7 +505,6 @@ async function init() {
   await loadAgentMap();
   await loadSettings();    // renderAgentCards now uses S.currentAssignments
   if (S.duoWebsearch || S.pipelineWebsearch || S.automapPipelineWebsearch) checkWebsearchStatus();
-  await loadPresets();
   await loadMemory();
   await loadVisionConfig();
   await loadSpecialAgentsConfig();
@@ -911,16 +829,12 @@ async function loadSettings() {
     const s = await (await fetch('/settings')).json();
 
     S.iters          = s.max_iterations || 2;
-    // NOTE: S.mode = s.mode is correct — server.py now preserves mode on preset load,
-    // so it always returns the correct (user-chosen) mode.
     S.mode           = s.mode || 'automap';
-    S.activePreset   = s.active_preset || '';
     S.constraintMode = s.constraint_mode !== false;
     S.smartPreload   = s.smart_preload_enabled !== false;  // FIX: default true (was false)
 
     document.getElementById('iters-in').value = S.iters;
     document.getElementById('h-iters-val').textContent = S.iters;
-    document.getElementById('h-preset-label').textContent = S.activePreset || 'no preset';
     document.getElementById('cfl-toggle').checked = S.constraintMode;
 
     // Auto-save chats (on by default, can be turned off)
@@ -1026,23 +940,8 @@ async function loadSettings() {
     if (dctEl) dctEl.value = typeof s.duo_compress_threshold === 'number' ? s.duo_compress_threshold : 0;
     var dpmsEl = document.getElementById('duo-planner-max-steps');
     if (dpmsEl) dpmsEl.value = typeof s.duo_planner_max_steps === 'number' ? s.duo_planner_max_steps : 0;
-    S.duoRuntimeProfile = (s.duo_runtime_profile || 'auto');
-    var drpEl = document.getElementById('duo-runtime-profile');
-    if (drpEl) drpEl.value = S.duoRuntimeProfile;
     S.duoProfileSpeedModel = (s.duo_profile_speed_model || 'qwen3.5:4b');
     S.duoProfileQualityModel = (s.duo_profile_quality_model || 'qwen3.5:9b-ud');
-    S.duoRuntimeProfileLockOverride = !!s.duo_runtime_profile_lock_override;
-    var drpLockEl = document.getElementById('duo-runtime-profile-lock-override');
-    if (drpLockEl) drpLockEl.checked = S.duoRuntimeProfileLockOverride;
-    S.duoUsePresetModels = !!s.duo_use_preset_models;
-    var dpmEl = document.getElementById('duo-use-preset-models-toggle');
-    if (dpmEl) dpmEl.checked = S.duoUsePresetModels;
-    S.duoUsePresets = (s.duo_use_presets !== false);
-    var dupsEl = document.getElementById('duo-use-presets-toggle');
-    if (dupsEl) dupsEl.checked = !!S.duoUsePresets;
-    var dupsPanel = document.getElementById('duo-presets-panel');
-    if (dupsPanel) dupsPanel.style.display = S.duoUsePresets ? 'block' : 'none';
-    updateDuoRuntimeProfileHint();
     updateDuoPairHint();
     S.duoCtxAgentic = parseInputAsOptionalInt(s.duo_coder_ctx_agentic, 16384);
     var dctxAgEl = document.getElementById('duo-ctx-agentic');
@@ -1516,7 +1415,6 @@ function onDuoPairChange(val) {
   }
   syncDuoPairSelectWithState();
   updateDuoPairHint();
-  updateDuoRuntimeProfileHint();
   updateDuoPairVramHint(parseFloat(document.getElementById('vram-budget-inp') && document.getElementById('vram-budget-inp').value || 7.5));
 }
 function setMode(mode, el) {
@@ -1625,15 +1523,6 @@ function toggleDuoModeAccordion() {
   var open = body.style.display !== 'none';
   body.style.display = open ? 'none' : 'block';
   if (chev) chev.style.transform = open ? '' : 'rotate(180deg)';
-}
-
-function toggleDuoPresetsUI(checked) {
-  var pnl = document.getElementById('duo-presets-panel');
-  if(pnl) pnl.style.display = checked ? 'block' : 'none';
-  S.duoUsePresets = !!checked;
-  postSettings({duo_use_presets: S.duoUsePresets});
-  updateDuoRuntimeProfileHint();
-  if(typeof updateCtxScopeHint === 'function') updateCtxScopeHint();
 }
 
 function setPassFiles(val) {
@@ -2150,144 +2039,6 @@ async function applyAll() {
   await loadSettings();
 }
 
-// -- Presets ----------------------------------------------------
-async function loadPresets() {
-  try {
-    const d = await (await fetch('/presets')).json();
-    renderPresets(d);
-    const sel = document.getElementById('prompt-agent-sel');
-    sel.innerHTML = '';
-    Object.entries(AGENT_META).forEach(function(e) {
-      if (e[0] === 'judge') return;
-      const opt = document.createElement('option');
-      opt.value = e[0]; opt.textContent = e[1].label;
-      sel.appendChild(opt);
-    });
-  } catch(e) {}
-}
-
-function renderPresets(presets) {
-  const c = document.getElementById('preset-list');
-  const keys = Object.keys(presets);
-  if (!keys.length) { c.innerHTML = '<div class="empty">No presets saved</div>'; return; }
-  c.innerHTML = '';
-  keys.forEach(function(name) {
-    const isActive = name === S.activePreset;
-    const item = document.createElement('div');
-    item.className = 'preset-item';
-    const nd = document.createElement('div');
-    nd.className = 'preset-name';
-    nd.textContent = name;
-    if (isActive) {
-      const dot = document.createElement('span');
-      dot.className = 'preset-active'; dot.textContent = ' \u25CF active';
-      nd.appendChild(dot);
-    }
-    const bp = document.createElement('button'); bp.className = 'ghost'; bp.textContent = 'Prompts';
-    const bs = document.createElement('button'); bs.className = 'pload'; bs.textContent = 'Save';
-    bs.title = 'Overwrite this preset with the current config';
-    const bl = document.createElement('button'); bl.className = 'pload'; bl.textContent = 'Load';
-    const bd = document.createElement('button'); bd.className = 'pdel'; bd.textContent = '\u00D7';
-    (function(n) {
-      bp.addEventListener('click', function() { openPromptEditor(n); });
-      bs.addEventListener('click', function() { savePresetAs(n); });
-      bl.addEventListener('click', function() { loadPreset(n); });
-      bd.addEventListener('click', function() { delPreset(n); });
-    })(name);
-    item.appendChild(nd); item.appendChild(bp); item.appendChild(bs); item.appendChild(bl); item.appendChild(bd);
-    c.appendChild(item);
-  });
-}
-
-async function savePreset() {
-  const name = document.getElementById('preset-name-in').value.trim();
-  if (!name) return;
-  await savePresetAs(name);
-  document.getElementById('preset-name-in').value = '';
-  await loadPresets();
-}
-
-async function savePresetAs(name) {
-  if (!name) return;
-  await fetch('/presets/' + encodeURIComponent(name), {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({max_iterations: S.iters, constraint_mode: S.constraintMode})
-  });
-  await loadPresets();
-}
-
-async function loadPreset(name) {
-  const r = await fetch('/presets/' + encodeURIComponent(name) + '/load', {method:'POST'});
-  const d = await r.json();
-  if (d.ok) {
-    S.activePreset = name;
-    document.getElementById('h-preset-label').textContent = name;
-    if (d.settings) {
-      S.iters = d.settings.max_iterations || S.iters;
-      // NOTE: S.mode is NOT set here — the server does not return mode,
-      // and even if it did, code_duo / whatever the user chose stays.
-      document.getElementById('iters-in').value = S.iters;
-      document.getElementById('h-iters-val').textContent = S.iters;
-      setModeUI(S.mode);
-    }
-    await loadSettings();
-    await loadPresets();
-  }
-}
-
-async function delPreset(name) {
-  if (!confirm('Delete preset "' + name + '"?')) return;
-  await fetch('/presets/' + encodeURIComponent(name), {method:'DELETE'});
-  if (S.activePreset === name) {
-    S.activePreset = null;
-    document.getElementById('h-preset-label').textContent = 'no preset';
-  }
-  document.getElementById('prompt-editor-section').style.display = 'none';
-  await loadPresets();
-}
-
-// -- Prompt Editor ----------------------------------------------
-async function openPromptEditor(name) {
-  S.editingPreset = name;
-  document.getElementById('prompt-editor-section').style.display = 'block';
-  const p = document.querySelector('#p-presets');
-  p.scrollTo(0, p.scrollHeight);
-  await loadPrompt();
-}
-
-async function loadPrompt() {
-  if (!S.editingPreset) return;
-  const agent = document.getElementById('prompt-agent-sel').value;
-  try {
-    const d = await (await fetch('/presets/' + encodeURIComponent(S.editingPreset) + '/prompts/' + agent)).json();
-    document.getElementById('prompt-textarea').value = d.content || '';
-    document.getElementById('custom-badge').style.display = d.is_custom ? 'inline' : 'none';
-  } catch(e) {}
-}
-
-function promptChanged() {
-  document.getElementById('custom-badge').style.display = 'inline';
-}
-
-async function savePrompt() {
-  if (!S.editingPreset) return;
-  const agent   = document.getElementById('prompt-agent-sel').value;
-  const content = document.getElementById('prompt-textarea').value;
-  await fetch('/presets/' + encodeURIComponent(S.editingPreset) + '/prompts/' + agent, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({content: content})
-  });
-  document.getElementById('custom-badge').style.display = 'inline';
-}
-
-async function resetPrompt() {
-  if (!S.editingPreset) return;
-  const agent = document.getElementById('prompt-agent-sel').value;
-  const d = await (await fetch('/presets/' + encodeURIComponent(S.editingPreset) + '/prompts/' + agent)).json();
-  document.getElementById('prompt-textarea').value = d.content || '';
-  document.getElementById('custom-badge').style.display = d.is_custom ? 'inline' : 'none';
-}
-
 // -- Memory -----------------------------------------------------
 async function loadMemory() {
   try {
@@ -2385,7 +2136,6 @@ async function newChat() {
   setStopBtnState('idle');
   stopAskUserCountdown();
   document.getElementById('h-complexity').style.display = 'none';
-  document.getElementById('h-preset-label').textContent = S.activePreset || 'no preset';
   showInfo('New chat started.');
 }
 
@@ -3969,15 +3719,11 @@ async function sendMsg() {
   if (_elBadge) _elBadge.style.display = 'none';
 
   const skippedKeys = Object.keys(S.skippedAgents).filter(function(k){return S.skippedAgents[k];});
-  const _effDuoRuntimeProfile = resolveDuoRuntimeProfileForRequest();
   if (S.forcedComplexity !== 'auto' || skippedKeys.length || S.judgeBias !== 50) {
     const parts = [];
     if (S.forcedComplexity !== 'auto') parts.push('MODE FORCE: ' + S.forcedComplexity.toUpperCase());
     if (S.judgeBias !== 50) parts.push('JUDGE-BIAS: ' + S.judgeBias + (S.judgeBias > 50 ? ' (complex-bevorzugend)' : ' (simple-bevorzugend)'));
     if (skippedKeys.length) parts.push('SKIP: ' + skippedKeys.join(', '));
-    if (S.mode === 'code_duo') {
-      parts.push('RUNTIME: ' + _effDuoRuntimeProfile.toUpperCase());
-    }
     const info = document.createElement('div');
     info.className = 'msg divider';
     info.style.cssText = 'color:#e09030;border-color:rgba(224,144,48,.25);font-size:9px;letter-spacing:.07em';
@@ -4045,7 +3791,6 @@ async function sendMsg() {
         images: imgs.map(function(i) { return i.b64; }),
         mode: S.mode,
         iterations: S.iters,
-        active_preset: S.activePreset,
         constraint_mode: S.constraintMode,
         force_complexity: S.forcedComplexity !== 'auto' ? S.forcedComplexity : undefined,
         skip_agents:      Object.keys(S.skippedAgents).filter(function(k){return S.skippedAgents[k];}),
@@ -4072,9 +3817,6 @@ async function sendMsg() {
                 duo_coder_tool_thinking_auto_mode: S.duoToolThinkingAlways ? 'always' : (S.duoToolThinkingMode || 'off'),
                 chat_id: S.currentChatId || undefined,
         until_finished: !!S.duoUntilFinished,
-        duo_runtime_profile: _effDuoRuntimeProfile,
-        duo_runtime_profile_lock_override: !!S.duoRuntimeProfileLockOverride,
-        duo_use_preset_models: !!S.duoUsePresetModels,
       })
     });
     const reader = res.body.getReader();
@@ -4755,15 +4497,10 @@ function handleEvent(d) {
     var _runtimeInfo = document.createElement('div');
     _runtimeInfo.className = 'msg divider';
     _runtimeInfo.style.cssText = 'font-family:"IBM Plex Mono",monospace;font-size:9px;letter-spacing:.05em;color:#7a8fa8;border-color:rgba(122,143,168,.25)';
-    var _rtSource = (d.runtime_model_source === 'dropdown')
-      ? ('Dropdown-Override' + (d.runtime_model_override ? (': ' + d.runtime_model_override) : ''))
-      : (d.runtime_model_source === 'preset'
-          ? 'Preset-Routing'
-          : (d.runtime_model_source === 'preset_toggle' ? 'Preset-Routing (Toggle)' : 'Pair-Routing'));
+    var _rtModel = (d.runtime_model_source === 'dropdown' && d.runtime_model_override)
+      ? ('Coder: ' + d.runtime_model_override) : '';
     var _ctxText = d.runtime_ctx_target ? String(d.runtime_ctx_target) : '?';
-    _runtimeInfo.textContent = 'Runtime: ' + String((d.runtime_profile || 'balanced')).toUpperCase()
-      + ' | Source: ' + _rtSource
-      + ' | ctx=' + _ctxText;
+    _runtimeInfo.textContent = [_rtModel, ('ctx=' + _ctxText)].filter(Boolean).join(' | ');
     c.appendChild(_runtimeInfo);
     // PERF-CONSOLIDATION (2026-08-26): thin ctx bar on top removed —
     // only the lower performance bar remains (ctx-% there, colored in the summary).
@@ -6242,7 +5979,6 @@ document.querySelectorAll('.tab').forEach(function(btn) {
     if (btn.dataset.p === 'models') { _vramOpen = true; refreshVram(); refreshModelsAutomap(); loadModels(); refreshAvailableModels(); }
     if (btn.dataset.p === 'agents') { loadModels(); }
     if (btn.dataset.p === 'memory') loadMemory();
-    if (btn.dataset.p === 'presets') loadPresets();
     if (btn.dataset.p === 'configs') initConfigsPanel();
     if (btn.dataset.p === 'soul')   loadSoulStatus();
     if (btn.dataset.p === 'chats')  loadChatHistory();
@@ -8276,7 +8012,6 @@ async function loadChat(chatId) {
       document.getElementById('chat').appendChild(_bn);
     }
     scrollBtm();
-    document.getElementById('h-preset-label').textContent = chat.title.slice(0,18);
     showInfo('Chat loaded: ' + chat.title.slice(0,40));
     loadChatHistory();  // refresh active state
     try {

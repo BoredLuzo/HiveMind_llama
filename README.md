@@ -250,7 +250,7 @@ Prefix a key with `_` to skip it (e.g. notes). `TODO:` paths are ignored.
 
 - **Agent assignment** — UI "Agents" tab or `settings.json.agents`
   (model, temperature, max_tokens, thinking, thinking_budget). "Set all to
-  model" assigns one model to every agent. Presets in `presets.json`.
+  model" assigns one model to every agent.
 - **Learned configs** — `model_configs/learned/<model>/<agent>.json`
   (temperature, max_tokens, system_prompt_override, notes), managed via the UI
   "Configs" tab or `/model_configs` API. Learned values override base defaults

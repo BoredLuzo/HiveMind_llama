@@ -237,9 +237,7 @@ _MAX_TREE_DEPTH = 4
 _MAX_TREE_FILES = 200
 from hive_functions.language_config import LANGUAGE_RUNNERS as _LANGUAGE_RUNNERS, detect_language as _detect_language
 from settings import (
-    load_settings, save_settings, load_presets, save_presets,
-    get_custom_prompt, save_custom_prompt,
-    delete_custom_prompts_for_preset, copy_prompts_to_preset,
+    load_settings, save_settings,
     DEFAULT_AGENT_CFG, DEFAULT_SETTINGS
 )
 from model_configs import (
@@ -334,7 +332,6 @@ _state._SESSIONS_DIR = _SESSIONS_DIR
 init_pause_state(_SESSIONS_DIR)
 _logger.info("[VRAM-BUDGET] Startup: settings['vram_budget_gb'] = %s (type=%s)",
              settings.get("vram_budget_gb"), type(settings.get("vram_budget_gb")).__name__)
-# AUTO-PRESET-LOAD: now happens entirely in _startup() via _apply_preset_internal()
 def _sync_backend_runtime_config() -> None:
     """Sync settings → backend runtime globals (llama_server_manager/llama_config)."""
     try:
@@ -558,11 +555,6 @@ async def _shutdown():
         save_settings(settings)
     except Exception as _e:
         _logger.debug("[Hivemind] flush_settings error: %s", _e)
-    try:
-        _cur_presets = load_presets()
-        save_presets(_cur_presets)
-    except Exception as _e:
-        _logger.debug("[Hivemind] flush_presets error: %s", _e)
     if _WEBSEARCH_AVAILABLE:
         try:
             await _websearch.shutdown()
@@ -678,16 +670,6 @@ async def _startup():
 
     _init_extracted_modules()
 
-
-    _active_preset = settings.get("active_preset")
-    if _active_preset:
-        try:
-            from routers.config import _apply_preset_internal
-            _applied = await _apply_preset_internal(_active_preset, persist=False)
-            if _applied:
-                logger.info("[AUTO-PRESET] '%s' loaded from last session", _active_preset)
-        except Exception as _ap_err:
-            logger.warning("[AUTO-PRESET] Error loading '%s': %s", _active_preset, _ap_err)
 
     # ─── Cleanup stale ports from previous crashes ───
     try:
@@ -873,7 +855,7 @@ from tools.errors import tool_error_response as _tool_error_response
 
 from context.chat_util import (
     _extract_ws_query, _trim_query,
-    _validate_preset_prompt, get_effective_prompt, _make_messages,
+    get_effective_prompt, _make_messages,
     _extract_memory, _auto_memory_from_input,
 )
 
@@ -1101,7 +1083,7 @@ async def stream(req: Request):
     images = body.get("images", [])
     mode = body.get("mode", settings.get("mode", "auto"))
     iters = body.get("iterations", body.get("iters", 1))
-    preset = body.get("active_preset", body.get("preset"))
+    preset = ""  # presets removed (2026-09-02) — prompts come from built-ins only
     cmode = body.get("constraint_mode", body.get("cmode", False))
     force_complexity = body.get("force_complexity")
     skip_agents = body.get("skip_agents", [])

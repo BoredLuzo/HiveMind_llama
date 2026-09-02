@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """backup_data.py - copy HiveMind user data into backups/<timestamp>/.
 
-Backs up the most important persistent data (sessions, memory, soul, presets,
+Backs up the most important persistent data (sessions, memory, soul,
 settings, learned model-configs, learning_logs) into a timestamped backup
 directory under backups/. Missing sources are skipped (soul.json/memory.json/
 learning_logs/ are only created on demand).
@@ -25,7 +25,6 @@ SOURCES: list[str] = [
     "sessions",
     "memory.json",
     "soul.json",
-    "presets.json",
     "settings.json",
     "model_configs/learned",
     "learning_logs",

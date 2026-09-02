@@ -7,7 +7,6 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | Key | Type | Default | Note |
 |---|---|---|---|
 | `_thinking_before_chunking` | null | `null` | persisted user-preference before chunking forced thinking ON |
-| `active_preset` | null | `null` | — |
 | `agents` | str | `"<ref DEFAULT_AGENT_CFG>"` | — |
 | `allow_cpu_offload` | bool | `True` | — |
 | `ask_user_auto_answer` | str | `"Use best judgment, document decision in commit message."` | — |
@@ -94,7 +93,6 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_run_timeout_critical_seconds` | int | `900` | — |
 | `duo_run_timeout_seconds` | int | `420` | — |
 | `duo_runtime_profile` | str | `"balanced"` | — |
-| `duo_runtime_profile_lock_override` | bool | `False` | — |
 | `duo_soft_planner_wall_timeout_s` | int | `300` | — |
 | `duo_static_map_chars` | int | `0` | 0 = Tier-abgeleitet (rich: 8000); >0 = explizites Static-Repo-Map-Char-Budget |
 | `duo_symbol_ref_enabled` | bool | `True` | — |
@@ -115,8 +113,6 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_tree_scout_max_files` | int | `200` | — |
 | `duo_until_finished_cap` | int | `999999` | — |
 | `duo_use_pipeline` | bool | `False` | — |
-| `duo_use_preset_models` | bool | `False` | — |
-| `duo_use_presets` | bool | `True` | — |
 | `duo_websearch_enabled` | bool | `False` | — |
 | `duo_websearch_max_calls` | int | `20` | — |
 | `duo_websearch_timeout_critical_seconds` | int | `24` | — |

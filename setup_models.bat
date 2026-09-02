@@ -54,8 +54,10 @@ echo    2. Qwen3.6 35B A3B UD      Q4_K_XL   ~20 GB    Coder/Planner MoE
 echo    3. Qwen3.5 4B UD           Q4_K_XL    ~3 GB    Analyst/Critic/Speed
 echo    4. Qwen3.5 9B UD           Q4_K_XL    ~6 GB    Direct/Duo-Coder
 echo    5. Qwen3.5 2B              Q4_K_M     ~1.3 GB  Refiner
-echo    6. LFM2.5 2.6B             Q4_K_M     ~2 GB    Subagent/Judge
+echo    6. LFM2.5 2.6B             Q4_K_M     ~2 GB    Subagent/Judge (+DSpark drafter)
 echo    7. Qwen3.5 0.8B UD         Q4_K_XL    ~0.6 GB  Subagent ladder
+echo.
+echo    LFM2.5 2.6B automatically also downloads the DSpark spec-dec drafter.
 echo.
 choice /c DCRA /m "[D]ownload / [C]ustom model add / [R]egister own folder only / [A]bort"
 if errorlevel 4 exit /b 0
@@ -76,7 +78,7 @@ echo.
 echo  Single-model download - enter numbers, comma-separated, e.g. 1,4:
 echo    1. gemma-4:e4b-it        All-rounder/Vision
 echo    2. qwen3.6:35b-a3b-ud    Coder/Planner MoE
-echo    3. lfm2.5:2.6b           Subagent/Judge
+echo    3. lfm2.5:2.6b           Subagent/Judge (+DSpark drafter)
 echo    4. qwen3.5:0.8b-ud       Subagent ladder
 echo    5. qwen3.5:2b            Refiner
 echo    6. qwen3.5:4b-ud         Analyst/Critic/Speed

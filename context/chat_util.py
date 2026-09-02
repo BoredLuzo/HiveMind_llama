@@ -1,45 +1,21 @@
 # -*- coding: utf-8 -*-
 """Chat message/prompt/memory utilities (extracted from server.py).
 
-Contains: prompt resolution (preset validation), message builder,
+Contains: prompt resolution, message builder,
 websearch auto-trigger, memory extraction (explicit + auto memory).
 Runtime state (memory) is read via core.state.
 """
 from __future__ import annotations
 
-import logging
 import re
 
 from core import state as _state
 from hive_functions.prompts import PROMPTS
-from settings import get_custom_prompt
-
-_RE_NUMBERED_LIST = re.compile(r'^\s*\d+\.\s', re.MULTILINE)
 
 
-def _validate_preset_prompt(preset_text: str, preset_name: str, agent_key: str) -> str | None:
-    if agent_key == "duo_coder":
-        return preset_text
-    _has_exec_constraint = (
-        "first output MUST be a tool call" in preset_text
-        or "EXECUTION MODE" in preset_text
-        or "Your first output MUST be" in preset_text
-    )
-    if not _has_exec_constraint and _RE_NUMBERED_LIST.search(preset_text):
-        logging.getLogger(__name__).warning(
-            "[PRESET WARN] %s/%s.txt contains numbered list ─ "
-            "model may output text instead of tool calls. "
-            "Falling back to default prompt.", preset_name, agent_key
-        )
-        return None
-    return preset_text
-
-
-def get_effective_prompt(agent_key, preset_name):
-    if preset_name:
-        custom = get_custom_prompt(preset_name, agent_key)
-        if custom:
-            return _validate_preset_prompt(custom, preset_name, agent_key) or PROMPTS.get(agent_key, PROMPTS.get("direct", ""))
+def get_effective_prompt(agent_key, preset_name=None):
+    """Effective system prompt — always the built-in default. Presets were
+    removed (2026-09-02): behavior is fixed by the UI/base prompts only."""
     return PROMPTS.get(agent_key, PROMPTS.get("direct", ""))
 
 

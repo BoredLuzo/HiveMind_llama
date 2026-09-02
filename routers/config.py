@@ -1,4 +1,4 @@
-"""Config API-Router — Settings, Presets, Memory."""
+"""Config API-Router — Settings, Memory."""
 import asyncio
 import copy
 import logging
@@ -8,50 +8,21 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from settings import (
-    load_settings, save_settings, load_presets, save_presets,
+    load_settings, save_settings,
     DEFAULT_AGENT_CFG, DEFAULT_SETTINGS,
-    get_custom_prompt, save_custom_prompt,
-    delete_custom_prompts_for_preset, copy_prompts_to_preset,
 )
-from hive_functions.prompts import PROMPTS
-from vram.loader import _bk_load
-# Stale-Import-Fix (2026-08-19): _state.pipeline/_state.memory/_state._WEBSEARCH_AVAILABLE/
 import core.state as _state
 from core.state import (
     settings, registry_all,
-    registry_set, registry_sync_from_pipeline,
+    registry_set,
     apply_settings_to_pipeline,
     _refresh_safe_profile_policy,
-    _ws_configure, _get_num_ctx,
+    _ws_configure,
 )
 
 logger = logging.getLogger("hivemind.server")
 
 router = APIRouter(prefix="", tags=["Config"])
-
-_PRESET_EXCLUDED_SETTINGS = {
-    "agents",
-    "active_preset",
-    "mode",
-    "prefetch_agent_avgs",
-    "_registry",
-    "searxng_host",
-    "searxng_engines",
-    "searxng_language",
-}
-
-
-def _build_preset_settings_snapshot(body: dict) -> dict:
-    snap: dict = {}
-    for key, value in settings.items():
-        if key in _PRESET_EXCLUDED_SETTINGS:
-            continue
-        snap[key] = copy.deepcopy(value)
-    for key, value in (body or {}).items():
-        if key in _PRESET_EXCLUDED_SETTINGS or key == "prompts":
-            continue
-        snap[key] = copy.deepcopy(value)
-    return snap
 
 
 @router.get("/settings")
@@ -301,129 +272,6 @@ async def set_all_model(req: Request):
 @router.get("/registry")
 async def get_registry():
     return registry_all()
-
-
-@router.get("/presets")
-async def get_presets():
-    return load_presets()
-
-
-@router.post("/presets/{name}")
-async def save_preset_ep(name: str, req: Request):
-    body = await req.json()
-    presets = load_presets()
-    _snap = _build_preset_settings_snapshot(body)
-    _snap["agents"] = {
-        k: {"model": a.model, "temperature": a.temperature, "max_tokens": a.max_tokens}
-        for k, a in _state.pipeline.agents.items()
-    } if _state.pipeline else {}
-    _snap["prompts"] = {}
-    presets[name] = _snap
-    if _state.pipeline:
-        copy_prompts_to_preset(
-            src_preset=None, dst_preset=name,
-            agent_keys=list(_state.pipeline.agents.keys()), base_prompts=PROMPTS
-        )
-    save_presets(presets)
-    return {"ok": True, "name": name}
-
-
-async def _apply_preset_internal(name: str, *, persist: bool = True) -> bool:
-    """Full preset load — reusable from endpoint + startup."""
-    presets = load_presets()
-    if name not in presets:
-        return False
-    p = presets[name]
-    if "agents" in p:
-        _agents_cfg = p["agents"]
-        if isinstance(_agents_cfg, dict) and "agents" in _agents_cfg and isinstance(_agents_cfg["agents"], dict):
-            _agents_cfg = _agents_cfg["agents"]
-        if isinstance(_agents_cfg, dict) and _agents_cfg:
-            _sa = settings.setdefault("agents", {})
-            # MERGE instead of hard overwrite: existing agent keys stay,
-            # only the preset values are applied.
-            for _ak, _av in _agents_cfg.items():
-                if isinstance(_av, dict) and isinstance(_sa.get(_ak), dict):
-                    _sa[_ak].update(copy.deepcopy(_av))
-                else:
-                    _sa[_ak] = copy.deepcopy(_av)
-    for key, value in p.items():
-        if key in {"agents", "prompts", "mode", "active_preset"}:
-            continue
-        if key.startswith("searxng_"):
-            continue
-        if key in {"workspace", "workspace_force_ui"}:
-            continue
-        if key in settings and settings[key] != value:
-            logger.info("[PRESET-APPLY] %s: %s changed: %r -> %r",
-                        name, key, settings[key], value)
-        settings[key] = copy.deepcopy(value)
-    apply_settings_to_pipeline(settings)
-    settings["active_preset"] = name
-    if _state._WEBSEARCH_AVAILABLE:
-        _ws_configure(
-            host=settings.get("searxng_host", "http://localhost:8888"),
-            enabled=settings.get("pipeline_websearch_enabled", False)
-            or settings.get("duo_websearch_enabled", False),
-            engines=settings.get("searxng_engines"),
-            language=settings.get("searxng_language"),
-        )
-    if persist:
-        await asyncio.to_thread(save_settings, settings)
-    registry_sync_from_pipeline()
-    return True
-
-
-@router.post("/presets/{name}/load")
-async def load_preset_ep(name: str):
-    if not await _apply_preset_internal(name):
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    try:
-        if _state.pipeline:
-            judge_agent = _state.pipeline.agents.get("judge")
-            if judge_agent:
-                _wm3_ctx = _get_num_ctx(judge_agent.model)
-                await _bk_load(judge_agent.model, keep_alive="10m", num_ctx=_wm3_ctx or None)
-    except Exception:
-        pass
-    return {
-        "ok": True,
-        "settings": {
-            "max_iterations": settings.get("max_iterations", 2),
-            "constraint_mode": settings.get("constraint_mode", True),
-            "pin_direct_after_response": settings.get("pin_direct_after_response", False),
-            "vision_agent_enabled": settings.get("vision_agent_enabled", False),
-            "vision_agent_mode": settings.get("vision_agent_mode", "sequential"),
-            "vision_agent_model": settings.get("vision_agent_model", ""),
-            "learning_preset_mode": settings.get("learning_preset_mode", False),
-            "until_finished": settings.get("until_finished", False),
-            "ctx_overrides": settings.get("ctx_overrides", {}),
-        }
-    }
-
-
-@router.delete("/presets/{name}")
-async def del_preset(name: str):
-    presets = load_presets()
-    if name in presets:
-        del presets[name]
-        delete_custom_prompts_for_preset(name)
-        save_presets(presets)
-    return {"ok": True}
-
-
-@router.get("/presets/{name}/prompts/{agent}")
-async def get_prompt(name: str, agent: str):
-    custom = get_custom_prompt(name, agent)
-    default = PROMPTS.get(agent, "")
-    return {"content": custom or default, "is_custom": custom is not None}
-
-
-@router.post("/presets/{name}/prompts/{agent}")
-async def set_prompt(name: str, agent: str, req: Request):
-    d = await req.json()
-    save_custom_prompt(name, agent, d.get("content", ""))
-    return {"ok": True}
 
 
 @router.get("/memory")
