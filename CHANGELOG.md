@@ -31,6 +31,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   immediately while typing (`oninput`/Enter) — a typed value without blur/Enter
   is no longer lost. The effective context is logged at run start
   (`[CTX-EFFECTIVE] …`).
+- Each run now also sends the context chosen in the frontend **with the
+  `/stream` request** and applies it to that run — the displayed/used context
+  can no longer silently stay on a stale default (e.g. 16k).
 
 ## [1.0.4] - 2026-09-02
 

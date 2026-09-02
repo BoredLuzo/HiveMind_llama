@@ -1123,6 +1123,22 @@ async def stream(req: Request):
         if _model_key in body and str(body.get(_model_key) or "").strip():
             _model_overrides[_model_key] = str(body.get(_model_key)).strip()
 
+    # CTX-OVERRIDE-WITH-RUN (2026-09-02): the context the user chose in the
+    # frontend (Duo "Context Coder (Agentic)/Normal/Planner") is sent with the
+    # /stream request and applied to this run's settings snapshot. This makes
+    # the run use the UI value even if the settings.json write lagged/failed —
+    # no more "16k despite having set 32k".
+    for _ctx_key in ("duo_coder_ctx_agentic", "duo_coder_ctx_normal",
+                     "duo_coder_ctx_until_finished", "duo_planner_ctx_target"):
+        _cv = body.get(_ctx_key)
+        if _cv is not None:
+            try:
+                _ci = int(_cv)
+            except (TypeError, ValueError):
+                _ci = 0
+            if _ci > 0:
+                _model_overrides[_ctx_key] = _ci
+
     _duo_tool_rounds_raw = body.get("duo_tool_rounds", None)
     if _duo_tool_rounds_raw is None:
         _duo_tool_rounds_raw = settings.get("duo_tool_rounds", 0)
