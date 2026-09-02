@@ -39,6 +39,9 @@ let S = {
    agentQuestion: null,
     _pauseBtnState: 'idle',
     _stopBtnState: 'idle',
+    // TRUE once a duo/agentic run streamed a duo_start event — only then a
+    // graceful "stop after chunk" makes sense. Direct/chat runs have no chunks.
+    _runIsDuo: false,
     // Code
   duoPair: 'focused',
   duoToolRounds: 0,
@@ -3943,6 +3946,7 @@ async function sendMsg() {
 
   S.streaming = true;
   S.currentRunId = null;
+  S._runIsDuo = false;
   if (S._runAbortCtrl) { S._runAbortCtrl.abort(); }
   S._runAbortCtrl = new AbortController();
   _perfResetRuntimeState();
@@ -4711,6 +4715,7 @@ function handleEvent(d) {
   }
   // ── Code Events ──────────────────────────────────────────
   else if (d.type === 'duo_start') {
+    S._runIsDuo = true;   // chunked agentic run → graceful stop-after-chunk applies
     _setVramFast(120000);  // 2min fast polling for the duo loop
     window._prexModelVariantSeen = Object.create(null);
     window._prexLaneVariantByKey = Object.create(null);
@@ -7280,6 +7285,13 @@ async function handleStopClick() {
   if (!S.currentRunId) return;
   switch (S._stopBtnState) {
     case 'idle':
+      // DIRECT/CHAT RUN — no chunks, so the graceful after-chunk stop does not
+      // apply. The first click aborts the generation immediately.
+      if (!S._runIsDuo) {
+        setStopBtnState('force');
+        stopStream();
+        break;
+      }
       setStopBtnState('graceful_pending');
       try {
         var resp = await fetch('/abort/graceful/' + S.currentRunId, {method: 'POST'});
