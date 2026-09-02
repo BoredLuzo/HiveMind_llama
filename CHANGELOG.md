@@ -25,6 +25,12 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   models, and the per-model config
   (`model_configs/models/hermes3.6_…_v12-mtp-apex-compact.json`) ships with the
   release so the MoE/MTP launch settings apply.
+- **Optional Desktop shortcut for end users** (`create_shortcut.bat`, new
+  `[7/7]` step in `install.bat`): the installer can now create a
+  `HiveMind.lnk` on the user's Desktop (OneDrive-safe resolution) that starts
+  `start_hivemind.bat` with the HiveMind icon (`static\favicon.ico`). The
+  helper can also be run manually — optionally with a custom shortcut name as
+  argument (`create_shortcut.bat "HiveMind v1.0.6"`).
 
 ## [1.0.5] - 2026-09-02
 
