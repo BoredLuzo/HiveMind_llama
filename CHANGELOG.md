@@ -5,14 +5,6 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## History Note
-
-Versions up to and including v1.1.4 were **private project-file changes**
-without any release intent — things were wired up on demand, without changelog
-or versioning discipline. Release intent started with v1: clean up, rewire,
-pay down technical debt. This changelog starts **now** and only documents
-deliberate changes/features, not internal patchwork.
-
 ## [1.0.4] - 2026-09-02
 
 ### Added
