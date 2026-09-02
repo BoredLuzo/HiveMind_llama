@@ -9,12 +9,13 @@ echo  ^|    Full setup: Python, packages, GPU backend                ^|
 echo  +=============================================================+
 echo.
 echo  What this does (you will be asked before every step):
-echo    [1/6] Python 3.14       - found or installed automatically
-echo    [2/6] Python packages   - installed into a virtual env (.venv)
-echo    [3/6] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
-echo    [4/6] llama.cpp backend - downloaded for the chosen backend
-echo    [5/6] Models            - downloaded into \models
-echo    [6/6] SearXNG           - optional web search (requires Docker)
+echo    [1/7] Python 3.14       - found or installed automatically
+echo    [2/7] Python packages   - installed into a virtual env (.venv)
+echo    [3/7] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
+echo    [4/7] llama.cpp backend - downloaded for the chosen backend
+echo    [5/7] Models            - downloaded into \models
+echo    [6/7] SearXNG           - optional web search (requires Docker)
+echo    [7/7] Desktop shortcut  - optional, with the HiveMind icon
 echo.
 
 choice /c YN /n /m "Install HiveMind now? [Y/N] "
@@ -27,10 +28,10 @@ if errorlevel 2 (
 echo.
 
 REM ======================================================
-REM [1/6] Python 3.14
+REM [1/7] Python 3.14
 REM ======================================================
 echo  ==========================================================
-echo   [1/6] Checking Python
+echo   [1/7] Checking Python
 echo  ==========================================================
 echo.
 set "PY="
@@ -163,10 +164,10 @@ echo  [venv] %CD%\.venv
 echo.
 
 REM ======================================================
-REM [2/6] Dependencies
+REM [2/7] Dependencies
 REM ======================================================
 echo  ==========================================================
-echo   [2/6] Installing Python packages
+echo   [2/7] Installing Python packages
 echo  ==========================================================
 echo.
 echo   Target: %CD%\.venv
@@ -203,10 +204,10 @@ if errorlevel 1 (
 echo.
 
 REM ======================================================
-REM [3/6] GPU backend (auto-detection)
+REM [3/7] GPU backend (auto-detection)
 REM ======================================================
 echo  ==========================================================
-echo   [3/6] GPU backend
+echo   [3/7] GPU backend
 echo  ==========================================================
 echo.
 echo   [V] Vulkan  - AMD / Intel GPUs
@@ -284,10 +285,10 @@ if errorlevel 1 (
 echo.
 
 REM ======================================================
-REM [4/6] llama.cpp backend
+REM [4/7] llama.cpp backend
 REM ======================================================
 echo  ==========================================================
-echo   [4/6] llama.cpp backend
+echo   [4/7] llama.cpp backend
 echo  ==========================================================
 echo.
 echo   Target: %~dp0llama\
@@ -328,10 +329,10 @@ if defined HAVE_LLAMA (
 echo.
 
 REM ======================================================
-REM [5/6] Models
+REM [5/7] Models
 REM ======================================================
 echo  ==========================================================
-echo   [5/6] Models
+echo   [5/7] Models
 echo  ==========================================================
 echo.
 echo   Default: models are downloaded into %~dp0models.
@@ -351,11 +352,11 @@ goto searxng_step
 :searxng_step
 
 REM ======================================================
-REM [6/6] SearXNG (optional)
+REM [6/7] SearXNG (optional)
 REM ======================================================
 echo.
 echo  ==========================================================
-echo   [6/6] SearXNG (web search, requires Docker Desktop)
+echo   [6/7] SearXNG (web search, requires Docker Desktop)
 echo  ==========================================================
 echo.
 where docker >nul 2>&1
@@ -369,6 +370,23 @@ if errorlevel 1 (
 )
 
 echo.
+REM ======================================================
+REM [7/7] Desktop shortcut (optional, HiveMind icon)
+REM ======================================================
+echo.
+echo  ==========================================================
+echo   [7/7] Desktop shortcut
+echo  ==========================================================
+echo.
+echo   Creates "HiveMind.lnk" on the Desktop that starts
+echo   start_hivemind.bat with the HiveMind icon.
+echo.
+choice /c YN /n /m "Create a Desktop shortcut with the HiveMind icon? [Y/N] "
+if errorlevel 2 goto shortcut_done
+call create_shortcut.bat
+:shortcut_done
+echo.
+
 echo  ==============================================================
 echo   Installation finished!
 echo.
