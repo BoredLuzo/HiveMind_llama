@@ -464,13 +464,13 @@ function checkWebsearchStatus() {
     // STATUS-FIX (2026-08-12): the real search-engine config is checked too —
     // the display now distinguishes disabled/unreachable/HTTP-error/ok.
     if (d.ok) {
-      _set(dot, 'OK — ' + (d.engines || 'SearXNG'), '#60c080');
+      _set(dot, 'OK', '#60c080');
       _set(ad, 'Reachable OK', '#60c080');
     } else if (d.reason === 'disabled') {
       _set(dot, 'Disabled — turn on websearch toggle!', '#c0a060');
       _set(ad, 'Disabled', '#c0a060');
     } else if (d.reason === 'search_http' && d.status === 400) {
-      _set(dot, 'ERROR: SearXNG replies 400 (engines?) — engines: ' + (d.engines || '(empty)'), '#d05050');
+      _set(dot, 'ERROR: SearXNG replies 400 - check engine config', '#d05050');
       _set(ad, 'SearXNG 400', '#d05050');
     } else if (d.reason === 'search_error') {
       _set(dot, 'Search error: ' + (d.detail || d.reason), '#d05050');
