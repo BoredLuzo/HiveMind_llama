@@ -1019,6 +1019,18 @@ async def run_code_duo(ctx):
 
             # ── Context Pipeline: explore → planner ─────────────────────────────
             _exec_ctx = (int(ctx.settings.get("duo_planner_ctx_target", 0) or 0) or resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")) if ctx.duo_config.agentic_mode else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
+            try:
+                _over = ((ctx.settings.get("ctx_overrides") or {}).get("roles") or {}).get("duo_coder")
+                logger.info(
+                    "[CTX-EFFECTIVE] mode=%s model=%s coder_ctx=%d agentic_setting=%s planner_target=%s ctx_overrides_duo_coder=%s",
+                    "agentic" if ctx.duo_config.agentic_mode else "duo",
+                    coder_mdl, _exec_ctx,
+                    ctx.settings.get("duo_coder_ctx_agentic"),
+                    ctx.settings.get("duo_planner_ctx_target"),
+                    _over,
+                )
+            except Exception:
+                pass
             _runtime_profile = ctx.resolve_duo_runtime_profile(
                 None, important_task=False, until_finished=ctx.duo_config.until_finished,
             )

@@ -258,6 +258,38 @@ function onDuoToolThinkingModeChange(v) {
 
 // removed: updateToolThinkingModeVis — segmented control is always visible
 
+var _duoCtxCommitTimer = null;
+function scheduleDuoCtxCommit() {
+  if (_duoCtxCommitTimer) clearTimeout(_duoCtxCommitTimer);
+  _duoCtxCommitTimer = setTimeout(commitDuoCtx, 450);
+}
+function commitDuoCtx() {
+  if (_duoCtxCommitTimer) { clearTimeout(_duoCtxCommitTimer); _duoCtxCommitTimer = null; }
+  function _num(id, fb) {
+    var el = document.getElementById(id);
+    if (!el) return fb;
+    var v = parseInt(el.value, 10);
+    return (isFinite(v) && v > 0) ? v : fb;
+  }
+  var a = _num('duo-ctx-agentic', 16384);
+  var n = _num('duo-ctx-normal', 8192);
+  var p = _num('duo-ctx-planner', 16384);
+  S.duoCtxAgentic = a;
+  S.duoCtxUntilFinished = a;
+  S.duoCtxNormal = n;
+  S.duoCtxPlanner = p;
+  var payload = {
+    duo_coder_ctx_agentic: a,
+    duo_coder_ctx_until_finished: a,
+    duo_coder_ctx_normal: n,
+  };
+  // Planner target only when "Planner = coder" is off (field enabled) — otherwise
+  // a stale/disabled value would silently override the agentic context.
+  var pl = document.getElementById('duo-ctx-planner');
+  if (pl && !pl.disabled) payload.duo_planner_ctx_target = p;
+  postSettings(payload);
+}
+
 function updateWebsearchHint() {
   var h = document.getElementById('duo-websearch-hint');
   var _wsActive = S.duoWebsearch || S.pipelineWebsearch;
