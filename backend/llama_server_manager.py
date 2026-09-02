@@ -84,6 +84,7 @@ class LlamaServerManager(LlamaLoadMixin, LlamaEvictMixin, LlamaProcessMixin,
 
     _kv_flag_supported: bool | None = None
     _moe_flag_supported: bool | None = None
+    _dspark_flag_supported: bool | None = None
     _load_mode_supported: bool | None = None
     _device_flag_supported: bool | None = None
     _backend_devices_ok: bool | None = None

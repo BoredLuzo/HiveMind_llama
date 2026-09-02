@@ -243,6 +243,11 @@ def is_mtp(model_name: str) -> bool | None:
     return bool(v) if v is not None else None
 
 
+def get_dspark_draft(model_name: str) -> str | None:
+    v = get_profile(model_name).get("dspark_draft_filename")
+    return str(v).strip() if v else None
+
+
 def get_gpu_layers(model_name: str) -> int | None:
     v = get_profile(model_name).get("gpu_layers")
     if v:

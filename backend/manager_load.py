@@ -11,6 +11,7 @@ from .llama_config import (
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS, _MOE_KV_CACHE_TYPES,
     MLOCK_MODEL, CACHE_REUSE,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
+    DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
     _MTP_MODELS,
     _GPU_LAYERS_TABLE,
 )
@@ -701,14 +702,15 @@ class LlamaLoadMixin:
             or type(self)._load_mode_supported is None
         )
         if _all_flags_uncached:
-            def _probe_all(llama_bin: str, kv_type: str) -> tuple[int, bool, bool, bool, bool]:
-                """Einmalige Probe: Build-Nummer + vier Flag-Tests aus einem --help-Aufruf."""
+            def _probe_all(llama_bin: str, kv_type: str) -> tuple[int, bool, bool, bool, bool, bool]:
+                """Einmalige Probe: Build-Nummer + Flag-Tests aus einem --help-Aufruf."""
                 import re as _re3
                 build_num = 0
                 device_ok = False
                 kv_ok     = False
                 moe_ok    = False
                 load_mode_ok = False
+                dspark_ok = False
                 for flag in ["--version", "-v"]:
                     try:
                         r = subprocess.run(
@@ -746,6 +748,7 @@ class LlamaLoadMixin:
                                  or "cache_type_k" in help_text.lower())
                     moe_ok    = "n-cpu-moe" in help_text.lower()
                     load_mode_ok = "load-mode" in help_text.lower()
+                    dspark_ok = "draft-dspark" in help_text.lower()
                 except Exception:
                     pass
                 if build_num == 0:
@@ -758,9 +761,11 @@ class LlamaLoadMixin:
                     device_ok = True
                     kv_ok     = True
                     moe_ok    = True
-                return build_num, device_ok, kv_ok, moe_ok, load_mode_ok
+                if build_num >= DSPARK_MIN_BUILD:
+                    dspark_ok = True
+                return build_num, device_ok, kv_ok, moe_ok, load_mode_ok, dspark_ok
 
-            _bn, _dev, _kv, _moe, _lm = await asyncio.to_thread(_probe_all, str(LLAMA_BIN), KV_CACHE_TYPE)
+            _bn, _dev, _kv, _moe, _lm, _dspark = await asyncio.to_thread(_probe_all, str(LLAMA_BIN), KV_CACHE_TYPE)
             if _bn > 0 and type(self)._binary_build_number in (None, 0):
                 type(self)._binary_build_number = _bn
                 logger.info(f"llama-server Binary Build: {_bn} (from --help/filename)")
@@ -772,6 +777,8 @@ class LlamaLoadMixin:
                 type(self)._moe_flag_supported = _moe
             if type(self)._load_mode_supported is None:
                 type(self)._load_mode_supported = _lm
+            if type(self)._dspark_flag_supported is None:
+                type(self)._dspark_flag_supported = _dspark
 
         if type(self)._device_flag_supported:
             # CUDA → "CUDA<N>" (DEVICE-FORMAT-FIX 2026-08-27: llama.cpp
@@ -967,6 +974,57 @@ class LlamaLoadMixin:
                 "MTP aktiv: %s (draft-max=%d, draft-min=%d)",
                 MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
             )
+
+        # ── DSpark external drafter (Speculative-Decoding Sidecar) ──────────
+        _draft_fn = None
+        try:
+            from .llama_config import _try_registry_dspark_draft as _reg_dd2
+            _draft_fn = _reg_dd2(_strip_alias(model))
+        except Exception:
+            _draft_fn = None
+        if _draft_fn:
+            _draft_path = None
+            _dp = Path(_draft_fn)
+            if _dp.is_absolute() and _dp.exists():
+                _draft_path = _dp
+            else:
+                _cand = MODELS_DIR / _draft_fn
+                if _cand.exists():
+                    _draft_path = _cand
+                else:
+                    try:
+                        _found = list(MODELS_DIR.rglob(_draft_fn))
+                        if _found:
+                            _draft_path = _found[0]
+                    except Exception:
+                        pass
+            if _draft_path is None:
+                logger.warning(
+                    "DSpark-Drafter für '%s' konfiguriert (%s), aber nicht in %s gefunden "
+                    "— läuft ohne Drafter.",
+                    model, _draft_fn, MODELS_DIR,
+                )
+            else:
+                _dspark_ok = type(self)._dspark_flag_supported
+                if _dspark_ok is None:
+                    _dspark_ok = (type(self)._binary_build_number or 0) >= DSPARK_MIN_BUILD
+                if not _dspark_ok:
+                    logger.warning(
+                        f"DSpark-Speculative-Decoding für '{model}' nicht unterstützt von "
+                        f"{LLAMA_BIN.name} (braucht --spec-type draft-dspark, Build "
+                        f"{DSPARK_MIN_BUILD}+) — Drafter übersprungen."
+                    )
+                else:
+                    cmd += [
+                        "--spec-type", DSPARK_SPEC_TYPE,
+                        "--model-draft", str(_draft_path),
+                        "--spec-draft-n-max", str(DSPARK_DRAFT_N_MAX),
+                        "--spec-draft-n-min", str(DSPARK_DRAFT_N_MIN),
+                    ]
+                    logger.info(
+                        "DSpark aktiv: %s → Drafter %s (n-max=%d, n-min=%d)",
+                        model, _draft_path.name, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN,
+                    )
 
         # ── Jinja-Chat-Template ───────────────────────────────────────────────
         _JINJA_BASES = {"qwen3.5", "qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "tiel-coder"}

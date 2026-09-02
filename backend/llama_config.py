@@ -162,6 +162,18 @@ def _try_registry_mtp(model_key: str) -> bool | None:
         return None
 
 
+def _try_registry_dspark_draft(model_key: str) -> str | None:
+    """Per-Model-Registry (model_configs/models/*.json) → DSpark drafter GGUF filename."""
+    try:
+        from model_configs.models_registry import get_dspark_draft as _reg_dd
+        v = _reg_dd(model_key)
+        if v:
+            return str(v).strip()
+    except Exception:
+        pass
+    return None
+
+
 def detect_moe_count(model_key: str) -> int:
 
 
@@ -210,6 +222,15 @@ MTP_SPEC_TYPE = "draft-mtp"
 MTP_DRAFT_N_MAX = 3
 
 MTP_DRAFT_N_MIN = 1
+
+
+# ── DSpark external-drafter (Speculative-Decoding Sidecar) ────────────────────
+# LFM2.5-DSpark: standalone draft GGUF paired with the target model. Enabled per
+# model via model_configs/models/*.json → "dspark_draft_filename".
+DSPARK_SPEC_TYPE = "draft-dspark"
+DSPARK_DRAFT_N_MAX = 10
+DSPARK_DRAFT_N_MIN = 0
+DSPARK_MIN_BUILD = 10173   # llama.cpp mainline #25173 (--spec-type …draft-dspark)
 
 #   _MTP_MODELS = {"qwen3.6:35b-a3b-mtp"}
 # Tiel-Coder MTP variant (2026-08-31): Tiel-Coder-35B-A3B-MTP-UD-Q4_K_XL.gguf
