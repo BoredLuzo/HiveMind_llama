@@ -88,6 +88,30 @@ except ImportError:
     _trafilatura = None
     _HAS_TRAFILATURA = False
 
+
+def _silence_trafilatura_logging() -> None:
+    """trafilatura emits noisy ERROR/WARNING records whenever fetched content
+    is not parseable HTML (e.g. raw.githubusercontent.com source files, JSON,
+    PDFs). We have our own fallback for those cases, so mute the library."""
+    if not _HAS_TRAFILATURA:
+        return
+    try:
+        for _name in (
+            "trafilatura",
+            "trafilatura.core",
+            "trafilatura.utils",
+            "trafilatura.htmlprocessing",
+            "trafilatura.downloads",
+            "trafilatura.spider",
+            "trafilatura.settings",
+        ):
+            logging.getLogger(_name).setLevel(logging.CRITICAL)
+    except Exception:
+        pass
+
+
+_silence_trafilatura_logging()
+
 try:
     import httpx as _httpx
     _HAS_HTTPX = True
@@ -275,7 +299,8 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
             else:
                 return f"[web_fetch: too many redirects (>5) - {url}]"
             resp.raise_for_status()
-            html = resp.text
+            body = resp.text
+            _content_type = resp.headers.get("content-type", "").split(";")[0].strip().lower()
             break
         except _httpx.ConnectError:
             return f"[web_fetch: connection error - {url}]"
@@ -298,7 +323,14 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
     else:
         return f"[web_fetch: all attempts failed - {url}]"
 
-    text = _extract_text(html, url)
+    # Only run HTML extraction for real web pages. Raw files (source code,
+    # configs, JSON, ...) must NOT go through trafilatura/HTML-stripping:
+    # parsing them as HTML spams ERROR logs and their tag-like content gets
+    # destroyed by the <[^>]+> removal.
+    if _is_html_content(body, _content_type):
+        text = _extract_text(body, url)
+    else:
+        text = _clean_plain_text(body)
 
     if not text.strip():
         return f"[web_fetch: no text extractable from {url}]"
@@ -409,6 +441,31 @@ WEB_FETCH_TOOL_DEF = {
 
 def get_tool_defs() -> list:
     return [WEB_SEARCH_TOOL_DEF, WEB_FETCH_TOOL_DEF]
+
+
+_HTML_SNIFF_RE = re.compile(
+    r"<\s*(?:!doctype\s+html|html|head|body|title|meta|link|div|span|"
+    r"p\b|a\b|h[1-6]\b|ul\b|ol\b|li\b|table|tr\b|td\b|article|main|"
+    r"section|header|footer)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_html_content(text: str, content_type: str = "") -> bool:
+    """Best-effort decision whether a fetched body should be parsed as HTML."""
+    if content_type in ("text/html", "application/xhtml+xml"):
+        return True
+    # Trust other declared types (text/plain, application/json, ...) - raw
+    # files and API payloads are common web_fetch targets.
+    if content_type:
+        return False
+    # No content-type header: sniff the first bytes for real markup.
+    return bool(_HTML_SNIFF_RE.search(text[:4096]))
+
+
+def _clean_plain_text(text: str) -> str:
+    """Keep non-HTML bodies (scripts, configs, JSON, READMEs) verbatim."""
+    return text.replace("\x00", " ").strip()
 
 
 def _extract_text(html: str, url: str = "") -> str:
