@@ -11,7 +11,7 @@ echo   \__/   \__/
 echo      \___/
 echo.
 echo    H I V E M I N D
-echo    by: Luzo  ^|  v1.0.1
+echo    by: Luzo  ^|  v1.0.4
 echo.
 
 REM Resolve server port: settings.json "server_port" (set by install.bat), default 8001.
@@ -69,12 +69,13 @@ if not exist "llama" (
     echo         extract llama.cpp manually into it.
     echo.
 )
-if not exist "models" (
-    if not defined HIVEMIND_MODELS_DIR (
-        echo  [NOTE] Folder 'models\' is missing and HIVEMIND_MODELS_DIR is not set.
-        echo         Load models with setup_models.bat or set your own path.
-        echo.
-    )
+REM Models available via: env HIVEMIND_MODELS_DIR > settings.json "models_dir"
+REM > repo\models\ > models.json (absolute GGUF paths from setup_models.bat).
+for /f "usebackq delims=" %%M in (`powershell -NoProfile -Command "$ok=$false; if ($env:HIVEMIND_MODELS_DIR) { $ok=$true }; if (Test-Path 'models') { $ok=$true }; try { $s=Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if ($s.models_dir) { $ok=$true } } catch {}; try { $j=Get-Content 'models.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; $n=0; foreach($p in $j.PSObject.Properties){ if(-not $p.Name.StartsWith('_') -and $p.Value) { $n++ } }; if ($n -gt 0) { $ok=$true } } catch {}; if ($ok) { '1' } else { '0' }"`) do set HM_HAS_MODELS=%%M
+if not "%HM_HAS_MODELS%"=="1" (
+    echo  [NOTE] No models configured. Run setup_models.bat, set
+    echo         HIVEMIND_MODELS_DIR, or drop GGUFs into the models\ folder.
+    echo.
 )
 
 echo  --------------------------------------------------------------

@@ -45,6 +45,12 @@ _STRUCT_OUTPUT = """
 
 === OUTPUT FORMAT ===
 
+NO TOOL CALLS: You are the PLANNER — you have NO tools and cannot read files
+or execute anything. Do NOT output <|tool_call_start|> / <|tool_call_end|>,
+tool-call markup, or "I should read X first" actions. The codebase analysis
+you need is already in your context (CONTRACT OVERVIEW / repo-map). Output
+ONLY the plan text below.
+
 Structure your answer ALWAYS like this:
 
 ## Plan: [Short summary, max 1 sentence]
@@ -1379,6 +1385,21 @@ async def run_inloop_planner(
         _think_m = re.search(r"<think\>([\s\S]*?)\</think\>", _plan_raw, re.IGNORECASE)
         _plan_thinking = _think_m.group(1).strip() if _think_m else ""
         _plan_text = re.sub(r"<think\>[\s\S]*?\</think\>", "", _plan_raw, flags=re.IGNORECASE).strip()
+
+        # PLAN-TOOLMARK-GUARD (2026-09-02): tool-calling-trained models (e.g.
+        # lfm2.5) sometimes emit <|tool_call_start|>[read(path=...)] markup in
+        # the PLANNER, which has NO tools. Strip it so it can never become a
+        # bogus "plan" (this caused empty/broken plan blocks + coder loops).
+        _plan_text0 = _plan_text
+        _plan_text = re.sub(r"<\|tool_call_start\|>[\s\S]*?(?:<\|tool_call_end\|>|$)", "", _plan_text, flags=re.IGNORECASE)
+        _plan_text = re.sub(r"<\|tool_call_(?:start|end)\|?>", "", _plan_text, flags=re.IGNORECASE)
+        _plan_text = re.sub(r"\[\s*[a-zA-Z_]+\s*\([^)]*\)\s*\]", "", _plan_text)
+        _plan_text = _plan_text.strip()
+        if _plan_text != _plan_text0:
+            logger.warning(
+                "[PLAN-TOOLMARK-GUARD] stripped tool-call markup (%d chars -> %d)",
+                len(_plan_text0), len(_plan_text),
+            )
 
         # Distilled <think/> Fallback
         if not _plan_text and _plan_thinking:

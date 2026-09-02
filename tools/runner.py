@@ -198,6 +198,10 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
     _gate = _ask_user_gate.get("open")
     question = args.get("question", "")
     _note_tool_use(_current_run_id.get(), "ask_user", "requested")
+    import logging as _ask_diag_log
+    _ask_diag_log.getLogger("hivemind.tools").info(
+        "[ASK-DIAG] enter gate=%s run_id=%s qlen=%d",
+        _gate, _current_run_id.get(), len(question or ""))
 
     def _save_project_state():
         try:
@@ -297,7 +301,29 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
     if _gcfg and _gcfg["until_finished"] and _gcfg["timeout_s"] > 0:
         await _gov_start_timeout(run_id, _gcfg["timeout_s"], _gcfg["auto_answer"])
     timeout = _pause_timeout_s.get()
-    answer = await run_control.wait_for_resume(run_id, timeout_s=timeout)
+    import logging as _ask_diag2, time as _ask_diag_t
+    import asyncio as _ask_diag_ai
+    _ask_diag2.getLogger("hivemind.tools").warning(
+        "[ASK-DIAG] pausing run_id=%s gate=%s qlen=%d pause_event_present=%s",
+        run_id, _gate, len(question or ""),
+        bool(run_control.get_question(run_id)),
+    )
+    _ask_t0 = _ask_diag_t.monotonic()
+    try:
+        answer = await run_control.wait_for_resume(run_id, timeout_s=timeout)
+    except _ask_diag_ai.CancelledError:
+        _ask_diag2.getLogger("hivemind.tools").warning(
+            "[ASK-DIAG] wait_for_resume CANCELLED run_id=%s after %.1fs",
+            run_id, _ask_diag_t.monotonic() - _ask_t0)
+        raise
+    except Exception as _ask_exc:
+        _ask_diag2.getLogger("hivemind.tools").warning(
+            "[ASK-DIAG] wait_for_resume ERROR run_id=%s: %s",
+            run_id, _ask_exc)
+        answer = ""
+    _ask_diag2.getLogger("hivemind.tools").warning(
+        "[ASK-DIAG] resumed run_id=%s after %.1fs answer_len=%d",
+        run_id, _ask_diag_t.monotonic() - _ask_t0, len(answer or ""))
     _note_tool_use(
         run_id, "ask_user",
         "paused_timeout"
@@ -641,7 +667,13 @@ async def _run_inline_tool(
         _target = _normalize_tool_path(str(_fp_check), workspace)
         _ctx_set = _files_in_context.get(None)
         _in_context = bool(_ctx_set and _target in _ctx_set)
-        _guard_active = not _is_external_dispatch() and _read_guard_enabled()
+        # WRITE-GUARD-RELAX (2026-09-02): the read-before-write guard stops blind
+        # overwrites in the direct chat. The agentic/duo coder (duo_full) is an
+        # explicit full-access coding agent working in the workspace — blocking
+        # write_file/edit_file on existing files there produced red errors and
+        # empty diffs ("Waiting for coder output.").
+        _guard_active = (not _is_external_dispatch() and _read_guard_enabled()
+                         and (tool_mode or "") != "duo_full")
         if _guard_active and _fp_check.exists() and _target not in _read_set and _target not in _any_read_set and _target not in _written_set and not _in_context:
             if name == "write_file":
                 return _normalize_meta_paths(

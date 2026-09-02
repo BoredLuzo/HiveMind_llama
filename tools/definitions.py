@@ -423,7 +423,10 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     "mcp_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
     "openai_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "hivemind_pipeline"},
     # DIRECT-CHAT-TOOLS (2026-08-31): tiered tool sets for the simple/direct chat.
-    "direct": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
+    # TIER-FIX (2026-09-02): the "read" tier is now WEBSEARCH ONLY — the model
+    # can search/fetch the web but gets no file-read tools. File reading moved
+    # up to the python tier ("read + python"). python tier keeps web (additive).
+    "direct": {"web_search", "web_fetch"},
     "direct_python": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "run_python"},
     "direct_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
 }

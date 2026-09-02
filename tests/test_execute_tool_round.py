@@ -144,6 +144,26 @@ res, hooks, msgs, rs, seen, ltl = run_round([tc("ask_user", {"question": "ok?"})
 check("ask_user agent_asking", any(e.get("type") == "agent_asking" for e in hooks.events))
 check("ask_user resumed", any(e.get("type") == "agent_resumed" for e in hooks.events))
 
+# ── 4b. ASK-USER-TOOL-GUARD (2026-09-02): S6 announce must NOT fire for
+#        non-ask_user tools even when the gate is open (previously every
+#        write_file/read_file round emitted a spurious "input needed"). ─────
+try:
+    from tools.runner import _ask_user_gate as _ask_gate_test_cv
+except Exception:
+    _ask_gate_test_cv = None
+if _ask_gate_test_cv is not None:
+    _ask_gate_test_cv.set("open")
+    _HANDLERS["write_file"] = "[write_file: created 'g.txt' (+1 lines)]"
+    res, hooks, msgs, rs, seen, ltl = run_round([tc("write_file", {"path": "g.txt", "content": "x"})])
+    check("non-ask_user no agent_asking",
+          not any(e.get("type") == "agent_asking" for e in hooks.events))
+    check("non-ask_user tool still executed",
+          any(e.get("type") == "tool_result" for e in hooks.events))
+    _ask_gate_test_cv.set("open")
+    res, hooks, msgs, rs, seen, ltl = run_round([tc("ask_user", {"question": "guard ok?"})])
+    check("ask_user still announces under open gate",
+          any(e.get("type") == "agent_asking" for e in hooks.events))
+
 # ── 5. web_search dedup ─────────────────────────────────────────────────
 res, hooks, msgs, rs, seen, ltl = run_round([
     tc("web_search", {"query": "HiveMind"}),

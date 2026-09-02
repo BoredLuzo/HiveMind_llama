@@ -221,13 +221,28 @@ async def execute_tool_round(
         _dargs_with_model = {**_dargs, "__model__": exec_model}
 
         # ── ask_user ──
-        await _handle_ask_user(_dargs, hooks, exec_model, trs.cached_coder_port, run_id_global)
+        # ASK-USER-TOOL-GUARD (2026-09-02): only announce/pause for a genuine
+        # ask_user tool call. Previously S6 ran for EVERY tool in the round when
+        # the gate was "open", so write_file/read_file/edit_file rounds emitted a
+        # spurious "Your input is needed" while the run never paused (the pausing
+        # handler in tools/runner.py is only reached via the ask_user dispatch).
+        if _dname == "ask_user":
+            await _handle_ask_user(_dname, _dargs, hooks, exec_model, trs.cached_coder_port, run_id_global)
         _dresult = await _execute_one_tool(
             _dname, _dargs, _dargs_with_model, _i, _pre_results,
             trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws)
         await hooks.emit(_make_tool_result_event(_dname, _dresult))
         if _dname == "ask_user":
-            await hooks.emit({"type": "agent_resumed"})
+            # ASK-USER-GATE-FIX (2026-09-02): agent_resumed only when the run
+            # actually paused (gate == "open"). In throttled/autonomous mode
+            # tools/runner.py answers without pausing — no resume event.
+            try:
+                from tools.runner import _ask_user_gate as _ask_gate_cv2
+                _ask_paused = _ask_gate_cv2.get("open") == "open"
+            except Exception:
+                _ask_paused = True
+            if _ask_paused:
+                await hooks.emit({"type": "agent_resumed"})
 
         # ── Until-Finished stuck detection + user abort ──
         if hooks.on_tool_result:
@@ -514,6 +529,29 @@ async def execute_tool_round(
         # ── File-change tracking ──
         await _track_file_changes(_dname, _dargs, _dresult, result, trs.file_changes,
                                    dtool_msgs, hooks, _is_git_repo)
+        # ── LRU-A: stale-read invalidation ──
+        # After a successful edit/write/patch/append, any read_file output of the
+        # same path already in context is stale (the file on disk changed). Evict
+        # it immediately so the model neither wastes context nor trusts outdated
+        # content for follow-up edits.
+        if (
+            _dname in ("edit_file", "write_file", "patch_file", "write_file_append", "replace_lines")
+            and _focus_path
+            and not _tool_call_failed(_dresult, _dname)
+        ):
+            try:
+                from context.compression import evict_stale_reads_for_path as _evict_stale
+                _evicted_stale = _evict_stale(
+                    messages=dtool_msgs,
+                    lru=trs.tool_ctx_lru,
+                    path=_focus_path,
+                )
+                if _evicted_stale:
+                    _logger.info(
+                        "[LRU-STALE] %s invalidated %d stale read_file output(s) of %s",
+                        _dname, _evicted_stale, _focus_path)
+            except Exception as _ev_stale_err:
+                _logger.debug("[LRU-STALE] invalidation failed: %s", _ev_stale_err)
         # ── Context LRU registration ──
         _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult)
         # ── Read-file ladder tracker ──

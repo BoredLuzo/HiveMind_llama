@@ -128,6 +128,16 @@ def get_question(run_id: str) -> str | None:
 
 
 def cleanup_pause(run_id: str):
+    # PAUSE-WAKE (2026-09-02): signal any pending wait_for_resume BEFORE removing
+    # the event. If a run stops/aborts while ask_user is waiting (e.g. loop_detect
+    # hard-stop or an external cancel), the waiter would otherwise hang or the
+    # task would be orphaned while the UI showed "run cancelled" after a question.
+    _ev = _pause_events.get(run_id)
+    if _ev is not None:
+        try:
+            _ev.set()
+        except Exception:
+            pass
     _pause_events.pop(run_id, None)
     _user_answers.pop(run_id, None)
     _user_questions.pop(run_id, None)

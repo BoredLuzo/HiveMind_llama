@@ -16,12 +16,18 @@ async def _phase_vram(ctx, state: dict):
     _MAX_TREE_DEPTH = 4
     _MAX_TREE_FILES = 200
     _avail = set(ctx.models_cache) if ctx.models_cache else set()
-    _free_mdl = (ctx.settings.get("duo_coder_model")
-                 or (ctx.settings.get("agents", {}).get("duo_coder", {}) or {}).get("model", "")
+    # AGENT-CARD-FIRST (2026-09-01): the model selected on the Agent-tab card
+    # (settings.agents.<role>.model) ALWAYS wins. The legacy flat keys
+    # (duo_coder_model/duo_critic_model) used to take precedence, so a card
+    # change was silently ignored while a stale flat key kept loading the old
+    # model (e.g. a too-big 9b on an 8 GB GPU). The safe-profile policy still
+    # works: it writes BOTH the card AND the flat key, so the card reflects it.
+    _free_mdl = ((ctx.settings.get("agents", {}).get("duo_coder", {}) or {}).get("model", "")
+                 or ctx.settings.get("duo_coder_model")
                  or "qwen3.5:4b")
     coder_mdl  = _free_mdl
-    critic_mdl = (ctx.settings.get("duo_critic_model")
-                  or (ctx.settings.get("agents", {}).get("duo_critic", {}) or {}).get("model", "")
+    critic_mdl = ((ctx.settings.get("agents", {}).get("duo_critic", {}) or {}).get("model", "")
+                  or ctx.settings.get("duo_critic_model")
                   or _free_mdl)
     exec_mdl   = _free_mdl
     _is_solo   = critic_mdl == _free_mdl

@@ -132,7 +132,7 @@ pushd "%~dp0"
 popd
 echo.
 echo  [..] Building image + starting container (port %HM_PORT%)...
-docker compose -f docker-compose.yml up -d --build
+docker compose -f docker-compose.yml up -d --build --force-recreate --renew-anon-volumes
 if errorlevel 1 (
     echo.
     echo  [ERROR] docker compose failed. Is Docker Desktop running?
@@ -154,7 +154,7 @@ echo.
 docker start hivemind-searxng >nul 2>&1
 if errorlevel 1 (
     echo  [INFO] Container does not exist - creating it...
-    docker compose -f docker-compose.yml up -d --build
+    docker compose -f docker-compose.yml up -d --build --force-recreate --renew-anon-volumes
     if errorlevel 1 (
         echo.
         echo  [ERROR] docker compose failed. Is Docker Desktop running?

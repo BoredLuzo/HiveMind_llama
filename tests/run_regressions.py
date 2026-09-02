@@ -38,6 +38,7 @@ SUITES = [
     ("dispatch_smoke",            "tests/test_dispatch_smoke.py",               60),
     ("destructive_python",        "tests/test_destructive_python.py",           60),
     ("execute_tool_round",        "tests/test_execute_tool_round.py",           60),
+    ("ctx_lru_invalidation",      "tests/test_ctx_lru_invalidation.py",          60),
     ("planner_connect_recovery",  "tests/test_planner_connect_recovery.py",    120),
     ("planner_thinking_cap",      "tests/test_planner_thinking_cap.py",        120),
     ("stuck_bash_reset_threshold", "tests/test_stuck_bash_reset_threshold.py", 120),

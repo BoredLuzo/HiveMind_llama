@@ -83,7 +83,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.0.1"
+HIVEMIND_VERSION = "1.0.4"
 
 # ─── FrÃ¼he Logger-Definition ────────────────────────────────────────────────────
 logger = logging.getLogger("hivemind.server")
@@ -702,7 +702,7 @@ async def _startup():
     # compile Vulkan shaders + load MoE experts, exceeding the 600s timeout.
     # This warmup forces the forward-pass at startup so the Planner is hot.
     _planner_warmup_model = str(settings.get("duo_planner_model", "") or "").strip()
-    if _planner_warmup_model and bool(settings.get("startup_preload_enabled", True)):
+    if _planner_warmup_model and bool(settings.get("startup_preload_enabled", False)):
         try:
             from backend.llama_server_manager import manager as _lsm_warmup
             _warmup_ctx = int(settings.get("duo_planner_ctx_target", 0) or 8192)

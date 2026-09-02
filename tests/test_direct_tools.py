@@ -41,9 +41,12 @@ def check(label, cond, extra=""):
 print("-- 1) Direct-Tool-Mode Allowlists --")
 _allow = _defs._TOOL_MODE_ALLOWLISTS
 check("modes present", {"direct", "direct_python", "direct_full"} <= set(_allow))
-check("direct has no run_python/write",
-      "run_python" not in _allow["direct"]
-      and "edit_file" not in _allow["direct"]
+check("direct = websearch only (no read/python/write)",
+      "web_search" in _allow["direct"]
+      and "web_fetch" in _allow["direct"]
+      and "read_file" not in _allow["direct"]
+      and "search_code" not in _allow["direct"]
+      and "run_python" not in _allow["direct"]
       and "run_bash" not in _allow["direct"])
 check("direct_python adds run_python only",
       "run_python" in _allow["direct_python"]
@@ -70,14 +73,15 @@ check("web tools stripped when include_websearch=False",
 
 _tools = _defs._get_inline_tools(include_websearch=True, mode="direct")
 _tool_names = {t["function"]["name"] for t in _tools}
-check("_get_inline_tools(direct) read-only + web",
-      "read_file" in _tool_names and "search_code" in _tool_names
-      and "run_python" not in _tool_names and "run_bash" not in _tool_names
-      and "web_search" in _tool_names)
+check("_get_inline_tools(direct) websearch only",
+      "web_search" in _tool_names and "web_fetch" in _tool_names
+      and "read_file" not in _tool_names and "search_code" not in _tool_names
+      and "run_python" not in _tool_names and "run_bash" not in _tool_names)
 _tools_py = _defs._get_inline_tools(include_websearch=True, mode="direct_python")
 _py_names = {t["function"]["name"] for t in _tools_py}
-check("_get_inline_tools(direct_python) + run_python",
-      "run_python" in _py_names and "run_bash" not in _py_names and "edit_file" not in _py_names)
+check("_get_inline_tools(direct_python) read + python",
+      "read_file" in _py_names and "run_python" in _py_names
+      and "run_bash" not in _py_names and "edit_file" not in _py_names)
 _tools_full = _defs._get_inline_tools(include_websearch=True, mode="direct_full")
 _full_names = {t["function"]["name"] for t in _tools_full}
 check("_get_inline_tools(direct_full) full set",
@@ -172,7 +176,11 @@ try:
                                 thinking=False, thinking_budget=0)
     _pipe = types.SimpleNamespace(agents={"direct": _ag})
     _ctx = RunContext()
-    _ctx.websearch_available = False
+    # TIER-FIX (2026-09-02): the "direct" tier is websearch-only, so the wiring
+    # test needs a registered (fake) websearch module — otherwise mode "direct"
+    # yields zero tools and _run_direct_tools returns early.
+    _defs.init_websearch(True, _fake_ws)
+    _ctx.websearch_available = True
     _ctx.workspace = r"C:\fake"
     _ctx.settings = {"direct_tools_max_rounds": 3, "duo_llm_slow_timeout_s": 300}
     _ctx.get_num_ctx = lambda m, r=None: 8192
@@ -209,6 +217,7 @@ try:
 finally:
     _lc.manager = _orig_mgr
     _tl.ToolLoop = _orig_loop
+    _defs.init_websearch(False, None)
 
 print()
 print(f"{'='*50}")

@@ -1,8 +1,8 @@
 # HiveMind Settings
 
-Auto-generiert aus `settings.py` (`DEFAULT_SETTINGS`) per `python deploy/gen_settings_docs.py` — nicht von Hand editieren.
+Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_settings_docs.py` — do not edit by hand.
 
-189 Settings-Keys, Stand: DEFAULT_SETTINGS.
+189 settings keys, based on DEFAULT_SETTINGS.
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -26,7 +26,7 @@ Auto-generiert aus `settings.py` (`DEFAULT_SETTINGS`) per `python deploy/gen_set
 | `desktop_notifications` | bool | `True` | — |
 | `direct_tools_enabled` | bool | `True` | — |
 | `direct_tools_max_rounds` | int | `12` | — |
-| `direct_tools_tier` | str | `"readonly"` | readonly | python | full | off |
+| `direct_tools_tier` | str | `"readonly"` | off | readonly(websearch only) | python(read+python) | full |
 | `disable_thinking_in_planner` | bool | `False` | — |
 | `duo_agentic_mode` | bool | `False` | — |
 | `duo_agentic_thinking` | bool | `False` | — |
@@ -82,7 +82,7 @@ Auto-generiert aus `settings.py` (`DEFAULT_SETTINGS`) per `python deploy/gen_set
 | `duo_pre_explore_timeout_per_file_s` | int | `20` | — |
 | `duo_pre_explore_timeout_seconds` | int | `600` | — |
 | `duo_pre_explore_tokens` | int | `700` | — |
-| `duo_profile_quality_model` | str | `"qwen3.5:9b-ud"` | — |
+| `duo_profile_quality_model` | str | `"lfm2.5:2.6b"` | — |
 | `duo_profile_speed_model` | str | `"qwen3.5:4b-ud"` | — |
 | `duo_pyright_path` | str | `""` | — |
 | `duo_read_timeout` | int | `390` | — |
@@ -135,7 +135,7 @@ Auto-generiert aus `settings.py` (`DEFAULT_SETTINGS`) per `python deploy/gen_set
 | `gpu_backend` | str | `""` | — |
 | `image_desc_full_pipeline` | bool | `False` | — |
 | `intent_agent` | object | `{'enabled': False, 'model': 'qwen3.5:4b', 'temperature': ...` | — |
-| `judge_keepalive_enabled` | bool | `True` | — |
+| `judge_keepalive_enabled` | bool | `False` | — |
 | `judge_prefetch_before_complexity` | bool | `True` | — |
 | `keep_awake_during_run` | bool | `True` | — |
 | `learning_preset_mode` | bool | `False` | — |
@@ -173,8 +173,8 @@ Auto-generiert aus `settings.py` (`DEFAULT_SETTINGS`) per `python deploy/gen_set
 | `soul_skill_writing` | bool | `False` | — |
 | `startup_preload_analyst` | bool | `False` | — |
 | `startup_preload_coder` | bool | `False` | — |
-| `startup_preload_enabled` | bool | `True` | — |
-| `startup_preload_judge_in_agentic` | bool | `True` | — |
+| `startup_preload_enabled` | bool | `False` | — |
+| `startup_preload_judge_in_agentic` | bool | `False` | — |
 | `subagent_lite_cooldown_s` | int | `60` | — |
 | `subagent_lite_ctx_default` | int | `8192` | — |
 | `subagent_lite_enabled` | bool | `True` | — |

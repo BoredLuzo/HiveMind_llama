@@ -1150,26 +1150,90 @@ class LlamaLoadMixin:
             _ext_est = max(0, int(TOTAL_VRAM_MIB - _fit.free_mib - _current_own))
             _min_needed = vram_of_moe(_strip_alias(model), 4096) + _fit.margin_mib
             _fixed_dominant = _min_needed > _fit.free_mib
-            logger.warning(
-                "[PRE-FLIGHT-BLOCK] %s @ctx=%d: external_usage_est=%d MiB "
-                "fixed_cost_dominant=%s needed=%dMiB free=%dMiB (Quelle: %s)",
-                model, num_ctx, _ext_est, _fixed_dominant,
-                int(_fit.needed_mib), int(_fit.free_mib), _fit.source,
-            )
-            raise VRAMPreFlightError(
-                model=model, num_ctx=num_ctx,
-                needed_mib=_fit.needed_mib, free_mib=_fit.free_mib, source=_fit.source,
-                external_usage_est_mib=_ext_est, fixed_cost_dominant=_fixed_dominant,
-                message=(
-                    f"VRAM-Pre-Flight-Check fehlgeschlagen für '{model}' @ ctx={num_ctx}:\n"
-                    f"  benötigt: {_fit.needed_mib:.0f} MiB + {_fit.margin_mib} MiB Sicherheitsmarge "
-                    f"= {_fit.needed_mib + _fit.margin_mib:.0f} MiB\n"
-                    f"  frei:     {_fit.free_mib:.0f} MiB (Quelle: {_fit.source})\n"
-                    f"  extern:   ~{_ext_est} MiB Fremdbelegung (geschätzt)\n"
-                    f"  → Load abgebrochen (kein Popen). Andere GPU-Nutzer schließen, ctx senken, "
-                    f"oder Modelle entladen und erneut versuchen."
-                ),
-            )
+            # CTX-AUTO-DOWNGRADE (2026-09-01): before hard-blocking on a VRAM
+            # shortfall, try progressively smaller context windows (e.g. a
+            # leftover ctx_override of 32768 on an 8 GB GPU). If a smaller ctx
+            # fits, load with that instead of failing the run.
+            _downgraded = False
+            if not _fixed_dominant:
+                _ctx_cur = num_ctx
+                _ctx_attempts = [16384, 8192, 4096]
+                if _ctx_cur not in _ctx_attempts:
+                    _ctx_attempts.insert(0, _ctx_cur)
+                _ctx_seen: set[int] = set()
+                for _cand in _ctx_attempts:
+                    if _cand in _ctx_seen or _cand >= _ctx_cur:
+                        continue
+                    _ctx_seen.add(_cand)
+                    _fit_c = self.can_fit(model, _cand, exclude_slot_id=slot.slot_id)
+                    if _fit_c.ok:
+                        logger.warning(
+                            "[PRE-FLIGHT-CTX-DOWN] %s @ctx=%d passt nicht "
+                            "(%dMiB frei < %dMiB nötig) — versuche ctx=%d",
+                            model, _ctx_cur, int(_fit.free_mib), int(_fit.needed_mib), _cand,
+                        )
+                        num_ctx = _cand
+                        slot._num_ctx = _cand
+                        # Rewrite the --ctx-size flag that was baked into cmd
+                        # before the pre-flight check.
+                        for _ci, _ca in enumerate(cmd):
+                            if _ca == "--ctx-size" and _ci + 1 < len(cmd):
+                                cmd[_ci + 1] = str(num_ctx)
+                                break
+                        _fit = _fit_c
+                        _downgraded = True
+                        break
+            if not _downgraded:
+                # MODEL-SUGGEST (2026-09-01): when nothing fits at any ctx, name
+                # fitting alternatives (verified via can_fit, availability-checked)
+                # so the user knows what to pick on the Agent tab instead of a
+                # generic "ctx senken" hint.
+                _cands: list[str] = []
+                try:
+                    from .llama_vram_table import _VRAM_TABLE as _VRAM_TBL
+                    _avail_models = set(list_available_models() or [])
+                    for _sm, _gb in sorted(_VRAM_TBL.items(), key=lambda kv: kv[1]):
+                        _base = _sm.split(":")[0].lower()
+                        if _sm.lower() == _strip_alias(model).lower():
+                            continue
+                        if _base in _OLLAMA_ONLY_BASES:
+                            continue
+                        if _avail_models and _sm not in _avail_models:
+                            continue
+                        try:
+                            if self.can_fit(_sm, 4096, exclude_slot_id=slot.slot_id).ok:
+                                _cands.append(_sm)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # Spread the suggestions (smallest / mid / largest that fit)
+                # instead of only the tiniest models.
+                if len(_cands) <= 3:
+                    _sugg = _cands
+                else:
+                    _sugg = [_cands[0], _cands[len(_cands) // 2], _cands[-1]]
+                _sugg_txt = ", ".join(_sugg) if _sugg else "ein kleineres Modell im Agent-Tab wählen"
+                logger.warning(
+                    "[PRE-FLIGHT-BLOCK] %s @ctx=%d: external_usage_est=%d MiB "
+                    "fixed_cost_dominant=%s needed=%dMiB free=%dMiB (Quelle: %s)",
+                    model, num_ctx, _ext_est, _fixed_dominant,
+                    int(_fit.needed_mib), int(_fit.free_mib), _fit.source,
+                )
+                raise VRAMPreFlightError(
+                    model=model, num_ctx=num_ctx,
+                    needed_mib=_fit.needed_mib, free_mib=_fit.free_mib, source=_fit.source,
+                    external_usage_est_mib=_ext_est, fixed_cost_dominant=_fixed_dominant,
+                    message=(
+                        f"VRAM-Pre-Flight-Check fehlgeschlagen für '{model}' @ ctx={num_ctx}:\n"
+                        f"  benötigt: {_fit.needed_mib:.0f} MiB + {_fit.margin_mib} MiB Sicherheitsmarge "
+                        f"= {_fit.needed_mib + _fit.margin_mib:.0f} MiB\n"
+                        f"  frei:     {_fit.free_mib:.0f} MiB (Quelle: {_fit.source})\n"
+                        f"  extern:   ~{_ext_est} MiB Fremdbelegung (geschätzt)\n"
+                        f"  → Vorschlag: Modell im Agent-Tab wechseln — z. B. {_sugg_txt}.\n"
+                        f"  → Oder andere GPU-Nutzer schließen und erneut versuchen."
+                    ),
+                )
 
         # ── Log-Datei ─────────────────────────────────────────────────────────
         _log_path = Path(__file__).parent.parent / "logs" / f"llama_server_{slot.port}.log"

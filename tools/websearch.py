@@ -37,7 +37,13 @@ async def _get_client_async() -> "_httpx.AsyncClient":
                     connect=5.0, read=_FETCH_TIMEOUT, write=10.0, pool=5.0
                 ),
                 follow_redirects=False,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; HiveMind-Agent/1.0)"},
+                # UA-FIX (2026-09-02): a generic "Mozilla/5.0 (compatible;
+                # HiveMind-Agent/1.0)" UA gets 403'd by many sites (e.g.
+                # Wikipedia, openai.com). Use a real browser UA to reduce false
+                # 403s on public pages. Some strict sites still block — see README.
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                       "Chrome/126.0.0.0 Safari/537.36"},
                 limits=_httpx.Limits(max_connections=10, max_keepalive_connections=5),
             )
     return _http_client

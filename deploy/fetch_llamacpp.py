@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 import urllib.request
 from pathlib import Path
@@ -108,22 +109,58 @@ def http_text(url: str) -> str:
         return r.read().decode("utf-8")
 
 
-def download(url: str, dest: Path) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "HiveMind-Installer"})
-    with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
-        total = int(r.headers.get("Content-Length") or 0)
-        done = 0
-        while True:
-            chunk = r.read(1024 * 256)
-            if not chunk:
-                break
-            f.write(chunk)
-            done += len(chunk)
-            if total:
-                pct = done * 100 // total
-                sys.stdout.write(f"\r    {done / (1024*1024):.0f} / {total / (1024*1024):.0f} MB ({pct}%)")
-                sys.stdout.flush()
-    sys.stdout.write("\n")
+def download(url: str, dest: Path, max_attempts: int = 6) -> None:
+    """Download a file with resume + retries.
+
+    Flaky connections used to abort the whole install with a traceback
+    mid-download. Now:
+      - a partial file is RESUMED via HTTP Range instead of restarted,
+      - transient errors (reset / timeout / EOF / IncompleteRead) retry
+        with backoff,
+      - the byte count is verified against Content-Length; a short body
+        raises instead of silently producing a corrupt ZIP.
+    """
+    chunk = 256 * 1024
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resume_from = dest.stat().st_size if dest.exists() else 0
+            headers = {"User-Agent": "HiveMind-Installer"}
+            if resume_from:
+                headers["Range"] = f"bytes={resume_from}-"
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as r:
+                if r.getcode() == 206 and resume_from:
+                    total = resume_from + int(r.headers.get("Content-Length") or 0)
+                    mode = "ab"
+                else:
+                    # Server ignored Range (200) -> start from scratch.
+                    resume_from = 0
+                    total = int(r.headers.get("Content-Length") or 0)
+                    mode = "wb"
+                done = resume_from
+                with open(dest, mode) as f:
+                    while True:
+                        data = r.read(chunk)
+                        if not data:
+                            break
+                        f.write(data)
+                        done += len(data)
+                        if total:
+                            pct = min(100, done * 100 // total)
+                            sys.stdout.write(f"\r    {done / (1024*1024):.0f} / {total / (1024*1024):.0f} MB ({pct}%)")
+                            sys.stdout.flush()
+                sys.stdout.write("\n")
+            if total and done < total:
+                raise IOError(f"incomplete download ({done}/{total} bytes)")
+            return
+        except Exception as e:
+            sys.stdout.write("\n")
+            if attempt >= max_attempts:
+                print(f"    [ERROR] Download failed after {max_attempts} attempts: {e}")
+                raise
+            backoff = min(60, 2 ** attempt)
+            print(f"    [WARNING] Download error ({e}) - retry {attempt + 1}/{max_attempts} in {backoff}s")
+            time.sleep(backoff)
 
 
 def existing_build() -> tuple[int, Path] | None:
@@ -240,8 +277,24 @@ def main() -> int:
         print(f"    Removing old version: {target.name}")
         shutil.rmtree(target, ignore_errors=True)
     print(f"[3/3] Extracting to {target}...")
-    with zipfile.ZipFile(tmp_zip) as zf:
-        zf.extractall(target)
+    try:
+        with zipfile.ZipFile(tmp_zip) as zf:
+            # CRC-check every member before extracting: a ZIP whose download
+            # was interrupted mid-body would otherwise unpack into broken
+            # binaries that "find no devices" or crash at startup.
+            bad = zf.testzip()
+            if bad is not None:
+                raise zipfile.BadZipFile(f"corrupt member: {bad}")
+            zf.extractall(target)
+    except (zipfile.BadZipFile, OSError, EOFError) as e:
+        shutil.rmtree(target, ignore_errors=True)
+        tmp_zip.unlink(missing_ok=True)
+        print()
+        print(f"[ERROR] The downloaded archive is corrupt or incomplete ({e}).")
+        print("        Delete the temp ZIP and run again - it will download")
+        print("        from scratch. If it keeps failing, download the asset")
+        print("        manually from: https://github.com/ggml-org/llama.cpp/releases")
+        return 1
     tmp_zip.unlink(missing_ok=True)
 
     exe = target / "llama-server.exe"

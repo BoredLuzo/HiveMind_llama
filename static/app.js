@@ -371,10 +371,13 @@ function setDirectToolsTier(v) {
 
 var _DIRECT_TIER_HINTS = {
   off:      'Off \u2014 pure chat, no tools.',
-  readonly: 'Read \u2014 read (read_file/list_dir/find_files/search_code) + web search.',
+  readonly: 'Websearch \u2014 web_search/web_fetch only (no file read).',
   python:   'Python \u2014 Read + run_python (run code snippets).',
   full:     'Full \u2014 Read/Write/Exec incl. edit_file + run_bash. Needed for real coding requests.',
 };
+
+// TIER-LABEL (2026-09-02): display names for the stored tier values.
+var _TIER_LABEL = { off: 'Off', readonly: 'Websearch', python: 'Python', full: 'Full' };
 
 function updateDirectToolsTierHint() {
   var h = document.getElementById('direct-tools-tier-hint');
@@ -397,7 +400,7 @@ function updateComposerToolStatus() {
   var html = '', color = 'var(--tx3)';
   if (S.mode === 'simple' || S.mode === 'auto') {
     if (S.directToolsEnabled && tier !== 'off') {
-      html = '\u2699 Chat Tools: ' + tier + ' \u00b7 ' + rounds + ' rounds';
+      html = '\u2699 Chat Tools: ' + (_TIER_LABEL[tier] || tier) + ' \u00b7 ' + rounds + ' rounds';
       color = 'var(--green)';
     } else {
       html = '\u2699 Chat Tools: off (pure chat)';
@@ -437,7 +440,7 @@ function updateChatToolsBadge() {
     && S.directToolsEnabled && tier !== 'off';
   b.classList.toggle('off', !active);
   if (!active) { b.style.display = 'none'; b.textContent = ''; }
-  else { b.textContent = '\u2699 Tools: ' + tier; b.style.display = ''; }
+  else { b.textContent = '\u2699 Tools: ' + (_TIER_LABEL[tier] || tier); b.style.display = ''; }
 }
 
 // MODUS-BESCHREIBUNG (2026-08-31): Ein-Zeilen-Text unter den Mode-Buttons.
@@ -1189,14 +1192,14 @@ async function loadSettings() {
     }
     // Startup Preload Toggle
         var suEl = document.getElementById('startup-preload-toggle');
-    if (suEl) suEl.checked = s.startup_preload_enabled !== false;
+    if (suEl) suEl.checked = s.startup_preload_enabled === true;
     var jkaEl = document.getElementById('judge-keepalive-toggle');
-    if (jkaEl) jkaEl.checked = s.judge_keepalive_enabled !== false;
+    if (jkaEl) jkaEl.checked = s.judge_keepalive_enabled === true;
     // Analyst Sub-Toggle
     var saEl = document.getElementById('startup-preload-analyst-toggle');
     if (saEl) saEl.checked = s.startup_preload_analyst === true;
     var sjaEl = document.getElementById('startup-preload-judge-agentic-toggle');
-    if (sjaEl) sjaEl.checked = s.startup_preload_judge_in_agentic !== false;
+    if (sjaEl) sjaEl.checked = s.startup_preload_judge_in_agentic === true;
     var scEl = document.getElementById('startup-preload-coder-toggle');
     if (scEl) scEl.checked = s.startup_preload_coder === true;
     var pdEl = document.getElementById('pin-direct-toggle');
@@ -1224,7 +1227,7 @@ async function loadSettings() {
     populateVisionAgentModelSel();
     _updateVisionAgentModeUI(S.visionAgentMode);
     var ar = document.getElementById('preload-analyst-row');
-    if (ar) ar.style.opacity = (s.startup_preload_enabled !== false) ? '1' : '0.4';
+    if (ar) ar.style.opacity = (s.startup_preload_enabled === true) ? '1' : '0.4';
     // Smart Preload Toggle + Prefetch-Lead Slider
     var spEl = document.getElementById('smart-preload-toggle');
     if (spEl) {
@@ -5052,6 +5055,27 @@ function handleEvent(d) {
     scrollBtmIfNearBottom(120);
   }
   else if (d.type === 'duo_coder') {
+    // DUO-CODE-DEDUP (2026-09-02): the backend sends a generic agent event
+    // content:"Code" as a coder phase switch right before the first duo_coder
+    // event. startAgent() opens an empty purple "Code" bubble for it; the real
+    // duo-coder block below ("Coder") is what receives the stream. Remove only
+    // that first stray empty Code bubble so no duplicate header is shown.
+    var _strayCode = null;
+    var _allBlocks = document.querySelectorAll('#chat .msg.ablock');
+    for (var _si = _allBlocks.length - 1; _si >= 0; _si--) {
+      var _blk = _allBlocks[_si];
+      if (_blk.classList.contains('duo-coder') || _blk.classList.contains('duo-critic')) continue;
+      var _an = _blk.querySelector('.aname');
+      if (!_an || (_an.textContent || '').trim() !== 'Code') continue;
+      var _ab = _blk.querySelector('.abody');
+      if (_ab && (_ab.textContent || '').trim()) continue; // has content — keep
+      _strayCode = _blk;
+      break;
+    }
+    if (_strayCode) {
+      _strayCode.remove();
+      if (S.curAgent && S.curAgent.name === 'Code') S.curAgent = null;
+    }
     if (S._chunkingActive) {
       // chunking: EVERY chunk gets its own coder block (no reuse)
       startDuoAgent('coder', 'Coder', d.model || '', 'R' + d.round);

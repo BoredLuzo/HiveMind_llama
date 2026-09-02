@@ -23,9 +23,9 @@ DEFAULT_AGENT_CFG = {
     "refiner":     {"model": "qwen3.5:2b",    "temperature": 0.3, "max_tokens": 400, "thinking": False, "thinking_budget": 0},
     "critic":      {"model": "qwen3.5:4b-ud", "temperature": 0.2, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
     "synthesizer": {"model": "qwen3.5:4b-ud", "temperature": 0.2, "max_tokens": 900, "thinking": False, "thinking_budget": 0},
-    "direct":      {"model": "qwen3.5:9b-ud", "temperature": 0.4, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
+    "direct":      {"model": "lfm2.5:2.6b",   "temperature": 0.4, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
     "judge":       {"model": "lfm2.5:2.6b",   "temperature": 0.1, "max_tokens": 120, "thinking": False, "thinking_budget": 0},
-    "duo_coder":   {"model": "qwen3.5:9b-ud", "temperature": 0.8, "max_tokens": 12000, "thinking": False, "thinking_budget": 0},
+    "duo_coder":   {"model": "lfm2.5:2.6b",   "temperature": 0.8, "max_tokens": 12000, "thinking": False, "thinking_budget": 0},
     "duo_critic":  {"model": "qwen3.5:4b-ud", "temperature": 0.15, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
 }
 
@@ -56,7 +56,7 @@ DEFAULT_SETTINGS = {
     "max_model_size_gb":       None,
     "prefer_smaller_models":   False,
     "pin_direct_after_response": False,
-    "judge_keepalive_enabled": True,
+    "judge_keepalive_enabled": False,
     "duo_worker_slots":        2,
     "moe_cpu_experts":         {},
     "llama_mlock":             True,
@@ -79,7 +79,7 @@ DEFAULT_SETTINGS = {
     "duo_runtime_profile":     "balanced",
     "duo_runtime_profile_lock_override": False,
     "duo_profile_speed_model": "qwen3.5:4b-ud",
-    "duo_profile_quality_model": "qwen3.5:9b-ud",
+    "duo_profile_quality_model": "lfm2.5:2.6b",
     "duo_agentic_mode":        False,
     "duo_agentic_thinking":    False,
     "_thinking_before_chunking": None,  # persisted user-preference before chunking forced thinking ON
@@ -225,7 +225,7 @@ DEFAULT_SETTINGS = {
     # J2) DIRECT-CHAT-TOOLS (Simple/Direct-Mode Tool-Use, 2026-08-31)
     # ════════════════════════════════════════════════════════════════════════
     "direct_tools_enabled":    True,
-    "direct_tools_tier":       "readonly",   # readonly | python | full | off
+    "direct_tools_tier":       "readonly",   # off | readonly(websearch only) | python(read+python) | full
     "direct_tools_max_rounds": 12,
 
     # ════════════════════════════════════════════════════════════════════════
@@ -246,9 +246,9 @@ DEFAULT_SETTINGS = {
     # L) PRELOAD & PREFETCH
     # ════════════════════════════════════════════════════════════════════════
     "smart_preload_enabled":   True,
-    "startup_preload_enabled": True,
+    "startup_preload_enabled": False,
     "startup_preload_analyst": False,
-    "startup_preload_judge_in_agentic": True,
+    "startup_preload_judge_in_agentic": False,
     "startup_preload_coder":   False,
     "judge_prefetch_before_complexity": True,
     "prefetch_agent_avgs":     {},

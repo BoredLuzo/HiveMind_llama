@@ -185,6 +185,24 @@ echo   OK.
 echo.
 
 REM ======================================================
+REM [playwright] Chromium browser (for browser_tool)
+REM ======================================================
+echo  ==========================================================
+echo   [playwright] Installing Chromium browser
+echo  ==========================================================
+echo.
+"%PY%" -m playwright install chromium
+if errorlevel 1 (
+    echo.
+    echo   [ERROR] Chromium installation failed.
+    echo   Browser tool will not work without it.
+    echo.
+) else (
+    echo   OK.
+)
+echo.
+
+REM ======================================================
 REM [3/6] GPU backend (auto-detection)
 REM ======================================================
 echo  ==========================================================
@@ -277,19 +295,29 @@ echo.
 choice /c YN /n /m "Download llama.cpp backend now? [Y/N] "
 if errorlevel 2 goto llama_check
 "%PY%" deploy\fetch_llamacpp.py --backend %BACKEND%
-if errorlevel 1 (
-    echo.
-    echo   [ERROR] Could not download llama.cpp automatically.
-    echo   Download it manually from https://github.com/ggml-org/llama.cpp/releases
-    echo   and extract it into %~dp0llama\, then run install.bat again.
-    echo.
-    echo   Stopping BEFORE the model download - prevents ~30 GB wasted downloads.
-    echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
-)
+REM PAREN-IF-FIX (2026-09-01): the old `if errorlevel 1 ( ... )` block put the
+REM bare %~dp0llama path INSIDE a parenthesized block. With an install folder
+REM like "...\HiveMind_v1.0.3 (4)\" the ')' from the path closed the block early
+REM and cmd aborted the batch silently right after a successful llama download.
+REM `goto` skips the error lines without a parenthesized block.
+if not errorlevel 1 goto llama_check
+echo.
+echo   [ERROR] Could not download llama.cpp automatically.
+echo   Download it manually from https://github.com/ggml-org/llama.cpp/releases
+echo   and extract it into %~dp0llama\, then run install.bat again.
+echo.
+echo   Stopping BEFORE the model download - prevents ~30 GB wasted downloads.
+echo.
+echo  Press any key to continue... & pause >nul & exit /b 1
 :llama_check
 set "HAVE_LLAMA="
-for /f %%i in ('dir /b /s "%~dp0llama\llama-server.exe" 2^>nul') do set "HAVE_LLAMA=1"
+REM PAREN-PATH-FIX (2026-09-01): a `for /f` over "%~dp0..." breaks when the
+REM install folder contains parentheses (e.g. "...\HiveMind_v1.0.3 (3)\") —
+REM cmd eats the ')' as the end of the for-block and the batch dies silently.
+REM The path is passed to PowerShell via an ENV var so the parens never go
+REM through cmd's for-block parser.
+set "HM_LLAMA_ROOT=%~dp0llama"
+for /f "usebackq delims=" %%F in (`powershell -NoProfile -Command "$r = $env:HM_LLAMA_ROOT; if (Get-ChildItem -Recurse -Path $r -Filter llama-server.exe -ErrorAction SilentlyContinue) { '1' }"`) do set "HAVE_LLAMA=%%F"
 if defined HAVE_LLAMA (
     echo   [OK] llama-server.exe found.
 ) else (
