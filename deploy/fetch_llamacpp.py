@@ -343,4 +343,20 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nAborted by user.")
+        sys.exit(1)
+    except Exception as e:
+        # Never die with a raw traceback in the installer — print a clear,
+        # actionable message and suggest the manual path.
+        print()
+        print(f"[ERROR] llama.cpp downloader crashed: {type(e).__name__}: {e}")
+        print("  This is usually transient (network/API) — just run the command again:")
+        print("    python deploy\\fetch_llamacpp.py --backend vulkan --force")
+        print("  Or download the matching build manually from:")
+        print("    https://github.com/ggml-org/llama.cpp/releases")
+        print("  (pick the newest `llama-bXXXX-bin-win-vulkan-x64.zip`, extract it into")
+        print("   a folder under `llama\\` — auto-discovery picks the highest build).")
+        sys.exit(1)
