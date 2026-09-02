@@ -13,7 +13,7 @@ LANGUAGE_RUNNERS: dict[str, dict] = {
         # switched. Exit propagation is now handled runner-side
         # (; exit $LASTEXITCODE), siehe tools/handlers.py.
         "lint_cmd":      "python -m py_compile {file}",
-        "install_cmd":   "pip install {package}",
+        "install_cmd":   "python -m pip install {package}",
     },
     "javascript": {
         "extensions":    [".js", ".mjs", ".cjs"],
