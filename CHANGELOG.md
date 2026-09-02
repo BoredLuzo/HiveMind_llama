@@ -22,6 +22,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Removed the stale "History Note" from the changelog header.
+- Duo/agentic context now honours a user-set per-agent **Context** override
+  (`ctx_overrides`) even when a persisted `duo_*` context default exists —
+  raising the context actually takes effect now.
 
 ## [1.0.4] - 2026-09-02
 
