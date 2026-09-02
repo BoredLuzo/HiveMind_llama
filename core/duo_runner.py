@@ -3539,7 +3539,7 @@ async def run_code_duo(ctx):
                                     _dtool_msgs.append({"role": "user",
                                         "content": _build_dropped_tool_retry(_drop_names)})
                                     continue
-                            _final = (_dr_msg.get("content") or "").strip()
+                            _final = _re_think_cleanup.sub(" ", (_dr_msg.get("content") or "")).strip()
                             if _final:
                                 if not _soft_check_done and _file_changes:
                                     _sc = _build_soft_check(_file_changes, _ws_str)
