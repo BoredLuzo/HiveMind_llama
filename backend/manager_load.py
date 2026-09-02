@@ -1027,7 +1027,7 @@ class LlamaLoadMixin:
                     )
 
         # ── Jinja-Chat-Template ───────────────────────────────────────────────
-        _JINJA_BASES = {"qwen3.5", "qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "tiel-coder"}
+        _JINJA_BASES = {"qwen3.5", "qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "tiel-coder", "lfm2.5"}
 
         # User-config (model_configs/models/*.json): jinja / reasoning / distilled / template.
         _reg_jinja = None
