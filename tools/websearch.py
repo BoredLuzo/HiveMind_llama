@@ -64,7 +64,7 @@ logger = logging.getLogger("hivemind.websearch")
 
 _SEARXNG_HOST        = "http://localhost:8888"
 _SEARXNG_ENABLED     = False
-_SEARXNG_ENGINES     = "brave,wikipedia,github"
+_SEARXNG_ENGINES     = "google,bing,wikipedia,github"
 # "de-DE,en-US" lieferte 400 Bad Request (Live-Test gegen lokalen SearXNG).
 _SEARXNG_LANGUAGE    = "all"
 _MAX_RESULTS_DEFAULT = 5
