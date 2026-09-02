@@ -210,7 +210,7 @@ DEFAULT_SETTINGS = {
     # J) WEBSEARCH & SEARXNG
     # ════════════════════════════════════════════════════════════════════════
     "searxng_host":            "http://localhost:8888",
-    "searxng_engines":         "brave,wikipedia,github",
+    "searxng_engines":         "google,bing,wikipedia,github",
     "searxng_language":        "all",
     "pipeline_websearch_enabled": True,
     "duo_websearch_enabled":   False,

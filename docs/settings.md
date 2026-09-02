@@ -161,7 +161,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `read_guard_enabled` | bool | `True` | — |
 | `safe_profile_matrix_file` | str | `"model_configs/safe_profile_matrix.json"` | — |
 | `safe_profile_policy` | str | `"default_8gb_v1"` | — |
-| `searxng_engines` | str | `"brave,wikipedia,github"` | — |
+| `searxng_engines` | str | `"google,bing,wikipedia,github"` | — |
 | `searxng_host` | str | `"http://localhost:8888"` | — |
 | `searxng_language` | str | `"all"` | — |
 | `server_port` | int | `8001` | — |
