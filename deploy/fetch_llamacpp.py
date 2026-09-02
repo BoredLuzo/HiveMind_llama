@@ -215,25 +215,40 @@ def main() -> int:
         return 0
 
     print(f"[1/3] Fetching latest llama.cpp release info ({args.backend})...")
-    # NIGHTLY-FIRST (2026-08-31): the installer should install the nightly
-    # bXXXX build, not the stable semver release. The stable release v0.x only
-    # contains 'nightly-tag.txt' (pointer to the bXXXX nightly); the real
-    # binaries live in the nightly release. Nightly is the primary source,
-    # stable only serves as fallback if the nightly tag cannot be resolved.
-    main_rel = http_json(API_LATEST)
-    nightly_release = None
-    nt = next((a for a in main_rel.get("assets", []) if a.get("name") == "nightly-tag.txt"), None)
-    if nt:
-        try:
-            _tag = http_text(nt["browser_download_url"]).strip()
-            if _tag:
-                nightly_release = http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{_tag}")
-                print(f"       Nightly release resolved: {_tag}")
-        except Exception as e:
-            print(f"       [WARNING] Nightly tag could not be resolved: {e}")
-    releases = [nightly_release] if nightly_release else [main_rel]
-
     rx = ASSET_REGEX[args.backend]
+
+    # NIGHTLY-NEWEST (2026-09-02): llama.cpp publishes a fresh bXXXX nightly
+    # very frequently. The stable release's 'nightly-tag.txt' pointer lags
+    # ~100 builds behind the newest nightly, so resolve the NEWEST nightly
+    # directly from the releases list (newest first). The stable pointer is
+    # only a fallback.
+    releases: list[dict] = []
+    try:
+        _rels = http_json("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=100")
+        for _rel in _rels:
+            _tag = str(_rel.get("tag_name") or "")
+            if not re.fullmatch(r"b\d{4,}", _tag):
+                continue
+            if any(rx.match(str(a.get("name", "") or "")) for a in (_rel.get("assets") or [])):
+                releases = [_rel]
+                break
+        if releases:
+            print(f"       Newest nightly with {args.backend} asset: {releases[0].get('tag_name')}")
+    except Exception as e:
+        print(f"       [WARNING] Nightly list could not be fetched: {e}")
+    if not releases:
+        main_rel = http_json(API_LATEST)
+        nt = next((a for a in main_rel.get("assets", []) if a.get("name") == "nightly-tag.txt"), None)
+        if nt:
+            try:
+                _tag = http_text(nt["browser_download_url"]).strip()
+                if _tag:
+                    releases = [http_json(f"https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{_tag}")]
+                    print(f"       Nightly release resolved (stable pointer): {_tag}")
+            except Exception as e:
+                print(f"       [WARNING] Nightly tag could not be resolved: {e}")
+        if not releases:
+            releases = [main_rel]
 
     # CUDA-VERSION-SELECTION (2026-08-27, FIX): prefer exactly the driver
     # version (nvidia-smi), otherwise the newest available CUDA runtime.
@@ -253,8 +268,8 @@ def main() -> int:
         asset, asset_tag = _pick_asset(releases, rx, args.cuda_version or "")
 
     if asset is None:
-        print(f"[ERROR] No asset for '{args.backend}' found in release {main_rel.get('tag_name', '?')}.")
-        print(f"         Manual: {main_rel.get('html_url', 'https://github.com/ggml-org/llama.cpp/releases')}")
+        print(f"[ERROR] No asset for '{args.backend}' found in release {releases[0].get('tag_name', '?')}.")
+        print(f"         Manual: {releases[0].get('html_url', 'https://github.com/ggml-org/llama.cpp/releases')}")
         return 1
 
     tag = asset_tag
