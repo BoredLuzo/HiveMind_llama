@@ -23,8 +23,6 @@
   <div class="h-sep"></div>
   <div id="h-agentmap"></div>
   <div class="h-sep"></div>
-  <span id="h-preset-label">no preset</span>
-  <div class="h-sep"></div>
   <button id="skip-btn" class="hbtn" onclick="skipCurrentStep()" title="Skip current phase (Planner/Coder/Critic/Test — does not abort the whole run)" style="display:none">⏭ Skip</button>
   <button id="h-sidebar-btn" class="hbtn active" onclick="toggleSidebar()" title="Toggle sidebar">&#9776; Panel</button>
   <button id="h-code-btn" onclick="toggleCodePanel()" title="Toggle live code panel">⌨ Code</button>
@@ -59,7 +57,6 @@
 <div id="sidebar">
   <div class="tabs">
     <button class="tab on" data-p="agents">Agents</button>
-    <button class="tab" data-p="presets">Presets</button>
     <button class="tab" data-p="configs">Configs</button>
     <button class="tab" data-p="memory">Memory</button>
     <button class="tab" data-p="soul" style="color:var(--purple)">Soul</button>
@@ -528,51 +525,6 @@
 
     <!-- Gemeinsame Optionen -->
     <div style="border-top:1px solid rgba(32,176,160,.1);padding-top:8px;margin-top:2px">
-
-      <!-- Preset-Routing / Override -->
-      <div class="opt-row" style="margin-top:6px">
-        <div class="opt-row-left">
-          <span class="opt-name">&#128260; Use Presets</span>
-          <span class="opt-hint">Preset picks model family + ctx/timeout/review</span>
-        </div>
-        <label class="cfl-sw" style="margin:0">
-          <input type="checkbox" id="duo-use-presets-toggle" onchange="toggleDuoPresetsUI(this.checked)">
-          <span class="sl"></span>
-        </label>
-      </div>
-      <div id="duo-presets-panel" style="display:none;padding:0 4px 8px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);white-space:nowrap">Runtime profile</span>
-          <select id="duo-runtime-profile" onchange="onDuoRuntimeProfileChange(this.value)"
-            style="flex:1;background:#10131a;border:1px solid rgba(136,88,192,.4);border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4">
-            <option value="auto">auto</option>
-            <option value="fast">fast</option>
-            <option value="balanced">balanced</option>
-            <option value="critical">critical</option>
-          </select>
-        </div>
-        <div class="opt-row" style="margin-top:2px">
-          <div class="opt-row-left">
-            <span class="opt-name">Lock profile</span>
-            <span class="opt-hint">Profile stays fixed — no auto-escalation</span>
-          </div>
-          <label class="cfl-sw" style="margin:0">
-            <input type="checkbox" id="duo-runtime-profile-lock-override" onchange="onDuoRuntimeProfileLockOverrideChange(this.checked)">
-            <span class="sl"></span>
-          </label>
-        </div>
-        <div class="opt-row" style="margin-top:2px">
-          <div class="opt-row-left">
-            <span class="opt-name">Preset models</span>
-            <span class="opt-hint">Preset model replaces the dropdown model</span>
-          </div>
-          <label class="cfl-sw" style="margin:0">
-            <input type="checkbox" id="duo-use-preset-models-toggle" onchange="onDuoUsePresetModelsChange(this.checked)">
-            <span class="sl"></span>
-          </label>
-        </div>
-        <div id="duo-runtime-profile-hint" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:4px 4px 0;line-height:1.5"></div>
-      </div>
 
       <div class="opt-row" style="margin-top:6px">
         <div class="opt-row-left">
@@ -1254,33 +1206,6 @@
         </div>
 
       </div>
-    </div>
-  </div>
-  <!-- PRESETS -->
-  <div class="panel" id="p-presets">
-    <div class="sec">Save new preset</div>
-    <div style="display:flex;gap:6px;margin-bottom:4px">
-      <input class="sinput" type="text" id="preset-name-in" placeholder="Name..." style="flex:1;height:32px">
-      <button class="amber-btn" onclick="savePreset()">Save</button>
-    </div>
-    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:12px">
-      Saves the current agent configuration + prompts. Use <b>Save</b> on an existing
-      preset below to overwrite it without retyping the name.
-    </div>
-    <div class="sec">Saved presets</div>
-    <div id="preset-list"></div>
-    <div id="prompt-editor-section" style="display:none">
-      <div class="sec" style="display:flex;align-items:center;gap:8px">
-        Prompt Editor
-        <span class="custom-badge" id="custom-badge" style="display:none">Modified</span>
-      </div>
-      <div class="row" style="margin-bottom:6px">
-        <select id="prompt-agent-sel" style="flex:1" onchange="loadPrompt()"></select>
-        <button class="ghost" onclick="resetPrompt()">Reset</button>
-      </div>
-      <textarea class="prompt-editor" id="prompt-textarea" rows="10"
-        placeholder="Prompt will be loaded..." oninput="promptChanged()"></textarea>
-      <button class="amber-btn" style="width:100%;margin-top:6px" onclick="savePrompt()">Save prompt</button>
     </div>
   </div>
   <!-- CONFIGS -->

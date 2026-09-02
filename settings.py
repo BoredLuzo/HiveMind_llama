@@ -9,13 +9,10 @@ import threading
 from pathlib import Path
 
 SETTINGS_FILE      = Path(__file__).parent / "settings.json"
-PRESETS_FILE       = Path(__file__).parent / "presets.json"
-CUSTOM_PROMPTS_DIR = Path(__file__).parent / "custom_prompts"
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 # Recommended models (setup_models.bat / fetch_models.py) as defaults — they
-# are the models the installer downloads. Presets are NOT shipped
-# (presets.json is empty); the user creates their own presets.
+# are the models the installer downloads.
 # CODER-TEMP (2026-08-31): higher than for Refiner/Critic — creative coding.
 
 DEFAULT_AGENT_CFG = {
@@ -40,7 +37,6 @@ DEFAULT_SETTINGS = {
     "agents":                  DEFAULT_AGENT_CFG,
     "max_iterations":          2,
     "mode":                    "simple",
-    "active_preset":           None,
 
     # ════════════════════════════════════════════════════════════════════════
     # B) VRAM & GPU
@@ -74,10 +70,7 @@ DEFAULT_SETTINGS = {
     "duo_coding_mode":         True,
     "duo_pre_explore":         False,
     "until_finished":          False,
-    "duo_use_preset_models":   False,
-    "duo_use_presets":         True,
     "duo_runtime_profile":     "balanced",
-    "duo_runtime_profile_lock_override": False,
     "duo_profile_speed_model": "qwen3.5:4b-ud",
     "duo_profile_quality_model": "lfm2.5:2.6b",
     "duo_agentic_mode":        False,
@@ -330,8 +323,6 @@ DEFAULT_SETTINGS = {
 }
 
 
-DEFAULT_PRESETS = {}
-
 # ── Load / Save ───────────────────────────────────────────────────────────────
 
 _load_cache_key: tuple | None = None
@@ -374,6 +365,12 @@ def _load_settings_from_disk() -> dict:
                               "duo_agentic_post_review_max_tokens",
                               "duo_agentic_post_review_context_injection"):
                 data.pop(_dead_key, None)
+            # MIGRATION (presets removed 2026-09-02): preset keys are gone — the
+            # user configures model/context/behavior directly in the UI.
+            for _dead_preset_key in ("active_preset", "duo_use_presets",
+                                     "duo_use_preset_models",
+                                     "duo_runtime_profile_lock_override"):
+                data.pop(_dead_preset_key, None)
             # MIGRATION (0.99.2): duo_planner_content_tokens -> duo_planner_max_tokens.
             _old_cap = data.get("duo_planner_content_tokens")
             if "duo_planner_max_tokens" not in data:
@@ -439,46 +436,3 @@ def save_settings(settings: dict):
     _tmp.write_text(_data, encoding="utf-8")
     with _settings_write_lock:
         _tmp.replace(SETTINGS_FILE)                  # atomar, OS-Garantie
-
-def load_presets() -> dict:
-    if PRESETS_FILE.exists():
-        try:
-            return json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return dict(DEFAULT_PRESETS)
-
-_presets_write_lock = threading.Lock()
-
-def save_presets(presets: dict):
-    """Analog zu save_settings: atomic write via tmp + replace."""
-    _data = json.dumps(presets, ensure_ascii=False, indent=2)
-    _tmp = PRESETS_FILE.with_name(f".presets_{threading.get_ident()}.tmp")
-    _tmp.write_text(_data, encoding="utf-8")
-    with _presets_write_lock:
-        _tmp.replace(PRESETS_FILE)
-
-def get_custom_prompt(preset_name: str, agent_key: str) -> str | None:
-    path = CUSTOM_PROMPTS_DIR / f"{preset_name}_{agent_key}.txt"
-    if path.exists():
-        return path.read_text(encoding="utf-8").strip()
-    return None
-
-def save_custom_prompt(preset_name: str, agent_key: str, content: str):
-    CUSTOM_PROMPTS_DIR.mkdir(exist_ok=True)
-    path = CUSTOM_PROMPTS_DIR / f"{preset_name}_{agent_key}.txt"
-    path.write_text(content, encoding="utf-8")
-
-def delete_custom_prompts_for_preset(preset_name: str):
-    if not CUSTOM_PROMPTS_DIR.exists():
-        return
-    for f in CUSTOM_PROMPTS_DIR.glob(f"{preset_name}_*.txt"):
-        f.unlink()
-
-def copy_prompts_to_preset(src_preset: str | None, dst_preset: str,
-                            agent_keys: list[str], base_prompts: dict):
-    for key in agent_keys:
-        src_content = get_custom_prompt(src_preset, key) if src_preset else None
-        content = src_content or base_prompts.get(key, "")
-        if content:
-            save_custom_prompt(dst_preset, key, content)

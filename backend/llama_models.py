@@ -121,7 +121,7 @@ def _parse_gguf_filename(filename: str) -> list[str]:
 
 # ── GGUF-Index ─────────────────────────────────────────────────────────────────
 
-_NON_MODEL_PATTERNS = {"mmproj", "projector", "vision_encoder", "vl-encoder"}
+_NON_MODEL_PATTERNS = {"mmproj", "projector", "vision_encoder", "vl-encoder", "dspark"}
 
 # ── Ollama-Familien-Exclusion ─────────────────────────────────────────────────
 #
