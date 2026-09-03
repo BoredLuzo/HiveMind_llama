@@ -43,6 +43,16 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`write_file_append` appends received content in one go**: no artificial
   splitting that would force the model to re-send the same content.
 
+### Removed
+
+- **Tiel-Coder model recommendations and their default configs dropped**:
+  removed from the recommended-model downloader (`deploy/fetch_models.py`),
+  `setup_models.bat`, the README model table and the shipped per-model configs
+  (`model_configs/models/tiel-coder_*.json` deleted) together with their launch
+  defaults (MoE expert counts, MTP registration, sampling profile, VRAM table,
+  vision/mmproj base lists). The models are no longer advertised or
+  auto-configured; the repo history (CHANGELOG) keeps the original entries.
+
 ### Fixed
 
 - **Context compression crash** (`context/compression.py`): the empty-history

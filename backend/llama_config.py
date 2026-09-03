@@ -205,13 +205,6 @@ _MOE_EXPERT_COUNTS[_HERMES_V7_MTP] = 35
 _HERMES_V10_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact"
 _MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 
-# Tiel-Coder 35B-A3B (peculiar-ragdoll, 2026-08-31): 35B-total/3B-active MoE,
-# identical launch settings to hermes3.6 (n-cpu-moe 35, GPU offload 99, KV q4_0).
-# Base tier (without MTP head) stays WITHOUT --spec-type. The MTP variant
-# (…-A3B-MTP-UD…, trained MTP head) belongs in _MTP_MODELS.
-_MOE_EXPERT_COUNTS["tiel-coder:35b-a3b"] = 35
-_MOE_EXPERT_COUNTS["tiel-coder:35b-a3b-mtp"] = 35
-
 _MOE_KV_CACHE_TYPES: dict[str, str] = {}
 
 
@@ -233,12 +226,8 @@ DSPARK_DRAFT_N_MIN = 0
 DSPARK_MIN_BUILD = 10173   # llama.cpp mainline #25173 (--spec-type …draft-dspark)
 
 #   _MTP_MODELS = {"qwen3.6:35b-a3b-mtp"}
-# Tiel-Coder MTP variant (2026-08-31): Tiel-Coder-35B-A3B-MTP-UD-Q4_K_XL.gguf
-# → canonical "tiel-coder:35b-a3b-mtp-ud". Both names here so that settings-
-# references without "-ud" also get draft-mtp.
 _MTP_MODELS: set[str] = {
     "qwen3.5:4b-mtp", _HERMES_V7_MTP, _HERMES_V10_MTP,
-    "tiel-coder:35b-a3b-mtp", "tiel-coder:35b-a3b-mtp-ud",
 }
 
 

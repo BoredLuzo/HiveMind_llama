@@ -13,7 +13,6 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   qwen3.5:2b              Q4_K_M        — Refiner
   qwen3.5:4b-ud           UD-Q4_K_XL    — Analyst/Critic/Synthesizer/Speed/Fallback
   qwen3.5:9b-ud           UD-Q4_K_XL    — Direct/Duo-Coder/Quality
-  2x Tiel-Coder MTP from https://huggingface.co/BoredLuzo (see SPECS below)
 
 Usage:
   python deploy\\fetch_models.py --models-dir <path> [options]
@@ -202,42 +201,6 @@ SPECS: list[dict] = [
         "mmproj_regex": [
             r"(?i)mmproj[-_.]hermes3\.6[-_.]35b.*genesis[-_.]f16\.gguf$",
             r"(?i)mmproj.*(f16|bf16)\.gguf$",
-        ],
-    },
-    # ── BoredLuzo Tiel-Coder 35B-A3B MTP (2026-09-02) ───────────────────────
-    # Two self-quantized MTP variants hosted by the author of HiveMind
-    # (https://huggingface.co/BoredLuzo): "Compact" (~18 GB) and "APEX"
-    # (~26 GB). Filenames parse to tiel-coder:35b-a3b-mtp-compact / -apex,
-    # and the shipped per-model configs
-    # (model_configs/models/tiel-coder_35b-a3b-mtp-*.json) enable MTP + the
-    # right number of CPU experts, so the download must match the exact name.
-    # VISION (per peculiar-ragdoll, the Tiel-Coder author): inherits the
-    # Ornith-1.5 vision tower; projector is the shared mmproj-BF16.gguf
-    # (original BF16, untouched by quantization) — NOT the Hermes projector.
-    {
-        "key": "tiel-coder:35b-a3b-mtp-compact",
-        "desc": "Tiel-Coder 35B-A3B MTP-Compact (BoredLuzo, Coder/Hermes agent, MoE+MTP, ~18GB download)",
-        "search": "Tiel-Coder 35B A3B MTP GGUF",
-        "author_pref": ["BoredLuzo"],
-        "file_regex": [
-            r"(?i)^Tiel[-_.]Coder[-_.]35B[-_.]A3B[-_.]MTP[-_.]Compact\.gguf$",
-        ],
-        "mmproj_regex": [
-            r"(?i)^mmproj[-_.]bf16\.gguf$",
-            r"(?i)mmproj.*bf16\.gguf$",
-        ],
-    },
-    {
-        "key": "tiel-coder:35b-a3b-mtp-apex",
-        "desc": "Tiel-Coder 35B-A3B MTP-APEX (BoredLuzo, Coder/Hermes agent, MoE+MTP, ~26GB download)",
-        "search": "Tiel-Coder 35B A3B MTP GGUF",
-        "author_pref": ["BoredLuzo"],
-        "file_regex": [
-            r"(?i)^Tiel[-_.]Coder[-_.]35B[-_.]A3B[-_.]MTP[-_.]APEX\.gguf$",
-        ],
-        "mmproj_regex": [
-            r"(?i)^mmproj[-_.]bf16\.gguf$",
-            r"(?i)mmproj.*bf16\.gguf$",
         ],
     },
 ]
