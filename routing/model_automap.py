@@ -24,10 +24,6 @@ MODEL_PROFILES: dict[str, dict] = {
     "qwen3.6":     {"thinking": True,  "vision": True, "tool_call": True},  # embedded encoder / mmproj
     "hermes3.6":   {"thinking": True,  "vision": True, "tool_call": True},
     "hermes":      {"thinking": True,  "vision": True, "tool_call": True},
-    # Tiel-Coder (2026-08-31): vision tower from Ornith-1.5 (mmproj-BF16.gguf),
-    # Tool calls + thinking like hermes3.6. EXPLICITLY needed — the generic
-    # the "coder" heuristic below would wrongly set vision/thinking to False.
-    "tiel-coder":  {"thinking": True,  "vision": True, "tool_call": True},
     "lfm2.5":      {"thinking": False, "vision": False, "tool_call": True},
     # Ling-3.0-tiny (InclusionAI, 2026-08-19): MoE, Thinking per Default an.
     "ling-3.0-tiny": {"thinking": True, "vision": False, "tool_call": True},
@@ -152,7 +148,7 @@ def _estimate_vram_gb_for_model(model_name: str, quant: str = "q4") -> float:
 _VISION_PREPROCESSING_ALLOWLIST: list[str] = [
     "minicpm-v", "llava", "qwen2-vl", "qwen2.5-vl", "pixtral",
     "llava-next", "gemma3-vl", "internvl",
-    "qwen3.5", "qwen3.6", "hermes3.6", "hermes", "gemma-4", "tiel-coder",
+    "qwen3.5", "qwen3.6", "hermes3.6", "hermes", "gemma-4",
 ]
 
 # ── Automap-State ──────────────────────────────────────────────────────────

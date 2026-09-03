@@ -90,14 +90,6 @@ _MOE_TABLE: dict[str, dict] = {
         "measured_bytes_per_token": 6272,
         "calibrated_n_cpu_moe":     35,
     },
-    # Tiel-Coder 35B-A3B (2026-08-31): identical A3B-MoE architecture as
-    # hermes3.6/qwen3.6:35b — gleiche Messwerte (--n-cpu-moe=35, q4_0-KV).
-    # Prefix-Match deckt "-ud"/"-q4-k-xl"-Suffixe aus der GGUF-Auto-Discovery ab.
-    "tiel-coder:35b-a3b": {
-        "active_gpu_gb":            4.66,
-        "measured_bytes_per_token": 6272,
-        "calibrated_n_cpu_moe":     35,
-    },
 }
 
 

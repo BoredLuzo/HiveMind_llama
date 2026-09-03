@@ -122,9 +122,6 @@ FAMILY_PROFILES: dict[str, dict] = {
     "lfm2.5":  LFM25_PROFILE,
     "ling-3.0-tiny": LING3_PROFILE,
     "hermes3.6": QWEN36_PROFILE,
-    # Tiel-Coder 35B-A3B (2026-08-31): Model-Card-Sampling temp 1.0/top_p 0.95/
-    # top_k 20, agentic coding temp 0.6 → exakt QWEN36_PROFILE (hermes3.6-Zwilling).
-    "tiel-coder": QWEN36_PROFILE,
     # "qwen4.0": QWEN40_PROFILE,
     # "deepseek-v4": DEEPSEEK_PROFILE,
 }

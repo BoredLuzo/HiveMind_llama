@@ -1027,7 +1027,7 @@ class LlamaLoadMixin:
                     )
 
         # ── Jinja-Chat-Template ───────────────────────────────────────────────
-        _JINJA_BASES = {"qwen3.5", "qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "tiel-coder", "lfm2.5"}
+        _JINJA_BASES = {"qwen3.5", "qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "lfm2.5"}
 
         # User-config (model_configs/models/*.json): jinja / reasoning / distilled / template.
         _reg_jinja = None
@@ -1053,7 +1053,7 @@ class LlamaLoadMixin:
         #
         _DISTILLED_MODELS = {"qwen3.5:2b-d", "qwen3.5:4b-d", "qwen3.5:9b-d", "qwen3.5:4b-ud-v3", "qwen3.5:9b-ud"}
         # Server <think>-Inhalte in reasoning_content → split_thinking + thinking_budget greifen.
-        _REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes", "tiel-coder"}
+        _REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes"}
         if type(self)._reasoning_override is not None:
             _ro = type(self)._reasoning_override
             type(self)._reasoning_override = None  # consume override

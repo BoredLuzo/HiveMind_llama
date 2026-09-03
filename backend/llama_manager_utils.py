@@ -43,8 +43,6 @@ _VISION_CAPABLE_BASES: set[str] = {
     "qwen3.6",
     "hermes3.6",
     "hermes",
-    # Tiel-Coder (2026-08-31): erbt Ornith-1.5 Vision-Tower, mmproj-BF16.gguf.
-    "tiel-coder",
 }
 
 _VRAM_BASE_OVERHEAD_GB: float = 2.5

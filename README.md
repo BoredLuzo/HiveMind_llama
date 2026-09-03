@@ -267,8 +267,6 @@ Prefix a key with `_` to skip it (e.g. notes). `TODO:` paths are ignored.
 | `gemma-4:e4b-it` (Q4_K_M) | Allrounder/Vision | ~3 GB | ~3 GB |
 | `qwen3.6:35b-a3b-ud` (UD-Q4_K_XL) | Coder/Planner (MoE) | ~20 GB | ~5 GB (experts in RAM) |
 | `hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact` (APEX-Compact) | Coder/Hermes agent (MoE, MTP) | ~17 GB | ~6 GB (experts in RAM) |
-| `tiel-coder:35b-a3b-mtp-compact` (Compact, from [BoredLuzo](https://huggingface.co/BoredLuzo)) | Coder/Hermes agent (MoE, MTP, 32 experts) | ~18 GB | ~6 GB (experts in RAM) |
-| `tiel-coder:35b-a3b-mtp-apex` (APEX, from [BoredLuzo](https://huggingface.co/BoredLuzo)) | Coder/Hermes agent (MoE, MTP) | ~26 GB | ~6 GB (experts in RAM) |
 | `qwen3.5:4b-ud` (UD-Q4_K_XL) | Analyst/Critic/Speed | ~3 GB | ~3 GB |
 | `qwen3.5:9b-ud` (UD-Q4_K_XL) | Direct/Duo-Coder | ~6 GB | ~6 GB |
 | `qwen3.5:2b` (Q4_K_M) | Refiner | ~1.3 GB | ~1.5 GB |
@@ -289,24 +287,8 @@ Standard configs:
 > it fits the 8 GB VRAM budget while delivering far better quality than the 9B
 > coder for solo agentic coding.
 
-> **Tiel-Coder MTP models from [huggingface.co/BoredLuzo](https://huggingface.co/BoredLuzo):**
-> the two self-quantized `Tiel-Coder-35B-A3B-MTP` GGUFs listed above
-> (`…-MTP-Compact.gguf`, ~18 GB, and `…-MTP-APEX.gguf`, ~26 GB) are recommended
-> Coder/Hermes agents (MoE + MTP head). Their per-model configs ship in
-> `model_configs/models/tiel-coder_35b-a3b-mtp-*.json`, so once a GGUF is
-> registered (via `setup_models.bat` or auto-detection) the launch settings
-> apply automatically — `setup_models.bat` single-select options `9` and `10`
-> download them directly from BoredLuzo's repos.
-> Per the upstream author
-> ([peculiar-ragdoll/Tiel-Coder-35B-A3B-GGUF](https://huggingface.co/peculiar-ragdoll/Tiel-Coder-35B-A3B-GGUF)):
-> Tiel-Coder launches with `--jinja` using **its own embedded chat template**
-> (not the qwen custom ones), sampling temperature 1.0 / top_p 0.95 / top_k 20
-> (0.6 for agentic coding), and its vision tower is Ornith-1.5's own — served
-> via the shared **`mmproj-BF16.gguf`** projector (original BF16, untouched by
-> quantization), not the Hermes projector.
-
-**Multimodal (images):** gemma-4 has a built-in vision encoder; qwen3.5/qwen3.6/
-tiel-coder use `mmproj-BF16.gguf` (auto-downloaded by `setup_models.bat` or
+**Multimodal (images):** gemma-4 has a built-in vision encoder; qwen3.5/qwen3.6
+use `mmproj-BF16.gguf` (auto-downloaded by `setup_models.bat` or
 pinned via `models.json` / `mmproj_filename`). Non-multimodal models fall back
 to the vision-agent/preprocessing path.
 

@@ -85,8 +85,6 @@ echo    5. qwen3.5:2b            Refiner
 echo    6. qwen3.5:4b-ud         Analyst/Critic/Speed
 echo    7. qwen3.5:9b-ud         Direct/Duo-Coder
 echo    8. hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact  Coder/Hermes (MoE+MTP)
-echo    9. tiel-coder:35b-a3b-mtp-compact   Tiel-Coder MTP-Compact (BoredLuzo, MoE+MTP)
-echo   10. tiel-coder:35b-a3b-mtp-apex      Tiel-Coder MTP-APEX (BoredLuzo, MoE+MTP)
 echo.
 set "MODELS_SEL="
 set /p "MODELS_SEL=Numbers: "

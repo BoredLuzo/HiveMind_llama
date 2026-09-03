@@ -431,9 +431,6 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
             "qwen35":    "mmprojqwen35",
             "hermes36":  "hermes36",
             "hermes":    "hermes",
-            # Tiel-Coder (2026-08-31): inherits Ornith-1.5 vision tower → uses the
-            # gemeinsame mmproj-BF16.gguf (gleiches File wie qwen3.6 vanilla).
-            "tiel-coder": "bf16",
         }
         _wanted = _MMPROJ_FILENAME_MATCH.get(base, "")
         for p in MODELS_DIR.rglob("*mmproj*.gguf"):
@@ -442,7 +439,7 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
                 return p
             if _wanted and _wanted in n:
                 return p
-        if base in ("qwen3.6", "hermes3.6", "tiel-coder"):
+        if base in ("qwen3.6", "hermes3.6"):
             for p in MODELS_DIR.rglob("*mmproj*.gguf"):
                 if "bf16" in p.name.lower().replace(".", ""):
                     return p

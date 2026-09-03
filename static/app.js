@@ -1700,7 +1700,7 @@ function renderAgentCards(agents) {
       var b = '';
       // VISION-FIX: badge only for verified vision capability (MODEL_PROFILES / /models),
       // plus name heuristic as fallback. Tooltip explains the meaning.
-      if (prof.vision || ['vl','llava','vision','moondream','minicpm','qwen3.5','qwen3.6','hermes3.6','hermes','gemma-4','tiel-coder'].some(function(v){return (activeModel||'').toLowerCase().includes(v);}))
+      if (prof.vision || ['vl','llava','vision','moondream','minicpm','qwen3.5','qwen3.6','hermes3.6','hermes','gemma-4'].some(function(v){return (activeModel||'').toLowerCase().includes(v);}))
         b += '<span title="Multimodal — processes images directly" style="font-size:8px;padding:1px 4px;border-radius:2px;background:rgba(136,88,192,.15);color:#8858c0;border:1px solid rgba(136,88,192,.3);margin-left:4px">VISION</span>';
       if (prof.thinking || /think|qwq|deepseek-r|qwen3\.5|qwen3:/i.test(activeModel||''))
         b += '<span style="font-size:8px;padding:1px 4px;border-radius:2px;background:rgba(72,120,192,.15);color:#4878c0;border:1px solid rgba(72,120,192,.3);margin-left:4px">THINK</span>';

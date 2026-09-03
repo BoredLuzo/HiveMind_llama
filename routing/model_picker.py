@@ -35,13 +35,12 @@ def _pick_direct_model(complexity: str, task_type: str, available: list) -> str:
             "qwen3.6:35b-a3b-ud", "qwen3.6:35b-a3b-uncensored",
             "hermes3.6:35b-a3b-uncensored-genesis-v7-mtp-apex-compact",
             "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact",
-            "tiel-coder:35b-a3b-ud",
             "gemma-4:e4b-it-obliterated", "gemma-4:e4b-it-qat-ud",
         ]
         for cand in _vision_priority:
             if cand in available:
                 return cand
-        _multimodal_bases = ("qwen3.5", "qwen3.6", "hermes", "gemma-4", "tiel-coder")
+        _multimodal_bases = ("qwen3.5", "qwen3.6", "hermes", "gemma-4")
         for m in available:
             if m.split(":")[0] in _multimodal_bases:
                 return m
