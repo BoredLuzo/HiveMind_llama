@@ -99,7 +99,7 @@ from core.tool_executor import execute_tool_round, ToolExecHooks, ToolRoundState
 
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
-    DEFAULT_VRAM_BUDGET_GB, _READ_ONLY_KEYWORDS, RE_THINK_CLEANUP as _re_think_cleanup,
+    DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
     _run_parallel_pre_explore, _build_symbol_reference_hints,
@@ -476,6 +476,15 @@ async def _git_checkpoint_at_chunk_start(ctx, _ws_str: str, _di: int,
 
 def _ld_setter(src_line: int) -> None:
     logger.warning("[LD-SET] _loop_detected gesetzt bei Zeile %d", src_line)
+
+
+_READONLY_CODER_NOTE = (
+    "[READ-ONLY REQUEST — file tools are DISABLED]\n"
+    "Answer in plain text from the provided codebase context. If you would call a "
+    "tool, describe the outcome in text instead.\n"
+    "IMPORTANT: textual tool-call syntax will NOT be executed — never output "
+    "[TOOL_CALL] … [END_TOOL_CALL], edit_file<argkey>…, <function=…> or bare tool JSON."
+)
 
 
 async def run_code_duo(ctx):
@@ -2069,7 +2078,29 @@ async def run_code_duo(ctx):
                     f"Fix ALL listed issues. Write the complete corrected code."
                 )
 
-            if _subtasks:
+            # RO-DETECT (2026-09-03): decide BEFORE building coder messages.
+            # A read-only phrase (e.g. "DO NOT MODIFY") is often only a content
+            # constraint inside a real implementation task — in that case the tool
+            # round must stay ON. See is_read_only_request() in duo_helpers.py.
+            _read_only_task_request = is_read_only_request(ctx.user_input or "")
+            if _read_only_task_request:
+                # Read-only tasks run WITHOUT tools (see :2163) — never tell the
+                # coder to open with a tool call, and forbid textual tool-call
+                # syntax. Otherwise a tool-finetuned model free-styles
+                # "[TOOL_CALL] …"/"edit_file<argkey>…" that nothing parses.
+                _exec_header = _READONLY_CODER_NOTE
+                if _subtasks:
+                    _plan_preview = "\n".join(f"  {i+1}. {st}" for i, st in enumerate(_subtasks))
+                    _coder_input = (
+                        _exec_header + "\n" + _coder_input +
+                        f"\n\n[Plan — {len(_subtasks)} subtasks, current: {_di+1}/{_n_items}]:\n{_plan_preview}"
+                    )
+                elif _plan_thinking:
+                    _coder_input = (
+                        _exec_header + "\n" + _coder_input +
+                        f"\n\n[Plan Briefing — IMPLEMENT THIS]:\n{_plan_thinking}"
+                    )
+            elif _subtasks:
                 _exec_header = (
                     "[EXECUTION MODE — DO NOT CREATE YOUR OWN PLAN]\n"
                     "The plan below is ALREADY DECIDED. Your ONLY job is to implement it.\n"
@@ -2130,9 +2161,6 @@ async def run_code_duo(ctx):
             _tool_round_error_text = ""
 
             _file_written_prev = bool(_written_files)
-            _ui_lc = (ctx.user_input or "").lower()
-            # P2-7 FIX: Use module-level keyword tuple instead of inline duplication.
-            _read_only_task_request = any(_p in _ui_lc for _p in _READ_ONLY_KEYWORDS)
             _is_first_outer_round = (_di == 0 and not _subtasks) or (_subtasks and _di == 0 and not _done_tasks)
             _chunking_active = bool(_subtasks)
             _tool_round_base = (
@@ -2167,6 +2195,13 @@ async def run_code_duo(ctx):
                     "type": "status",
                     "content": "\U0001f512 Read-only request detected: using explore context without tool calls.",
                 })
+                # Last user message wins over any system "must call a tool" text.
+                try:
+                    _coder_msgs = _coder_msgs + [
+                        {"role": "user", "content": _READONLY_CODER_NOTE}
+                    ]
+                except Exception:
+                    pass
             _loop_detected = False
             if _is_tool_round:
                 _tm_what = (_subtask[:52] + '…') if _subtask and len(_subtask) > 52 else (_subtask or 'Writing code')
