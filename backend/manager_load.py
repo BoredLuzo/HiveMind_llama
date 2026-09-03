@@ -1128,11 +1128,11 @@ class LlamaLoadMixin:
         elif _model_base in ("qwen3.5", "qwen3.6", "qwen3.8"):
             # Bases — reasoning_effort-Steuerung (<|think_*|>), preserve_reasoning,
             # \n\n → KV-Cache/MTP-Draft-Gewinne) und message.reasoning-Extraktion.
-            # Fallback-Kette (Repo-relativ): v22.4 → Repo-Fallback qwen3.6_template.
+            # Fallback-Kette (Repo-relativ): v22.5 → Repo-Fallback qwen3.6_template.
             _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
-            _template_v24 = _templates_dir / "chat_template22.4.jinja"
-            if _template_v24.exists():
-                _template_path = _template_v24
+            _template_v25 = _templates_dir / "chat_template22.5.jinja"
+            if _template_v25.exists():
+                _template_path = _template_v25
             else:
                 _template_path = _templates_dir / "qwen3.6_chat_template.jinja"
             if _template_path.exists():
@@ -1140,9 +1140,9 @@ class LlamaLoadMixin:
                 logger.info(f"--chat-template-file: {_template_path}")
         if _model_base == "hermes3.6":
             _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
-            _template_v24h = _templates_dir / "chat_template22.4.jinja"
-            if _template_v24h.exists():
-                _template_path = _template_v24h
+            _template_v25h = _templates_dir / "chat_template22.5.jinja"
+            if _template_v25h.exists():
+                _template_path = _template_v25h
             else:
                 _template_path = _templates_dir / "qwen3.6_chat_template.jinja"
             if _template_path.exists():

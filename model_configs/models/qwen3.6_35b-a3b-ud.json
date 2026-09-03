@@ -10,7 +10,7 @@
   "num_ctx_analyst": 8192,
   "num_ctx_duo_coder": 16384,
   "num_ctx_vision": 8192,
-  "chat_template": "chat_template22.4.jinja",
+  "chat_template": "chat_template22.5.jinja",
   "jinja": true,
   "reasoning": "on",
   "distilled": false,

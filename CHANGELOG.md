@@ -5,6 +5,18 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.10] - 2026-09-04
+
+### Changed
+
+- **Chat template updated to qwen3.8-froggeric v22.5** (`model_configs/chat_template22.5.jinja`,
+  shipped under the versioned name so users can tell the template version at a glance). The
+  previous `model_configs/chat_template22.4.jinja` is removed; the per-model configs
+  (`qwen3.5_0.8b-ud`, `qwen3.5_2b`, `qwen3.5_4b-ud`, `qwen3.5_9b-ud`, `qwen3.6_35b-a3b-ud`)
+  and the `hermes3.6` code fallback (`backend/manager_load.py`) now point at
+  `chat_template22.5.jinja`, so qwen (3.5/3.6) and hermes3.6 all use the new template.
+  The repo fallback copy `model_configs/qwen3.6_chat_template.jinja` is kept in sync.
+
 ## [1.0.9] - 2026-09-03
 
 ### Added
