@@ -121,6 +121,28 @@ echo.
 echo  Target folder: %~dp0searxng-config
 echo  Port:          http://localhost:%HM_PORT%
 echo.
+REM SEED-TEMPLATES (2026-09-03): docker-compose.yml + settings.yml are
+REM gitignored (per-machine secret + port). A fresh clone has only the
+REM *.example files - seed the real ones from them before rewriting.
+if not exist "docker-compose.yml" (
+    if exist "docker-compose.yml.example" (
+        copy /y "docker-compose.yml.example" "docker-compose.yml" >nul
+        echo  [..] docker-compose.yml seeded from template.
+    ) else (
+        echo  [ERROR] docker-compose.yml.example missing - re-clone or restore it.
+        echo  Press any key to continue... & pause >nul & exit /b 1
+    )
+)
+if not exist "settings.yml" (
+    if exist "settings.yml.example" (
+        copy /y "settings.yml.example" "settings.yml" >nul
+        echo  [..] settings.yml seeded from template.
+    ) else (
+        echo  [ERROR] settings.yml.example missing - re-clone or restore it.
+        echo  Press any key to continue... & pause >nul & exit /b 1
+    )
+)
+echo.
 echo  [..] Generating secrets (compose + settings)...
 powershell -NoProfile -Command "$hex = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Max 16) }); foreach ($f in @('docker-compose.yml','settings.yml')) { $c=[System.IO.File]::ReadAllText($f); $c=$c -replace 'SEARXNG_SECRET=.*', ('SEARXNG_SECRET=' + $hex) -replace 'secret_key: \".*\"', ('secret_key: \"' + $hex + '\"'); [System.IO.File]::WriteAllText($f, $c) }"
 REM Adapt host port + SEARXNG_BASE_URL in docker-compose.yml
@@ -151,6 +173,13 @@ if errorlevel 2 (
     exit /b 0
 )
 echo.
+REM Seed gitignored runtime files from *.example templates if absent.
+if not exist "docker-compose.yml" (
+    if exist "docker-compose.yml.example" copy /y "docker-compose.yml.example" "docker-compose.yml" >nul
+)
+if not exist "settings.yml" (
+    if exist "settings.yml.example" copy /y "settings.yml.example" "settings.yml" >nul
+)
 docker start hivemind-searxng >nul 2>&1
 if errorlevel 1 (
     echo  [INFO] Container does not exist - creating it...
