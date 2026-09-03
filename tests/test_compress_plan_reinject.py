@@ -128,6 +128,49 @@ def test_reinject_in_fallback():
         fail("A2: anchor lost in the fallback", _summary_content[-200:])
 
 
+def test_empty_history_returns_triple():
+    # Regression (Run PacMan, 2026-09-03): after the first compression the
+    # message count can drop below keep_recent_msgs -> _older_msgs contains no
+    # assistant/tool content -> the early return used to hand back a 2-tuple
+    # `(messages, set())`, while duo_runner.py unpacks 3 values:
+    #   ValueError: not enough values to unpack (expected 3, got 2)
+    # -> [Tool round error] -> [AUTO-STOP] loop_detected.
+    class _NoCallClient:
+        async def post(self, url, json=None, timeout=None):
+            raise AssertionError("compression LLM call must be skipped on empty history")
+
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "Implement PacMan in logic.js"},
+        {"role": "user", "content": "[RUNTIME NOTICE] finish quickly"},
+    ]
+    result = asyncio.run(_compress_tool_context(
+        messages=msgs,
+        model="test-model", port=1, client=_NoCallClient(),
+        system_prompt="sys", original_task="Task X",
+        written_files=["logic.js"], done_tasks=[],
+        keep_recent_msgs=1,
+    ))
+    if isinstance(result, tuple) and len(result) == 3:
+        ok("E1: empty-history return is a 3-tuple (messages, condensed, usage)")
+    else:
+        fail("E1: expected 3-tuple, got", repr(result))
+    if result[0] is msgs:
+        ok("E2: messages returned unchanged (no compression applied)")
+    else:
+        fail("E2: messages were replaced", repr(result[0]))
+    if isinstance(result[1], set) and isinstance(result[2], dict):
+        ok("E3: condensed=set(), usage={}")
+    else:
+        fail("E3: wrong types for condensed/usage",
+             repr((result[1], result[2])))
+    try:
+        _m, _cf, _cu = result  # exact duo_runner.py:3132-style unpack
+        ok("E4: caller-style 3-way unpack does not raise")
+    except ValueError as _e:
+        fail("E4: unpack raised", str(_e))
+
+
 def test_validation_accepts_reinjected():
     # validation: a summary that (partially) contains the anchor is accepted.
     summary = ("State Reconstruction a.py: add and subtract implemented, router still "
@@ -247,6 +290,8 @@ def main():
     test_reinject_in_summary()
     print()
     test_reinject_in_fallback()
+    print()
+    test_empty_history_returns_triple()
     print()
     test_validation_accepts_reinjected()
     print("\n-- B: Stale-CTX-notice cleanup --")
