@@ -670,6 +670,20 @@ async def _startup():
 
     _init_extracted_modules()
 
+    # ─── Preset auto-load at startup (2026-09-03) ─────────────────────────
+    # The preset that was last explicitly Loaded is applied again so the full
+    # configuration (models incl. duo_planner_model + planner ctx, context,
+    # options, mode, prompts) survives a restart without a manual reload.
+    try:
+        _ap_name = str(settings.get("active_preset") or "").strip()
+        if _ap_name:
+            from routers.config import _apply_preset_internal as _ap_apply
+            if await _ap_apply(_ap_name, persist=True):
+                logger.info("[PRESET] startup auto-load: applied preset '%s'", _ap_name)
+            else:
+                logger.warning("[PRESET] startup auto-load: preset '%s' not found", _ap_name)
+    except Exception as _ap_err:
+        logger.warning("[PRESET] startup auto-load failed: %s", _ap_err)
 
     # ─── Cleanup stale ports from previous crashes ───
     try:

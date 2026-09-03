@@ -409,7 +409,12 @@ def _load_settings_from_disk() -> dict:
                 data["duo_test_feedback_chunk"] = bool(_legacy_tf)
             if "duo_test_feedback_final" not in data and _legacy_tf is not None:
                 data["duo_test_feedback_final"] = bool(_legacy_tf)
-            data["duo_planner_model"] = None
+            # duo_planner_model persists across restarts. (The forced None here
+            # wiped a user/preset-selected planner model on every reload —
+            # live: preset "1" Loaded hermes as planner model, after a restart
+            # the planner silently fell back to the coder model.)
+            if "duo_planner_model" not in data:
+                data["duo_planner_model"] = None
             # MIGRATION: moe_cpu_experts int (globaler Override) -> dict (per-Model)
             if not isinstance(data.get("moe_cpu_experts"), dict):
                 data["moe_cpu_experts"] = {}
