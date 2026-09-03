@@ -5,6 +5,56 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.9] - 2026-09-03
+
+### Added
+
+- **Server-side AUTO-SPLIT for oversized writes** (`tools/handlers/file_ops.py`):
+  when a single `write_file` / `edit_file` full-rewrite / `write_file_append`
+  call exceeds the per-call char limit, the leading chunk is written immediately
+  and the REMAINDER is cached server-side. The model finishes the file with one
+  tiny call `write_file_append(path, content="<AUTO_SPLIT_CONTINUE>")` — no
+  regeneration of the content, no "7-minute total loss" after an oversized call
+  is rejected. The previous existing-file full-rewrite error
+  (`EDIT_FILE_CONTENT_TOO_LARGE`) is replaced by this split. Pending entries
+  expire after 5 minutes; a stale/missing marker returns a clear fallback error.
+- **Active preset is auto-loaded at startup** (`server.py`): the preset that was
+  last explicitly Loaded is applied again on boot (`[PRESET] startup auto-load`),
+  so the full configuration — models incl. `duo_planner_model` + planner
+  context, options, mode, prompts — survives a restart without a manual reload.
+- **Read-only detection understands content constraints**
+  (`core/duo_helpers.py`): `is_read_only_request()` only treats a request as
+  read-only when a read-only phrase is present AND there is no (non-negated)
+  implementation intent. Phrases like "DO NOT MODIFY" inside a build task no
+  longer disable the tool round. In read-only / text mode the coder receives an
+  explicit note forbidding textual tool-call syntax (`[TOOL_CALL] …`,
+  `edit_file<argkey>…`).
+
+### Changed
+
+- **Coder WRITE RULES + dynamic char cap injected into the system prompt**
+  (`core/duo_runner.py`): the exact per-call limit (resolved via
+  `resolve_write_char_limits`, the same source the runtime tool check uses) and
+  the `<AUTO_SPLIT_CONTINUE>` continuation are spelled out before generation.
+- **Tool schemas advertise the write cap** (`tools/definitions.py`):
+  `maxLength: 20000` on the `content`/`edits` of `write_file`,
+  `write_file_append` and `edit_file`; descriptions document the AUTO-SPLIT
+  marker.
+- **`write_file_append` appends received content in one go**: no artificial
+  splitting that would force the model to re-send the same content.
+
+### Fixed
+
+- **Context compression crash** (`context/compression.py`): the empty-history
+  early return handed back a 2-tuple while the caller unpacks 3 →
+  `ValueError: not enough values to unpack (expected 3, got 2)` during the
+  second compression; the error was mis-stamped as `loop_detected` and
+  hard-stopped otherwise healthy runs. The early return now yields a 3-tuple.
+- **Planner model lost on every settings reload** (`settings.py`): the loader
+  forced `duo_planner_model = None` unconditionally, wiping a user/preset-
+  selected planner model on restart (the planner silently fell back to the
+  coder model). The stored value now persists across reloads and presets.
+
 ## [1.0.7] - 2026-09-02
 
 ### Added
@@ -290,9 +340,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   No model is loaded at boot that isn't needed immediately; prefetch without
   learned timing data (`prefetch_agent_avgs`) is off. Server-side
   `settings.get(..., True)` fallbacks aligned to `False`.
-- **Configs tab regrouped** (index.html): three semantic sections — "Modell-
-  Vorladen & VRAM" (Startup Preload, Keep-Alive/Pinning, Smart Preload),
-  "Lernen & Modell-Config" (Learning Preset Mode, Model Config), "System"
+- **Configs tab regrouped** (index.html): three semantic sections — "Model
+  Preload & VRAM" (Startup Preload, Keep-Alive/Pinning, Smart Preload),
+  "Learning & Model Config" (Learning Preset Mode, Model Config), "System"
   (Energy, Git Integration).
 - **Git single source of truth**: the duplicated Auto-Commit toggle in the
   Agents tab was removed; git config now lives only in the Configs tab. The
@@ -305,7 +355,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `duo_runtime_profile` stays `"balanced"` as the fixed backend default
   (still used for run timeouts / important-task escalation).
 - **Composer tool-status line removed** (index.html + app.js): the status text
-  above the input (e.g. "⇄ Code-Duo: coder tools off") is gone; the header
+  above the input (e.g. "⇄ Code Duo: coder tools off") is gone; the header
   Chat-Tools badge remains the single indicator.
 - `run.py`/UI default semantics for the four changed settings now read
   `=== true` instead of `!== false` so the new OFF default renders correctly.
@@ -333,7 +383,7 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   https://huggingface.co/LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V12-GGUF
 - **Hermes V12 default sampling = strict (producer recommendation)** — only
   `temperature` + `top_k` active; `top_p`/`min_p`/`presence_penalty`/
-  `repetition_penalty` disabled (Noise-Gate entfernt → stabil). The per-model
+  `repetition_penalty` disabled (noise gate removed → stable). The per-model
   `sampling` block overrides repeatable 1.05→1.0 from the model card.
 - **llama.cpp updater fix** (`deploy/fetch_llamacpp.py`): the nightly build is
   now resolved from the GitHub releases list by the HIGHEST `bXXXX` build

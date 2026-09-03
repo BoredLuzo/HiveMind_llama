@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 
 from . import _shared
 
@@ -22,6 +23,66 @@ _JSON_EDIT_KEY_OLD = ("old_str", "old_string", "search")
 
 from .linting import _auto_lint_result
 from .exec_tools import _stage_split
+
+# ── Server-side AUTO-SPLIT remainder store (2026-09-03) ───────────────────────
+# When a single write_file / edit_file / write_file_append call exceeds the
+# per-call char limit, the leading chunk is written immediately and the
+# REMAINDER is cached here. The model only sends a tiny continuation marker
+# (content="<AUTO_SPLIT_CONTINUE>") and the rest is appended server-side - no
+# regeneration / reproduction of the big content, no 7-minute total loss.
+AUTO_SPLIT_CONTINUE_MARKER = "<AUTO_SPLIT_CONTINUE>"
+_PENDING_TTL_S = 300.0          # 5 minutes
+_PENDING_MAX_ENTRIES = 8
+_PENDING_MAX_CHARS = 250_000
+_pending_splits: dict[str, dict] = {}
+
+
+def _prune_pending_splits() -> None:
+    _now = time.time()
+    for _k in [k for k, _v in _pending_splits.items()
+               if (_now - float(_v.get("ts", 0.0))) > _PENDING_TTL_S]:
+        _pending_splits.pop(_k, None)
+
+
+def _store_pending_remainder(path: str, content: str, written_chars: int) -> None:
+    _prune_pending_splits()
+    while len(_pending_splits) >= _PENDING_MAX_ENTRIES:
+        _oldest = min(_pending_splits, key=lambda k: float(_pending_splits[k].get("ts", 0.0)))
+        _pending_splits.pop(_oldest, None)
+    _remainder = str(content)[written_chars:]
+    if len(_remainder) > _PENDING_MAX_CHARS:
+        _remainder = _remainder[:_PENDING_MAX_CHARS]
+    _pending_splits[path] = {
+        "content": _remainder,
+        "ts": time.time(),
+        "total": len(content),
+    }
+
+
+def _auto_split_instr(path, written_chars: int, total_chars: int) -> str:
+    _remaining = max(0, total_chars - written_chars)
+    return (
+        f"[AUTO-SPLIT] '{path}' got the FIRST {written_chars} of {total_chars} chars. "
+        f"REMAINING {_remaining} chars are stored server-side.\n"
+        f"Call NOW: write_file_append(path, content=\"{AUTO_SPLIT_CONTINUE_MARKER}\") "
+        f"to write the rest automatically - do NOT resend the content."
+    )
+
+
+def _atomic_write_text(p: Path, text: str) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+    try:
+        with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
+            _f.write(text)
+        os.replace(_tmp_path, str(p))
+    except Exception:
+        try:
+            os.unlink(_tmp_path)
+        except Exception:
+            pass
+        raise
+
 
 async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
     p = _inline_resolve_path(workspace, args.get("path", ""))
@@ -125,42 +186,65 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     p = _inline_resolve_path(workspace, args.get("path", ""))
     if err := _inline_check_workspace(p, workspace_lock, "write_file_append"):
         return err
-    content = args.get("content", "")
+    content = str(args.get("content", ""))
     get_transaction().capture_before(p)
-    # ── Model-dependent chunk limit (same tier as write_file) ──
-    # LIMITS-RAISE (2026-08-22): 8000→16000 (14b+), 5000→8000, 3500→5000, 2500→3500.
-    # cut off at the output limit. Now: tier limit MINUS token-budget cap
-    # (duo_runner passes budget + factor via _set_write_budget).
-    try:
-        from utils.tool import resolve_write_char_limits as _resolve_limits
-        from tools.runner import _get_write_budget as _get_wb
-        _wb = _get_wb() or (None, None)
-        _, _append_limit = _resolve_limits(args.get("__model__", ""), *_wb)
-    except Exception:
-        _append_limit = 3500
-    if len(content) > _append_limit:
-        part1, rest_at = _stage_split(content, _append_limit)
-        remaining = len(content) - rest_at
-        _anchor = part1.rstrip()[-80:].replace("\n", "\\n")
-        content = part1
-    else:
-        remaining = 0
-        _anchor = ""
+
+    # ── AUTO-SPLIT continuation marker ──
+    # The remainder of an oversized write_file/edit_file call is stored
+    # server-side (see AUTO_SPLIT_CONTINUE_MARKER). This marker appends it in
+    # one go without the model re-sending the big content.
+    if content.strip() == AUTO_SPLIT_CONTINUE_MARKER:
+        _prune_pending_splits()
+        _entry = _pending_splits.pop(str(p), None)
+        if not _entry:
+            return _tool_error_response(
+                "AUTO_SPLIT_NO_PENDING",
+                f"[AUTO-SPLIT] No pending remainder found for '{p}'. The file may only contain "
+                "the first chunk. Resend the full content (write_file + write_file_append) or "
+                "use edit_file with SEARCH/REPLACE blocks.",
+                tool="write_file_append")
+        _rest = str(_entry.get("content", ""))
+        if not _rest:
+            return _tool_error_response(
+                "AUTO_SPLIT_NO_PENDING",
+                f"[AUTO-SPLIT] Pending remainder for '{p}' is empty.",
+                tool="write_file_append")
+        try:
+            def _drain() -> int:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                with open(p, "a", encoding="utf-8", newline="") as f:
+                    f.write(_rest)
+                return p.stat().st_size
+            _total = await asyncio.to_thread(_drain)
+        except Exception as e:
+            return _tool_error_response(
+                "WRITE_FILE_APPEND_FAILED",
+                f"write_file_append (AUTO-SPLIT drain) failed for '{p}': {e}",
+                tool="write_file_append")
+        _lines = _rest.count("\n") + 1
+        return (f"[AUTO-SPLIT-DONE] '{p}' completed: +{_lines} lines, "
+                f"{_total} bytes total (full content written).")
+
+    if not content:
+        return _tool_error_response(
+            "EDIT_FILE_EMPTY_EDITS",
+            "write_file_append requires non-empty content.",
+            tool="write_file_append")
+
+    # Normal append: the content already arrived in full, so append it in one
+    # go (no artificial chunking - splitting would only force the model to
+    # regenerate the same content again).
     try:
         def _append_and_size() -> int:
             p.parent.mkdir(parents=True, exist_ok=True)
-            with open(p, "a", encoding="utf-8") as f:
+            with open(p, "a", encoding="utf-8", newline="") as f:
                 f.write(content)
             return p.stat().st_size
 
         total = await asyncio.to_thread(_append_and_size)
         lines = content.count("\n") + 1
-        base = f"[Appended: {p} (+{lines} lines, total {total} bytes)]"
-        if remaining > 0:
-            return (f"{base} [AUTO-SPLIT] REMAINING {remaining} chars NOT written yet. "
-                    f"Call write_file_append again, resuming directly after anchor: ...{_anchor}")
         _lint = await _auto_lint_result(p, workspace)
-        return f"{base}{_lint}"
+        return f"[Appended: {p} (+{lines} lines, total {total} bytes)]{_lint}"
     except Exception as e:
         return _tool_error_response(
             "WRITE_FILE_APPEND_FAILED",
@@ -354,28 +438,9 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
         content = edits_raw
         if len(content) > _wf_limit:
             part1, rest_at = _stage_split(content, _wf_limit)
-            remaining = len(content) - rest_at
-
-            def _write_part() -> None:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
-                try:
-                    with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                        _f.write(part1)
-                    os.replace(_tmp_path, str(p))
-                except Exception:
-                    try: os.unlink(_tmp_path)
-                    except Exception: pass
-                    raise
-
-            await asyncio.to_thread(_write_part)
-            _anchor = part1.rstrip()[-80:].replace("\n", "\\n")
-            return (
-                f"[{_display_tool}: AUTO-SPLIT] created '{p}' with the FIRST {len(part1)} chars. "
-                f"REMAINING {remaining} chars are NOT written yet.\n"
-                f"Continue NOW: call write_file_append with the remaining content, "
-                f"resuming directly after anchor: ...{_anchor}"
-            )
+            await asyncio.to_thread(_atomic_write_text, p, part1)
+            _store_pending_remainder(str(p), content, rest_at)
+            return _auto_split_instr(p, len(part1), len(content))
         try:
             def _write_new() -> None:
                 p.parent.mkdir(parents=True, exist_ok=True)
@@ -432,14 +497,16 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
                 )
             content_new = edits_raw
             if len(content_new) > _wf_limit:
-                lines = content_new.count("\n") + 1
-                _chunk = 60 if _wf_limit <= 3500 else 120
-                return _tool_error_response(
-                    "EDIT_FILE_CONTENT_TOO_LARGE",
-                    f"Content too large for full rewrite ({len(content_new)} chars, {lines} lines). "
-                    f"Max {_wf_limit} chars. Use SEARCH/REPLACE blocks for partial edits, or split with write_file_append.",
-                    tool=_display_tool ,
-                    details={"max_chars": _wf_limit, "lines": lines, "suggested_chunk_lines": _chunk})
+                # AUTO-SPLIT (2026-09-03): an oversized full rewrite of an EXISTING
+                # file used to be rejected AFTER the model had already generated
+                # the whole content (7-minute total loss). Now the first chunk is
+                # written immediately and the remainder is cached server-side; a
+                # tiny write_file_append(path, content="<AUTO_SPLIT_CONTINUE>")
+                # finishes the file without any regeneration.
+                part1, rest_at = _stage_split(content_new, _wf_limit)
+                await asyncio.to_thread(_atomic_write_text, p, part1)
+                _store_pending_remainder(str(p), content_new, rest_at)
+                return _auto_split_instr(p, len(part1), len(content_new))
             if content_new.replace("\r\n", "\n").strip() == str(content or "").replace("\r\n", "\n").strip():
                 return _tool_error_response(
                     "EDIT_FILE_NOOP",
