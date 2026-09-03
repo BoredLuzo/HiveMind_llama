@@ -39,16 +39,20 @@ def _preset_snapshot() -> dict:
         if key in _PRESET_NEVER_KEYS:
             continue
         snap[key] = copy.deepcopy(value)
-    snap["agents"] = {
-        k: {
-            "model": a.model,
-            "temperature": a.temperature,
-            "max_tokens": a.max_tokens,
-            "thinking": bool(getattr(a, "thinking", False)),
-            "thinking_budget": int(getattr(a, "thinking_budget", 0) or 0),
-        }
-        for k, a in _state.pipeline.agents.items()
-    } if _state.pipeline else {}
+    # Agent-Karten: keep every stored per-agent field (model, temperature,
+    # max_tokens, thinking, thinking_budget, plus any extra keys a preset may
+    # carry) and overlay the LIVE pipeline values so a just-changed card
+    # setting is what gets persisted.
+    _ag_snap = copy.deepcopy(settings.get("agents") or {})
+    if _state.pipeline:
+        for k, a in _state.pipeline.agents.items():
+            _entry = _ag_snap.setdefault(k, {})
+            _entry["model"] = a.model
+            _entry["temperature"] = a.temperature
+            _entry["max_tokens"] = a.max_tokens
+            _entry["thinking"] = bool(getattr(a, "thinking", False))
+            _entry["thinking_budget"] = int(getattr(a, "thinking_budget", 0) or 0)
+    snap["agents"] = _ag_snap
     snap["prompts"] = {}
     return snap
 
