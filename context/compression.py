@@ -244,7 +244,7 @@ async def _compress_tool_context(
             _history_text.append(f"[{role.upper()}]: {content[:_limit]}")
 
     if not _history_text:
-        return messages, set()
+        return messages, set(), {}
 
     _compress_prompt = (
         f"Summarize the following coding session for context compression.\n\n"
