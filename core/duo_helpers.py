@@ -17,6 +17,59 @@ _READ_ONLY_KEYWORDS = (
     "nur lesen", "keine aenderung", "keine änderung",
 )
 
+# A read-only phrase alone is NOT enough: the same wording is frequently used as
+# a *content constraint* inside a real implementation request (observed live:
+# "## CRITICAL – MAZE DATA (GROUND TRUTH – DO NOT MODIFY)" inside a
+# "Create a fully playable Pac-Man game …" task). Those tasks disabled the tool
+# round, and a tool-finetuned model (hermes v12) then free-styled textual tool
+# calls ([TOOL_CALL] …, edit_file<argkey>…) that nothing ever executes.
+# Implementation-intent verbs therefore override the read-only classification.
+_IMPL_OVERRIDE_RE = re.compile(
+    r"\b(?:create|build|write|implement(?:ed|ation)?|fix(?:es|ing)?|"
+    r"generate|develop|refactor|produce|patch|"
+    r"schreib\w*|erstell\w*|bau\w*|implementier\w*|programmier\w*|"
+    r"entwickel\w*|erzeug\w*|korrigier\w*|verbesser\w*)\b",
+    re.IGNORECASE,
+)
+
+# Verbs negated directly before/after ("aendere nichts", "nicht aendern",
+# "fix nothing") must not count as implementation intent.
+_NEGATOR_RE = re.compile(
+    r"(?:nicht|nichts|niemals|nie\b|kein\w*|never|not\b|no\b|don'?t|dont|"
+    r"ohne\b|weder\b|never)",
+    re.IGNORECASE,
+)
+
+
+def _impl_negated(low: str, s: int, e: int) -> bool:
+    _before = low[max(0, s - 28):s]
+    _after = low[e:e + 28]
+    if _NEGATOR_RE.search(_before):
+        return True
+    return bool(_NEGATOR_RE.search(_after))
+
+
+def is_read_only_request(text: str) -> bool:
+    """True only when a read-only phrase is present AND there is no
+    (non-negated) implementation intent in the request."""
+    if not text:
+        return False
+    _low = text.lower()
+    if not any(_k in _low for _k in _READ_ONLY_KEYWORDS):
+        return False
+    _scan = _low
+    for _k in _READ_ONLY_KEYWORDS:
+        _scan = _scan.replace(_k, " ")
+    _pos = 0
+    while True:
+        _m = _IMPL_OVERRIDE_RE.search(_scan, _pos)
+        if not _m:
+            return True
+        if _impl_negated(_scan, _m.start(), _m.end()):
+            _pos = _m.end()
+            continue
+        return False
+
 RE_THINK_CLEANUP = re.compile(r"<think[^>]*>[\s\S]*?</think(?:ing)?>", re.DOTALL)
 
 _RE_THINK_TOOL = re.compile(
