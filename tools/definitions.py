@@ -151,7 +151,7 @@ _INLINE_CODING_TOOLS = [
         ),
         "parameters": {"type": "object", "properties": {
             "path":  {"type": "string", "description": "File path"},
-            "edits": {"type": "string", "description": (
+            "edits": {"type": "string", "maxLength": 20000, "description": (
                 "One or more SEARCH/REPLACE blocks (plain text markers, NOT JSON)."
             )}
         }, "required": ["path", "edits"]}
@@ -177,12 +177,13 @@ _INLINE_CODING_TOOLS = [
             "Pass the COMPLETE plain content — no SEARCH/REPLACE markers (that is edit_file's format).\n"
             "WRONG: using write_file to change an existing file — it overwrites the whole file; "
             "use edit_file or patch_file instead.\n"
-            "For very large files: write the FIRST part here, then continue with write_file_append "
-            "(stay within your OUTPUT-BUDGET hint per call)."
+            "For files larger than ~20000 chars: write the FIRST part here, then finish with "
+            "write_file_append(path, content=\"<AUTO_SPLIT_CONTINUE>\") — the remainder is stored "
+            "server-side; never resend the whole content."
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path"},
-            "content": {"type": "string", "description": "Complete file content as plain text — no SEARCH/REPLACE markers"}
+            "content": {"type": "string", "maxLength": 20000, "description": "Complete file content as plain text — no SEARCH/REPLACE markers. Max ~20000 chars per call."}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {
@@ -241,12 +242,13 @@ _INLINE_CODING_TOOLS = [
             "ONLY valid as a follow-up in the SAME write sequence that created/last touched the file.\n"
             "CORRECT sequence: write_file(path, part1) -> write_file_append(path, part2) -> write_file_append(path, part3).\n"
             "WRONG: append before the file exists, or append to an unrelated file.\n"
-            "Stay within your OUTPUT-BUDGET hint per call; prefer several smaller appends over one "
-            "near-limit call — a call cut off by the output token limit is discarded ENTIRELY."
+            "Each call holds at most ~20000 chars. For AUTO-SPLIT follow-ups send only "
+            "content=\"<AUTO_SPLIT_CONTINUE>\" — the remainder is stored server-side and will be "
+            "appended automatically; never resend the content."
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path (must already exist)"},
-            "content": {"type": "string", "description": "Content chunk to append"}
+            "content": {"type": "string", "maxLength": 20000, "description": "Content chunk to append. For AUTO-SPLIT continuation use exactly \"<AUTO_SPLIT_CONTINUE>\"."}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {

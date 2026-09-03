@@ -1423,19 +1423,36 @@ async def run_code_duo(ctx):
         if _follow_up_hint:
             _duo_coder_sys += "\n\n" + _follow_up_hint
 
-        # Writes were being truncated by the token limit. Instruct proactively:
-        # from the budget boundary use write_file + write_file_append.
+        # Writes were being truncated by the token limit or rejected as too large
+        # AFTER full generation (7-minute total loss). Instruct proactively with
+        # an exact per-call char cap (same source as the runtime tool check:
+        # resolve_write_char_limits) plus the server-side AUTO-SPLIT continuation.
         try:
             _wb_hint_budget = max(1024, int(_duo_coder_tok))
             _wb_hint_cpt = float(ctx.settings.get("duo_write_chars_per_token", 2.5))
-            _wb_hint_safe = max(500, int(_wb_hint_budget * _wb_hint_cpt) - 2000)
+            _wb_limit = 20000
+            try:
+                from utils.tool import resolve_write_char_limits as _wcl
+                _wb_limit = int((_wcl(exec_mdl, _wb_hint_budget, _wb_hint_cpt) or (20000, 20000))[0] or _wb_limit)
+            except Exception:
+                pass
+            _wb_hint_safe = max(2000, int(_wb_limit) - 1000)
             _duo_coder_sys += (
-                f"\n\nOUTPUT BUDGET: max {_wb_hint_budget} tokens per answer. "
-                f"If you expect more than ~{_wb_hint_safe} characters of content "
-                f"for a write_file call, ALWAYS write incrementally: write_file with "
-                f"the first part, then write_file_append for each further part "
-                f"(each part well below ~{_wb_hint_safe} characters). An oversized "
-                f"single call will be cut off at the token limit and discarded entirely."
+                f"\n\nWRITE RULES (hard limits):\n"
+                f"- write_file / write_file_append / edit_file full-rewrite accept at "
+                f"most ~{_wb_limit} characters per call.\n"
+                f"- If the target file already exists, NEVER overwrite it with the full "
+                f"content in a single write_file call. First read_file it, then use "
+                f"edit_file SEARCH/REPLACE blocks for partial changes. Full rebuilds via "
+                f"write_file are only for NEW files.\n"
+                f"- If a file needs more than ~{_wb_limit} chars: write_file with the "
+                f"first part, then write_file_append for each further part (each chunk "
+                f"well below ~{_wb_hint_safe} chars).\n"
+                f"- If a call is auto-split the harness replies [AUTO-SPLIT]: the "
+                f"remainder is stored server-side. Finish it with one SHORT call:\n"
+                f"  write_file_append(path, content=\"<AUTO_SPLIT_CONTINUE>\")\n"
+                f"  Never resend the content - an oversized single call wastes minutes "
+                f"and is split/rejected."
             )
         except Exception:
             pass
