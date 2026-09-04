@@ -1,7 +1,7 @@
 """Insight-Extractor (aus server.py extrahiert)."""
 from __future__ import annotations
 
-import asyncio, json, logging, re
+import asyncio, ctypes, json, logging, re, sys
 
 logger = logging.getLogger("hivemind.insights")
 
@@ -9,6 +9,86 @@ _bg_insight_sem: asyncio.Semaphore | None = None
 _registry_get: callable | None = None
 _pipeline: object | None = None
 _memory: object | None = None
+
+# POST-RUN-GUARD (2026-09-04): Nach langen Runs ist der Arbeitsspeicher durch
+# den (mlock) evicted Big-Model oft noch nicht wieder frei (live: ram_free 1.4GB
+# -> lfm2.5 llama-server hing 240s im Startup und der InsightExtractor wartete
+# in den Leerlauf). Unterhalb dieser Schwelle wird die Extraktion/Destillation
+# uebersprungen statt ein neues Modell in knappem RAM zu laden.
+_INSIGHT_MIN_RAM_GB = 3.5
+
+
+def _available_ram_gb() -> float | None:
+    """Verfuegbarer physischer RAM in GB (Windows via GlobalMemoryStatusEx,
+    Linux via /proc/meminfo). None wenn nicht bestimmbar."""
+    try:
+        if sys.platform == "win32":
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            _m = _MEMORYSTATUSEX()
+            _m.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(_m)):
+                return _m.ullAvailPhys / (1024.0 ** 3)
+            return None
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as _fh:
+                for _line in _fh:
+                    if _line.startswith("MemAvailable:"):
+                        return int(_line.split()[1]) / 1048576.0
+        except Exception:
+            pass
+        return None
+    except Exception:
+        return None
+
+
+def _loaded_model_name() -> str | None:
+    """Erstes aktuell geladenes llama-Modell (kein neuer Load noetig)."""
+    try:
+        from backend.llama_server_manager import manager as _lsm
+        for _s in (getattr(_lsm, "_slots", None) or []):
+            _m = str(getattr(_s, "model", "") or "").strip()
+            if _m:
+                return _m
+    except Exception:
+        pass
+    return None
+
+
+def _low_ram_skip() -> bool:
+    """True wenn zu wenig RAM fuer EINEN ZUSAETZLICHEN Load frei ist UND kein
+    Modell bereits geladen ist (dann wird das warme Modell weitergenutzt).
+
+    Live-Befund: nach langen Runs haelt der evicted Big-Model (mlock) den RAM
+    noch ~17GB -> ein neuer lfm2.5-Load hing 240s und der InsightExtractor
+    blockierte den Leerlauf.
+    """
+    try:
+        _avail = _available_ram_gb()
+        if _avail is None:
+            return False
+        if _avail < _INSIGHT_MIN_RAM_GB:
+            if _loaded_model_name():
+                return False  # warmes Modell nutzen, kein Zusatz-Load
+            logger.info(
+                "[InsightExtractor] Skipped - low RAM (%.1f GB available) and no model loaded",
+                _avail,
+            )
+            return True
+    except Exception:
+        pass
+    return False
+
 
 def init_insights(insight_sem=None, registry_get_fn=None, pipeline_obj=None, memory_obj=None):
     global _bg_insight_sem, _registry_get, _pipeline, _memory
@@ -20,6 +100,7 @@ def init_insights(insight_sem=None, registry_get_fn=None, pipeline_obj=None, mem
         _pipeline = pipeline_obj
     if memory_obj:
         _memory = memory_obj
+
 
 async def _run_insight_extractor(
     task: str,
@@ -37,6 +118,9 @@ async def _run_insight_extractor(
         return
     # Use own semaphore — independent from peer ratings
     if _bg_insight_sem.locked():
+        return
+    # POST-RUN-GUARD: kein neues Modell in knappem RAM laden (sonst 240s-Stall)
+    if _low_ram_skip():
         return
 
     try:
@@ -60,6 +144,14 @@ async def _run_insight_extractor(
     _extractor_model = _registry_get("judge") or _registry_get("analyst") or _registry_get("refiner")
     if not _extractor_model:
         return
+    # POST-RUN-GUARD: bei knappem RAM das bereits geladene (warme) Modell
+    # weiternutzen statt ein neues zu laden (verhindert den 240s-Stall).
+    _avail_gb = _available_ram_gb()
+    if _avail_gb is not None and _avail_gb < _INSIGHT_MIN_RAM_GB:
+        _warm = _loaded_model_name()
+        if _warm:
+            _extractor_model = _warm
+            logger.debug("[InsightExtractor] Low RAM (%.1f GB) - reusing loaded model %s", _avail_gb, _warm)
 
     async with _bg_insight_sem:
         try:
@@ -166,6 +258,9 @@ async def _run_skill_distillation(workspace: str):
 
     if not _memory or not _pipeline or not _registry_get:
         return
+    # POST-RUN-GUARD: kein neues Modell in knappem RAM laden (sonst 240s-Stall)
+    if _low_ram_skip():
+        return
     from hive_functions.skills import select_skill_candidates, skill_file_exists, write_skill_md
     try:
         from hive_functions.prompts import SKILL_DISTILLER
@@ -191,6 +286,14 @@ async def _run_skill_distillation(workspace: str):
     _distiller_model = _registry_get("judge") or _registry_get("analyst") or _registry_get("refiner")
     if not _distiller_model:
         return
+    # POST-RUN-GUARD: bei knappem RAM das bereits geladene (warme) Modell
+    # weiternutzen statt ein neues zu laden (verhindert den 240s-Stall).
+    _avail_gb = _available_ram_gb()
+    if _avail_gb is not None and _avail_gb < _INSIGHT_MIN_RAM_GB:
+        _warm = _loaded_model_name()
+        if _warm:
+            _distiller_model = _warm
+            logger.debug("[SkillDistillation] Low RAM (%.1f GB) - reusing loaded model %s", _avail_gb, _warm)
 
     for _cand in _candidates:
         _slug = _slugify(str(_cand.get("insight", "")) or "")

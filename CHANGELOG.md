@@ -63,6 +63,10 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Preset coder context no longer resets to the safe-profile default after a page reload.
 - Long runs at high context no longer degrade into per-round full re-prefills
   (`[CACHE-MISS]` / `[MSGSIG-CHANGE]` churn) in the cache-friendly mode.
+- Post-run insight extraction / skill distillation no longer stalls up to 240 s by loading a
+  new small model while the evicted big model still holds RAM (`learning/insights.py`): when
+  available RAM is low the currently loaded model is reused instead, and extraction is skipped
+  entirely if no model is loaded.
 
 ## [1.0.10] - 2026-09-04
 
