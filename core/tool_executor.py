@@ -145,6 +145,68 @@ def _cap_tool_result(result: str, max_chars: int = 8000) -> str:
     )
 
 
+# CONTEXT-COMPACTION (2026-09-04): erfolgreich ausgeführte riesige
+# write/edit-Tool-Calls tragen ihren kompletten Content (~20-30k chars) als
+# function.arguments in der History. Diese Message war noch nie Teil eines
+# gesendeten Prompts (sie ist die Completion der letzten Runde), also wird sie
+# direkt nach Erfolg auf einen kleinen, aussagekräftigen Stub gekuerzt - der
+# Kontext bleibt klein, der llama.cpp Prefix-Cache wird NICHT invalidiert.
+_WRITE_ARG_COMPACT_MIN = 12000
+_WRITE_ARG_COMPACT_NAMES = {
+    "write_file", "write_file_append", "edit_file",
+    "patch_file", "replace_lines",
+}
+
+
+def _args_str_len(raw_args) -> int:
+    if isinstance(raw_args, str):
+        return len(raw_args)
+    try:
+        return len(json.dumps(raw_args or {}, ensure_ascii=False))
+    except Exception:
+        return 0
+
+
+def _compact_round_write_args(messages, assistant_idx, call, dname, raw_args, dargs) -> int:
+    """Kuerzt die arguments eines erfolgreich ausgeführten grossen Write-Calls.
+
+    Macht NUR den assistant-Eintrag dieser Runde kleiner (noch nie als Prompt
+    gesendet -> cache-schonend). Der Stub behaelt path + eine kurze Referenz
+    (arg chars + sha1-Prefix), damit undo/diff/Referenzchecks ohne den vollen
+    Content moeglich bleiben. Returns Anzahl gekuerzter Eintraege.
+    """
+    if not (dname in _WRITE_ARG_COMPACT_NAMES and messages and 0 <= int(assistant_idx) < len(messages)):
+        return 0
+    _alen = _args_str_len(raw_args)
+    if _alen < _WRITE_ARG_COMPACT_MIN:
+        return 0
+    _msg = messages[int(assistant_idx)]
+    _tcs = _msg.get("tool_calls") or []
+    if not _tcs:
+        return 0
+    try:
+        _raw_s = raw_args if isinstance(raw_args, str) else json.dumps(raw_args or {}, ensure_ascii=False)
+        _dig = hashlib.md5(_raw_s.encode("utf-8", "ignore")).hexdigest()[:8]
+    except Exception:
+        _dig = "?"
+    _path = str((dargs or {}).get("path", "") or "")
+    _stub = json.dumps({
+        "path": _path,
+        "content": f"[executed {dname}: {_alen} arg chars (sha {_dig}) - "
+                   "content written; use read_file to inspect]",
+    }, ensure_ascii=False)
+    _cid = (call or {}).get("id")
+    for _tc in _tcs:
+        if _cid and _tc.get("id") == _cid:
+            _fn = _tc.setdefault("function", {})
+            if not isinstance(_fn, dict):
+                _fn = {}
+                _tc["function"] = _fn
+            _fn["arguments"] = _stub
+            return 1
+    return 0
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Main entry point
 # ═══════════════════════════════════════════════════════════════════════════
@@ -188,6 +250,14 @@ async def execute_tool_round(
     _total_tool_errors = trs.total_tool_errors
     _ws_root = Path(workspace_lock) if workspace_lock else Path(os.environ.get("HIVEMIND_WORKSPACE", "."))
     _is_git_repo = (_ws_root / ".git").exists()
+
+    # CONTEXT-COMPACTION: assistant-Message dieser Runde (letzte mit tool_calls)
+    # - noch nie als Prompt gesendet, daher sicher direkt nach Erfolg zu kuerzen.
+    _assistant_idx = -1
+    for _ai in range(len(dtool_msgs) - 1, -1, -1):
+        if dtool_msgs[_ai].get("role") == "assistant" and dtool_msgs[_ai].get("tool_calls"):
+            _assistant_idx = _ai
+            break
 
     _pre_results: dict[int, str] = await _prefetch_readonly_tools(
         tool_calls, exec_model, workspace_lock, tool_mode, duo_ws)
@@ -585,6 +655,14 @@ async def execute_tool_round(
                         _dname, _evicted_stale, _focus_path)
             except Exception as _ev_stale_err:
                 _logger.debug("[LRU-STALE] invalidation failed: %s", _ev_stale_err)
+            # CONTEXT-COMPACTION: riesige args dieser Runde nach Erfolg kuerzen
+            # (noch nie als Prompt gesendet -> cache-schonend, spart Kontext).
+            _saved_chars = _args_str_len(_raw_args)
+            if _compact_round_write_args(dtool_msgs, _assistant_idx, _dtc_call, _dname, _raw_args, _dargs):
+                _logger.info(
+                    "[ARG-COMPACT] %s args compacted to stub after success "
+                    "(focus=%s, saved_chars=%d)",
+                    _dname, _focus_path, _saved_chars)
         # ── Context LRU registration ──
         _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult,
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)

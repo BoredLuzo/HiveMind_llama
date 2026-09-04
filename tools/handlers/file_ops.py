@@ -132,18 +132,98 @@ def _atomic_write_text(p: Path, text: str) -> None:
         raise
 
 
+def _read_binary_error(p) -> str:
+    """READ-FIX helper: konsistente Binary-Fehlerantwort (sys.platform-aware)."""
+    _inspect_hint = (
+        "Use run_bash with 'Get-Content -Encoding Byte {p} | Select-Object -First 64' "
+        "to inspect binary content."
+        if sys.platform == "win32"
+        else "Use run_bash with 'file {p}' to identify the file type, "
+             "or 'xxd {p} | head' to inspect binary content."
+    )
+    return _tool_error_response(
+        "BINARY_FILE",
+        f"'{p}' appears to be a binary file (image, compiled binary, archive, etc.) "
+        "and cannot be read as text. "
+        + _inspect_hint,
+        tool="read_file")
+
+
+def _read_head_bytes(p: Path, n: int = 1024) -> bytes:
+    """READ-FIX helper: liest nur den Dateianfang (kein Voll-Read)."""
+    try:
+        with open(p, "rb") as f:
+            return f.read(n)
+    except Exception:
+        return b""
+
+
+def _looks_binary_bytes(b: bytes) -> bool:
+    """READ-FIX helper: Binary-Sniff auf Bytes (NUL + Steuerzeichen)."""
+    if not b:
+        return False
+    _binary = sum(1 for c in b if c == 0 or (c < 32 and c not in (10, 13, 9)))
+    return (_binary / len(b)) > 0.10
+
+
+def _fast_newline_count(p: Path, cap: int = 401) -> tuple:
+    """READ-FIX helper: gestreamter Newline-Count.
+
+    Bricht bei cap ab -> liefert (cap, True). Liefert (count, False) sonst.
+    Verhindert, dass eine grosse Datei nur zum Zaehlen komplett als String+Liste
+    in den Speicher geladen wird.
+    """
+    _count = 0
+    try:
+        with open(p, "rb") as f:
+            while True:
+                _chunk = f.read(1 << 16)
+                if not _chunk:
+                    break
+                _count += _chunk.count(b"\n")
+                if _count >= cap:
+                    return cap, True
+    except Exception:
+        return 0, False
+    return _count, False
+
+
 async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
     p = _inline_resolve_path(workspace, args.get("path", ""))
     if err := _inline_check_workspace(p, workspace_lock, "read_file"):
         return err
     start_line = args.get("start_line")
     end_line = args.get("end_line")
+    _full = start_line is None and end_line is None
     try:
+        # READ-EARLY-ABORT (2026-09-04): bei Voll-Reads (kein Range) wird eine
+        # grosse Datei NICHT mehr komplett eingelesen, nur um sie dann als "too
+        # large" abzulehnen. Staette dessen: billiger Binary-Sniff am Anfang +
+        # gestreamter Newline-Count (bricht bei Zeile 401 ab).
+        if _full:
+            _head = await asyncio.to_thread(_read_head_bytes, p, 1024)
+            if _looks_binary_bytes(_head):
+                return _read_binary_error(p)
+            _nl, _capped = await asyncio.to_thread(_fast_newline_count, p, 401)
+            if _nl > 400:
+                _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
+                _sig = await asyncio.to_thread(_sig_fn, p, 200) if _sig_fn else (
+                    "(signature extraction unavailable) — use read_file with line_range=[1,50] to inspect the file header first."
+                )
+                _disp = f"{_nl}+" if _capped else str(_nl)
+                return _tool_error_response(
+                    "FILE_TOO_LARGE_NEED_RANGE",
+                    f"File '{p}' is too large ({_disp} lines) to read fully into limited context. "
+                    "Please use 'start_line' and 'end_line' inside read_file to read specific sections.\n\n"
+                    f"File Outline / Signatures:\n{_sig}",
+                    tool="read_file" )
+
         content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
 
-        # Binary file detection: check first 512 chars for NUL bytes and
-        # control characters (excluding \n \r \t). Non-ASCII (Umlaute, Emojis,
+        # Binary file detection (Range-Reads; Voll-Reads wurden oben schon per
+        # Head-Sniff abgefangen). Check first 512 chars for NUL bytes and
+        # control characters (excluding \n \r \t).
         _sample = content[:512]
         if _sample:
             _binary_chars = sum(
@@ -151,32 +231,10 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
                 if ord(c) == 0 or (ord(c) < 32 and c not in "\n\r\t")
             )
             if len(_sample) > 0 and (_binary_chars / len(_sample)) > 0.10:
-                _inspect_hint = (
-                    "Use run_bash with 'Get-Content -Encoding Byte {p} | Select-Object -First 64' "
-                    "to inspect binary content."
-                    if sys.platform == "win32"
-                    else "Use run_bash with 'file {p}' to identify the file type, "
-                         "or 'xxd {p} | head' to inspect binary content."
-                )
-                return _tool_error_response(
-                    "BINARY_FILE",
-                    f"'{p}' appears to be a binary file (image, compiled binary, archive, etc.) "
-                    "and cannot be read as text. "
-                    + _inspect_hint,
-                    tool="read_file")
+                return _read_binary_error(p)
 
-        # Enforce line ranges for large files to prevent context bloat
-        if start_line is None and end_line is None and len(lines) > 400:
-            _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
-            _sig = await asyncio.to_thread(_sig_fn, p, 200) if _sig_fn else (
-                "(signature extraction unavailable) — use read_file with line_range=[1,50] to inspect the file header first."
-            )
-            return _tool_error_response(
-                "FILE_TOO_LARGE_NEED_RANGE",
-                f"File '{p}' is too large ({len(lines)} lines) to read fully into limited context. "
-                "Please use 'start_line' and 'end_line' inside read_file to read specific sections.\n\n"
-                f"File Outline / Signatures:\n{_sig}",
-                tool="read_file" )
+        # Hinweis: Voll-Reads mit >400 Zeilen werden oben frueh abgebrochen
+        # (READ-EARLY-ABORT) - hier ist len(lines) <= 400 garantiert.
 
         # Hallucination guard: validate start_line/end_line against actual file length
         _actual_lines = len(lines)

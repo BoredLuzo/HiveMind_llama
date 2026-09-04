@@ -55,6 +55,12 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   avoid pointless fallbacks on slower MoE/CPU-offload setups.
 - **UI**: "Compression Limit" label and help text updated to English and to the new auto
   behaviour; `app.js` is cache-busted (`?v=20260904-2`) so UI fixes actually reach clients.
+- **Context compaction of executed write tool calls** (`core/tool_executor.py`): after a
+  successful oversized `write_file`/`write_file_append`/`edit_file`/`patch_file`/
+  `replace_lines`, the still-unsent assistant tool-call arguments (>12k chars) are replaced
+  with a small stub (`path` + arg chars + sha1 prefix) - the message was never part of a sent
+  prompt, so llama.cpp's prefix cache is not invalidated and ~20-30k tokens of content no
+  longer occupy the context window until the next compression.
 
 ### Fixed
 
@@ -67,6 +73,9 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   new small model while the evicted big model still holds RAM (`learning/insights.py`): when
   available RAM is low the currently loaded model is reused instead, and extraction is skipped
   entirely if no model is loaded.
+- `read_file` aborts oversized full reads early (`tools/handlers/file_ops.py`): a binary sniff
+  on the file head plus a streaming newline count (stops at line 401) replace reading the whole
+  file into memory just to answer `FILE_TOO_LARGE_NEED_RANGE` with the file outline.
 
 ## [1.0.10] - 2026-09-04
 
