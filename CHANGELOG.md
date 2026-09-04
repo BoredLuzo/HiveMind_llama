@@ -76,6 +76,13 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `read_file` aborts oversized full reads early (`tools/handlers/file_ops.py`): a binary sniff
   on the file head plus a streaming newline count (stops at line 401) replace reading the whole
   file into memory just to answer `FILE_TOO_LARGE_NEED_RANGE` with the file outline.
+- UI: a transport-level stream drop ("Error in input stream") is no longer shown as a red
+  model error - aborts/connection drops get a neutral "run stopped / possibly parked" notice
+  (`static/app.js`).
+- A "skip" pressed while the planner is running now aborts the planner and starts the coder
+  directly (`core/duo_runner.py`) instead of letting a long planner finish and then silently
+  ending the run with zero coder output ("Coder 0s"). A skip on a single non-chunk round is
+  ignored so it can no longer complete a coding run without doing any work.
 
 ## [1.0.10] - 2026-09-04
 

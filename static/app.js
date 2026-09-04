@@ -4051,22 +4051,37 @@ async function sendMsg() {
   } catch(e) {
     if (window._plannerTickInterval) { clearInterval(window._plannerTickInterval); window._plannerTickInterval = null; }
     _cleanupLoadTimers();
+    // STREAM-ERROR-UX (2026-09-04): "Error in input stream" ist ein
+    // Transportabbruch (Stop/Verbindung), kein Modell-Fehler - nicht als roten
+    // Fehler-Bubble ausgeben, sondern als neutralen/amber Hinweis.
+    const _errMsg = String((e && e.message) || e || '');
+    const _isAbort = !!(e && e.name === 'AbortError');
+    const _isConnDrop = !_isAbort && /input stream|network|fetch failed|body stream/i.test(_errMsg);
+    const _hadBody = S.curAgent && S.curAgent.body && String(S.curAgent.body.textContent || '').trim();
     if (S.curAgent) {
-      if (!S.curAgent.body.textContent.trim()) {
-        S.curAgent.body.textContent = '[Error: ' + e.message + ']';
+      if (!_hadBody && _isAbort) {
+        S.curAgent.body.textContent = '[Run abgebrochen]';
+        S.curAgent.body.style.color = '#7a8fa8';
+      } else if (!_hadBody && _isConnDrop) {
+        S.curAgent.body.textContent = '[Verbindung unterbrochen - Run evtl. geparkt]';
+        S.curAgent.body.style.color = '#7a8fa8';
+      } else if (!_hadBody && !_isAbort) {
+        S.curAgent.body.textContent = '[Error: ' + _errMsg + ']';
         S.curAgent.body.style.color = '#b04040';
       }
       S.curAgent.body.classList.remove('live');
       S.curAgent = null;
     }
-    // P1-3 (2026-08-11): show errors even WITHOUT an agent bubble in the chat —
-    // previously the error vanished into a transient status line and the
-    // UI looked as if no request had ever been sent.
-    if (!S.curAgent) {
+    if (!_hadBody && !S.curAgent && !_isAbort) {
       const errDiv = document.createElement('div');
       errDiv.className = 'msg status-txt';
-      errDiv.style.cssText = 'color:#b04040;font-size:10px;border:1px solid rgba(200,64,64,.25);padding:6px 8px;border-radius:4px';
-      errDiv.textContent = '\u26A0 Stream error: ' + (e.message || e);
+      if (_isConnDrop) {
+        errDiv.style.cssText = 'color:#b08a40;font-size:10px;border:1px solid rgba(200,160,64,.25);padding:6px 8px;border-radius:4px';
+        errDiv.textContent = '\u26A0 Verbindung unterbrochen - der Run laeuft evtl. weiter bzw. ist geparkt. Sende eine Nachricht zum Resume oder pruefe das Log.';
+      } else {
+        errDiv.style.cssText = 'color:#b04040;font-size:10px;border:1px solid rgba(200,64,64,.25);padding:6px 8px;border-radius:4px';
+        errDiv.textContent = '\u26A0 Stream error: ' + (e.message || e);
+      }
       const chatEl = document.getElementById('chat');
       if (chatEl) chatEl.appendChild(errDiv);
       scrollBtmIfNearBottom(120);
@@ -4075,11 +4090,10 @@ async function sendMsg() {
       if (!b.textContent.trim()) {
         b.textContent = '[No output - stream aborted]';
         b.style.color = '#7a8fa8';
-        b.style.fontStyle = 'italic';
       }
       b.classList.remove('live');
     });
-    showStatus('\u26A0 Stream error: ' + e.message);
+    showStatus(_isAbort ? 'Run gestoppt.' : (_isConnDrop ? 'Verbindung unterbrochen - Status im Log pruefen.' : '\u26A0 Stream error: ' + e.message));
   } // end inner try/catch (fetch)
 
   } finally { // end outer try — covers automap + intent + fetch

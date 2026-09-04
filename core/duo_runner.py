@@ -1148,6 +1148,11 @@ async def run_code_duo(ctx):
                     heartbeat_fn=_plan_heartbeat_fn,
                 ))
 
+                # PLANNER-SKIP (2026-09-04): Skip waehrend des Planners bricht
+                # den Planner ab und geht direkt zum Coder (vorher lief der
+                # Planner weiter und der Skip wurde spaeter faelschlich als
+                # "Round skipped" konsumiert -> Coder 0s, stilles done).
+                _planner_skip_mid = False
                 try:
                     # Yield events from the bridge as they arrive
                     while not _plan_task.done() or not _plan_event_q.empty():
@@ -1167,6 +1172,19 @@ async def run_code_duo(ctx):
                                 ),
                             })
                             _plan_task.cancel()
+                            break
+                        # PLANNER-SKIP (2026-09-04): Skip gedrueckt, waehrend der
+                        # Planner laeuft -> Planner abbrechen, direkt zum Coder.
+                        if ctx.step_skipped() and not ctx.aborted():
+                            _planner_skip_mid = True
+                            ctx.clear_step_skip()
+                            try:
+                                _plan_task.cancel()
+                            except Exception:
+                                pass
+                            yield await ctx.emit({"type": "status",
+                                "content": "⏭ Planner skipped — going straight to coder"})
+                            yield await ctx.emit({"type": "planner_done", "summary": "⏭ skipped mid-plan"})
                             break
                         # Yield pending events from the bridge
                         while not _plan_event_q.empty():
@@ -1199,8 +1217,8 @@ async def run_code_duo(ctx):
                     except asyncio.CancelledError:
                         _plan_result = None
                         _planner_used_fallback = True
-                        _planner_fallback_reason = "run_deadline"
-                        _planner_parse_mode = "timeout"
+                        _planner_fallback_reason = "planner_step_skipped" if _planner_skip_mid else "run_deadline"
+                        _planner_parse_mode = "skipped" if _planner_skip_mid else "timeout"
                 except Exception as _plan_exc:
                     logger.error("[Planner] Exception: %s", _plan_exc, exc_info=True)
                     _subtasks = []
@@ -2013,24 +2031,33 @@ async def run_code_duo(ctx):
             # Auto-consumed: ctx.clear_step_skip() resets so next skip requires another press.
             if ctx.step_skipped() and not ctx.aborted():
                 ctx.clear_step_skip()
-                if _subtask:
-                    _cs.mark_chunk_done(_subtask)
-                    yield await ctx.emit({"type":"status",
-                        "content": f"⏭ Chunk {_di+1} skipped: {_subtask[:50]}"})
-                else:
-                    yield await ctx.emit({"type":"status",
-                        "content": f"⏭ Round {_di+1} skipped"})
-                _ac_out = await _auto_commit_chunk(ctx.user_input, _subtask, _ws_str,
-                                                   ctx.duo_config.git_autocommit,
-                                                   files=list(_cs.written_files[-20:]))
-                if _ac_out:
-                    yield await ctx.emit({"type": "status", "content": _ac_out})
-                _di += 1
-                _cs.reset_test_retries()
-                if _subtask:
+                # SKIP-GUARD (2026-09-04): Ein einzelner Nicht-Chunk-Round darf
+                # nicht still uebersprungen werden - das wuerde den Run mit
+                # "Coder 0s" beenden (live beobachtet: Skip landete waehrend des
+                # Planners). Skip wirkt hier nur im Chunking-/Multi-Round-Fall.
+                if not ctx.duo_config.chunking and not _subtask and _n_items <= 1:
+                    logger.warning("[SKIP-GUARD] single-round skip ignored - starting coder (subtask=%s)", _subtask)
                     yield await ctx.emit({"type": "status",
-                        "content": f"✅ Chunk {_di}/{_n_items} done — {len(_written_files)} files changed"})
-                continue
+                        "content": "⏭ Skip ignorieren — Coder startet jetzt."})
+                else:
+                    if _subtask:
+                        _cs.mark_chunk_done(_subtask)
+                        yield await ctx.emit({"type":"status",
+                            "content": f"⏭ Chunk {_di+1} skipped: {_subtask[:50]}"})
+                    else:
+                        yield await ctx.emit({"type":"status",
+                            "content": f"⏭ Round {_di+1} skipped"})
+                    _ac_out = await _auto_commit_chunk(ctx.user_input, _subtask, _ws_str,
+                                                       ctx.duo_config.git_autocommit,
+                                                       files=list(_cs.written_files[-20:]))
+                    if _ac_out:
+                        yield await ctx.emit({"type": "status", "content": _ac_out})
+                    _di += 1
+                    _cs.reset_test_retries()
+                    if _subtask:
+                        yield await ctx.emit({"type": "status",
+                            "content": f"✅ Chunk {_di}/{_n_items} done — {len(_written_files)} files changed"})
+                    continue
 
             # ── Coder ──────────────────────────────────────────────────────
             if _subtask:
