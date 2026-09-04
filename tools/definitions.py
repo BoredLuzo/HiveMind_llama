@@ -178,8 +178,9 @@ _INLINE_CODING_TOOLS = [
             "WRONG: using write_file to change an existing file — it overwrites the whole file; "
             "use edit_file or patch_file instead.\n"
             "For files larger than ~20000 chars: write the FIRST part here, then finish with "
-            "write_file_append(path, content=\"<AUTO_SPLIT_CONTINUE>\") — the remainder is stored "
-            "server-side; never resend the whole content."
+            "write_file_append(path, content='<AUTO_SPLIT_CONTINUE>') — content must be the "
+            "bare token <AUTO_SPLIT_CONTINUE> (no quotes); the remainder is stored "
+            "server-side. Never resend the whole content."
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path"},
@@ -243,12 +244,13 @@ _INLINE_CODING_TOOLS = [
             "CORRECT sequence: write_file(path, part1) -> write_file_append(path, part2) -> write_file_append(path, part3).\n"
             "WRONG: append before the file exists, or append to an unrelated file.\n"
             "Each call holds at most ~20000 chars. For AUTO-SPLIT follow-ups send only "
-            "content=\"<AUTO_SPLIT_CONTINUE>\" — the remainder is stored server-side and will be "
-            "appended automatically; never resend the content."
+            "content='<AUTO_SPLIT_CONTINUE>' — the bare token, NO quotes around it; the "
+            "remainder is stored server-side and will be appended automatically; never "
+            "resend the content."
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path (must already exist)"},
-            "content": {"type": "string", "maxLength": 20000, "description": "Content chunk to append. For AUTO-SPLIT continuation use exactly \"<AUTO_SPLIT_CONTINUE>\"."}
+            "content": {"type": "string", "maxLength": 20000, "description": "Content chunk to append. For AUTO-SPLIT continuation use exactly the bare token <AUTO_SPLIT_CONTINUE> - without quotes."}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {

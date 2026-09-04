@@ -37,6 +37,52 @@ _PENDING_MAX_CHARS = 250_000
 _pending_splits: dict[str, dict] = {}
 
 
+def _split_key(path) -> str:
+    """Kanonischer Key fuer Pending-Entries (Pfad-Varianten vereinheitlichen)."""
+    return os.path.normcase(os.path.normpath(str(path)))
+
+
+def _looks_like_split_marker(content) -> bool:
+    """Erkennt den AUTO-SPLIT-Continue-Marker robust.
+
+    Modelle kopieren die Anweisung inkl. Anfuehrungszeichen in den Content
+    (content = "\\"<AUTO_SPLIT_CONTINUE>\\""), was einen strikten Vergleich
+    scheitern liess und den Marker LITERAL in die Datei schrieb. Akzeptiert:
+    - exakt der nackte Marker (nach strip)
+    - mit umschliessenden ' / " / ` Quotes
+    - kurze Antworten (<=64 Zeichen), die den Marker enthalten
+    """
+    c = str(content or "").strip()
+    if not c:
+        return False
+    c = c.strip('"\'`')
+    if not c:
+        return False
+    if c == AUTO_SPLIT_CONTINUE_MARKER:
+        return True
+    if len(c) <= 64 and AUTO_SPLIT_CONTINUE_MARKER in c:
+        return True
+    return False
+
+
+def _heal_trailing_split_marker(text: str, content: str) -> str:
+    """Entfernt am Datei-Ende literal geschriebene Marker-Zeilen.
+
+    War der Marker vor dem Fix einmal als normaler Append gelandet, steht er
+    wörtlich (ggf. mit Quotes) am File-Ende. Vor dem Drain wird er entfernt,
+    damit der Rest sauber an den echten Teil1 anschliesst.
+    """
+    if content and text.endswith(content):
+        return text[:-len(content)]
+    for _q in ('"', "'", '`'):
+        _v = _q + AUTO_SPLIT_CONTINUE_MARKER + _q
+        if text.endswith(_v):
+            return text[:-len(_v)]
+    if text.endswith(AUTO_SPLIT_CONTINUE_MARKER):
+        return text[:-len(AUTO_SPLIT_CONTINUE_MARKER)]
+    return text
+
+
 def _prune_pending_splits() -> None:
     _now = time.time()
     for _k in [k for k, _v in _pending_splits.items()
@@ -52,7 +98,7 @@ def _store_pending_remainder(path: str, content: str, written_chars: int) -> Non
     _remainder = str(content)[written_chars:]
     if len(_remainder) > _PENDING_MAX_CHARS:
         _remainder = _remainder[:_PENDING_MAX_CHARS]
-    _pending_splits[path] = {
+    _pending_splits[_split_key(path)] = {
         "content": _remainder,
         "ts": time.time(),
         "total": len(content),
@@ -64,8 +110,10 @@ def _auto_split_instr(path, written_chars: int, total_chars: int) -> str:
     return (
         f"[AUTO-SPLIT] '{path}' got the FIRST {written_chars} of {total_chars} chars. "
         f"REMAINING {_remaining} chars are stored server-side.\n"
-        f"Call NOW: write_file_append(path, content=\"{AUTO_SPLIT_CONTINUE_MARKER}\") "
-        f"to write the rest automatically - do NOT resend the content."
+        f"Call NOW to finish it automatically:\n"
+        f"  write_file_append(path, content={AUTO_SPLIT_CONTINUE_MARKER})\n"
+        f"content MUST be the bare token {AUTO_SPLIT_CONTINUE_MARKER} - WITHOUT any "
+        f"quotes. Never resend the content and never wrap the token in quotes."
     )
 
 
@@ -193,37 +241,56 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     # The remainder of an oversized write_file/edit_file call is stored
     # server-side (see AUTO_SPLIT_CONTINUE_MARKER). This marker appends it in
     # one go without the model re-sending the big content.
-    if content.strip() == AUTO_SPLIT_CONTINUE_MARKER:
-        _prune_pending_splits()
-        _entry = _pending_splits.pop(str(p), None)
-        if not _entry:
-            return _tool_error_response(
-                "AUTO_SPLIT_NO_PENDING",
-                f"[AUTO-SPLIT] No pending remainder found for '{p}'. The file may only contain "
-                "the first chunk. Resend the full content (write_file + write_file_append) or "
-                "use edit_file with SEARCH/REPLACE blocks.",
-                tool="write_file_append")
-        _rest = str(_entry.get("content", ""))
-        if not _rest:
-            return _tool_error_response(
-                "AUTO_SPLIT_NO_PENDING",
-                f"[AUTO-SPLIT] Pending remainder for '{p}' is empty.",
-                tool="write_file_append")
-        try:
-            def _drain() -> int:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                with open(p, "a", encoding="utf-8", newline="") as f:
-                    f.write(_rest)
-                return p.stat().st_size
-            _total = await asyncio.to_thread(_drain)
-        except Exception as e:
-            return _tool_error_response(
-                "WRITE_FILE_APPEND_FAILED",
-                f"write_file_append (AUTO-SPLIT drain) failed for '{p}': {e}",
-                tool="write_file_append")
-        _lines = _rest.count("\n") + 1
-        return (f"[AUTO-SPLIT-DONE] '{p}' completed: +{_lines} lines, "
-                f"{_total} bytes total (full content written).")
+    # FIX (2026-09-04): Modelle kopieren die Quotes in den Content
+    # (content="<AUTO_SPLIT_CONTINUE>") -> strikter Vergleich schlug fehl und
+    # der Marker landete LITERAL in der Datei. Detektion ist jetzt robust
+    # (Quotes/Backticks/kurze Zusatztexte); ein Pending wird beim naechsten
+    # Append gedrained, nie literal geschrieben.
+    _split_key_ = _split_key(p)
+    _looks_marker = _looks_like_split_marker(content)
+    _prune_pending_splits()
+    _pending_now = _pending_splits.get(_split_key_)
+
+    if _looks_marker or _pending_now is not None:
+        if _looks_marker:
+            _entry = _pending_splits.pop(_split_key_, None)
+            if not _entry or not str(_entry.get("content", "")):
+                return _tool_error_response(
+                    "AUTO_SPLIT_NO_PENDING",
+                    f"[AUTO-SPLIT] No pending remainder found for '{p}'. "
+                    "read_file the end of the file to see what is already written, then "
+                    "finish it with normal chunks (write_file_append) or edit_file "
+                    "SEARCH/REPLACE blocks - do NOT send a full rewrite of the whole file.",
+                    tool="write_file_append")
+            _rest = str(_entry["content"])
+            try:
+                def _drain() -> int:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        _cur = p.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        _cur = ""
+                    # Heilung: ggf. wörtlich geschriebene Marker-Zeile(n) vom
+                    # File-Ende entfernen, damit der Rest sauber anschliesst.
+                    _healed = _heal_trailing_split_marker(_cur, content)
+                    if _healed != _cur:
+                        with open(p, "w", encoding="utf-8", newline="") as f:
+                            f.write(_healed)
+                    with open(p, "a", encoding="utf-8", newline="") as f:
+                        f.write(_rest)
+                    return p.stat().st_size
+                _total = await asyncio.to_thread(_drain)
+            except Exception as e:
+                return _tool_error_response(
+                    "WRITE_FILE_APPEND_FAILED",
+                    f"write_file_append (AUTO-SPLIT drain) failed for '{p}': {e}",
+                    tool="write_file_append")
+            _lines = _rest.count("\n") + 1
+            return (f"[AUTO-SPLIT-DONE] '{p}' completed: +{_lines} lines, "
+                    f"{_total} bytes total (full content written).")
+        # Pending existiert, aber der Content ist KEIN Marker: das Modell ist
+        # weitergezogen / resendet selbst - alter Remainder ist veraltet.
+        _pending_splits.pop(_split_key_, None)
 
     if not content:
         return _tool_error_response(

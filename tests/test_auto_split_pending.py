@@ -95,6 +95,94 @@ def main():
             ok("A7: existing-file AUTO-SPLIT + drain reconstructs the full content")
         else:
             fail("A7: existing-file drain mismatch", r5[:160])
+
+        print("\n=== AUTO-SPLIT robust marker (2026-09-04) ===\n")
+
+        # B: quoted marker ("<AUTO_SPLIT_CONTINUE>") must DRAIN, not be written
+        # literally (live bug: model copies the quotes into content).
+        fq = wd / "q.txt"
+        _quote_marker = '"' + _F.AUTO_SPLIT_CONTINUE_MARKER + '"'
+        rq1 = asyncio.run(_F._inline_tool_write_file(
+            {"path": "q.txt", "content": content, "_tool_name": "write_file"}, wd, None))
+        if "[AUTO-SPLIT]" in rq1:
+            ok("B1: quoted-marker file split into part1")
+        else:
+            fail("B1: quoted-marker file not split", rq1[:120])
+        rq2 = asyncio.run(_F._inline_tool_write_file_append(
+            {"path": "q.txt", "content": _quote_marker,
+             "_tool_name": "write_file_append"}, wd, None))
+        _q_disk = fq.read_text(encoding="utf-8")
+        if "AUTO-SPLIT-DONE" in rq2 and _q_disk == base:
+            ok("B2: QUOTED marker drains (no literal write), file complete")
+        else:
+            fail("B2: quoted marker not drained correctly",
+                 f"r={rq2[:120]} len_disk={len(_q_disk)} marker_in_file="
+                 f"{_F.AUTO_SPLIT_CONTINUE_MARKER in _q_disk}")
+        if _F.AUTO_SPLIT_CONTINUE_MARKER not in _q_disk:
+            ok("B3: no literal marker text left in file")
+        else:
+            fail("B3: marker text leaked into file")
+
+        # C: heal already-corrupted tail (literal quoted marker appended earlier)
+        fh = wd / "h.txt"
+        rh1 = asyncio.run(_F._inline_tool_write_file(
+            {"path": "h.txt", "content": content, "_tool_name": "write_file"}, wd, None))
+        if "[AUTO-SPLIT]" in rh1:
+            ok("C1: heal-case file split into part1")
+        else:
+            fail("C1: heal-case file not split", rh1[:120])
+        # simulate the old bug: literal quoted marker was appended to the file
+        fh.write_text(fh.read_text(encoding="utf-8") + _quote_marker, encoding="utf-8")
+        rh2 = asyncio.run(_F._inline_tool_write_file_append(
+            {"path": "h.txt", "content": _quote_marker,
+             "_tool_name": "write_file_append"}, wd, None))
+        _h_disk = fh.read_text(encoding="utf-8")
+        if "AUTO-SPLIT-DONE" in rh2 and _h_disk == base:
+            ok("C2: drain heals prior literal marker + completes file")
+        else:
+            fail("C2: heal/drain failed",
+                 f"r={rh2[:120]} len_disk={len(_h_disk)} marker_in_file="
+                 f"{_F.AUTO_SPLIT_CONTINUE_MARKER in _h_disk}")
+
+        # D: quoted marker WITHOUT pending -> clear error, never a literal append
+        fg = wd / "g.txt"
+        fg.write_text("hello\n", encoding="utf-8")
+        rg = asyncio.run(_F._inline_tool_write_file_append(
+            {"path": "g.txt", "content": _quote_marker,
+             "_tool_name": "write_file_append"}, wd, None))
+        _g_disk = fg.read_text(encoding="utf-8")
+        if "AUTO_SPLIT_NO_PENDING" in rg and _F.AUTO_SPLIT_CONTINUE_MARKER not in _g_disk:
+            ok("D1: quoted marker without pending -> error, no literal write")
+        else:
+            fail("D1: marker-without-pending handled wrong",
+                 f"r={rg[:120]} disk={_g_disk!r}")
+
+        # E: real content while a pending split exists -> normal append, pending
+        # dropped (model moved on), marker is NOT drained into it.
+        fe = wd / "e.txt"
+        re1 = asyncio.run(_F._inline_tool_write_file(
+            {"path": "e.txt", "content": content, "_tool_name": "write_file"}, wd, None))
+        if "[AUTO-SPLIT]" in re1:
+            ok("E1: pending-dropped file split into part1")
+        else:
+            fail("E1: pending-dropped file not split", re1[:120])
+        re2 = asyncio.run(_F._inline_tool_write_file_append(
+            {"path": "e.txt", "content": "tail-extra\n",
+             "_tool_name": "write_file_append"}, wd, None))
+        _e_disk = fe.read_text(encoding="utf-8")
+        if "tail-extra" in _e_disk:
+            ok("E2: real append content written verbatim while stale pending existed")
+        else:
+            fail("E2: real append not written", re2[:120])
+        # pending was dropped -> a later marker must NOT resurrect stale remainder
+        re3 = asyncio.run(_F._inline_tool_write_file_append(
+            {"path": "e.txt", "content": _F.AUTO_SPLIT_CONTINUE_MARKER,
+             "_tool_name": "write_file_append"}, wd, None))
+        if "AUTO_SPLIT_NO_PENDING" in re3:
+            ok("E3: stale pending dropped -> later marker errors (no ghost drain)")
+        else:
+            fail("E3: stale pending resurrected", re3[:120])
+
     finally:
         shutil.rmtree(str(wd), ignore_errors=True)
 
