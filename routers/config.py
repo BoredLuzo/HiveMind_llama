@@ -29,16 +29,33 @@ logger = logging.getLogger("hivemind.server")
 
 router = APIRouter(prefix="", tags=["Config"])
 
-# Secrets are never stored into / loaded from a preset snapshot.
-_PRESET_NEVER_KEYS = {"git_token", "_registry"}
+# Secrets / maschinen-spezifische Werte werden nie in ein Preset gespeichert
+# und nie aus einem geladen. models_dir ist ein absoluter Install-Pfad (vom
+# Installer gesetzt) - ein Preset-Snapshot/-Auto-Load darf ihn nicht auf ""
+# zuruecksetzen (live beobachtet: startup auto-load hat models_dir gekillt).
+_PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir"}
+
+# PRESET-CTX-OVERLAY (2026-09-04): nur diese Keys darf der Client beim
+# Preset-Save explizit uebergeben (verhindert das Race zwischen debounced
+# postSettings und dem Snapshot). Alles andere bleibt Server-seitig gesnapshottet.
+_PRESET_OVERLAY_KEYS = {
+    "duo_coder_ctx_agentic",
+    "duo_coder_ctx_until_finished",
+    "duo_coder_ctx_normal",
+    "duo_planner_ctx_target",
+}
 
 
-def _preset_snapshot() -> dict:
+def _preset_snapshot(extra: dict | None = None) -> dict:
     snap = {}
     for key, value in settings.items():
         if key in _PRESET_NEVER_KEYS:
             continue
         snap[key] = copy.deepcopy(value)
+    if isinstance(extra, dict):
+        for key in _PRESET_OVERLAY_KEYS:
+            if key in extra and key not in _PRESET_NEVER_KEYS:
+                snap[key] = copy.deepcopy(extra[key])
     # Agent-Karten: keep every stored per-agent field (model, temperature,
     # max_tokens, thinking, thinking_budget, plus any extra keys a preset may
     # carry) and overlay the LIVE pipeline values so a just-changed card
@@ -349,7 +366,13 @@ async def get_presets():
 @router.post("/presets/{name}")
 async def save_preset_ep(name: str, req: Request):
     presets = load_presets()
-    presets[name] = _preset_snapshot()
+    try:
+        _body = await req.json()
+    except Exception:
+        _body = {}
+    if not isinstance(_body, dict):
+        _body = {}
+    presets[name] = _preset_snapshot(extra=_body)
     if _state.pipeline:
         copy_prompts_to_preset(
             src_preset=None, dst_preset=name,

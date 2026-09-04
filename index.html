@@ -622,10 +622,14 @@
             Until-finished uses an unlimited tool budget (no hardcap).
           </div>
           <div style="display:flex;align-items:center;gap:7px">
-            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);flex:1;font-weight:600">Compression Limit (0=Auto 80%)</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);flex:1;font-weight:600">Compression Limit (0=Auto)</span>
             <input type="number" min="0" max="100000" step="1000" id="duo-compress-threshold"
               style="width:64px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--tx1);font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;padding:3px 5px;text-align:center;outline:none"
               onchange="postSettings({duo_compress_threshold:parseInt(this.value)||0})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);line-height:1.55;margin-top:4px">
+            0 = auto: compresses at min(72% ctx, ctx - reserve) - small contexts trigger earlier.<br>
+            &gt;0 = exact threshold in tokens. (Legacy mode <code>duo_cache_friendly_ctx=false</code>: auto = 80% ctx)
           </div>
           <div style="display:flex;align-items:center;gap:7px;margin-top:10px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);flex:1;font-weight:600">Planner Max Steps (0=Auto)</span>
@@ -1779,6 +1783,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-<script src="/static/app.js"></script>
+       <script src="/static/app.js?v=20260904-2"></script>
 </body>
 </html>

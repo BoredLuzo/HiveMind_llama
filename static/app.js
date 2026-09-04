@@ -265,8 +265,7 @@ function scheduleDuoCtxCommit() {
   if (_duoCtxCommitTimer) clearTimeout(_duoCtxCommitTimer);
   _duoCtxCommitTimer = setTimeout(commitDuoCtx, 450);
 }
-function commitDuoCtx() {
-  if (_duoCtxCommitTimer) { clearTimeout(_duoCtxCommitTimer); _duoCtxCommitTimer = null; }
+function _duoCtxPayload() {
   function _num(id, fb) {
     var el = document.getElementById(id);
     if (!el) return fb;
@@ -289,7 +288,12 @@ function commitDuoCtx() {
   // a stale/disabled value would silently override the agentic context.
   var pl = document.getElementById('duo-ctx-planner');
   if (pl && !pl.disabled) payload.duo_planner_ctx_target = p;
-  postSettings(payload);
+  return payload;
+}
+
+function commitDuoCtx() {
+  if (_duoCtxCommitTimer) { clearTimeout(_duoCtxCommitTimer); _duoCtxCommitTimer = null; }
+  return postSettings(_duoCtxPayload());
 }
 
 function updateWebsearchHint() {
@@ -2147,8 +2151,18 @@ async function savePreset() {
 
 async function savePresetAs(name) {
   if (!name) return;
+  // PRESET-CTX-FIX (2026-09-04): die Ctx-Werte leben in den DOM-Feldern und
+  // werden nur debounced (180ms) nach /settings gepostet. Beim Preset-Save
+  // wuerde der Server-Snapshot sonst den noch nicht geflushten (alten) Stand
+  // speichern. Deshalb: erst den laufenden Ctx-Commit erzwingen+abwarten,
+  // dann die aktuellen Werte explizit als Overlay-Body mitschicken.
+  try {
+    var _ctxCommit = commitDuoCtx();
+    if (_ctxCommit && typeof _ctxCommit.then === 'function') await _ctxCommit;
+  } catch (e) { /* stillen Fehler ignorieren - Overlay-Body sichert den Wert */ }
+  var body = _duoCtxPayload();
   await fetch('/presets/' + encodeURIComponent(name), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
   await loadPresets();
 }
@@ -2161,6 +2175,19 @@ async function loadPreset(name) {
     _setPresetHeader();
     await loadSettings();
     await loadPresets();
+    // PRESET-CTX-FIX (2026-09-04): abgeleitete Ctx-Zustaende nach dem Load neu
+    // auswerten, damit das Duo-Tab-Feld den geladenen Wert zeigt und bei
+    // "Planner = coder" korrekt gespiegelt/disabled ist.
+    S.duoCtxUntilFinished = S.duoCtxAgentic;
+    var _plAfter = document.getElementById('duo-ctx-planner');
+    if (_plAfter) {
+      if (S.duoPlannerUseCoderCtx) { _plAfter.disabled = true; _plAfter.value = S.duoCtxAgentic != null ? S.duoCtxAgentic : ''; }
+      else { _plAfter.disabled = false; }
+    }
+    var _agAfter = document.getElementById('duo-ctx-agentic');
+    if (_agAfter && S.duoCtxAgentic != null) _agAfter.value = S.duoCtxAgentic;
+    var _noAfter = document.getElementById('duo-ctx-normal');
+    if (_noAfter && S.duoCtxNormal != null) _noAfter.value = S.duoCtxNormal;
   }
 }
 

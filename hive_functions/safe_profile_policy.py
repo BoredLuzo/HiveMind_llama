@@ -53,6 +53,17 @@ _GUARDRAIL_SETTINGS = {
 # philosophy used for agent models.
 _USER_PREF_KEYS = {"vram_budget_gb"}
 
+# DUO-CTX (2026-09-04): duo_coder_ctx_* sind Defaults der Sicherheitsmatrix,
+# duerfen aber eine explizit gesetzte Konfiguration (Preset/User/UI) NICHT
+# ueberschreiben. Matrix wirkt nur, wenn der Wert noch None (= ungesetzt) ist.
+# Sonst klebt z.B. der Preset-Auto-Load + Safe-Profile-Refresh den Matrix-Ctx
+# ueber den gewuenschten Wert.
+_DUO_CTX_USER_KEYS = {
+    "duo_coder_ctx_agentic",
+    "duo_coder_ctx_until_finished",
+    "duo_coder_ctx_normal",
+}
+
 
 def _as_float(value, default=None):
     try:
@@ -272,6 +283,10 @@ def apply_safe_profile_policy(settings: dict, workspace_root: Path) -> dict:
         if key in _USER_PREF_KEYS:
             # USER-WINS (2026-09-02): never clobber a saved user preference
             # (e.g. vram_budget_gb). The policy default stays informational.
+            continue
+        if key in _DUO_CTX_USER_KEYS and settings.get(key) is not None:
+            # CTX-USER-WINS (2026-09-04): nie einen explizit gesetzten Duo-Ctx
+            # (Preset/User) mit dem Matrix-Default ueberschreiben.
             continue
         if settings.get(key) != value:
             settings[key] = value
