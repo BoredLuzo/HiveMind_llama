@@ -32,7 +32,13 @@ from context.pause_state import (
     clear_pause_state as _clear_pause_state,
 )
 from infra.ask_user_governor import cleanup_governor as _cleanup_governor
-from context.compression import _evict_stale_tool_outputs, _compress_tool_context
+from context.compression import _evict_stale_tool_outputs, _compress_tool_context, _compress_rule_based
+from context.ctx_guard import (
+    decide_context_action as _decide_context_action,
+    resolve_compress_threshold as _resolve_compress_threshold,
+    should_use_partial as _ctx_should_use_partial,
+    plan_partial_cut_index as _ctx_plan_partial_cut_index,
+)
 
 # ── Tools ──
 from tools.definitions import _get_inline_tools, _filter_tools_for_mode
@@ -1450,9 +1456,10 @@ async def run_code_duo(ctx):
                 f"well below ~{_wb_hint_safe} chars).\n"
                 f"- If a call is auto-split the harness replies [AUTO-SPLIT]: the "
                 f"remainder is stored server-side. Finish it with one SHORT call:\n"
-                f"  write_file_append(path, content=\"<AUTO_SPLIT_CONTINUE>\")\n"
-                f"  Never resend the content - an oversized single call wastes minutes "
-                f"and is split/rejected."
+                f"  write_file_append(path, content='<AUTO_SPLIT_CONTINUE>')\n"
+                f"  content must be exactly <AUTO_SPLIT_CONTINUE> (bare token, no quotes "
+                f"around it). Never resend the content - an oversized single call wastes "
+                f"minutes and is split/rejected."
             )
         except Exception:
             pass
@@ -2827,12 +2834,22 @@ async def run_code_duo(ctx):
                         timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=5.0),
                     )
                     _stored_threshold = int(ctx.settings.get("duo_compress_threshold", 0))
-                    _dynamic_threshold = _dtool_ctx - _dtool_opts.get("num_predict", 800) - 8200
                     _plan_state = ""  # initialized before loop; updated during compression
-                    _compress_threshold = max(
-                        _stored_threshold if _stored_threshold > 0 else _dynamic_threshold,
-                        int(_dtool_ctx * 0.8)
+                    # CACHE-FRIENDLY (2026-09-04): effektive Schwelle =
+                    # min(P1 = auto_floor*ctx, P2 = ctx - reserve); UI-Override
+                    # (>0) setzt die Schwelle exakt. Komprimiert wird frueher
+                    # als der alte 0.8-Floor, damit der In-place-Evict-Churn
+                    # ab ~78% (Prefix-Cache-Killer) gar nicht erst beginnt.
+                    _compress_threshold = _resolve_compress_threshold(
+                        ctx_tokens=_dtool_ctx,
+                        num_predict=int(_dtool_opts.get("num_predict", 800) or 800),
+                        ui_threshold=_stored_threshold,
+                        auto_floor=float(ctx.settings.get("duo_compress_auto_floor", 0.72) or 0.72),
+                        min_free_tokens=int(ctx.settings.get("duo_min_free_ctx_tokens", 0) or 0),
+                        overflow_reserve=int(ctx.settings.get("duo_compress_overflow_reserve", 1024) or 1024),
                     )
+                    _cache_friendly_ctx = bool(ctx.settings.get("duo_cache_friendly_ctx", True))
+                    _partial_compression = bool(ctx.settings.get("duo_partial_compression", False))
                     _max_tool_rounds_cfg = int(ctx.settings.get("duo_max_tool_rounds", 64))
                     _max_tool_rounds_cfg = 8 if duo_rounds > 1 else _max_tool_rounds_cfg
                     _max_tool_rounds = _resolve_tool_budget(
@@ -2864,7 +2881,16 @@ async def run_code_duo(ctx):
                     _total_edit_lines: int = 0
                     _ctx_pressure_warned = False
                     _ctx_critical_warned = False
-                    _MAX_COMPRESSIONS = 6  # raised from 3 — 40+ round tasks need more headroom
+                    # CACHE-FRIENDLY (2026-09-04): Cap aus Settings, deutlich
+                    # hoeher als die alten 6, damit lange 32k+-Runs nicht in
+                    # den No-Reset-Modus kippen (der nur noch in-place Churn
+                    # kennt).
+                    _MAX_COMPRESSIONS = max(1, int(ctx.settings.get("duo_max_compressions", 40) or 40))
+                    # Kompressions-Zaehler fuer Telemetrie + regelbasierten
+                    # Fallback (LLM-Fail -> 2x -> regelbasiert).
+                    _llm_compress_fails = 0
+                    _rule_compress_fails = 0
+                    _rule_compress_used = False
                     _call_sigs: list = []  # loop detection: incremental signatures
                     _last_too_large_path: str = ""
                     _attempts_per_file: dict = {}
@@ -3110,45 +3136,102 @@ async def run_code_duo(ctx):
                                 ),
                             })
                             _ctx_pressure_warned = True
-                        # Phase 2: semantic LRU eviction of stale tool outputs.
-                        # Keep conversational turns, evict low-TTL tool payloads first.
-                        _near_limit = int(_dtool_ctx * 0.78)
-                        if _guard_tokens > _near_limit:
-                            _est_before_evict = int(_est_tokens)
-                            _evicted_n = _evict_stale_tool_outputs(
-                                messages=_dtool_msgs,
-                                lru=_tool_ctx_lru,
-                                target_token_budget=int(_dtool_ctx * 0.70),
-                                hard_floor_tokens=int(_dtool_ctx * 0.62),
-                            )
-                            if _evicted_n > 0:
-                                _ctx_evictions += int(_evicted_n)
-                                _est_tokens = _estimate_ctx_tokens(_dtool_msgs)
-                                # METER-FIX (2026-08-25): the real value is now STALE
-                                # (pre-eviction). Without a reset, the context meter
-                                # shows the old (too high) reading at the next round
-                                # start until a new usage_meta arrives.
-                                _coder_real_prompt_tokens[0] = 0
-                                logger.warning(
-                                    "[CTX-EVICT] est_before=%d near_limit=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d",
-                                    _est_before_evict, _near_limit, _evicted_n, int(_est_tokens), int(_dtool_ctx),
-                                    int(_dtool_ctx * 0.70), int(_dtool_ctx * 0.62), int(_guard_tokens),
+                        # CACHE-FRIENDLY (2026-09-04): Kompression ist der
+                        # primaere Shrink. In-place semantic eviction ist NUR
+                        # noch das Notventil, wenn keine Kompression mehr
+                        # verfuegbar ist (Cap erreicht) UND der Kontext >90%
+                        # voll ist. Zwischen zwei Kompressionen bleibt die
+                        # History append-only -> llama.cpp prefix cache lebt
+                        # und Rounds sind (nur Tail-Prefill) schnell.
+                        _can_compress = (_MAX_COMPRESSIONS != -1 or _force_compress_next)
+                        if not _cache_friendly_ctx:
+                            # LEGACY-PFAD (A/B-Kontrollgruppe): gleiches Verhalten
+                            # wie vor der cache-freundlichen Umstellung —
+                            # In-place-Eviction ab 78% + alter Schwellen-Mix.
+                            _near_limit_legacy = int(_dtool_ctx * 0.78)
+                            if _guard_tokens > _near_limit_legacy:
+                                _est_before_evict = int(_est_tokens)
+                                _evicted_n = _evict_stale_tool_outputs(
+                                    messages=_dtool_msgs,
+                                    lru=_tool_ctx_lru,
+                                    target_token_budget=int(_dtool_ctx * 0.70),
+                                    hard_floor_tokens=int(_dtool_ctx * 0.62),
                                 )
-                                yield await ctx.emit({
-                                    "type": "status",
-                                    "content": (
-                                        f"🧹 Semantic context eviction: {_evicted_n} stale tool output(s) "
-                                        "replaced by recall markers."
-                                    ),
-                                })
-                        _compress_ok = (
-                            (_MAX_COMPRESSIONS != -1 or _force_compress_next)  # sentinel bypass for structural fallback
-                            and (
-                                (_total_tool_rounds > 0 and _guard_tokens > _compress_threshold)
-                                or _guard_tokens > int(_dtool_ctx * 0.90)
-                                or _force_compress_next
+                                if _evicted_n > 0:
+                                    _ctx_evictions += int(_evicted_n)
+                                    _est_tokens = _estimate_ctx_tokens(_dtool_msgs)
+                                    # METER-FIX (2026-08-25): the real value is now
+                                    # STALE (pre-eviction). Reset -> naechster
+                                    # ctx_meter nutzt den frischen Schaetzer.
+                                    _coder_real_prompt_tokens[0] = 0
+                                    logger.warning(
+                                        "[CTX-EVICT-LEGACY] est_before=%d near_limit=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d",
+                                        _est_before_evict, _near_limit_legacy, _evicted_n, int(_est_tokens),
+                                        int(_dtool_ctx), int(_dtool_ctx * 0.70), int(_dtool_ctx * 0.62), int(_guard_tokens),
+                                    )
+                                    yield await ctx.emit({
+                                        "type": "status",
+                                        "content": (
+                                            f"🧹 Semantic context eviction: {_evicted_n} stale tool output(s) "
+                                            "replaced by recall markers."
+                                        ),
+                                    })
+                            _stored_legacy = int(ctx.settings.get("duo_compress_threshold", 0))
+                            _dyn_legacy = _dtool_ctx - int(_dtool_opts.get("num_predict", 800) or 800) - 8200
+                            _compress_threshold = max(
+                                _stored_legacy if _stored_legacy > 0 else _dyn_legacy,
+                                int(_dtool_ctx * 0.8)
                             )
-                        )
+                            _compress_ok = (
+                                _can_compress
+                                and (
+                                    (_total_tool_rounds > 0 and _guard_tokens > _compress_threshold)
+                                    or _guard_tokens > int(_dtool_ctx * 0.90)
+                                    or _force_compress_next
+                                )
+                            )
+                        else:
+                            _guard_decision = _decide_context_action(
+                                guard_tokens=int(_guard_tokens),
+                                ctx_tokens=int(_dtool_ctx),
+                                threshold=int(_compress_threshold),
+                                can_compress=_can_compress,
+                                force_compress=bool(_force_compress_next),
+                            )
+                            _compress_ok = (_guard_decision.action == "compress")
+                            # Erst-Round-Schutz: initialer Kontext (explore/static
+                            # map) darf erst nach >=1 Tool-Round per Schwelle
+                            # komprimiert werden (Notfall >90% weiterhin ok).
+                            if _compress_ok and _guard_decision.reason == "threshold" and _total_tool_rounds <= 0:
+                                _compress_ok = False
+                            if not _compress_ok and _guard_decision.action == "emergency_evict":
+                                _est_before_evict = int(_est_tokens)
+                                _evicted_n = _evict_stale_tool_outputs(
+                                    messages=_dtool_msgs,
+                                    lru=_tool_ctx_lru,
+                                    target_token_budget=int(_dtool_ctx * 0.70),
+                                    hard_floor_tokens=int(_dtool_ctx * 0.62),
+                                )
+                                if _evicted_n > 0:
+                                    _ctx_evictions += int(_evicted_n)
+                                    _est_tokens = _estimate_ctx_tokens(_dtool_msgs)
+                                    # METER-FIX (2026-08-25): the real value is now
+                                    # STALE (pre-eviction). Reset -> naechster
+                                    # ctx_meter nutzt den frischen Schaetzer.
+                                    _coder_real_prompt_tokens[0] = 0
+                                    logger.warning(
+                                        "[CTX-EVICT-EMERGENCY] est_before=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d reason=%s",
+                                        _est_before_evict, _evicted_n, int(_est_tokens), int(_dtool_ctx),
+                                        int(_dtool_ctx * 0.70), int(_dtool_ctx * 0.62), int(_guard_tokens),
+                                        _guard_decision.reason,
+                                    )
+                                    yield await ctx.emit({
+                                        "type": "status",
+                                        "content": (
+                                            f"🧹 Emergency context eviction (no compression left): {_evicted_n} "
+                                            "stale tool output(s) replaced by recall markers."
+                                        ),
+                                    })
                         if _compress_ok:
                             # it's in hivemind.log.
                             _compress_reason = (
@@ -3179,6 +3262,21 @@ async def run_code_duo(ctx):
                             # PLAN-ANCHOR-FIX (2.2): anchor text via pure module function
                             # (testable, identical logic — see _build_plan_anchor_text).
                             _plan_anchor_text = _build_plan_anchor_text(_subtasks, _plan_tracker)
+                            # CACHE-FRIENDLY partial vs full (2026-09-04):
+                            # partial behaelt einen grossen raw Tail byte-identisch
+                            # am Ende -> llama.cpp --cache-reuse KV-Shift kann den
+                            # Suffix nach dem Rebuild retten.
+                            _comp_mode = "full"
+                            _comp_cut = -1
+                            if _cache_friendly_ctx and _partial_compression:
+                                if _ctx_should_use_partial(partial_enabled=True, messages=_dtool_msgs):
+                                    _comp_cut = _ctx_plan_partial_cut_index(
+                                        _dtool_msgs,
+                                        ctx_tokens=int(_dtool_ctx),
+                                        guard_tokens=int(_guard_tokens),
+                                    )
+                                    if _comp_cut is not None and int(_comp_cut) >= 2:
+                                        _comp_mode = "partial"
                             _msgs_before_compress = _dtool_msgs
                             _est_tokens_before_compress = _estimate_ctx_tokens(_dtool_msgs)
                             _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(
@@ -3198,6 +3296,8 @@ async def run_code_duo(ctx):
                                 explore_ctx=_explore_ctx,
                                 tool_rounds=_total_tool_rounds,
                                 max_tool_rounds=_max_tool_rounds,
+                                compression_mode=_comp_mode,
+                                cut_index=_comp_cut,
                             )
                             if _compress_usage and _compress_usage.get("completion_tokens"):
                                 yield await ctx.emit({"type": "usage_meta", "phase": "coder",
@@ -3238,11 +3338,91 @@ async def run_code_duo(ctx):
                                     _dtool_msgs[-1].get("content", "") or ""
                                 )
                             if not _cs_valid:
-                                yield await ctx.emit({"type": "status",
-                                    "content": "⚠ Compression failed — keeping uncompressed context"})
-                                _dtool_msgs = _msgs_before_compress  # Restore original, don't inject degraded summary
+                                _llm_compress_fails += 1
+                                # RULE-BASED FALLBACK (2026-09-04): deterministisch
+                                # komprimieren statt den Kontext unkontrolliert
+                                # weiter wachsen zu lassen. Nach 2 LLM-Fails
+                                # (und sonst sofort) wird regelbasiert ersetzt.
+                                _rule_target = max(1, int(_est_tokens_before_compress * 0.80))
+                                _rule_msgs, _rule_evicted = _compress_rule_based(
+                                    messages=_msgs_before_compress,
+                                    target_tokens=_rule_target,
+                                    keep_recent_msgs=(18 if ctx.duo_config.until_finished else 12),
+                                )
+                                _est_rule = _estimate_ctx_tokens(_rule_msgs)
+                                if _est_rule < _est_tokens_before_compress * 0.90:
+                                    _rule_compress_used = True
+                                    _llm_compress_fails = 0
+                                    _rule_compress_fails = 0
+                                    _dtool_msgs = _strip_stale_ctx_notices(_rule_msgs)
+                                    _est_tokens = _est_rule
+                                    _condensed_files = [str(p) for p in (_rule_evicted or [])]
+                                    logger.warning(
+                                        "[CTX-COMPRESS-RULE] LLM summary failed (%d) — rule-based fallback applied (%d -> %d est. tokens, evicted=%d)",
+                                        _llm_compress_fails, int(_est_tokens_before_compress), int(_est_rule),
+                                        len(_condensed_files),
+                                    )
+                                    yield await ctx.emit({"type": "status",
+                                        "content": f"🧰 LLM-Kompression fehlgeschlagen — regelbasiert komprimiert ({int(_est_tokens_before_compress)} → {int(_est_rule)} est. tokens)"})
+                                    # Manueller Cleanup analog zum LLM-Erfolgspfad
+                                    # (der else-Zweig laeuft fuer den Fallback nicht):
+                                    # LRU/Rounds/Read-Guard/Plan-Pin zuruecksetzen.
+                                    _tool_ctx_lru.reset()
+                                    _total_tool_rounds = 0
+                                    ctx.exec_ctrl.sync_tool_rounds(0)
+                                    _ctx_pressure_warned = False
+                                    _ctx_critical_warned = False
+                                    _compress_fail_streak, _compress_stop = _compress_fail_streak_update(
+                                        _compress_fail_streak, True, 3,
+                                    )
+                                    try:
+                                        from tools.runner import _files_read_in_run as _fic_rule
+                                        _rset_rule = _fic_rule.get(None)
+                                        if _rset_rule is not None and _ws_str:
+                                            for _cp in (_rule_evicted or []):
+                                                _wpn = _normalize_tool_path(str(_cp), _ws_str)
+                                                if _wpn:
+                                                    _rset_rule.discard(_wpn)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        if _subtasks and _di is not None and _n_items:
+                                            _pin_lines = []
+                                            for _pi, _pt in enumerate(_subtasks):
+                                                if _pi < _di:
+                                                    _pin_lines.append(f"  {_pi+1}. \u2713 {str(_pt)[:120]}")
+                                                elif _pi == _di:
+                                                    _pin_lines.append(f"  {_pi+1}. \u2192 {str(_pt)[:120]}  \u25c0 YOU ARE HERE")
+                                                else:
+                                                    _pin_lines.append(f"  {_pi+1}. \u25cb {str(_pt)[:120]}")
+                                            if _pin_lines:
+                                                _dtool_msgs.append({"role": "user", "content":
+                                                    f"[PLAN-PIN - current subtask {_di+1}/{_n_items}]\n"
+                                                    + "\n".join(_pin_lines)
+                                                })
+                                                logger.warning("[COMPRESS-PLAN-PIN] %d subtasks re-injected (rule fallback, current=%d)", _n_items, _di + 1)
+                                    except Exception as _pp_rule_err:
+                                        logger.debug("[COMPRESS-PLAN-PIN] Pin failed: %s", _pp_rule_err)
+                                else:
+                                    _rule_compress_fails += 1
+                                    yield await ctx.emit({"type": "status",
+                                        "content": "⚠ Compression failed — keeping uncompressed context"})
+                                    _dtool_msgs = _msgs_before_compress  # Restore original, don't inject degraded summary
+                                    if _rule_compress_fails >= 3:
+                                        _compress_fail_streak, _compress_stop = _compress_fail_streak_update(
+                                            _compress_fail_streak, False, 3,
+                                        )
+                                        if _compress_stop:
+                                            _ld_setter(2906); _loop_detected = True
+                                            yield await ctx.emit({
+                                                "type": "status",
+                                                "content": "⛔ Context compression repeatedly fails to shrink the context (3x) — run stopped.",
+                                            })
+                                            break
                             else:
                                 _ctx_compressions += 1
+                                _llm_compress_fails = 0
+                                _rule_compress_fails = 0
                                 if _ctx_compressions < _MAX_COMPRESSIONS:
                                     _total_tool_rounds = 0
                                     ctx.exec_ctrl.sync_tool_rounds(0)
@@ -3285,9 +3465,10 @@ async def run_code_duo(ctx):
                             _coder_real_prompt_tokens[0] = 0
                             # D1-DIAG: log the result (shrinkage).
                             logger.warning(
-                                "[CTX-COMPRESS] done before=%d after=%d condensed_files=%d",
+                                "[CTX-COMPRESS] done before=%d after=%d condensed_files=%d mode=%s llm_fails=%d rule_fails=%d rule_used=%s",
                                 int(_est_tokens_before_compress), int(_est_tokens_after_compress),
-                                len(_condensed_files or []),
+                                len(_condensed_files or []), _comp_mode,
+                                _llm_compress_fails, _rule_compress_fails, _rule_compress_used,
                             )
                             yield await ctx.emit({
                                 "type": "status",
@@ -3712,6 +3893,10 @@ async def run_code_duo(ctx):
                         )
                         _snap_before = _loop_detect_file_snapshot() if _round_bash_only else None
                         # ── Execute all tool calls via shared executor ──
+                        # CACHE-HORIZON (2026-09-04): alles < cache_horizon ist
+                        # bereits gesendet (immutable Prefix); alles ab hier ist
+                        # diese Round und darf frei mutiert werden.
+                        _round_cache_horizon = len(_dtool_msgs) if _cache_friendly_ctx else 0
                         _last_too_large_ref = [_last_too_large_path]
                         _cached_port_ref = [_cached_coder_port]
                         _exec_task = asyncio.create_task(execute_tool_round(
@@ -3720,6 +3905,7 @@ async def run_code_duo(ctx):
                             round_state=_duo_state,
                             hooks=_tool_exec_hooks,
                             trs=ToolRoundState(
+                                cache_horizon=_round_cache_horizon,
                                 tool_ctx_lru=_tool_ctx_lru,
                                 duo_deadline_at=_duo_deadline_at,
                                 verify_mutation_serial=_verify_mutation_serial,

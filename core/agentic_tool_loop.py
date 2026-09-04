@@ -285,6 +285,20 @@ class AgenticToolLoop(ToolLoop):
                                 "cached_tokens": _cached,
                                 "gen_ms": int((time.monotonic() - _gen_t0) * 1000),
                             }
+                            # CACHE-TELEMETRIE (2026-09-04): Reuse% pro Coder-Round.
+                            # prompt gross + cached klein => Prefix/Suffix-Cache
+                            # wurde invalidiert (In-place-Mutation, Kompression).
+                            try:
+                                _pt = int(_dr_usage_final.get("prompt_tokens") or 0)
+                                if _pt > 0:
+                                    logger.info(
+                                        "[CACHE] round=%s prompt=%d cached=%d reuse=%.0f%%",
+                                        getattr(self.round_state, "exec_model", "?"),
+                                        _pt, _cached,
+                                        (100.0 * _cached / _pt) if _pt else 0.0,
+                                    )
+                            except Exception:
+                                pass
                         _sse_choices = _sse_chunk.get("choices") or [{}]
                         # Choice-Chunk ⇒ Generation lief ins max_tokens-Limit ⇒ Tool-Call-
                         _sse_fr = _sse_choices[0].get("finish_reason")

@@ -874,13 +874,17 @@ async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
             if result.last_run_bash_failure:
                 result.changed_since_failure.add(_fc_path)
 
-def _register_context_lru(dtool_msgs, tool_ctx_lru, _focus_path, _dname, _dresult):
+def _register_context_lru(dtool_msgs, tool_ctx_lru, _focus_path, _dname, _dresult,
+                          cache_horizon: int = 0, superseded: list | None = None):
     """S16: context LRU registration (from execute_tool_round).
 
     LRU-B (dedupe): when a NEW read_file output for a path already present in
     the context is registered, the older full copies of the same path are
     stale/redundant - evict them immediately (recall marker) so repeated reads
     of one file do not occupy multiple copies of the context window.
+
+    cache_horizon/superseded: siehe
+    context.compression.evict_stale_reads_for_path (CACHE-HORIZON).
     """
     _tool_msg_idx = -1
     if dtool_msgs and dtool_msgs[-1].get("role") == "tool":
@@ -908,6 +912,8 @@ def _register_context_lru(dtool_msgs, tool_ctx_lru, _focus_path, _dname, _dresul
                     lru=tool_ctx_lru,
                     path=_focus_path,
                     exclude_idx=_tool_msg_idx,  # keep the newest copy
+                    cache_horizon=cache_horizon,
+                    superseded=superseded,
                 )
                 if _evicted_dup:
                     logger.debug(
@@ -937,3 +943,10 @@ class ToolRoundState:
     cached_coder_port: list = field(default_factory=lambda: [None])
     task_complete_blocked_count: list = field(default_factory=lambda: [0])
     total_tool_errors: list = field(default_factory=lambda: [0])
+    # CACHE-HORIZON (2026-09-04): erster Message-Index dieser Tool-Round.
+    # Alles < cache_horizon wurde bereits an llama.cpp gesendet (immutabler
+    # Prefix); Mutationen dort wuerden den Prefix-Cache killen und sind nur
+    # als append-only Notice erlaubt. Alles >= cache_horizon ist ungesendet
+    # und darf frei in-place geaendert werden.
+    cache_horizon: int = 0
+    superseded_paths: list = field(default_factory=list)

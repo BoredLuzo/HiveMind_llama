@@ -576,6 +576,8 @@ async def execute_tool_round(
                     messages=dtool_msgs,
                     lru=trs.tool_ctx_lru,
                     path=_focus_path,
+                    cache_horizon=trs.cache_horizon,
+                    superseded=trs.superseded_paths,
                 )
                 if _evicted_stale:
                     _logger.info(
@@ -584,7 +586,8 @@ async def execute_tool_round(
             except Exception as _ev_stale_err:
                 _logger.debug("[LRU-STALE] invalidation failed: %s", _ev_stale_err)
         # ── Context LRU registration ──
-        _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult)
+        _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult,
+                              cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)
         # ── Read-file ladder tracker ──
         _consecutive_reads = _update_read_ladder(_dname, _args_parse_failed, _consecutive_reads)
 
@@ -654,6 +657,24 @@ async def execute_tool_round(
                 )})
             await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_consecutive_reads}x reads ohne Write — Hint injiziert]\n"})
             _consecutive_reads = 0
+
+    # CACHE-HORIZON (2026-09-04): superseded read_file outputs liegen im
+    # bereits gesendeten Prefix und wurden NICHT in-place ersetzt. Einmalige
+    # Tail-Note, damit das Modell dem aelteren (stale) Inhalt nicht vertraut.
+    if getattr(trs, "superseded_paths", None):
+        _sup_clean = []
+        for _sp in trs.superseded_paths:
+            if _sp and _sp not in _sup_clean:
+                _sup_clean.append(_sp)
+        if _sup_clean:
+            dtool_msgs.append({"role": "user", "content": (
+                _SYS_PREFIX +
+                "[CTX-HORIZON] Earlier read_file output(s) for the following path(s) "
+                "are superseded by newer changes and must be ignored: "
+                + ", ".join(_sup_clean[:8])
+                + ". The current file state (from your most recent write/edit or the "
+                "newest read_file) is authoritative. Do NOT edit based on the older copy."
+            )})
 
     # Track last tool call for plan tracker
     result.last_tool_name = _dname

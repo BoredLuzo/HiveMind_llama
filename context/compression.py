@@ -44,6 +44,8 @@ def evict_stale_reads_for_path(
     lru: ToolContextLRU,
     path: str,
     exclude_idx: int | None = None,
+    cache_horizon: int = 0,
+    superseded: list | None = None,
 ) -> int:
     """
     LRU-A: immediately evict read_file outputs for a path that was just
@@ -54,11 +56,21 @@ def evict_stale_reads_for_path(
     LRU-B: when a NEW read_file for the same path is registered, *exclude_idx*
     keeps that newest copy alive while the older full duplicates are evicted.
 
-    Returns the number of tool messages evicted.
+    CACHE-HORIZON (2026-09-04): messages with index < cache_horizon were
+    already sent to llama.cpp and form the cached prefix. Mutating them
+    in-place kills the prefix cache, so they are NOT rewritten - their LRU
+    entry is still marked evicted and the path is collected into *superseded*
+    so the caller can append a cache-safe tail notice. Messages with
+    index >= cache_horizon (this round's fresh tail) keep the old in-place
+    marker behaviour.
+
+    Returns the number of tool messages evicted in-place.
     """
     if not messages or not path:
         return 0
     evicted = 0
+    cache_horizon = int(cache_horizon or 0)
+    _sup = superseded if isinstance(superseded, list) else None
     # oldest first -> keep the newest read of the path alive
     for entry in lru.alive_by_path(path, kind="read_file"):
         idx = int(entry.get("idx", -1))
@@ -72,6 +84,14 @@ def evict_stale_reads_for_path(
         old = str(msg.get("content", ""))
         if not old or old.startswith("[System: Content of"):
             lru.mark_evicted(idx)
+            continue
+        if idx < cache_horizon:
+            # Im bereits gesendeten Prefix -> nicht in-place anfassen. Nur
+            # LRU markieren; der semantische Hinweis wird als Tail-Note durch
+            # den Aufrufer angehaengt (cache-sicher).
+            lru.mark_evicted(idx)
+            if _sup is not None and path not in _sup:
+                _sup.append(path)
             continue
         messages[idx] = {
             **msg,
@@ -134,6 +154,67 @@ def _evict_stale_tool_outputs(
             break
 
     return evicted
+
+
+# ── Rule-based Kompression (Fallback bei LLM-Fail) ─────────────────────────
+_RULE_NOTICE_MARKERS = (
+    "[RUNTIME NOTICE]", "[CTX CRITICAL:", "[CTX: ~", "[CTX:",
+    "[PLAN-PIN", "[SYSTEM]", "[READ LADDER]", "[LOOP DETECTED]",
+    "[GRACE ROUND", "[TIMEOUT]", "[JSON parse error", "[CTX-HORIZON]",
+)
+
+
+def _compress_rule_based(messages: list, target_tokens: int = 0,
+                         keep_recent_msgs: int = 12) -> tuple:
+    """Deterministische, regelbasierte Kompression.
+
+    Fallback wenn die LLM-Zusammenfassung wiederholt fehlschlaegt oder zu
+    teuer ist: ersetzt aeltere grosse Tool-Outputs (ausserhalb der letzten
+    keep_recent_msgs) durch Recall-Marker und entfernt ueberfluessige
+    Notice-/System-Meldungen, bis target_tokens unterschritten sind.
+
+    Bewusster Cache-Bust (wie jede Kompression); der Aufrufer setzt danach
+    LRU/Horizon neu. Rein deterministisch und ohne weitere Inferenz.
+
+    Returns (messages, evicted_paths) — evicted_paths fuer den Read-Guard.
+    """
+    if not messages:
+        return list(messages), []
+    out = [dict(m) for m in messages]  # flache Kopien, Indizes bleiben stabil
+    target_tokens = max(0, int(target_tokens or 0))
+    _safe_end = len(out) - max(0, int(keep_recent_msgs or 0))
+    _est = _estimate_ctx_tokens(out)
+    _evicted_paths: list[str] = []
+
+    # 1) Aelteste grosse Tool-Outputs -> Recall-Marker
+    _idx = 0
+    while _est > target_tokens and _idx < _safe_end:
+        _m = out[_idx]
+        if _m.get("role") == "tool" and isinstance(_m.get("content"), str):
+            _old = _m["content"]
+            if _old and not _old.startswith("[System: Content of"):
+                _paths_in = _RE_READ_PATH.findall(_old)
+                _p0 = (_paths_in[0] if _paths_in else (_m.get("name") or "tool output"))
+                _marker = _recall_marker(str(_p0))
+                _est -= (len(_old) // 3) - (len(_marker) // 3)
+                _m["content"] = _marker
+                if _paths_in:
+                    _evicted_paths.extend(_paths_in)
+        _idx += 1
+
+    # 2) Ueberfluessige Notice-/System-User-Messages vorne entfernen
+    _idx2 = 0
+    while _est > target_tokens and _idx2 < len(out):
+        _m = out[_idx2]
+        if _m.get("role") == "user":
+            _c = str(_m.get("content") or "")
+            if _c.startswith(_RULE_NOTICE_MARKERS):
+                _est -= len(_c) // 3
+                del out[_idx2]
+                continue
+        _idx2 += 1
+
+    return out, _evicted_paths
 
 
 def _validate_compression_summary(summary: str,
@@ -199,17 +280,30 @@ async def _compress_tool_context(
     explore_ctx: str = "",
     tool_rounds: int = 0,
     max_tool_rounds: int = 0,
+    compression_mode: str = "full",
+    cut_index: int = -1,
 ) -> list:
 
 
     _keep_recent = max(0, int(keep_recent_msgs or 0))
+    _partial = (str(compression_mode or "full").lower() == "partial")
+    _cut = int(cut_index or -1)
     _history_msgs = [m for m in messages if m.get("role") != "system"]
     if goal_pin:
         _history_msgs = [
             m for m in _history_msgs
             if not (m.get("role") == goal_pin.get("role") and m.get("content") == goal_pin.get("content"))
         ]
-    if _keep_recent > 0 and len(_history_msgs) > _keep_recent:
+    if _partial and 0 < _cut < len(messages):
+        # PARTIAL-KOMPRESSION (2026-09-04): nur die Nachrichten bis _cut
+        # verdichten. Der Tail ab _cut bleibt byte-identisch am Ende -> der
+        # llama.cpp --cache-reuse KV-Shift kann diesen Suffix nach dem Rebuild
+        # wiederverwenden. _cut referenziert Indizes der ORIGINAL-messages
+        # (system steht an [0] und wird unten separat als _system_msg neu
+        # aufgebaut).
+        _older_msgs = messages[:_cut]
+        _recent_tail_msgs = messages[_cut:]
+    elif _keep_recent > 0 and len(_history_msgs) > _keep_recent:
         _older_msgs = _history_msgs[:-_keep_recent]
         _recent_tail_msgs = _history_msgs[-_keep_recent:]
     else:
@@ -307,7 +401,7 @@ async def _compress_tool_context(
                 "max_tokens":     800,
                 "thinking": False, "thinking_budget": 0,
             },
-            timeout=httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0),
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0),
         )
         _data = _resp.json()
         _u = _data.get("usage") or {}

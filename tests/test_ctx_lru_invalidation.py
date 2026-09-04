@@ -138,6 +138,42 @@ lru7.register(1, path="", kind="run_bash",
 by7 = {e["idx"]: e["ttl"] for e in lru7.candidates()}
 check("I3: pathless error output gets longer TTL", by7[1] > by7[0], f" {by7}")
 
+# ── D: CACHE-HORIZON (2026-09-04) ──────────────────────────────────────────
+# deep (idx < cache_horizon): bereits gesendeter Prefix -> KEIN in-place
+# Marker, nur LRU-Evicted + superseded-Liste fuer die Tail-Note.
+
+msgsH = _msgs(["a.py", "b.py"])          # a.py tool idx=2, b.py tool idx=4
+lruH = ToolContextLRU(default_ttl=3)
+_register_reads(lruH, msgsH)
+supH: list = []
+evH = evict_stale_reads_for_path(messages=msgsH, lru=lruH, path="a.py",
+                                 cache_horizon=3, superseded=supH)
+check("D1: deep stale read NOT evicted in place", evH == 0, f" got={evH}")
+check("D2: message content untouched below horizon",
+      msgsH[2]["content"].startswith("[a.py"), msgsH[2]["content"][:40])
+check("D3: lru entry still marked evicted",
+      all(e.get("evicted") for e in lruH._entries if e.get("path") == "a.py"))
+check("D4: path collected as superseded (tail-note source)", supH == ["a.py"], f" got={supH}")
+
+# near (idx >= cache_horizon): ungesendeter Tail -> In-place wie bisher.
+msgsH2 = _msgs(["a.py", "b.py"])
+lruH2 = ToolContextLRU(default_ttl=3)
+_register_reads(lruH2, msgsH2)
+supH2: list = []
+evH2 = evict_stale_reads_for_path(messages=msgsH2, lru=lruH2, path="a.py",
+                                  cache_horizon=1, superseded=supH2)
+check("D5: near-tail read evicted in place", evH2 == 1, f" got={evH2}")
+check("D6: near-tail content replaced by recall marker",
+      msgsH2[2]["content"] == _recall_marker("a.py"), msgsH2[2]["content"][:40])
+check("D7: superseded empty for in-place path", supH2 == [], f" got={supH2}")
+
+# default cache_horizon=0 => legacy Verhalten bleibt erhalten (Regression)
+msgsH3 = _msgs(["a.py"])
+lruH3 = ToolContextLRU(default_ttl=3)
+_register_reads(lruH3, msgsH3)
+evH3 = evict_stale_reads_for_path(messages=msgsH3, lru=lruH3, path="a.py")
+check("D8: default cache_horizon keeps legacy in-place eviction", evH3 == 1, f" got={evH3}")
+
 print()
 print("=" * 50)
 print(f"  {passed} passed, {failed} failed  (total {passed + failed})")

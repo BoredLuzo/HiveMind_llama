@@ -101,6 +101,20 @@ DEFAULT_SETTINGS = {
     "duo_tool_output_ttl":     3,
     "duo_compress_threshold":  0,
     "duo_compress_every":      4,
+    # CACHE-FRIENDLY (2026-09-04): Prefix-Cache von llama.cpp schuetzen.
+    # - duo_cache_friendly_ctx: Kompression primaer statt In-place-Eviction;
+    #   bereits gesendete History wird nicht mehr in-place mutiert.
+    # - duo_partial_compression: nur den alten Teil verdichten, raw Tail
+    #   byte-identisch am Ende behalten (KV-Shift-Reuse). Default off -> erst
+    #   nach Telemetrie-Phase einschalten.
+    # - duo_compress_threshold > 0 = exakter UI-Override (absolute Tokens);
+    #   0 = auto: min(duo_compress_auto_floor*ctx, ctx - Reserve).
+    "duo_cache_friendly_ctx":    True,
+    "duo_partial_compression":   False,
+    "duo_compress_auto_floor":   0.72,
+    "duo_compress_overflow_reserve": 1024,
+    "duo_min_free_ctx_tokens":   0,
+    "duo_max_compressions":      40,
     "session_compress_threshold": 20,
 
     # ════════════════════════════════════════════════════════════════════════
