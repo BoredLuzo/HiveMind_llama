@@ -9,13 +9,12 @@ echo  ^|    Full setup: Python, packages, GPU backend                ^|
 echo  +=============================================================+
 echo.
 echo  What this does (you will be asked before every step):
-echo    [1/7] Python 3.14       - found or installed automatically
-echo    [2/7] Python packages   - installed into a virtual env (.venv)
-echo    [3/7] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
-echo    [4/7] llama.cpp backend - downloaded for the chosen backend
-echo    [5/7] Models            - downloaded into \models
-echo    [6/7] SearXNG           - optional web search (requires Docker)
-echo    [7/7] Desktop shortcut  - optional, with the HiveMind icon
+echo    [1/6] Python            - set up python environment
+echo    [2/6] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
+echo    [3/6] llama.cpp backend - downloaded for the chosen backend
+echo    [4/6] Models            - downloaded into \models
+echo    [5/6] SearXNG           - optional web search (requires Docker)
+echo    [6/6] Desktop shortcut  - optional, with the HiveMind icon
 echo.
 
 choice /c YN /n /m "Install HiveMind now? [Y/N] "
@@ -28,95 +27,18 @@ if errorlevel 2 (
 echo.
 
 REM ======================================================
-REM [1/7] Python 3.14
+REM [1/6] Python
 REM ======================================================
 echo  ==========================================================
-echo   [1/7] Checking Python
+echo   [1/6] Setting up Python
 echo  ==========================================================
-echo.
-set "PY="
-
-REM Prefer the py launcher (3.14 first, then any 3.x) and resolve it to the
-REM real python.exe so "%PY%" can always be quoted safely.
-py -3.14 --version >nul 2>&1
-if not errorlevel 1 (
-    for /f "delims=" %%X in ('py -3.14 -c "import sys; print(sys.executable)" 2^>nul') do set "PY=%%X"
-)
-if not defined PY py -3 --version >nul 2>&1
-if not defined PY if not errorlevel 1 (
-    for /f "delims=" %%X in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do set "PY=%%X"
-)
-
-REM python / python3 on PATH
-if not defined PY python --version >nul 2>&1
-if not defined PY if not errorlevel 1 set "PY=python"
-if not defined PY python3 --version >nul 2>&1
-if not defined PY if not errorlevel 1 set "PY=python3"
-
-REM Known install locations (no launcher, incomplete PATH)
-if not defined PY if exist "%LocalAppData%\Programs\Python\Python314\python.exe" set "PY=%LocalAppData%\Programs\Python\Python314\python.exe"
-if not defined PY if exist "C:\Program Files\Python314\python.exe" set "PY=C:\Program Files\Python314\python.exe"
-
-if defined PY goto python_ok
-
-REM ---- Install Python (winget first, then python.org) ----
-echo   Python 3.14 not found - it will be installed.
-echo   Target: %LocalAppData%\Programs\Python\Python314\
-choice /c YN /n /m "Install Python 3.14 now? [Y/N] "
-if errorlevel 2 (
-    echo.
-    echo   [ERROR] HiveMind cannot be installed without Python.
-    echo   Download it manually: https://www.python.org/downloads/
-    echo   Important: enable "Add python.exe to PATH" during installation.
-    echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
-)
-where winget >nul 2>&1
-if not errorlevel 1 (
-    winget install --id Python.Python.3.14 --accept-source-agreements --accept-package-agreements --silent --override "/quiet InstallAllUsers=0 PrependPath=1"
-    if errorlevel 1 (
-        echo   [ERROR] winget installation failed.
-        echo.
-        echo  Press any key to continue... & pause >nul & exit /b 1
-    )
-) else (
-    echo   No winget - downloading the installer from python.org...
-    curl.exe -L --fail -o "%TEMP%\python314.exe" "https://www.python.org/ftp/python/3.14.0/python-3.14.0-amd64.exe" >nul 2>&1
-    if errorlevel 1 (
-        echo   curl failed - trying PowerShell with TLS 1.2...
-        powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('https://www.python.org/ftp/python/3.14.0/python-3.14.0-amd64.exe','%TEMP%\python314.exe')"
-    )
-    if not exist "%TEMP%\python314.exe" (
-        echo   [ERROR] Python download failed.
-        echo   Download it manually: https://www.python.org/downloads/
-        echo   Important: enable "Add python.exe to PATH" during installation.
-        echo.
-        echo  Press any key to continue... & pause >nul & exit /b 1
-    )
-    "%TEMP%\python314.exe" /quiet InstallAllUsers=0 PrependPath=1
-    del "%TEMP%\python314.exe" 2>nul
-    set "PATH=%PATH%;%LocalAppData%\Programs\Python\Python314;%LocalAppData%\Programs\Python\Python314\Scripts"
-)
-
-REM Verify the installation
-if not defined PY if exist "%LocalAppData%\Programs\Python\Python314\python.exe" set "PY=%LocalAppData%\Programs\Python\Python314\python.exe"
-if not defined PY if exist "C:\Program Files\Python314\python.exe" set "PY=C:\Program Files\Python314\python.exe"
-if not defined PY (
-    echo   [ERROR] Python installation could not be verified.
-    echo   Close this window, open a new terminal and run install.bat again.
-    echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
-)
-
-:python_ok
-echo   OK: %PY%
 echo.
 
 REM ======================================================
 REM uv (fast Python package manager)
 REM ======================================================
 echo  ==========================================================
-echo   [uv] Fast package manager
+echo   [uv] Setting up package manager
 echo  ==========================================================
 echo.
 where uv >nul 2>&1
@@ -125,11 +47,13 @@ if errorlevel 1 (
     echo  [uv] Target: %USERPROFILE%\.local\bin (added to PATH)
     where winget >nul 2>&1
     if not errorlevel 1 (
-        winget install --id astral-sh.uv --accept-source-agreements --accept-package-agreements --silent
+        REM --source winget supresses the MS store license agreement prompt
+        winget install --id astral-sh.uv --source winget --silent
+        set "PATH=%PATH%;%LOCALAPPDATA%\Microsoft\WinGet\Links"
     ) else (
         powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex"
+        set "PATH=%PATH%;%USERPROFILE%\.local\bin"
     )
-    set "PATH=%PATH%;%USERPROFILE%\.local\bin"
     where uv >nul 2>&1
     if errorlevel 1 (
         echo.
@@ -140,50 +64,18 @@ if errorlevel 1 (
     )
 )
 uv --version
+
+SET "UV_NO_DEV=1"
 echo.
 
 REM ======================================================
 REM Virtual environment (keeps the system Python clean)
 REM ======================================================
 echo  ==========================================================
-echo   [venv] Virtual environment
+echo   [venv] Setting up virtual environment
 echo  ==========================================================
 echo.
-if not exist ".venv\Scripts\python.exe" (
-    echo  [venv] Creating virtual environment .venv with uv ...
-    uv venv -p "%PY%" .venv
-    if errorlevel 1 (
-        echo.
-        echo   [ERROR] Could not create the virtual environment.
-        echo.
-        echo  Press any key to continue... & pause >nul & exit /b 1
-    )
-)
-set "PY=.venv\Scripts\python.exe"
-echo  [venv] %CD%\.venv
-echo.
-
-REM ======================================================
-REM [2/7] Dependencies
-REM ======================================================
-echo  ==========================================================
-echo   [2/7] Installing Python packages
-echo  ==========================================================
-echo.
-echo   Target: %CD%\.venv
-echo.
-choice /c YN /n /m "Install Python packages into .venv? [Y/N] "
-if errorlevel 2 goto pip_skip
-uv pip install -p ".venv\Scripts\python.exe" -r requirements.txt
-if errorlevel 1 (
-    echo.
-    echo   [ERROR] Package installation failed - read the message above.
-    echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
-)
-echo   OK.
-:pip_skip
-echo.
+uv sync --all-extras
 
 REM ======================================================
 REM [playwright] Chromium browser (for browser_tool)
@@ -192,7 +84,7 @@ echo  ==========================================================
 echo   [playwright] Installing Chromium browser
 echo  ==========================================================
 echo.
-"%PY%" -m playwright install chromium
+uv run playwright install chromium
 if errorlevel 1 (
     echo.
     echo   [ERROR] Chromium installation failed.
@@ -203,11 +95,13 @@ if errorlevel 1 (
 )
 echo.
 
+for /f "delims=" %%X in ('uv python find') do set "PY=%%X"
+
 REM ======================================================
-REM [3/7] GPU backend (auto-detection)
+REM [2/6] GPU backend (auto-detection)
 REM ======================================================
 echo  ==========================================================
-echo   [3/7] GPU backend
+echo   [2/6] GPU backend
 echo  ==========================================================
 echo.
 echo   [V] Vulkan  - AMD / Intel GPUs
@@ -285,10 +179,10 @@ if errorlevel 1 (
 echo.
 
 REM ======================================================
-REM [4/7] llama.cpp backend
+REM [3/6] llama.cpp backend
 REM ======================================================
 echo  ==========================================================
-echo   [4/7] llama.cpp backend
+echo   [3/6] llama.cpp backend
 echo  ==========================================================
 echo.
 echo   Target: %~dp0llama\
@@ -329,10 +223,10 @@ if defined HAVE_LLAMA (
 echo.
 
 REM ======================================================
-REM [5/7] Models
+REM [4/6] Models
 REM ======================================================
 echo  ==========================================================
-echo   [5/7] Models
+echo   [4/6] Models
 echo  ==========================================================
 echo.
 echo   Default: models are downloaded into %~dp0models.
@@ -352,11 +246,11 @@ goto searxng_step
 :searxng_step
 
 REM ======================================================
-REM [6/7] SearXNG (optional)
+REM [5/6] SearXNG (optional)
 REM ======================================================
 echo.
 echo  ==========================================================
-echo   [6/7] SearXNG (web search, requires Docker Desktop)
+echo   [5/6] SearXNG (web search, requires Docker Desktop)
 echo  ==========================================================
 echo.
 where docker >nul 2>&1
@@ -371,11 +265,11 @@ if errorlevel 1 (
 
 echo.
 REM ======================================================
-REM [7/7] Desktop shortcut (optional, HiveMind icon)
+REM [6/6] Desktop shortcut (optional, HiveMind icon)
 REM ======================================================
 echo.
 echo  ==========================================================
-echo   [7/7] Desktop shortcut
+echo   [6/6] Desktop shortcut
 echo  ==========================================================
 echo.
 echo   Creates "HiveMind.lnk" on the Desktop that starts
