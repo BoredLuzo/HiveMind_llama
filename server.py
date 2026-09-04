@@ -83,7 +83,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.0.10"
+HIVEMIND_VERSION = "1.0.11"
 
 # ─── FrÃ¼he Logger-Definition ────────────────────────────────────────────────────
 logger = logging.getLogger("hivemind.server")
@@ -352,7 +352,19 @@ def _sync_backend_runtime_config() -> None:
             # LLAMA-BIN-RE-RESOLVE (2026-08-27, CUDA-VERSION-FIX): Auto-Discovery
             _lc_init.LLAMA_BIN = _lc_init._find_llama_server()
             _lsm_init.LLAMA_BIN = _lc_init.LLAMA_BIN
-        _lsm_init.CACHE_REUSE = int(settings.get("llama_cache_reuse", 256) or 0)
+        # CACHE-REUSE-FIX (2026-09-04): server.py hat nur _lsm_init.CACHE_REUSE
+        # gesetzt; gelesen wird aber die beim Import kopierte Konstante in
+        # backend.manager_load (und backend.llama_config als Quelle). Jetzt
+        # werden alle drei Modul-Globals synchron gesetzt, damit das UI-Setting
+        # (llama_cache_reuse) wirklich den --cache-reuse-Startwert aendert.
+        _cache_reuse_val = int(settings.get("llama_cache_reuse", 256) or 0)
+        _lc_init.CACHE_REUSE = _cache_reuse_val
+        _lsm_init.CACHE_REUSE = _cache_reuse_val
+        try:
+            import backend.manager_load as _ml_init
+            _ml_init.CACHE_REUSE = _cache_reuse_val
+        except Exception:
+            pass
     except Exception:
         pass
 

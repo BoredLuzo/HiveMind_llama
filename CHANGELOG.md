@@ -5,6 +5,65 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.11] - 2026-09-04
+
+### Added
+
+- **Cache-friendly context management for long agentic runs** (`context/ctx_guard.py`,
+  `core/duo_runner.py`): llama.cpp's prefix cache stays alive between compressions.
+  The effective auto-compression threshold is now `min(auto_floor·ctx, ctx − reserve)`
+  (UI `duo_compress_threshold > 0` stays an exact token override), and in-place
+  recall-marker eviction is used only as an emergency (>90 % context when no
+  compression is left). New settings: `duo_cache_friendly_ctx`, `duo_partial_compression`,
+  `duo_compress_auto_floor`, `duo_compress_overflow_reserve`, `duo_min_free_ctx_tokens`,
+  `duo_max_compressions`.
+- **Partial context compression behind a feature flag** (`duo_partial_compression`,
+  default off): only the older messages up to a computed cut are condensed while the
+  recent tail stays byte-identical at the end, so llama.cpp's KV-shift reuse can
+  salvage the suffix after a rebuild. `full` stays the fallback.
+- **Cache reuse telemetry** (`core/agentic_tool_loop.py`): logs `[CACHE] prompt/cached/
+  reuse%` per coder round, plus compression mode and rule-fallback counters.
+- **`deploy/analyze_cache_log.py`**: A/B analyzer over `logs/hivemind.log` (reuse%
+  trajectory, cumulative re-prefill, compressions, emergency evictions, optional CSV).
+- **`deploy/ab_phase1.ps1`**: switches `duo_cache_friendly_ctx`/`duo_partial_compression`
+  live on the running server (fallback: settings.json) and snapshots the log for A/B runs.
+
+### Changed
+
+- **Compression is the primary shrink; in-place eviction is the exception**: between two
+  compressions the tool history is append-only, so `[CACHE] reuse` stays ~100 % and long
+  runs no longer pay a full re-prefill every round at 78–90 % context.
+- **Rule-based compression fallback**: if the LLM summary fails validation, a deterministic
+  pass replaces old tool outputs with recall markers and strips stale notices instead of
+  keeping the full context; the run only stops after repeated rule-fallback failures.
+- **AUTO-SPLIT continuation marker detection is robust**
+  (`tools/handlers/file_ops.py`): the marker is accepted with surrounding quotes/backticks
+  or in short replies — models that copy `content="<AUTO_SPLIT_CONTINUE>"` no longer write
+  the marker literally into the file. A pending remainder is drained on the next append and
+  previously literal marker lines at the file end are healed before the remainder is written;
+  pending keys are path-canonicalised; a stale pending remainder is dropped when real content
+  is appended. Marker-without-pending returns a clear error instead of a literal write.
+- **Presets save and load the coder context deterministically** (`routers/config.py`,
+  `static/app.js`): the preset endpoint accepts an overlay body (allow-listed
+  `duo_coder_ctx_agentic/until_finished/normal`, `duo_planner_ctx_target`) and the UI commits
+  + flushes the ctx fields before saving, so a quick "Save" no longer races the debounced
+  settings POST. Loading re-evaluates the until-finished / planner-coder mirrors.
+- **`models_dir` is never stored into or restored from a preset** and the safe-profile matrix
+  no longer overwrites an explicitly set `duo_coder_ctx_*` — presets/policy can no longer
+  reset your model folder or context.
+- **Compression HTTP timeouts raised** (`context/compression.py`: connect 10 s, read 120 s) to
+  avoid pointless fallbacks on slower MoE/CPU-offload setups.
+- **UI**: "Compression Limit" label and help text updated to English and to the new auto
+  behaviour; `app.js` is cache-busted (`?v=20260904-2`) so UI fixes actually reach clients.
+
+### Fixed
+
+- Oversized `write_file` + `write_file_append` with a quoted `<AUTO_SPLIT_CONTINUE>` marker
+  no longer truncates files by writing the marker as literal content.
+- Preset coder context no longer resets to the safe-profile default after a page reload.
+- Long runs at high context no longer degrade into per-round full re-prefills
+  (`[CACHE-MISS]` / `[MSGSIG-CHANGE]` churn) in the cache-friendly mode.
+
 ## [1.0.10] - 2026-09-04
 
 ### Changed
