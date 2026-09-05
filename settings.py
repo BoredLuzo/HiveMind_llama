@@ -200,6 +200,10 @@ DEFAULT_SETTINGS = {
     # TESTING-DEFAULT (2026-08-12): finaler Auto-Test standardmaessig aktiv —
     "duo_test_feedback_final": True,
     "duo_p3_max_fix_attempts": 3,
+    # ERROR ROLLUP (2026-09-06): deterministic dedup of repeating test/compile
+    # failures in the fix-loop (core/error_rollup.py). First failure full,
+    # repeats rendered as PERSISTS/FIXED/REOPENED. Runtime state per run.
+    "duo_error_rollup":        True,
 
     # ════════════════════════════════════════════════════════════════════════
     # I) GIT, SANDBOX & SYSTEM

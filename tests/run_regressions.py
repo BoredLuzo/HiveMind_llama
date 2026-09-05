@@ -43,6 +43,7 @@ SUITES = [
     ("planner_thinking_cap",      "tests/test_planner_thinking_cap.py",        120),
     ("stuck_bash_reset_threshold", "tests/test_stuck_bash_reset_threshold.py", 120),
     ("stuck_edit_false_positive", "tests/test_stuck_edit_false_positive.py",   120),
+    ("error_rollup",              "tests/test_error_rollup.py",                  60),
 ]
 
 

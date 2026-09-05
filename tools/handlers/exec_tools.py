@@ -394,6 +394,79 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             details={"cmd": str(cmd)[:400]})
 
 
+# ── Deterministic error rollup (core/error_rollup.py) ────────────────────────
+
+def _error_rollup_enabled() -> bool:
+    try:
+        from core import state as _er_st
+        return bool(_er_st.settings.get("duo_error_rollup", True))
+    except Exception:
+        return True
+
+
+def _error_rollup_state():
+    """Return (run_id, RollupState) or (None, None) when no active run context."""
+    try:
+        from tools.runner import _current_run_id as _crid_rollup
+    except Exception:
+        return None, None
+    run_id = _crid_rollup.get() or ""
+    if not run_id:
+        return None, None
+    try:
+        from core.error_rollup import get_run_state
+        return run_id, get_run_state(run_id)
+    except Exception:
+        return None, None
+
+
+def _rollup_test_failure(tr, original: str) -> str:
+    """Compact repeated failures (PERSISTS/FIXED/REOPENED). First failing round
+    stays untouched; the rollup only kicks in once a signature repeats."""
+    if not _error_rollup_enabled():
+        return original
+    _run_id, _st = _error_rollup_state()
+    if _st is None:
+        return original
+    try:
+        from core.error_rollup import parse_errors, render_rollup
+        _items = parse_errors(getattr(tr, "raw_output", None) or "")
+    except Exception:
+        return original
+    if not _items:
+        return original
+    try:
+        _res = _st.ingest(_items)
+    except Exception:
+        return original
+    if not _res.get("changed"):
+        return original
+    try:
+        _lines = render_rollup(_res)
+        _head = (
+            f"[TEST-RESULT] ❌ {getattr(tr, 'failure_count', 0)} test failure(s) "
+            f"({getattr(tr, 'language', '?')})\nCommand: {getattr(tr, 'command', '')}"
+        )
+        return _head + "\n\nErrors:\n" + "\n".join(_lines) + \
+            "\n\nFix the above failures. Run tests again after fixing."
+    except Exception:
+        return original
+
+
+def _rollup_note_clean() -> None:
+    """A green run marks all still-active signatures as resolved (so an identical
+    later failure renders as REOPENED, not NEW)."""
+    if not _error_rollup_enabled():
+        return
+    _run_id, _st = _error_rollup_state()
+    if _st is None:
+        return
+    try:
+        _st.mark_all_fixed()
+    except Exception:
+        pass
+
+
 async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: str | None) -> str:
 
 
@@ -428,13 +501,14 @@ async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: s
             f"run_tests crashed: {type(e).__name__}: {str(e)[:200]}",
             tool="run_tests" )
     if _tr.is_clean():
+        _rollup_note_clean()
         return f"[TEST-RESULT] ✅ All tests passed ({_tr.language}). Command: {_tr.command}"
     if _tr.failure_count == 0:
         return (
             f"[TEST-RESULT] ⚠️ No tests found or no test command available "
             f"({_tr.language}). Command: {_tr.command}\n{(_tr.inject_msg or '')[:400]}"
         )
-    return _tr.inject_msg or "[TEST-RESULT] No result from test runner."
+    return _rollup_test_failure(_tr, _tr.inject_msg or "[TEST-RESULT] No result from test runner.")
 
 
 async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lock: str | None) -> str:
