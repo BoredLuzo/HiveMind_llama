@@ -282,6 +282,7 @@ async def _compress_tool_context(
     max_tool_rounds: int = 0,
     compression_mode: str = "full",
     cut_index: int = -1,
+    read_timeout: float = 180.0,
 ) -> list:
 
 
@@ -401,7 +402,7 @@ async def _compress_tool_context(
                 "max_tokens":     800,
                 "thinking": False, "thinking_budget": 0,
             },
-            timeout=httpx.Timeout(connect=10.0, read=120.0, write=10.0, pool=5.0),
+            timeout=httpx.Timeout(connect=10.0, read=float(read_timeout or 180.0), write=10.0, pool=5.0),
         )
         _data = _resp.json()
         _u = _data.get("usage") or {}

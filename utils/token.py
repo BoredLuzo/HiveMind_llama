@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Token-Schaetzung fuer Context-Guards (chars/_CHARS_PER_TOKEN, Default 3.5)."""
+"""Token-Schaetzung fuer Context-Guards (chars/CHARS_PER_TOKEN, Default 3.0).
 
-_CHARS_PER_TOKEN = 3.5  # empirical for 35B MoE GGUF; raise to 4.0 if compression too rare
+2026-09-05 Kalibrierung 3.5 -> 3.0: Live-Messung (est vs. reale prompt_tokens)
+ergab ~2.7-2.9 chars/tok; 3.0 haelt die Anzeige nahe am realen Wert und laesst
+den UI/Guard-Schaetzer nicht mehr um ~20% unterzaehlen.
+"""
 
-def estimate_ctx_tokens(messages: list[dict]) -> int:
+CHARS_PER_TOKEN = 3.0  # zentrale Konstante (chars pro Token)
 
+def estimate_ctx_tokens(messages: list[dict]) -> float:
 
-    total = 0
+    total = 0.0
     for m in messages:
         content = m.get("content", "")
         if isinstance(content, list):
@@ -16,7 +20,7 @@ def estimate_ctx_tokens(messages: list[dict]) -> int:
             )
         else:
             text = str(content)
-        total += len(text) / _CHARS_PER_TOKEN
+        total += len(text) / CHARS_PER_TOKEN
         for _tc in (m.get("tool_calls") or []):
-            total += len(str(_tc.get("function", {}).get("arguments", ""))) / _CHARS_PER_TOKEN
+            total += len(str(_tc.get("function", {}).get("arguments", ""))) / CHARS_PER_TOKEN
     return total

@@ -52,7 +52,8 @@ _VRAM_TABLE: dict[str, float] = {
     # Ternary-Bonsai
     "ternary-bonsai:8b": 4.8,
 
-    # Ling-3.0-tiny (InclusionAI, 2026-08-19): MoE ~5.5B total / 1.4B aktiv,
+    # Ling-3.0-tiny (InclusionAI): hybrid MoE, 7.9B total / 1.3B aktiv,
+    # 128 routed + 1 shared Expert (8 aktiv), KDA/MLA. Q4_K_L ~4.75GB weights
     # — passt in 8GB, schneller als Expert-Offloading via PCIe.
     "ling-3.0-tiny":     4.8,
 

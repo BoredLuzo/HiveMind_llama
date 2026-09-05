@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from utils.token import CHARS_PER_TOKEN as _CPT
+
 
 # ── Budget ──────────────────────────────────────────────────────────────────
 
@@ -47,9 +49,9 @@ class ContextBudget:
         """
         Derive char budgets from available content tokens.
         content_tokens = model_ctx - system_prompt - tool_defs - history_reserve
-        Approx: 1 token ≈ 3.5 chars.
+        Approx: 1 token ≈ CHARS_PER_TOKEN chars (zentrale Konstante, utils.token).
         """
-        chars = int(content_tokens * 3.5)
+        chars = int(content_tokens * _CPT)
 
         if chars < 4000:        # tight: ~1K tokens (4B, 8K ctx, heavy quant)
             return ContextBudget(
@@ -91,7 +93,6 @@ class CharCaps:
     goal_pin: int = 800
 
 
-_CHARS_PER_TOKEN = 3.5
 _CTX_UTIL_RATIO = 0.7
 
 # (section, prozent, floor, ceiling)
@@ -113,7 +114,7 @@ def compute_char_caps(
 ) -> CharCaps:
 
 
-    chars = int(max(1024, int(ctx_tokens or 0)) * _CHARS_PER_TOKEN * _CTX_UTIL_RATIO)
+    chars = int(max(1024, int(ctx_tokens or 0)) * _CPT * _CTX_UTIL_RATIO)
     vals: dict[str, int] = {}
     for section, frac, floor, ceiling in _CAP_DEFS:
         vals[section] = max(floor, min(ceiling, int(chars * frac)))

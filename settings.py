@@ -108,13 +108,21 @@ DEFAULT_SETTINGS = {
     #   byte-identisch am Ende behalten (KV-Shift-Reuse). Default off -> erst
     #   nach Telemetrie-Phase einschalten.
     # - duo_compress_threshold > 0 = exakter UI-Override (absolute Tokens);
-    #   0 = auto: min(duo_compress_auto_floor*ctx, ctx - Reserve).
+    #   0 = auto: Schwelle = duo_compress_auto_floor*ctx (dynamische
+    #   Output-Reserve klemmt jede Tool-Round so, dass prompt+output <= ctx bleibt,
+    #   daher kein statischer max_tokens-Abzug noetig).
+    # - duo_compress_model: Light-Modell fuer die Kompressions-Zusammenfassung
+    #   (wenn VRAM ohne Coder-Evict reicht, sonst Fallback auf das Coder-Modell).
+    # - duo_compress_llm_timeout_s: Read-Timeout der Kompressions-LLM (120s war
+    #   fuer den 35B-CPU-MoE zu knapp -> ReadTimeout -> Fallback-Summaries).
     "duo_cache_friendly_ctx":    True,
     "duo_partial_compression":   False,
-    "duo_compress_auto_floor":   0.72,
+    "duo_compress_auto_floor":   0.78,
     "duo_compress_overflow_reserve": 1024,
     "duo_min_free_ctx_tokens":   0,
     "duo_max_compressions":      40,
+    "duo_compress_model":        "lfm2.5:2.6b",
+    "duo_compress_llm_timeout_s": 180,
     "session_compress_threshold": 20,
 
     # ════════════════════════════════════════════════════════════════════════

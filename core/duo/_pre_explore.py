@@ -7,6 +7,7 @@ logger = logging.getLogger("hivemind.duo")
 
 from context.chat import _load_chat_context, _chat_context_valid, _mutate_chat_context, _save_chat_context, _SESSIONS_DIR
 from context.resume import _try_resume
+from utils.token import CHARS_PER_TOKEN as _CPT
 from tools.definitions import _get_inline_tools, _filter_tools_for_mode
 from explore.cache import (
     _pre_explore_cache, _explore_cache_key, _explore_cache_valid,
@@ -535,16 +536,13 @@ async def _phase_pre_explore_prepare(ctx, state: dict):
     _xctx_slot_eff = max(512, _xctx // max(1, _xmsg_n_parallel_est))
     _XMSG_HARD_CAP    = max(_xctx * 8, _xctx_slot_eff * 8)
     #
-    # Problem: Floor 28800 > _xctx_slot_eff*3.5*0.82 bei ctx≤8101:
-    #   8101 * 3.5 * 0.82 = ~23248 chars echter KV-Budget
+    # Problem: Floor 28800 > echter KV-Budget bei kleinen ctx:
     #   → llama.cpp: "exceeds available context size" → Context-Limit-Recovery → 0 Reads
     #
-    #   - echter-KV-Budget: _xctx_slot_eff * 3.5 * 0.80 (80% Sicherheitspuffer)
-    #
-    # Bei ctx=8101:  min(36454, 8101*3.5*0.80) = min(36454, 22683) = 22683 ✓
-    # Bei ctx=16384: min(73728, 16384*3.5*0.80) = min(73728, 45875) = 45875 ✓
-    # Bei ctx=32768: min(147456, 32768*3.5*0.80) = min(147456, 91750) = 91750 ✓
-    _kv_budget_chars  = int(_xctx_slot_eff * 3.5 * 0.80)
+    #   - echter-KV-Budget: _xctx_slot_eff * CHARS_PER_TOKEN * 0.80 (80% Puffer),
+    #     CHARS_PER_TOKEN = zentrale Konstante (utils.token, 3.0).
+    #   - Beispiel ctx=16384: min(73728, 16384*3.0*0.80) = min(73728, 39321) ✓
+    _kv_budget_chars  = int(_xctx_slot_eff * _CPT * 0.80)
     _ratio_limit      = int(_xctx_slot_eff * _xctx_chars_ratio)
     _XCTX_CHARS_LIMIT = max(12000, min(_ratio_limit, _kv_budget_chars))
 

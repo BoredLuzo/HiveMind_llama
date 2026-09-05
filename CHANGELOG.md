@@ -5,6 +5,46 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.12] - 2026-09-06
+
+### Added
+
+- **Central token estimator calibration at 3.0 chars/token** (`utils/token.py`
+  `CHARS_PER_TOKEN`): the context guard, UI meters and compression notices now share
+  one constant; char-based conversions in `hive_functions/ctx_utils.py`,
+  `context/ctx_guard.py` and the pre-explore KV budget bind to it. The UI compression
+  notice shows rounded integers (no more `22284.5714… est. tokens` artifacts).
+- **Dynamic output reserve** (`context/ctx_guard.py` `clamp_request_max_tokens`): each
+  tool round clamps `max_tokens` so `prompt + output <= ctx` even when the agent's
+  output budget is large. The compression threshold is therefore floor-driven again
+  (`duo_compress_auto_floor`, default `0.78`) instead of binding to the full
+  `max_tokens` reserve (which previously pushed the trigger down to ~67 % on 40k ctx).
+- **Compression on a light model** (`duo_compress_model`, default `lfm2.5:2.6b`):
+  summaries run on a small model when it fits without evicting the coder (VRAM
+  `can_fit` guard), otherwise they fall back to the coder model. Read timeout is
+  configurable via `duo_compress_llm_timeout_s` (default `180`) to avoid the 120 s
+  `ReadTimeout` fallback-summary chain.
+- **`ling-3.0-tiny` as a recommended low-resource coder** (InclusionAI hybrid MoE,
+  7.9B total / 1.3B active): registry config (`model_configs/models/ling-3.0-tiny.json`,
+  `reasoning: on`), downloader entry (`deploy/fetch_models.py`, `bartowski` Q4_K_L),
+  `setup_models.bat` menu item and README Recommended Model Set row.
+
+### Changed
+
+- **Compression threshold is floor-driven with a dynamic output reserve**: the old
+  `min(P1, ctx − max_tokens − reserve)` behaviour no longer forces compression at ~67 %
+  when the coder agent uses a 12000-token output budget; compression now triggers at
+  the configured floor (~78 %) while per-request `max_tokens` is clamped to the free
+  context (plus estimator headroom) so single generations cannot overflow.
+- **New default `duo_compress_auto_floor = 0.78`** (settings.py; per-instance values in
+  `settings.json` still win). `ctx_guard.py` module default stays `0.72` (pure-function
+  tests unchanged).
+
+### Fixed
+
+- **Compression notices show integer estimates** instead of raw float `chars/3.5`
+  values in the UI status text.
+
 ## [1.0.11] - 2026-09-04
 
 ### Added

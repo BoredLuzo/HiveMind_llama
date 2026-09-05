@@ -19,6 +19,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+from utils.token import CHARS_PER_TOKEN as _CPT
+
 logger = logging.getLogger("hivemind.ctx_guard")
 
 # ── Defaults (werden pro Aufruf ueber die Settings ueberschrieben) ──────────
@@ -165,6 +167,39 @@ def should_use_partial(
     return True
 
 
+def clamp_request_max_tokens(
+    *,
+    est_tokens: int,
+    ctx_tokens: int,
+    max_output: int = 0,
+    factor: float = 1.35,
+    reserve_tokens: int = 768,
+    min_output: int = 256,
+) -> int:
+    """Dynamische Output-Reserve (2026-09-05).
+
+    Klemmt max_output einer einzelnen Tool-Round so, dass selbst im Worst-Case
+    (der Char-Schätzer unterzaehlt reale prompt_tokens um Faktor bis ~1.3x wegen
+    Tool-Schema/Overhead) prompt+output <= ctx bleibt. Frueh im Run (viel freier
+    Platz) bleibt das volle Budget erhalten; je voller der Kontext, desto kleiner
+    wird der erlaubte Output - Kompression wird dadurch erst bei der Floor-Schwelle
+    noetig statt wegen einer statischen max_tokens-Reserve (P2).
+    """
+    ctx = int(ctx_tokens or 0)
+    if ctx <= 0:
+        return max(1, int(max_output or 0))
+    est = max(0, int(est_tokens or 0))
+    budget = int(max_output or 0)
+    if budget <= 0:
+        budget = max(2048, int(ctx * 0.25))
+    head = ctx - int(est * float(factor or 1.35)) - int(reserve_tokens or 0)
+    if head >= budget:
+        return budget
+    if head > 0:
+        return max(1, head)
+    return max(1, int(min_output or 256))
+
+
 def _msg_chars(msg) -> int:
     c = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(c, list):
@@ -199,11 +234,11 @@ def plan_partial_cut_index(
     target = int(ctx_tokens * _to_num(target_post_fraction, DEFAULT_PARTIAL_POST_FRACTION))
     target = max(1, min(target, int(guard_tokens or 0)))
 
-    # Gesamtlaenge ueber Char-Heuristik (3.5 Zeichen/Tok), konsistent mit
-    # utils.token.estimate_ctx_tokens, wenn kein estimate_fn uebergeben wird.
+    # Gesamtlaenge ueber Char-Heuristik (CHARS_PER_TOKEN Zeichen/Tok), konsistent
+    # mit utils.token.estimate_ctx_tokens, wenn kein estimate_fn uebergeben wird.
     total = int(guard_tokens or 0)
     if total <= 0:
-        total = sum(_msg_chars(m) for m in msgs) // 3
+        total = int(sum(_msg_chars(m) for m in msgs) / _CPT)
 
     if total <= target:
         return -1
@@ -211,7 +246,7 @@ def plan_partial_cut_index(
     to_remove = total - target
     acc = 0
     for i, m in enumerate(msgs):
-        acc += _msg_chars(m) // 3
+        acc += int(_msg_chars(m) / _CPT)
         # Nachricht i wird Teil des zu komprimierenden Alt-Teils. cut zeigt auf
         # den ersten Message-Index, der roh erhalten bleibt.
         cut = i + 1

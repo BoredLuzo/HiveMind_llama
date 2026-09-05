@@ -38,6 +38,7 @@ from context.ctx_guard import (
     resolve_compress_threshold as _resolve_compress_threshold,
     should_use_partial as _ctx_should_use_partial,
     plan_partial_cut_index as _ctx_plan_partial_cut_index,
+    clamp_request_max_tokens as _clamp_request_max_tokens,
 )
 
 # ── Tools ──
@@ -48,6 +49,7 @@ from tools.workspace import new_transaction, get_transaction
 # ── Utils ──
 from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
 from utils.token import estimate_ctx_tokens as _estimate_ctx_tokens
+from utils.token import CHARS_PER_TOKEN as _CHARS_PER_TOKEN
 from utils.file import normalize_tool_path as _normalize_tool_path
 
 # ── SSE ──
@@ -2862,21 +2864,30 @@ async def run_code_duo(ctx):
                     )
                     _stored_threshold = int(ctx.settings.get("duo_compress_threshold", 0))
                     _plan_state = ""  # initialized before loop; updated during compression
-                    # CACHE-FRIENDLY (2026-09-04): effektive Schwelle =
-                    # min(P1 = auto_floor*ctx, P2 = ctx - reserve); UI-Override
-                    # (>0) setzt die Schwelle exakt. Komprimiert wird frueher
-                    # als der alte 0.8-Floor, damit der In-place-Evict-Churn
-                    # ab ~78% (Prefix-Cache-Killer) gar nicht erst beginnt.
+                    # CACHE-FRIENDLY + DYNAMISCHE OUTPUT-RESERVE (2026-09-05):
+                    # effektive Schwelle = auto_floor*ctx (P1). Der fruehere
+                    # P2-Abzug (ctx - max_tokens - Reserve) entfaellt, weil jede
+                    # Tool-Round ihr Output-Budget pro Request an den freien Platz
+                    # klemmt (clamp_request_max_tokens) -> prompt+output <= ctx ist
+                    # auch bei grossem max_tokens garantiert. So komprimiert es
+                    # erst ~78% (statt ~67% bei max_tokens 12000). UI-Override
+                    # (>0) setzt die Schwelle weiterhin exakt.
+                    _duo_compress_floor = float(ctx.settings.get("duo_compress_auto_floor", 0.78) or 0.78)
+                    _duo_out_budget = int(_dtool_opts.get("num_predict", 800) or 800)
+                    # Reserve-Cap nur als kleiner Overflow-Backstop (P1 soll binden).
+                    _duo_reserve_cap = max(1, min(_duo_out_budget, 4096))
                     _compress_threshold = _resolve_compress_threshold(
                         ctx_tokens=_dtool_ctx,
-                        num_predict=int(_dtool_opts.get("num_predict", 800) or 800),
+                        num_predict=_duo_reserve_cap,
                         ui_threshold=_stored_threshold,
-                        auto_floor=float(ctx.settings.get("duo_compress_auto_floor", 0.72) or 0.72),
+                        auto_floor=_duo_compress_floor,
                         min_free_tokens=int(ctx.settings.get("duo_min_free_ctx_tokens", 0) or 0),
                         overflow_reserve=int(ctx.settings.get("duo_compress_overflow_reserve", 1024) or 1024),
                     )
                     _cache_friendly_ctx = bool(ctx.settings.get("duo_cache_friendly_ctx", True))
                     _partial_compression = bool(ctx.settings.get("duo_partial_compression", False))
+                    _comp_llm_cfg = str(ctx.settings.get("duo_compress_model") or "").strip()
+                    _comp_llm_timeout_s = int(ctx.settings.get("duo_compress_llm_timeout_s", 180) or 180)
                     _max_tool_rounds_cfg = int(ctx.settings.get("duo_max_tool_rounds", 64))
                     _max_tool_rounds_cfg = 8 if duo_rounds > 1 else _max_tool_rounds_cfg
                     _max_tool_rounds = _resolve_tool_budget(
@@ -3272,7 +3283,7 @@ async def run_code_duo(ctx):
                             )
                             _force_compress_next = False
                             yield await ctx.emit({"type": "status",
-                                "content": f"🗜 Context compression ({_est_tokens} est. tokens → compressing...)"})
+                                "content": f"🗜 Context compression ({int(_est_tokens)} est. tokens → compressing...)"})
                             yield await ctx.emit({"type": "ctx_meter",
                                 "est_tokens": int(_coder_real_prompt_tokens[0] or _est_tokens), "ctx_limit": _dtool_ctx,
                                 "compressing": True})
@@ -3306,11 +3317,48 @@ async def run_code_duo(ctx):
                                         _comp_mode = "partial"
                             _msgs_before_compress = _dtool_msgs
                             _est_tokens_before_compress = _estimate_ctx_tokens(_dtool_msgs)
+                            # COMPRESSION-MODEL (2026-09-05): Die Zusammenfassung
+                            # laeuft auf einem Light-Modell (duo_compress_model),
+                            # wenn es ohne Coder-Evict passt (VRAM can_fit);
+                            # sonst Fallback auf das Coder-Modell. Read-Timeout
+                            # konfigurierbar (duo_compress_llm_timeout_s).
+                            _comp_mdl = exec_mdl
+                            _comp_port = _dport
+                            if _comp_llm_cfg and _comp_llm_cfg != exec_mdl:
+                                try:
+                                    from backend.llama_server_manager import manager as _lsm_comp
+                                    _comp_ctx_try = 16384
+                                    _fit_comp = _lsm_comp.can_fit(_comp_llm_cfg, _comp_ctx_try)
+                                    if not _fit_comp.ok:
+                                        _comp_ctx_try = 8192
+                                        _fit_comp = _lsm_comp.can_fit(_comp_llm_cfg, _comp_ctx_try)
+                                    if _fit_comp.ok:
+                                        _comp_port_new = await asyncio.wait_for(
+                                            _lsm_comp.ensure_loaded(_comp_llm_cfg, num_ctx=_comp_ctx_try, n_parallel=1),
+                                            timeout=240.0,
+                                        )
+                                        _comp_mdl = _comp_llm_cfg
+                                        _comp_port = int(_comp_port_new)
+                                        logger.warning(
+                                            "[COMPRESS-MODEL] compression via %s (port %d, ctx=%d) instead of %s",
+                                            _comp_mdl, _comp_port, _comp_ctx_try, exec_mdl,
+                                        )
+                                    else:
+                                        logger.warning(
+                                            "[COMPRESS-MODEL] light model %s does not fit (needed=%.0fMiB free=%.0fMiB) - using coder model for compression",
+                                            _comp_llm_cfg, _fit_comp.needed_mib, _fit_comp.free_mib,
+                                        )
+                                except Exception as _cm_err:
+                                    logger.warning(
+                                        "[COMPRESS-MODEL] light model %s unavailable (%s) - using coder model for compression",
+                                        _comp_llm_cfg, _cm_err,
+                                    )
                             _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(
                                 messages=_dtool_msgs,
-                                model=exec_mdl,
-                                port=_dport,
+                                model=_comp_mdl,
+                                port=_comp_port,
                                 client=_dtc,
+                                read_timeout=float(_comp_llm_timeout_s or 180),
                                 system_prompt=_sys_for_compress,
                                 original_task=ctx.user_input,
                                 written_files=_written_files,
@@ -3609,8 +3657,8 @@ async def run_code_duo(ctx):
                                     _s_cur = _sig_now[_mi] if _mi < len(_sig_now) else None
                                     _s_prev = _prev_sig[_mi]
                                     if _s_cur != _s_prev:
-                                        if _cum_chars / 3.5 < 10000:
-                                            _changed_early.append((_mi, int(_cum_chars / 3.5), _s_prev, _s_cur))
+                                        if _cum_chars / _CHARS_PER_TOKEN < 10000:
+                                            _changed_early.append((_mi, int(_cum_chars / _CHARS_PER_TOKEN), _s_prev, _s_cur))
                                         break
                                     if _s_cur:
                                         _cum_chars += _s_cur[1]
@@ -3622,6 +3670,19 @@ async def run_code_duo(ctx):
                                 )
                         except Exception as _sig_err:
                             logger.debug("[MSGSIG-CHANGE] Signature error: %s", _sig_err)
+                        # DYNAMISCHE OUTPUT-RESERVE (2026-09-05): max_tokens pro
+                        # Tool-Round wird an den freien Platz geklemmt (est-basiert,
+                        # Worst-Case-Faktor 1.35). Volle Budgets bleiben, solange
+                        # genug Platz ist; nahe der Kompressionsschwelle schrumpft
+                        # das Output-Budget statt ueberzulaufen.
+                        _est_now = _estimate_ctx_tokens(_dtool_msgs)
+                        _max_tokens_round = _clamp_request_max_tokens(
+                            est_tokens=int(_est_now),
+                            ctx_tokens=int(_dtool_ctx),
+                            max_output=int(_dtool_opts.get("num_predict", 2048) or 2048),
+                        )
+                        if _dtool_ctx > 0 and _max_tokens_round > int(_dtool_ctx):
+                            _max_tokens_round = int(_dtool_ctx)
                         _tool_payload = {
                             "model": exec_mdl, "messages": _dtool_msgs,
                             "tools": _active_tools, "stream": True,
@@ -3636,7 +3697,7 @@ async def run_code_duo(ctx):
                             "presence_penalty": _profile.get("presence_penalty", 1.5),
                             "repetition_penalty": _profile.get("repetition_penalty", 1.0),
                             # OUTPUT-LIMIT-POLICY (2026-08-12): max_tokens = visible
-                            "max_tokens": min(int(_dtool_opts.get("num_predict", 2048) or 2048), int(_dtool_ctx)),
+                            "max_tokens": _max_tokens_round,
                             "thinking": _thinking,
                             "thinking_budget": max(0, _tool_thinking_budget),
                         }

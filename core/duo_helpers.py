@@ -264,7 +264,7 @@ _EXPLORE_SIZE_TOLERANCE: dict[str, int] = {
     "qwen3.5":     1,   # 2B/4B/9B-Basis — live belegt
     "granite-4.1": 1,
     "qwen3.6":     1,
-    "ling-3.0-tiny": 1,  # 1.4B-aktiver MoE — kleine Familie, gleicher Lese-Vorlauf wie qwen3.5
+    "ling-3.0-tiny": 1,  # 1.3B-aktiver MoE (7.9B total) — kleine Familie, gleicher Lese-Vorlauf wie qwen3.5
 }
 
 

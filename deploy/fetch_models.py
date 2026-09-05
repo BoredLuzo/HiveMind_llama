@@ -8,6 +8,7 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   gemma-4:e4b-it          Q4_K_M        — Direct/Vision/Allrounder
   qwen3.6:35b-a3b-ud      UD-Q4_K_XL    — Coder/Planner (MoE, needs ~16GB RAM)
   hermes3.6:…-genesis-v12-mtp-apex-compact  APEX-Compact  — Coder/Hermes agent (MoE+MTP)
+  ling-3.0-tiny           Q4_K_L        — Low-resource Coder (hybrid MoE 7.9B/1.3B)
   lfm2.5:2.6b             Q4_K_M        — Subagent/Worker + Judge
   qwen3.5:0.8b-ud         UD-Q4_K_XL    — Subagent ladder (smallest tier)
   qwen3.5:2b              Q4_K_M        — Refiner
@@ -202,6 +203,24 @@ SPECS: list[dict] = [
             r"(?i)mmproj[-_.]hermes3\.6[-_.]35b.*genesis[-_.]f16\.gguf$",
             r"(?i)mmproj.*(f16|bf16)\.gguf$",
         ],
+    },
+    # ── Ling-3.0-tiny (InclusionAI, hybrid MoE, low-resource coder) ────────
+    # 7.9B total / 1.3B aktiv, 128 routed + 1 shared Expert (8 aktiv), KDA/MLA.
+    # Thinking per Default. Per-model config model_configs/models/ling-3.0-tiny.json
+    # setzt --reasoning on + jinja. Quant Q4_K_L (bartowski, ~4.75GB) ist der
+    # Low-VRAM-Coder-Standard; Q4_K_M als Fallback (WhiskyAKM/bloomer010 lower-case
+    # oder "Ling-3.0-tiny-..." Dateinamen). Kein mmproj (kein Vision).
+    # Dateien verifiziert 2026-09-05 in bartowski/Ling-3.0-tiny-GGUF (Q4_K_L).
+    {
+        "key": "ling-3.0-tiny",
+        "desc": "Ling-3.0-tiny (Low-resource hybrid MoE coder, 7.9B/1.3B aktiv, ~4.75GB download)",
+        "search": "Ling-3.0-tiny GGUF",
+        "author_pref": ["bartowski", "bloomer010", "inclusionAI", "WhiskyAKM"],
+        "file_regex": [
+            r"(?i)ling[-_.]3\.0[-_.]tiny[-_.]q4_k_l\.gguf$",
+            r"(?i)ling[-_.]3\.0[-_.]tiny[-_.]q4_k_m\.gguf$",
+        ],
+        "mmproj_regex": [],
     },
 ]
 

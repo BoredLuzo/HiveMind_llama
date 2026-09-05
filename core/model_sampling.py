@@ -79,7 +79,8 @@ LFM25_PROFILE = {
     "non_thinking": {"temperature": 0.2, "top_p": 1.0, "top_k": 80, "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.05, "cache_prompt": True},
 }
 
-# Ling-3.0-tiny (InclusionAI, 2026-08-19): 1.4B aktiver MoE, Thinking per Default
+# Ling-3.0-tiny (InclusionAI): 7.9B total / 1.3B aktiv, hybrid MoE (KDA/MLA),
+# Thinking per Default. Empfohlene Sampling-Parameter: temp 1.0, top_p 0.95, top_k 20.
 LING3_PROFILE = {
     "sampling_text": {
         "temperature": 1.0, "top_p": 0.95, "top_k": 20,
