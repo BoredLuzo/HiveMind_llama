@@ -132,6 +132,10 @@ DEFAULT_SETTINGS = {
     "duo_tree_scout_max_depth": 4,
     "duo_tree_scout_max_files": 200,
     "duo_static_map_chars":    0,   # 0 = Tier-abgeleitet (rich: 8000); >0 = explizites Static-Repo-Map-Char-Budget
+    # REPO-MAP-PIN (2026-09-06): "## Static Repo-Map" in die System-Message legen
+    # (byte-stabil = cache-stabil ueber Kompressionen). Deltas/TODO-Konsolidierung
+    # siehe core/repomap_pin.py.
+    "duo_pin_static_map":      True,
     "duo_coder_explore_chars": 0,
     "duo_parallel_preexplore": False,
     "duo_partition_max_files": 30,

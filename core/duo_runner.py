@@ -3110,6 +3110,20 @@ async def run_code_duo(ctx):
                                         "content": f"⛔ Server dead after health check (port {_dport}) — run aborted."})
                                     break
                         # (tool-result messages) — now the central repaired function.
+                        # REPO-MAP-PIN (2026-09-06): static repo-map into the pinned
+                        # system message once per built list (marker makes later
+                        # rounds a no-op). Extends the cache-stable prefix beyond the
+                        # ~7.1k system/tool base; the map is no longer inside the big
+                        # first user message that full compression rewrites.
+                        if ctx.settings.get("duo_pin_static_map", True):
+                            try:
+                                from core.repomap_pin import pin_static_map as _pin_map_once
+                                if _pin_map_once(_dtool_msgs):
+                                    logger.warning(
+                                        "[REPO-MAP-PIN] static repo-map moved into pinned system message"
+                                    )
+                            except Exception as _pin_err:
+                                logger.debug("[REPO-MAP-PIN] skipped: %s", _pin_err)
                         _est_tokens = _estimate_ctx_tokens(_dtool_msgs)
                         # GUARD-REAL-BASIS (2026-08-26): all guard decisions on the
                         # (evict/compress/90%/72%/notices) use the real
