@@ -3731,11 +3731,12 @@ async def run_code_duo(ctx):
                             if _can_compress or _guard_tokens > int(_dtool_ctx * 0.90):
                                 logger.warning(
                                     "[CTX-FULL] insufficient headroom for a safe tool round "
-                                    "(max_tokens=%d est=%d real=%d) - compressing first",
+                                    "(max_tokens=%d est=%d real=%d skip=%d/4) - compressing first",
                                     int(_max_tokens_round), int(_est_now), int(_guard_tokens),
+                                    _ctx_full_skips,
                                 )
                                 yield await ctx.emit({"type": "status",
-                                    "content": "⛽ Context too full for a safe tool round — compressing first."})
+                                    "content": f"⛽ Context too full for a safe tool round — compressing first. ({_ctx_full_skips}/4)"})
                                 _force_compress_next = True
                                 continue
                             # Compression exhausted & not at emergency level: keep

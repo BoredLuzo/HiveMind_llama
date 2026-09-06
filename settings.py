@@ -134,7 +134,9 @@ DEFAULT_SETTINGS = {
     "duo_static_map_chars":    0,   # 0 = Tier-abgeleitet (rich: 8000); >0 = explizites Static-Repo-Map-Char-Budget
     # REPO-MAP-PIN (2026-09-06): "## Static Repo-Map" in die System-Message legen
     # (byte-stabil = cache-stabil ueber Kompressionen). Deltas/TODO-Konsolidierung
-    # siehe core/repomap_pin.py.
+    # siehe core/repomap_pin.py. Baseline (Live 2026-09-06, PacMan/8 Dateien):
+    # Post-Compress-cached war ~6905/7137 (System+Tools) und ist mit Pinning auf
+    # ~8003 gestiegen - Referenzwert, falls ein Change die Prefix-Stabilitaet bricht.
     "duo_pin_static_map":      True,
     "duo_coder_explore_chars": 0,
     "duo_parallel_preexplore": False,
