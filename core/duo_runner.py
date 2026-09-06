@@ -2904,6 +2904,7 @@ async def run_code_duo(ctx):
                     _dr_dropped_tool_retries = 0     # DROPPED-FIX: rounds where tool-calls had malformed JSON args
                     _limit_warned = False  # round-limit warning: inject only once
                     _replan_bonus_granted = False  # extra rounds: grant once per run
+                    _ctx_full_skips = 0  # consecutive min-viable-budget skips (stop guard)
                     _replan_count = 0              # hard cap: max replans per run
                     _grace_round_active = False  # budget exhaustion grace round
                     _grace_round_used   = False  # hard exit if model ignores grace prompt
@@ -3709,6 +3710,49 @@ async def run_code_duo(ctx):
                         )
                         if _dtool_ctx > 0 and _max_tokens_round > int(_dtool_ctx):
                             _max_tokens_round = int(_dtool_ctx)
+                        # MIN-VIABLE-GUARD (2026-09-06): with a sub-~1k budget a
+                        # tool call can never finish -> sending it truncates JSON
+                        # args mid-write and poisons history (llama 500 on the next
+                        # request). Compress first instead of generating garbage.
+                        if int(_max_tokens_round) >= 1024:
+                            _ctx_full_skips = 0
+                        else:
+                            _ctx_full_skips += 1
+                            if _ctx_full_skips >= 4:
+                                logger.error(
+                                    "[CTX-FULL] 4 consecutive rounds without enough headroom "
+                                    "(est=%d ctx=%d) - compression cannot shrink enough",
+                                    int(_est_now), int(_dtool_ctx),
+                                )
+                                yield await ctx.emit({"type": "status",
+                                    "content": "⛔ Context cannot be reduced enough for a tool round — run stopped."})
+                                _ld_setter(3726); _loop_detected = True
+                                break
+                            if _can_compress or _guard_tokens > int(_dtool_ctx * 0.90):
+                                logger.warning(
+                                    "[CTX-FULL] insufficient headroom for a safe tool round "
+                                    "(max_tokens=%d est=%d real=%d) - compressing first",
+                                    int(_max_tokens_round), int(_est_now), int(_guard_tokens),
+                                )
+                                yield await ctx.emit({"type": "status",
+                                    "content": "⛽ Context too full for a safe tool round — compressing first."})
+                                _force_compress_next = True
+                                continue
+                            # Compression exhausted & not at emergency level: keep
+                            # the old tiny-budget behaviour instead of looping.
+                            _max_tokens_round = max(int(_max_tokens_round), 512)
+                        # TOOLCALL-SANITIZE (2026-09-06): never send assistant
+                        # tool_calls with malformed JSON args (llama 500 re-parse).
+                        try:
+                            from core.toolcall_sanitize import sanitize_invalid_tool_call_history as _sanitize_tc
+                            _sanitized_tc = _sanitize_tc(_dtool_msgs)
+                            if _sanitized_tc:
+                                logger.warning(
+                                    "[TOOLCALL-REPAIR] removed %d invalid tool-call entrie(s) from history before POST",
+                                    _sanitized_tc,
+                                )
+                        except Exception as _san_err:
+                            logger.debug("[TOOLCALL-REPAIR] skipped: %s", _san_err)
                         _tool_payload = {
                             "model": exec_mdl, "messages": _dtool_msgs,
                             "tools": _active_tools, "stream": True,
