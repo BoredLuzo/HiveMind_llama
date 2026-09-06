@@ -2857,6 +2857,42 @@ async def run_code_duo(ctx):
                             "content": f"⛔ Coder model {exec_mdl} could not be loaded "
                                        f"(VRAM/ctx?) — run stopped."})
                         break
+                    # CTX-ACTUAL (2026-09-06): the manager can downscale the slot
+                    # (PRE-FLIGHT ctx-down when VRAM is tight), so the server runs a
+                    # SMALLER n_ctx than configured. Guard/threshold/clamp/max_tokens
+                    # must follow the REAL slot ctx - otherwise prompt+budget exceed
+                    # the slot (llama HTTP 400) and the run churns through
+                    # force-compressions every few rounds.
+                    try:
+                        _actual_ctx = 0
+                        for _s_act in _lsm3._slots:
+                            if getattr(_s_act, "port", None) == _dport and getattr(_s_act, "_num_ctx", 0):
+                                _actual_ctx = int(_s_act._num_ctx)
+                                break
+                        if not _actual_ctx:
+                            try:
+                                async with httpx.AsyncClient(
+                                    timeout=httpx.Timeout(connect=3.0, read=3.0, write=3.0, pool=3.0),
+                                ) as _c_act:
+                                    _props_act = (await _c_act.get(
+                                        f"http://127.0.0.1:{_dport}/props"
+                                    )).json()
+                                _actual_ctx = int((_props_act.get("default_generation_settings") or {}).get("n_ctx") or 0)
+                            except Exception:
+                                pass
+                        if _actual_ctx > 0 and _actual_ctx < int(_dtool_ctx):
+                            logger.warning(
+                                "[CTX-ACTUAL] slot ctx=%d < configured %d - guard/clamp/budget follow the slot",
+                                _actual_ctx, int(_dtool_ctx),
+                            )
+                            _dtool_ctx = _actual_ctx
+                            _dtool_opts["num_ctx"] = _actual_ctx
+                            _dtool_opts["num_predict"] = min(
+                                max(int(_duo_coder_tok), 1024), _actual_ctx
+                            )
+                            _cached_coder_port_ctx = _actual_ctx
+                    except Exception as _ctx_act_err:
+                        logger.debug("[CTX-ACTUAL] query failed: %s", _ctx_act_err)
                     _dtc_owned = getattr(getattr(ctx.pipeline, 'ollama', None), '_client', None) is None
                     _dtc = getattr(getattr(ctx.pipeline, 'ollama', None), '_client', None) or httpx.AsyncClient(
                         limits=httpx.Limits(max_connections=4, max_keepalive_connections=4),
