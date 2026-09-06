@@ -3301,7 +3301,19 @@ async def run_code_duo(ctx):
                             yield await ctx.emit({"type": "ctx_meter",
                                 "est_tokens": int(_coder_real_prompt_tokens[0] or _est_tokens), "ctx_limit": _dtool_ctx,
                                 "compressing": True})
-                            _sys_for_compress = _dtool_sys_eff
+                            # PIN-PRESERVING COMPRESSION (2026-09-06): the system
+                            # message that is actually in _dtool_msgs may carry the
+                            # pinned static repo-map (byte-stable prefix). Rebuilding
+                            # it from the raw template (_dtool_sys_eff) would drop
+                            # the map on every compression and reset the cache base
+                            # to ~system+tools again. Prefer the live system content.
+                            _live_sys = (
+                                _dtool_msgs[0].get("content", "")
+                                if _dtool_msgs and isinstance(_dtool_msgs[0], dict)
+                                and _dtool_msgs[0].get("role") == "system"
+                                else ""
+                            )
+                            _sys_for_compress = str(_live_sys or _dtool_sys_eff)
                             _plan_state = ""
                             if _plan_tracker and _plan_tracker.total > 0:
                                 _cur = _plan_tracker._current_step()
