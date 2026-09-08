@@ -93,7 +93,7 @@ async def run_pipeline(ctx):
                 for b in vision_agent_images
             ]
 
-            _va_user_content: list = [{"type": "text", "text": f"[NUTZER]\n{ctx.user_input}"}]
+            _va_user_content: list = [{"type": "text", "text": f"[USER]\n{ctx.user_input}"}]
             for _b64_orig, _b64 in zip(vision_agent_images, _va_img_data):
                 _mime = "image/jpeg"
                 if isinstance(_b64_orig, str) and _b64_orig.startswith("data:image/"):
@@ -230,7 +230,7 @@ async def run_pipeline(ctx):
                     )
                     if _analyst_prof and _analyst_prof.get("tool_call") is False:
                         yield await ctx.emit({"type": "status",
-                            "content": f"⚠ Analyst ({_analyst_mdl}) unterstuetzt kein Tool-Calling "
+                            "content": f"⚠ Analyst ({_analyst_mdl}) does not support tool calling "
                                        f"— search result inserted as context"})
                     yield await ctx.emit({"type": "status",
                                           "content": f"🔍 Websearch (round {i+1}): {_ws_query[:60]}…"})
@@ -730,7 +730,7 @@ async def run_pipeline(ctx):
 
             yield await ctx.emit({
                 "type": "agent",
-                "content": "Antwort (Synthesizer off)",
+                "content": "Answer (synthesizer off)",
                 "model": ctx.registry_get("direct")
             })
 

@@ -5,6 +5,15 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- LLM-facing message scaffolding translated to English: the per-message origin
+  note (`[MESSAGE ORIGIN] ...`) and the `[USER]` label replace their German
+  forms; KV-poison markers (`server.py`, `vision/preprocess.py`) now match both
+  the new English and the legacy German forms.
+
 ## [1.0.13] - 2026-09-08
 
 ### Added

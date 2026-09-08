@@ -55,6 +55,8 @@ _VISION_POISON_MARKERS: tuple[str, ...] = (
     "ein lokales ki-system, das vollst",
     "nachrichtenherkunft",
     "[nutzer]\n",
+    "message origin",
+    "[user]\n",
     "i am hivemind",
 )
 
