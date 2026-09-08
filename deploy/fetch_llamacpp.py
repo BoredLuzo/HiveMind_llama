@@ -22,7 +22,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import platform
 import zipfile
+import tarfile
 import urllib.request
 from pathlib import Path
 
@@ -31,15 +33,22 @@ LLAMA_DIR = ROOT / "llama"
 
 API_LATEST = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
 
+_IS_WIN = platform.system() == "Windows"
+_OS_TAG = "win" if _IS_WIN else "ubuntu"
+_ASSET_EXT = r"\.zip" if _IS_WIN else r"\.(?:zip|tar\.gz)"
+SERVER_NAME = "llama-server.exe" if _IS_WIN else "llama-server"
 ASSET_REGEX = {
-    "vulkan": re.compile(r"^llama-b(\d+)-bin-win-vulkan-x64\.zip$", re.IGNORECASE),
+    "vulkan": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-vulkan-x64{_ASSET_EXT}$", re.IGNORECASE),
     # CUDA assets are named e.g. llama-b1234-bin-win-cuda-12.4-x64.zip
     # or llama-b1234-bin-win-cuda-13.3-x64.zip — the version is captured,
     # so that with equal build numbers the NEWER CUDA runtime wins
     # (CUDA-VERSION-FIX 2026-08-27: previously cuda-12.4 was always pulled,
     # even when the driver supports 13.x — live finding on RTX,
     # "--list-devices empty").
-    "cuda": re.compile(r"^llama-b(\d+)-bin-win-cuda-([\d.]+)-x64\.zip$", re.IGNORECASE),
+    "cuda": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-cuda-([\d.]+)-x64{_ASSET_EXT}$", re.IGNORECASE),
+    # CPU build (no backend tag in the name) + ROCm (Linux):
+    "cpu": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-x64{_ASSET_EXT}$", re.IGNORECASE),
+    "rocm": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-rocm-x64{_ASSET_EXT}$", re.IGNORECASE),
 }
 
 
@@ -167,7 +176,7 @@ def existing_build() -> tuple[int, Path] | None:
     """Find the highest already installed build."""
     best: tuple[int, Path] | None = None
     if LLAMA_DIR.is_dir():
-        for exe in LLAMA_DIR.glob("*/llama-server.exe"):
+        for exe in LLAMA_DIR.glob(f"*/{SERVER_NAME}"):
             m = re.search(r"b(\d{4,})", exe.parent.name)
             b = int(m.group(1)) if m else 0
             if best is None or b > best[0]:
@@ -184,24 +193,27 @@ def _verify_backend_dlls(exe: Path, backend: str) -> list[str]:
     llama-server finds no devices ("--device CUDA0" needs them). Returns the
     list of missing DLL names (empty = complete).
     """
+    if backend in ("cpu", "rocm"):
+        return []  # CPU/ROCm: keine gesonderten Runtime-DLLs neben dem Binary erwartet
     dll_dir = Path(exe).parent
+    _so = "" if _IS_WIN else ".so"
     missing: list[str] = []
     if backend == "cuda":
-        for name in ("ggml-cuda.dll",):
-            if not (dll_dir / name).exists():
-                missing.append(name)
-        for base in ("cudart64", "cublas64", "cublasLt64"):
-            if not list(dll_dir.glob(f"{base}*.dll")):
-                missing.append(f"{base}*.dll")
+        if not (dll_dir / f"ggml-cuda{_so}").exists():
+            missing.append(f"ggml-cuda{_so}")
+        if _IS_WIN:
+            for base in ("cudart64", "cublas64", "cublasLt64"):
+                if not list(dll_dir.glob(f"{base}*.dll")):
+                    missing.append(f"{base}*.dll")
     else:
-        if not (dll_dir / "ggml-vulkan.dll").exists():
-            missing.append("ggml-vulkan.dll")
+        if not (dll_dir / f"ggml-vulkan{_so}").exists():
+            missing.append(f"ggml-vulkan{_so}")
     return missing
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backend", choices=["vulkan", "cuda"], default="vulkan")
+    ap.add_argument("--backend", choices=["vulkan", "cuda", "cpu", "rocm"], default="vulkan")
     ap.add_argument("--cuda-version", default="",
                     help="Pick the CUDA runtime exactly (e.g. 12.4 or 13.3). Default: "
                          "driver version via nvidia-smi, otherwise the newest available.")
@@ -287,21 +299,27 @@ def main() -> int:
         return 1
     download(url, tmp_zip)
 
-    target = LLAMA_DIR / tmp_zip.stem
+    _base_name = re.sub(r"\.(zip|tar\.gz)$", "", asset["name"], flags=re.IGNORECASE)
+    target = LLAMA_DIR / _base_name
     if target.exists():
         print(f"    Removing old version: {target.name}")
         shutil.rmtree(target, ignore_errors=True)
     print(f"[3/3] Extracting to {target}...")
+    _is_targz = tmp_zip.name.lower().endswith(".tar.gz")
     try:
-        with zipfile.ZipFile(tmp_zip) as zf:
-            # CRC-check every member before extracting: a ZIP whose download
-            # was interrupted mid-body would otherwise unpack into broken
-            # binaries that "find no devices" or crash at startup.
-            bad = zf.testzip()
-            if bad is not None:
-                raise zipfile.BadZipFile(f"corrupt member: {bad}")
-            zf.extractall(target)
-    except (zipfile.BadZipFile, OSError, EOFError) as e:
+        if _is_targz:
+            with tarfile.open(tmp_zip) as tf:
+                tf.extractall(target)
+        else:
+            with zipfile.ZipFile(tmp_zip) as zf:
+                # CRC-check every member before extracting: a ZIP whose download
+                # was interrupted mid-body would otherwise unpack into broken
+                # binaries that "find no devices" or crash at startup.
+                bad = zf.testzip()
+                if bad is not None:
+                    raise zipfile.BadZipFile(f"corrupt member: {bad}")
+                zf.extractall(target)
+    except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError) as e:
         shutil.rmtree(target, ignore_errors=True)
         tmp_zip.unlink(missing_ok=True)
         print()
@@ -312,11 +330,13 @@ def main() -> int:
         return 1
     tmp_zip.unlink(missing_ok=True)
 
-    exe = target / "llama-server.exe"
+    exe = target / SERVER_NAME
     if not exe.exists():
         # Some archives extract a subfolder
-        nested = list(target.glob("*/llama-server.exe"))
+        nested = list(target.glob(f"*/{SERVER_NAME}"))
         exe = nested[0] if nested else exe
+    if not _IS_WIN and exe.exists():
+        exe.chmod(exe.stat().st_mode | 0o755)
 
     # CUDA-RUNTIME-SPLIT (2026-09-02): recent llama.cpp nightlies (b10760+)
     # stopped bundling the CUDA runtime DLLs in the main
@@ -324,7 +344,7 @@ def main() -> int:
     # `cudart-llama-bin-win-cuda-<ver>-x64.zip` on the same release. Download it
     # (matching the main asset's CUDA version) and extract the DLLs next to the
     # exe, otherwise the server fails to start / the installer errors out.
-    if args.backend == "cuda" and releases:
+    if args.backend == "cuda" and _IS_WIN and releases:
         _cuda_ver = ""
         _m_ver = re.match(r"^llama-b\d+-bin-win-cuda-([\d.]+)-x64\.zip$", str(asset.get("name") or ""), re.IGNORECASE)
         if _m_ver:
