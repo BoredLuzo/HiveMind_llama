@@ -75,6 +75,15 @@ class LlamaEvictMixin:
                 exclude_slot_id: Optional[int] = None) -> CanFitResult:
 
 
+        try:
+            from .llama_config import GPU_BACKEND as _ce_gb
+        except Exception:
+            _ce_gb = ""
+        if _ce_gb == "cpu":
+            # CPU-BACKEND (2026-09-08): VRAM pre-flight is meaningless — model
+            # + KV live in system RAM. Accept the load; a GPU-based check here
+            # would block every load on a CPU-only host.
+            return CanFitResult(True, 0.0, 0.0, 0.0, "cpu-backend")
         needed_mib = round(vram_of_moe(_strip_alias(model_name), num_ctx) * 1024, 1)
         free_mib = get_live_gpu_free_mib()
         source = "live"

@@ -2,6 +2,9 @@
 """LlamaLoadMixin — Methoden aus LlamaServerManager extrahiert (M3c)."""
 from __future__ import annotations
 
+import os
+import platform
+
 from .llama_config import (
     LLAMA_BIN, BASE_PORT, MAX_SLOTS,
     KV_CACHE_TYPE, GPU_LAYERS, CONTEXT_SIZE_DEFAULT,
@@ -697,6 +700,15 @@ class LlamaLoadMixin:
                 _gpu_layers = _gl_reg
         except Exception:
             pass
+        # CPU-BACKEND (2026-09-08): every layer runs on the CPU — a GPU-layer
+        # count from registry/table would request an offload to a GPU that
+        # does not exist.
+        if GPU_BACKEND == "cpu":
+            _gpu_layers = 0
+        import os as _os_th
+        # THREADS-DEFAULT (2026-09-08): POSIX hosts get a CPU-count-aware
+        # default — a fixed 16 oversubscribes small Linux boxes.
+        _def_threads = 16 if platform.system() == "Windows" else max(2, min(16, (_os_th.cpu_count() or 8)))
         cmd = [
             str(LLAMA_BIN),
             "--model",        str(gguf_path),
@@ -707,8 +719,8 @@ class LlamaLoadMixin:
             "--flash-attn",   "on",
             "--batch-size",   "1024",
             "--ubatch-size",  str(LLAMA_UBATCH),
-            "--threads",      "16",
-            "--threads-batch","8",
+            "--threads",      str(_def_threads),
+            "--threads-batch",str(_def_threads),
             "--split-mode",   "none",
         ]
 
@@ -801,7 +813,7 @@ class LlamaLoadMixin:
             if type(self)._dspark_flag_supported is None:
                 type(self)._dspark_flag_supported = _dspark
 
-        if type(self)._device_flag_supported:
+        if GPU_BACKEND != "cpu" and type(self)._device_flag_supported:
             # CUDA → "CUDA<N>" (DEVICE-FORMAT-FIX 2026-08-27: llama.cpp
             if GPU_BACKEND == "cuda":
                 cmd += ["--device", f"CUDA{VULKAN_DEVICE}"]
@@ -859,7 +871,7 @@ class LlamaLoadMixin:
                     GPU_BACKEND.upper(), LLAMA_BIN.name,
                     "Gerät gefunden" if _dev_ok else "KEIN Gerät gefunden",
                 )
-        if type(self)._backend_devices_ok is False and type(self)._device_flag_supported:
+        if GPU_BACKEND != "cpu" and type(self)._backend_devices_ok is False and type(self)._device_flag_supported:
             _be_upper = GPU_BACKEND.upper()
             raise RuntimeError(
                 f"{_be_upper}-Device-Check fehlgeschlagen: {LLAMA_BIN.name} "
@@ -952,7 +964,7 @@ class LlamaLoadMixin:
                 )
 
         # ── MoE-Offloading ────────────────────────────────────────────────────
-        if _moe_count > 0:
+        if _moe_count > 0 and GPU_BACKEND != "cpu":
             if type(self)._moe_flag_supported:
                 cmd += ["--n-cpu-moe", str(_moe_count)]
                 logger.info(
