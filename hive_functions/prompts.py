@@ -242,8 +242,9 @@ RULES:
 DUO_CODER_CHUNKING = """
 EXECUTION MODE — SUBTASK:
 
-The user message contains a [Plan — N subtasks] block with numbered implementation
-steps and a "current: X/N" indicator.
+The user message contains a "FULL PLAN" block with numbered implementation steps,
+✓/→/○ status badges (○ = pending, → = YOU ARE HERE, ✓ = done) and a
+"SUBTASK i OF n" header marking the current subtask.
 
 - Implement ONLY the current subtask — do NOT touch code belonging to other subtasks.
 - DO NOT restate, summarize, or re-explain the plan. Start with a tool call immediately.

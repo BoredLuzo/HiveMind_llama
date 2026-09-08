@@ -29,6 +29,17 @@ logger = logging.getLogger("hivemind.server")
 
 router = APIRouter(prefix="", tags=["Config"])
 
+# UI-REV (2026-09-09): monotonically incremented on every accepted POST
+# /settings and exposed via GET /settings so the UI can tag its patches.
+# A patch from a stale tab (older ui_rev) touching a protected key loses that
+# key — see post_settings. Escape hatch: "settings_force": true.
+_settings_rev = 0
+_UI_REV_PROTECTED_KEYS = {
+    "duo_compress_threshold", "duo_compress_auto_floor",
+    "duo_cache_friendly_ctx", "duo_partial_compression",
+    "duo_compress_local_only",
+}
+
 # Secrets / maschinen-spezifische Werte werden nie in ein Preset gespeichert
 # und nie aus einem geladen. models_dir ist ein absoluter Install-Pfad (vom
 # Installer gesetzt) - ein Preset-Snapshot/-Auto-Load darf ihn nicht auf ""
@@ -125,6 +136,7 @@ async def get_settings():
             _sa[_ak].setdefault("thinking_budget", _av.get("thinking_budget", 0))
     s["_registry"] = registry_all()
     s["_safe_profile_state"] = dict(_state._safe_profile_state)
+    s["settings_rev"] = int(_settings_rev)
     try:
         from backend.llama_config import (
             _MOE_EXPERT_COUNTS as _moe_tbl,
@@ -186,7 +198,30 @@ async def get_settings():
 
 @router.post("/settings")
 async def post_settings(req: Request):
+    global _settings_rev
     data = await req.json()
+    # UI-REV STALE-TAB GUARD (2026-09-09): a patch from a stale tab (snapshot
+    # predates newer changes) must not silently revert the compression keys.
+    if isinstance(data, dict):
+        _ui_rev = data.pop("ui_rev", None)
+        _settings_force = bool(data.pop("settings_force", False))
+    else:
+        _ui_rev, _settings_force = None, False
+    if not _settings_force:
+        try:
+            _ui_rev_i = int(_ui_rev)
+        except (TypeError, ValueError):
+            _ui_rev_i = -1
+        if 0 <= _ui_rev_i < _settings_rev:
+            _touched = _UI_REV_PROTECTED_KEYS.intersection(data.keys())
+            if _touched:
+                logger.warning(
+                    "[SETTINGS-GUARD] stale ui_rev %s < %s — protected keys stripped: %s "
+                    "(allow with \"settings_force\": true)",
+                    _ui_rev_i, _settings_rev, sorted(_touched),
+                )
+                for _k in _touched:
+                    data.pop(_k)
     if "ctx_overrides" in data and not isinstance(data.get("ctx_overrides"), dict):
         return JSONResponse({"error": "ctx_overrides must be an object"}, status_code=400)
     # the whole workspace chain was crippled (follow-up ran on repo root).
@@ -272,7 +307,8 @@ async def post_settings(req: Request):
     except Exception as e:
         logger.warning("[settings] save_settings failed: %s", e, exc_info=True)
         return JSONResponse({"error": f"Save failed: {str(e)[:120]}"}, status_code=500)
-    return {"ok": True}
+    _settings_rev += 1
+    return {"ok": True, "settings_rev": int(_settings_rev)}
 
 
 @router.post("/settings/agent")

@@ -1043,6 +1043,10 @@ async function loadSettings() {
     S.duoPinStaticMap  = s.duo_pin_static_map !== false;
     S.duoWriteGuard    = s.duo_write_guard_enabled !== false;
     S.duoNoopHint      = s.duo_noop_hint_enabled !== false;
+    S.duoCacheFriendly = s.duo_cache_friendly_ctx !== false;
+    S.duoPartialCompr  = s.duo_partial_compression === true;
+    S.duoCompressLocal = s.duo_compress_local_only === true;
+    S.settingsRev = parseInt(s.settings_rev || 0, 10) || S.settingsRev || 0;
     var _dcmsEl = document.getElementById('duo-compress-model-sel');
     if (_dcmsEl) {
       var _storedModel = (S.duoCompressModel && _dcmsEl.querySelector('option[value="' + S.duoCompressModel + '"]')) ? S.duoCompressModel : 'auto';
@@ -1052,6 +1056,9 @@ async function loadSettings() {
     _syncFlagCheck('duo-pin-static-map-toggle', S.duoPinStaticMap);
     _syncFlagCheck('duo-write-guard-toggle', S.duoWriteGuard);
     _syncFlagCheck('duo-noop-hint-toggle', S.duoNoopHint);
+    _syncFlagCheck('duo-cache-friendly-toggle', S.duoCacheFriendly);
+    _syncFlagCheck('duo-partial-compression-toggle', S.duoPartialCompr);
+    _syncFlagCheck('duo-compress-local-only-toggle', S.duoCompressLocal);
     // Planner / Coder TTL
     S.duoPlannerTtl = parseInt(s.duo_planner_ttl_seconds || 0) || 0;
     S.duoCoderTtl = parseInt(s.duo_coder_ttl_seconds || 0) || 0;
@@ -1297,11 +1304,19 @@ async function _flushQueuedSettings() {
     _emptyWaiters.forEach(function(_resolve){ try { _resolve(); } catch(e) {} });
     return;
   }
+  // UI-REV (2026-09-09): tag the patch with the loaded settings revision —
+  // the server strips protected keys from stale revisions (old tabs).
+  if (S.settingsRev > 0) _payload.ui_rev = S.settingsRev;
   try {
-    await fetch('/settings', {
+    var _resp = await fetch('/settings', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(_payload)
     });
+    try {
+      var _rj = await _resp.json();
+      if (_rj && _rj.settings_rev) S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
+      if (_rj && _rj.stale_rejected) console.warn('postSettings: stale patch rejected for', _rj.stale_rejected);
+    } catch (_je) {}
   } catch(e) {
     console.warn('postSettings flush failed:', e);
   }
@@ -3699,6 +3714,8 @@ function _perfResetRuntimeState() {
   S.runRequestCount = 0;
   S.perfCtxLimit = 0;
   S.perfCtxPct = 0;
+  S.perfCtxReal = 0;
+  S.perfCtxCached = 0;
   S.perfTokRate = 0;
   S.perfTokRateEma = 0;
   S.perfCompressing = false;
@@ -3715,6 +3732,7 @@ function _pbbEnsure() {
     + '<div id="pbb-body">'
       + '<div class="ctx-perf">'
         + '<span class="ctx-perf-item live" id="pbb-ctx">ctx: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-ctxreuse">reuse: --</span>'
         + '<span class="ctx-perf-item live" id="pbb-tok">out: --</span>'
         + '<span class="ctx-perf-item live" id="pbb-rate">tok/s: --</span>'
       + '</div>'
@@ -3769,7 +3787,19 @@ function _perfRender(finalized) {
     var _qId = function (id) { return document.getElementById(id); };
     var _outT = S.perfRealTokens > 0 ? S.perfRealTokens : S.perfEstTokens;
     var _e;
-    if ((_e = _qId('pbb-ctx'))) _e.textContent = 'ctx: ' + (_ctx > 0 ? (_pct > 0 ? _pct + '%' : '--') : '--');
+    if ((_e = _qId('pbb-ctx'))) {
+      var _ctxTxt = 'ctx: ' + (_ctx > 0 ? (_pct > 0 ? _pct + '%' : '--') : '--');
+      if (_ctx > 0 && _pct > 0) {
+        var _absC = _est > 0 ? _fmtTokens(_est) + '/' + _fmtTokens(_ctx) : _pct + '%';
+        _ctxTxt = 'ctx: ' + _absC + ' (' + _pct + '%)' + (S.perfCtxReal > 0 ? ' \u00b7 real' : ' \u00b7 est');
+      }
+      _e.textContent = _ctxTxt;
+    }
+    if ((_e = _qId('pbb-ctxreuse'))) {
+      _e.textContent = (S.perfCtxReal > 0 && S.perfCtxReal >= S.perfCtxCached)
+        ? 'reuse: ' + Math.round((S.perfCtxCached / S.perfCtxReal) * 100) + '%'
+        : 'reuse: --';
+    }
     if ((_e = _qId('pbb-tok'))) _e.textContent = 'out: ' + (_outT > 0 ? _fmtTokens(_outT) : '--');
     if ((_e = _qId('pbb-rate'))) _e.textContent = (_rateVal > 0 ? _rateVal.toFixed(1) : '--') + '/s';
     // PERF-CONSOLIDATION: consistent '--' placeholders until the first usage_meta arrives
@@ -3790,7 +3820,7 @@ function _perfRender(finalized) {
       var _parts = [];
       if (_ctx > 0 && _pct > 0) {
         var _absTxt = _est > 0 ? (_fmtTokens(_est) + '/' + _fmtTokens(_ctx)) : String(_pct);
-        _parts.push('ctx ' + _absTxt + ' (' + _pct + '%)');
+        _parts.push('ctx ' + _absTxt + ' (' + _pct + '%)' + (S.perfCtxReal > 0 ? ' real' : ''));
       } else if (_ctx > 0) {
         _parts.push('ctx --/' + _fmtTokens(_ctx));
       }
@@ -3828,10 +3858,14 @@ function _perfOnToken(content) {
   _perfRender(false);
 }
 
-function _perfOnCtxMeter(estTokens, ctxLimit, compressing) {
+function _perfOnCtxMeter(estTokens, ctxLimit, compressing, realTokens, cachedTokens) {
   var _est = parseInt(estTokens || 0, 10);
   var _ctx = parseInt(ctxLimit || 0, 10);
   if (!isNaN(_est) && _est >= 0) S.perfEstTokens = _est;
+  // METER-REAL (2026-09-09): real_tokens > 0 = measured usage (usage_meta),
+  // 0 = heuristic estimate (e.g. right after compression).
+  S.perfCtxReal = parseInt(realTokens || 0, 10) || 0;
+  S.perfCtxCached = parseInt(cachedTokens || 0, 10) || 0;
   if (!isNaN(_ctx) && _ctx > 0) {
     S.perfCtxLimit = _ctx;
     S.perfCtxPct = Math.round((S.perfEstTokens / _ctx) * 100);
@@ -5815,7 +5849,7 @@ function handleEvent(d) {
   // ── Context meter (PERF-CONSOLIDATION: thin bar on top removed,
   //     values live in the lower performance bar) ─────────────────────────
   else if (d.type === 'ctx_meter') {
-    _perfOnCtxMeter(d.est_tokens, d.ctx_limit, !!d.compressing);
+    _perfOnCtxMeter(d.est_tokens, d.ctx_limit, !!d.compressing, d.real_tokens, d.cached_tokens);
   }
   else if (d.type === 'memory_saved') {
     loadMemory();
@@ -8641,16 +8675,12 @@ function setSoulEvolveAgentEnabled(enabled) {
 
 const INTENT_MEMORY_KWS = [
   'remember that', 'forget', 'store this', 'save that', 'keep in mind',
-  'merke dir', 'speichere', 'vergiss', 'erinnere dich',
 ];
 const INTENT_EVOLVE_KWS = [
   'soul evolution', 'soul evolve', 'evolve yourself', 'learn from this',
-  'evolviere dich', 'entwickle dich', 'lerne daraus',
-  'lerne aus unserem', 'passe dich an', 'verbesser dich', 'update deine soul',
-  'lerne aus dieser unterhaltung', 'lerne aus unserem gespraech',
 ];
 // Tool keywords kept minimal — full detection lives in server
-const INTENT_TOOL_KWS   = ['search for', 'search the web', 'google it', 'calculate', 'compute', 'suche im web', 'google das', 'berechne', 'rechne aus'];
+const INTENT_TOOL_KWS   = ['search for', 'search the web', 'google it', 'calculate', 'compute'];
 
 function _detectIntentLocally(text) {
   const t = text.toLowerCase();

@@ -2341,11 +2341,10 @@ async def run_code_duo(ctx):
                 # "[TOOL_CALL] …"/"edit_file<argkey>…" that nothing parses.
                 _exec_header = _READONLY_CODER_NOTE
                 if _subtasks:
-                    _plan_preview = "\n".join(f"  {i+1}. {st}" for i, st in enumerate(_subtasks))
-                    _coder_input = (
-                        _exec_header + "\n" + _coder_input +
-                        f"\n\n[Plan — {len(_subtasks)} subtasks, current: {_di+1}/{_n_items}]:\n{_plan_preview}"
-                    )
+                    # PLAN-DEDUP (2026-09-09): the [Plan — N subtasks] preview is
+                    # gone — build_chunk_context already embeds the FULL PLAN
+                    # block with ✓/→/○ badges for chunk runs.
+                    _coder_input = _exec_header + "\n" + _coder_input
                 elif _plan_thinking:
                     _coder_input = (
                         _exec_header + "\n" + _coder_input +
@@ -2357,11 +2356,10 @@ async def run_code_duo(ctx):
                     "The plan below is ALREADY DECIDED. Your ONLY job is to implement it.\n"
                     "Start with a tool call NOW. Do not restate, summarize, or re-plan.\n"
                 )
-                _plan_preview = "\n".join(f"  {i+1}. {st}" for i, st in enumerate(_subtasks))
-                _coder_input = (
-                    _exec_header + "\n" + _coder_input +
-                    f"\n\n[Plan — {len(_subtasks)} subtasks, current: {_di+1}/{_n_items}]:\n{_plan_preview}"
-                )
+                # PLAN-DEDUP (2026-09-09): preview removed — chunk runs already
+                # carry the FULL PLAN block with ✓/→/○ badges from
+                # build_chunk_context; a second bare list added nothing.
+                _coder_input = _exec_header + "\n" + _coder_input
             elif _plan_thinking:
                 _exec_header = (
                     "[EXECUTION MODE — DO NOT CREATE YOUR OWN PLAN]\n"
@@ -3124,7 +3122,7 @@ async def run_code_duo(ctx):
                     # planned threshold compression. 0.70 fires clearly before
                     # the 400 zone; ctx_guard's module default is 0.72.
                     _duo_compress_floor = float(ctx.settings.get("duo_compress_auto_floor", 0.70) or 0.70)
-                    _duo_out_budget = int(_dtool_opts.get("num_predict", 800) or 800)
+                    _duo_out_budget = int(_dtool_opts.get("num_predict", 1024) or 1024)
                     # Reserve cap only as a small overflow backstop (P1 is meant to bind).
                     _duo_reserve_cap = max(1, min(_duo_out_budget, 4096))
                     _compress_threshold = _resolve_compress_threshold(
@@ -3303,11 +3301,13 @@ async def run_code_duo(ctx):
                     # never blocks (queue never fills up). Pattern like the planner bridge.
                     _coder_event_q: asyncio.Queue = asyncio.Queue(maxsize=20)
                     _coder_real_prompt_tokens: list = [0]
+                    _coder_real_cached_tokens: list = [0]
                     _prev_msg_sig: list = [None]
 
                     async def _coder_emit_fn(event: dict) -> str:
                         if isinstance(event, dict) and event.get("type") == "usage_meta" and event.get("prompt_tokens"):
                             _coder_real_prompt_tokens[0] = int(event["prompt_tokens"])
+                            _coder_real_cached_tokens[0] = int(event.get("cached_tokens") or 0)
                         _sse = await ctx.emit(event)
                         try:
                             _coder_event_q.put_nowait(_sse)
@@ -3451,7 +3451,9 @@ async def run_code_duo(ctx):
                             yield await ctx.emit({
                                 "type": "ctx_meter",
                                 "est_tokens": int(_coder_real_prompt_tokens[0] or _est_tokens),
+                                "real_tokens": int(_coder_real_prompt_tokens[0]),
                                 "ctx_limit": int(_dtool_ctx),
+                                "cached_tokens": int(_coder_real_cached_tokens[0]),
                                 "compressing": False,
                                 "swa_window": _swa_win,
                                 "swa_warning": _swa_warn,
@@ -3603,7 +3605,8 @@ async def run_code_duo(ctx):
                             yield await ctx.emit({"type": "status",
                                 "content": f"🗜 Context compression ({int(_est_tokens)} est. tokens → compressing...)"})
                             yield await ctx.emit({"type": "ctx_meter",
-                                "est_tokens": int(_coder_real_prompt_tokens[0] or _est_tokens), "ctx_limit": _dtool_ctx,
+                                "est_tokens": int(_coder_real_prompt_tokens[0] or _est_tokens),
+                                "real_tokens": int(_coder_real_prompt_tokens[0]), "ctx_limit": _dtool_ctx,
                                 "compressing": True})
                             # PIN-PRESERVING COMPRESSION (2026-09-06): the system
                             # message that is actually in _dtool_msgs may carry the
@@ -3969,6 +3972,7 @@ async def run_code_duo(ctx):
                             yield await ctx.emit({
                                 "type": "ctx_meter",
                                 "est_tokens": int(_est_tokens_after_compress),
+                                "real_tokens": int(_coder_real_prompt_tokens[0]),
                                 "ctx_limit": int(_dtool_ctx),
                                 "compressing": False,
                             })
@@ -4096,7 +4100,15 @@ async def run_code_duo(ctx):
                         _max_tokens_round = _clamp_request_max_tokens(
                             est_tokens=int(_est_now),
                             ctx_tokens=int(_dtool_ctx),
-                            max_output=int(_dtool_opts.get("num_predict", 2048) or 2048),
+                            max_output=int(_dtool_opts.get("num_predict", 1024) or 1024),
+                            # CLAMP-RESERVE-FIX (2026-09-09): honor the same
+                            # reserve knobs the threshold math uses instead of
+                            # the hardwired 768 default.
+                            reserve_tokens=max(
+                                768,
+                                int(ctx.settings.get("duo_compress_overflow_reserve", 1024) or 1024),
+                                int(ctx.settings.get("duo_min_free_ctx_tokens", 0) or 0),
+                            ),
                         )
                         if _dtool_ctx > 0 and _max_tokens_round > int(_dtool_ctx):
                             _max_tokens_round = int(_dtool_ctx)

@@ -1285,6 +1285,30 @@
         </label>
       </div>
       <div class="fld-hint">Injects a read_file nudge after 2 ineffective edits on the same file.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Cache-friendly compression</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="duo-cache-friendly-toggle" onchange="onFlagToggle('duo_cache_friendly_ctx', this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Compress to summary + raw tail so the llama.cpp prefix cache survives.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Partial compression</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="duo-partial-compression-toggle" onchange="onFlagToggle('duo_partial_compression', this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Only condense the older part; the recent tail stays byte-identical (KV-shift reuse).</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Local-only summary</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="duo-compress-local-only-toggle" onchange="onFlagToggle('duo_compress_local_only', this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Skip the compression LLM call — instant local fallback summary (best for slow prefill).</div>
       <div class="fld-hint" style="margin-top:6px">Flags take effect on the next run; the Write- and No-Op guards are also read live during a run.</div>
     </div>
 
