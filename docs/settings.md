@@ -2,7 +2,7 @@
 
 Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_settings_docs.py` — do not edit by hand.
 
-197 settings keys, based on DEFAULT_SETTINGS.
+199 settings keys, based on DEFAULT_SETTINGS.
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -43,9 +43,10 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_coder_tool_thinking_auto_mode` | str | `"off"` | — |
 | `duo_coder_ttl_seconds` | int | `0` | 0 = auto (420s), >0 = Override |
 | `duo_coding_mode` | bool | `True` | — |
-| `duo_compress_auto_floor` | float | `0.78` | — |
+| `duo_compress_auto_floor` | float | `0.7` | — |
 | `duo_compress_every` | int | `4` | — |
 | `duo_compress_llm_timeout_s` | int | `180` | — |
+| `duo_compress_local_only` | bool | `False` | — |
 | `duo_compress_model` | str | `"lfm2.5:2.6b"` | — |
 | `duo_compress_overflow_reserve` | int | `1024` | — |
 | `duo_compress_threshold` | int | `0` | — |
@@ -149,6 +150,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `learning_preset_mode` | bool | `False` | — |
 | `llama_cache_reuse` | int | `256` | — |
 | `llama_mlock` | bool | `True` | — |
+| `llama_ubatch_size` | int | `256` | — |
 | `max_concurrent_models` | null | `null` | — |
 | `max_iterations` | int | `2` | — |
 | `max_model_size_gb` | null | `null` | — |

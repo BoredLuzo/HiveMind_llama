@@ -263,6 +263,34 @@ def _validate_compression_summary(summary: str,
 
     
 
+def _build_local_fallback_summary(original_task: str, written_files: list,
+                                  done_tasks: list, explore_ctx: str) -> str:
+    """Local (no-LLM) compression summary — instant, deterministic.
+
+    Used when the compression-LLM call fails (e.g. ReadTimeout) or when
+    duo_compress_local_only is set. Keeps the anchors a later round needs:
+    original task, written files, completed subtasks, partition labels.
+    """
+    _fallback_files = ", ".join(written_files[:10]) if written_files else "none"
+    _fallback_done  = ", ".join(done_tasks[:5])    if done_tasks    else "none"
+    import re as _re_fb
+    _fb_parts = _re_fb.findall(r'partition\s*=\s*"([^"]+)"', explore_ctx or "")
+    _summary = (
+        f"## State Reconstruction (compression model unavailable)\n\n"
+        f"**Original Task:** {original_task[:300]}\n\n"
+        f"**Written Files:** {_fallback_files}\n"
+        f"**Completed Subtasks:** {_fallback_done}\n"
+    )
+    if _fb_parts:
+        _summary += "\n**Preserved Partitions:**\n"
+        for _p in list(dict.fromkeys(_fb_parts))[:12]:
+            _summary += f"- partition: {_p}\n"
+    _summary += (
+        "\nContinue implementing — do NOT re-read already written files."
+    )
+    return _summary
+
+
 async def _compress_tool_context(
     messages: list,
     model: str,
@@ -283,6 +311,7 @@ async def _compress_tool_context(
     compression_mode: str = "full",
     cut_index: int = -1,
     read_timeout: float = 180.0,
+    local_only: bool = False,
     aggressive_retry: bool = False,
 ) -> list:
 
@@ -402,64 +431,52 @@ async def _compress_tool_context(
         )
 
     _compress_usage: dict = {}
-    try:
-        _c_gen_t0 = time.monotonic()  # GEN-TIME: Compression-POST-Dauer
-        _resp = await client.post(
-            f"http://127.0.0.1:{port}/v1/chat/completions",
-            json={
-                "model":          model,
-                "messages":       [{"role": "user", "content": _compress_prompt}],
-                "stream":         False,
-                "temperature":    0.1,
-                "max_tokens":     800,
-                "thinking": False, "thinking_budget": 0,
-            },
-            timeout=httpx.Timeout(connect=10.0, read=float(read_timeout or 180.0), write=10.0, pool=5.0),
-        )
-        _data = _resp.json()
-        _u = _data.get("usage") or {}
-        if _u.get("completion_tokens"):
-            # TOKEN-TRACKER (2026-08-25): cached_tokens aus prompt_tokens_details.
-            try:
-                _cu_cached = int((_u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-            except Exception:
-                _cu_cached = 0
-            _compress_usage = {"completion_tokens": int(_u["completion_tokens"]),
-                               "prompt_tokens": int(_u.get("prompt_tokens") or 0),
-                               "cached_tokens": _cu_cached,
-                               "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)}
-        if "choices" in _data:
-            _summary = _data["choices"][0].get("message", {}).get("content", "").strip()
-        else:
-            _summary = _data.get("message", {}).get("content", "").strip()
-    except Exception as _compress_err:
-        logger.warning(
-            "Context compression failed (%s: %s) - using fallback summary",
-            type(_compress_err).__name__, _compress_err
-        )
-        _fallback_files = ", ".join(written_files[:10]) if written_files else "none"
-        _fallback_done  = ", ".join(done_tasks[:5])    if done_tasks    else "none"
-        _tool_results = [
-            (m.get("content", "") or "")[:200]
-            + ("..." if len(m.get("content", "") or "") > 200 else "")
-            for m in messages
-            if m.get("role") == "tool"
-        ][-3:]
-        import re as _re_fb
-        _fb_parts = _re_fb.findall(r'partition\s*=\s*"([^"]+)"', explore_ctx or "")
-        _summary = (
-            f"## State Reconstruction (compression model unavailable)\n\n"
-            f"**Original Task:** {original_task[:300]}\n\n"
-            f"**Written Files:** {_fallback_files}\n"
-            f"**Completed Subtasks:** {_fallback_done}\n"
-        )
-        if _fb_parts:
-            _summary += "\n**Preserved Partitions:**\n"
-            for _p in list(dict.fromkeys(_fb_parts))[:12]:
-                _summary += f"- partition: {_p}\n"
-        _summary += (
-            "\nContinue implementing — do NOT re-read already written files."
-        )
+    if local_only:
+        # LOCAL-ONLY (2026-09-08, duo_compress_local_only): skip the LLM
+        # summary POST entirely. For hardware where that call routinely hits
+        # the ReadTimeout (MoE with CPU experts, slow prefill) it is pure
+        # dead time — and the local summary is more cache-friendly, since it
+        # only lightly edits the summary message instead of rewriting it
+        # (observed live: LLM summary -> 0% reuse, local summary -> 33%+).
+        logger.info("Context compression: local-only mode - skipping the LLM summary call")
+        _summary = _build_local_fallback_summary(original_task, written_files, done_tasks, explore_ctx)
+    else:
+        try:
+            _c_gen_t0 = time.monotonic()  # GEN-TIME: Compression-POST-Dauer
+            _resp = await client.post(
+                f"http://127.0.0.1:{port}/v1/chat/completions",
+                json={
+                    "model":          model,
+                    "messages":       [{"role": "user", "content": _compress_prompt}],
+                    "stream":         False,
+                    "temperature":    0.1,
+                    "max_tokens":     800,
+                    "thinking": False, "thinking_budget": 0,
+                },
+                timeout=httpx.Timeout(connect=10.0, read=float(read_timeout or 180.0), write=10.0, pool=5.0),
+            )
+            _data = _resp.json()
+            _u = _data.get("usage") or {}
+            if _u.get("completion_tokens"):
+                # TOKEN-TRACKER (2026-08-25): cached_tokens aus prompt_tokens_details.
+                try:
+                    _cu_cached = int((_u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+                except Exception:
+                    _cu_cached = 0
+                _compress_usage = {"completion_tokens": int(_u["completion_tokens"]),
+                                   "prompt_tokens": int(_u.get("prompt_tokens") or 0),
+                                   "cached_tokens": _cu_cached,
+                                   "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)}
+            if "choices" in _data:
+                _summary = _data["choices"][0].get("message", {}).get("content", "").strip()
+            else:
+                _summary = _data.get("message", {}).get("content", "").strip()
+        except Exception as _compress_err:
+            logger.warning(
+                "Context compression failed (%s: %s) - using fallback summary",
+                type(_compress_err).__name__, _compress_err
+            )
+            _summary = _build_local_fallback_summary(original_task, written_files, done_tasks, explore_ctx)
 
     # Neue komprimierte Message-Liste
     _explored_paths: list[str] = []

@@ -484,6 +484,8 @@ defaults). Key settings:
 | `searxng_host` | http://localhost:8888 | SearXNG instance URL |
 | `duo_runtime_profile` | balanced | fast / balanced / critical |
 | `duo_coder_fallback_model` | qwen3.5:4b-ud | VRAM fallback for the coder (empty = off) |
+| `duo_partial_compression` | false | Keep a byte-identical raw tail at compression (KV-cache reuse); helps on slow-prefill setups |
+| `duo_compress_local_only` | false | Skip the compression LLM summary (instant local fallback) — for setups where that call routinely hits the read timeout |
 | `duo_test_feedback_final` | true | Auto-run tests before `task_complete` |
 | `duo_planner_max_tokens` | 8000 | Planner output budget (0 = none) |
 | `duo_planner_thinking_budget` | 8000 | Planner thinking budget (0 = none) |

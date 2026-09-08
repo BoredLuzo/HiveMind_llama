@@ -3129,6 +3129,7 @@ async def run_code_duo(ctx):
                     _partial_compression = bool(ctx.settings.get("duo_partial_compression", False))
                     _comp_llm_cfg = str(ctx.settings.get("duo_compress_model") or "").strip()
                     _comp_llm_timeout_s = int(ctx.settings.get("duo_compress_llm_timeout_s", 180) or 180)
+                    _compress_local_only = bool(ctx.settings.get("duo_compress_local_only", False))
                     _max_tool_rounds_cfg = int(ctx.settings.get("duo_max_tool_rounds", 64))
                     _max_tool_rounds_cfg = 8 if duo_rounds > 1 else _max_tool_rounds_cfg
                     _max_tool_rounds = _resolve_tool_budget(
@@ -3639,7 +3640,11 @@ async def run_code_duo(ctx):
                             # silently forget — see docs/architecture.md.
                             _comp_mdl = exec_mdl
                             _comp_port = _dport
-                            if _comp_llm_cfg and _comp_llm_cfg != exec_mdl:
+                            # LOCAL-ONLY: no LLM compression call happens, so
+                            # loading a light compressor (up to 240s wait, can
+                            # evict the coder) would be pure wasted pause.
+                            if (_comp_llm_cfg and _comp_llm_cfg != exec_mdl
+                                    and not _compress_local_only):
                                 try:
                                     from backend.llama_server_manager import manager as _lsm_comp
                                     _comp_ctx_try = 16384
@@ -3689,6 +3694,7 @@ async def run_code_duo(ctx):
                                 max_tool_rounds=_max_tool_rounds,
                                 compression_mode=_comp_mode,
                                 cut_index=_comp_cut,
+                                local_only=_compress_local_only,
                             )
                             # MINI-SHRINK-RETRY (2026-09-07): if the full compression
                             # barely shrank (<15% of the before value), an early
@@ -3698,7 +3704,10 @@ async def run_code_duo(ctx):
                             # BEFORE validation — the existing
                             # _validate_compression_summary flow (+ rule fallback)
                             # below checks the RETRY result.
+                            # LOCAL-ONLY: the local summary is deterministic — a
+                            # second identical attempt cannot shrink more.
                             if (not _mini_retry_done
+                                    and not _compress_local_only
                                     and str(_comp_mode or "full") == "full"
                                     and int(_est_tokens_before_compress or 0) > 2048):
                                 _mini_retry_done = True
@@ -3731,6 +3740,7 @@ async def run_code_duo(ctx):
                                         max_tool_rounds=_max_tool_rounds,
                                         compression_mode=_comp_mode,
                                         cut_index=_comp_cut,
+                                        local_only=_compress_local_only,
                                         aggressive_retry=True,
                                     )
                                     _after2_est = int(_estimate_ctx_tokens(_dtool_msgs2))

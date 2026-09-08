@@ -9,6 +9,16 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`duo_compress_local_only` setting** (compression block, default `false`):
+  skips the compression LLM summary POST entirely and builds the instant local
+  fallback summary instead. For hardware where that call routinely hits the
+  read timeout (MoE with CPU experts, slow prefill) it removes ~3 min of dead
+  time per compression — and the local summary is more cache-friendly, since
+  it only lightly edits the summary message instead of rewriting it (live
+  run 2026-09-08: LLM summary → 0 % reuse, local summary → 33 %+). The light
+  compressor model load and the mini-shrink retry are also skipped in this
+  mode. Combine with `duo_partial_compression: true` to keep a byte-identical
+  raw tail (KV-shift cache reuse).
 - **Linux/POSIX support for the llama.cpp backend**: `gpu_backend` now accepts
   `cpu` (env `HIVEMIND_GPU_BACKEND` / settings), binary discovery is
   platform-aware (`llama-server` without .exe, POSIX: backend fit outranks

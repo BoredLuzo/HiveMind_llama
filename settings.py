@@ -121,6 +121,11 @@ DEFAULT_SETTINGS = {
     #   (wenn VRAM ohne Coder-Evict reicht, sonst Fallback auf das Coder-Modell).
     # - duo_compress_llm_timeout_s: Read-Timeout der Kompressions-LLM (120s war
     #   fuer den 35B-CPU-MoE zu knapp -> ReadTimeout -> Fallback-Summaries).
+    # - duo_compress_local_only: LLM-Summary komplett ueberspringen und direkt
+    #   den lokalen (instantanen) Fallback-Summary bauen. Fuer Hardware, auf der
+    #   der Summary-Call routinemaessig in den ReadTimeout laeuft (MoE mit
+    #   CPU-Experts, langsames Prefill): dort kostet der LLM-Versuch nur
+    #   Totzeit und der lokale Summary ist zudem cache-freundlicher.
     "duo_cache_friendly_ctx":    True,
     "duo_partial_compression":   False,
     "duo_compress_auto_floor":   0.70,
@@ -129,6 +134,7 @@ DEFAULT_SETTINGS = {
     "duo_max_compressions":      40,
     "duo_compress_model":        "lfm2.5:2.6b",
     "duo_compress_llm_timeout_s": 180,
+    "duo_compress_local_only":   False,
     "session_compress_threshold": 20,
 
     # ════════════════════════════════════════════════════════════════════════
