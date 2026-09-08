@@ -177,7 +177,8 @@ def _extract_memory(text: str):
     t  = text.strip()
     tl = t.lower()
     core = re.sub(
-        r'^(?:merke?\s+dir\s+dass?\s+|merke?\s+dir\s*[,:\s]+|speichere?\s+|notiere?\s+|merke?\s*[,:\s]+)',
+        r'^(?:remember\s+(?:that\s+)?|note\s+(?:that\s+)?|save\s+(?:this|that)\s*[,:\s]?'
+        r'|merke?\s+dir\s+dass?\s+|merke?\s+dir\s*[,:\s]+|speichere?\s+|notiere?\s+|merke?\s*[,:\s]+)',
         '', tl, flags=re.I
     ).strip().lstrip(',: ')
     offset = tl.find(core[:12]) if len(core) >= 12 else max(0, len(tl) - len(core))
@@ -188,40 +189,46 @@ def _extract_memory(text: str):
         p  = core.find(vl)
         return corig[p:p+len(vl)].strip() if p >= 0 else vl
 
-    m = re.search(r'ich\s+hei(?:ss|\xdf)e\s+(\S+(?:\s+\S+)?)', core)
+    m = re.search(r'(?:my\s+name\s+is|ich\s+hei(?:ss|\xdf)e)\s+(\S+(?:\s+\S+)?)', core)
     if m: return 'name', _ov(m.group(1))
-    m = re.search(r'(?:ich\s+komme\s+aus|aus)\s+(\S+(?:\s+\S+))(?:\s+(?:komme|stamme|bin))?\s*$', core)
+    m = re.search(r"(?:i\s+come\s+from|i'?m\s+from|ich\s+komme\s+aus|aus)\s+(\S+(?:\s+\S+))(?:\s+(?:come|komme|stamme|bin))?\s*$", core)
     if m: return 'herkunft', _ov(m.group(1))
-    m = re.search(r'ich\s+(?:bin\s+(.{2,50}?)\s*$|(.{2,30}?)\s+bin\s*$)', core)
+    m = re.search(r"(?:i'?m|i\s+am)\s+(.{2,50}?)\s*$|ich\s+(?:bin\s+(.{2,50}?)\s*$|(.{2,30}?)\s+bin\s*$)", core)
     if m:
-        val = (m.group(1) or m.group(2)).strip()
+        val = (m.group(1) or m.group(2) or m.group(3)).strip()
         return 'ich_bin', _ov(val)
-    m = re.match(r'mein(?:e|er|em)?\s+(\w+)\s+(.+?)\s+ist\s*$', core)
+    m = re.match(r'(?:my|mein(?:e|er|em)?)\s+(\w+)\s+(.+?)\s+(?:is|ist)\s*$', core)
     if m: return m.group(1).strip(), _ov(m.group(2).strip())
-    m = re.match(r'mein(?:e|er|em)?\s+(\w[\w ]{0,20}?)\s*(?:\bist\b|=|:)\s*(.+)', core)
+    m = re.match(r'(?:my|mein(?:e|er|em)?)\s+(\w[\w ]{0,20}?)\s*(?:\b(?:is|ist)\b|=|:)\s*(.+)', core)
     if m: return m.group(1).strip().replace(' ', '_'), _ov(m.group(2))
-    m = re.match(r'(\w[\w ]{0,25}?)\s*(?:\bist\b|=|:)\s*(.+)', core)
+    m = re.match(r'(\w[\w ]{0,25}?)\s*(?:\b(?:is|ist)\b|=|:)\s*(.+)', core)
     if m:
         k = m.group(1).strip().replace(' ', '_')
-        if k not in ('ich','er','sie','es','wir','das','die','der') and len(k) < 35:
+        if k not in ('ich','er','sie','es','wir','das','die','der','i') and len(k) < 35:
             return k, _ov(m.group(2))
-    m = re.match(r'(\w+)\s+(.+?)\s+ist\s*$', core)
+    m = re.match(r'(\w+)\s+(.+?)\s+(?:is|ist)\s*$', core)
     if m:
         k = m.group(1).strip()
-        if len(k) < 20 and k not in ('ich','das','die','der','er','sie','wir'):
+        if len(k) < 20 and k not in ('ich','das','die','der','er','sie','wir','i','it','that','this'):
             return k, _ov(m.group(2).strip())
     return None, None
 
 
 # ─── Auto-memory: detects facts in normal conversations ──────────────────────
 _AUTO_MEMORY_PATTERNS = [
-    (re.compile(r'\bich\s+hei(?:ss|\xdf)e\s+(\S+(?:\s+\S+)?)', re.I),         'name'),
-    (re.compile(r'\bmein(?:e|er)?\s+name\s+ist\s+(\S+(?:\s+\S+)?)', re.I),     'name'),
-    (re.compile(r'\bich\s+(?:komme|stamme)\s+aus\s+(\S+(?:\s+\S+)?)', re.I),   'herkunft'),
-    (re.compile(r'\bich\s+wohne\s+in\s+(\S+(?:\s+\S+)?)', re.I),               'wohnort'),
+    (re.compile(r'\b(?:my\s+name\s+is|ich\s+hei(?:ss|\xdf)e)\s+(\S+(?:\s+\S+)?)', re.I),        'name'),
+    (re.compile(r'\bmein(?:e|er)?\s+name\s+ist\s+(\S+(?:\s+\S+)?)', re.I),                      'name'),
+    (re.compile(r"\b(?:i\s+come\s+from|i'?m\s+from)\s+(\S+(?:\s+\S+)?)", re.I),                 'herkunft'),
+    (re.compile(r'\bich\s+(?:komme|stamme)\s+aus\s+(\S+(?:\s+\S+)?)', re.I),                    'herkunft'),
+    (re.compile(r'\bi\s+live\s+in\s+(\S+(?:\s+\S+)?)', re.I),                                   'wohnort'),
+    (re.compile(r'\bich\s+wohne\s+in\s+(\S+(?:\s+\S+)?)', re.I),                                'wohnort'),
+    (re.compile(r'\bi\s+work\s+as\s+an?\s+(\S+(?:\s+\S+)?)', re.I),                             'beruf'),
     (re.compile(r'\bich\s+(?:bin|arbeite\s+als)\s+(entwickler|programmierer|student|lehrer|designer|manager|ingenieur|forscher|\w+er|\w+in)\b', re.I), 'beruf'),
-    (re.compile(r'\bich\s+bin\s+(\d{1,2})\s+jahre?(?:\s+alt)?', re.I),          'alter'),
+    (re.compile(r"\bi(?:'m|\s+am)\s+(\d{1,2})\s+years?\s+old", re.I),                           'alter'),
+    (re.compile(r'\bich\s+bin\s+(\d{1,2})\s+jahre?(?:\s+alt)?', re.I),                          'alter'),
+    (re.compile(r'\bmy\s+(?:current\s+)?project\s+is\s+(?:called\s+)?(\S+(?:\s+\S+){0,3})', re.I), 'projekt'),
     (re.compile(r'\bmein\s+(?:aktuelles?\s+)?projekt\s+(?:ist|heisst|hei\xdft)\s+(\S+(?:\s+\S+){0,3})', re.I), 'projekt'),
+    (re.compile(r'\bmy\s+(?:favorite|preferred)\s+(?:programming\s+)?language\s+is\s+(\S+)', re.I), 'sprache'),
     (re.compile(r'\bmeine\s+(?:lieblings)?(?:sprache|programmiersprache)\s+ist\s+(\S+)', re.I), 'sprache'),
 ]
 

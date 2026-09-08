@@ -35,8 +35,8 @@ _IMPL_OVERRIDE_RE = re.compile(
 # Verbs negated directly before/after ("aendere nichts", "nicht aendern",
 # "fix nothing") must not count as implementation intent.
 _NEGATOR_RE = re.compile(
-    r"(?:nicht|nichts|niemals|nie\b|kein\w*|never|not\b|no\b|don'?t|dont|"
-    r"ohne\b|weder\b|never)",
+    r"(?:never|not\b|no\b|don'?t|dont|"
+    r"nicht|nichts|niemals|nie\b|kein\w*|ohne\b|weder\b)",
     re.IGNORECASE,
 )
 
