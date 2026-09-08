@@ -1177,7 +1177,7 @@ async def stream(req: Request):
     # the run use the UI value even if the settings.json write lagged/failed —
     # no more "16k despite having set 32k".
     for _ctx_key in ("duo_coder_ctx_agentic", "duo_coder_ctx_normal",
-                     "duo_coder_ctx_until_finished", "duo_planner_ctx_target"):
+                     "duo_planner_ctx_target"):
         _cv = body.get(_ctx_key)
         if _cv is not None:
             try:

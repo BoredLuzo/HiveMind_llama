@@ -2,7 +2,7 @@
 
 Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_settings_docs.py` — do not edit by hand.
 
-199 settings keys, based on DEFAULT_SETTINGS.
+197 settings keys, based on DEFAULT_SETTINGS.
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -35,7 +35,6 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_chunking` | bool | `True` | — |
 | `duo_coder_ctx_agentic` | null | `null` | — |
 | `duo_coder_ctx_normal` | null | `null` | — |
-| `duo_coder_ctx_until_finished` | null | `null` | — |
 | `duo_coder_explore_chars` | int | `0` | — |
 | `duo_coder_fallback_model` | str | `"qwen3.5:4b-ud"` | — |
 | `duo_coder_model` | str | `""` | — |
@@ -44,7 +43,6 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_coder_ttl_seconds` | int | `0` | 0 = auto (420s), >0 = Override |
 | `duo_coding_mode` | bool | `True` | — |
 | `duo_compress_auto_floor` | float | `0.7` | — |
-| `duo_compress_every` | int | `4` | — |
 | `duo_compress_llm_timeout_s` | int | `180` | — |
 | `duo_compress_local_only` | bool | `False` | — |
 | `duo_compress_model` | str | `"lfm2.5:2.6b"` | — |

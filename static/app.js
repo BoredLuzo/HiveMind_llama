@@ -78,7 +78,6 @@ let S = {
   perfTokRateEma: 0,
   perfCompressing: false,
   duoCtxAgentic: 16384,
-  duoCtxUntilFinished: 16384,
   duoCtxNormal: 8192,
   duoCtxPlanner: 16384,
   duoCtxCritic: 8192,
@@ -281,7 +280,6 @@ function _duoCtxPayload() {
   S.duoCtxPlanner = p;
   var payload = {
     duo_coder_ctx_agentic: a,
-    duo_coder_ctx_until_finished: a,
     duo_coder_ctx_normal: n,
   };
   // Planner target only when "Planner = coder" is off (field enabled) — otherwise
@@ -989,8 +987,6 @@ async function loadSettings() {
     S.duoCtxAgentic = parseInputAsOptionalInt(s.duo_coder_ctx_agentic, 16384);
     var dctxAgEl = document.getElementById('duo-ctx-agentic');
     if (dctxAgEl) dctxAgEl.value = S.duoCtxAgentic != null ? S.duoCtxAgentic : 16384;
-    // Agentic ctx applies to Solo + Until-Finished — one value, both modes
-    S.duoCtxUntilFinished = S.duoCtxAgentic;
     S.duoCtxNormal = parseInputAsOptionalInt(s.duo_coder_ctx_normal, 8192);
     var dctxNoEl = document.getElementById('duo-ctx-normal');
     if (dctxNoEl) dctxNoEl.value = S.duoCtxNormal != null ? S.duoCtxNormal : 8192;
@@ -2227,7 +2223,6 @@ async function loadPreset(name) {
     // PRESET-CTX-FIX (2026-09-04): abgeleitete Ctx-Zustaende nach dem Load neu
     // auswerten, damit das Duo-Tab-Feld den geladenen Wert zeigt und bei
     // "Planner = coder" korrekt gespiegelt/disabled ist.
-    S.duoCtxUntilFinished = S.duoCtxAgentic;
     var _plAfter = document.getElementById('duo-ctx-planner');
     if (_plAfter) {
       if (S.duoPlannerUseCoderCtx) { _plAfter.disabled = true; _plAfter.value = S.duoCtxAgentic != null ? S.duoCtxAgentic : ''; }
@@ -4078,7 +4073,6 @@ async function sendMsg() {
         // CTX-WITH-RUN: send the currently chosen context so the run uses it
         // even if the settings.json write lagged/failed.
         duo_coder_ctx_agentic: (function(){var e=document.getElementById('duo-ctx-agentic'); if(!e)return undefined; var v=parseInt(e.value,10); return (isFinite(v)&&v>0)?v:undefined;})(),
-        duo_coder_ctx_until_finished: (function(){var e=document.getElementById('duo-ctx-agentic'); if(!e)return undefined; var v=parseInt(e.value,10); return (isFinite(v)&&v>0)?v:undefined;})(),
         duo_coder_ctx_normal: (function(){var e=document.getElementById('duo-ctx-normal'); if(!e)return undefined; var v=parseInt(e.value,10); return (isFinite(v)&&v>0)?v:undefined;})(),
         duo_planner_ctx_target: (function(){var e=document.getElementById('duo-ctx-planner'); if(!e||e.disabled)return undefined; var v=parseInt(e.value,10); return (isFinite(v)&&v>0)?v:undefined;})(),
       })

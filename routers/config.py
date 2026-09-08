@@ -40,7 +40,6 @@ _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir"}
 # postSettings und dem Snapshot). Alles andere bleibt Server-seitig gesnapshottet.
 _PRESET_OVERLAY_KEYS = {
     "duo_coder_ctx_agentic",
-    "duo_coder_ctx_until_finished",
     "duo_coder_ctx_normal",
     "duo_planner_ctx_target",
 }

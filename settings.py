@@ -106,7 +106,6 @@ DEFAULT_SETTINGS = {
     "duo_max_tool_rounds":     64,
     "duo_tool_output_ttl":     3,
     "duo_compress_threshold":  0,
-    "duo_compress_every":      4,
     # CACHE-FRIENDLY (2026-09-04): Prefix-Cache von llama.cpp schuetzen.
     # - duo_cache_friendly_ctx: Kompression primaer statt In-place-Eviction;
     #   bereits gesendete History wird nicht mehr in-place mutiert.
@@ -196,7 +195,6 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # ════════════════════════════════════════════════════════════════════════
     "duo_coder_ctx_agentic":   None,
-    "duo_coder_ctx_until_finished": None,
     "duo_coder_ctx_normal":    None,
     "duo_coder_tool_thinking": False,
     "duo_coder_tool_thinking_auto_mode": "off",

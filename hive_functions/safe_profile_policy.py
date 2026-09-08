@@ -34,7 +34,7 @@ _DUO_ROLE_SETTINGS = {
 # direct scalar keys adopted 1:1 from the policy.
 _SCALAR_SETTINGS = {
     "vram_budget_gb", "duo_runtime_profile",
-    "duo_coder_ctx_agentic", "duo_coder_ctx_until_finished", "duo_coder_ctx_normal",
+    "duo_coder_ctx_agentic", "duo_coder_ctx_normal",
     "default_keep_alive", "smart_preload_keep_alive", "max_concurrent_models",
 }
 
@@ -60,7 +60,6 @@ _USER_PREF_KEYS = {"vram_budget_gb"}
 # over the desired value.
 _DUO_CTX_USER_KEYS = {
     "duo_coder_ctx_agentic",
-    "duo_coder_ctx_until_finished",
     "duo_coder_ctx_normal",
 }
 

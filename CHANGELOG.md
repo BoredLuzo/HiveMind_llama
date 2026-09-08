@@ -14,6 +14,10 @@
   obsolete "adjust the venv path" hint removed. Stale ~30s retry comment in
   fetch_llamacpp.py corrected (~90s).
 - README and CHANGELOG rewritten, trimmed.
+- Dead settings removed: `duo_compress_every` (never read anywhere) and
+  `duo_coder_ctx_until_finished` (defined, UI-wired, never read — the agentic
+  ctx applies to until-finished runs anyway). The UI compression hint now
+  states the real auto floor (70%, was 72%).
 
 ## [1.0.13] - 2026-09-08
 

@@ -628,7 +628,7 @@
               onchange="postSettings({duo_compress_threshold:parseInt(this.value)||0})">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);line-height:1.55;margin-top:4px">
-            0 = auto: compresses at min(72% ctx, ctx - reserve) - small contexts trigger earlier.<br>
+            0 = auto: compresses at the auto floor (default 70% ctx) - small contexts trigger earlier.<br>
             &gt;0 = exact threshold in tokens. (Legacy mode <code>duo_cache_friendly_ctx=false</code>: auto = 80% ctx)
           </div>
           <div style="display:flex;align-items:center;gap:7px;margin-top:10px">
@@ -665,7 +665,7 @@
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Context Coder (Agentic)</span>
             <input type="number" min="1024" step="1024" id="duo-ctx-agentic" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
               style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
-              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxAgentic=v;S.duoCtxUntilFinished=v;postSettings({duo_coder_ctx_agentic:v,duo_coder_ctx_until_finished:v});setDuoSubMode(S.duoAgenticMode?'agentic':'critic');updateCtxScopeHint();refreshVram();_vramEstimate(S.duoCoderModel,v,'vram-est-agentic')">
+              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxAgentic=v;postSettings({duo_coder_ctx_agentic:v});setDuoSubMode(S.duoAgenticMode?'agentic':'critic');updateCtxScopeHint();refreshVram();_vramEstimate(S.duoCoderModel,v,'vram-est-agentic')">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
             Applies to coder (agentic/solo + until-finished).<br>
