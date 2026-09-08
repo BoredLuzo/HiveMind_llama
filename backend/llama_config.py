@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import re
 from pathlib import Path
 
@@ -18,12 +19,12 @@ def _resolve_gpu_backend() -> str:
 
 
     _env = os.environ.get("HIVEMIND_GPU_BACKEND", "").strip().lower()
-    if _env in ("vulkan", "cuda"):
+    if _env in ("vulkan", "cuda", "cpu"):
         return _env
     try:
         from settings import load_settings as _ls
         _g = str(_ls().get("gpu_backend", "") or "").strip().lower()
-        if _g in ("vulkan", "cuda"):
+        if _g in ("vulkan", "cuda", "cpu"):
             return _g
     except Exception:
         pass
@@ -34,20 +35,24 @@ GPU_BACKEND = _resolve_gpu_backend()
 
 
 def _find_llama_server() -> Path:
-    """llama-server.exe finden: Env > Auto-Discovery (Build + Backend + CUDA-Version) > Fallback."""
+    """Find llama-server (Windows: .exe, POSIX: no suffix): env > auto-discovery > fallback."""
     _env = os.environ.get("HIVEMIND_LLAMA_BIN", "").strip()
     if _env:
         return Path(_env)
 
-    # Auto-Discovery: <repo>/llama/<folder>/llama-server.exe.
-    _backend_tag = "cuda" if GPU_BACKEND == "cuda" else "vulkan"
+    # Auto-Discovery: <repo>/llama/<folder>/llama-server[.exe].
+    _bin_name = "llama-server.exe" if platform.system() == "Windows" else "llama-server"
+    _backend_tag = "cuda" if GPU_BACKEND == "cuda" else ("vulkan" if GPU_BACKEND == "vulkan" else "cpu")
     _best: tuple[tuple, Path] | None = None
     if _LLAMA_ROOT.is_dir():
-        for cand in _LLAMA_ROOT.glob("*/llama-server.exe"):
+        for cand in _LLAMA_ROOT.glob(f"*/{_bin_name}"):
             _name = cand.parent.name.lower()
             m = re.search(r"b(\d{4,})", _name)
             build = int(m.group(1)) if m else 0
-            backend_match = 1 if _backend_tag in _name else 0
+            if _backend_tag == "cpu":
+                backend_match = 0 if ("vulkan" in _name or "cuda" in _name or "rocm" in _name) else 1
+            else:
+                backend_match = 1 if _backend_tag in _name else 0
             cuda_ver: tuple = (0,)
             if _backend_tag == "cuda":
                 m2 = re.search(r"cuda-([\d.]+)", _name)
@@ -56,13 +61,18 @@ def _find_llama_server() -> Path:
                         cuda_ver = tuple(int(x) for x in m2.group(1).split("."))
                     except Exception:
                         cuda_ver = (0,)
-            key = (build, backend_match, cuda_ver)
+            if _backend_tag == "cpu":
+                # CPU backend: a vulkan/cuda binary won't start on a host
+                # without the backend loader — backend fit outranks build age.
+                key = (backend_match, build, cuda_ver)
+            else:
+                key = (build, backend_match, cuda_ver)
             if _best is None or key > _best[0]:
                 _best = (key, cand)
     if _best is not None:
         return _best[1]
 
-    return _LLAMA_ROOT / "llama-server.exe"
+    return _LLAMA_ROOT / _bin_name
 
 
 LLAMA_BIN = _find_llama_server()

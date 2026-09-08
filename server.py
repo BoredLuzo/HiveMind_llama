@@ -346,7 +346,7 @@ def _sync_backend_runtime_config() -> None:
         _lsm_init.MLOCK_MODEL = bool(settings.get("llama_mlock", True))
         import backend.llama_config as _lc_init
         _gb = str(settings.get("gpu_backend", "") or "").strip().lower()
-        if _gb in ("vulkan", "cuda"):
+        if _gb in ("vulkan", "cuda", "cpu"):
             _lc_init.GPU_BACKEND = _gb
             _lsm_init.GPU_BACKEND = _gb
             # LLAMA-BIN-RE-RESOLVE (2026-08-27, CUDA-VERSION-FIX): Auto-Discovery
