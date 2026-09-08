@@ -103,6 +103,7 @@ async def run_pre_explore(
                 emit_fn=emit_fn,
                 aborted_fn=aborted_fn,
                 thinking_override=thinking_override,
+                llm_read_timeout=llm_read_timeout,
             )
         )
         tasks.append(task)

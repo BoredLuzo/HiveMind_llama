@@ -184,7 +184,7 @@ def build_tree(root: str, max_depth: int = _MAX_DEPTH, max_files: int = _MAX_FIL
 
     _walk(root_path, depth=0, prefix="")
 
-    summary = f"\n[{counter[0]} Dateien angezeigt"
+    summary = f"\n[{counter[0]} files shown"
     if counter[0] >= max_files:
         summary += f" — limit reached, tree may be incomplete"
     summary += "]"
@@ -288,7 +288,7 @@ def build_tree_from_paths(
 
     _render(tree, "", 0)
 
-    summary = f"\n[{counter[0]} Dateien angezeigt]"
+    summary = f"\n[{counter[0]} files shown]"
     lines.append(summary)
     return "\n".join(lines)
 
@@ -605,7 +605,7 @@ def partition_tree(
 
         refined = big_groups
 
-    # Slot-Mathe: 1 Slot ≈ 4KB Dateiinhalt (konservativ — Worker liest ~14KB bei 70K ctx,
+    # Slot math: 1 slot ≈ 4KB file content (conservative — worker reads ~14KB at 70K ctx,
     _READ_SLOT_BYTES = 4000    # 4KB pro Slot
     _MAX_SLOTS_PER_PARTITION = max(4, int(max_files_per_partition * 1.5))
 
@@ -1100,9 +1100,7 @@ def select_analysis_window(
         return all_paths
 
     _stats: dict = {}
-    t1 = time.perf_counter()
     ranked = rank_repo_paths(workspace_root, all_paths, stats=_stats)
-    t_rank = time.perf_counter() - t1
     window = ranked[:max_files]
     logger.info(
         "[ANALYSIS-WINDOW] full walk=%d files (walk %.2fs, scan %.2fs, pagerank %.2fs), "
@@ -1354,7 +1352,7 @@ def build_contract_prompt(partition: dict, all_contracts: list[dict]) -> str:
 
     if other_parts:
         parts.append(
-            "## Contracts anderer Partitionen\n"
+            "## Contracts from other partitions\n"
             "For OTHER partitions: use their exports and contracts. Do NOT read their source files.\n"
             "For YOUR OWN files: read them before editing unless their content is already provided in context.\n"
             + "\n".join(other_parts)

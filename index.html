@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-<link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20260907-1">
 </head>
 <body>
 <header>
@@ -1244,6 +1244,50 @@
   </div>
   <!-- CONFIGS -->
   <div class="panel" id="p-configs">
+    <!-- Compression & Context Fixes (2026-09-07) -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">Compression &amp; Context Fixes</div>
+      <div style="margin:8px 0 4px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2)">Compression model</div>
+      <select id="duo-compress-model-sel"
+        style="width:100%;background:var(--bg2);border:1px solid rgba(217,169,78,.4);border-radius:4px;color:#e0c080;font-family:'IBM Plex Mono',monospace;font-size:12px;padding:5px 6px;outline:none;margin-bottom:4px"
+        onchange="onDuoCompressModelChange(this.value)"></select>
+      <div class="fld-hint">Auto (Coder) = the coder model summarizes. Selecting a model uses it as the light summarizer; it falls back to the coder when VRAM is tight.</div>
+      <div style="height:8px"></div>
+      <div class="tgl-row">
+        <span class="tgl-text">Error-Rollup</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="duo-error-rollup-toggle" onchange="onFlagToggle('duo_error_rollup', this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Deterministic error consolidation in the coder fix-loop.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Pin repo-map into system</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="duo-pin-static-map-toggle" onchange="onFlagToggle('duo_pin_static_map', this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Stable cache prefix (pinned map survives compression).</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Write-Guard</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="duo-write-guard-toggle" onchange="onFlagToggle('duo_write_guard_enabled', this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">write_file on existing files only after read_file.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">No-Op hint</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="duo-noop-hint-toggle" onchange="onFlagToggle('duo_noop_hint_enabled', this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Injects a read_file nudge after 2 ineffective edits on the same file.</div>
+      <div class="fld-hint" style="margin-top:6px">Flags take effect on the next run; the Write- and No-Op guards are also read live during a run.</div>
+    </div>
+
     <!-- Learning Preset Mode -->
     <div class="cfg-card">
       <div class="cfg-card-title">Learning Preset Mode <span class="cfl-badge" style="color:var(--purple);border-color:rgba(136,88,192,.4)">BETA</span></div>
@@ -1783,6 +1827,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-       <script src="/static/app.js?v=20260904-3"></script>
+        <script src="/static/app.js?v=20260907-1"></script>
 </body>
 </html>

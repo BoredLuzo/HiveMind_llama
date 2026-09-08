@@ -285,6 +285,8 @@ async def run_direct(ctx):
         # stream (the model decides; no tool call => no round trip).
         _direct_tools_enabled = bool(ctx.settings.get("direct_tools_enabled", True))
         _direct_tier = str(ctx.settings.get("direct_tools_tier", "readonly") or "readonly").strip().lower()
+        if _direct_tier == "websearch":  # accepted alias for the UI's "Websearch" label
+            _direct_tier = "readonly"
         _direct_tool_mode = {
             "readonly": "direct",
             "python": "direct_python",

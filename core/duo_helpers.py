@@ -99,7 +99,7 @@ def _preprocess_think_blocks(text: str) -> str:
                     _inner.group(1).strip()[:80], _je
                 )
         # Fallback: no valid JSON found, strip think blocks normally
-        return _RE_THINK_CLEANUP.sub("", text)
+        return RE_THINK_CLEANUP.sub("", text)
     return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
 
 # ── Regexes ────────────────────────────────────────────────────────────
@@ -264,7 +264,7 @@ _EXPLORE_SIZE_TOLERANCE: dict[str, int] = {
     "qwen3.5":     1,   # 2B/4B/9B-Basis — live belegt
     "granite-4.1": 1,
     "qwen3.6":     1,
-    "ling-3.0-tiny": 1,  # 1.3B-aktiver MoE (7.9B total) — kleine Familie, gleicher Lese-Vorlauf wie qwen3.5
+    "ling-3.0-tiny": 1,  # 1.3B-active MoE (7.9B total) — small family, same read prewarm as qwen3.5
 }
 
 

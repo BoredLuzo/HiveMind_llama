@@ -1,4 +1,4 @@
-# HiveMind v1.0.10
+# HiveMind v1.0.13
 
 Local multi-agent AI coding assistant powered by **llama.cpp**. Runs entirely on
 your own hardware — no cloud, no API keys, no data leaving your machine.
@@ -12,6 +12,9 @@ Explorer, Judge, …) through structured pipelines to analyze, plan, and execute
 software engineering tasks. Everything runs through a single-page web UI
 (`http://localhost:8001`) with live SSE streaming, a VRAM monitor, and full
 control over agents, models, and run modes.
+
+For a visual overview of how the components fit together, see
+[Architecture (`docs/architecture.md`)](docs/architecture.md).
 
 ## Quick Start (Windows)
 
@@ -54,15 +57,14 @@ learned insights about the repository.
 
 | Mode | When | What happens |
 |------|------|--------------|
-| **Auto** | default | Judge model classifies complexity → routes to Direct / Pipeline / Duo |
-| **Simple / Direct** | trivial tasks | Single model, direct answer, optional web-search tool calls |
+| **Simple / Direct** | trivial tasks (shipped default) | Single model, direct answer, optional web-search tool calls |
+| **Auto** | judge-routed | Judge model classifies complexity → routes to Direct / Pipeline / Duo |
 | **Pipeline** | analysis / complex docs | Analyst → Refiner → Critic → Synthesizer, optional constraint feedback loop |
-| **Map (AutoMap)** | mixed tasks | Judge picks the best model *per agent role* based on task type + capabilities + VRAM |
+| **Map (AutoMap)** | mixed tasks | Heuristic scorer picks the best model *per agent role* based on task type + capabilities + VRAM |
 | **Code Duo** | coding | Coder + Critic loop (see below); sub-modes **Critic-Duo** and **Agentic** |
 
-Mode buttons live in the sidebar ("Agents" tab). AutoMap routing is
-conservative by default (`automap_mode="conservative"`) and can learn from
-run outcomes (`routing_weights.json`).
+Mode buttons live in the sidebar ("Agents" tab). AutoMap routing can learn
+from run outcomes (`routing_weights.json`).
 
 > **Status:** `Auto` and `AutoMap` routing are currently **untested** and not
 > recommended for real work yet. HiveMind is most reliable in **Direct / Chat**
@@ -73,16 +75,18 @@ run outcomes (`routing_weights.json`).
 In **Simple / Direct** chat the model can use real tools through a tier
 (`direct_tools_tier`, UI: "Tool tier"):
 
-| Tier | Tools |
-|------|-------|
-| **Off** | pure chat — no tools |
-| **Websearch** | `web_search`, `web_fetch` only (no file read) |
-| **Python** | read tools + `web_search`/`web_fetch` + `run_python` |
-| **Full** | read/write/exec — `edit_file`, `run_bash`, background, git, … |
+| Tier | Value | Tools |
+|------|-------|-------|
+| **Off** | `off` | pure chat — no tools |
+| **Websearch** | `readonly` | `web_search`, `web_fetch` only (no file read) |
+| **Python** | `python` | read tools + `web_search`/`web_fetch` + `run_python` |
+| **Full** | `full` | read/write/exec — `edit_file`, `run_bash`, background, git, … |
 
 The tier only escalates what the model is allowed to call; `full` is needed
-for real edit/build requests. When SearXNG is not reachable the Websearch
-tier degrades to pure chat.
+for real edit/build requests. When the web-search module is unavailable or
+web search is disabled, the Websearch tier falls back to pure chat; with
+SearXNG installed but unreachable at request time, the tool calls return an
+error string instead.
 
 ### Code Duo (Critic-Duo / Agentic)
 
@@ -110,7 +114,8 @@ Agents have a rich, mode-scoped toolset (`tools/definitions.py`):
 | **Test** | `run_tests` (auto-detects pytest/npm/vitest/jest/cargo/go/maven/dotnet) |
 | **Git** | `git_status`, `git_commit` |
 | **Task** | `task_complete`, `ask_user` (pause + resume) |
-| **Browser** | `browser` (headless Playwright/Chromium: navigate, snapshot, screenshot, click, type, evaluate, console) |
+| **Browser** | `browser` (headless Playwright/Chromium: navigate, snapshot, screenshot, click, type, evaluate, console, close) |
+| **Misc** | `get_datetime`, `hivemind_pipeline` (OpenAI-compatible agent endpoint) |
 | **Web** | `web_search`, `web_fetch` (SearXNG, added when available) |
 
 Tool scoping per phase: `duo_full`, `duo_readonly`, `pre_explore`,
@@ -226,8 +231,8 @@ Field notes:
   `top_p`, `top_k`, `min_p`, `seed`, `presence_penalty`, `repetition_penalty`).
   **llama.cpp "disabled" semantics:** `top_p=1.0`, `min_p=0.0`,
   `presence_penalty=0.0`, `repetition_penalty=1.0`. Only entered fields are
-  stored; missing fields fall back to the family default. The `setup_models.bat`
-  → `[C]ustom` wizard collects this block interactively (generic for any model).
+  stored; missing fields fall back to the family default. The block is applied
+  at runtime via the model registry (`model_configs/models_registry.py`).
 
 > A config file whose name is only the base (e.g. `qwen3.5.json`) applies to
 > **all** tags of that base; a `qwen3.5_9b-ud.json` file applies only to that
@@ -266,7 +271,8 @@ Prefix a key with `_` to skip it (e.g. notes). `TODO:` paths are ignored.
 |-------|------|----------|------|
 | `gemma-4:e4b-it` (Q4_K_M) | Allrounder/Vision | ~3 GB | ~3 GB |
 | `qwen3.6:35b-a3b-ud` (UD-Q4_K_XL) | Coder/Planner (MoE) | ~20 GB | ~5 GB (experts in RAM) |
-| `hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact` (APEX-Compact) | Coder/Hermes agent (MoE, MTP) | ~17 GB | ~6 GB (experts in RAM) |
+| `qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact` (APEX-Compact) | Coder/Hermes agent (MoE, MTP) | ~17 GB | ~6 GB (experts in RAM) |
+| `ling-3.0-tiny` (Q4_K_L) | Low-resource Coder (hybrid MoE, 7.9B/1.3B) | ~4.75 GB | ~5 GB |
 | `qwen3.5:4b-ud` (UD-Q4_K_XL) | Analyst/Critic/Speed | ~3 GB | ~3 GB |
 | `qwen3.5:9b-ud` (UD-Q4_K_XL) | Direct/Duo-Coder | ~6 GB | ~6 GB |
 | `qwen3.5:2b` (Q4_K_M) | Refiner | ~1.3 GB | ~1.5 GB |
@@ -412,10 +418,9 @@ searxng.bat start|stop|restart|status
 searxng.bat external URL     # point at an already-running SearXNG (no Docker)
 ```
 
-`settings.yml` is baked into the image and selected via `SEARXNG_SETTINGS_PATH`
-(no host bind mounts — avoids Docker Desktop WSL2 path translation errors).
-The base image's `/etc/searxng` volume is intentionally NOT used for the config
-(it would shadow the baked file with a stale template). Container uses
+`settings.yml` is baked into the image
+(`COPY settings.yml /etc/searxng/settings.yml`) — no host bind mounts, which
+avoids Docker Desktop WSL2 path translation errors. Container uses
 `restart: unless-stopped`. Without Docker, web search stays disabled — or point
 HiveMind at an already-running instance with `searxng.bat external URL`.
 
@@ -470,7 +475,7 @@ defaults). Key settings:
 | `keep_awake_during_run` | true | System wake-lock during runs |
 | `desktop_notifications` | true | Windows toast notifications |
 
-See `settings.py` for the full list (189 configurable settings; auto-generated reference in `docs/settings.md`).
+See `settings.py` for the full list (197 configurable settings; auto-generated reference in `docs/settings.md`).
 
 ## Updating llama.cpp
 
@@ -515,12 +520,12 @@ taskkill /F /PID <pid>
 
 - Update GPU drivers.
 - Use the `win-vulkan-x64` build (not `win-cuda-x64`).
-- Add `--no-vulkan` for CPU fallback (edit `run.py`).
+- CPU fallback: when a model fails to start on the GPU, HiveMind automatically
+  retries that model once with `--n-gpu-layers 0` (CPU-only inference).
 
 ### llama.cpp download slow or fails
 
 - Download manually from https://github.com/ggml-org/llama.cpp/releases
-- GitHub API rate limit: 60 req/hour unauthenticated; set `GITHUB_TOKEN`.
 
 ### Web search returns no results
 

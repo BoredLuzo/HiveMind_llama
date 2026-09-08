@@ -86,7 +86,7 @@ class ModelSlot:
                                         return True
                                 except Exception:
                                     pass
-                            # status=="loading": weiter warten, 0.5s Pause
+                            # status=="loading": keep waiting, 0.5s pause
                         except Exception:
                             _stable_count = 1
                             _stable_needed = 3

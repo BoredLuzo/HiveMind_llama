@@ -108,7 +108,7 @@ async def run_research(task: str, workspace_lock: str | None) -> str:
         return ("Subagent exceeded the time limit — partial results "
                 "discarded. Research inline.")
     except Exception as e:
-        return f"Subagent-Fehler ({type(e).__name__}) — recherchiere inline."
+        return f"Subagent error ({type(e).__name__}) — research inline."
     finally:
         _active = False
 
@@ -124,7 +124,7 @@ _SYSTEM_PROMPT = (
 
 
 def _tool_schemas() -> list[dict]:
-    """OpenAI-Schemas der Read-Only-Tools aus definitions.py filtern."""
+    """Filter the read-only tool OpenAI schemas from definitions.py."""
     try:
         from tools.definitions import _INLINE_CODING_TOOLS
         want = set(_ALLOWED_TOOLS)
@@ -176,8 +176,8 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
 
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": f"Aufgabe:\n{task}\n\n"
-         "Recherchiere mit den Werkzeugen und liefere die Zusammenfassung."},
+        {"role": "user", "content": f"Task:\n{task}\n\n"
+         "Research with the tools and provide the summary."},
     ]
     summary = ""
     from tools.runner import _run_inline_tool
@@ -200,7 +200,7 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
                     args = {}
                 tc_id = tc.get("id") or f"call_{_round}"
                 if name not in _ALLOWED_TOOLS:
-                    result = f"[blocked] '{name}' ist im Subagent nicht erlaubt (read-only)."
+                    result = f"[blocked] '{name}' is not allowed in the subagent (read-only)."
                 else:
                     result = await _run_inline_tool(
                         name, dict(args), workspace_lock=workspace_lock)

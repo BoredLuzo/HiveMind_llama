@@ -23,7 +23,6 @@ MODEL_PROFILES: dict[str, dict] = {
     "qwen3-d":     {"thinking": True,  "vision": False, "tool_call": False},
     "qwen3.6":     {"thinking": True,  "vision": True, "tool_call": True},  # embedded encoder / mmproj
     "hermes3.6":   {"thinking": True,  "vision": True, "tool_call": True},
-    "hermes":      {"thinking": True,  "vision": True, "tool_call": True},
     "lfm2.5":      {"thinking": False, "vision": False, "tool_call": True},
     # Ling-3.0-tiny (InclusionAI, 2026-08-19): MoE, Thinking per Default an.
     "ling-3.0-tiny": {"thinking": True, "vision": False, "tool_call": True},

@@ -17,7 +17,7 @@ _VRAM_TABLE: dict[str, float] = {
     "qwen3.5:0.8b-ud":   0.7,
     "qwen3.5:2b":        1.5,
     "qwen3.5:2b-ud":     1.7,
-    # LFM2.5 — 8B total, 1B aktiv, Q4_K_M ~2.5GB weights + 0.2GB KV@4096
+    # LFM2.5 — 8B total, 1B active, Q4_K_M ~2.5GB weights + 0.2GB KV@4096
     "lfm2.5:8b-a1b":     2.7,
     # LFM2.5 dense 2.6B (Q4_K_M ~1.6GB weights + KV@4096) — Subagent-Ladder Default
     "lfm2.5:2.6b":       1.9,
@@ -52,9 +52,9 @@ _VRAM_TABLE: dict[str, float] = {
     # Ternary-Bonsai
     "ternary-bonsai:8b": 4.8,
 
-    # Ling-3.0-tiny (InclusionAI): hybrid MoE, 7.9B total / 1.3B aktiv,
-    # 128 routed + 1 shared Expert (8 aktiv), KDA/MLA. Q4_K_L ~4.75GB weights
-    # — passt in 8GB, schneller als Expert-Offloading via PCIe.
+    # Ling-3.0-tiny (InclusionAI): hybrid MoE, 7.9B total / 1.3B active,
+    # 128 routed + 1 shared expert (8 active), KDA/MLA. Q4_K_L ~4.75GB weights
+    # — fits in 8GB, faster than expert offloading via PCIe.
     "ling-3.0-tiny":     4.8,
 
     # Qwen3.6
@@ -295,24 +295,43 @@ def get_live_gpu_free_mib() -> float | None:
 
 
 async def wait_for_vram_reclaim(target_mib: int, timeout_sec: int = 45,
-                                poll_interval: float = 0.5) -> bool:
+                                poll_interval: float = 0.5,
+                                stall_abort_s: float = 0.0) -> bool:
 
 
     import asyncio as _asyncio
     import time as _time
     start = _time.time()
     _first_free: float | None = None
+    _best_free: float | None = None
     while _time.time() - start < timeout_sec:
         try:
             free_mib = get_live_gpu_free_mib()
             if _first_free is None and free_mib is not None:
                 _first_free = free_mib
+                _best_free = free_mib
+            elif free_mib is not None and _best_free is not None:
+                _best_free = max(_best_free, free_mib)
             if free_mib is not None and free_mib >= target_mib:
                 _logger.info(
                     "[VRAM-RECLAIM] %d MiB frei nach %.1fs — OK (target: %d)",
                     free_mib, _time.time() - start, target_mib,
                 )
                 return True
+            # STALL-ABORT (2026-09-07): if free VRAM does not measurably rise over
+            # ~stall_abort_s (no driver release in progress), the target is
+            # structurally unreachable — abort early instead of waiting 45s
+            # (e.g. external ~3.1 GB blocks hermes@256 even after eviction).
+            if (stall_abort_s > 0.0 and _first_free is not None
+                    and _best_free is not None
+                    and _time.time() - start >= stall_abort_s
+                    and _best_free < _first_free + 64):
+                _logger.warning(
+                    "[VRAM-RECLAIM] abort after %.0fs (no release progress: "
+                    "free=%dMiB, target=%d, initially=%dMiB)",
+                    stall_abort_s, int(_best_free), target_mib, int(_first_free),
+                )
+                return False
         except Exception as e:
             _logger.warning("[VRAM-RECLAIM] measurement failed: %s", e)
             return False
@@ -322,9 +341,9 @@ async def wait_for_vram_reclaim(target_mib: int, timeout_sec: int = 45,
     except Exception:
         free_mib = -1
     _logger.warning(
-        "[VRAM-RECLAIM] Timeout nach %ds — nur %d MiB frei (target: %d, anfangs %s) — "
-        "Treiber-Freigabe kann 30-40s dauern (AMD/Vulkan)",
+        "[VRAM-RECLAIM] timeout after %ds — only %d MiB free (target: %d, initially %s) — "
+        "driver release can take 30-40s (AMD/Vulkan)",
         timeout_sec, free_mib, target_mib,
-        f"{_first_free:.0f} MiB" if _first_free is not None else "unbekannt",
+        f"{_first_free:.0f} MiB" if _first_free is not None else "unknown",
     )
     return False

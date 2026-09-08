@@ -60,10 +60,10 @@ class LlamaProcessMixin:
             if _nm(slot.model) != _nm(model):
                 continue
             if slot._loading:
-                # LOAD-DIED-GUARD (2026-08-31): Wenn der Ladeprozess bereits
-                # gestorben ist, klemmt _loading auf True und _ready_event wird
-                # nie gesetzt → ensure_loaded würde 240s auf ein totes Event
-                # warten. Slot zurücksetzen und weitersuchen (Caller lädt neu).
+                # LOAD-DIED-GUARD (2026-08-31): If the load process has already
+                # died, _loading stays True and _ready_event is never
+                # set → ensure_loaded would wait 240s on a dead event.
+                # Reset the slot and keep searching (caller reloads).
                 if slot.process is not None and slot.process.poll() is not None:
                     logger.warning(
                         "ensure_loaded: load process for %s died (slot %s) - resetting slot.",
@@ -76,7 +76,6 @@ class LlamaProcessMixin:
                 if slot._orphan_port is None:
                     return slot
                 # Orphan-Slot: re-verify via TCP+API
-                is_orphan = True
                 self._lock.release()
                 try:
                     api_ok = await self._verify_port_api(slot.port)

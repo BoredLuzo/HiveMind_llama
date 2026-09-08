@@ -1,0 +1,450 @@
+{
+ "backend/llama_client.py": {
+  "broad_except": 3,
+  "except_pass": 3
+ },
+ "backend/llama_compat.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "backend/llama_config.py": {
+  "broad_except": 7,
+  "except_pass": 3
+ },
+ "backend/llama_manager_utils.py": {
+  "broad_except": 15,
+  "except_pass": 4
+ },
+ "backend/llama_models.py": {
+  "broad_except": 9,
+  "except_pass": 5
+ },
+ "backend/llama_slots.py": {
+  "broad_except": 9,
+  "except_pass": 4
+ },
+ "backend/llama_vram_table.py": {
+  "broad_except": 5,
+  "except_pass": 2
+ },
+ "backend/manager_health.py": {
+  "broad_except": 8,
+  "except_pass": 5
+ },
+ "backend/manager_load.py": {
+  "broad_except": 30,
+  "except_pass": 13
+ },
+ "backend/manager_prefetch.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "backend/manager_process.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
+ "context/chat.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "context/compression.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "context/pause_state.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
+ "core/agentic_tool_loop.py": {
+  "broad_except": 10,
+  "except_pass": 5
+ },
+ "core/chat_run.py": {
+  "broad_except": 17,
+  "except_pass": 13
+ },
+ "core/direct_runner.py": {
+  "broad_except": 11,
+  "except_pass": 2
+ },
+ "core/duo/_pre_explore.py": {
+  "broad_except": 48,
+  "except_pass": 18
+ },
+ "core/duo/_utils.py": {
+  "broad_except": 1,
+  "except_pass": 1
+ },
+ "core/duo/_vram.py": {
+  "broad_except": 8,
+  "except_pass": 2
+ },
+ "core/duo_helpers.py": {
+  "broad_except": 8,
+  "except_pass": 1
+ },
+ "core/duo_runner.py": {
+  "broad_except": 100,
+  "except_pass": 29
+ },
+ "core/model_sampling.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
+ "core/pipeline_runner.py": {
+  "broad_except": 15,
+  "except_pass": 8
+ },
+ "core/run_audit.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "core/state.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "core/subagent_lite.py": {
+  "broad_except": 7,
+  "except_pass": 2
+ },
+ "core/tool_exec_helpers.py": {
+  "broad_except": 10,
+  "except_pass": 3
+ },
+ "core/tool_executor.py": {
+  "broad_except": 9,
+  "except_pass": 2
+ },
+ "core/tool_loop.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "core/toolcall_sanitize.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "deploy/add_model.py": {
+  "broad_except": 6,
+  "except_pass": 1
+ },
+ "deploy/backup_data.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "deploy/fetch_llamacpp.py": {
+  "broad_except": 8,
+  "except_pass": 0
+ },
+ "deploy/fetch_models.py": {
+  "broad_except": 4,
+  "except_pass": 0
+ },
+ "deploy/gen_settings_docs.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "explore/cache.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "hive_functions/chunking.py": {
+  "broad_except": 7,
+  "except_pass": 3
+ },
+ "hive_functions/ctx_utils.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "hive_functions/git_tools.py": {
+  "broad_except": 4,
+  "except_pass": 1
+ },
+ "hive_functions/hivemind_feature/ast_tools.py": {
+  "broad_except": 6,
+  "except_pass": 1
+ },
+ "hive_functions/memory.py": {
+  "broad_except": 4,
+  "except_pass": 1
+ },
+ "hive_functions/num_ctx_config.py": {
+  "broad_except": 3,
+  "except_pass": 1
+ },
+ "hive_functions/pipeline.py": {
+  "broad_except": 5,
+  "except_pass": 2
+ },
+ "hive_functions/planner.py": {
+  "broad_except": 23,
+  "except_pass": 15
+ },
+ "hive_functions/pre_explore/contracts.py": {
+  "broad_except": 9,
+  "except_pass": 5
+ },
+ "hive_functions/pre_explore/llm.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "hive_functions/pre_explore/partition.py": {
+  "broad_except": 11,
+  "except_pass": 6
+ },
+ "hive_functions/pre_explore/runner.py": {
+  "broad_except": 2,
+  "except_pass": 2
+ },
+ "hive_functions/pre_explore/tooling.py": {
+  "broad_except": 8,
+  "except_pass": 2
+ },
+ "hive_functions/safe_profile_policy.py": {
+  "broad_except": 5,
+  "except_pass": 0
+ },
+ "hive_functions/skill_distiller.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "hive_functions/skills.py": {
+  "broad_except": 14,
+  "except_pass": 3
+ },
+ "hive_functions/soul_engine.py": {
+  "broad_except": 8,
+  "except_pass": 4
+ },
+ "hive_functions/static_repomap.py": {
+  "broad_except": 6,
+  "except_pass": 0
+ },
+ "hive_functions/test_runner.py": {
+  "broad_except": 4,
+  "except_pass": 3
+ },
+ "hive_functions/tree_scout.py": {
+  "broad_except": 9,
+  "except_pass": 4
+ },
+ "infra/keep_awake.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
+ "infra/log_noise.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "infra/mcp_server.py": {
+  "broad_except": 31,
+  "except_pass": 4
+ },
+ "infra/notify.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "infra/run_control.py": {
+  "broad_except": 2,
+  "except_pass": 2
+ },
+ "infra/run_counter.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "infra/security.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
+ "infra/token_stats.py": {
+  "broad_except": 2,
+  "except_pass": 2
+ },
+ "learning/insights.py": {
+  "broad_except": 8,
+  "except_pass": 4
+ },
+ "learning/peer_ratings.py": {
+  "broad_except": 4,
+  "except_pass": 1
+ },
+ "model_configs/__init__.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "model_configs/models_registry.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "routers/chats.py": {
+  "broad_except": 6,
+  "except_pass": 3
+ },
+ "routers/config.py": {
+  "broad_except": 12,
+  "except_pass": 4
+ },
+ "routers/core.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "routers/debug.py": {
+  "broad_except": 5,
+  "except_pass": 1
+ },
+ "routers/git.py": {
+  "broad_except": 6,
+  "except_pass": 0
+ },
+ "routers/models.py": {
+  "broad_except": 4,
+  "except_pass": 1
+ },
+ "routers/skills.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "routers/soul.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "routers/vision.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "routers/vram.py": {
+  "broad_except": 15,
+  "except_pass": 2
+ },
+ "routing/model_automap.py": {
+  "broad_except": 7,
+  "except_pass": 3
+ },
+ "run.py": {
+  "broad_except": 4,
+  "except_pass": 2
+ },
+ "server.py": {
+  "broad_except": 27,
+  "except_pass": 11
+ },
+ "settings.py": {
+  "broad_except": 3,
+  "except_pass": 2
+ },
+ "sse/events.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/run_regressions.py": {
+  "broad_except": 1,
+  "except_pass": 1
+ },
+ "tests/test_dispatch_smoke.py": {
+  "broad_except": 1,
+  "except_pass": 1
+ },
+ "tests/test_execute_tool_round.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_fallback_ctx_stall.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_mini_shrink_retry.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_noop_hint_and_zero_lines.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "tests/test_stuck_bash_reset_threshold.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_stuck_edit_false_positive.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tools/background.py": {
+  "broad_except": 8,
+  "except_pass": 6
+ },
+ "tools/browser.py": {
+  "broad_except": 6,
+  "except_pass": 1
+ },
+ "tools/definitions.py": {
+  "broad_except": 1,
+  "except_pass": 1
+ },
+ "tools/errors.py": {
+  "broad_except": 1,
+  "except_pass": 1
+ },
+ "tools/handlers/code_intel.py": {
+  "broad_except": 9,
+  "except_pass": 1
+ },
+ "tools/handlers/exec_tools.py": {
+  "broad_except": 23,
+  "except_pass": 7
+ },
+ "tools/handlers/file_ops.py": {
+  "broad_except": 31,
+  "except_pass": 10
+ },
+ "tools/handlers/git_tools.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "tools/handlers/linting.py": {
+  "broad_except": 7,
+  "except_pass": 1
+ },
+ "tools/handlers/misc.py": {
+  "broad_except": 3,
+  "except_pass": 1
+ },
+ "tools/handlers/web_tools.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "tools/runner.py": {
+  "broad_except": 18,
+  "except_pass": 12
+ },
+ "tools/sandbox.py": {
+  "broad_except": 10,
+  "except_pass": 4
+ },
+ "tools/websearch.py": {
+  "broad_except": 12,
+  "except_pass": 5
+ },
+ "tools/workspace.py": {
+  "broad_except": 5,
+  "except_pass": 2
+ },
+ "utils/file.py": {
+  "broad_except": 3,
+  "except_pass": 1
+ },
+ "utils/tool.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "utils/workspace_resolve.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "vision/preprocess.py": {
+  "broad_except": 5,
+  "except_pass": 0
+ },
+ "vram/loader.py": {
+  "broad_except": 5,
+  "except_pass": 2
+ }
+}

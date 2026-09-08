@@ -29,10 +29,10 @@ MODEL_NUM_CTX: dict[str, int] = {
 # ── Analyst-Override ──────────────────────────────────────────────────────────
 
 MODEL_NUM_CTX_ANALYST: dict[str, int] = {
-    "rnj-1":       12288,  # Code-STEM: 4k zu knapp bei langen Pipeline-Kontexten
+    "rnj-1":       12288,  # Code-STEM: 4k too tight for long pipeline contexts
     "ministral-3":  8192,
-    "gemma3":      16384,  # gemma3:12b exzellentes long-ctx, 16k unkritisch (sequenziell)
-    "qwen3.5":      8192,  # :4b/:9b als Analyst: 4k zu knapp bei langen Sessions
+    "gemma3":      16384,  # gemma3:12b excellent long-ctx, 16k uncritical (sequential)
+    "qwen3.5":      8192,  # :4b/:9b as analyst: 4k too tight for long sessions
     "qwen3.6":       8192,
 }
 

@@ -158,8 +158,8 @@ async def run_stream(
             _run_real_tokens_by_phase[_ph] = _run_real_tokens_by_phase.get(_ph, 0) + int(data["completion_tokens"])
             _run_prompt_by_phase[_ph] = _run_prompt_by_phase.get(_ph, 0) + int(data.get("prompt_tokens") or 0)
             _run_cached_by_phase[_ph] = _run_cached_by_phase.get(_ph, 0) + int(data.get("cached_tokens") or 0)
-            # D2-DIAG (2026-08-21): Cache-Miss erkennen â€” prompt gross, cached klein
-            # [CTX-COMPRESS] korrelierbar.
+            # D2-DIAG (2026-08-21): detect cache miss — large prompt, small cached,
+            # correlatable with [CTX-COMPRESS].
             try:
                 _cached_n = int(data.get("cached_tokens") or 0)
                 _prompt_n = int(data.get("prompt_tokens") or 0)
@@ -216,7 +216,7 @@ async def run_stream(
                     "stop_reason": str(stop_reason),
                     "phases": _phases,
                     "models": _run_models,
-                    # TOKEN-TRACKER 1.1.0: Input-/Cache-Dimension
+                    # TOKEN-TRACKER 1.1.0: input/cache dimension
                     "prompt_tokens": _prompt_total,
                     "cached_tokens": _cached_total,
                     "requests": _run_requests,
@@ -285,8 +285,8 @@ async def run_stream(
 
     use_learned   = settings.get("learning_preset_mode", False)
     smart_preload = settings.get("smart_preload_enabled", True)
-    # P1-2 FIX: Cache VRAM budget ONCE per run â”€ prevents mid-run setting changes
-    # from causing VRAM overcommit â”€ OOM â”€ model crash. Previously parsed from
+    # P1-2 FIX: cache VRAM budget ONCE per run — prevents mid-run setting changes
+    # from causing VRAM overcommit — OOM — model crash. Previously parsed from
     # mutable settings dict 13+ times per run with inconsistent values possible.
     _raw_budget = settings.get("vram_budget_gb")
     _vram_budget = float(_raw_budget) if _raw_budget is not None else DEFAULT_VRAM_BUDGET_GB
@@ -489,7 +489,6 @@ async def run_stream(
 
     image_description: str | None = None
     effective_images = images
-    vision_agent_images = list(images) if images else []
 
     _pipeline_soul = load_soul(THIS_FILE)
 
@@ -716,7 +715,6 @@ async def run_stream(
         elif _va_cfg_enabled:
             yield await emit({"type": "status", "content": "[Vision preprocessing off â”€ vision-agent uses raw image]"})
         else:
-            vision_agent_images = []
             yield await emit({"type": "status", "content": "[Image ignored â”€ no vision model active]"})
 
     # P1-2 (2026-08-12): Restore the session per chat from .context.json,

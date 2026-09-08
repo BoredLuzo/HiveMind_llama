@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, hashlib, json, logging, math, os, time
+import asyncio, hashlib, json, logging, math, os, re, time
 from pathlib import Path
 import httpx
 
@@ -133,9 +133,9 @@ def _validate_explore_plan(
 
 
 async def _phase_pre_explore_bootstrap(ctx, state: dict):
-    """P1: Entry-Reads, Inits, Resume-Check, Workspace/Tree-Scout, Follow-up-
-    Hint, Static-Repo-Map-only — aus _phase_pre_explore extrahiert (mechanisch).
-    Produkte landen in state; der Parent liest sie zurueck."""
+    """P1: entry reads, inits, resume check, workspace/tree-scout, follow-up
+    hint, static-repo-map-only — extracted from _phase_pre_explore (mechanical).
+    Products land in state; the parent reads them back."""
     # AGENTIC-FIX (2026-09-02): _phase_pre_explore_bootstrap was extracted from
     # _phase_pre_explore but lost the local `exec_mdl`. Every bare `exec_mdl`
     # reference below (NameError: name 'exec_mdl' is not defined) crashed every
@@ -153,7 +153,6 @@ async def _phase_pre_explore_bootstrap(ctx, state: dict):
     _use_parallel = False        # PRE-EXPLORE-GATE-FIX
     _worker_slots: list = []     # PRE-EXPLORE-GATE-FIX
     _xexplore_mdl = exec_mdl    # PRE-EXPLORE-GATE-FIX
-    n_parallel = 1              # PRE-EXPLORE-GATE-FIX
     _partitions = None
     _xtask: asyncio.Task | None = None
     _touched_paths: set[str] = set()
@@ -362,7 +361,7 @@ async def _phase_pre_explore_bootstrap(ctx, state: dict):
     })
 
 async def _phase_pre_explore_cache(ctx, state: dict):
-    """P2: Pre-Explore-Cache-Hit (own Guard) — aus _phase_pre_explore extrahiert."""
+    """P2: pre-explore cache hit (own guard) — extracted from _phase_pre_explore."""
     # PHASE-FIX (2026-09-02): this phase was extracted from _phase_pre_explore but
     # lost its locals. Unpack them from state (like _phase_pre_explore_finalize
     # does) so the function no longer raises UnboundLocalError when the
@@ -523,7 +522,7 @@ async def _phase_pre_explore_prepare(ctx, state: dict):
     _xctx_chars_ratio = min(8.0, max(1.8, _xctx_chars_ratio))
     # WORKER-N_PARALLEL-FIX 355:
     # _use_parallel = bool(ctx.settings.duo_parallel_preexplore) — User-Toggle.
-    # Konfig. Multi-Worker: exploration_agent.workers → je n_parallel=1.
+    # Config multi-worker: exploration_agent.workers → n_parallel=1 each.
     import math as _math  # MATH-IMPORT-FIX: must be available before first use here
     _parallel_setting_est = ctx.duo_config.parallel_preexplore
     _use_parallel = bool(_parallel_setting_est)
@@ -579,7 +578,7 @@ async def _phase_pre_explore_prepare(ctx, state: dict):
         include_websearch=_duo_ws,
     )
 
-    # ── FIX: Tree Scout — Workspace-Baum VOR Pre-Explore ────────────────────
+    # ── FIX: tree scout — workspace tree BEFORE pre-explore ────────────────
     try:
         _tree_ctx = await get_workspace_tree(
             task      = ctx.user_input,
@@ -610,8 +609,8 @@ async def _phase_pre_explore_prepare(ctx, state: dict):
     except Exception:
         _tree_ctx = ""
 
-    # PATCH-3: Contract-Memory — Prior Knowledge aus letztem Run einblenden.
-    # Bekannte Repos brauchen 60-80% weniger Pre-Explore-Runden.
+    # PATCH-3: contract memory — prior knowledge from the last run.
+    # Known repos need 60-80% fewer pre-explore rounds.
     try:
         from patch_3_contract_memory import load_contract_memory, build_prior_knowledge_block
         _p3_prior_contracts = load_contract_memory(_ws_str, ctx.chat_id, _SESSIONS_DIR)
@@ -753,14 +752,14 @@ async def _phase_pre_explore_finalize(ctx, state: dict):
                     _cov_pct = int(100 * _cov_read / _cov_total)
                     yield await ctx.emit({
                         "type": "status",
-                        "content": f"📊 Coverage: {_cov_read}/{_cov_total} Dateien gelesen ({_cov_pct}%)",
+                        "content": f"📊 Coverage: {_cov_read}/{_cov_total} files read ({_cov_pct}%)",
                     })
             except Exception:
                 pass
     yield await ctx.emit({"type": "agent_done", "elapsed": round(time.time() - _xexplore_t, 1)})
     _explore_ctx_str = _explore_ctx or ""
     _explore_is_timeout = _explore_ctx_str.startswith("[Pre-Explore timeout")
-    _explore_is_error   = _explore_ctx_str.startswith("[Exploration fehlgeschlagen")
+    _explore_is_error   = _explore_ctx_str.startswith("[Exploration failed")
     ctx.phase_timer.end(
         "pre_explore",
         status="timeout" if _explore_is_timeout else "ok",
@@ -824,7 +823,7 @@ async def _phase_pre_explore_finalize(ctx, state: dict):
             else:
                 logger.warning("[EVICT] force_kill_all() timeout — VRAM may not be fully released")
             yield await ctx.emit({"type": "status",
-                "content": "🗑️ VRAM bereinigt — frischer Start fuer Planner"})
+                "content": "🗑️ VRAM cleared — fresh start for the planner"})
         except Exception:
             pass
 
@@ -1179,8 +1178,8 @@ async def _phase_pre_explore(ctx, state: dict):
 
                 if _selected_cfgs and len(_selected_cfgs) < _requested_workers:
                     _cap_msg = (
-                        f"ℹ️ Worker-Cap aktiv: {len(_selected_cfgs)} statt {_requested_workers} "
-                        f"(Headroom ~{_headroom_gb:.1f}GB, geplant ~{_selected_gb:.1f}GB)"
+                        f"ℹ️ Worker cap active: {len(_selected_cfgs)} instead of {_requested_workers} "
+                        f"(headroom ~{_headroom_gb:.1f}GB, planned ~{_selected_gb:.1f}GB)"
                     )
                     yield await ctx.emit({
                         "type": "status",
@@ -1195,8 +1194,8 @@ async def _phase_pre_explore(ctx, state: dict):
                             {
                                 "model": str(_cw.get("model") or "?"),
                                 "reason": (
-                                    f"Worker-Cap/VRAM: benötigt ~{float(_cw.get('need_gb') or 0.0):.1f}GB, "
-                                    f"Headroom ~{_headroom_gb:.1f}GB"
+                                    f"Worker cap/VRAM: needs ~{float(_cw.get('need_gb') or 0.0):.1f}GB, "
+                                    f"headroom ~{_headroom_gb:.1f}GB"
                                 ),
                             }
                             for _cw in _cap_skipped_cfgs
@@ -1209,10 +1208,10 @@ async def _phase_pre_explore(ctx, state: dict):
                 _wmdl_seen: dict[str, int] = {}
                 _n_worker_cfgs = len([w for w in _worker_cfgs if (w.get("model") or "").strip()])
                 # PARALLEL-DEFAULT (WORKER-N_PARALLEL-FIX 355):
-                # - 1 Worker (Single-Worker-Fallback): ceil(parts/1) = parts → mind. 2,
+                # - 1 worker (single-worker fallback): ceil(parts/1) = parts -> at least 2,
                 #
                 import math as _math
-                # eigener voller KV-Cache).
+                # own full KV cache).
                 _default_n_parallel = 1
                 _default_multi_worker_parallel = 1  # WORKER-N_PARALLEL-FIX 355
                 for _wi, _wc in enumerate(_worker_cfgs):
@@ -1404,8 +1403,8 @@ async def _phase_pre_explore(ctx, state: dict):
                         yield await ctx.emit({
                             "type": "status",
                             "content": (
-                                f"↻ Worker-Recovery: {len(_missing_plans)} fehlende Slot(s) — "
-                                "zweiter Ladeversuch (deferred)"
+                                f"↻ Worker recovery: {len(_missing_plans)} missing slot(s) — "
+                                "second load attempt (deferred)"
                             ),
                         })
                         for _mp in _missing_plans:
@@ -1424,7 +1423,7 @@ async def _phase_pre_explore(ctx, state: dict):
                                     pin=True,
                                 )
                                 if _mp_port <= 0 or not await _lsm_workers._port_alive(_mp_port):
-                                    raise RuntimeError(f"Port {_mp_port} nicht erreichbar")
+                                    raise RuntimeError(f"Port {_mp_port} not reachable")
                                 _worker_slots.append({
                                     "model": _mp_model,
                                     "port": _mp_port,
@@ -1435,8 +1434,8 @@ async def _phase_pre_explore(ctx, state: dict):
                                 yield await ctx.emit({
                                     "type": "status",
                                     "content": (
-                                        f"  ✓ Worker-Recovery: {_mp_model} "
-                                        f"(Port {_mp_port}, ctx={_mp_ctx}, parallel={_mp_parallel})"
+                                        f"  ✓ Worker recovery: {_mp_model} "
+                                        f"(port {_mp_port}, ctx={_mp_ctx}, parallel={_mp_parallel})"
                                     ),
                                 })
                             except Exception as _dre:
@@ -1519,7 +1518,7 @@ async def _phase_pre_explore(ctx, state: dict):
                         yield await ctx.emit({
                             "type": "status",
                             "content": (
-                                f"ℹ️ Worker-Pool degradiert: {len(_worker_slots)}/{len(_planned_workers)} aktiv"
+                                f"ℹ️ Worker pool degraded: {len(_worker_slots)}/{len(_planned_workers)} active"
                                 + (f" — {_brief}" if _brief else "")
                             ),
                         })
@@ -1570,7 +1569,7 @@ async def _phase_pre_explore(ctx, state: dict):
                 return s
 
             if _use_parallel:
-                # ── PARALLEL: Baum in Partitionen aufteilen ───────────
+                # ── PARALLEL: split the tree into partitions ───────────
                 import math as _math  # MATH-IMPORT-FIX-356: _math.ceil in AUTO-PARTITION-COUNT-FIX
                 _pmax_files  = int(ctx.settings.get("duo_partition_max_files", 30))
 
@@ -1719,8 +1718,8 @@ async def _phase_pre_explore(ctx, state: dict):
                         yield await ctx.emit({
                             "type": "status",
                             "content": (
-                                f"⚙️ Pre-Explore Split: Partitionen {_normal_before_split}→{len(_normal_all)} "
-                                f"(angefordert: {_requested_parts})"
+                                f"⚙️ Pre-Explore split: partitions {_normal_before_split}→{len(_normal_all)} "
+                                f"(requested: {_requested_parts})"
                             ),
                         })
 
@@ -1735,8 +1734,8 @@ async def _phase_pre_explore(ctx, state: dict):
                         yield await ctx.emit({
                             "type": "status",
                             "content": (
-                                f"⚙️ Queue-First aktiv: {_n_parts_eff} normale Partitionen in Queue "
-                                f"(cfg={_n_parts_cfg}, aktive Worker={_n_workers_eff})"
+                                f"⚙️ Queue-first active: {_n_parts_eff} normal partitions in queue "
+                                f"(cfg={_n_parts_cfg}, active workers={_n_workers_eff})"
                             ),
                         })
                     if _shared and _normal_all:
@@ -1792,9 +1791,9 @@ async def _phase_pre_explore(ctx, state: dict):
                         "selected_labels": [str(p.get("label", "?")) for p in _partitions],
                     })
 
-                    # AUTO-TUNE PARALLEL-KORREKTUR:
+                    # AUTO-TUNE PARALLEL CORRECTION:
                     #
-                    # QUEUE-FIRST-AUTO-TUNE-FIX 356: Im Queue-First-Modus (mehr Partitionen als
+                    # QUEUE-FIRST-AUTO-TUNE-FIX 356: in queue-first mode (more partitions than
                     _n_workers_final = max(1, len(_worker_slots))
                     _parts_per_worker_final = max(1, _math.ceil(_n_parts_eff / _n_workers_final))
                     _queue_first_mode = _n_parts_eff > _n_workers_final
@@ -1851,7 +1850,7 @@ async def _phase_pre_explore(ctx, state: dict):
                     })
 
                     yield await ctx.emit({"type": "status",
-                        "content": f"🔀 Parallel Pre-Explore: {len(_partitions)} Partitionen "
+                        "content": f"🔀 Parallel pre-explore: {len(_partitions)} partitions "
                                    f"({', '.join(p['label'] for p in _partitions)})"})
 
                     async def _xparallel_task():

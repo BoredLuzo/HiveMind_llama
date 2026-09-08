@@ -49,7 +49,7 @@ def main():
     try:
         _test = _tmp / "settings.json"
         _test.write_text(json.dumps({
-            "duo_planner_model": "hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact",
+            "duo_planner_model": "qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact",
             "duo_planner_ctx_target": 20480,
             "duo_planner_use_coder_ctx": False,
             "active_preset": "1",
@@ -59,7 +59,7 @@ def main():
 
         print("\n=== Planner model/context persistence (2026-09-03) ===\n")
         loaded = _settings._load_settings_from_disk()
-        if loaded.get("duo_planner_model") == "hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact":
+        if loaded.get("duo_planner_model") == "qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact":
             ok("A1: duo_planner_model survives a reload (was forced None)")
         else:
             fail("A1: duo_planner_model lost", repr(loaded.get("duo_planner_model")))

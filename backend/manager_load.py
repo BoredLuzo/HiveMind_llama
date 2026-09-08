@@ -9,7 +9,7 @@ from .llama_config import (
     BINARY_MIN_BUILD, MODELS_DIR,
     NO_MMAP_MIN_BUILD,
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS, _MOE_KV_CACHE_TYPES,
-    MLOCK_MODEL, CACHE_REUSE,
+    MLOCK_MODEL, CACHE_REUSE, LLAMA_UBATCH,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
     _MTP_MODELS,
@@ -20,6 +20,8 @@ from .llama_manager_utils import (
     LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
     _OLLAMA_ONLY_BASES, _MMPROJ_REQUIRED_BASES, _VISION_CAPABLE_BASES,
     _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
+    VRAM_PRE_FLIGHT_MARGIN_MIB, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+    CTX_DOWN_MIN, resolve_ctx_fit,
     VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
     _needs_mmproj, _gguf_path_to_model_name,
     _probe_binary_build, _probe_kv_flag, _probe_moe_flag,
@@ -36,7 +38,6 @@ import httpx
 import logging
 import subprocess
 import time
-import logging
 logger = logging.getLogger("llama_manager")
 
 class LlamaLoadMixin:
@@ -177,17 +178,18 @@ class LlamaLoadMixin:
             logger.info("startup_cleanup: No leftovers found - clean start")
 
     async def load(self, model: str, keep_alive_seconds: float = 600.0,
-                   num_ctx: Optional[int] = None, pin: bool = False) -> ModelSlot:
+                   num_ctx: Optional[int] = None, pin: bool = False,
+                   ctx_graceful: bool = True) -> ModelSlot:
         _canonical_l = _strip_alias(model)
         _base_l = _canonical_l.split(":")[0].lower()
         if _base_l in _OLLAMA_ONLY_BASES:
             raise RuntimeError(
-                f"Modell '{model}' ist Ollama-only (Architektur nicht in b8278 unterstützt)."
+                f"Model '{model}' is Ollama-only (architecture not supported in b8278)."
             )
         if _canonical_l in VRAM_OVERFLOW_MODELS:
             raise RuntimeError(
-                f"Modell '{model}' überschreitet VRAM-Budget ({_vram_of(_canonical_l):.1f}GB > {VRAM_BUDGET_GB}GB). "
-                f"Auf dieser GPU (8GB) nicht ladbar."
+                f"Model '{model}' exceeds the VRAM budget ({_vram_of(_canonical_l):.1f}GB > {VRAM_BUDGET_GB}GB). "
+                f"Not loadable on this GPU (8GB)."
             )
         _need_start = False
         slot = None
@@ -212,22 +214,24 @@ class LlamaLoadMixin:
 
         if _need_start and not slot._ready_event.is_set():
             try:
-                await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT)
+                await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                          ctx_graceful=ctx_graceful)
             except RuntimeError as _load_exc:
                 _has_running_peers = any(
                     s.is_running for s in self._slots if s.slot_id != slot.slot_id
                 )
                 if "exit=-1" in str(_load_exc) and _has_running_peers:
                     logger.warning(
-                        f"AMD-Vulkan-Kollision bei '{model}' in load() (exit=-1) — "
-                        f"5s warten und einmal neu versuchen ..."
+                        f"AMD Vulkan collision for '{model}' in load() (exit=-1) — "
+                        f"waiting 5s and retrying once ..."
                     )
                     await _kill_slot_async(slot)
                     slot._loading = True
                     slot.model    = model
                     await asyncio.sleep(5.0)
                     try:
-                        await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT)
+                        await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                                  ctx_graceful=ctx_graceful)
                     except Exception:
                         await _kill_slot_async(slot)
                         raise
@@ -282,7 +286,8 @@ class LlamaLoadMixin:
 
     async def ensure_loaded(self, model: str, num_ctx: Optional[int] = None,
                             pin: bool = False, vision: bool = False,
-                            n_parallel: int = 1) -> int:
+                            n_parallel: int = 1,
+                            ctx_graceful: bool = True) -> int:
 
 
         _canonical = _strip_alias(model)
@@ -290,13 +295,13 @@ class LlamaLoadMixin:
         _base = _canonical.split(":")[0].lower()
         if _base in _OLLAMA_ONLY_BASES:
             raise RuntimeError(
-                f"Modell '{model}' ist Ollama-only (Architektur nicht in b8278 unterstützt)."
+                f"Model '{model}' is Ollama-only (architecture not supported in b8278)."
             )
-        # OVERFLOW-GUARD (gegen kanonischen Namen)
+        # OVERFLOW-GUARD (against the canonical name)
         if _canonical in VRAM_OVERFLOW_MODELS:
             raise RuntimeError(
-                f"Modell '{model}' überschreitet VRAM-Budget ({_vram_of(_canonical):.1f}GB > {VRAM_BUDGET_GB}GB). "
-                f"Auf dieser GPU (8GB) nicht ladbar."
+                f"Model '{model}' exceeds the VRAM budget ({_vram_of(_canonical):.1f}GB > {VRAM_BUDGET_GB}GB). "
+                f"Not loadable on this GPU (8GB)."
             )
         _need_start = False
         slot = None
@@ -320,7 +325,7 @@ class LlamaLoadMixin:
                     # "Cannot read image.png" via GGUF-Chat-Template auf b8940+.
                     elif _base.startswith("qwen3") and not slot._jinja:
                         logger.info(
-                            "ensure_loaded: %s Jinja-Mismatch (--jinja fehlt) — reload.", model
+                            "ensure_loaded: %s jinja mismatch (--jinja missing) — reload.", model
                         )
                         self._metric_inc("evictions_total")
                         await _kill_slot_async(slot)
@@ -330,33 +335,33 @@ class LlamaLoadMixin:
                         _req_ctx = num_ctx or CONTEXT_SIZE_DEFAULT
                         if slot._num_ctx > 0 and _req_ctx > slot._num_ctx:
                             logger.info(
-                                f"ensure_loaded: {model} ctx-Mismatch "
-                                f"(läuft mit {slot._num_ctx}, braucht {_req_ctx}) — reload."
+                                f"ensure_loaded: {model} ctx mismatch "
+                                f"(running with {slot._num_ctx}, needs {_req_ctx}) — reload."
                             )
                             self._metric_inc("evictions_total")
                             self._metric_inc("evictions_ctx_reload")
                             await _kill_slot_async(slot)
                             slot = None
-                        # → Beim asyncio.gather feuern mehrere Requests gleichzeitig, llama queued sie.
+                        # → with asyncio.gather several requests fire at once; llama queues them.
                         elif (getattr(slot, "_n_parallel", 1) > 0
                               and n_parallel > getattr(slot, "_n_parallel", 1)):
                             logger.info(
-                                f"ensure_loaded: {model} parallel-Mismatch "
-                                f"(läuft mit --parallel {getattr(slot, '_n_parallel', 1)}, braucht {n_parallel}) — reload."
+                                f"ensure_loaded: {model} parallel mismatch "
+                                f"(running with --parallel {getattr(slot, '_n_parallel', 1)}, needs {n_parallel}) — reload."
                             )
                             self._metric_inc("evictions_total")
                             self._metric_inc("evictions_parallel_reload")
                             await _kill_slot_async(slot)
                             slot = None
                         else:
-                            # STALE-PORT-GUARD (2026-08-31): Phantom-Slot —
-                            # Manager-Buchhaltung sagt "geladen", aber der Port
-                            # bedient keine Requests mehr (Prozess gehangen oder
-                            # extern gekillt → Live-Befund: Planner-POST bekam
-                            # httpx.ConnectError auf einem "geladenen" Slot).
-                            # TCP-Probe ist billig (~0.4s) und schlägt auch bei
-                            # laufender Generation NICHT fehl (Kernel-Backlog).
-                            # Port tot → Slot killen und sauber neu laden.
+                            # STALE-PORT-GUARD (2026-08-31): phantom slot —
+                            # manager bookkeeping says "loaded", but the port
+                            # no longer serves requests (process hung or
+                            # killed externally → live finding: planner POST
+                            # got httpx.ConnectError on a "loaded" slot).
+                            # The TCP probe is cheap (~0.4s) and does NOT fail
+                            # during active generation (kernel backlog).
+                            # Port dead → kill the slot and reload cleanly.
                             try:
                                 _stale_alive = await self._port_alive(slot.port)
                             except Exception:
@@ -426,7 +431,8 @@ class LlamaLoadMixin:
         if _need_start and not slot._ready_event.is_set():
             try:
                 await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                          vision=vision, n_parallel=n_parallel)
+                                          vision=vision, n_parallel=n_parallel,
+                                          ctx_graceful=ctx_graceful)
             except RuntimeError as _start_exc:
                 # AMD-VULKAN-KOLLISIONS-RETRY:
                 _has_running_peers = any(
@@ -434,8 +440,8 @@ class LlamaLoadMixin:
                 )
                 if "exit=-1" in str(_start_exc) and _has_running_peers:
                     logger.warning(
-                        f"AMD-Vulkan-Kollision bei '{model}' (exit=-1) — "
-                        f"5s warten und einmal neu versuchen ..."
+                        f"AMD Vulkan collision for '{model}' (exit=-1) — "
+                        f"waiting 5s and retrying once ..."
                     )
                     await _kill_slot_async(slot)
                     slot._loading = True
@@ -443,19 +449,27 @@ class LlamaLoadMixin:
                     await asyncio.sleep(5.0)
                     try:
                         await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                                   vision=vision, n_parallel=n_parallel)
+                                                   vision=vision, n_parallel=n_parallel,
+                                                   ctx_graceful=ctx_graceful)
                     except Exception:
                         await _kill_slot_async(slot)
                         raise
                 elif "exit=-1" in str(_start_exc) and GPU_LAYERS > 0:
                     _model_vram = _vram_of(_strip_alias(model))
-                    if _model_vram > 5.0:
+                    # 3.0 GB (2026-09-08): the coder sits at ~4.9 GB — under the
+                    # old 5.0 threshold a post-eviction Vulkan-timing failure
+                    # could silently reload it with --n-gpu-layers 0 (full CPU,
+                    # ~1-2 tok/s for the rest of the run). Above 3.0 GB we now
+                    # fail loudly instead; only genuinely small models
+                    # (light compressors ~2.1 GB, fallback minis) may still
+                    # take the CPU fallback.
+                    if _model_vram > 3.0:
                         await _kill_slot_async(slot)
                         raise RuntimeError(
-                            f"Modell '{model}' ({_model_vram:.1f}GB) konnte nicht auf GPU geladen werden (exit=-1).\n"
-                            f"Wahrscheinliche Ursache: VRAM noch nicht freigegeben (AMD Vulkan-Timing).\n"
-                            f"  → Server neu starten oder 10s warten und erneut versuchen.\n"
-                            f"  → CPU-Fallback übersprungen: {_model_vram:.1f}GB auf CPU ist zu langsam."
+                            f"Model '{model}' ({_model_vram:.1f}GB) could not be loaded on the GPU (exit=-1).\n"
+                            f"Likely cause: VRAM not yet released (AMD Vulkan timing).\n"
+                            f"  → Restart the server, or wait 10s and try again.\n"
+                            f"  → CPU fallback skipped: {_model_vram:.1f}GB on CPU is too slow."
                         ) from _start_exc
                     logger.warning(
                         f"Single-model start for '{model}' with exit=-1 failed - "
@@ -472,6 +486,7 @@ class LlamaLoadMixin:
                             vision=vision,
                             n_parallel=n_parallel,
                             gpu_layers_override=0,
+                            ctx_graceful=ctx_graceful,
                         )
                     except Exception:
                         await _kill_slot_async(slot)
@@ -502,8 +517,9 @@ class LlamaLoadMixin:
 
     async def _start_process(self, slot: ModelSlot, model: str, num_ctx: int,
                              vision: bool = False, n_parallel: int = 1,
-                             gpu_layers_override: Optional[int] = None):
-        """Startet llama-server. Setzt _ready_event wenn /health OK."""
+                             gpu_layers_override: Optional[int] = None,
+                             ctx_graceful: bool = True):
+        """Starts llama-server. Sets _ready_event when /health is OK."""
         _evicted_here = False
         if slot.is_running:
             await _kill_slot_async(slot)
@@ -515,21 +531,21 @@ class LlamaLoadMixin:
             from .llama_config import MODELS_DIR as _MDIR
             if not Path(_MDIR).exists():
                 raise FileNotFoundError(
-                    f"GGUF für '{model}' nicht gefunden.\n"
-                    f"  → Models-Ordner fehlt: {_MDIR}\n"
-                    f"  → Setze HIVEMIND_MODELS_DIR (Umgebungsvariable) auf deinen Models-Ordner\n"
-                    f"    oder führe setup_models.bat aus, um die empfohlenen Modelle zu laden."
+                    f"GGUF for '{model}' not found.\n"
+                    f"  → Models folder missing: {_MDIR}\n"
+                    f"  → Set HIVEMIND_MODELS_DIR (environment variable) to your models folder\n"
+                    f"    or run setup_models.bat to download the recommended models."
                 )
             raise FileNotFoundError(
-                f"GGUF für '{model}' nicht gefunden.\n"
-                f"  → Prüfe models.json und führe hive_functions/scan_models.py aus.\n"
-                f"  → Pfad muss auf eine .gguf-Datei zeigen."
+                f"GGUF for '{model}' not found.\n"
+                f"  → Check models.json and run hive_functions/scan_models.py.\n"
+                f"  → The path must point to a .gguf file."
             )
         if not Path(gguf_path).exists():
             raise FileNotFoundError(
-                f"GGUF-Datei existiert nicht auf der Festplatte: {gguf_path}\n"
-                f"  → Modell wurde verschoben oder gelöscht.\n"
-                f"  → models.json aktualisieren oder hive_functions/scan_models.py erneut ausführen."
+                f"GGUF file does not exist on disk: {gguf_path}\n"
+                f"  → The model was moved or deleted.\n"
+                f"  → Update models.json or run hive_functions/scan_models.py again."
             )
 
         _resolved_str = str(gguf_path).replace("\\", "/")
@@ -560,11 +576,11 @@ class LlamaLoadMixin:
                 _unpinned = [s for s in running_slots if not s.pinned]
                 if not _unpinned:
                     logger.warning(
-                        f"_start_process [{model}]: Alle laufenden Peers "
-                        f"({[s.model for s in running_slots]}) sind gepinnt — "
-                        f"VRAM-Eviction übersprungen "
+                        f"_start_process [{model}]: all running peers "
+                        f"({[s.model for s in running_slots]}) are pinned — "
+                        f"VRAM eviction skipped "
                         f"(current={current_vram:.1f}+new={new_vram:.1f}>{VRAM_BUDGET_GB}GB). "
-                        f"Caller hat Budget validiert; AMD-Vulkan-Retry greift bei echtem OOM."
+                        f"Caller validated the budget; AMD Vulkan retry covers real OOM."
                     )
                 else:
                     to_kill = _unpinned
@@ -580,18 +596,22 @@ class LlamaLoadMixin:
                                 break
                             await asyncio.sleep(0.05)
                     await asyncio.sleep(0.5)
-                    # VRAM-Reclaim-Wait: Port-Tod != VRAM frei (Vulkan asynchron)
-                    _reclaimed = await wait_for_vram_reclaim(int(new_vram * 1024 + 768), timeout_sec=45)
+                    # VRAM reclaim wait: port dead != VRAM free (Vulkan is async)
+                    _reclaimed = await wait_for_vram_reclaim(int(new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB), timeout_sec=45, stall_abort_s=12.0)
                     if not _reclaimed:
                         _free_now = get_live_gpu_free_mib()
                         logger.warning(
-                            "Vulkan: VRAM-Reclaim-Timeout nach Eviction — "
-                            "Pre-Flight könnte trotzdem blocken (nur %.0fMiB frei)",
+                            "Vulkan: VRAM reclaim timeout after eviction — "
+                            "pre-flight could still block (only %.0fMiB free)",
                             _free_now if _free_now is not None else -1,
                         )
             else:
                 _live_free = get_live_gpu_free_mib()
-                _need_mib = new_vram * 1024 + 768
+                # STALL-FIX (2026-09-07): reclaim target with REDUCED margin —
+                # the 768 value was structurally unreachable under external GPU load
+                # (guaranteed 45s wait, e.g. target 5775 with only ~5.06 GB free).
+                # The 256 target is what the resolution accepts.
+                _need_mib = new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
 
                 _should_evict = False
                 if _live_free is None:
@@ -599,15 +619,15 @@ class LlamaLoadMixin:
                     if _formel_free_mib < _need_mib + 500:
                         _should_evict = True
                         logger.warning(
-                            "Vulkan: Live-Messung nicht verfügbar, "
-                            "Formel knapp (%.0fMiB < %.0fMiB) — evicte konservativ",
+                            "Vulkan: live measurement unavailable, "
+                            "formula is tight (%.0fMiB < %.0fMiB) — evicting conservatively",
                             _formel_free_mib, _need_mib + 500,
                         )
                 elif _live_free < _need_mib:
                     _should_evict = True
                     logger.warning(
-                        "Vulkan: Formel sagt passt (%.1f+%.1f<=%.1fGB), "
-                        "aber Live-Messung zeigt nur %.0fMiB frei (<%.0fMiB nötig) — evicte",
+                        "Vulkan: formula says it fits (%.1f+%.1f<=%.1fGB), "
+                        "but live measurement shows only %.0fMiB free (<%.0fMiB needed) — evicting",
                         current_vram, new_vram, VRAM_BUDGET_GB, _live_free, _need_mib,
                     )
 
@@ -625,19 +645,19 @@ class LlamaLoadMixin:
                                 break
                             await asyncio.sleep(0.05)
                     await asyncio.sleep(0.5)
-                    _reclaimed = await wait_for_vram_reclaim(int(_need_mib), timeout_sec=45)
+                    _reclaimed = await wait_for_vram_reclaim(int(_need_mib), timeout_sec=45, stall_abort_s=12.0)
                     if not _reclaimed:
                         _free_now = get_live_gpu_free_mib()
                         logger.warning(
-                            "Vulkan: VRAM-Reclaim-Timeout nach Eviction — "
-                            "Pre-Flight könnte trotzdem blocken (nur %.0fMiB frei)",
+                            "Vulkan: VRAM reclaim timeout after eviction — "
+                            "pre-flight could still block (only %.0fMiB free)",
                             _free_now if _free_now is not None else -1,
                         )
                 else:
                     _free_str = f"{_live_free:.0f}MiB" if _live_free is not None else "N/A"
                     logger.info(
-                        "Vulkan: %s passt neben laufenden "
-                        "(Formel: %.1f+%.1f<=%.1fGB, Live: %s) — kein Kill nötig",
+                        "Vulkan: %s fits next to running "
+                        "(formula: %.1f+%.1f<=%.1fGB, live: %s) — no kill needed",
                         model, current_vram, new_vram, VRAM_BUDGET_GB, _free_str,
                     )
 
@@ -652,13 +672,13 @@ class LlamaLoadMixin:
         _min_build = BINARY_MIN_BUILD.get(_model_base, 0)
         if _build > 0 and _min_build > 0 and _build < _min_build:
             raise RuntimeError(
-                f"Binary zu alt für '{model}':\n"
-                f"  Installiert: Build {_build}\n"
-                f"  Benötigt:    Build {_min_build}+\n\n"
-                f"  → Neues Binary herunterladen:\n"
+                f"Binary too old for '{model}':\n"
+                f"  Installed: build {_build}\n"
+                f"  Required:  build {_min_build}+\n\n"
+                f"  → Download a new binary:\n"
                 f"    https://github.com/ggerganov/llama.cpp/releases\n"
-                f"    Datei: llama-bXXXX-bin-win-vulkan-x64.zip\n"
-                f"  → Danach llama_config.py → LLAMA_BIN aktualisieren"
+                f"    File: llama-bXXXX-bin-win-vulkan-x64.zip\n"
+                f"  → Then update llama_config.py → LLAMA_BIN"
             )
         elif _build == 0 and _min_build > 0:
             logger.warning(
@@ -685,7 +705,7 @@ class LlamaLoadMixin:
             "--parallel",     str(max(1, n_parallel)),
             "--flash-attn",   "on",
             "--batch-size",   "1024",
-            "--ubatch-size",  "256",
+            "--ubatch-size",  str(LLAMA_UBATCH),
             "--threads",      "16",
             "--threads-batch","8",
             "--split-mode",   "none",
@@ -693,7 +713,7 @@ class LlamaLoadMixin:
 
         if CACHE_REUSE and int(CACHE_REUSE) > 0:
             cmd += ["--cache-reuse", str(int(CACHE_REUSE))]
-            logger.info("Prompt-Cache-Reuse aktiv: --cache-reuse %d", int(CACHE_REUSE))
+            logger.info("Prompt cache reuse active: --cache-reuse %d", int(CACHE_REUSE))
 
         # ── --device Flag (Vulkan-Device-Auswahl) ────────────────────────────
         _all_flags_uncached = (
@@ -792,8 +812,8 @@ class LlamaLoadMixin:
                 "Vulkan device selection disabled. Update the binary to b8278+ recommended."
             )
 
-        # ── Backend-DLL-Check (CUDA/Vulkan) ───────────────────────────────
-        # kryptischem Start-Fail. Einmalig gecacht.
+        # ── Backend DLL check (CUDA/Vulkan) ───────────────────────────────
+        # cryptic start failure. Cached once.
         if type(self)._backend_dlls_ok is None:
             _dll_ok = await asyncio.to_thread(
                 _probe_backend_dlls, str(LLAMA_BIN), GPU_BACKEND
@@ -801,32 +821,32 @@ class LlamaLoadMixin:
             if _dll_ok is not None:
                 type(self)._backend_dlls_ok = _dll_ok
                 logger.info(
-                    "Backend-DLL-Check (%s, %s): %s",
+                    "Backend DLL check (%s, %s): %s",
                     GPU_BACKEND.upper(), LLAMA_BIN.name,
-                    "DLLs vollständig" if _dll_ok else "DLLs fehlen",
+                    "DLLs complete" if _dll_ok else "DLLs missing",
                 )
         if type(self)._backend_dlls_ok is False:
             _be_upper = GPU_BACKEND.upper()
             raise RuntimeError(
-                f"{_be_upper}-DLL-Check fehlgeschlagen: die Runtime-DLLs für "
-                f"'{GPU_BACKEND}' fehlen neben {LLAMA_BIN.name}.\n\n"
-                f"  Benötigt ({GPU_BACKEND}): "
+                f"{_be_upper} DLL check failed: the runtime DLLs for "
+                f"'{GPU_BACKEND}' are missing next to {LLAMA_BIN.name}.\n\n"
+                f"  Required ({GPU_BACKEND}): "
                 + ("ggml-cuda.dll, cudart64_*.dll, cublas64_*.dll, cublasLt64_*.dll"
                    if GPU_BACKEND == "cuda" else "ggml-vulkan.dll")
                 + "\n"
-                f"  Binary-Ordner: {LLAMA_BIN.parent}\n\n"
-                f"  Lösung A: llama.cpp neu laden — die offiziellen ZIPs bündeln "
-                f"die passenden DLLs:\n"
+                f"  Binary folder: {LLAMA_BIN.parent}\n\n"
+                f"  Fix A: re-download llama.cpp — the official ZIPs bundle "
+                f"the matching DLLs:\n"
                 f"    python deploy\\fetch_llamacpp.py --backend {GPU_BACKEND} --force\n"
-                f"    (lädt die CUDA-Version passend zum Treiber via nvidia-smi)\n"
-                f"  Lösung B: Ordner {LLAMA_BIN.parent} prüfen — ist es ein "
-                f"{_be_upper}-Build (Name enthält '{GPU_BACKEND}')?\n"
-                f"  Lösung C: Antivirus/Defender hat DLLs quarantänisiert — "
-                f"Betroffene Dateien wiederherstellen."
+                f"    (fetches the CUDA version matching the driver via nvidia-smi)\n"
+                f"  Fix B: check folder {LLAMA_BIN.parent} — is it a "
+                f"{_be_upper} build (name contains '{GPU_BACKEND}')?\n"
+                f"  Fix C: antivirus/Defender quarantined DLLs — "
+                f"restore the affected files."
             )
 
-        # ── Backend-Device-Check (CUDA/Vulkan) ─────────────────────────────
-        #      cuda-12.4-Build auf 13.x-Treiber → cudaGetDeviceCount=0 →
+        # ── Backend device check (CUDA/Vulkan) ─────────────────────────────
+        #      cuda-12.4 build on 13.x driver → cudaGetDeviceCount=0 →
         if type(self)._backend_devices_ok is None:
             _dev_ok = await asyncio.to_thread(
                 _probe_backend_devices, str(LLAMA_BIN), GPU_BACKEND
@@ -834,26 +854,26 @@ class LlamaLoadMixin:
             if _dev_ok is not None:
                 type(self)._backend_devices_ok = _dev_ok
                 logger.info(
-                    "Backend-Device-Check (%s, %s): %s",
+                    "Backend device check (%s, %s): %s",
                     GPU_BACKEND.upper(), LLAMA_BIN.name,
-                    "Gerät gefunden" if _dev_ok else "KEIN Gerät gefunden",
+                    "device found" if _dev_ok else "NO device found",
                 )
         if type(self)._backend_devices_ok is False and type(self)._device_flag_supported:
             _be_upper = GPU_BACKEND.upper()
             raise RuntimeError(
-                f"{_be_upper}-Device-Check fehlgeschlagen: {LLAMA_BIN.name} "
-                f"listet KEINE {_be_upper}-Geräte (--list-devices leer).\n\n"
+                f"{_be_upper} device check failed: {LLAMA_BIN.name} "
+                f"lists NO {_be_upper} devices (--list-devices empty).\n\n"
                 f"  Binary: {LLAMA_BIN}\n"
-                f"  Backend: {GPU_BACKEND} (settings.json → 'gpu_backend' / Env HIVEMIND_GPU_BACKEND)\n\n"
-                f"  Häufigste Ursache: CUDA-Runtime des Builds passt nicht zum Treiber "
-                f"(z.B. cuda-12.4-Build auf Treiber 13.x → GPU wird nicht erkannt).\n"
-                f"  Lösung A: llama.cpp neu laden — lädt automatisch die CUDA-Version "
-                f"passend zum Treiber (nvidia-smi):\n"
+                f"  Backend: {GPU_BACKEND} (settings.json → 'gpu_backend' / env HIVEMIND_GPU_BACKEND)\n\n"
+                f"  Most common cause: the build's CUDA runtime doesn't match the driver "
+                f"(e.g. cuda-12.4 build on 13.x driver → GPU not detected).\n"
+                f"  Fix A: re-download llama.cpp — it fetches the CUDA version "
+                f"matching the driver automatically (nvidia-smi):\n"
                 f"    python deploy\\fetch_llamacpp.py --backend {GPU_BACKEND} --force\n"
-                f"  Lösung B: Anderes Binary gewählt? prüfe llama\\-Ordner — es muss ein\n"
-                f"    {_be_upper}-Build sein (Ordner enthält '{GPU_BACKEND}').\n"
-                f"  Lösung C: Backend in settings.json auf das tatsächlich installierte "
-                f"Binary stellen (\"gpu_backend\": \"vulkan\" bzw. \"cuda\")."
+                f"  Fix B: chose a different binary? check the llama\\ folder — it must be a\n"
+                f"    {_be_upper} build (folder contains '{GPU_BACKEND}').\n"
+                f"  Fix C: point the backend in settings.json at the actually installed "
+                f"binary (\"gpu_backend\": \"vulkan\" or \"cuda\")."
             )
 
         # (2026-08-17, Hermes-35B-MoE auf Windows-Vulkan):
@@ -907,27 +927,27 @@ class LlamaLoadMixin:
             except Exception:
                 _moe_count = 0
 
-        # ── VRAM-KALIBRIERUNGS-GUARD (soft) ──
+        # ── VRAM calibration guard (soft) ──
         _cal_key = _strip_alias(model).strip().lower()
         _cal_cfg = _MOE_TABLE.get(_cal_key) or _MOE_TABLE.get(_cal_key.replace("-ud", ""))
         if _cal_cfg and "calibrated_n_cpu_moe" in _cal_cfg and _cal_cfg["calibrated_n_cpu_moe"] != _moe_count:
             logger.warning(
-                f"[VRAM-KALIBRIERUNG] {model}: --n-cpu-moe={_moe_count} weicht vom kalibrierten Wert "
-                f"{_cal_cfg['calibrated_n_cpu_moe']} ab — die VRAM-Schätzung (vram_of_moe) ist jetzt "
-                f"möglicherweise ungenau. Neu kalibrieren via -lv 5 "
-                f"(KV/compute buffer size aus dem llama-server-Log)."
+                f"[VRAM-CALIBRATION] {model}: --n-cpu-moe={_moe_count} deviates from the calibrated value "
+                f"{_cal_cfg['calibrated_n_cpu_moe']} — the VRAM estimate (vram_of_moe) may now "
+                f"be inaccurate. Recalibrate via -lv 5 "
+                f"(KV/compute buffer size from the llama-server log)."
             )
 
-        # ── KV-Cache Quantisierung ────────────────────────────────────────────
+        # ── KV cache quantization ────────────────────────────────────────────
         if KV_CACHE_TYPE and KV_CACHE_TYPE.lower() not in ("f16", "") and _moe_count <= 0:
             if type(self)._kv_flag_supported:
                 cmd += ["--cache-type-k", KV_CACHE_TYPE, "--cache-type-v", KV_CACHE_TYPE]
-                logger.info(f"KV-Cache Quantisierung aktiv: {KV_CACHE_TYPE}")
+                logger.info(f"KV cache quantization active: {KV_CACHE_TYPE}")
             else:
                 logger.warning(
-                    f"--cache-type-k {KV_CACHE_TYPE} nicht unterstuetzt von "
-                    f"{LLAMA_BIN.name} — falle auf f16 zurueck. "
-                    "Neueres Binary verwenden fuer q4_0-Support."
+                    f"--cache-type-k {KV_CACHE_TYPE} not supported by "
+                    f"{LLAMA_BIN.name} — falling back to f16. "
+                    "Use a newer binary for q4_0 support."
                 )
 
         # ── MoE-Offloading ────────────────────────────────────────────────────
@@ -935,7 +955,7 @@ class LlamaLoadMixin:
             if type(self)._moe_flag_supported:
                 cmd += ["--n-cpu-moe", str(_moe_count)]
                 logger.info(
-                    f"MoE-Offloading aktiv: {_moe_count} Experts auf CPU "
+                    f"MoE offloading active: {_moe_count} experts on CPU "
                     f"({_moe_model_key})"
                 )
                 # MoE-spezifische Optimierungen
@@ -971,7 +991,7 @@ class LlamaLoadMixin:
                 "--spec-draft-n-min", str(MTP_DRAFT_N_MIN),
             ]
             logger.info(
-                "MTP aktiv: %s (draft-max=%d, draft-min=%d)",
+                "MTP active: %s (draft-max=%d, draft-min=%d)",
                 MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
             )
 
@@ -1000,8 +1020,8 @@ class LlamaLoadMixin:
                         pass
             if _draft_path is None:
                 logger.warning(
-                    "DSpark-Drafter für '%s' konfiguriert (%s), aber nicht in %s gefunden "
-                    "— läuft ohne Drafter.",
+                    "DSpark drafter configured for '%s' (%s) but not found in %s "
+                    "— running without the drafter.",
                     model, _draft_fn, MODELS_DIR,
                 )
             else:
@@ -1010,9 +1030,9 @@ class LlamaLoadMixin:
                     _dspark_ok = (type(self)._binary_build_number or 0) >= DSPARK_MIN_BUILD
                 if not _dspark_ok:
                     logger.warning(
-                        f"DSpark-Speculative-Decoding für '{model}' nicht unterstützt von "
-                        f"{LLAMA_BIN.name} (braucht --spec-type draft-dspark, Build "
-                        f"{DSPARK_MIN_BUILD}+) — Drafter übersprungen."
+                        f"DSpark speculative decoding not supported for '{model}' by "
+                        f"{LLAMA_BIN.name} (needs --spec-type draft-dspark, build "
+                        f"{DSPARK_MIN_BUILD}+) — skipping the drafter."
                     )
                 else:
                     cmd += [
@@ -1022,7 +1042,7 @@ class LlamaLoadMixin:
                         "--spec-draft-n-min", str(DSPARK_DRAFT_N_MIN),
                     ]
                     logger.info(
-                        "DSpark aktiv: %s → Drafter %s (n-max=%d, n-min=%d)",
+                        "DSpark active: %s → drafter %s (n-max=%d, n-min=%d)",
                         model, _draft_path.name, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN,
                     )
 
@@ -1095,19 +1115,19 @@ class LlamaLoadMixin:
                     _tag_matches = [p for p in _all_mmproj
                                     if _size_tag and _size_tag in p.stem.lower()]
                     _mmproj_resolved = _tag_matches[0] if _tag_matches else _all_mmproj[0]
-                    logger.info(f"mmproj Fallback (GGUF-Verzeichnis): {_mmproj_resolved}")
+                    logger.info(f"mmproj fallback (GGUF directory): {_mmproj_resolved}")
 
             if _mmproj_resolved:
                 cmd += ["--mmproj", str(_mmproj_resolved)]
                 logger.info(f"mmproj: {_mmproj_resolved}")
             else:
                 logger.warning(
-                    f"WARNUNG: Kein mmproj für '{model}' gefunden.\n"
-                    f"  Das Modell startet, aber Vision-Anfragen (Bilder) werden fehlschlagen.\n"
-                    f"  Lösungen:\n"
-                    f"    1. Modell in Ollama neu pullen: ollama pull {model}\n"
-                    f"    2. mmproj.gguf manuell in {Path(gguf_path).parent} ablegen\n"
-                    f"    3. models.json um einen 'mmproj'-Key ergänzen (falls llama_models.py das unterstützt)"
+                    f"WARNING: no mmproj found for '{model}'.\n"
+                    f"  The model starts, but vision requests (images) will fail.\n"
+                    f"  Fixes:\n"
+                    f"    1. Re-pull the model in Ollama: ollama pull {model}\n"
+                    f"    2. Place mmproj.gguf manually in {Path(gguf_path).parent}\n"
+                    f"    3. Add an 'mmproj' key to models.json (if llama_models.py supports it)"
                 )
 
         _use_jinja = _reg_jinja if _reg_jinja is not None else (_model_base in _JINJA_BASES)
@@ -1157,7 +1177,11 @@ class LlamaLoadMixin:
             "OK" if _fit.ok else "BLOCK",
         )
         if not _fit.ok and _evicted_here:
-            _fit = await self._pre_flight_grace_recheck(model, num_ctx, slot)
+            _fit = await self._pre_flight_grace_recheck(
+                model, num_ctx, slot,
+                safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+                progress_abort_s=12.0,
+            )
         #      gepinnte Slots bleiben unantastbar).
         if not _fit.ok:
             _recovered = False
@@ -1176,7 +1200,11 @@ class LlamaLoadMixin:
                 )
                 _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id)
                 if not _fit.ok:
-                    _fit = await self._pre_flight_grace_recheck(model, num_ctx, slot)
+                    _fit = await self._pre_flight_grace_recheck(
+                        model, num_ctx, slot,
+                        safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+                        progress_abort_s=12.0,
+                    )
                 _recovered = _fit.ok
             if not _recovered and not _fit.ok:
                 while not self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id).ok:
@@ -1191,11 +1219,15 @@ class LlamaLoadMixin:
                     self._metric_inc("evictions_total")
                     self._metric_inc("evictions_preflight")
                     logger.info(
-                        "[PRE-FLIGHT-EVICT] %s (slot %d) geopfert für Load %s @ctx=%d",
+                        "[PRE-FLIGHT-EVICT] %s (slot %d) sacrificed for load %s @ctx=%d",
                         _victim.model, _victim.slot_id, model, num_ctx,
                     )
                     _victim.kill()
-                    _fit = await self._pre_flight_grace_recheck(model, num_ctx, slot)
+                    _fit = await self._pre_flight_grace_recheck(
+                        model, num_ctx, slot,
+                        safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+                        progress_abort_s=12.0,
+                    )
                     if _fit.ok:
                         break
         if not _fit.ok:
@@ -1206,41 +1238,61 @@ class LlamaLoadMixin:
                 for s in self._slots if s.is_running and s.model
             )
             _ext_est = max(0, int(TOTAL_VRAM_MIB - _fit.free_mib - _current_own))
-            _min_needed = vram_of_moe(_strip_alias(model), 4096) + _fit.margin_mib
+            # FIXED-DOMINANT (2026-09-06): the model's base load must fit at least
+            # at minimal context WITH reduced margin, else every resolution is
+            # pointless (old: 768 margin → hidden false blocks).
+            _min_needed = vram_of_moe(_strip_alias(model), 4096) + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
             _fixed_dominant = _min_needed > _fit.free_mib
-            # CTX-AUTO-DOWNGRADE (2026-09-01): before hard-blocking on a VRAM
-            # shortfall, try progressively smaller context windows (e.g. a
-            # leftover ctx_override of 32768 on an 8 GB GPU). If a smaller ctx
-            # fits, load with that instead of failing the run.
+            # CTX/MARGIN RESOLUTION (2026-09-06): previously a fixed 768-MiB
+            # margin silently degraded to 4096 when the full context just barely
+            # did not fit. With MoE + CPU expert offloading context costs almost
+            # nothing (hermes 35b-a3b @40960: needed ≈ 5018 MiB; 768 margin → 5786
+            # blocks, 256 margin → 5274 fits in ~5.5-5.7 GB free). Policy:
+            #   1. full requested ctx, first full then reduced margin (256)
+            #   2. only with allow_graceful (non-coder callers): ladder
+            #      16384/12288/8192 (each 768→256); 4096 only for small requests
+            #   3. strict requests (ctx_graceful=False, coder) NEVER degrade —
+            #      they fail clearly (VRAMPreFlightError, min-ctx floor).
             _downgraded = False
             if not _fixed_dominant:
-                _ctx_cur = num_ctx
-                _ctx_attempts = [16384, 8192, 4096]
-                if _ctx_cur not in _ctx_attempts:
-                    _ctx_attempts.insert(0, _ctx_cur)
-                _ctx_seen: set[int] = set()
-                for _cand in _ctx_attempts:
-                    if _cand in _ctx_seen or _cand >= _ctx_cur:
-                        continue
-                    _ctx_seen.add(_cand)
-                    _fit_c = self.can_fit(model, _cand, exclude_slot_id=slot.slot_id)
-                    if _fit_c.ok:
-                        logger.warning(
-                            "[PRE-FLIGHT-CTX-DOWN] %s @ctx=%d passt nicht "
-                            "(%dMiB frei < %dMiB nötig) — versuche ctx=%d",
-                            model, _ctx_cur, int(_fit.free_mib), int(_fit.needed_mib), _cand,
-                        )
-                        num_ctx = _cand
-                        slot._num_ctx = _cand
+                _free_res = get_live_gpu_free_mib()
+                if _free_res is None:
+                    _free_res = _fit.free_mib
+                _res = resolve_ctx_fit(
+                    num_ctx, _free_res,
+                    lambda _c: vram_of_moe(_strip_alias(model), int(_c)) * 1024,
+                    allow_graceful=ctx_graceful,
+                )
+                if _res is not None:
+                    _chosen_ctx, _chosen_margin = _res
+                    if _chosen_ctx != num_ctx:
+                        _old_req = num_ctx
+                        num_ctx = _chosen_ctx
+                        slot._num_ctx = _chosen_ctx
                         # Rewrite the --ctx-size flag that was baked into cmd
                         # before the pre-flight check.
                         for _ci, _ca in enumerate(cmd):
                             if _ca == "--ctx-size" and _ci + 1 < len(cmd):
                                 cmd[_ci + 1] = str(num_ctx)
                                 break
-                        _fit = _fit_c
+                        _fit = self.can_fit(model, num_ctx, safety_margin_mib=_chosen_margin,
+                                            exclude_slot_id=slot.slot_id)
+                        logger.warning(
+                            "[PRE-FLIGHT-CTX-DOWN] %s @ctx=%d does not fit with full margin "
+                            "(%dMiB free) — using ctx=%d with margin %dMiB (graceful=%s)",
+                            model, _old_req, int(_free_res), num_ctx, _chosen_margin,
+                            ctx_graceful,
+                        )
                         _downgraded = True
-                        break
+                    else:
+                        _fit = self.can_fit(model, num_ctx, safety_margin_mib=_chosen_margin,
+                                            exclude_slot_id=slot.slot_id)
+                        logger.warning(
+                            "[PRE-FLIGHT-REDUCED-MARGIN] %s @ctx=%d does not fit with full margin "
+                            "(%dMiB free < %dMiB needed) — loading with reduced margin %dMiB (VRAM tight)",
+                            model, num_ctx, int(_fit.free_mib), int(_fit.needed_mib), _chosen_margin,
+                        )
+                        _downgraded = True
             if not _downgraded:
                 # MODEL-SUGGEST (2026-09-01): when nothing fits at any ctx, name
                 # fitting alternatives (verified via can_fit, availability-checked)
@@ -1271,10 +1323,23 @@ class LlamaLoadMixin:
                     _sugg = _cands
                 else:
                     _sugg = [_cands[0], _cands[len(_cands) // 2], _cands[-1]]
-                _sugg_txt = ", ".join(_sugg) if _sugg else "ein kleineres Modell im Agent-Tab wählen"
+                _sugg_txt = ", ".join(_sugg) if _sugg else "pick a smaller model in the agent tab"
+                # MAX-CTX HINT (2026-09-07): compute the largest context that
+                # still fits at the currently free VRAM with reduced margin
+                # (MoE: KV overhead nearly linear) — gives the user a concrete
+                # value for the agent tab instead of just "VRAM too low".
+                _max_fit_ctx = 0
+                try:
+                    _fb_free = float(_fit.free_mib or 0)
+                    for _cand_c in (32768, 28672, 24576, 20480, 16384, 14336, 12288, 10240, 8192):
+                        if _cand_c < num_ctx and (vram_of_moe(_strip_alias(model), _cand_c) * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB) <= _fb_free:
+                            _max_fit_ctx = _cand_c
+                            break
+                except Exception:
+                    _max_fit_ctx = 0
                 logger.warning(
                     "[PRE-FLIGHT-BLOCK] %s @ctx=%d: external_usage_est=%d MiB "
-                    "fixed_cost_dominant=%s needed=%dMiB free=%dMiB (Quelle: %s)",
+                    "fixed_cost_dominant=%s needed=%dMiB free=%dMiB (source: %s)",
                     model, num_ctx, _ext_est, _fixed_dominant,
                     int(_fit.needed_mib), int(_fit.free_mib), _fit.source,
                 )
@@ -1283,13 +1348,25 @@ class LlamaLoadMixin:
                     needed_mib=_fit.needed_mib, free_mib=_fit.free_mib, source=_fit.source,
                     external_usage_est_mib=_ext_est, fixed_cost_dominant=_fixed_dominant,
                     message=(
-                        f"VRAM-Pre-Flight-Check fehlgeschlagen für '{model}' @ ctx={num_ctx}:\n"
-                        f"  benötigt: {_fit.needed_mib:.0f} MiB + {_fit.margin_mib} MiB Sicherheitsmarge "
+                        f"VRAM pre-flight check failed for '{model}' @ ctx={num_ctx}:\n"
+                        f"  needed:   {_fit.needed_mib:.0f} MiB + {_fit.margin_mib} MiB safety margin "
                         f"= {_fit.needed_mib + _fit.margin_mib:.0f} MiB\n"
-                        f"  frei:     {_fit.free_mib:.0f} MiB (Quelle: {_fit.source})\n"
-                        f"  extern:   ~{_ext_est} MiB Fremdbelegung (geschätzt)\n"
-                        f"  → Vorschlag: Modell im Agent-Tab wechseln — z. B. {_sugg_txt}.\n"
-                        f"  → Oder andere GPU-Nutzer schließen und erneut versuchen."
+                        f"  free:     {_fit.free_mib:.0f} MiB (source: {_fit.source})\n"
+                        f"  external: ~{_ext_est} MiB external usage (estimated)\n"
+                        + (
+                            f"  → Model base load does not fit even at minimal context "
+                            f"with reduced margin ({VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB).\n"
+                            if _fixed_dominant else
+                            f"  → Even with reduced safety margin ({VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB)"
+                            f" and small context (≥ {CTX_DOWN_MIN} for coder runs) not loadable — "
+                            f"VRAM too low for a meaningful run.\n"
+                        )
+                        + (f"  → At currently ~{_fit.free_mib:.0f} MiB free, ctx≈{_max_fit_ctx} fits at most "
+                           f"(with reduced margin {VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB) — "
+                           f"lower the coder ctx in the agent tab to ≤ {_max_fit_ctx}.\n"
+                           if _max_fit_ctx and not _fixed_dominant else "")
+                        + f"  → Suggestion: switch models in the agent tab — e.g. {_sugg_txt}.\n"
+                        + f"  → Or close other GPU users and try again."
                     ),
                 )
 
@@ -1362,9 +1439,9 @@ class LlamaLoadMixin:
                         # Formel: ctx=4096 → 2.0s | ctx=8192 → 4.0s | ctx=12800 → 6.0s (cap)
                         _vk_commit_s = round(min(6.0, max(2.0, 2.0 * (num_ctx / 4096))), 1)
                         logger.info(
-                            f"AMD-Vulkan-Commit-Wait: {model} geladen, warte {_vk_commit_s}s "
-                            f"auf VRAM-Sichtbarkeit fuer naechsten Slot "
-                            f"(ctx={num_ctx}, {len(_other_running)} andere Slot(s) aktiv)"
+                            f"AMD Vulkan commit wait: {model} loaded, waiting {_vk_commit_s}s "
+                            f"for VRAM visibility for the next slot "
+                            f"(ctx={num_ctx}, {len(_other_running)} other slot(s) active)"
                         )
                         await asyncio.sleep(_vk_commit_s)
             slot._loading = False
@@ -1373,53 +1450,53 @@ class LlamaLoadMixin:
                 _log_content = _log_path.read_text(encoding="utf-8", errors="replace")[-8000:]
                 slot.kill()
                 if _exit is not None:
-                    # ── Spezifische Fehlerdiagnose ────────────────────────────
+                    # ── Specific error diagnosis ────────────────────────────
                     if "key not found in model: qwen3vl.rope" in _log_content:
                         _extra = (
-                            "\n\n→ qwen3-vl Ollama-GGUF inkompatibel mit aktuellem Binary:\n"
-                            "  Der Key 'qwen3vl.rope.dimension_sections' fehlt im Ollama-Blob.\n"
-                            "  Lösung A: Unsloth GGUF laden und in models.json eintragen:\n"
-                            "    (GGUF in den konfigurierten Models-Ordner legen,\n"
-                            "     z.B. Qwen3-VL-2B-Instruct-Q4_K_M.gguf)\n"
-                            "  Lösung B: Neueres Binary (b8300+) von\n"
+                            "\n\n→ qwen3-vl Ollama GGUF incompatible with the current binary:\n"
+                            "  The key 'qwen3vl.rope.dimension_sections' is missing from the Ollama blob.\n"
+                            "  Fix A: download the Unsloth GGUF and register it in models.json:\n"
+                            "    (place the GGUF in the configured models folder,\n"
+                            "     e.g. Qwen3-VL-2B-Instruct-Q4_K_M.gguf)\n"
+                            "  Fix B: newer binary (b8300+) from\n"
                             "  https://github.com/ggerganov/llama.cpp/releases"
                         )
                     elif "rope.dimension_sections has wrong array length" in _log_content:
                         _build_hint = (
-                            f" (Binary: b{type(self)._binary_build_number})"
+                            f" (binary: b{type(self)._binary_build_number})"
                             if type(self)._binary_build_number
                             else ""
                         )
                         _extra = (
-                            f"\n\n→ GGUF-FORMAT INKOMPATIBEL: Ollama-Blob für dieses Modell\n"
-                            f"  verwendet rope.dimension_sections mit 3 Elementen, aber llama.cpp{ _build_hint}\n"
-                            f"  erwartet 4 Elemente (qwen3.5 VL-Blob vs. Text-only GGUF).\n"
-                            f"  Ursache: models.json Override-Pfad existiert nicht → Fallback zu kaputtem Ollama-Blob.\n"
-                            f"  Lösung A: Kompatiblen Unsloth UD-GGUF herunterladen (setup_models.bat)\n"
-                            f"    oder: python -c \"from huggingface_hub import snapshot_download; "
+                            f"\n\n→ GGUF FORMAT INCOMPATIBLE: the Ollama blob for this model\n"
+                            f"  uses rope.dimension_sections with 3 elements, but llama.cpp{_build_hint}\n"
+                            f"  expects 4 elements (qwen3.5 VL blob vs. text-only GGUF).\n"
+                            f"  Cause: models.json override path doesn't exist → fallback to the broken Ollama blob.\n"
+                            f"  Fix A: download a compatible Unsloth UD-GGUF (setup_models.bat)\n"
+                            f"    or: python -c \"from huggingface_hub import snapshot_download; "
                             f"snapshot_download('unsloth/Qwen3.5-2B-GGUF', "
                             f"local_dir=r'<models-dir>', "
                             f"allow_patterns=['*UD-Q4_K_XL*'])\"\n"
-                            f"  Lösung B: models.json prüfen — der Pfad muss auf einen GGUF im\n"
-                            f"    konfigurierten Models-Ordner zeigen,\n"
-                            f"    NICHT auf .ollama/models/blobs/ (das ist der kaputte VL-Blob).\n"
-                            f"  Lösung C: Anderes Modell verwenden (z.B. granite4:3b statt qwen3.5:2b)."
+                            f"  Fix B: check models.json — the path must point to a GGUF in the\n"
+                            f"    configured models folder,\n"
+                            f"    NOT to .ollama/models/blobs/ (that's the broken VL blob).\n"
+                            f"  Fix C: use a different model (e.g. granite4:3b instead of qwen3.5:2b)."
                         )
                     elif "cannot open model file" in _log_content or "failed to open" in _log_content.lower():
                         _extra = (
-                            "\n\n→ GGUF-DATEI NICHT GEFUNDEN: Prüfe ob die Datei noch vorhanden ist.\n"
-                            "  Lösung: hive_functions/scan_models.py erneut ausführen → models.json wird aktualisiert."
+                            "\n\n→ GGUF FILE NOT FOUND: check whether the file still exists.\n"
+                            "  Fix: run hive_functions/scan_models.py again → models.json gets updated."
                         )
                     elif "exceed_context_size" in _log_content or "exceeds the available context size" in _log_content:
                         _extra = (
-                            "\n\n→ CONTEXT ZU KLEIN: Das Modell wurde mit zu kleinem --ctx-size gestartet.\n"
-                            "  Für Vision-Modelle die Bilder verarbeiten: ctx mindestens 8192.\n"
-                            "  Fix: num_ctx_config.py → Wert für dieses Modell erhöhen."
+                            "\n\n→ CONTEXT TOO SMALL: the model was started with a too small --ctx-size.\n"
+                            "  For vision models processing images: ctx at least 8192.\n"
+                            "  Fix: num_ctx_config.py → raise the value for this model."
                         )
                     elif "CUDA error" in _log_content or "Vulkan error" in _log_content:
                         _extra = (
-                            "\n\n→ GPU-FEHLER: Treiber-Problem oder VRAM-Overflow.\n"
-                            "  Prüfe ob ein anderer Prozess den VRAM belegt (GPU-Z oder Task-Manager)."
+                            "\n\n→ GPU ERROR: driver problem or VRAM overflow.\n"
+                            "  Check whether another process occupies the VRAM (GPU-Z or task manager)."
                         )
                     elif (
                         "load_tensors" in _log_content
@@ -1427,37 +1504,37 @@ class LlamaLoadMixin:
                         and not any(e in _log_content for e in ("Vulkan error", "CUDA error", "rope.dimension"))
                         and _model_base in ("qwen3.5", "qwen3-vl", "qwen3")
                     ):
-                        # SSM/Mamba-Architektur (qwen3.5) crasht auf Vulkan beim Tensor-Upload
+                        # SSM/Mamba architecture (qwen3.5) crashes on Vulkan during tensor upload
                         _build_hint = (
-                            f" (aktuell: build {type(self)._binary_build_number})"
+                            f" (current: build {type(self)._binary_build_number})"
                             if type(self)._binary_build_number
                             else ""
                         )
                         _extra = (
-                            f"\n\n→ VULKAN SSM-CRASH: {model} verwendet Mamba-SSM-Layers die auf "
-                            f"Vulkan erst ab llama.cpp b8300+ stabil sind{_build_hint}.\n"
-                            f"  Lösung A (empfohlen): Neueres Binary laden:\n"
+                            f"\n\n→ VULKAN SSM CRASH: {model} uses Mamba-SSM layers that are only stable on "
+                            f"Vulkan from llama.cpp b8300+{_build_hint}.\n"
+                            f"  Fix A (recommended): download a newer binary:\n"
                             f"    https://github.com/ggerganov/llama.cpp/releases\n"
-                            f"    Datei: llama-b8300+-bin-win-vulkan-x64.zip\n"
-                            f"    → Dann llama_config.py → LLAMA_BIN aktualisieren\n"
-                            f"  Lösung B: CPU-Fallback (langsamer, aber stabil):\n"
+                            f"    File: llama-b8300+-bin-win-vulkan-x64.zip\n"
+                            f"    → Then update llama_config.py → LLAMA_BIN\n"
+                            f"  Fix B: CPU fallback (slower, but stable):\n"
                             f"    llama_config.py → GPU_LAYERS = 0"
                         )
                     else:
                         _extra = ""
                     _msg = (
-                        f"llama-server fuer '{model}' gecrasht (exit={_exit}).\n"
+                        f"llama-server for '{model}' crashed (exit={_exit}).\n"
                         f"Log ({_log_path}):\n{_log_content}"
                         f"{_extra}\n\n"
-                        f"Häufige Ursachen:\n"
-                        f"  1. Binary-Version inkompatibel mit GGUF (z.B. neues qwen3.5 → b8300+ nötig)\n"
-                        f"  2. GGUF-Datei beschädigt, verschoben oder falsches Format\n"
-                        f"  3. Port {slot.port} bereits belegt (taskkill /F /IM llama-server.exe)\n"
-                        f"  4. Unzureichend VRAM/RAM (Vision-Modelle + Bild: mind. 8192 ctx)"
+                        f"Common causes:\n"
+                        f"  1. Binary version incompatible with the GGUF (e.g. new qwen3.5 → b8300+ needed)\n"
+                        f"  2. GGUF file damaged, moved, or wrong format\n"
+                        f"  3. Port {slot.port} already in use (taskkill /F /IM llama-server.exe)\n"
+                        f"  4. Insufficient VRAM/RAM (vision models + image: at least 8192 ctx)"
                     )
                 else:
                     _msg = (
-                        f"llama-server fuer '{model}' Timeout ({int(LLAMA_STARTUP_READY_TIMEOUT_SECONDS)}s, Prozess laeuft noch).\n"
+                        f"llama-server for '{model}' timeout ({int(LLAMA_STARTUP_READY_TIMEOUT_SECONDS)}s, process still running).\n"
                         f"Log ({_log_path}):\n{_log_content}"
                     )
                 raise RuntimeError(_msg)

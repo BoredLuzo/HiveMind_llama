@@ -111,10 +111,15 @@ KV_CACHE_TYPE = "q4_0"
 # 0 = aus, 256 = llama.cpp-Empfehlung. Senkt Re-Prefill-Kosten massiv bei hohen ctx.
 CACHE_REUSE = 256
 
+# Prompt-processing chunk (--ubatch-size). Higher = faster prefill for MoE with
+# CPU expert offloading, but larger VRAM compute buffer. Runtime-overridable via
+# settings key llama_ubatch_size (server._sync_backend_runtime_config).
+LLAMA_UBATCH = 256
+
 
 # ── MoE (Mixture of Experts) ──────────────────────────────────────────────────
 
-# Per-Model-CPU-Experts-Override: {model_key: n_cpu_moe}. 0/fehlt = aus _MOE_EXPERT_COUNTS.
+# Per-model CPU-experts override: {model_key: n_cpu_moe}. 0/missing = from _MOE_EXPERT_COUNTS.
 MOE_CPU_EXPERTS = {}
 
 #   Override (moe_cpu_experts) > _MOE_EXPERT_COUNTS (kalibriert) > Autodetect.
@@ -256,7 +261,6 @@ BINARY_MIN_BUILD: dict[str, int] = {
     "gemma2":    8250,
     "gemma-4":   8278,   # gemma-4-E4B-it Fine-Tunes (basieren auf gemma2/gemma3 Arch) — b8278+
     "qwen3.5":   8300,
-    "qwen3.5": 8300, 
     "qwen3-vl":  8278,   # GGUF-Architektur "qwen3vl" — rope.dimension_sections
     "qwen3vl":   8278,   # interner Architektur-Name im GGUF
     "qwen35":    8300,

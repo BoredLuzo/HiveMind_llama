@@ -24,7 +24,7 @@ def _default_skill() -> dict:
 
 
 def parse_skill(text: str, path: str = "") -> dict | None:
-    """Parse eine Skill-.md-Datei (YAML-Frontmatter + Body)."""
+    """Parse a skill .md file (YAML frontmatter + body)."""
     m = _FRONTMATTER_RE.match(text)
     if not m:
         return None
@@ -124,7 +124,7 @@ def workspace_file_paths(workspace_root: str | Path, max_files: int = 200) -> li
 
 
 def match_skills(skills: list[dict], user_input: str, accessed_paths: list[str] | None = None) -> list[dict]:
-    """Deterministisches Matching: Keywords gegen Prompt, Paths gegen zugegriffene Dateien."""
+    """Deterministic matching: keywords against the prompt, paths against accessed files."""
     accessed = [str(p) for p in (accessed_paths or [])]
     user_low = (user_input or "").lower()
     matched: list[dict] = []

@@ -699,7 +699,7 @@ def parse_planner_output(raw: str, *, step_cap: int = 20) -> tuple[list[str], st
 
 @dataclass
 class PlannerResult:
-    """Strukturiertes Ergebnis des Planner-Laufs."""
+    """Structured result of the planner run."""
     subtasks:          list[str]     = field(default_factory=list)
     thinking:          str           = ""
     planner_model:     str           = ""

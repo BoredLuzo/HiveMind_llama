@@ -7,6 +7,7 @@ from .llama_manager_utils import (
     LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
     _OLLAMA_ONLY_BASES, _MMPROJ_REQUIRED_BASES, _VISION_CAPABLE_BASES,
     _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
+    VRAM_PRE_FLIGHT_MARGIN_MIB,
     VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
     _needs_mmproj, _gguf_path_to_model_name,
     _probe_binary_build, _probe_kv_flag, _probe_moe_flag,
@@ -69,7 +70,8 @@ class LlamaEvictMixin:
             self._metric_inc("prefetch_dequeued")
             self._schedule_prefetch_task(slot, model, num_ctx)
 
-    def can_fit(self, model_name: str, num_ctx: int, safety_margin_mib: int = 768,
+    def can_fit(self, model_name: str, num_ctx: int,
+                safety_margin_mib: int = VRAM_PRE_FLIGHT_MARGIN_MIB,
                 exclude_slot_id: Optional[int] = None) -> CanFitResult:
 
 
@@ -94,25 +96,46 @@ class LlamaEvictMixin:
 
     async def _pre_flight_grace_recheck(self, model_name: str, num_ctx: int,
                                         slot: ModelSlot, grace_s: float = _VRAM_PRE_FLIGHT_GRACE_S,
-                                        poll_interval: float = 2.0) -> CanFitResult:
+                                        poll_interval: float = 2.0,
+                                        safety_margin_mib: int = VRAM_PRE_FLIGHT_MARGIN_MIB,
+                                        progress_abort_s: float = 0.0) -> CanFitResult:
 
 
         _t0 = time.time()
-        _fit = self.can_fit(model_name, num_ctx, exclude_slot_id=slot.slot_id)
+        _fit = self.can_fit(model_name, num_ctx, exclude_slot_id=slot.slot_id,
+                            safety_margin_mib=safety_margin_mib)
         _deadline = _t0 + grace_s
+        _first_free: float | None = _fit.free_mib
+        _best_free: float | None = _first_free
+        _aborted = False
         while not _fit.ok and time.time() < _deadline:
             await asyncio.sleep(poll_interval)
-            _fit = self.can_fit(model_name, num_ctx, exclude_slot_id=slot.slot_id)
+            _fit = self.can_fit(model_name, num_ctx, exclude_slot_id=slot.slot_id,
+                                safety_margin_mib=safety_margin_mib)
             if _fit.ok:
                 logger.info(
-                    "[PRE-FLIGHT-GRACE] %s @ctx=%d nach %.0fs frei (%.0fMiB) — weiter",
+                    "[PRE-FLIGHT-GRACE] %s @ctx=%d free after %.0fs (%.0fMiB, margin %dMiB) — continuing",
                     model_name, num_ctx, time.time() - _t0, _fit.free_mib,
+                    safety_margin_mib,
                 )
                 return _fit
+            if _fit.free_mib is not None:
+                _best_free = _fit.free_mib if _best_free is None else max(_best_free, _fit.free_mib)
+            # STALL-ABORT (2026-09-07): no release progress (>=64 MiB) ->
+            # target structurally unreachable, abort early instead of waiting grace_s.
+            if (progress_abort_s > 0.0 and _first_free is not None
+                    and _best_free is not None
+                    and time.time() - _t0 >= progress_abort_s
+                    and _best_free < _first_free + 64):
+                _aborted = True
+                break
         if not _fit.ok:
             logger.warning(
-                "[PRE-FLIGHT-GRACE] %s @ctx=%d bleibt nach %.0fs blockiert "
-                "(frei=%.0fMiB) — Blockade endgueltig",
-                model_name, num_ctx, grace_s, _fit.free_mib,
+                "[PRE-FLIGHT-GRACE] %s @ctx=%d still blocked after %.0fs "
+                "(frei=%.0fMiB, Marge %dMiB)%s",
+                model_name, num_ctx,
+                time.time() - _t0 if _aborted else grace_s,
+                _fit.free_mib, safety_margin_mib,
+                " — abort (no release progress)" if _aborted else "",
             )
         return _fit

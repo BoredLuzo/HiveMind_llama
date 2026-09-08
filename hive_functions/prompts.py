@@ -434,7 +434,7 @@ def get_explore_analyst_prompt(label: str) -> str:
         "Output a compact structured summary. No implementation suggestions."
     )
 
-# ── Partition Worker (Kartograph) ─────────────────────────────────────────────
+# ── Partition worker (cartographer) ─────────────────────────────────────────────
 
 PARTITION_WORKER_SYSTEM = """CRITICAL: You are a tool-calling agent. Your FIRST output MUST be a tool call.
 DO NOT generate thinking, reasoning, plans, or explanations.

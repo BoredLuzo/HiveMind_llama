@@ -10,6 +10,7 @@ from model_configs import (
     read_learning_log,
     get_learned_config,
     get_base_config,
+    save_learned_config,
 )
 from infra.run_counter import _load_run_counter
 from hive_functions.prompts import PEER_RATING_PROMPT

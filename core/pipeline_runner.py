@@ -163,11 +163,11 @@ async def run_pipeline(ctx):
                 if _stop in out:
                     out = out[:out.index(_stop)].strip()
 
-            # Sanity-Check: KV-Cache-Poisoning erkennen (identisch zu Vision-Preprocessing)
+            # Sanity check: detect KV-cache poisoning (same as vision preprocessing)
             if any(m in out[:120].lower() for m in _VISION_POISON_MARKERS):
                 _va_logger.error(
-                    f"Vision-Agent KV-Cache-Poisoning erkannt — verworfen. "
-                    f"Erste 80 Zeichen: {out[:80]!r}"
+                    f"Vision-agent KV-cache poisoning detected — discarded. "
+                    f"First 80 chars: {out[:80]!r}"
                 )
                 out = ""
 
@@ -245,7 +245,7 @@ async def run_pipeline(ctx):
                             "content": f"⚠ Websearch fallback: {_ws_result}",
                         })
                     else:
-                        _pipeline_ws_ctx = f"\n\n[Web-Recherche Runde {i+1}]\n{_ws_result}\n[Ende Recherche]\n"
+                        _pipeline_ws_ctx = f"\n\n[Web research round {i+1}]\n{_ws_result}\n[End of research]\n"
                         yield await ctx.emit({"type": "status", "content": "✓ Websearch complete"})
 
             if _pipeline_ws_ctx:
@@ -319,8 +319,7 @@ async def run_pipeline(ctx):
                     yield await ctx.emit({"type": "status", "content": f"⚠ Analyst output truncated - retry with {retry_tokens} tokens"})
                     yield await ctx.emit({"type": "clear_agent"})
                     retry_msgs = ctx.make_messages(ctx.pipeline, sys_p, analyst_input + "\n\n[IMPORTANT: Full answer, do not truncate!]", imgs_for_analyst, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
-                    t_original_analyst = t
-                    retry_parts, retry_t = [], time.time()
+                    retry_parts = []
                     try:
                         async for tok in ctx.pipeline_chat_stream(a.model, retry_msgs, a.temperature, retry_tokens,
                                                                agent_role="analyst"):
@@ -476,11 +475,11 @@ async def run_pipeline(ctx):
                     critic_input = (
                         f"Problem: {ctx.user_input}{_img_ctx_c}\n\nAnalysis:\n{refiner_out}"
                         f"\n\nGive your critique in Tune format. One line per point:"
-                        f"\nERR: <logischer Fehler oder falsche Annahme>"
-                        f"\nMISS: <was fehlt oder ignoriert wird>"
-                        f"\nFIX: <was der Refiner konkret aendern soll>"
-                        f"\nCONTRA: <Widerspruch zwischen zwei Aussagen>"
-                        f"\n\nNur diese Zeilen, kein Freitext, kein JSON."
+                        f"\nERR: <logical error or wrong assumption>"
+                        f"\nMISS: <what is missing or ignored>"
+                        f"\nFIX: <what the Refiner should change concretely>"
+                        f"\nCONTRA: <contradiction between two statements>"
+                        f"\n\nOnly these lines, no free text, no JSON."
                     )
                 else:
                     critic_input = (
@@ -825,7 +824,7 @@ async def _unpin_pipeline_models(ctx, pinned_models: set, restore_keep_alive: st
 
 def _role_vision(ctx, role_key: str, iteration: int, vision_agent_images: list,
                  vision_roles_cfg: dict) -> bool:
-    """Vision-Rolle fuer einen Pipeline-Agenten (aus run_pipeline-Closure)."""
+    """Vision role for a pipeline agent (from the run_pipeline closure)."""
     if iteration != 0 or not vision_agent_images:
         return False
     if not vision_roles_cfg.get(role_key):

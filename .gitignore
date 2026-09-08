@@ -73,6 +73,7 @@ backend/*.log
 
 # Local tooling & backups (not part of the release)
 .opencode/
+.zcode/
 backups/
 
 # Learned routing weights (generated at runtime)

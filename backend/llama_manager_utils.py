@@ -49,6 +49,79 @@ _VRAM_BASE_OVERHEAD_GB: float = 2.5
 
 _VRAM_PRE_FLIGHT_GRACE_S: float = 40.0
 
+# ── Pre-flight margins / ctx-down policy (2026-09-06) ─────────────────────────
+# 768 MiB used to be the only, hardcoded margin. With MoE models using CPU
+# expert offloading (e.g. 35b-a3b, n-cpu-moe 35) the base weights dominate
+# (~4.66 GB) and context costs almost nothing (40k ctx ≈ +245 MiB). As a
+# result @40960 with a 768 margin blocked by ~200 MiB while @256 fits easily —
+# the old policy silently degraded to 4096 and the coder ran into a useless
+# compress loop. New policy: full margin → reduced margin → ladder (only for
+# explicitly small requests / allow_graceful), otherwise a clear error.
+VRAM_PRE_FLIGHT_MARGIN_MIB: int = 768
+VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB: int = 256
+
+# Untergrenze fuer stille Degradation: Requests > CTX_DOWN_MIN werden nie
+# still unter diesen Wert gefahren (strikte Coder-Requests degradieren gar
+# nicht, sie scheitern klar).
+CTX_DOWN_MIN: int = 8192
+CTX_DOWN_LADDER: tuple[int, ...] = (16384, 12288, 8192)
+
+
+def resolve_ctx_fit(requested_ctx: int, free_mib: float | None,
+                    needs_at, *,
+                    margin_mib: int = VRAM_PRE_FLIGHT_MARGIN_MIB,
+                    reduced_margin_mib: int = VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+                    min_ctx: int = CTX_DOWN_MIN,
+                    ladder: tuple[int, ...] = CTX_DOWN_LADDER,
+                    allow_graceful: bool = False) -> tuple[int, int] | None:
+    """Pure, testable ctx/margin decision without I/O.
+
+    needs_at(ctx) returns the MiB required for a context (e.g.
+    vram_of_moe*1024). free_mib = currently free VRAM (live or formula).
+
+    Reihenfolge:
+      1. requested_ctx mit voller Marge  → passt: (requested, margin)
+      2. requested_ctx mit reduzierter Marge → passt: (requested, reduced)
+      3. allow_graceful=True: ladder rungs below requested_ctx (each first
+         full, then reduced margin); 4096 only if requested_ctx itself was
+         small (<= min_ctx).
+      4. otherwise None → caller decides (clear error instead of silent
+         degradation).
+
+    allow_graceful=False (strict coder requests) NEVER returns a smaller
+    ctx rung: either full context (full/reduced margin) or None.
+    """
+    requested_ctx = max(1, int(requested_ctx))
+
+    def _fits(_ctx: int, _margin: int) -> bool:
+        if free_mib is None:
+            return False
+        try:
+            _need = float(needs_at(_ctx))
+        except Exception:
+            return False
+        return (_need + float(_margin)) <= float(free_mib)
+
+    if _fits(requested_ctx, margin_mib):
+        return (requested_ctx, margin_mib)
+    if _fits(requested_ctx, reduced_margin_mib):
+        return (requested_ctx, reduced_margin_mib)
+    if not allow_graceful:
+        return None
+    for _cand in ladder:
+        if _cand >= requested_ctx:
+            continue
+        if _fits(_cand, margin_mib):
+            return (_cand, margin_mib)
+        if _fits(_cand, reduced_margin_mib):
+            return (_cand, reduced_margin_mib)
+    # Small requests (<= min_ctx) may also fall back to 4096.
+    if requested_ctx <= min_ctx:
+        for _margin in (margin_mib, reduced_margin_mib):
+            if _fits(4096, _margin):
+                return (4096, _margin)
+    return None
+
 async def _kill_slot_async(slot) -> None:
     """Slot.kill() off-loop ausfuehren.
 
@@ -270,7 +343,7 @@ def _prefetch_key(model: str, num_ctx: int) -> tuple[str, int]:
     return (_strip_alias(model), int(num_ctx or CONTEXT_SIZE_DEFAULT))
 
 def _tcp_alive(port: int, timeout: float = 0.4) -> bool:
-    """Blocking TCP-Check — nur via run_in_executor aufrufen."""
+    """Blocking TCP check — call only via run_in_executor."""
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=timeout):
             return True

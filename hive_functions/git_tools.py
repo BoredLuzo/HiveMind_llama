@@ -304,7 +304,7 @@ async def exec_git_undo_full(workspace: str) -> str:
     h = await _git("git", "rev-parse", "--short", "HEAD")
     msg = f"restored to checkpoint [{h.stdout.strip()}]"
     if removed:
-        msg += f"; neue Dateien entfernt: {', '.join(removed[:8])}"
+        msg += f"; removed new files: {', '.join(removed[:8])}"
     return msg
 
 

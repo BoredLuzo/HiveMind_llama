@@ -273,6 +273,13 @@ def get_vram_gb_override(model_name: str) -> float | None:
     return None
 
 
+def get_sampling(model_name: str) -> dict:
+    """Per-model sampling overrides from the config file (mode key such as
+    "thinking" / "non_thinking" -> llama.cpp sampling dict)."""
+    v = get_profile(model_name).get("sampling")
+    return dict(v) if isinstance(v, dict) and v else {}
+
+
 def save_profile(model_name: str, data: dict) -> Path:
     """Schreibt eine Config-Datei nach model_configs/models/<name>.json."""
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)

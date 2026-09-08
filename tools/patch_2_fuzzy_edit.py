@@ -20,7 +20,6 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
 
     c_norm = _norm(content)
     o_norm = _norm(old_str)
-    n_norm = _norm(new_str)
 
     old_lines = o_norm.splitlines()
     c_lines = c_norm.splitlines()

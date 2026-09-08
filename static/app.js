@@ -1041,6 +1041,21 @@ async function loadSettings() {
     if (dplmEl && S.duoPlannerModel) dplmEl.value = S.duoPlannerModel;
     var dcmEl = document.getElementById('duo-coder-model-sel');
     if (dcmEl && S.duoCoderModel) dcmEl.value = S.duoCoderModel;
+    // COMPRESSION-MODELL + FIX-FLAGS (2026-09-07)
+    S.duoCompressModel = s.duo_compress_model || '';
+    S.duoErrorRollup   = s.duo_error_rollup !== false;
+    S.duoPinStaticMap  = s.duo_pin_static_map !== false;
+    S.duoWriteGuard    = s.duo_write_guard_enabled !== false;
+    S.duoNoopHint      = s.duo_noop_hint_enabled !== false;
+    var _dcmsEl = document.getElementById('duo-compress-model-sel');
+    if (_dcmsEl) {
+      var _storedModel = (S.duoCompressModel && _dcmsEl.querySelector('option[value="' + S.duoCompressModel + '"]')) ? S.duoCompressModel : 'auto';
+      _dcmsEl.value = _storedModel;
+    }
+    _syncFlagCheck('duo-error-rollup-toggle', S.duoErrorRollup);
+    _syncFlagCheck('duo-pin-static-map-toggle', S.duoPinStaticMap);
+    _syncFlagCheck('duo-write-guard-toggle', S.duoWriteGuard);
+    _syncFlagCheck('duo-noop-hint-toggle', S.duoNoopHint);
     // Planner / Coder TTL
     S.duoPlannerTtl = parseInt(s.duo_planner_ttl_seconds || 0) || 0;
     S.duoCoderTtl = parseInt(s.duo_coder_ttl_seconds || 0) || 0;
@@ -1423,6 +1438,21 @@ function populateDuoModelGroup() {
   }
   buildOptions(plannerSel, true);
   buildOptions(coderSel, false);
+  // COMPRESSION-MODELL (2026-09-07): eigener Select — "auto" = Coder, sonst Light-Modell.
+  var compressSel = document.getElementById('duo-compress-model-sel');
+  if (compressSel) {
+    var _curComp = compressSel.value || S.duoCompressModel || 'auto';
+    compressSel.innerHTML = '';
+    var _autoComp = document.createElement('option');
+    _autoComp.value = 'auto'; _autoComp.textContent = 'Auto (Coder)';
+    compressSel.appendChild(_autoComp);
+    allModels.forEach(function(m) {
+      var opt = document.createElement('option');
+      opt.value = m; opt.textContent = m;
+      compressSel.appendChild(opt);
+    });
+    compressSel.value = (compressSel.querySelector('option[value="' + _curComp + '"]')) ? _curComp : 'auto';
+  }
   // apply the stored state
   if (S.duoPlannerModel && plannerSel) plannerSel.value = S.duoPlannerModel;
   if (S.duoCoderModel && coderSel) coderSel.value = S.duoCoderModel;
@@ -1442,6 +1472,25 @@ function onDuoCoderModelChange(model) {
   if (S.currentAssignments.duo_coder) S.currentAssignments.duo_coder.model = model;
   updateDuoPairHint();
   updateMoeVisibility();
+}
+
+// COMPRESSION-MODELL + FIX-FLAGS (2026-09-07): UI-Schalter fuer Backend-Keys.
+function _syncFlagCheck(id, on) {
+  var e = document.getElementById(id);
+  if (e) e.checked = !!on;
+}
+
+function onDuoCompressModelChange(model) {
+  S.duoCompressModel = (model === 'auto') ? '' : (model || '');
+  // '' (auto) => Coder-Modell; sonst Light-Modell fuer die Zusammenfassung.
+  postSettings({duo_compress_model: S.duoCompressModel});
+}
+
+function onFlagToggle(key, checked) {
+  var patch = {};
+  patch[key] = !!checked;
+  S['_flag_' + key] = !!checked;
+  postSettings(patch);
 }
 
 function onDuoPairChange(val) {
@@ -1651,7 +1700,7 @@ function updateAgenticHint() {
 // -- Agent Cards ------------------------------------------------
 function renderAgentCards(agents) {
   const c = document.getElementById('agent-cards');
-  if (!c) { console.error('[renderAgentCards] #agent-cards nicht gefunden!'); return; }
+  if (!c) { console.error('[renderAgentCards] #agent-cards not found!'); return; }
   c.innerHTML = '';
   const entries = Object.entries(agents || {});
   console.log('[renderAgentCards] entries:', entries.length, 'keys:', entries.map(function(e){return e[0];}));
@@ -4077,7 +4126,7 @@ async function sendMsg() {
       errDiv.className = 'msg status-txt';
       if (_isConnDrop) {
         errDiv.style.cssText = 'color:#b08a40;font-size:10px;border:1px solid rgba(200,160,64,.25);padding:6px 8px;border-radius:4px';
-        errDiv.textContent = '\u26A0 Verbindung unterbrochen - der Run laeuft evtl. weiter bzw. ist geparkt. Sende eine Nachricht zum Resume oder pruefe das Log.';
+        errDiv.textContent = '\u26A0 Connection lost - the run may still be running or parked. Send a message to resume, or check the log.';
       } else {
         errDiv.style.cssText = 'color:#b04040;font-size:10px;border:1px solid rgba(200,64,64,.25);padding:6px 8px;border-radius:4px';
         errDiv.textContent = '\u26A0 Stream error: ' + (e.message || e);

@@ -177,6 +177,7 @@ def _apply_folder_override(canonical_names: list[str], gguf_path: Path) -> list[
 def _build_index() -> dict[str, Path]:
 
 
+    _t0 = _time_module.perf_counter()
     index: dict[str, Path] = {}
 
     if not MODELS_DIR.exists():
@@ -219,7 +220,7 @@ def _build_index() -> dict[str, Path]:
             else:
                 index[name] = gguf
 
-    _logger.info(f"GGUF index: {len(index)} entries from {len(gguf_files)} files in {MODELS_DIR}")
+    _logger.info(f"GGUF index: {len(index)} entries from {len(gguf_files)} files in {MODELS_DIR} (build took {(_time_module.perf_counter() - _t0) * 1000:.0f}ms)")
     for name, path in sorted(index.items()):
         _logger.debug(f"  {name} → {path.name}")
 
@@ -230,9 +231,23 @@ def _get_index() -> dict[str, Path]:
     global _index_cache, _index_ts
     now = _time_module.time()
     if not _index_cache or (now - _index_ts) > _INDEX_TTL:
+        _age = now - _index_ts
+        _logger.info(f"GGUF index cache expired (age={_age:.0f}s > TTL={_INDEX_TTL:.0f}s) — rebuilding (trigger={_index_trigger_callers()})")
         _index_cache = _build_index()
         _index_ts = _time_module.time()
     return _index_cache
+
+
+def _index_trigger_callers(_depth: int = 4) -> str:
+    """Short caller chain for diagnosing the index refresh (no behavior)."""
+    import inspect
+    names: list[str] = []
+    try:
+        for _fr in inspect.stack()[2:2 + _depth]:
+            names.append(_fr.function)
+    except Exception:
+        pass
+    return " <- ".join(names) if names else "?"
 
 
 def refresh_index() -> None:

@@ -283,6 +283,7 @@ async def _compress_tool_context(
     compression_mode: str = "full",
     cut_index: int = -1,
     read_timeout: float = 180.0,
+    aggressive_retry: bool = False,
 ) -> list:
 
 
@@ -365,6 +366,17 @@ async def _compress_tool_context(
         f"\n"
         f"Be dense and technical. This replaces the full history."
     )
+
+    # MINI-SHRINK-ESCALATION (2026-09-07): soft escalation on retry instead of
+    # a hard token target — relevance stays the guiding principle, but the
+    # second attempt may cut far more aggressively (else it just repeats the weakness).
+    if aggressive_retry:
+        _compress_prompt += (
+            "\n\nYOUR PREVIOUS SUMMARY CUT TOO LITTLE (the session barely shrank). "
+            "THIS TIME CUT AGGRESSIVELY: drop exhaustively described, no-longer-needed "
+            "tool history and read_file dumps; keep only what later rounds still need. "
+            "Relevance before quota, but do not shy away from a large reduction."
+        )
 
     if explore_ctx:
         import re as _re_anchor

@@ -46,6 +46,19 @@ SUITES = [
     ("error_rollup",              "tests/test_error_rollup.py",                  60),
     ("repomap_pin",               "tests/test_repomap_pin.py",                   60),
     ("toolcall_sanitize",         "tests/test_toolcall_sanitize.py",             60),
+    ("ctx_fit_and_floor_guard",   "tests/test_ctx_fit_and_floor_guard.py",       60),
+    ("write_guard_and_explore_truth", "tests/test_write_guard_and_explore_truth.py", 60),
+    ("noop_hint_and_zero_lines",  "tests/test_noop_hint_and_zero_lines.py",       60),
+    ("fallback_ctx_stall",     "tests/test_fallback_ctx_stall.py",             60),
+    ("mini_shrink_retry",      "tests/test_mini_shrink_retry.py",              60),
+    ("output_reserve",         "tests/test_output_reserve.py",                  60),
+    ("auto_split_pending",     "tests/test_auto_split_pending.py",              60),
+    ("ctx_guard",              "tests/test_ctx_guard.py",                       60),
+    ("planner_model_persist",  "tests/test_planner_model_persist.py",           60),
+    ("read_only_detect",       "tests/test_read_only_detect.py",                60),
+    ("tool_arg_compact",       "tests/test_tool_arg_compact.py",                60),
+    ("lint",                   "tests/test_lint.py",                            60),
+    ("no_new_silent_excepts",  "tests/test_no_new_silent_excepts.py",           60),
 ]
 
 

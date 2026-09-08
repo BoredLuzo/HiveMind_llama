@@ -103,8 +103,8 @@ def _parse_failures(output: str, language: str) -> tuple[int, list[str]]:
                 errors.append(line.strip())
 
     else:
-        # triggerte auf "error handling", "no failures detected", "default_error_handler"
-        # → false-positive failures bei erfolgreich laufenden Tests.
+        # triggered on "error handling", "no failures detected", "default_error_handler"
+        # → false-positive failures for tests that run successfully.
         _err_pat = re.compile(r'\b(error|exception|traceback|failed?|assert)\b', re.IGNORECASE)
         _fp_skip = ("no error", "no errors", "no fail", "no failure", "no failures",
                     "without error", "without errors", "handle", "handler",

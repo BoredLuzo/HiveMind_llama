@@ -29,14 +29,14 @@ from tools.errors import tool_call_failed as _tool_call_failed, tool_error_has_c
 from core.agentic_duo_state import DuoRoundState
 from core.tool_exec_helpers import (
     ToolRoundState,
-    _SYS_PREFIX, _RECOVERY_PHRASES, _recovery_saturated,
+    _SYS_PREFIX,
     _prefetch_readonly_tools, _warn_duplicate_write_targets, _track_focus_path,
     _note_successful_write, _update_read_ladder,
     _handle_too_large, _inject_tool_error_hints,
     _handle_ask_user, _execute_one_tool, _maybe_activate_reactive_think,
     _run_bash_fail_fix_pass_insight, _patch_file_fallback_hint,
     _read_required_and_python_hints, _unknown_error_hint,
-    _track_file_changes, _register_context_lru,
+    _track_file_changes, _register_context_lru, _track_edit_noop,
 )
 
 _logger = logging.getLogger("tool_executor")
@@ -145,12 +145,12 @@ def _cap_tool_result(result: str, max_chars: int = 8000) -> str:
     )
 
 
-# CONTEXT-COMPACTION (2026-09-04): erfolgreich ausgeführte riesige
-# write/edit-Tool-Calls tragen ihren kompletten Content (~20-30k chars) als
-# function.arguments in der History. Diese Message war noch nie Teil eines
-# gesendeten Prompts (sie ist die Completion der letzten Runde), also wird sie
-# direkt nach Erfolg auf einen kleinen, aussagekräftigen Stub gekuerzt - der
-# Kontext bleibt klein, der llama.cpp Prefix-Cache wird NICHT invalidiert.
+# CONTEXT-COMPACTION (2026-09-04): successfully executed huge
+# write/edit tool calls carry their full content (~20-30k chars) as
+# function.arguments in the history. This message was never part of a
+# sent prompt (it is the completion of the last round), so it is
+# compacted to a small, meaningful stub right after success — the
+# context stays small and the llama.cpp prefix cache is NOT invalidated.
 _WRITE_ARG_COMPACT_MIN = 12000
 _WRITE_ARG_COMPACT_NAMES = {
     "write_file", "write_file_append", "edit_file",
@@ -168,12 +168,22 @@ def _args_str_len(raw_args) -> int:
 
 
 def _compact_round_write_args(messages, assistant_idx, call, dname, raw_args, dargs) -> int:
-    """Kuerzt die arguments eines erfolgreich ausgeführten grossen Write-Calls.
+    """Compacts the arguments of a successfully executed large write call.
 
-    Macht NUR den assistant-Eintrag dieser Runde kleiner (noch nie als Prompt
-    gesendet -> cache-schonend). Der Stub behaelt path + eine kurze Referenz
-    (arg chars + sha1-Prefix), damit undo/diff/Referenzchecks ohne den vollen
-    Content moeglich bleiben. Returns Anzahl gekuerzter Eintraege.
+    Shrinks ONLY the assistant entry of this round (never sent as a prompt
+    -> cache-friendly). The stub keeps path + a short reference
+    (arg chars + sha1 prefix) so undo/diff/reference checks work without
+    the full content. Returns the number of compacted entries.
+
+    TODO (2026-09-06, consolidation after live observation ghosts.js/game.js):
+    after the stub the model no longer sees the written content and often
+    rewrites the same file COMPLETELY in later rounds (write_file churn).
+    Planned ideas: (a) do not compact small files at all (e.g. < _WRITE_ARG_
+    COMPACT_MIN or < ~200 lines), or (b) append a read-first nudge to the stub
+    ("content not in context - read_file the path before further writes"), or
+    (c) size AND round threshold: only compact when the file is large AND the
+    path is not being written again. Do not silently forget - see also
+    duo_write_guard_enabled.
     """
     if not (dname in _WRITE_ARG_COMPACT_NAMES and messages and 0 <= int(assistant_idx) < len(messages)):
         return 0
@@ -245,14 +255,16 @@ async def execute_tool_round(
     _build_fix_insight = None  # lazy import
     _dname = _dresult = ""
     _consecutive_reads = 0
+    _read_ladder_fired = False  # READ-LADDER cooldown (2026-09-07): bool flag, reset by write
+    _round_noop_hints: list[str] = []  # NO-OP hint (2026-09-07): appended as user msg at end of round
     if trs.total_tool_errors is None:
         trs.total_tool_errors = [0]
     _total_tool_errors = trs.total_tool_errors
     _ws_root = Path(workspace_lock) if workspace_lock else Path(os.environ.get("HIVEMIND_WORKSPACE", "."))
     _is_git_repo = (_ws_root / ".git").exists()
 
-    # CONTEXT-COMPACTION: assistant-Message dieser Runde (letzte mit tool_calls)
-    # - noch nie als Prompt gesendet, daher sicher direkt nach Erfolg zu kuerzen.
+    # CONTEXT-COMPACTION: this round's assistant message (last one with tool_calls)
+    # - never sent as a prompt, so safe to compact right after success.
     _assistant_idx = -1
     for _ai in range(len(dtool_msgs) - 1, -1, -1):
         if dtool_msgs[_ai].get("role") == "assistant" and dtool_msgs[_ai].get("tool_calls"):
@@ -269,7 +281,8 @@ async def execute_tool_round(
             result.duo_timed_out = True
             _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
             result.loop_detected = True
-            _logger.warning("[EXEC-LOOP-DIAG] loop_detected via deadline (tool=%s)", _dfn if "_dfn" in dir() else "?")
+            _logger.warning("[EXEC-LOOP-DIAG] loop_detected via deadline (tool=%s)",
+                            _dtc_call.get("function", {}).get("name", "?"))
             _remaining = [_tc.get("function", {}).get("name", "?") for _tc in tool_calls[_i + 1:]]
             if _remaining:
                 dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
@@ -626,6 +639,19 @@ async def execute_tool_round(
 
         # Parse errors: decrement on successful write/patch
         _note_successful_write(_dname, _dresult, result, round_state, _total_tool_errors)
+        # NO-OP HINT (2026-09-07): compression-proof run-state streak for
+        # ineffective edits — collected; appended to the message end only after
+        # the complete round (template-safe, like [CTX-HORIZON]).
+        try:
+            _hint_noop = _track_edit_noop(
+                _dname, _dresult,
+                str(_focus_path or (_dargs or {}).get("path", "") or ""),
+                round_state,
+            )
+            if _hint_noop:
+                _round_noop_hints.append(_hint_noop)
+        except Exception:
+            pass
 
         # ── File-change tracking ──
         await _track_file_changes(_dname, _dargs, _dresult, result, trs.file_changes,
@@ -655,8 +681,8 @@ async def execute_tool_round(
                         _dname, _evicted_stale, _focus_path)
             except Exception as _ev_stale_err:
                 _logger.debug("[LRU-STALE] invalidation failed: %s", _ev_stale_err)
-            # CONTEXT-COMPACTION: riesige args dieser Runde nach Erfolg kuerzen
-            # (noch nie als Prompt gesendet -> cache-schonend, spart Kontext).
+            # CONTEXT-COMPACTION: compact this round's huge args after success
+            # (never sent as a prompt -> cache-friendly, saves context).
             _saved_chars = _args_str_len(_raw_args)
             if _compact_round_write_args(dtool_msgs, _assistant_idx, _dtc_call, _dname, _raw_args, _dargs):
                 _logger.info(
@@ -668,6 +694,11 @@ async def execute_tool_round(
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)
         # ── Read-file ladder tracker ──
         _consecutive_reads = _update_read_ladder(_dname, _args_parse_failed, _consecutive_reads)
+        if _dname in ("edit_file", "write_file", "patch_file", "write_file_append",
+                      "replace_lines", "run_bash", "run_python"):
+            if _read_ladder_fired:
+                _logger.info("[READ-LADDER] cooldown reset by write/edit (tool=%s)", _dname)
+            _read_ladder_fired = False
 
         # ── Loop detection ──
         _args_str = str(_dfn.get("arguments", ""))
@@ -720,25 +751,36 @@ async def execute_tool_round(
                 )})
 
         # ── Read-file ladder: 3+ consecutive reads with no write/edit ──
-        elif _consecutive_reads >= 3 and any(
+        elif _consecutive_reads >= 3 and not _read_ladder_fired and any(
             isinstance(_m, dict) and _m.get("role") == "tool" and _m.get("name") in (
                 "edit_file", "write_file", "patch_file", "write_file_append",
                 "replace_lines", "run_bash", "run_python")
             for _m in dtool_msgs
         ):
             if not _recovery_saturated(dtool_msgs):
+                _logger.info("[READ-LADDER] fired consecutive=%d recovery_saturated=False", _consecutive_reads)
                 dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
                     f"[READ LADDER] {_consecutive_reads} consecutive read_file calls without any write/edit. "
                     f"You are exploring but not implementing. Pick the MOST RELEVANT file you've read and "
                     f"call write_file or edit_file on it NOW. Do NOT read any more files until you've "
                     f"made a change."
                 )})
+            else:
+                _logger.info("[READ-LADDER] skipped (recovery_saturated=True) consecutive=%d", _consecutive_reads)
             await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_consecutive_reads}x reads ohne Write — Hint injiziert]\n"})
+            _read_ladder_fired = True
             _consecutive_reads = 0
 
-    # CACHE-HORIZON (2026-09-04): superseded read_file outputs liegen im
-    # bereits gesendeten Prefix und wurden NICHT in-place ersetzt. Einmalige
-    # Tail-Note, damit das Modell dem aelteren (stale) Inhalt nicht vertraut.
+    # NO-OP HINT (2026-09-07): append only after all tool results of this
+    # round, so the assistant(tool_calls) -> tool-result ordering stays
+    # intact.
+    if _round_noop_hints:
+        for _nh in _round_noop_hints:
+            dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX + _nh)})
+
+    # CACHE-HORIZON (2026-09-04): superseded read_file outputs live in the
+    # already-sent prefix and were NOT replaced in-place. One-time tail note
+    # so the model does not trust the older (stale) content.
     if getattr(trs, "superseded_paths", None):
         _sup_clean = []
         for _sp in trs.superseded_paths:

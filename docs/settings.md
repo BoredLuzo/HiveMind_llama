@@ -2,11 +2,12 @@
 
 Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_settings_docs.py` — do not edit by hand.
 
-189 settings keys, based on DEFAULT_SETTINGS.
+197 settings keys, based on DEFAULT_SETTINGS.
 
 | Key | Type | Default | Note |
 |---|---|---|---|
 | `_thinking_before_chunking` | null | `null` | persisted user-preference before chunking forced thinking ON |
+| `active_preset` | null | `null` | — |
 | `agents` | str | `"<ref DEFAULT_AGENT_CFG>"` | — |
 | `allow_cpu_offload` | bool | `True` | — |
 | `ask_user_auto_answer` | str | `"Use best judgment, document decision in commit message."` | — |
@@ -17,7 +18,6 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `automap_duo_parallel_preexplore` | bool | `False` | — |
 | `automap_duo_pre_explore` | bool | `False` | — |
 | `automap_excluded` | list | `[]` | — |
-| `automap_mode` | str | `"conservative"` | — |
 | `automap_pipeline_websearch_enabled` | bool | `False` | — |
 | `constraint_mode` | bool | `True` | — |
 | `ctx_overrides` | object | `{'default': None, 'roles': {}, 'models': {}}` | — |
@@ -30,6 +30,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_agentic_mode` | bool | `False` | — |
 | `duo_agentic_thinking` | bool | `False` | — |
 | `duo_autolint_python_engine` | str | `"auto"` | — |
+| `duo_cache_friendly_ctx` | bool | `True` | — |
 | `duo_caps` | object | `{}` | — |
 | `duo_chunking` | bool | `True` | — |
 | `duo_coder_ctx_agentic` | null | `null` | — |
@@ -39,27 +40,37 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_coder_fallback_model` | str | `"qwen3.5:4b-ud"` | — |
 | `duo_coder_model` | str | `""` | — |
 | `duo_coder_tool_thinking` | bool | `False` | — |
-| `duo_coder_tool_thinking_auto_mode` | str | `"on_fail"` | — |
+| `duo_coder_tool_thinking_auto_mode` | str | `"off"` | — |
 | `duo_coder_ttl_seconds` | int | `0` | 0 = auto (420s), >0 = Override |
 | `duo_coding_mode` | bool | `True` | — |
+| `duo_compress_auto_floor` | float | `0.78` | — |
 | `duo_compress_every` | int | `4` | — |
+| `duo_compress_llm_timeout_s` | int | `180` | — |
+| `duo_compress_model` | str | `"lfm2.5:2.6b"` | — |
+| `duo_compress_overflow_reserve` | int | `1024` | — |
 | `duo_compress_threshold` | int | `0` | — |
 | `duo_critic_ctx` | null | `null` | — |
 | `duo_critic_model` | str | `""` | — |
 | `duo_critic_tools` | bool | `False` | — |
 | `duo_distilled_executor` | bool | `False` | — |
+| `duo_error_rollup` | bool | `True` | — |
 | `duo_git_autocommit` | bool | `False` | — |
 | `duo_git_checkpoints` | bool | `True` | — |
 | `duo_install_max_calls` | int | `3` | — |
 | `duo_llm_slow_timeout_s` | int | `300` | — |
+| `duo_max_compressions` | int | `40` | — |
 | `duo_max_tool_rounds` | int | `64` | — |
 | `duo_max_tool_rounds_runtime_cap` | int | `300` | — |
+| `duo_min_free_ctx_tokens` | int | `0` | — |
+| `duo_noop_hint_enabled` | bool | `True` | — |
 | `duo_p3_max_fix_attempts` | int | `3` | — |
 | `duo_pair` | str | `"focused"` | — |
 | `duo_parallel_preexplore` | bool | `False` | — |
+| `duo_partial_compression` | bool | `False` | — |
 | `duo_partition_max_files` | int | `30` | — |
 | `duo_pass_explore_files` | str | `"touched"` | — |
 | `duo_peer_ratings_agentic` | bool | `False` | — |
+| `duo_pin_static_map` | bool | `True` | — |
 | `duo_planner_ctx_cap` | null | `null` | — |
 | `duo_planner_ctx_target` | null | `null` | — |
 | `duo_planner_default_thinking` | bool | `True` | — |
@@ -120,6 +131,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_websearch_timeout_seconds` | int | `20` | — |
 | `duo_worker_slots` | int | `2` | — |
 | `duo_write_chars_per_token` | float | `2.5` | — |
+| `duo_write_guard_enabled` | bool | `True` | — |
 | `exploration_agent` | object | `{'enabled': True, 'model': 'qwen3.5:4b-ud', 'workers': [{...` | — |
 | `git_auto_push` | bool | `False` | — |
 | `git_commit_prefix` | str | `"hivemind:"` | — |

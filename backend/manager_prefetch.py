@@ -82,7 +82,7 @@ class LlamaPrefetchMixin:
         return self._shared_http_client
 
     async def _prefetch_task(self, slot: ModelSlot, model: str, num_ctx: int):
-        """Background-Task: startet llama-server und setzt _ready_event.
+        """Background task: starts llama-server and sets _ready_event.
 
         PRE-EXPLORE-GUARD (Fix A):
         """

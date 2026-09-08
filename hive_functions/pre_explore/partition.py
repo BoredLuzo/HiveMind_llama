@@ -1086,6 +1086,7 @@ async def _worker_drain(
     emit_fn=None,
     aborted_fn=None,
     thinking_override: bool | None = None,
+    llm_read_timeout: float = 300.0,
 ):
 
 
@@ -1103,12 +1104,6 @@ async def _worker_drain(
         if not paths:
             queue.task_done()
             continue
-
-        # Sibling-Labels berechnen
-        base = label.split(":sz")[0]
-        sibling_labels = []
-        if sibling_map:
-            sibling_labels = [s for s in sibling_map.get(base, []) if s != label]
 
 
         if aborted_fn and aborted_fn():

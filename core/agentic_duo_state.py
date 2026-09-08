@@ -33,6 +33,13 @@ class DuoRoundState:
     # ── S2 (2026-08-23): Constrained Decoding ──
     force_grammar: bool = False
 
+    # ── No-op hint (2026-09-07): run-persistent, COMPRESSION-PROOF counter
+    # for edit_file/patch_file/write_file calls that change nothing (NOOP /
+    # SEARCH-not-found / 0-blocks). Normalized path -> streak. Lives here
+    # (not in message history) so it survives full compression —
+    # analogous to duo_error_rollup / read guard.
+    edit_noop_streak: dict = field(default_factory=dict)
+
 
 # Backward-compatible alias for code still importing AgenticDuoState
 AgenticDuoState = DuoRoundState

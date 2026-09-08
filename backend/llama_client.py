@@ -367,7 +367,7 @@ class LlamaClient:
             pass
 
     async def close(self):
-        """Wird beim App-Shutdown aufgerufen."""
+        """Called on app shutdown."""
         try:
             await self._client.aclose()
         except Exception:
