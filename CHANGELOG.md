@@ -18,6 +18,16 @@
   `duo_coder_ctx_until_finished` (defined, UI-wired, never read — the agentic
   ctx applies to until-finished runs anyway). The UI compression hint now
   states the real auto floor (70%, was 72%).
+- Grace round actually runs now: the old budget-exhaustion path aborted the
+  loop before the grace prompt was ever sent. The tool loop has two extra
+  slots (grace + nudge retry), and a chunk that still fails afterwards only
+  ends itself — the run continues with the next chunk instead of halting.
+- Tool budget is per chunk again: `_total_tool_rounds` resets per chunk, run
+  totals keep counting in the telemetry. Compression-force and fail-streak
+  flags no longer leak across chunk boundaries.
+- Chunk coders receive the planner's `plan_content` (`[IMPLEMENTATION PLAN]`),
+  not only the subtask title list. Non-chunk outer rounds 2+ get it
+  re-injected too (it was previously lost after round 1).
 
 ## [1.0.13] - 2026-09-08
 

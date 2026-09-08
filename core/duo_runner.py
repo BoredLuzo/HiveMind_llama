@@ -405,9 +405,10 @@ def _inject_plan_into_coder_msgs(dtool_msgs, plan_result, *, chunking: bool, is_
     if (
         plan_result is not None
         and getattr(plan_result, "plan_content", None)
-        and not chunking
-        and is_first_outer_round
     ):
+        # PLAN-INJECT (2026-09-08): also injected in chunked mode — every
+        # fresh coder context gets the planner's detailed plan, not just the
+        # subtask title list from build_chunk_context.
         logger.warning(
             "[PLAN-INJECT] non-bridge branch: plan injected into coder context (%d chars, first_outer_round=%s)",
             len(plan_result.plan_content), is_first_outer_round,
@@ -1478,6 +1479,7 @@ async def run_code_duo(ctx):
         _force_compress_next: bool = False
         _compress_fail_streak: int = 0      # CONSECUTIVE-FAIL-GUARD: limit 400->compress->fail->restore cycles
         _loop_detected = False   # guard against UnboundLocalError on early exit (abort/timeout)
+        _chunk_budget_exhausted = False  # chunk containment: budget spent (incl. grace)
         _explore_only_rounds: int = 0
                                         # late initialization (depends on tool-round setup)
         _stuck_reason = ""       # guard against UnboundLocalError on early exit
@@ -2578,8 +2580,7 @@ async def run_code_duo(ctx):
                     _dtool_base = _build_dtool_base(
                         _dtool_sys_eff,
                         _explore_history,
-                        _plan_result.plan_content if (_plan_result and _plan_result.plan_content
-                                                      and not ctx.duo_config.chunking) else "",
+                        _plan_result.plan_content if (_plan_result and _plan_result.plan_content) else "",
                         _bridge_msg,
                     )
                     # loop_detected rejected). For important runs (important_task
@@ -3138,6 +3139,13 @@ async def run_code_duo(ctx):
                         profile=_duo_runtime_profile,
                     ) + _accumulated_replan_bonus
                     _loop_detected = False
+                    _chunk_budget_exhausted = False
+                    # PER-CHUNK-BUDGET: rounds spent in earlier chunks must not
+                    # shrink this chunk's budget (compression resets at :3830
+                    # stay; lifetime totals live in _lifetime_tool_rounds).
+                    _total_tool_rounds = 0
+                    _force_compress_next = False
+                    _compress_fail_streak = 0
                     _duo_state = DuoRoundState(think_runtime=_coder_tool_think, exec_model=exec_mdl,
                                                dtool_opts=_dtool_opts, tool_read_timeout_s=_tool_read_timeout_s,
                                                cached_port=_cached_coder_port, current_port=_dport)
@@ -3304,9 +3312,14 @@ async def run_code_duo(ctx):
                         remember_insight=ctx.memory.remember_repo_insight,
                         evict_model=_evict_model_handler,
                     )
-                    for _dr in range(_max_tool_rounds):
+                    _round_budget0 = _max_tool_rounds
+                    # +2 slots: the grace round plus one nudge-retry round; the
+                    # extra slots stay gated on _grace_round_active at the top.
+                    for _dr in range(_max_tool_rounds + 2):
                         _round_t0 = time.time()
                         if ctx.aborted() or ctx.is_aborted_chat(ctx.chat_id) or _loop_detected:
+                            break
+                        if _dr >= _round_budget0 and not _grace_round_active:
                             break
                         if time.time() >= _duo_deadline_at:
                             _duo_timed_out = True
@@ -4352,6 +4365,7 @@ async def run_code_duo(ctx):
                                         "[GRACE ROUND EXPIRED] Grace round already used — exiting now. "
                                         "The run will end."
                                     )})
+                                    _chunk_budget_exhausted = True
                                     _ld_setter(3137); _loop_detected = True
                                     break
                                 _grace_round_used = True
@@ -4794,8 +4808,6 @@ async def run_code_duo(ctx):
                                     })
                         if (not _loop_detected and not ctx.aborted()
                                 and _total_tool_rounds >= _max_tool_rounds):
-                            ctx.exec_ctrl.abort(StopReason.MAX_TOOL_ROUNDS)
-                            _ld_setter(3551); _loop_detected = True
                             if _verify_mutation_serial > _verify_last_ok_serial and _file_changes:
                                 _uv_files = ", ".join(sorted(_file_changes.keys())[:10])
                                 _uv_count = len(_file_changes)
@@ -4805,11 +4817,11 @@ async def run_code_duo(ctx):
                                     "type": "status",
                                     "content": f"\u26a0\ufe0f Budget exhausted with {_uv_count} unverified file(s): {_uv_files} — changes may be broken.",
                                 })
-                            yield await ctx.emit({
-                                "type": "status",
-                                "content": f"\u23f9 Tool budget exhausted ({_total_tool_rounds}/{_max_tool_rounds} rounds) \u2014 stopping.",
-                            })
                             if not _grace_round_active:
+                                # GRACE-ROUND-FIX: the round loop runs two extra
+                                # slots; this arms the first one. The old code set
+                                # _loop_detected + abort here, so the grace prompt
+                                # was appended but the round never ran.
                                 _grace_round_active = True
                                 _max_tool_rounds += 1
                                 _dtool_msgs.append({"role": "user", "content": (
@@ -4817,6 +4829,22 @@ async def run_code_duo(ctx):
                                     "Call task_complete now with what was completed, "
                                     "any blockers, and build_status. No other tool calls."
                                 )})
+                                yield await ctx.emit({
+                                    "type": "status",
+                                    "content": f"\u23f8 Tool budget exhausted ({_total_tool_rounds}/{_max_tool_rounds - 1} rounds) \u2014 granting one grace round to wrap up.",
+                                })
+                            else:
+                                # CHUNK-CONTAINMENT: grace round spent without
+                                # task_complete -> end THIS chunk only. No
+                                # exec_ctrl.abort anymore: the run continues with
+                                # the next chunk (gate after the round loop).
+                                _chunk_budget_exhausted = True
+                                _ld_setter(3551)
+                                yield await ctx.emit({
+                                    "type": "status",
+                                    "content": f"\u23f9 Tool budget exhausted ({_total_tool_rounds}/{_max_tool_rounds - 1} rounds incl. grace) \u2014 ending this chunk.",
+                                })
+                                break
                 except Exception as _dce:
                     if isinstance(_dce, (
                         GeneratorExit,
@@ -5039,6 +5067,20 @@ async def run_code_duo(ctx):
             # Both end here: without this guard the inner tool-loop break would
             # fall through to the critic block and the next subtask/retry would run.
             # Fix: break immediately after the critic-relevant cleanup when _loop_detected.
+            if _chunk_budget_exhausted:
+                # CHUNK-CONTAINMENT: this chunk spent its whole budget (incl.
+                # grace round) without task_complete. Move on to the next chunk
+                # instead of halting the run (old behavior: MAX_TOOL_ROUNDS
+                # aborted exec_ctrl -> head guard ended the entire run).
+                if _di < _n_items - 1:
+                    yield await ctx.emit({"type": "status",
+                        "content": f"⏭ Chunk {_di+1} ended (tool budget exhausted) — moving to chunk {_di+2}/{_n_items}"})
+                    _cs.reset_test_retries()
+                    _di += 1
+                    continue
+                yield await ctx.emit({"type": "status",
+                    "content": "⏹ Tool budget exhausted — last chunk ended."})
+                break
             if _loop_detected:
                 final_verdict = final_verdict or "loop_detected"
                 # multiple setters stamp finished runs as loop_detected (observed live
@@ -5708,7 +5750,7 @@ async def run_code_duo(ctx):
             f"Files written ({len(_written_list)}): "
             + (", ".join(_written_list[:12]) + ("..." if len(_written_list) > 12 else "")
                if _written_list else "none")
-            + f"\nTool rounds used: {_total_tool_rounds}/{_max_tool_rounds}."
+            + f"\nTool rounds used: {_lifetime_tool_rounds}."
         )
         _drop_diag_names = []
         _drop_diag_retries = "n/a"
@@ -5970,7 +6012,7 @@ async def run_code_duo(ctx):
             "written_files": sorted(_written_files or []),
             "loop_detected": bool(_loop_detected),
             "explore_only_rounds": int(_explore_only_rounds),
-            "total_tool_rounds": int(_total_tool_rounds),
+            "total_tool_rounds": int(_lifetime_tool_rounds),
         })
     except Exception:
         pass
