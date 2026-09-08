@@ -1,5 +1,5 @@
 {
-  "model": "hermes3.6:35b-a3b-uncensored-genesis-v12-mtp-apex-compact",
+  "model": "hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact",
   "capabilities": {
     "thinking": true,
     "vision": true,

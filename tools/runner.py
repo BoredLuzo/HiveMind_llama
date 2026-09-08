@@ -78,6 +78,15 @@ def _read_guard_enabled() -> bool:
         return True
 
 
+def _write_guard_enabled() -> bool:
+    """Rollback lever for the duo_full write_file guard (settings flag)."""
+    try:
+        from core.state import settings as _ws_settings
+        return bool(_ws_settings.get("duo_write_guard_enabled", True))
+    except Exception:
+        return True
+
+
 def reset_read_guard_after_compression():
 
 
@@ -689,6 +698,40 @@ async def _run_inline_tool(
                 f"Action: {name} BLOCKED on '{raw_path}'\n"
                 f"Reason: File has not been read in this session.\n"
                 f"Fix: Call read_file('{raw_path}') first, then retry {name}."
+            )
+        # WRITE-GUARD duo_full (2026-09-06): re-enabled ONLY for the destructive
+        # alias write_file on an existing file never seen in this run. The
+        # original RELAX (2026-09-02) blocked write_file AND edit_file in
+        # general → red errors/empty diffs on legitimate full rewrites; that is
+        # NOT reproduced here: edit_file/patch_file (SEARCH/REPLACE) and full
+        # rewrites AFTER a read_file stay free in duo_full.
+        # Allow paths (all Python run-state, compression-proof):
+        #   - _read_set / _any_read_set  = file read in this run
+        #     (_any_read_set survives full compression, since only _read_set is
+        #     pruned — like the error rollup, no reliance on message history)
+        #   - _written_set               = file created by the run itself
+        #   - _in_context                = real pre-explore content in context
+        #   - allow_overwrite            = explicit escape hatch
+        if (
+            (tool_mode or "") == "duo_full"
+            and name == "write_file"
+            and _fp_check.exists()
+            and not args.get("allow_overwrite")
+            and _target not in _read_set
+            and _target not in _any_read_set
+            and _target not in _written_set
+            and not _in_context
+            and _write_guard_enabled()
+        ):
+            return _normalize_meta_paths(
+                f"[TOOL_ERROR: READ_REQUIRED]\n"
+                f"Action: write_file BLOCKED on '{raw_path}'\n"
+                f"Reason: The file already exists and was not read in this session "
+                f"(only a symbol index may have been in context — not its content).\n"
+                f"Fix: Call read_file('{raw_path}') first, then modify it with "
+                f"edit_file/patch_file (SEARCH/REPLACE).\n"
+                f"Note: write_file with full content is only for creating NEW files.\n"
+                f"      To disable this guard set duo_write_guard_enabled=false."
             )
     if tool_mode:
         _allowed = _tool_names_for_mode(tool_mode, include_websearch=include_websearch)

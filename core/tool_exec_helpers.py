@@ -116,6 +116,75 @@ def _note_successful_write(dname, dresult, result, round_state, total_tool_error
         total_tool_errors[0] = 0
 
 
+# ── NO-OP hint (2026-09-07) ────────────────────────────────────────────────────
+# Live observation: after a full compression [READ-GUARD] drops read_file
+# paths from tracking; the model then edits with stale SEARCH blocks from
+# memory -> ineffective/no-op edit_file calls, sometimes repeatedly
+# (155/158/158 chars). Counter as Python run-state on DuoRoundState (lives
+# across the run, untouched by full compression) — analogous to
+# duo_error_rollup / read guard, NO reliance on message history.
+_NOOP_HINT_THRESHOLD = 2
+_EDIT_NO_CHANGE_MARKERS = (
+    "EDIT_FILE_NOOP",
+    "EDIT_FILE_NO_BLOCKS_APPLIED",
+    "EDIT_FILE_MALFORMED_BLOCK",
+    "PATCH_FILE_OLD_STR_NOT_FOUND",
+    "PATCH_FILE_NON_UNIQUE_MATCH",
+)
+
+
+def _noop_hint_enabled() -> bool:
+    """Rollback lever: duo_noop_hint_enabled (default True)."""
+    try:
+        from core.state import settings as _ws_settings
+        return bool(_ws_settings.get("duo_noop_hint_enabled", True))
+    except Exception:
+        return True
+
+
+def _is_no_change_result(dname, dresult) -> bool:
+    if dname not in ("edit_file", "patch_file", "write_file"):
+        return False
+    return any(_m in str(dresult or "") for _m in _EDIT_NO_CHANGE_MARKERS)
+
+
+def _track_edit_noop(dname, dresult, path, round_state) -> str | None:
+    """Run-state streak for ineffective edits -> hint text (or None).
+
+    - A successful write/edit of the same path resets the streak.
+    - At _NOOP_HINT_THRESHOLD consecutive no-ops for the same path, a hint is
+      returned and the streak resets (no spam).
+    """
+    if not _noop_hint_enabled():
+        return None
+    if not path or round_state is None:
+        return None
+    if dname not in ("edit_file", "patch_file", "write_file"):
+        return None
+    _result = str(dresult or "")
+    _key = str(path).replace("\\", "/").strip()
+    if not _key:
+        return None
+    _streak = round_state.edit_noop_streak
+    if not _is_no_change_result(dname, _result):
+        # Only real success (no [TOOL_ERROR]) resets the counter.
+        if not _result.startswith("[TOOL_ERROR") and dname in ("edit_file", "patch_file", "write_file"):
+            _streak.pop(_key, None)
+        return None
+    _n = _streak.get(_key, 0) + 1
+    _streak[_key] = _n
+    if _n < _NOOP_HINT_THRESHOLD:
+        return None
+    _streak.pop(_key, None)
+    return (
+        f"[NO-OP] {dname} on '{_key}' repeatedly changed nothing "
+        f"(the SEARCH block no longer matches the current content, or the change "
+        f"is identical). Re-read the file with read_file (its content may have "
+        f"changed due to compression or earlier edits), then send a real "
+        f"SEARCH/REPLACE block against the current text."
+    )
+
+
 def _update_read_ladder(dname, args_parse_failed, consecutive_reads: int) -> int:
     """Read-file ladder tracker (S17) — returns a new counter."""
     if dname == "read_file" and not args_parse_failed:

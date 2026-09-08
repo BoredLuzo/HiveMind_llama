@@ -295,24 +295,43 @@ def get_live_gpu_free_mib() -> float | None:
 
 
 async def wait_for_vram_reclaim(target_mib: int, timeout_sec: int = 45,
-                                poll_interval: float = 0.5) -> bool:
+                                poll_interval: float = 0.5,
+                                stall_abort_s: float = 0.0) -> bool:
 
 
     import asyncio as _asyncio
     import time as _time
     start = _time.time()
     _first_free: float | None = None
+    _best_free: float | None = None
     while _time.time() - start < timeout_sec:
         try:
             free_mib = get_live_gpu_free_mib()
             if _first_free is None and free_mib is not None:
                 _first_free = free_mib
+                _best_free = free_mib
+            elif free_mib is not None and _best_free is not None:
+                _best_free = max(_best_free, free_mib)
             if free_mib is not None and free_mib >= target_mib:
                 _logger.info(
                     "[VRAM-RECLAIM] %d MiB frei nach %.1fs — OK (target: %d)",
                     free_mib, _time.time() - start, target_mib,
                 )
                 return True
+            # STALL-ABORT (2026-09-07): if free VRAM does not measurably rise over
+            # ~stall_abort_s (no driver release in progress), the target is
+            # structurally unreachable — abort early instead of waiting 45s
+            # (e.g. external ~3.1 GB blocks hermes@256 even after eviction).
+            if (stall_abort_s > 0.0 and _first_free is not None
+                    and _best_free is not None
+                    and _time.time() - start >= stall_abort_s
+                    and _best_free < _first_free + 64):
+                _logger.warning(
+                    "[VRAM-RECLAIM] Abbruch nach %.0fs (kein Release-Fortschritt: "
+                    "frei=%dMiB, target=%d, anfangs=%dMiB)",
+                    stall_abort_s, int(_best_free), target_mib, int(_first_free),
+                )
+                return False
         except Exception as e:
             _logger.warning("[VRAM-RECLAIM] measurement failed: %s", e)
             return False

@@ -12,8 +12,9 @@ from model_configs.models_registry import (
     get_profile, get_capabilities, get_num_ctx, is_vision_preprocessing,
     is_jinja, get_reasoning, get_moe_cpu_experts, get_gpu_layers,
     get_mmproj_filename, get_vram_gb_override, is_distilled, is_mtp,
-    save_profile, refresh,
+    get_sampling, save_profile, refresh,
 )
+from core.model_sampling import get_sampling_profile
 
 passed = 0
 failed = 0
@@ -116,6 +117,27 @@ refresh()
 # 10) Nach Cleanup: kein Einfluss mehr
 check("21 after cleanup -> None",
       get_capabilities("my-model:7b") is None and get_num_ctx("my-model:7b") is None)
+
+# 11) sampling block from config file feeds get_sampling_profile
+p3 = save_profile("smp-model:1b", {
+    "model": "smp-model:1b",
+    "sampling": {"thinking": {"temperature": 0.42}},
+})
+_test_files.append(p3)
+refresh()
+check("22 sampling accessor",
+      get_sampling("smp-model:1b").get("thinking", {}).get("temperature") == 0.42)
+check("23 sampling applied (registry fallback)",
+      get_sampling_profile("smp-model:1b", thinking=True).get("temperature") == 0.42)
+check("24 settings seam wins over registry",
+      get_sampling_profile("smp-model:1b", thinking=True, settings={
+          "_model_sampling_overrides": {"smp-model:1b": {"thinking": {"temperature": 0.99}}}
+      }).get("temperature") == 0.99)
+check("25 other mode key untouched",
+      get_sampling_profile("smp-model:1b", thinking=False).get("temperature") == 0.8)
+_cleanup()
+refresh()
+check("26 sampling cleaned up", get_sampling("smp-model:1b") == {})
 
 print()
 print(f"{'='*50}")

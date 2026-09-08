@@ -9,7 +9,7 @@ from .llama_config import (
     BINARY_MIN_BUILD, MODELS_DIR,
     NO_MMAP_MIN_BUILD,
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS, _MOE_KV_CACHE_TYPES,
-    MLOCK_MODEL, CACHE_REUSE,
+    MLOCK_MODEL, CACHE_REUSE, LLAMA_UBATCH,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
     _MTP_MODELS,
@@ -20,6 +20,8 @@ from .llama_manager_utils import (
     LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
     _OLLAMA_ONLY_BASES, _MMPROJ_REQUIRED_BASES, _VISION_CAPABLE_BASES,
     _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
+    VRAM_PRE_FLIGHT_MARGIN_MIB, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+    CTX_DOWN_MIN, resolve_ctx_fit,
     VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
     _needs_mmproj, _gguf_path_to_model_name,
     _probe_binary_build, _probe_kv_flag, _probe_moe_flag,
@@ -177,7 +179,8 @@ class LlamaLoadMixin:
             logger.info("startup_cleanup: No leftovers found - clean start")
 
     async def load(self, model: str, keep_alive_seconds: float = 600.0,
-                   num_ctx: Optional[int] = None, pin: bool = False) -> ModelSlot:
+                   num_ctx: Optional[int] = None, pin: bool = False,
+                   ctx_graceful: bool = True) -> ModelSlot:
         _canonical_l = _strip_alias(model)
         _base_l = _canonical_l.split(":")[0].lower()
         if _base_l in _OLLAMA_ONLY_BASES:
@@ -212,7 +215,8 @@ class LlamaLoadMixin:
 
         if _need_start and not slot._ready_event.is_set():
             try:
-                await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT)
+                await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                          ctx_graceful=ctx_graceful)
             except RuntimeError as _load_exc:
                 _has_running_peers = any(
                     s.is_running for s in self._slots if s.slot_id != slot.slot_id
@@ -227,7 +231,8 @@ class LlamaLoadMixin:
                     slot.model    = model
                     await asyncio.sleep(5.0)
                     try:
-                        await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT)
+                        await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                                  ctx_graceful=ctx_graceful)
                     except Exception:
                         await _kill_slot_async(slot)
                         raise
@@ -282,7 +287,8 @@ class LlamaLoadMixin:
 
     async def ensure_loaded(self, model: str, num_ctx: Optional[int] = None,
                             pin: bool = False, vision: bool = False,
-                            n_parallel: int = 1) -> int:
+                            n_parallel: int = 1,
+                            ctx_graceful: bool = True) -> int:
 
 
         _canonical = _strip_alias(model)
@@ -426,7 +432,8 @@ class LlamaLoadMixin:
         if _need_start and not slot._ready_event.is_set():
             try:
                 await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                          vision=vision, n_parallel=n_parallel)
+                                          vision=vision, n_parallel=n_parallel,
+                                          ctx_graceful=ctx_graceful)
             except RuntimeError as _start_exc:
                 # AMD-VULKAN-KOLLISIONS-RETRY:
                 _has_running_peers = any(
@@ -443,13 +450,21 @@ class LlamaLoadMixin:
                     await asyncio.sleep(5.0)
                     try:
                         await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                                   vision=vision, n_parallel=n_parallel)
+                                                   vision=vision, n_parallel=n_parallel,
+                                                   ctx_graceful=ctx_graceful)
                     except Exception:
                         await _kill_slot_async(slot)
                         raise
                 elif "exit=-1" in str(_start_exc) and GPU_LAYERS > 0:
                     _model_vram = _vram_of(_strip_alias(model))
-                    if _model_vram > 5.0:
+                    # 3.0 GB (2026-09-08): the coder sits at ~4.9 GB — under the
+                    # old 5.0 threshold a post-eviction Vulkan-timing failure
+                    # could silently reload it with --n-gpu-layers 0 (full CPU,
+                    # ~1-2 tok/s for the rest of the run). Above 3.0 GB we now
+                    # fail loudly instead; only genuinely small models
+                    # (light compressors ~2.1 GB, fallback minis) may still
+                    # take the CPU fallback.
+                    if _model_vram > 3.0:
                         await _kill_slot_async(slot)
                         raise RuntimeError(
                             f"Modell '{model}' ({_model_vram:.1f}GB) konnte nicht auf GPU geladen werden (exit=-1).\n"
@@ -472,6 +487,7 @@ class LlamaLoadMixin:
                             vision=vision,
                             n_parallel=n_parallel,
                             gpu_layers_override=0,
+                            ctx_graceful=ctx_graceful,
                         )
                     except Exception:
                         await _kill_slot_async(slot)
@@ -502,7 +518,8 @@ class LlamaLoadMixin:
 
     async def _start_process(self, slot: ModelSlot, model: str, num_ctx: int,
                              vision: bool = False, n_parallel: int = 1,
-                             gpu_layers_override: Optional[int] = None):
+                             gpu_layers_override: Optional[int] = None,
+                             ctx_graceful: bool = True):
         """Startet llama-server. Setzt _ready_event wenn /health OK."""
         _evicted_here = False
         if slot.is_running:
@@ -581,7 +598,7 @@ class LlamaLoadMixin:
                             await asyncio.sleep(0.05)
                     await asyncio.sleep(0.5)
                     # VRAM-Reclaim-Wait: Port-Tod != VRAM frei (Vulkan asynchron)
-                    _reclaimed = await wait_for_vram_reclaim(int(new_vram * 1024 + 768), timeout_sec=45)
+                    _reclaimed = await wait_for_vram_reclaim(int(new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB), timeout_sec=45, stall_abort_s=12.0)
                     if not _reclaimed:
                         _free_now = get_live_gpu_free_mib()
                         logger.warning(
@@ -591,7 +608,11 @@ class LlamaLoadMixin:
                         )
             else:
                 _live_free = get_live_gpu_free_mib()
-                _need_mib = new_vram * 1024 + 768
+                # STALL-FIX (2026-09-07): reclaim target with REDUCED margin —
+                # the 768 value was structurally unreachable under external GPU load
+                # (guaranteed 45s wait, e.g. target 5775 with only ~5.06 GB free).
+                # The 256 target is what the resolution accepts.
+                _need_mib = new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
 
                 _should_evict = False
                 if _live_free is None:
@@ -625,7 +646,7 @@ class LlamaLoadMixin:
                                 break
                             await asyncio.sleep(0.05)
                     await asyncio.sleep(0.5)
-                    _reclaimed = await wait_for_vram_reclaim(int(_need_mib), timeout_sec=45)
+                    _reclaimed = await wait_for_vram_reclaim(int(_need_mib), timeout_sec=45, stall_abort_s=12.0)
                     if not _reclaimed:
                         _free_now = get_live_gpu_free_mib()
                         logger.warning(
@@ -685,7 +706,7 @@ class LlamaLoadMixin:
             "--parallel",     str(max(1, n_parallel)),
             "--flash-attn",   "on",
             "--batch-size",   "1024",
-            "--ubatch-size",  "256",
+            "--ubatch-size",  str(LLAMA_UBATCH),
             "--threads",      "16",
             "--threads-batch","8",
             "--split-mode",   "none",
@@ -1157,7 +1178,11 @@ class LlamaLoadMixin:
             "OK" if _fit.ok else "BLOCK",
         )
         if not _fit.ok and _evicted_here:
-            _fit = await self._pre_flight_grace_recheck(model, num_ctx, slot)
+            _fit = await self._pre_flight_grace_recheck(
+                model, num_ctx, slot,
+                safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+                progress_abort_s=12.0,
+            )
         #      gepinnte Slots bleiben unantastbar).
         if not _fit.ok:
             _recovered = False
@@ -1176,7 +1201,11 @@ class LlamaLoadMixin:
                 )
                 _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id)
                 if not _fit.ok:
-                    _fit = await self._pre_flight_grace_recheck(model, num_ctx, slot)
+                    _fit = await self._pre_flight_grace_recheck(
+                        model, num_ctx, slot,
+                        safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+                        progress_abort_s=12.0,
+                    )
                 _recovered = _fit.ok
             if not _recovered and not _fit.ok:
                 while not self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id).ok:
@@ -1195,7 +1224,11 @@ class LlamaLoadMixin:
                         _victim.model, _victim.slot_id, model, num_ctx,
                     )
                     _victim.kill()
-                    _fit = await self._pre_flight_grace_recheck(model, num_ctx, slot)
+                    _fit = await self._pre_flight_grace_recheck(
+                        model, num_ctx, slot,
+                        safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
+                        progress_abort_s=12.0,
+                    )
                     if _fit.ok:
                         break
         if not _fit.ok:
@@ -1206,41 +1239,61 @@ class LlamaLoadMixin:
                 for s in self._slots if s.is_running and s.model
             )
             _ext_est = max(0, int(TOTAL_VRAM_MIB - _fit.free_mib - _current_own))
-            _min_needed = vram_of_moe(_strip_alias(model), 4096) + _fit.margin_mib
+            # FIXED-DOMINANT (2026-09-06): the model's base load must fit at least
+            # at minimal context WITH reduced margin, else every resolution is
+            # pointless (old: 768 margin → hidden false blocks).
+            _min_needed = vram_of_moe(_strip_alias(model), 4096) + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
             _fixed_dominant = _min_needed > _fit.free_mib
-            # CTX-AUTO-DOWNGRADE (2026-09-01): before hard-blocking on a VRAM
-            # shortfall, try progressively smaller context windows (e.g. a
-            # leftover ctx_override of 32768 on an 8 GB GPU). If a smaller ctx
-            # fits, load with that instead of failing the run.
+            # CTX/MARGIN RESOLUTION (2026-09-06): previously a fixed 768-MiB
+            # margin silently degraded to 4096 when the full context just barely
+            # did not fit. With MoE + CPU expert offloading context costs almost
+            # nothing (hermes 35b-a3b @40960: needed ≈ 5018 MiB; 768 margin → 5786
+            # blocks, 256 margin → 5274 fits in ~5.5-5.7 GB free). Policy:
+            #   1. full requested ctx, first full then reduced margin (256)
+            #   2. only with allow_graceful (non-coder callers): ladder
+            #      16384/12288/8192 (each 768→256); 4096 only for small requests
+            #   3. strict requests (ctx_graceful=False, coder) NEVER degrade —
+            #      they fail clearly (VRAMPreFlightError, min-ctx floor).
             _downgraded = False
             if not _fixed_dominant:
-                _ctx_cur = num_ctx
-                _ctx_attempts = [16384, 8192, 4096]
-                if _ctx_cur not in _ctx_attempts:
-                    _ctx_attempts.insert(0, _ctx_cur)
-                _ctx_seen: set[int] = set()
-                for _cand in _ctx_attempts:
-                    if _cand in _ctx_seen or _cand >= _ctx_cur:
-                        continue
-                    _ctx_seen.add(_cand)
-                    _fit_c = self.can_fit(model, _cand, exclude_slot_id=slot.slot_id)
-                    if _fit_c.ok:
-                        logger.warning(
-                            "[PRE-FLIGHT-CTX-DOWN] %s @ctx=%d passt nicht "
-                            "(%dMiB frei < %dMiB nötig) — versuche ctx=%d",
-                            model, _ctx_cur, int(_fit.free_mib), int(_fit.needed_mib), _cand,
-                        )
-                        num_ctx = _cand
-                        slot._num_ctx = _cand
+                _free_res = get_live_gpu_free_mib()
+                if _free_res is None:
+                    _free_res = _fit.free_mib
+                _res = resolve_ctx_fit(
+                    num_ctx, _free_res,
+                    lambda _c: vram_of_moe(_strip_alias(model), int(_c)) * 1024,
+                    allow_graceful=ctx_graceful,
+                )
+                if _res is not None:
+                    _chosen_ctx, _chosen_margin = _res
+                    if _chosen_ctx != num_ctx:
+                        _old_req = num_ctx
+                        num_ctx = _chosen_ctx
+                        slot._num_ctx = _chosen_ctx
                         # Rewrite the --ctx-size flag that was baked into cmd
                         # before the pre-flight check.
                         for _ci, _ca in enumerate(cmd):
                             if _ca == "--ctx-size" and _ci + 1 < len(cmd):
                                 cmd[_ci + 1] = str(num_ctx)
                                 break
-                        _fit = _fit_c
+                        _fit = self.can_fit(model, num_ctx, safety_margin_mib=_chosen_margin,
+                                            exclude_slot_id=slot.slot_id)
+                        logger.warning(
+                            "[PRE-FLIGHT-CTX-DOWN] %s @ctx=%d does not fit with full margin "
+                            "(%dMiB free) — using ctx=%d with margin %dMiB (graceful=%s)",
+                            model, _old_req, int(_free_res), num_ctx, _chosen_margin,
+                            ctx_graceful,
+                        )
                         _downgraded = True
-                        break
+                    else:
+                        _fit = self.can_fit(model, num_ctx, safety_margin_mib=_chosen_margin,
+                                            exclude_slot_id=slot.slot_id)
+                        logger.warning(
+                            "[PRE-FLIGHT-REDUCED-MARGIN] %s @ctx=%d does not fit with full margin "
+                            "(%dMiB free < %dMiB needed) — loading with reduced margin %dMiB (VRAM tight)",
+                            model, num_ctx, int(_fit.free_mib), int(_fit.needed_mib), _chosen_margin,
+                        )
+                        _downgraded = True
             if not _downgraded:
                 # MODEL-SUGGEST (2026-09-01): when nothing fits at any ctx, name
                 # fitting alternatives (verified via can_fit, availability-checked)
@@ -1272,6 +1325,19 @@ class LlamaLoadMixin:
                 else:
                     _sugg = [_cands[0], _cands[len(_cands) // 2], _cands[-1]]
                 _sugg_txt = ", ".join(_sugg) if _sugg else "ein kleineres Modell im Agent-Tab wählen"
+                # MAX-CTX HINT (2026-09-07): compute the largest context that
+                # still fits at the currently free VRAM with reduced margin
+                # (MoE: KV overhead nearly linear) — gives the user a concrete
+                # value for the agent tab instead of just "VRAM too low".
+                _max_fit_ctx = 0
+                try:
+                    _fb_free = float(_fit.free_mib or 0)
+                    for _cand_c in (32768, 28672, 24576, 20480, 16384, 14336, 12288, 10240, 8192):
+                        if _cand_c < num_ctx and (vram_of_moe(_strip_alias(model), _cand_c) * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB) <= _fb_free:
+                            _max_fit_ctx = _cand_c
+                            break
+                except Exception:
+                    _max_fit_ctx = 0
                 logger.warning(
                     "[PRE-FLIGHT-BLOCK] %s @ctx=%d: external_usage_est=%d MiB "
                     "fixed_cost_dominant=%s needed=%dMiB free=%dMiB (Quelle: %s)",
@@ -1288,8 +1354,20 @@ class LlamaLoadMixin:
                         f"= {_fit.needed_mib + _fit.margin_mib:.0f} MiB\n"
                         f"  frei:     {_fit.free_mib:.0f} MiB (Quelle: {_fit.source})\n"
                         f"  extern:   ~{_ext_est} MiB Fremdbelegung (geschätzt)\n"
-                        f"  → Vorschlag: Modell im Agent-Tab wechseln — z. B. {_sugg_txt}.\n"
-                        f"  → Oder andere GPU-Nutzer schließen und erneut versuchen."
+                        + (
+                            f"  → Model base load does not fit even at minimal context "
+                            f"with reduced margin ({VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB).\n"
+                            if _fixed_dominant else
+                            f"  → Even with reduced safety margin ({VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB)"
+                            f" and small context (≥ {CTX_DOWN_MIN} for coder runs) not loadable — "
+                            f"VRAM too low for a meaningful run.\n"
+                        )
+                        + (f"  → At currently ~{_fit.free_mib:.0f} MiB free, ctx≈{_max_fit_ctx} fits at most "
+                           f"(with reduced margin {VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB) — "
+                           f"lower the coder ctx in the agent tab to ≤ {_max_fit_ctx}.\n"
+                           if _max_fit_ctx and not _fixed_dominant else "")
+                        + f"  → Suggestion: switch models in the agent tab — e.g. {_sugg_txt}.\n"
+                        + f"  → Or close other GPU users and try again."
                     ),
                 )
 

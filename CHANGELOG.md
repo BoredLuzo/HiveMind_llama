@@ -5,6 +5,78 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.13] - 2026-09-08
+
+### Added
+
+- Model config `hermes3.6_35b-a3b-uncensored-genesis-v13-mtp-apex-compact.json`
+  (mirror of the v12 MTP config: same ctx values and sampling, `mtp: true`) for
+  the Hermes3.6 V13 APEX-Compact GGUF; verified via `resolve_model_path` and
+  the MTP registry lookup.
+- Setting `llama_ubatch_size` (default `256`) + backend seam
+  (`server._sync_backend_runtime_config` -> `backend/llama_config.py`
+  `LLAMA_UBATCH` -> `manager_load.py` `--ubatch-size`): prompt-processing
+  chunk size is now tunable without code edits. Larger values (512/1024)
+  speed up prefill for MoE models with CPU expert offloading at the cost of
+  a larger VRAM compute buffer — the test lever for the slow
+  post-compression re-prefill (~17 tok/s observed on Vulkan MoE).
+
+### Fixed
+
+- **Per-model config `sampling` block is now applied at runtime**
+  (`model_configs/models_registry.py` accessor `get_sampling`,
+  `core/model_sampling.py` registry fallback): the documented `sampling` block
+  in `model_configs/models/*.json` (used by the shipped qwen3.6/hermes3.6
+  APEX-Compact configs) previously had no effect. The
+  `_model_sampling_overrides` settings seam still wins when provided.
+- **Documentation audit against the implementation**: README no longer claims
+  that `Auto` is the default run mode (`mode` defaults to `simple`), that
+  AutoMap is Judge-driven (it is a heuristic scorer), that the `[C]ustom`
+  wizard collects the `sampling` block, that `GITHUB_TOKEN` is honored by
+  `deploy/fetch_llamacpp.py` (never read), the `SEARXNG_SETTINGS_PATH`
+  mechanism (the config is baked via `COPY`), or the non-existent
+  `--no-vulkan` flag (CPU fallback is an automatic `--n-gpu-layers 0`
+  retry). Tool table now lists `get_datetime`, `hivemind_pipeline` and the
+  browser `close` action; tool-tier values (`off`/`readonly`/`python`/`full`)
+  are documented.
+- `direct_tools_tier` accepts the alias `websearch` → `readonly` (a literal
+  `websearch` value previously disabled all tools).
+- `docs/settings.md` regenerated (197 keys; stale at 189).
+
+- **Compression threshold floor lowered below the HTTP-400 overflow zone**
+  (`duo_compress_auto_floor` default `0.78` -> `0.70` in `settings.py` and the
+  `core/duo_runner.py` fallback): live logs (2026-09-07) show the request
+  overflow zone starts at ~72-73% of ctx (prompt + clamped `max_tokens` +
+  template overhead), i.e. below the old threshold — every cycle escalated to
+  `trigger=force` (6 compressions in 50 min), each costing a full cache-losing
+  re-prefill at ~17 tok/s prompt eval (Vulkan MoE). `0.70` fires a planned
+  compression clearly before that zone.
+- **Silent CPU fallback no longer applies to coder-class models**
+  (`backend/manager_load.py` `exit=-1` retry path): the VRAM threshold for the
+  one-time `--n-gpu-layers 0` fallback was lowered from 5.0 GB to 3.0 GB. The
+  coder (~4.9 GB) sat just under the old value, so a post-eviction
+  Vulkan-timing failure could reload it fully on CPU (~1-2 tok/s for the rest
+  of the run) instead of failing loudly. Only genuinely small models (light
+  compressor ~2.1 GB) still qualify for the CPU fallback.
+
+### Changed
+
+- All comments, log texts, UI status messages and model-facing hints from the
+  2026-09-06/07 context-flow work translated to English (line-stable
+  replacements; regression source-guard needles updated accordingly).
+
+### Removed
+
+- Dead setting `automap_mode` — defined and documented, but never read by
+  any code.
+
+### Tests
+
+- Registered 5 previously unregistered regression suites
+  (`auto_split_pending`, `ctx_guard`, `planner_model_persist`,
+  `read_only_detect`, `tool_arg_compact`) in `tests/run_regressions.py` and
+  extended `test_models_registry.py` with sampling-override coverage.
+
 ## [1.0.12] - 2026-09-06
 
 ### Added
@@ -31,6 +103,14 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Recommended Coder/Hermes agent model switched to `qwen3.6:…-genesis-final-apex-compact`**
+  (Qwen3.6 Genesis Final APEX-Compact, LuffyTheFox, ~17 GB): replaces the
+  hermes3.6 Genesis V12 downloader spec (`deploy/fetch_models.py`), the
+  `setup_models.bat` menu entry and the README Recommended Model Set row. The
+  per-model config now ships as
+  `model_configs/models/qwen3.6_…_genesis-final-apex-compact.json` (MTP head +
+  35 CPU experts, same launch/sampling settings as the old V12 config); the
+  vision projector follows as `mmproj-Qwen3.6-35B-A3B-Uncensored-Genesis-F16.gguf`.
 - **Compression threshold is floor-driven with a dynamic output reserve**: the old
   `min(P1, ctx − max_tokens − reserve)` behaviour no longer forces compression at ~67 %
   when the coder agent uses a 12000-token output budget; compression now triggers at

@@ -62,6 +62,12 @@ DEFAULT_SETTINGS = {
     "gpu_backend":             "",
     # 0 = aus, 256 = llama.cpp-Empfehlung.
     "llama_cache_reuse":       256,
+    # Prompt-processing chunk size (llama.cpp --ubatch-size). Larger values
+    # (512/1024) speed up prefill substantially for MoE models with CPU expert
+    # offloading (fewer RAM-streaming passes over the expert weights), at the
+    # cost of a larger VRAM compute buffer. Test lever for slow post-compression
+    # prefill; revert to 256 if a load OOMs on tight GPUs.
+    "llama_ubatch_size":       256,
 
     # ════════════════════════════════════════════════════════════════════════
     # ════════════════════════════════════════════════════════════════════════
@@ -117,7 +123,7 @@ DEFAULT_SETTINGS = {
     #   fuer den 35B-CPU-MoE zu knapp -> ReadTimeout -> Fallback-Summaries).
     "duo_cache_friendly_ctx":    True,
     "duo_partial_compression":   False,
-    "duo_compress_auto_floor":   0.78,
+    "duo_compress_auto_floor":   0.70,
     "duo_compress_overflow_reserve": 1024,
     "duo_min_free_ctx_tokens":   0,
     "duo_max_compressions":      40,
@@ -222,6 +228,13 @@ DEFAULT_SETTINGS = {
     "duo_tool_sandbox_max_mem_mb": 4096,
     "duo_tool_sandbox_max_procs": 64,
     "read_guard_enabled":      True,
+    # WRITE-GUARD duo_full (2026-09-06): blocks write_file on existing files
+    # never seen in this run (rollback lever like duo_error_rollup /
+    # duo_pin_static_map). False = old behavior (blind write_file allowed).
+    "duo_write_guard_enabled": True,
+    # NO-OP hint (2026-09-07): injects a read_file nudge after 2x ineffective
+    # edits on the same path (Python run-state, compression-proof).
+    "duo_noop_hint_enabled":    True,
     "keep_awake_during_run":   True,
     # DESKTOP-NOTIFICATIONS (2026-08-27, User-Wunsch): Windows-Toasts via
     "desktop_notifications":   True,
@@ -286,7 +299,6 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # M) AUTOMAP / ROUTING
     # ════════════════════════════════════════════════════════════════════════
-    "automap_mode":            "conservative",
     "automap_excluded":        [],
     "automap_code_duo_enabled": False,
     "automap_duo_pre_explore": False,

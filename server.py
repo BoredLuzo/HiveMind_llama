@@ -83,7 +83,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.0.12"
+HIVEMIND_VERSION = "1.0.13"
 
 # ─── FrÃ¼he Logger-Definition ────────────────────────────────────────────────────
 logger = logging.getLogger("hivemind.server")
@@ -360,9 +360,16 @@ def _sync_backend_runtime_config() -> None:
         _cache_reuse_val = int(settings.get("llama_cache_reuse", 256) or 0)
         _lc_init.CACHE_REUSE = _cache_reuse_val
         _lsm_init.CACHE_REUSE = _cache_reuse_val
+        # UBATCH-SEAM (2026-09-08): same three-module sync as CACHE_REUSE —
+        # llama_ubatch_size overrides --ubatch-size (prefill throughput lever
+        # for MoE + CPU expert offload; larger = faster prefill, more VRAM).
+        _ubatch_val = int(settings.get("llama_ubatch_size", 256) or 256)
+        _lc_init.LLAMA_UBATCH = _ubatch_val
+        _lsm_init.LLAMA_UBATCH = _ubatch_val
         try:
             import backend.manager_load as _ml_init
             _ml_init.CACHE_REUSE = _cache_reuse_val
+            _ml_init.LLAMA_UBATCH = _ubatch_val
         except Exception:
             pass
     except Exception:

@@ -141,7 +141,15 @@ def get_sampling_profile(model_name: str, thinking: bool = False, settings: dict
             break
     else:
         base = dict(DEFAULT_PROFILE.get(_mode_key, DEFAULT_PROFILE.get("non_thinking", DEFAULT_PROFILE.get("sampling_text", {}))))
-    overrides = (settings or {}).get("_model_sampling_overrides", {})
+    # Settings seam first; when it is not provided, per-model config files
+    # (model_configs/models/*.json) apply via the registry.
+    overrides = (settings or {}).get("_model_sampling_overrides")
+    if overrides is None:
+        try:
+            from model_configs.models_registry import get_sampling as _reg_sampling
+            overrides = {model_name: _reg_sampling(model_name)}
+        except Exception:
+            overrides = {}
     model_key = model_name.split(":")[0]
     model_override = overrides.get(model_name, overrides.get(model_key, {}))
     if model_override:

@@ -721,7 +721,14 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
 
         new_lines = final.count("\n") + 1
         delta = new_lines - old_lines
-        result = f"[{_display_tool}: '{p}' - {applied}/{len(blocks)} blocks applied ({delta:+d} lines)]"
+        # 0-LINES-CLARITY (2026-09-07): delta==0 can be a real inline fix
+        # (same line count, different content) — then report the char delta
+        # so the UI does not misleadingly show "0 lines".
+        result = f"[{_display_tool}: '{p}' - {applied}/{len(blocks)} blocks applied ({delta:+d} lines)"
+        if delta == 0:
+            _chard = len(final.replace("\r\n", "\n")) - len(str(content or "").replace("\r\n", "\n"))
+            result += f", {_chard:+d} chars"
+        result += "]"
         if errors:
             result += "\nWarnings:\n" + "\n".join(errors)
         if blocks and applied > 0:

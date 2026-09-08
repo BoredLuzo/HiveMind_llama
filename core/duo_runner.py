@@ -340,6 +340,65 @@ def _build_dtool_base(system_content, explore_history, plan_content, bridge_msg)
     ]
 
 
+_FALLBACK_MODEL_PREFERENCE = (
+    "qwen3.5:4b", "qwen3.5:2b-ud", "qwen3.5:2b", "lfm2.5:2.6b",
+    "ministral:3b-instruct-2410", "gemma-4:e4b-it-obliterated", "qwen3.5:0.8b-ud",
+)
+
+
+def _resolve_fallback_model(preferred: str, exclude_mdl: str = "", num_ctx: int = 8192) -> str | None:
+    """Robust fallback-model resolver (2026-09-07).
+
+    Live finding: duo_coder_fallback_model pointed at a non-installed model
+    (qwen3.5:4b-ud was missing) → the planner AND coder fallback both hit a
+    dead end and the run ended although other small models were available.
+    This checks preferred for existence + can_fit first, then falls back
+    deterministically to the first installed, loadable candidate model.
+    """
+    try:
+        from backend.llama_models import resolve_model_path as _resolve_path, list_available_models as _list_avail
+        from backend.llama_server_manager import manager as _lsm_fb
+    except Exception:
+        return preferred
+    try:
+        _avail = set(_list_avail() or [])
+    except Exception:
+        _avail = set()
+
+    _cands: list[str] = []
+    if preferred and preferred != exclude_mdl:
+        _cands.append(preferred)
+    for _m in _FALLBACK_MODEL_PREFERENCE:
+        if _m not in _cands and _m != exclude_mdl:
+            _cands.append(_m)
+    for _m in _cands:
+        try:
+            if not _resolve_path(_m):
+                continue
+        except Exception:
+            continue
+        try:
+            if not _lsm_fb.can_fit(_m, num_ctx).ok:
+                continue
+        except Exception:
+            pass
+        return _m
+    if _avail:
+        try:
+            from backend.llama_vram_table import vram_of as _vram_of_fb
+            for _m in sorted(_avail, key=lambda x: _vram_of_fb(x)):
+                if _m == exclude_mdl or _m in _cands:
+                    continue
+                try:
+                    if _resolve_path(_m) and _lsm_fb.can_fit(_m, num_ctx).ok:
+                        return _m
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return None
+
+
 def _inject_plan_into_coder_msgs(dtool_msgs, plan_result, *, chunking: bool, is_first_outer_round: bool):
 
 
@@ -881,19 +940,28 @@ async def run_code_duo(ctx):
                 except Exception as _plan_evict_exc:
                     logger.warning("Planner pre-eviction failed: %s", _plan_evict_exc)
                 if _evicted_any:
+                    # DRIVER-LAG-SETTLE (2026-09-06): this used to wait in an
+                    # UNCONDITIONAL wait_for_vram_reclaim for needed(full ctx)+768 —
+                    # a structurally unreachable target while the target model
+                    # itself is still warm in VRAM (e.g. Hermes@4096 from the
+                    # warmup): guaranteed 45s stall BEFORE every load. The settle
+                    # now only runs after real peer evictions above and targets
+                    # the ACHIEVABLE reduced margin; the ctx-mismatch kill +
+                    # the manager's margin resolution cover the rest.
                     await asyncio.sleep(2.5)
-                try:
-                    from backend.llama_vram_table import wait_for_vram_reclaim, vram_of_moe
-                    _planner_vram = vram_of_moe(_planner_model, _plan_ctx_final) * 1024 + 768
-                    await _await_with_hb(
-                        lambda: wait_for_vram_reclaim(int(_planner_vram), timeout_sec=45),
-                        timeout=60.0,
-                        emit_fn=ctx.emit,
-                        label="Waiting for VRAM to free up",
-                        interval=5.0,
-                    )
-                except Exception:
-                    pass
+                    try:
+                        from backend.llama_vram_table import wait_for_vram_reclaim, vram_of_moe
+                        from backend.llama_manager_utils import VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB as _RED_MIB
+                        _planner_vram_rm = vram_of_moe(_planner_model, _plan_ctx_final) * 1024 + _RED_MIB
+                        await _await_with_hb(
+                            lambda: wait_for_vram_reclaim(int(_planner_vram_rm), timeout_sec=20),
+                            timeout=30.0,
+                            emit_fn=ctx.emit,
+                            label="Waiting for VRAM to free up",
+                            interval=5.0,
+                        )
+                    except Exception:
+                        pass
                 _lsm_plan_pre._planner_critical_phase = True
                 # fallback to the lighter coder model to keep Planner responsive.
                 # P1-1 FIX: Capture port from first ensure_loaded — eliminates redundant
@@ -902,7 +970,18 @@ async def run_code_duo(ctx):
                 try:
                     _ensure_timeout = float(ctx.settings.get("duo_planner_ttl_seconds", 0) or 0) or float(ctx.settings.get("duo_planner_ensure_load_timeout_s", 450.0) or 450.0)
                     _plan_port = await _await_with_hb(
-                        lambda: _lsm_plan_pre.ensure_loaded(_planner_model, num_ctx=_plan_ctx_final, n_parallel=1),
+                        lambda: _lsm_plan_pre.ensure_loaded(
+                            _planner_model, num_ctx=_plan_ctx_final, n_parallel=1,
+                            # GRACEFUL-PLANNER (2026-09-07): the planner may
+                            # degrade to a smaller ctx (its prompts are small).
+                            # This load used to be STRICT when planner==coder —
+                            # then tight VRAM already aborted planning although
+                            # e.g. 16384 would fit. The coder later loads
+                            # strictly at full ctx (level A: a degraded planner
+                            # slot is never inherited, because the fast path
+                            # reuses only when slot-ctx >= coder-ctx).
+                            ctx_graceful=True,
+                        ),
                         timeout=_ensure_timeout,
                         emit_fn=ctx.emit,
                         label=f"Loading model {_planner_model.split(':')[0]}",
@@ -925,7 +1004,14 @@ async def run_code_duo(ctx):
                 except Exception as _pre_load_err:
                     logger.warning("Planner pre-load failed: %s", _pre_load_err, exc_info=True)
                     _err_short = str(_pre_load_err)[:120]
-                    _planner_fb = str(ctx.settings.get("duo_coder_fallback_model", "") or "").strip()
+                    # FALLBACK-RESOLVE (2026-09-07): the configured fallback
+                    # model may be missing (e.g. qwen3.5:4b-ud not installed) —
+                    # then fall back deterministically to an installed, loadable one.
+                    _planner_fb = _resolve_fallback_model(
+                        preferred=str(ctx.settings.get("duo_coder_fallback_model", "") or "").strip(),
+                        exclude_mdl=_planner_model,
+                        num_ctx=int(_plan_ctx_final or 8192),
+                    )
                     if _planner_fb and _planner_fb != _planner_model:
                         _planner_model = _planner_fb
                         _planner_used_fallback = True
@@ -966,7 +1052,11 @@ async def run_code_duo(ctx):
                 try:
                     from backend.llama_server_manager import manager as _lsm_port_res
                     _plan_port = await asyncio.wait_for(
-                        _lsm_port_res.ensure_loaded(_planner_model, num_ctx=_plan_ctx_final, n_parallel=1),
+                        _lsm_port_res.ensure_loaded(
+                            _planner_model, num_ctx=_plan_ctx_final, n_parallel=1,
+                            # GRACEFUL-PLANNER: see primary load above.
+                            ctx_graceful=True,
+                        ),
                         timeout=30.0,
                     )
                 except Exception as _port_err:
@@ -1439,11 +1529,19 @@ async def run_code_duo(ctx):
         _has_plan = bool(_subtasks) or bool(_plan_thinking) or bool(
             _plan_result is not None and _plan_result.plan_content
         )
+        # EXPLORE-CONTENT-TRUTH (2026-09-06): a static symbol map (created when
+        # pre_explore=False) lists only paths/symbols/imports — NO file
+        # contents. It is NOT "codebase explored". has_explore_ctx may only be
+        # True if the LLM pre-explore produced real results (messages) or
+        # architecture contracts. Otherwise _build_duo_coder_sys wrongly
+        # picks DUO_CODER_EXPLORED (with "no read_file needed") and the coder
+        # blindly overwrites existing files via write_file.
+        _explore_has_contents = bool(state.get("_pre_explore_msgs")) or bool(state.get("_contracts_raw"))
         _duo_coder_sys = _build_duo_coder_sys(
             ctx,
             has_plan=_has_plan,
             has_subtasks=bool(_subtasks),
-            has_explore_ctx=bool(_explore_ctx),
+            has_explore_ctx=_explore_has_contents,
         ) + _coder_dyn_hints
         _follow_up_hint = state.get("_follow_up_hint", "") or ""
         if _follow_up_hint:
@@ -1506,7 +1604,33 @@ async def run_code_duo(ctx):
                 _plan_port_alive = await _lsm_pv._port_alive(_plan_port)
             except Exception:
                 _plan_port_alive = False
-        if _planner_is_coder and _plan_port_available and _plan_port_alive:
+        # CTX-ACTUAL-FOR-PLANNER (2026-09-06): the manager may have silently
+        # degraded the slot to a smaller ctx (old: 768-MiB margin → 4096).
+        # planner==coder must then NOT inherit the slot as coder — the coder
+        # needs its full configured context and otherwise loads fresh.
+        _plan_port_actual_ctx = 0
+        if _plan_port_available and _plan_port_alive:
+            try:
+                for _s_pp in _lsm_pv._slots:
+                    if getattr(_s_pp, "port", None) == _plan_port and getattr(_s_pp, "_num_ctx", 0):
+                        _plan_port_actual_ctx = int(_s_pp._num_ctx)
+                        break
+                if not _plan_port_actual_ctx:
+                    async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(connect=3.0, read=3.0, write=3.0, pool=3.0),
+                    ) as _c_pp:
+                        _props_pp = (await _c_pp.get(f"http://127.0.0.1:{_plan_port}/props")).json()
+                    _plan_port_actual_ctx = int((_props_pp.get("default_generation_settings") or {}).get("n_ctx") or 0)
+            except Exception:
+                _plan_port_actual_ctx = 0
+        try:
+            _plan_ctx_req = int(_plan_ctx_final or 0)
+        except (NameError, TypeError):
+            _plan_ctx_req = 0
+        # Reuse only if the slot runs at >= the requested ctx. Query errors
+        # (actual==0) → conservatively no reuse (a clean reload is safer).
+        _planner_ctx_ok = bool(_plan_port_actual_ctx and _plan_port_actual_ctx >= _plan_ctx_req)
+        if _planner_is_coder and _plan_port_available and _plan_port_alive and _planner_ctx_ok:
             _cached_coder_port = _plan_port
             _cached_coder_port_ctx = _plan_ctx_final  # CTX-GUARD: pin planner ctx to port
             logger.info("[Planner=Coder] Model stays in VRAM - no reload needed")
@@ -1515,6 +1639,20 @@ async def run_code_duo(ctx):
                 "content": (
                     f"⚡ Planner=Coder — {_planner_model.split(':')[0]} stays in VRAM, "
                     "no reload needed"
+                ),
+            })
+        elif _planner_is_coder and _plan_port_available and _plan_port_alive and not _planner_ctx_ok:
+            logger.warning(
+                "[PLANNER=CODER-CTX-MISMATCH] slot ctx=%d < required %d — "
+                "no reuse, coder loads fresh at full ctx",
+                _plan_port_actual_ctx, _plan_ctx_req,
+            )
+            yield await ctx.emit({
+                "type": "status",
+                "content": (
+                    f"⚡ Planner=Coder — slot runs at ctx={_plan_port_actual_ctx} only, "
+                    f"coder needs {_plan_ctx_req} — loading coder model fresh "
+                    "(full context)."
                 ),
             })
         elif _planner_is_coder and _plan_port_available and not _plan_port_alive:
@@ -1535,6 +1673,16 @@ async def run_code_duo(ctx):
         from backend.llama_server_manager import manager as _lsm2
         from backend.llama_server_manager import VRAMPreFlightError as _VRAMPreFlightError
         _coder_load_ok = False
+        # VRAM-FALLBACK-CTX (2026-09-07): when the coder is pushed to a smaller
+        # model at a reduced ctx (_fb_ctx), this override pins _coder_ctx_eff
+        # to the fallback ctx for the rest of the run — otherwise the tool
+        # round keeps demanding the full target ctx and stops in the cached
+        # ctx mismatch (LD-SET 2497). The override is RUN-local: a new run
+        # starts again with the full target ctx; within this run there is
+        # deliberately no mid-run upgrade path back to the original model
+        # (fallback = model switch for the run), so no reset is needed
+        # (only fresh across runs).
+        _coder_ctx_override = 0
         if (_explore_ctx or _workers_were_loaded) and _scp:
             try:
                 yield await ctx.emit({"type": "status", "content": "🧹 Freeing VRAM (unloading worker models)…"})
@@ -1566,7 +1714,7 @@ async def run_code_duo(ctx):
                 # hits a dead port → TCP close → frontend: "Error in input stream".
                 if _evicted_workers > 0:
                     await asyncio.sleep(1.5)
-                if _planner_is_coder and _plan_port_available and _plan_port_alive:
+                if _planner_is_coder and _plan_port_available and _plan_port_alive and _planner_ctx_ok:
                     _coder_load_ok = True
                     _coder_ctx_post = (
                         resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
@@ -1604,7 +1752,11 @@ async def run_code_duo(ctx):
                             yield await ctx.emit({"type": "status",
                                 "content": f"⏳ Loading coder ({exec_mdl.split(':')[0]}, ctx={_coder_ctx_try})…"})
                             _coder_port = await asyncio.wait_for(
-                                _lsm2.ensure_loaded(exec_mdl, num_ctx=_coder_ctx_try, n_parallel=1),
+                                # STRICT-CTX: the coder needs its configured
+                                # full ctx OR a clear error — never a silently
+                                # degraded slot (manager: 768→256→error).
+                                _lsm2.ensure_loaded(exec_mdl, num_ctx=_coder_ctx_try,
+                                                    n_parallel=1, ctx_graceful=False),
                                 timeout=_coder_load_timeout,
                             )
                             _coder_load_ok = True
@@ -1645,7 +1797,11 @@ async def run_code_duo(ctx):
                             # attempts are structurally pointless (3x 4s+ wait + error
                             # return never reached — AUDIT-FIX 2026-08-04).
                             # occupancy (~3.6 GB, browser/desktop) blocked hermes
-                            _fb_model = str(ctx.settings.get("duo_coder_fallback_model", "") or "").strip()
+                            _fb_model = _resolve_fallback_model(
+                                preferred=str(ctx.settings.get("duo_coder_fallback_model", "") or "").strip(),
+                                exclude_mdl=exec_mdl,
+                                num_ctx=min(int(_coder_ctx_try or 8192), 10240),
+                            )
                             if _fb_model and _fb_model != exec_mdl:
                                 logger.warning(
                                     "[CODER-VRAM-FALLBACK] %s not loadable (free=%d MiB, external=%d MiB) — "
@@ -1670,6 +1826,9 @@ async def run_code_duo(ctx):
                                     exec_mdl = _fb_model
                                     coder_mdl = _fb_model
                                     _duo_pinned.add(_fb_model)
+                                    # CTX-CLAMP (2026-09-07): effective coder ctx
+                                    # follows the fallback slot, else mismatch stop.
+                                    _coder_ctx_override = _fb_ctx
                                     yield await ctx.emit({"type": "status",
                                         "content": f"✅ Coder fallback active: {_fb_model} (ctx={_fb_ctx})"})
                                     break
@@ -1816,6 +1975,16 @@ async def run_code_duo(ctx):
             if ctx.duo_config.agentic_mode
             else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
         )
+        # VRAM-FALLBACK-CTX-CLAMP (2026-09-07): after a coder VRAM fallback the
+        # slot runs at _fb_ctx; _coder_ctx_eff (and thus _dtool_ctx,
+        # num_predict, all ctx guards) must follow that slot — otherwise
+        # [DUO] Cached port ctx mismatch + immediate LD-SET-2497 stop.
+        if _coder_ctx_override and _coder_ctx_eff > int(_coder_ctx_override):
+            logger.warning(
+                "[CODER-FALLBACK-CTX] clamp coder ctx %d -> %d (VRAM-Fallback, Modell %s)",
+                int(_coder_ctx_eff), int(_coder_ctx_override), coder_mdl,
+            )
+            _coder_ctx_eff = int(_coder_ctx_override)
         _coder_caps = compute_char_caps(_coder_ctx_eff, overrides=ctx.settings.get("duo_caps"))
         # CODER-EXPLORE-WINDOW (2026-08-17): explicit lever next to duo_static_map_chars.
         _coder_explore_override = int(ctx.settings.get("duo_coder_explore_chars", 0) or 0)
@@ -2106,14 +2275,32 @@ async def run_code_duo(ctx):
                 if ctx.image_description:
                     _coder_input += f"\n\n[Image description]:\n{ctx.image_description}"
                 if _explore_ctx:
-                    _explore_rule = (
-                        "WORKSPACE PRE-EXPLORED — the static repo-map and architecture contracts below are confirmed.\n"
-                        "The STATIC REPO-MAP section shows file paths, symbols, and imports (deterministic, ground truth).\n"
-                        "Use paths from the map directly. Do NOT re-run list_dir or find_files on listed directories.\n"
-                        "If a file is already covered by pre-exploration:\n"
-                        "  → call edit_file directly (no read_file needed).\n"
-                        "Only call read_file if the file was NOT in the pre-exploration results.\n\n"
-                    )
+                    # EXPLORE-CONTENT-TRUTH (2026-09-06): rule text now keys off
+                    # the same truth flag as the system template choice above.
+                    # With a static symbol map only, it must NOT claim the
+                    # files are "pre-explored" (no read_file needed) — contents
+                    # are not in context, which caused blind write_file
+                    # overwrites. Also no dangling "below" reference to the
+                    # map (moved into the system message via repomap pin)
+                    # anymore.
+                    if _explore_has_contents:
+                        _explore_rule = (
+                            "WORKSPACE PRE-EXPLORED — the static repo-map and architecture contracts below are confirmed.\n"
+                            "The STATIC REPO-MAP section shows file paths, symbols, and imports (deterministic, ground truth).\n"
+                            "Use paths from the map directly. Do NOT re-run list_dir or find_files on listed directories.\n"
+                            "If a file is already covered by pre-exploration:\n"
+                            "  → call edit_file directly (no read_file needed).\n"
+                            "Only call read_file if the file was NOT in the pre-exploration results.\n\n"
+                        )
+                    else:
+                        _explore_rule = (
+                            "STATIC SYMBOL INDEX ONLY — the list below contains file paths, symbols, and imports, "
+                            "NOT the files' contents.\n"
+                            "Existing files may contain code you have not seen. BEFORE changing any listed existing file:\n"
+                            "  → call read_file on it first.\n"
+                            "write_file with full content is ONLY for NEW files. For existing files use "
+                            "edit_file/patch_file (SEARCH/REPLACE) AFTER reading the current content.\n\n"
+                        )
                     _MAX_EXPLORE_INJECT = _coder_caps.explore_inject
                     _explore_inject = _explore_ctx
                     if len(_explore_inject) > _MAX_EXPLORE_INJECT:
@@ -2602,7 +2789,7 @@ async def run_code_duo(ctx):
                     _plan_port_inloop = None
                     try:
                         from backend.llama_server_manager import manager as _lsm3
-                        _plan_port_inloop = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_ctx, n_parallel=1)
+                        _plan_port_inloop = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_ctx, n_parallel=1, ctx_graceful=False)
                     except Exception as _port_err:
                         logger.warning("Inloop planner: port not available (%s)", _port_err)
                     _inloop_plan_text = ""
@@ -2809,15 +2996,17 @@ async def run_code_duo(ctx):
                             )
                             _cached_coder_port = None
                             _cached_coder_port_ctx = None
-                            try:
-                                from backend.llama_vram_table import (
-                                    wait_for_vram_reclaim as _wvr_reclaim,
-                                    vram_of_moe as _wvr_moe,
-                                )
-                                _wvr_target = int(_wvr_moe(exec_mdl, _target_ctx) * 1024 + 768)
-                                await _wvr_reclaim(_wvr_target, timeout_sec=45)
-                            except Exception:
-                                pass
+                            # RECLAIM-STALL-FIX (2026-09-06): this waited in a
+                            # wait_for_vram_reclaim for needed(full ctx)+768 —
+                            # structurally unreachable while the old slot is still
+                            # loaded (the kill only happens in the ensure_loaded
+                            # ctx-mismatch branch below) → guaranteed 45s stall.
+                            # The manager kill + margin resolution (768→256→error)
+                            # now free VRAM correctly.
+                            logger.info(
+                                "[DUO] Cached port ctx mismatch — reload via ensure_loaded "
+                                "(ctx-mismatch kill + margin resolution in the manager)"
+                            )
                         else:
                             _dport = _cached_coder_port
                             # Touch keep-alive so idle monitor doesn't kill model mid-run
@@ -2838,7 +3027,7 @@ async def run_code_duo(ctx):
                     else:
                         for _connect_attempt in range(3):
                             try:
-                                _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1)
+                                _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False)
                                 break
                             except Exception as _ce:
                                 if _connect_attempt < 2:
@@ -2863,8 +3052,9 @@ async def run_code_duo(ctx):
                     # must follow the REAL slot ctx - otherwise prompt+budget exceed
                     # the slot (llama HTTP 400) and the run churns through
                     # force-compressions every few rounds.
+                    _dtool_ctx_requested = int(_dtool_ctx)
+                    _actual_ctx = 0
                     try:
-                        _actual_ctx = 0
                         for _s_act in _lsm3._slots:
                             if getattr(_s_act, "port", None) == _dport and getattr(_s_act, "_num_ctx", 0):
                                 _actual_ctx = int(_s_act._num_ctx)
@@ -2880,10 +3070,10 @@ async def run_code_duo(ctx):
                                 _actual_ctx = int((_props_act.get("default_generation_settings") or {}).get("n_ctx") or 0)
                             except Exception:
                                 pass
-                        if _actual_ctx > 0 and _actual_ctx < int(_dtool_ctx):
+                        if _actual_ctx > 0 and _actual_ctx < _dtool_ctx_requested:
                             logger.warning(
                                 "[CTX-ACTUAL] slot ctx=%d < configured %d - guard/clamp/budget follow the slot",
-                                _actual_ctx, int(_dtool_ctx),
+                                _actual_ctx, _dtool_ctx_requested,
                             )
                             _dtool_ctx = _actual_ctx
                             _dtool_opts["num_ctx"] = _actual_ctx
@@ -2893,6 +3083,14 @@ async def run_code_duo(ctx):
                             _cached_coder_port_ctx = _actual_ctx
                     except Exception as _ctx_act_err:
                         logger.debug("[CTX-ACTUAL] query failed: %s", _ctx_act_err)
+                    # CTX-FLOOR-PRECONDITION (Guard C): slot runs smaller than
+                    # requested by the coder (manager degradation) — stored for
+                    # the early round-loop stop instead of compress churn (paths 1/2).
+                    _slot_degraded = bool(
+                        _actual_ctx > 0
+                        and _actual_ctx < _dtool_ctx_requested
+                    )
+                    _slot_ctx_floor_stop = False  # Guard-C telemetry (see LOOP-DETECT-STOP)
                     _dtc_owned = getattr(getattr(ctx.pipeline, 'ollama', None), '_client', None) is None
                     _dtc = getattr(getattr(ctx.pipeline, 'ollama', None), '_client', None) or httpx.AsyncClient(
                         limits=httpx.Limits(max_connections=4, max_keepalive_connections=4),
@@ -2908,7 +3106,14 @@ async def run_code_duo(ctx):
                     # auch bei grossem max_tokens garantiert. So komprimiert es
                     # erst ~78% (statt ~67% bei max_tokens 12000). UI-Override
                     # (>0) setzt die Schwelle weiterhin exakt.
-                    _duo_compress_floor = float(ctx.settings.get("duo_compress_auto_floor", 0.78) or 0.78)
+                    # FLOOR 0.70 (2026-09-08, live-log evidence): the HTTP-400
+                    # overflow zone starts at ~72-73% of ctx (prompt + max_tokens
+                    # + template overhead) — a 0.78 threshold sat ABOVE it, so
+                    # every cycle went through the expensive force path
+                    # (6 compressions in 50min on 2026-09-07) instead of a
+                    # planned threshold compression. 0.70 fires clearly before
+                    # the 400 zone; ctx_guard's module default is 0.72.
+                    _duo_compress_floor = float(ctx.settings.get("duo_compress_auto_floor", 0.70) or 0.70)
                     _duo_out_budget = int(_dtool_opts.get("num_predict", 800) or 800)
                     # Reserve-Cap nur als kleiner Overflow-Backstop (P1 soll binden).
                     _duo_reserve_cap = max(1, min(_duo_out_budget, 4096))
@@ -3135,7 +3340,7 @@ async def run_code_duo(ctx):
                                 try:
                                     from backend.llama_server_manager import manager as _lsm_hc
                                     await _lsm_hc.evict(exec_mdl)
-                                    _dport = await _lsm_hc.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1)
+                                    _dport = await _lsm_hc.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False)
                                     _cached_coder_port = _dport
                                     _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)  # CTX-GUARD
                                     yield await ctx.emit({"type": "status",
@@ -3167,6 +3372,44 @@ async def run_code_duo(ctx):
                         # prompt_tokens value of the last round, fallback to the
                         # estimator (round 1 / backend without usage_meta).
                         _guard_tokens = int(_coder_real_prompt_tokens[0] or _est_tokens)
+                        # ── GUARD C: CTX-FLOOR-STOP (2026-09-06) ─────────────
+                        # If the slot is degraded (real slot-ctx < requested ctx)
+                        # and the round-1 baseline (pinned sys/repo-map/plan/goal)
+                        # already exhausts the usable space, compression is
+                        # pointless — the run used to churn for minutes in path 1
+                        # ([CTX-FULL] skip×4) or path 2 (compress-streak×3) and
+                        # then stopped unspecifically. Guard C fires BEFORE the
+                        # first tool round with a clear message and never lets paths 1/2
+                        # be reached in exactly this case (no double firing:
+                        # same exit funnel as all _ld_setter stops).
+                        if _slot_degraded and _total_tool_rounds <= 0:
+                            try:
+                                from backend.llama_manager_utils import CTX_DOWN_MIN as _CTX_FLOOR_MIN
+                            except Exception:
+                                _CTX_FLOOR_MIN = 8192
+                            _usable_floor = _actual_ctx - 512
+                            # IMPORTANT: _est_tokens (fresh estimate of the CURRENT
+                            # _dtool_msgs) instead of _guard_tokens — the latter can carry
+                            # the previous round's cached real-prompt-tokens value
+                            # (false-positive stop after compression/chunk switch).
+                            if _actual_ctx < _CTX_FLOOR_MIN and _est_tokens >= _usable_floor:
+                                _slot_ctx_floor_stop = True
+                                logger.warning(
+                                    "[CTX-FLOOR-STOP] slot ctx=%d < min %d; round-1 est=%d >= usable %d — "
+                                    "aborting instead of compress churn (path 1/2 skipped)",
+                                    _actual_ctx, _CTX_FLOOR_MIN, int(_est_tokens), _usable_floor,
+                                )
+                                yield await ctx.emit({
+                                    "type": "status",
+                                    "content": (
+                                        f"⛔ Coder slot running at ctx={_actual_ctx} only "
+                                        f"(requested: {_dtool_ctx_requested}, minimum {_CTX_FLOOR_MIN}) — "
+                                        f"round-1 context (~{int(_est_tokens)} tokens) does not fit. "
+                                        f"Close other GPU users, lower the coder ctx or pick a smaller model."
+                                    ),
+                                })
+                                _ld_setter(3246); _loop_detected = True
+                                break
                         _ctx_peak_tokens = max(_ctx_peak_tokens, int(_est_tokens))
                         _ctx_limit_seen = max(_ctx_limit_seen, int(_dtool_ctx))
                         if _dtool_ctx > 0:
@@ -3385,6 +3628,15 @@ async def run_code_duo(ctx):
                             # wenn es ohne Coder-Evict passt (VRAM can_fit);
                             # sonst Fallback auf das Coder-Modell. Read-Timeout
                             # konfigurierbar (duo_compress_llm_timeout_s).
+                            # FOLLOW-UP (2026-09-07, observed live): ensure_loaded
+                            # can evict the coder (Vulkan serialization,
+                            # VRAM 4.9+2.1>7.5) — light compression is faster
+                            # (~50s vs ~110s) but costs a coder reload (~20s)
+                            # + complete cache loss (next round reuse=0%).
+                            # Trade-off consciously accepted. Later candidates:
+                            # duo_partial_compression (byte-stable tail -> KV shift)
+                            # and/or pinning the coder during the run. Do not
+                            # silently forget — see docs/architecture.md.
                             _comp_mdl = exec_mdl
                             _comp_port = _dport
                             if _comp_llm_cfg and _comp_llm_cfg != exec_mdl:
@@ -3416,6 +3668,7 @@ async def run_code_duo(ctx):
                                         "[COMPRESS-MODEL] light model %s unavailable (%s) - using coder model for compression",
                                         _comp_llm_cfg, _cm_err,
                                     )
+                            _mini_retry_done = False  # MINI-SHRINK-RETRY (2026-09-07)
                             _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(
                                 messages=_dtool_msgs,
                                 model=_comp_mdl,
@@ -3437,6 +3690,63 @@ async def run_code_duo(ctx):
                                 compression_mode=_comp_mode,
                                 cut_index=_comp_cut,
                             )
+                            # MINI-SHRINK-RETRY (2026-09-07): if the full compression
+                            # barely shrank (<15% of the before value), an early
+                            # next 2-minute compress follows (cost cascade). Then
+                            # ONE escalated retry (aggressive_retry=soft escalation
+                            # instead of a hard token target). The retry runs
+                            # BEFORE validation — the existing
+                            # _validate_compression_summary flow (+ rule fallback)
+                            # below checks the RETRY result.
+                            if (not _mini_retry_done
+                                    and str(_comp_mode or "full") == "full"
+                                    and int(_est_tokens_before_compress or 0) > 2048):
+                                _mini_retry_done = True
+                                _after1_est = int(_estimate_ctx_tokens(_dtool_msgs))
+                                _shrink1 = (int(_est_tokens_before_compress) - _after1_est) / max(1, int(_est_tokens_before_compress))
+                                if _shrink1 < 0.15:
+                                    logger.warning(
+                                        "[CTX-COMPRESS-RETRY] before=%d after1=%d shrink=%.2f < 0.15 — starting escalated retry",
+                                        int(_est_tokens_before_compress), _after1_est, _shrink1,
+                                    )
+                                    yield await ctx.emit({"type": "status",
+                                        "content": "🗜 Mini-shrink detected — second (escalated) compression attempt …"})
+                                    _dtool_msgs2, _condensed_files2, _compress_usage2 = await _compress_tool_context(
+                                        messages=_msgs_before_compress,
+                                        model=_comp_mdl,
+                                        port=_comp_port,
+                                        client=_dtc,
+                                        read_timeout=float(_comp_llm_timeout_s or 180),
+                                        system_prompt=_sys_for_compress,
+                                        original_task=ctx.user_input,
+                                        written_files=_written_files,
+                                        done_tasks=_done_tasks,
+                                        goal_pin=_goal_pin_msg,
+                                        keep_recent_msgs=(18 if ctx.duo_config.until_finished else 12),
+                                        plan_state=_plan_state,
+                                        plan_anchor_text=_plan_anchor_text,
+                                        last_test_status=_last_test_status,
+                                        explore_ctx=_explore_ctx,
+                                        tool_rounds=_total_tool_rounds,
+                                        max_tool_rounds=_max_tool_rounds,
+                                        compression_mode=_comp_mode,
+                                        cut_index=_comp_cut,
+                                        aggressive_retry=True,
+                                    )
+                                    _after2_est = int(_estimate_ctx_tokens(_dtool_msgs2))
+                                    _retry_helped = bool(
+                                        (_after2_est < int(_after1_est * 0.85))
+                                        or ((int(_est_tokens_before_compress) - _after2_est)
+                                            / max(1, int(_est_tokens_before_compress)) >= 0.15)
+                                    )
+                                    logger.warning(
+                                        "[CTX-COMPRESS-RETRY] before=%d after1=%d after2=%d retry_helped=%s",
+                                        int(_est_tokens_before_compress), _after1_est, _after2_est,
+                                        _retry_helped,
+                                    )
+                                    _dtool_msgs = _dtool_msgs2
+                                    _condensed_files = _condensed_files2
+                                    _compress_usage = _compress_usage2
                             if _compress_usage and _compress_usage.get("completion_tokens"):
                                 yield await ctx.emit({"type": "usage_meta", "phase": "coder",
                                     "completion_tokens": int(_compress_usage["completion_tokens"]),
@@ -3501,7 +3811,7 @@ async def run_code_duo(ctx):
                                         len(_condensed_files),
                                     )
                                     yield await ctx.emit({"type": "status",
-                                        "content": f"🧰 LLM-Kompression fehlgeschlagen — regelbasiert komprimiert ({int(_est_tokens_before_compress)} → {int(_est_rule)} est. tokens)"})
+                                        "content": f"🧰 LLM compression failed — rule-based compression ({int(_est_tokens_before_compress)} → {int(_est_rule)} est. tokens)"})
                                     # Manueller Cleanup analog zum LLM-Erfolgspfad
                                     # (der else-Zweig laeuft fuer den Fallback nicht):
                                     # LRU/Rounds/Read-Guard/Plan-Pin zuruecksetzen.
@@ -4526,8 +4836,8 @@ async def run_code_duo(ctx):
                         try:
                             from backend.llama_server_manager import manager as _lsm_retry
                             await _lsm_retry.evict(exec_mdl)
-                            await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1)
-                            _dport = _cached_coder_port or await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1)
+                            await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False)
+                            _dport = _cached_coder_port or await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False)
                             ctx.exec_ctrl.sync_tool_rounds(_total_tool_rounds)
                             continue
                         except Exception as _retry_err:
@@ -4726,7 +5036,7 @@ async def run_code_duo(ctx):
                     logger.warning(
                         "[LOOP-DETECT-STOP] timed_out=%s think_only=%s compress_streak=%s "
                         "explore_only=%s runtime_error=%s grace=%s verify_warned=%s invalid_tool=%s "
-                        "force_compress=%s dropped_tool_retries=%s drop_names=%s last_msgs=%s",
+                        "force_compress=%s dropped_tool_retries=%s slot_ctx_floor=%s drop_names=%s last_msgs=%s",
                         _duo_timed_out,
                         _ld_locals.get("_dr_think_only_retries", "n/a"),
                         _ld_locals.get("_compress_fail_streak", "n/a"),
@@ -4737,6 +5047,7 @@ async def run_code_duo(ctx):
                         _ld_locals.get("_dr_invalid_tool_retries", "n/a"),
                         _ld_locals.get("_force_compress_next", "n/a"),
                         _ld_locals.get("_dr_dropped_tool_retries", "n/a"),
+                        _ld_locals.get("_slot_ctx_floor_stop", False),
                         _ld_locals.get("_drop_names", []),
                         [str(m.get("content", ""))[:80] for m in (_dtool_msgs or [])[-8:]],
                     )
