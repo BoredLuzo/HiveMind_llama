@@ -48,7 +48,7 @@ ASSET_REGEX = {
     "cuda": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-cuda-([\d.]+)-x64{_ASSET_EXT}$", re.IGNORECASE),
     # CPU build (no backend tag in the name) + ROCm (Linux):
     "cpu": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-x64{_ASSET_EXT}$", re.IGNORECASE),
-    "rocm": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-rocm-x64{_ASSET_EXT}$", re.IGNORECASE),
+    "rocm": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-rocm(?:-[\d.]+)?-x64{_ASSET_EXT}$", re.IGNORECASE),
 }
 
 
