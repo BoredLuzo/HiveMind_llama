@@ -866,6 +866,15 @@ async def run_code_duo(ctx):
             _planner_skipped = True
             yield await ctx.emit({"type": "planner_done", "summary": "⏭ skipped"})
             ctx.phase_timer.skip("soft_planner")
+        if (not (ctx.duo_config.chunking or ctx.duo_config.planner)
+                and not ctx.aborted() and not _resume_data
+                and not _planner_skipped and not ctx.step_skipped()):
+            # PLANNER-VISIBILITY (2026-09-08): this state used to fall through
+            # silently — planner toggle off + chunking off skipped the whole
+            # phase with zero feedback while the UI still showed a planner
+            # model ("planner stays off after preset load").
+            yield await ctx.emit({"type": "status",
+                "content": "⏹ Planner phase off (planner + chunking toggles both off) — going straight to coder"})
         if (ctx.duo_config.chunking or ctx.duo_config.planner) and not ctx.aborted() and not _resume_data and not _planner_skipped:
             _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
             _planner_is_distilled = False

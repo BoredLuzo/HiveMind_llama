@@ -1034,7 +1034,7 @@ async function loadSettings() {
     if (cacheReuseEl) cacheReuseEl.value = S.llamaCacheReuse;
     updateMoeExpertDefaultHint();
     var dplmEl = document.getElementById('duo-planner-model-sel');
-    if (dplmEl && S.duoPlannerModel) dplmEl.value = S.duoPlannerModel;
+    if (dplmEl) dplmEl.value = S.duoPlannerModel || '';
     var dcmEl = document.getElementById('duo-coder-model-sel');
     if (dcmEl && S.duoCoderModel) dcmEl.value = S.duoCoderModel;
     // COMPRESSION-MODELL + FIX-FLAGS (2026-09-07)
@@ -1450,7 +1450,7 @@ function populateDuoModelGroup() {
     compressSel.value = (compressSel.querySelector('option[value="' + _curComp + '"]')) ? _curComp : 'auto';
   }
   // apply the stored state
-  if (S.duoPlannerModel && plannerSel) plannerSel.value = S.duoPlannerModel;
+  if (plannerSel) plannerSel.value = S.duoPlannerModel || '';
   if (S.duoCoderModel && coderSel) coderSel.value = S.duoCoderModel;
   updateDuoPairHint();
 }
@@ -2213,6 +2213,18 @@ async function savePresetAs(name) {
 }
 
 async function loadPreset(name) {
+  // Flush pending settings/ctx patches first, so they can't land AFTER the
+  // preset was applied and overwrite its values via settings.update.
+  if (_settingsPostTimer) {
+    clearTimeout(_settingsPostTimer);
+    _settingsPostTimer = null;
+    await _flushQueuedSettings();
+  }
+  if (_duoCtxCommitTimer) {
+    clearTimeout(_duoCtxCommitTimer);
+    _duoCtxCommitTimer = null;
+    try { await commitDuoCtx(); } catch(e) {}
+  }
   var r = await fetch('/presets/' + encodeURIComponent(name) + '/load', { method: 'POST' });
   var d = await r.json();
   if (d.ok) {
@@ -2232,6 +2244,14 @@ async function loadPreset(name) {
     if (_agAfter && S.duoCtxAgentic != null) _agAfter.value = S.duoCtxAgentic;
     var _noAfter = document.getElementById('duo-ctx-normal');
     if (_noAfter && S.duoCtxNormal != null) _noAfter.value = S.duoCtxNormal;
+    // PRESET-VISIBILITY (2026-09-08): show what the preset restored — a
+    // "planner off + chunking off" snapshot used to disable the planner phase
+    // without any feedback.
+    alert('Preset "' + name + '" loaded.\n'
+      + 'Planner: ' + (d.planner_enabled ? 'ON' : 'OFF') + (d.planner_model ? ' (' + d.planner_model + ')' : '') + '\n'
+      + 'Chunking: ' + (d.chunking ? 'ON' : 'OFF'));
+  } else {
+    alert('Preset "' + name + '" could not be loaded' + (d && d.error ? ': ' + d.error : ''));
   }
 }
 

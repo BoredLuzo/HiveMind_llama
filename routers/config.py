@@ -393,7 +393,15 @@ async def load_preset_ep(name: str):
                 await _bk_load(judge_agent.model, keep_alive="10m", num_ctx=_wm3_ctx or None)
     except Exception:
         pass
-    return {"ok": True, "name": name}
+    return {
+        "ok": True,
+        "name": name,
+        # Summary so the UI can show what the preset actually restored —
+        # "planner off + chunking off" used to skip the planner phase silently.
+        "chunking": bool(settings.get("duo_chunking", False)),
+        "planner_enabled": bool(settings.get("duo_planner_enabled", False)),
+        "planner_model": settings.get("duo_planner_model") or "",
+    }
 
 
 @router.delete("/presets/{name}")

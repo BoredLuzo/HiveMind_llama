@@ -29,6 +29,16 @@
   not only the subtask title list. Non-chunk outer rounds 2+ get it
   re-injected too (it was previously lost after round 1).
 
+- Preset load reliability: a presets.json with a UTF-8 BOM (external Windows
+  editors add one) made load_presets() fail silently — every preset load 404'd
+  and the UI swallowed the error. BOM-tolerant now; load failures surface as
+  an alert, and the success alert shows what the preset restored (planner
+  on/off + model, chunking on/off). The planner phase is no longer skipped
+  silently when planner + chunking toggles are both off; the planner dropdown
+  clears when a preset removes the planner model override; pending settings
+  patches are flushed before a preset load so they can't overwrite it.
+  New suite tests/test_presets_bom.py (43 total).
+
 ## [1.0.13] - 2026-09-08
 
 ### Added

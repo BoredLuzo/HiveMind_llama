@@ -500,7 +500,10 @@ def save_settings(settings: dict):
 def load_presets() -> dict:
     if PRESETS_FILE.exists():
         try:
-            return json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
+            # utf-8-sig: tolerate a UTF-8 BOM. External Windows editors add one;
+            # strict utf-8 json.loads then failed, load_presets() silently
+            # returned {} and every preset load 404'd.
+            return json.loads(PRESETS_FILE.read_text(encoding="utf-8-sig"))
         except Exception:
             pass
     return dict(DEFAULT_PRESETS)
