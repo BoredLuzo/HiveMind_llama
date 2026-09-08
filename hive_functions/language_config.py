@@ -165,3 +165,20 @@ def get_run_cmd(lang: str, file: str = "") -> str | None:
 def get_start_cmd(lang: str) -> str | None:
     cfg = LANGUAGE_RUNNERS.get(lang)
     return cfg.get("start_cmd") if cfg else None
+
+# POSIX-TOOL-LADDER (2026-09-08): the command templates above were written for
+# the Windows runner (python / Select-Object pipes). On POSIX, python is
+# python3 and PowerShell pipe cmdlets do not exist — translate at import time.
+import re as _re_lc
+import sys as _sys_lc
+
+if _sys_lc.platform != "win32":
+    for _runner in LANGUAGE_RUNNERS.values():
+        for _key in ("test_cmd", "run_cmd", "start_cmd", "lint_cmd", "install_cmd"):
+            _val = _runner.get(_key)
+            if not _val:
+                continue
+            _val = _val.replace("Select-Object -First 30", "head -30")
+            _val = _val.replace("Select-Object -Last 20", "tail -20")
+            _val = _re_lc.sub(r"(?<![\w./-])python(?=\s|$)", "python3", _val)
+            _runner[_key] = _val
