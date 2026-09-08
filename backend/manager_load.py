@@ -706,9 +706,14 @@ class LlamaLoadMixin:
         if GPU_BACKEND == "cpu":
             _gpu_layers = 0
         import os as _os_th
-        # THREADS-DEFAULT (2026-09-08): POSIX hosts get a CPU-count-aware
-        # default — a fixed 16 oversubscribes small Linux boxes.
-        _def_threads = 16 if platform.system() == "Windows" else max(2, min(16, (_os_th.cpu_count() or 8)))
+        # THREADS-DEFAULT (2026-09-08): Windows keeps the proven 16/8 pair;
+        # POSIX hosts get a CPU-count-aware default — a fixed 16 oversubscribes
+        # small Linux boxes.
+        if platform.system() == "Windows":
+            _def_threads, _def_threads_batch = 16, 8
+        else:
+            _n_cpu = max(2, min(16, (_os_th.cpu_count() or 8)))
+            _def_threads, _def_threads_batch = _n_cpu, _n_cpu
         cmd = [
             str(LLAMA_BIN),
             "--model",        str(gguf_path),
@@ -720,7 +725,7 @@ class LlamaLoadMixin:
             "--batch-size",   "1024",
             "--ubatch-size",  str(LLAMA_UBATCH),
             "--threads",      str(_def_threads),
-            "--threads-batch",str(_def_threads),
+            "--threads-batch",str(_def_threads_batch),
             "--split-mode",   "none",
         ]
 
