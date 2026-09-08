@@ -13,8 +13,7 @@ DEFAULT_VRAM_BUDGET_GB = 7.5
 
 _READ_ONLY_KEYWORDS = (
     "read-only", "readonly", "no write", "do not write", "don't write",
-    "do not modify", "don't modify", "keine dateioperation", "nichts schreiben",
-    "nur lesen", "keine aenderung", "keine änderung",
+    "do not modify", "don't modify",
 )
 
 # A read-only phrase alone is NOT enough: the same wording is frequently used as
@@ -26,17 +25,14 @@ _READ_ONLY_KEYWORDS = (
 # Implementation-intent verbs therefore override the read-only classification.
 _IMPL_OVERRIDE_RE = re.compile(
     r"\b(?:create|build|write|implement(?:ed|ation)?|fix(?:es|ing)?|"
-    r"generate|develop|refactor|produce|patch|"
-    r"schreib\w*|erstell\w*|bau\w*|implementier\w*|programmier\w*|"
-    r"entwickel\w*|erzeug\w*|korrigier\w*|verbesser\w*)\b",
+    r"generate|develop|refactor|produce|patch)\b",
     re.IGNORECASE,
 )
 
-# Verbs negated directly before/after ("aendere nichts", "nicht aendern",
+# Verbs negated directly before/after ("don't change anything",
 # "fix nothing") must not count as implementation intent.
 _NEGATOR_RE = re.compile(
-    r"(?:never|not\b|no\b|don'?t|dont|"
-    r"nicht|nichts|niemals|nie\b|kein\w*|ohne\b|weder\b)",
+    r"(?:never|not\b|no\b|don'?t|dont)",
     re.IGNORECASE,
 )
 

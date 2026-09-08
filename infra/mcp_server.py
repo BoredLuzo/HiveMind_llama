@@ -192,10 +192,10 @@ else:
 
 
 _REGEX_ROUTES: list[tuple[re.Pattern, str, Any]] = [
-    (re.compile(r"(?:read|open|cat|type|lies?|lese?|zeig|öffne?)\s+['\"]?(.+?\.[a-z]{1,6})['\"]?", re.I),
+    (re.compile(r"(?:read|open|cat|type)\s+['\"]?(.+?\.[a-z]{1,6})['\"]?", re.I),
      "read_file", lambda m: {"path": m.group(1).strip()}),
 
-    (re.compile(r"(?:list|ls|dir|zeig\s+(?:mir\s+)?(?:alle\s+)?(?:dateien|files)|verzeichnis)\s*['\"]?([./\\\w-]*)['\"]?", re.I),
+    (re.compile(r"(?:list|ls|dir)\s*['\"]?([./\\\w-]*)['\"]?", re.I),
      "list_dir", lambda m: {"path": m.group(1).strip() or "."}),
 
     # Git
@@ -203,15 +203,15 @@ _REGEX_ROUTES: list[tuple[re.Pattern, str, Any]] = [
      "git_status", lambda m: {"cmd": m.group(0).strip()}),
 
     # Shell direkt
-    (re.compile(r"^(?:run|exec|execute|führe?\s+aus?)\s+(.+)$", re.I),
+    (re.compile(r"^(?:run|exec|execute)\s+(.+)$", re.I),
      "shell", lambda m: {"cmd": m.group(1).strip()}),
 
     # Read memory
-    (re.compile(r"(?:memory\s+get|get\s+from\s+memory|was\s+weißt\s+du\s+über|erinnere?\s+dich\s+an|hole\s+aus\s+memory)\s+['\"]?(\w+)['\"]?", re.I),
+    (re.compile(r"(?:memory\s+get|get\s+from\s+memory)\s+['\"]?(\w+)['\"]?", re.I),
      "memory_get", lambda m: {"key": m.group(1).strip()}),
 
     # Code suchen
-    (re.compile(r"(?:search|grep|find|suche?)\s+(?:for\s+|nach\s+)?['\"](.+?)['\"]", re.I),
+    (re.compile(r"(?:search|grep|find)\s+(?:for\s+)?['\"](.+?)['\"]", re.I),
      "search_code", lambda m: {"pattern": m.group(1)}),
 ]
 

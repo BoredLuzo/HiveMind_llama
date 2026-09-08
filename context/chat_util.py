@@ -110,12 +110,8 @@ def _extract_ws_query(user_input: str) -> str | None:
 
     # Pure conversation ─ skip (English + German)
     _CHAT_PATTERNS = [
-        # English
         r'^(hi|hey|hello|thanks|thank you|ok|okay|yes|no|sure|great|cool|good|bad|please)\b',
         r'^(how are you|what are you doing|tell me about yourself|can you explain briefly)',
-        # German
-        r'^(hi|hallo|hey|danke|ok|okay|ja|nein|super|cool|gut|schlecht|bitte|tschüss)\b',
-        r'^(wie geht|was machst|erzähl|kannst du kurz|erkläre mir kurz)',
     ]
     for pat in _CHAT_PATTERNS:
         if re.search(pat, text):
@@ -125,23 +121,18 @@ def _extract_ws_query(user_input: str) -> str | None:
     _HARD_TRIGGERS = [
         # Time-sensitive / recency
         r'\b(2025|2026|current(ly)?|latest|newest?|recent(ly)?|up-to-date)\b',
-        r'\b(aktuell|neueste[rns]?|derzeit|gerade|momentan)\b',                # DE
         r'\b(changelog|release\s*notes?|patch\s*notes?)\b',
         r'\b(version\s*\d|v\d+\.\d+)\b',
 
         # Errors & debugging
-        r'(error|exception|traceback|stacktrace|fehler|absturz)',
+        r'(error|exception|traceback|stacktrace|stack trace)',
         r'(not found|404|403|500|503|connection refused|timeout)',
 
-        # Docs & installation (English)
+        # Docs & installation
         r'\b(how\s+to\s+(install|use|configure|set\s*up|enable|fix))\b',
         r'\b(install(ation)?|pip\s+install|npm\s+(install|i\b)|apt(-get)?\s+install)\b',
         r'\b(api\s+(key|docs?|reference|endpoint)|sdk|library|package|module)\b',
         r'\b(setup\s+(guide|tutorial)|getting\s+started|quickstart)\b',
-
-        # Docs & installation (German)
-        r'\b(wie\s+(installiere|nutze|konfiguriere|aktiviere|richte\s+ein))\b',
-        r'\b(installieren|einrichten|konfigurieren|dokumentation)\b',
     ]
     for pat in _HARD_TRIGGERS:
         if re.search(pat, text):
@@ -151,8 +142,7 @@ def _extract_ws_query(user_input: str) -> str | None:
     _IS_QUESTION = (
         text.endswith("?")
         or re.search(
-            r'\b(what\s+is|what\s+are|how\s+does|how\s+do|explain|describe'
-            r'|was\s+ist|was\s+sind|wie\s+funktioniert|erkläre|beschreibe)\b',
+            r'\b(what\s+is|what\s+are|how\s+does|how\s+do|explain|describe)\b',
             text
         )
     )
@@ -160,8 +150,6 @@ def _extract_ws_query(user_input: str) -> str | None:
         r'\b(docs?|documentation|reference|manual|handbook)\b',
         r'\b(example|tutorial|guide|sample|demo|walkthrough)\b',
         r'\b(best\s+practice|recommendation|standard|convention)\b',
-        # German equivalents
-        r'\b(beispiel|leitfaden|empfehlung|handbuch|anleitung)\b',
     ]
     if _IS_QUESTION:
         for pat in _SOFT_TRIGGERS:
@@ -177,8 +165,7 @@ def _extract_memory(text: str):
     t  = text.strip()
     tl = t.lower()
     core = re.sub(
-        r'^(?:remember\s+(?:that\s+)?|note\s+(?:that\s+)?|save\s+(?:this|that)\s*[,:\s]?'
-        r'|merke?\s+dir\s+dass?\s+|merke?\s+dir\s*[,:\s]+|speichere?\s+|notiere?\s+|merke?\s*[,:\s]+)',
+        r'^(?:remember\s+(?:that\s+)?|note\s+(?:that\s+)?|save\s+(?:this|that)\s*[,:\s]?)',
         '', tl, flags=re.I
     ).strip().lstrip(',: ')
     offset = tl.find(core[:12]) if len(core) >= 12 else max(0, len(tl) - len(core))
@@ -189,24 +176,24 @@ def _extract_memory(text: str):
         p  = core.find(vl)
         return corig[p:p+len(vl)].strip() if p >= 0 else vl
 
-    m = re.search(r'(?:my\s+name\s+is|ich\s+hei(?:ss|\xdf)e)\s+(\S+(?:\s+\S+)?)', core)
+    m = re.search(r'my\s+name\s+is\s+(\S+(?:\s+\S+)?)', core)
     if m: return 'name', _ov(m.group(1))
-    m = re.search(r"(?:i\s+come\s+from|i'?m\s+from|ich\s+komme\s+aus|aus)\s+(\S+(?:\s+\S+))(?:\s+(?:come|komme|stamme|bin))?\s*$", core)
+    m = re.search(r"(?:i\s+come\s+from|i'?m\s+from)\s+(\S+(?:\s+\S+))(?:\s+come)?\s*$", core)
     if m: return 'herkunft', _ov(m.group(1))
-    m = re.search(r"(?:i'?m|i\s+am)\s+(.{2,50}?)\s*$|ich\s+(?:bin\s+(.{2,50}?)\s*$|(.{2,30}?)\s+bin\s*$)", core)
+    m = re.search(r"(?:i'?m|i\s+am)\s+(.{2,50}?)\s*$", core)
     if m:
-        val = (m.group(1) or m.group(2) or m.group(3)).strip()
+        val = m.group(1).strip()
         return 'ich_bin', _ov(val)
-    m = re.match(r'(?:my|mein(?:e|er|em)?)\s+(\w+)\s+(.+?)\s+(?:is|ist)\s*$', core)
+    m = re.match(r'my\s+(\w+)\s+(.+?)\s+is\s*$', core)
     if m: return m.group(1).strip(), _ov(m.group(2).strip())
-    m = re.match(r'(?:my|mein(?:e|er|em)?)\s+(\w[\w ]{0,20}?)\s*(?:\b(?:is|ist)\b|=|:)\s*(.+)', core)
+    m = re.match(r'my\s+(\w[\w ]{0,20}?)\s*(?:\bis\b|=|:)\s*(.+)', core)
     if m: return m.group(1).strip().replace(' ', '_'), _ov(m.group(2))
-    m = re.match(r'(\w[\w ]{0,25}?)\s*(?:\b(?:is|ist)\b|=|:)\s*(.+)', core)
+    m = re.match(r'(\w[\w ]{0,25}?)\s*(?:\bis\b|=|:)\s*(.+)', core)
     if m:
         k = m.group(1).strip().replace(' ', '_')
         if k not in ('ich','er','sie','es','wir','das','die','der','i') and len(k) < 35:
             return k, _ov(m.group(2))
-    m = re.match(r'(\w+)\s+(.+?)\s+(?:is|ist)\s*$', core)
+    m = re.match(r'(\w+)\s+(.+?)\s+is\s*$', core)
     if m:
         k = m.group(1).strip()
         if len(k) < 20 and k not in ('ich','das','die','der','er','sie','wir','i','it','that','this'):
@@ -216,25 +203,18 @@ def _extract_memory(text: str):
 
 # ─── Auto-memory: detects facts in normal conversations ──────────────────────
 _AUTO_MEMORY_PATTERNS = [
-    (re.compile(r'\b(?:my\s+name\s+is|ich\s+hei(?:ss|\xdf)e)\s+(\S+(?:\s+\S+)?)', re.I),        'name'),
-    (re.compile(r'\bmein(?:e|er)?\s+name\s+ist\s+(\S+(?:\s+\S+)?)', re.I),                      'name'),
-    (re.compile(r"\b(?:i\s+come\s+from|i'?m\s+from)\s+(\S+(?:\s+\S+)?)", re.I),                 'herkunft'),
-    (re.compile(r'\bich\s+(?:komme|stamme)\s+aus\s+(\S+(?:\s+\S+)?)', re.I),                    'herkunft'),
-    (re.compile(r'\bi\s+live\s+in\s+(\S+(?:\s+\S+)?)', re.I),                                   'wohnort'),
-    (re.compile(r'\bich\s+wohne\s+in\s+(\S+(?:\s+\S+)?)', re.I),                                'wohnort'),
-    (re.compile(r'\bi\s+work\s+as\s+an?\s+(\S+(?:\s+\S+)?)', re.I),                             'beruf'),
-    (re.compile(r'\bich\s+(?:bin|arbeite\s+als)\s+(entwickler|programmierer|student|lehrer|designer|manager|ingenieur|forscher|\w+er|\w+in)\b', re.I), 'beruf'),
-    (re.compile(r"\bi(?:'m|\s+am)\s+(\d{1,2})\s+years?\s+old", re.I),                           'alter'),
-    (re.compile(r'\bich\s+bin\s+(\d{1,2})\s+jahre?(?:\s+alt)?', re.I),                          'alter'),
+    (re.compile(r'\bmy\s+name\s+is\s+(\S+(?:\s+\S+)?)', re.I),                                 'name'),
+    (re.compile(r"\b(?:i\s+come\s+from|i'?m\s+from)\s+(\S+(?:\s+\S+)?)", re.I),                'herkunft'),
+    (re.compile(r'\bi\s+live\s+in\s+(\S+(?:\s+\S+)?)', re.I),                                  'wohnort'),
+    (re.compile(r'\bi\s+work\s+as\s+an?\s+(\S+(?:\s+\S+)?)', re.I),                            'beruf'),
+    (re.compile(r"\bi(?:'m|\s+am)\s+(\d{1,2})\s+years?\s+old", re.I),                          'alter'),
     (re.compile(r'\bmy\s+(?:current\s+)?project\s+is\s+(?:called\s+)?(\S+(?:\s+\S+){0,3})', re.I), 'projekt'),
-    (re.compile(r'\bmein\s+(?:aktuelles?\s+)?projekt\s+(?:ist|heisst|hei\xdft)\s+(\S+(?:\s+\S+){0,3})', re.I), 'projekt'),
     (re.compile(r'\bmy\s+(?:favorite|preferred)\s+(?:programming\s+)?language\s+is\s+(\S+)', re.I), 'sprache'),
-    (re.compile(r'\bmeine\s+(?:lieblings)?(?:sprache|programmiersprache)\s+ist\s+(\S+)', re.I), 'sprache'),
 ]
 
 async def _auto_memory_from_input(user_input: str):
     """Quietly extracts and stores facts from normal conversation."""
-    if re.search(r'^\s*(?:merke?|speichere?|notiere?|remember)', user_input, re.I):
+    if re.search(r'^\s*remember\b', user_input, re.I):
         return
     memory = _state.memory
     if memory is None:

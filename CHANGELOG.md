@@ -58,6 +58,34 @@
   and a partial attempt that shrank nothing escalates the next attempt to
   full mode. New suite tests/test_partial_cut.py (45 total).
 
+- Context compression actually condenses now (live failure: "done
+  before=26473 after=26473" three times, then the 3-strike guard stopped the
+  run at ~65% ctx). Root cause: plan_partial_cut_index counted the pinned
+  system prompt toward the cut budget, the cut landed before the first tool
+  output, the condenser found nothing to compress and silently returned the
+  original list — which passed validation vacuously. The cut now ignores the
+  system message and requires condensable content before it (otherwise full
+  mode), a no-op condensation logs a warning instead of pretending success,
+  and a partial attempt that shrank nothing escalates the next attempt to
+  full mode. New suite tests/test_partial_cut.py (45 total).
+- Read-first nudge in the write-arg stub: after a large write is compacted,
+  the stub now tells the model to read_file the path before further
+  write/edit calls (write_file churn fix). The per-round output clamp honors
+  duo_compress_overflow_reserve / duo_min_free_ctx_tokens, and the VRAM
+  pre-pin resolves the planner model exactly like the planner phase
+  (duo_planner_use_coder_ctx + duo_planner_model override were ignored).
+- Duplicate plan preview removed from the chunk coder input — the FULL PLAN
+  badge block from build_chunk_context is the single source now.
+- Ctx meter shows real prompt tokens (marked "real" vs heuristic "est") with
+  per-round cache reuse %, and the Compression card gained toggles for
+  cache-friendly compression, partial compression and local-only summary.
+- ui_rev stale-tab guard: POST /settings patches carrying an outdated revision
+  lose the protected compression keys (settings_force: true overrides).
+- Input-detection matchers are english-only (german halves removed for now —
+  restore via git history; legacy output parsers stay bilingual). AGENTS.md
+  added with the repo conventions and matcher inventory. Mojibake cleanup in
+  chat_run.py log/status strings.
+
 ## [1.0.13] - 2026-09-08
 
 ### Added

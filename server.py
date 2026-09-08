@@ -908,8 +908,6 @@ _SYMBOL_HINT_STOPWORDS = {
     "file", "files", "code", "project", "please", "write", "update", "change",
     "fix", "error", "issue", "test", "tests", "function", "class", "method",
     "python", "javascript", "typescript", "json", "yaml", "module", "build",
-    "und", "oder", "bitte", "datei", "dateien", "projekt", "funktion", "klasse",
-    "methode", "fehler", "testen", "ändere", "aendere", "schreibe", "nutze",
 }
 
 

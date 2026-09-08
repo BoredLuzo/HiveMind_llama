@@ -54,15 +54,15 @@ def main():
             "## CRITICAL – MAZE DATA (GROUND TRUTH – DO NOT MODIFY) "
             "Copy it 1:1 into your code."),
            False)
-    _check("A2 PacMan (DE, constraint)",
-           ("Erstelle ein Pac-Man-Spiel. Achtung – MAZE-Daten (DO NOT MODIFY) "
-            "muessen 1:1 uebernommen werden."),
+    _check("A2 PacMan (constraint)",
+           ("Create a Pac-Man game. Note - MAZE data (DO NOT MODIFY) "
+            "must be copied 1:1."),
            False)
     _check("A3 fix + do not modify tests",
            "Please fix the build, but do not modify the test files.",
            False)
-    _check("B1 pure read-only (DE)",
-           "Bitte nur lesen und fasse die wichtigsten Dateien kurz zusammen.",
+    _check("B1 pure read-only (EN)",
+           "Read-only session: summarize the most important files briefly.",
            True)
     _check("B2 pure read-only (EN)",
            "Do not modify anything, just explain how the app works.",
@@ -70,8 +70,8 @@ def main():
     _check("B3 don't write, only read",
            "Don't write any file, only read index.html and summarize it.",
            True)
-    _check("B4 nichts schreiben, nur lesen",
-           "Nur lesen, nichts schreiben, erklaere kurz was logic.js tut.",
+    _check("B4 do not write, only read",
+           "Only read, do not write anything, briefly explain what logic.js does.",
            True)
     _check("C1 no RO phrase at all",
            "Implement a sorting function in sorting.js",

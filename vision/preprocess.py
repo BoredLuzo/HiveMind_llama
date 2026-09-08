@@ -68,9 +68,8 @@ def _build_vision_prompt(user_query: str, custom_prompt: str = "") -> str:
 
     q = user_query.lower().strip()
 
-    if any(kw in q for kw in ["solve", "calculate", "equation", "exercise",
-                                "löse", "berechne", "rechne", "aufgabe", "aufgaben",
-                                "gleichung", "formel", "lösung", "ergebnis"]):
+    if any(kw in q for kw in ["solve", "calculate", "equation", "exercise", "task",
+                              "formula", "result"]):
         return (
             "Analyze this image as a task or problem statement.\n"
             "Extract: 1) The exact task/question, 2) All numbers/formulas/equations, "
@@ -80,7 +79,7 @@ def _build_vision_prompt(user_query: str, custom_prompt: str = "") -> str:
             )
 
     if any(kw in q for kw in ["read", "extract", "written", "ocr", "scan", "text",
-                                "lies", "lese", "was steht", "schrift", "lesen", "erkennen", "tabelle"]):
+                              "table"]):
         return (
             "Extract all visible text from this image.\n"
             "Preserve formatting, structure, and numbers exactly.\n"
@@ -88,17 +87,14 @@ def _build_vision_prompt(user_query: str, custom_prompt: str = "") -> str:
         )
 
     if any(kw in q for kw in ["hot", "pretty", "attractive", "look", "fashion", "style",
-                                "sexy", "attraktiv", "schön", "hässlich", "gefällt",
-                                "stil", "outfit", "mode", "aussehen", "bewerte"]):
+                              "sexy", "outfit"]):
         return (
             "Describe this image focused on visual aesthetics and appearance.\n"
             "Cover: style, clothing, expression, overall impression.\n"
             f"User question: {user_query}"
         )
 
-    if any(kw in q for kw in ["what is", "what happens", "describe", "scene", "who is",
-                                "was passiert", "was ist", "was zeigt", "wer ist",
-                                "beschreib", "erkläre", "szene", "bild"]):
+    if any(kw in q for kw in ["what is", "what happens", "describe", "scene", "who is"]):
         return (
             "Describe this scene precisely and in a structured way.\n"
             "Include: people, objects, actions, environment, relevant details.\n"
