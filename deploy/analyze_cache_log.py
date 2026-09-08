@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
-"""A/B-Analyzer fuer die Cache-Telemetrie im hivemind.log.
+"""A/B analyzer for the cache telemetry in hivemind.log.
 
-Extrahiert aus einem/mehreren Log(s):
-  [CACHE] prompt=.. cached=.. reuse=..%          (pro Coder-Round)
-  [CTX-COMPRESS] done before=.. after=.. mode=.. (Kompressionen, Shrink)
-  [CTX-EVICT-EMERGENCY] / [CTX-EVICT-LEGACY]     (Notfall-/Legacy-Evictions)
+Extracts from one/more log(s):
+  [CACHE] prompt=.. cached=.. reuse=..%          (per coder round)
+  [CTX-COMPRESS] done before=.. after=.. mode=.. (compressions, shrink)
+  [CTX-EVICT-EMERGENCY] / [CTX-EVICT-LEGACY]     (emergency/legacy evictions)
   [MSGSIG-CHANGE], [CACHE-MISS]
 
-Output: Vergleichstabelle je Log-Datei + (optional) CSV der Einzel-Rounds.
+Output: comparison table per log file + (optional) CSV of the individual rounds.
 
 Usage:
   python deploy/analyze_cache_log.py <log> [<log2> ...] [--csv out.csv] [--rounds 12]
 
-Kernfragen, die es beantwortet:
-  - Reuse%-Verlauf: kippt reuse nach Kompression/Eviction (Legacy) oder bleibt
-    es zwischen Kompressionen hoch (cache-freundlich)?
-  - Kumulativer Reprefill (prompt - cached) ueber alle Rounds.
+Core questions it answers:
+  - Reuse% trajectory: does reuse collapse after compression/eviction (legacy)
+    or does it stay high between compressions (cache-friendly)?
+  - Cumulative reprefill (prompt - cached) across all rounds.
 """
 import csv
 import re
@@ -82,20 +82,20 @@ def print_file_summary(res):
     for c in res["compresses"]:
         modes[c["mode"]] = modes.get(c["mode"], 0) + 1
     print(f"\n=== {res['file']} ===")
-    print(f"  Tool-Rounds mit usage:      {res['n_rounds']}")
+    print(f"  Tool rounds with usage:     {res['n_rounds']}")
     if r:
         print(f"  Reuse  avg/min:             {_pct(reuse)}  /  min {min(reuse)}%")
         # Verlauf in 4 Buckets (Anfang -> Ende)
         step = max(1, len(r) // 4)
         buckets = [r[i:i + step] for i in range(0, len(r), step)][:4]
-        traj = "  Reuse-Verlauf (4 Buckets):   " + "  ".join(
+        traj = "  Reuse trajectory (4 buckets):  " + "  ".join(
             f"[{statistics.mean([x['reuse'] for x in b]):.0f}%]" for b in buckets)
         print(traj)
-    print(f"  Kumulativer Reprefill:       {fmt_size(total_reprefill):>12} tok"
+    print(f"  Cumulative reprefill:        {fmt_size(total_reprefill):>12} tok"
           f"  (prompt {fmt_size(total_prompt)}, cached {fmt_size(total_cached)})")
-    print(f"  Kompressionen (done):        {res['n_compress_done']}"
+    print(f"  Compressions (done):         {res['n_compress_done']}"
           f"  {modes if modes else ''}")
-    print(f"  Kompressionen (trigger):     {res['n_compress_trig']}")
+    print(f"  Compressions (trigger):      {res['n_compress_trig']}")
     print(f"  Evictions emergency/legacy:  {res['n_evict_emergency']} / {res['n_evict_legacy']}"
           + (f" (+generic {res['n_evict_generic']})" if res["n_evict_generic"] else ""))
     print(f"  MSGSIG-CHANGE:               {res['n_msgsig']}")
@@ -120,7 +120,7 @@ def rounds_table_csv(paths, csv_path, limit_rounds):
                     break
                 w.writerow([res["file"], i, x["prompt"], x["cached"],
                             x["reuse"], x["prompt"] - x["cached"]])
-    print(f"\nCSV geschrieben: {csv_path}")
+    print(f"\nCSV written: {csv_path}")
 
 
 def main(argv):
@@ -153,14 +153,14 @@ def main(argv):
     results = []
     for p in paths:
         if not p.exists():
-            print(f"[SKIP] nicht gefunden: {p}")
+            print(f"[SKIP] not found: {p}")
             continue
         results.append(print_file_summary(analyze(p)))
     if csv_path:
         rounds_table_csv(paths, csv_path, limit_rounds)
-    print("\nHinweis: reuse% sinkt nach Kompression/Eviction immer kurz ab "
-          "(Rebuild). Relevant ist, ob es DANACH wieder hochlaeuft "
-          "(Cache-Recovery) statt dauerhaft niedrig zu bleiben.")
+    print("\nNote: reuse% always dips briefly after a compression/eviction "
+          "(rebuild). What matters is whether it recovers afterwards "
+          "(cache recovery) instead of staying permanently low.")
     return 0
 
 

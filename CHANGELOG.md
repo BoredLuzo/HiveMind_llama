@@ -13,6 +13,13 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   note (`[MESSAGE ORIGIN] ...`) and the `[USER]` label replace their German
   forms; KV-poison markers (`server.py`, `vision/preprocess.py`) now match both
   the new English and the legacy German forms.
+- MCP tool descriptions and JSON-RPC error strings (`Unknown tool` /
+  `Unknown method`) translated to English (`infra/mcp_server.py`); user-visible
+  status/UI strings translated too: pipeline status events, subagent gate and
+  fallback texts, pre-explore dedupe status, git-undo result, Playwright error,
+  planner bubble label and config-eval heading (`static/app.js`),
+  `deploy/ab_phase1.ps1` console output, `deploy/analyze_cache_log.py`
+  report/help output.
 
 ## [1.0.13] - 2026-09-08
 

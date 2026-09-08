@@ -77,7 +77,7 @@ async def pick_delegate_model() -> tuple[str, int]:
         fit = manager.can_fit(model, ctx_default, safety_margin_mib=margin)
         if getattr(fit, "ok", False):
             return model, ctx_default
-    raise GateBlocked("vram: kein Leitern-Modell passt")
+    raise GateBlocked("vram: no ladder model fits")
 
 
 async def run_research(task: str, workspace_lock: str | None) -> str:
@@ -187,7 +187,7 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
             tcs = msg.get("tool_calls") or []
             content = (msg.get("content") or "").strip()
             if not tcs or _round >= max_tools:
-                summary = content or "(Delegat lieferte keinen Inhalt)"
+                summary = content or "(delegate returned no content)"
                 break
             messages.append(msg)
             for tc in tcs:

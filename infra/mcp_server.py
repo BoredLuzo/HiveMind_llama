@@ -948,8 +948,8 @@ TOOL_SCHEMAS = [
             "properties": {
                 "path":       {"type": "string"},
                 "max_kb":     {"type": "integer", "default": 64},
-                "start_line": {"type": "integer", "description": "Erste Zeile (1-indexed, optional)"},
-                "end_line":   {"type": "integer", "description": "Letzte Zeile inklusive (optional)"},
+                "start_line": {"type": "integer", "description": "Start line (1-indexed, optional)"},
+                "end_line":   {"type": "integer", "description": "End line (inclusive, optional)"},
             },
             "required": ["path"],
         },
@@ -994,7 +994,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "edit_file",
-        "description": "Surgische SEARCH/REPLACE-Edits in einer bestehenden Datei (gleiches Tool wie im internen Agent-Loop).",
+        "description": "Surgical SEARCH/REPLACE edits in an existing file (same tool as the internal agent loop).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1006,7 +1006,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "replace_lines",
-        "description": "Ersetzt einen Zeilenbereich in einer Datei (1-indexed, inklusiv).",
+        "description": "Replace a line range in a file (1-indexed, inclusive).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1031,7 +1031,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "find_files",
-        "description": "Dateien per Glob finden (z.B. **/*.py).",
+        "description": "Find files by glob (e.g. **/*.py).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1068,7 +1068,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "find_references",
-        "description": "Leichte Symbol-Referenzsuche mit Datei+Zeile (LSP-lite).",
+        "description": "Lightweight symbol reference search with file+line (LSP-lite).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1081,7 +1081,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "edit_ast",
-        "description": "Ersetzt einen Python-AST-Knoten (function|class|variable) robust per Name.",
+        "description": "Robustly replace a Python AST node (function|class|variable) by name.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1248,7 +1248,7 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
         tool_name = params.get("name", "")
         args      = params.get("arguments", {})
         if tool_name not in TOOL_FNS:
-            return err(-32601, f"Unbekanntes Tool: {tool_name}")
+            return err(-32601, f"Unknown tool: {tool_name}")
         allowed, reason = _tool_allowed(tool_name, transport)
         if not allowed:
             return err(-32001, f"TOOL_NOT_ALLOWED: {reason}")
@@ -1297,7 +1297,7 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
     if method.startswith("notifications/"):
         return None
 
-    return err(-32601, f"Unbekannte Methode: {method}")
+    return err(-32601, f"Unknown method: {method}")
 
 
 # ── Startup ────────────────────────────────────────────────────────────────────

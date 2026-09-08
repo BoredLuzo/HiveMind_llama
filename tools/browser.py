@@ -77,7 +77,7 @@ def _ensure_page():
         from playwright.sync_api import sync_playwright
     except ImportError:
         raise RuntimeError(
-            "Playwright ist nicht installiert. Installiere: "
+            "Playwright is not installed. Install: "
             "pip install playwright && playwright install chromium"
         )
     _playwright = sync_playwright().start()

@@ -338,7 +338,7 @@ async def exec_git_undo_file(workspace: str, abs_path: str) -> str:
     p = Path(abs_path)
     if p.exists():
         p.unlink(missing_ok=True)
-        return f"removed '{rel}' (erstellt nach Checkpoint)"
+        return f"removed '{rel}' (created after checkpoint)"
     return ""
 
 

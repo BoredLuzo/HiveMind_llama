@@ -4910,8 +4910,8 @@ function handleEvent(d) {
     }
     _decoupleFinishedPlannerBubble();
     var _planLabel = _chunkCount > 0
-      ? ('Plan erstellt: ' + _chunkCount + ' Schritt' + (_chunkCount === 1 ? '' : 'e'))
-      : 'Briefing erstellt';
+      ? ('Plan created: ' + _chunkCount + ' step' + (_chunkCount === 1 ? '' : 's'))
+      : 'Briefing created';
     _renderPlanMarkdown();
     finalizePlannerBubble(_planLabel);
     // SUBTASK-CHECKLIST (2026-08-31): chunks merken + Checkliste im UI rendern.
@@ -6677,7 +6677,7 @@ async function runConfigEval() {
     if (!suggestions.length) {
       showEvalResult('\u2713 Configs look good for ' + model + ' (' + entries.length + ' log entries analyzed). No automatic adjustments recommended.');
     } else {
-      showEvalResult('Empfehlungen fuer ' + model + ':', suggestions, model);
+      showEvalResult('Recommendations for ' + model + ':', suggestions, model);
     }
   } catch(e) {
     showEvalResult('Error during analysis: ' + e.message);

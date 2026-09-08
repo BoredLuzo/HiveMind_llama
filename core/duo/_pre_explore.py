@@ -1771,7 +1771,7 @@ async def _phase_pre_explore(ctx, state: dict):
                     if _dedup_removed > 0:
                         yield await ctx.emit({
                             "type": "status",
-                            "content": f"🧹 Pre-Explore Dedupe: {_dedup_removed} doppelte Datei-Zuordnung(en) entfernt",
+                            "content": f"🧹 Pre-Explore Dedupe: {_dedup_removed} duplicate file mapping(s) removed",
                         })
 
                     _worker_degraded = max(0, len(_planned_workers) - len(_worker_slots)) if _planned_workers else 0
