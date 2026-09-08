@@ -395,7 +395,7 @@ def main() -> int:
     # AV-RETRY (2026-09-08): Windows Defender real-time scanning can make large
     # native DLLs (observed: ggml-vulkan.dll) vanish for several seconds right
     # after extraction (quarantine-then-release or slow scan), so a complete
-    # ZIP looks broken. Retry with a growing wait (~30s total window); after
+    # ZIP looks broken. Retry with a growing wait (~90s total window); after
     # the final wait re-check once more and treat a now-complete build as
     # success. If it is still incomplete, cross-check the SOURCE archive:
     # DLL in the ZIP but not on disk => antivirus removed it — keep the build,

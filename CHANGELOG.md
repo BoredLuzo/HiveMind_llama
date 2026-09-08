@@ -21,6 +21,15 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `deploy/ab_phase1.ps1` console output, `deploy/analyze_cache_log.py`
   report/help output.
 
+### Fixed
+
+- `deploy/hivemind.service`: `ExecStart` now uses the `.venv` path the Linux
+  installer actually creates (was `venv`), so the unit works out of the box;
+  dropped the obsolete "adjust the venv path" hint from
+  `deploy/install_linux.sh`.
+- `deploy/fetch_llamacpp.py`: corrected the stale DLL-retry comment (~90s
+  window, not ~30s).
+
 ## [1.0.13] - 2026-09-08
 
 ### Added
