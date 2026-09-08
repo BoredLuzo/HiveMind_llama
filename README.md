@@ -1,20 +1,19 @@
-# HiveMind v1.0.13
+# HiveMind
 
-Local multi-agent AI coding assistant powered by **llama.cpp**. Runs entirely on
-your own hardware — no cloud, no API keys, no data leaving your machine.
+Local multi-agent coding assistant on top of llama.cpp. Runs on your own
+hardware, no cloud, no API keys, nothing leaves your machine.
 
-**Author:** Luzo (BoredLuzo) — https://github.com/BoredLuzo
+Author: Luzo (BoredLuzo) — https://github.com/BoredLuzo
 
-## What Is HiveMind
+## What it is
 
-HiveMind orchestrates multiple local LLM "agents" (Analyst, Coder, Critic,
-Explorer, Judge, …) through structured pipelines to analyze, plan, and execute
-software engineering tasks. Everything runs through a single-page web UI
-(`http://localhost:8001`) with live SSE streaming, a VRAM monitor, and full
-control over agents, models, and run modes.
+HiveMind runs several local LLM "agents" (Analyst, Coder, Critic, Explorer,
+Judge, ...) through structured pipelines that analyze, plan and execute coding
+tasks. Everything is driven from a single-page web UI at
+`http://localhost:8001` with live SSE streaming, a VRAM monitor and full
+control over agents, models and run modes.
 
-For a visual overview of how the components fit together, see
-[Architecture (`docs/architecture.md`)](docs/architecture.md).
+How the components fit together: [docs/architecture.md](docs/architecture.md).
 
 ## Quick Start (Windows)
 
@@ -24,179 +23,154 @@ setup_models.bat     REM download / register / add custom models
 start_hivemind.bat   REM start the server
 ```
 
-Then open **http://localhost:8001**, set a workspace folder in the UI, and send
-your first message.
-
-> **Important:** HiveMind has **no default workspace**. Set your project folder
-> in the UI "Workspace" field before the first run.
+Open http://localhost:8001, set your project folder in the "Workspace" field,
+send a message. There is no default workspace; the first run needs one.
 
 ## Quick Start (Linux)
 
 ```bash
-# One-shot installer: system deps, venv, llama.cpp, systemd service → /opt/hivemind
+# one-shot installer: system deps, venv, llama.cpp, systemd -> /opt/hivemind
 sudo deploy/install_linux.sh                    # HIVEMIND_GPU_BACKEND=vulkan|cpu|rocm
 
-# … or manually:
+# or manually:
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/python deploy/fetch_llamacpp.py --backend vulkan   # vulkan | cuda | cpu | rocm
 ./.venv/bin/python run.py
 ```
 
-Then open **http://localhost:8001**, set a workspace folder in the UI, and send
-your first message — same as on Windows. Models: copy GGUFs into your models
-folder or run `./.venv/bin/python deploy/fetch_models.py`. See
-**Linux — Details** at the bottom of this file for backend selection, the
-CPU-only path, and prefill tuning.
+Same as on Windows after that: open http://localhost:8001, set a workspace.
+Models go into your models folder as GGUFs, or run
+`./.venv/bin/python deploy/fetch_models.py`. See "Linux details" at the bottom
+for backend selection, CPU-only hosts and prefill tuning.
 
-## How HiveMind Understands Your Code
+## Codebase understanding
 
-Codebase understanding is the default `duo_*` / `code_duo` path. It works in
-three layers — two of them are pure code analysis (no LLM, fast, deterministic):
+The default `code_duo` path builds its picture of your repo in three layers,
+two of them pure code analysis (no LLM, fast, deterministic):
 
-1. **Tree-Scout** (`hive_functions/tree_scout.py`) — renders a project tree,
-   filters build artifacts / binaries, and builds a file-level import graph that
-   is PageRank-ranked to find the most "central" files. **On by default**
-   (`duo_tree_scout_enabled=true`).
-2. **Static Repo-Map** (`hive_functions/static_repomap.py`) — deterministic,
-   LLM-free symbol + import extraction per partition (tree-sitter / AST with
-   regex fallback), a cross-partition dependency graph, and a token-budgeted
-   map that is injected into the Planner and Coder context. **On by default**
-   (`duo_static_map_chars=0` → auto-budget).
-3. **LLM Pre-Explore** (`hive_functions/pre_explore/`) — *optional* deep read:
-   parallel worker models read the codebase and emit structured TOML contracts
-   (exports, dependencies, entry points, complexity). **Off by default**
-   (`duo_pre_explore=false`) — enable it when the static map is not enough.
+1. Tree-Scout (`hive_functions/tree_scout.py`) — project tree without build
+   artifacts, file-level import graph, PageRank-ranked to find the central
+   files. On by default (`duo_tree_scout_enabled=true`).
+2. Static Repo-Map (`hive_functions/static_repomap.py`) — deterministic symbol
+   and import extraction per partition (tree-sitter/AST, regex fallback),
+   cross-partition dependency graph, token-budgeted map injected into Planner
+   and Coder context. On by default (`duo_static_map_chars=0` = auto budget).
+3. LLM Pre-Explore (`hive_functions/pre_explore/`) — optional deep read:
+   parallel worker models read the codebase and emit structured TOML contracts.
+   Off by default (`duo_pre_explore=false`), enable when the static map is not
+   enough.
 
-Repo-memory (`duo_repo_memory_enabled`) and symbol-reference hints
-(`duo_symbol_ref_enabled`) further enrich the Coder context with previously
-learned insights about the repository.
+Repo memory (`duo_repo_memory_enabled`) and symbol-reference hints
+(`duo_symbol_ref_enabled`) add previously learned insights about the repo to
+the Coder context.
 
-## Run Modes
+## Run modes
 
 | Mode | When | What happens |
 |------|------|--------------|
-| **Simple / Direct** | trivial tasks (shipped default) | Single model, direct answer, optional web-search tool calls |
-| **Auto** | judge-routed | Judge model classifies complexity → routes to Direct / Pipeline / Duo |
-| **Pipeline** | analysis / complex docs | Analyst → Refiner → Critic → Synthesizer, optional constraint feedback loop |
-| **Map (AutoMap)** | mixed tasks | Heuristic scorer picks the best model *per agent role* based on task type + capabilities + VRAM |
-| **Code Duo** | coding | Coder + Critic loop (see below); sub-modes **Critic-Duo** and **Agentic** |
+| Simple / Direct | trivial tasks (default) | single model, direct answer, optional web-search tool calls |
+| Auto | judge-routed | judge model classifies complexity, routes to Direct / Pipeline / Duo |
+| Pipeline | analysis, complex docs | Analyst -> Refiner -> Critic -> Synthesizer, optional constraint loop |
+| Map (AutoMap) | mixed tasks | heuristic scorer picks the best model per agent role |
+| Code Duo | coding | Coder + Critic loop, sub-modes Critic-Duo and Agentic |
 
-Mode buttons live in the sidebar ("Agents" tab). AutoMap routing can learn
-from run outcomes (`routing_weights.json`).
+Mode buttons live in the sidebar (Agents tab). AutoMap routing can learn from
+run outcomes (`routing_weights.json`).
 
-> **Status:** `Auto` and `AutoMap` routing are currently **untested** and not
-> recommended for real work yet. HiveMind is most reliable in **Direct / Chat**
-> (`simple`) and **Code-Duo agentic** modes — use those for actual tasks.
+Status note: `Auto` and `AutoMap` are untested and not recommended for real
+work yet. Most reliable are Simple/Direct and Code-Duo agentic.
 
 ### Direct chat tool tiers
 
-In **Simple / Direct** chat the model can use real tools through a tier
+In Simple/Direct chat the model can use tools through a tier
 (`direct_tools_tier`, UI: "Tool tier"):
 
 | Tier | Value | Tools |
 |------|-------|-------|
-| **Off** | `off` | pure chat — no tools |
-| **Websearch** | `readonly` | `web_search`, `web_fetch` only (no file read) |
-| **Python** | `python` | read tools + `web_search`/`web_fetch` + `run_python` |
-| **Full** | `full` | read/write/exec — `edit_file`, `run_bash`, background, git, … |
+| Off | `off` | pure chat |
+| Websearch | `readonly` | `web_search`, `web_fetch` only |
+| Python | `python` | read tools + web + `run_python` |
+| Full | `full` | read/write/exec: `edit_file`, `run_bash`, background, git, ... |
 
-The tier only escalates what the model is allowed to call; `full` is needed
-for real edit/build requests. When the web-search module is unavailable or
-web search is disabled, the Websearch tier falls back to pure chat; with
-SearXNG installed but unreachable at request time, the tool calls return an
-error string instead.
+The tier only escalates what the model may call; `full` is what you want for
+real edit/build requests. Without the web-search module the Websearch tier
+falls back to pure chat; an unreachable SearXNG returns an error string.
 
-### Code Duo (Critic-Duo / Agentic)
+### Code Duo
 
-- **Critic-Duo** — Coder writes → Critic reviews (with optional tool-loop:
-  reads files, runs tests; max 3 rounds) → approve or fix round.
-- **Agentic** — single-model loop with tool execution, auto-test self-fix,
-  verification guard (requires a successful `run_bash` after edits), and a grace
-  round on budget exhaustion.
-- **Chunking** — the Planner splits the task into subtasks; each chunk gets a
-  fresh context, goal pinning, auto-test on completion, and self-fix retry.
-- **Planner with Thinking** — contract-aware planning, per-model thinking
-  budgets, and a wall-clock safety net.
-- **Plan Tracker** — deviation detection (hard rules → soft rules → heuristic
-  classifier), graduated reminders, and plan rebuilding on replan.
+- Critic-Duo: Coder writes, Critic reviews (optional tool loop, max 3 rounds),
+  then approve or a fix round.
+- Agentic: single-model loop with tool execution, auto-test self-fix, a
+  verification guard (successful `run_bash` required after edits) and a grace
+  round when the budget runs out.
+- Chunking: the Planner splits the task into subtasks, each chunk gets a fresh
+  context, goal pinning, auto-test and self-fix retry.
+- Planner with thinking: contract-aware planning, per-model thinking budgets,
+  wall-clock safety net.
+- Plan tracker: deviation detection (hard rules -> soft rules -> heuristic
+  classifier), graduated reminders, plan rebuilding.
 
 ## Tools
 
-Agents have a rich, mode-scoped toolset (`tools/definitions.py`):
+Mode-scoped toolset (`tools/definitions.py`):
 
 | Area | Tools |
 |------|-------|
-| **Explore** | `read_file`, `get_signatures`, `find_references`, `list_dir`, `find_files`, `search_code`, `subagent_research` |
-| **Write** | `write_file`, `write_file_append`, `edit_file`, `patch_file`, `replace_lines`, `edit_ast`, `undo_last` |
-| **Run** | `run_bash`, `run_python`, `install_package`, `start_background`, `get_background_output`, `stop_background` |
-| **Test** | `run_tests` (auto-detects pytest/npm/vitest/jest/cargo/go/maven/dotnet) |
-| **Git** | `git_status`, `git_commit` |
-| **Task** | `task_complete`, `ask_user` (pause + resume) |
-| **Browser** | `browser` (headless Playwright/Chromium: navigate, snapshot, screenshot, click, type, evaluate, console, close) |
-| **Misc** | `get_datetime`, `hivemind_pipeline` (OpenAI-compatible agent endpoint) |
-| **Web** | `web_search`, `web_fetch` (SearXNG, added when available) |
+| Explore | `read_file`, `get_signatures`, `find_references`, `list_dir`, `find_files`, `search_code`, `subagent_research` |
+| Write | `write_file`, `write_file_append`, `edit_file`, `patch_file`, `replace_lines`, `edit_ast`, `undo_last` |
+| Run | `run_bash`, `run_python`, `install_package`, `start_background`, `get_background_output`, `stop_background` |
+| Test | `run_tests` (auto-detects pytest/npm/vitest/jest/cargo/go/maven/dotnet) |
+| Git | `git_status`, `git_commit` |
+| Task | `task_complete`, `ask_user` (pause + resume) |
+| Browser | `browser` (headless Chromium: navigate, snapshot, screenshot, click, type, evaluate, console, close) |
+| Misc | `get_datetime`, `hivemind_pipeline` (OpenAI-compatible agent endpoint) |
+| Web | `web_search`, `web_fetch` (SearXNG, added when available) |
 
 Tool scoping per phase: `duo_full`, `duo_readonly`, `pre_explore`,
 `critic_verify`, `tool_agent`, `mcp_agent`, `openai_agent`.
 
-## VRAM & Models
+## VRAM & models
 
-- **llama.cpp backend** — Vulkan (AMD/Intel), CUDA (NVIDIA), CPU. Multi-slot
-  worker architecture, dedicated port per loaded model.
-- **VRAM-aware loading** — budget-based management (`vram_budget_gb`), automatic
-  eviction of workers before larger models, KV-cache estimation, MoE-aware
-  expert handling (`moe_cpu_experts`).
-- **Smart preload / prefetch** — background model loading with keep-alive tiers
-  (pin / evict / idle timeout), planner-critical phase blocking.
-- **Safe profile policy** — hardware-specific VRAM safety matrix
-  (`model_configs/safe_profile_matrix.json`, e.g. `default_8gb_v1`).
+- llama.cpp backend: Vulkan (AMD/Intel), CUDA (NVIDIA), CPU. Multi-slot worker
+  architecture, one port per loaded model.
+- VRAM-aware loading: budget management (`vram_budget_gb`), automatic eviction
+  before larger loads, KV-cache estimation, MoE expert handling
+  (`moe_cpu_experts`).
+- Preload/prefetch in the background with keep-alive tiers (pin / evict / idle
+  timeout).
+- Hardware VRAM safety matrix in `model_configs/safe_profile_matrix.json`
+  (e.g. `default_8gb_v1`).
 
-## Adding Your Own Models
+## Adding your own models
 
-HiveMind ships with a recommended model set, but adding your own model is a
-first-class workflow — including full config. Three ways, from easiest to most
-complete:
+Three ways, easiest first.
 
-### 1. Quick path — just drop a GGUF in
+### 1. Drop a GGUF in
 
-Place a `.gguf` file into the models folder (`models\` by default, or
+Put a `.gguf` into the models folder (`models\` by default, or
 `HIVEMIND_MODELS_DIR`). The filename is parsed into a canonical tag
-(`Qwen3.5-4B-UD-Q4_K_XL.gguf` → `qwen3.5:4b-ud`). The model then appears in the
-UI (Models tab, Agent-Card dropdowns) — no config required for basic use.
+(`Qwen3.5-4B-UD-Q4_K_XL.gguf` -> `qwen3.5:4b-ud`) and the model shows up in
+the UI. No config needed for basic use.
 
-### 2. Interactive wizard — `setup_models.bat` → `[C]ustom`
+### 2. Wizard: `setup_models.bat` -> `[C]ustom`
 
-Run `setup_models.bat` and choose **`[C]`** (Custom model add). The wizard
-(`deploy/add_model.py`) prompts you through everything:
-
-1. **GGUF source** — single file path, or pick from GGUFs already in your models
-   folder.
-2. **Canonical name** — auto-detected, editable.
-3. **Capabilities** — thinking / vision / tool-call (sensible defaults
-   pre-filled).
-4. **Context & launch settings** — `num_ctx`, `num_ctx_duo_coder`, optional
-   `mmproj_filename`, `jinja`, `reasoning`, `moe_cpu_experts`, `gpu_layers`,
-   `vram_gb_override`.
-5. **Write** — registers the model in `models.json` and writes a per-model
-   config file `model_configs/models/<name>.json`.
-6. **Optional agent assignment** — assign the model to an agent role
-   (analyst / refiner / critic / synthesizer / direct / judge / duo_coder /
-   duo_critic). `settings.json` is updated and the model shows up in the
-   Agent-Cards dropdown automatically.
-
-Non-interactive variant for scripting:
+Walks you through GGUF source, canonical name (auto-detected), capabilities
+(thinking / vision / tool-call), context and launch settings (`num_ctx`,
+`mmproj_filename`, `jinja`, `reasoning`, `moe_cpu_experts`, `gpu_layers`,
+`vram_gb_override`), writes `models.json` plus a per-model config file, and
+can assign the model to an agent role. Scriptable variant:
 
 ```bat
 python deploy\add_model.py --json path\to\config.json
 ```
 
-### 3. Per-model config files — full control
+### 3. Per-model config files
 
-A config file `model_configs/models/<canonical-or-base>.json` fully configures a
-model *without touching Python code*. It is loaded at startup
-(`model_configs/models_registry.py`) and merged over the built-in tables —
-precedence: config file → hardcoded profiles → heuristics.
+`model_configs/models/<canonical-or-base>.json` configures a model without
+touching code. Loaded at startup (`model_configs/models_registry.py`), merged
+over the built-in tables. Precedence: config file -> hardcoded profiles ->
+heuristics.
 
 ```json
 {
@@ -225,43 +199,36 @@ precedence: config file → hardcoded profiles → heuristics.
 
 Field notes:
 
-- **`model`** — optional; the canonical name (`base:tag`). Defaults to the file
-  name (`:` encoded as `_` because Windows forbids `:` in filenames).
-- **`capabilities`** — `thinking` (reasoning tokens), `vision` (images directly),
-  `tool_call` (function calling). Used by AutoMap routing and the UI badges.
-- **`vision_preprocessing`** — allowlist membership for the image→text
-  preprocessing path (`vision/preprocess.py`).
-- **`num_ctx*`** — context sizes per role; the role-specific value wins.
-- **`chat_template`** — absolute path or filename under `model_configs\` for
+- `model` — optional canonical name, defaults to the file name (`:` becomes
+  `_` because Windows filenames).
+- `capabilities` — thinking / vision / tool_call, used by AutoMap and the UI
+  badges.
+- `vision_preprocessing` — allowlist for the image->text preprocessing path.
+- `num_ctx*` — context per role, the role-specific value wins.
+- `chat_template` — path or filename under `model_configs\` for
   `--chat-template-file`.
-- **`jinja`** — pass `--jinja` (use the GGUF-embedded chat template).
-- **`reasoning`** — `"on"` / `"off"` for `--reasoning`.
-- **`distilled`** — force reasoning on for distilled models.
-- **`moe_cpu_experts`** — `--n-cpu-moe` override.
-- **`mtp`** — enable multi-token prediction / speculative decoding
-  (`--spec-type draft-mtp`).
-- **`gpu_layers`** — `--n-gpu-layers` override.
-- **`mmproj_filename`** — explicit vision-projector file for this model.
-- **`vram_gb_override`** — VRAM estimate override (display + planning).
-- **`sampling`** — *optional* per-mode sampling stats, highest priority over the
-  built-in family profiles. Keys are the same mode keys used at runtime
-  (`thinking`, `non_thinking`, `sampling_thinking_code`, `sampling_thinking_text`,
-  `sampling_text`); each value is a llama.cpp sampling dict (`temperature`,
-  `top_p`, `top_k`, `min_p`, `seed`, `presence_penalty`, `repetition_penalty`).
-  **llama.cpp "disabled" semantics:** `top_p=1.0`, `min_p=0.0`,
-  `presence_penalty=0.0`, `repetition_penalty=1.0`. Only entered fields are
-  stored; missing fields fall back to the family default. The block is applied
-  at runtime via the model registry (`model_configs/models_registry.py`).
+- `jinja` — pass `--jinja` (GGUF-embedded chat template).
+- `reasoning` — `"on"` / `"off"` for `--reasoning`; `distilled` forces it on
+  for distilled models.
+- `moe_cpu_experts` — `--n-cpu-moe` override.
+- `mtp` — multi-token prediction (`--spec-type draft-mtp`).
+- `gpu_layers` — `--n-gpu-layers` override.
+- `mmproj_filename` — explicit vision projector for this model.
+- `vram_gb_override` — VRAM estimate override.
+- `sampling` — optional per-mode llama.cpp sampling values, highest priority
+  over the family profiles. Mode keys: `thinking`, `non_thinking`,
+  `sampling_thinking_code`, `sampling_thinking_text`, `sampling_text`.
+  llama.cpp "disabled" means `top_p=1.0`, `min_p=0.0`, `presence_penalty=0.0`,
+  `repetition_penalty=1.0`. Only entered fields are stored, missing ones fall
+  back to the family default.
 
-> A config file whose name is only the base (e.g. `qwen3.5.json`) applies to
-> **all** tags of that base; a `qwen3.5_9b-ud.json` file applies only to that
-> exact tag.
+A config named after the base only (e.g. `qwen3.5.json`) applies to all tags
+of that base; `qwen3.5_9b-ud.json` applies to that exact tag.
 
-### `models.json`
+### models.json
 
-`models.json` maps canonical names to GGUF paths and is the highest-priority
-override (above auto-detection). Auto-generated by `setup_models.bat`, but
-hand-editable:
+Maps canonical names to GGUF paths, highest-priority override, auto-generated
+by `setup_models.bat` but hand-editable:
 
 ```json
 {
@@ -271,163 +238,134 @@ hand-editable:
 }
 ```
 
-Prefix a key with `_` to skip it (e.g. notes). `TODO:` paths are ignored.
-`<model>_mmproj` keys pin a vision projector.
+A `_` prefix skips a key, `TODO:` paths are ignored, `<model>_mmproj` pins a
+vision projector.
 
-### Per-agent & learned config
+### Per-agent and learned config
 
-- **Agent assignment** — UI "Agents" tab or `settings.json.agents`
-  (model, temperature, max_tokens, thinking, thinking_budget). "Set all to
-  model" assigns one model to every agent.
-- **Learned configs** — `model_configs/learned/<model>/<agent>.json`
-  (temperature, max_tokens, system_prompt_override, notes), managed via the UI
-  "Configs" tab or `/model_configs` API. Learned values override base defaults
-  at runtime.
+Agent assignment via the UI Agents tab or `settings.json` (`agents` block:
+model, temperature, max_tokens, thinking, thinking_budget). Learned configs
+live in `model_configs/learned/<model>/<agent>.json`, managed in the UI
+Configs tab or `/model_configs` API, and override base defaults at runtime.
 
-## Recommended Model Set
+## Recommended model set
 
 | Model | Role | Download | VRAM |
 |-------|------|----------|------|
-| `gemma-4:e4b-it` (Q4_K_M) | Allrounder/Vision | ~3 GB | ~3 GB |
-| `qwen3.6:35b-a3b-ud` (UD-Q4_K_XL) | Coder/Planner (MoE) | ~20 GB | ~5 GB (experts in RAM) |
-| `qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact` (APEX-Compact) | Coder/Hermes agent (MoE, MTP) | ~17 GB | ~6 GB (experts in RAM) |
-| `ling-3.0-tiny` (Q4_K_L) | Low-resource Coder (hybrid MoE, 7.9B/1.3B) | ~4.75 GB | ~5 GB |
-| `qwen3.5:4b-ud` (UD-Q4_K_XL) | Analyst/Critic/Speed | ~3 GB | ~3 GB |
-| `qwen3.5:9b-ud` (UD-Q4_K_XL) | Direct/Duo-Coder | ~6 GB | ~6 GB |
-| `qwen3.5:2b` (Q4_K_M) | Refiner | ~1.3 GB | ~1.5 GB |
-| `lfm2.5:2.6b` (Q4_K_M) | Subagent/Judge | ~2 GB (+0.2 GB DSpark drafter) | ~2 GB |
-| `qwen3.5:0.8b-ud` (UD-Q4_K_XL) | Subagent ladder | ~0.6 GB | ~0.6 GB |
+| `gemma-4:e4b-it` (Q4_K_M) | allrounder / vision | ~3 GB | ~3 GB |
+| `qwen3.6:35b-a3b-ud` (UD-Q4_K_XL) | coder / planner (MoE) | ~20 GB | ~5 GB (experts in RAM) |
+| `qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact` (APEX-Compact) | coder / hermes agent (MoE, MTP) | ~17 GB | ~6 GB (experts in RAM) |
+| `ling-3.0-tiny` (Q4_K_L) | low-resource coder (hybrid MoE 7.9B/1.3B) | ~4.75 GB | ~5 GB |
+| `qwen3.5:4b-ud` (UD-Q4_K_XL) | analyst / critic / speed | ~3 GB | ~3 GB |
+| `qwen3.5:9b-ud` (UD-Q4_K_XL) | direct / duo-coder | ~6 GB | ~6 GB |
+| `qwen3.5:2b` (Q4_K_M) | refiner | ~1.3 GB | ~1.5 GB |
+| `lfm2.5:2.6b` (Q4_K_M) | subagent / judge | ~2 GB (+0.2 GB DSpark drafter) | ~2 GB |
+| `qwen3.5:0.8b-ud` (UD-Q4_K_XL) | subagent ladder | ~0.6 GB | ~0.6 GB |
 
 Standard configs:
 
-| Set | Models | Use | VRAM |
-|-----|--------|-----|------|
-| **Minimal (1 model)** | `lfm2.5:2.6b` or `gemma-4:e4b-it` | Everything (Direct/Agentic/Coder) | ~2–3GB |
-| **Standard (default install)** | `qwen3.5:9b-ud` (Coder) + `qwen3.5:4b-ud` (Analyst/Critic/Synth) + `qwen3.5:2b` (Refiner) + `lfm2.5:2.6b` (Judge/Subagent) | Default agent configuration | ~7–8GB |
-| **Quality** | + `qwen3.6:35b-a3b-ud` (heavy Coder/Planner) + `gemma-4:e4b-it` (Vision) | Full pipeline + Vision | ~10GB |
+| Set | Models | VRAM |
+|-----|--------|------|
+| Minimal (1 model) | `lfm2.5:2.6b` or `gemma-4:e4b-it` for everything | ~2-3 GB |
+| Standard (default install) | `qwen3.5:9b-ud` coder + `qwen3.5:4b-ud` analyst/critic/synth + `qwen3.5:2b` refiner + `lfm2.5:2.6b` judge/subagent | ~7-8 GB |
+| Quality | + `qwen3.6:35b-a3b-ud` heavy coder + `gemma-4:e4b-it` vision | ~10 GB |
 
-> **8 GB VRAM / 32 GB RAM tip:** for an 8 GB GPU with 32 GB system RAM (≥ ~17 GB
-> free), `qwen3.6:35b-a3b-ud` as the **solo agentic model** is the best choice.
-> It is a MoE (35B total, ~3B active) that runs with expert offloading to CPU, so
-> it fits the 8 GB VRAM budget while delivering far better quality than the 9B
-> coder for solo agentic coding.
+8 GB GPU + 32 GB RAM: `qwen3.6:35b-a3b-ud` alone as agentic model is the best
+pick. MoE 35B total, ~3B active, experts offloaded to CPU, fits the 8 GB
+budget and codes better than the 9B.
 
-**Multimodal (images):** gemma-4 has a built-in vision encoder; qwen3.5/qwen3.6
-use `mmproj-BF16.gguf` (auto-downloaded by `setup_models.bat` or
-pinned via `models.json` / `mmproj_filename`). Non-multimodal models fall back
-to the vision-agent/preprocessing path.
+Multimodal: gemma-4 has a built-in vision encoder; qwen3.5/3.6 use an
+`mmproj-BF16.gguf` projector (auto-downloaded or pinned via `models.json` /
+`mmproj_filename`). Non-multimodal models fall back to the vision-agent
+preprocessing path.
 
-**DSpark drafter:** `setup_models.bat` auto-downloads the LFM2.5-2.6B-DSpark
-speculative-decoding drafter (Q4_K_M, ~190 MB) together with `lfm2.5:2.6b`.
-HiveMind launches lfm2.5 models with `--jinja` (native ChatML/tool role) and
-attaches the drafter via `--model-draft` / `--spec-type draft-dspark` when the
-sidecar GGUF is present.
+`setup_models.bat` also fetches the LFM2.5-2.6B-DSpark speculative-decoding
+drafter together with `lfm2.5:2.6b`; lfm2.5 models launch with `--jinja` and
+attach it via `--model-draft` / `--spec-type draft-dspark`.
 
-## User Experience & Control
+## UI and control
 
-- **Single-page UI** (`index.html`) — no build step, no framework. Live code
-  display, VRAM monitor, agent toggles, mode selection, SSE streaming.
-- **SSE streaming** — ~56 event types (tokens, thinking, tool calls, planner
-  output, context meter, test results, …).
-- **Ask-User (pause + resume)** — agents can pause and ask for input; configurable
-  timeout, optional VRAM eviction during long pauses, countdown badge in the UI.
-- **Graceful Stop / Manual Pause** — two-state stop (graceful at chunk boundary
-  → force abort) and multi-state pause, both persisted for resume.
-- **Ask-User timeout & throttle** — auto-answer after a timeout in Until-Finished
-  runs; hard-pause if the agent asks too many questions (>5/10min).
-- **Context meter** — real-time token utilization with pressure warnings at 60%
-  and 85%.
-- **Desktop notifications & keep-awake** — Windows toasts when runs stop / need
-  input; system wake-lock during runs (`keep_awake_during_run=true`).
+- Single-page UI, no build step, no framework. Live code display, VRAM
+  monitor, agent toggles, mode selection, SSE streaming (~56 event types).
+- Ask-User pause + resume with configurable timeout, optional VRAM eviction
+  during long pauses, countdown badge. Auto-answer in Until-Finished runs;
+  hard-pause when the agent asks too often (>5/10min).
+- Graceful stop (finish at chunk boundary, then force) and multi-state pause,
+  both persisted for resume.
+- Context meter with pressure warnings at 60% and 85%.
+- Windows toast notifications when runs stop or need input; wake-lock during
+  runs (`keep_awake_during_run`).
 
-## Learning & Memory
+## Learning and memory
 
-- **Soul Engine** — peer-rating-based personality evolution; injects learned
-  traits into system prompts.
-- **Skill Distiller / Writing** — semantic insight compaction (decay/merge/
-  evict) and top-insights exported to `learning_logs/skills/`.
-- **Persistent memory** — 96-dim hash embeddings with cosine similarity
-  retrieval, path-based relevance boosting, deduplicated debounced persistence.
-- **Insights & token stats** — post-run insight extraction and persisted
-  per-run/per-phase token tracking.
+- Soul engine: peer-rating-based personality evolution, injects learned traits
+  into system prompts.
+- Skill distiller: semantic insight compaction (decay/merge/evict), top
+  insights exported to `learning_logs/skills/`.
+- Persistent memory: 96-dim hash embeddings with cosine retrieval, path-based
+  relevance boosting, deduplicated debounced persistence.
+- Post-run insight extraction and per-run/per-phase token stats.
 
-## Safety & Reliability
+## Safety and reliability
 
-- **Stuck detection** — Jaccard similarity ≥ 0.92 on consecutive outputs breaks
-  loops; tool-name-aware.
-- **Tool sandbox** — child processes (run_bash/run_python/background) run in a
-  Windows Job Object with `KILL_ON_JOB_CLOSE` (`duo_tool_sandbox=true`).
-- **Semantic context eviction** — TTL-based with recall markers, stale tool
-  outputs evicted to preserve budget.
-- **File transactions** — safe writes with rollback.
-- **Auto-test gate** — `run_tests` before `task_complete` (blocking with fix
-  rounds), plus optional per-chunk auto-test.
-- **Auto-lint** — lint check after edits/writes/patches, language-dependent.
+- Stuck detection: Jaccard similarity >= 0.92 on consecutive outputs breaks
+  loops, tool-name-aware.
+- Tool sandbox: `run_bash`/`run_python`/background processes run in a Windows
+  Job Object with `KILL_ON_JOB_CLOSE` (`duo_tool_sandbox=true`).
+- Semantic context eviction: TTL-based, recall markers, stale tool outputs
+  evicted to keep the budget.
+- File transactions with rollback.
+- Auto-test gate: `run_tests` before `task_complete` (blocking, with fix
+  rounds), optional per-chunk auto-test.
+- Auto-lint after edits/writes/patches, language-dependent.
 
-## API & Extensibility
+## API
 
-- **OpenAI-compatible** `/v1/chat/completions` (agent tool-loop mode).
-- **MCP Server** — Model Context Protocol v2 (`infra/mcp_server.py`), stdio +
-  HTTP on port 8090 (`start_mcp.bat`); tiered read/write/exec permissions.
-- **AutoMap API** — `/automap/*` endpoints for preview/apply routing profiles.
-- **Model configs API** — `/model_configs/*` for base/learned/effective configs,
-  learning logs, ratings.
+- OpenAI-compatible `/v1/chat/completions` (agent tool-loop mode).
+- MCP server (Model Context Protocol, `infra/mcp_server.py`), stdio + HTTP on
+  port 8090 (`start_mcp.bat`), tiered read/write/exec permissions.
+- `/automap/*` for routing profiles, `/model_configs/*` for base/learned/
+  effective configs and learning logs.
 
 ## Requirements
 
-- **Windows 10/11** (installer scripts are `.bat`; Linux works manually)
-- **Python 3.12+** (3.14 recommended; auto-installed by the setup)
-- **uv** (fast Python package manager; auto-installed)
-- **8 GB+ VRAM GPU** recommended (AMD/Intel via Vulkan, NVIDIA via CUDA)
-- **~30 GB disk** for the recommended model set
-- **Git** (optional, autocommit/diff integration)
-- **Docker Desktop** (optional, SearXNG web search)
+- Windows 10/11 or Linux
+- Python 3.12+ (3.14 recommended, auto-installed by the setup)
+- uv (auto-installed)
+- 8 GB+ VRAM GPU recommended (AMD/Intel via Vulkan, NVIDIA via CUDA)
+- ~30 GB disk for the recommended model set
+- Git (optional, autocommit/diff integration)
+- Docker Desktop (optional, SearXNG web search)
 
 ## Installation (Windows)
 
-### `install.bat`
+`install.bat` asks before every download step: Python 3.14 (only if missing),
+uv, venv in `.venv\`, dependencies, GPU backend choice, llama.cpp nightly into
+`llama\`, then it opens `setup_models.bat` for the models and optionally
+installs SearXNG when Docker is present. Afterwards run `start_hivemind.bat`
+and open http://localhost:8001.
 
-Interactive installer — asks before every download step:
+`setup_models.bat [custom models folder]`:
 
-1. **Python 3.14** — detects existing installs, installs only if missing
-   (winget / python.org).
-2. **uv** — installed automatically if missing.
-3. **Virtual environment** — `uv venv` → `.venv\` (system Python untouched).
-4. **Dependencies** — `uv pip install -r requirements.txt`.
-5. **GPU backend** — Vulkan (AMD/Intel) or CUDA (NVIDIA) + VRAM budget.
-6. **llama.cpp** — downloads the matching nightly build into `llama\`,
-   verifies `llama-server.exe`.
-7. **Models** — opens `setup_models.bat` (download recommended set, select
-   single models, register own folder, or add custom model).
-8. **SearXNG** — optional, offered when Docker is installed.
+- `[D]` Download: recommended set or single-select (`1,4`), goes to
+  `<repo>\models\`.
+- `[C]` Custom: wizard to add your own model with config (see above).
+- `[R]` Register own folder: scans a folder without network access and
+  registers every GGUF in `models.json`.
+- Vision (mmproj) files download automatically for vision-capable models. MTP
+  variants are not auto-downloaded (identical filenames would mis-register).
 
-Then run **`start_hivemind.bat`** and open **http://localhost:8001**.
+Manual installation:
 
-### `setup_models.bat`
-
-Standalone: `setup_models.bat [custom models folder]`
-
-- **`[D]` Download** — recommended set or single-select (comma-separated
-  numbers, e.g. `1,4`); downloads to `<repo>\models\`.
-- **`[C]` Custom** — interactive wizard to add your own model **with config**
-  (see *Adding Your Own Models*).
-- **`[R]` Register own folder** — scans your folder (no download, no network)
-  and registers every GGUF in `models.json`.
-- Vision (`mmproj`) is auto-downloaded for vision-capable models. MTP variants
-  are not auto-downloaded (identical filenames would mis-register).
-
-### Manual installation
-
-1. Install **Python 3.14** (enable "Add python.exe to PATH").
-2. Install **uv**.
-3. `uv venv -p 3.14 .venv` then `uv pip install -r requirements.txt`.
-4. Extract a llama.cpp release (`win-vulkan-x64.zip` / `win-cuda-x64.zip`) into
+1. Python 3.14 with "Add python.exe to PATH".
+2. Install uv.
+3. `uv venv -p 3.14 .venv` and `uv pip install -r requirements.txt`.
+4. Extract a llama.cpp build (`win-vulkan-x64.zip` / `win-cuda-x64.zip`) into
    `llama\` (highest build wins), or set `HIVEMIND_LLAMA_BIN`.
-5. Download GGUFs into `models\` (or `HIVEMIND_MODELS_DIR`) — easiest via
-   `setup_models.bat`.
-6. Check `settings.json` — `gpu_backend` ("vulkan"/"cuda") and
-   `vram_budget_gb`.
-7. Start: `python run.py` (or `start_hivemind.bat`).
+5. GGUFs into `models\` or `HIVEMIND_MODELS_DIR` (easiest via
+   `setup_models.bat`).
+6. Check `settings.json`: `gpu_backend`, `vram_budget_gb`.
+7. `python run.py` or `start_hivemind.bat`.
 
 ### SearXNG (web search)
 
@@ -437,271 +375,194 @@ searxng.bat start|stop|restart|status
 searxng.bat external URL     # point at an already-running SearXNG (no Docker)
 ```
 
-`settings.yml` is baked into the image
-(`COPY settings.yml /etc/searxng/settings.yml`) — no host bind mounts, which
-avoids Docker Desktop WSL2 path translation errors. Container uses
-`restart: unless-stopped`. Without Docker, web search stays disabled — or point
-HiveMind at an already-running instance with `searxng.bat external URL`.
+`settings.yml` is baked into the image, no host bind mounts (avoids Docker
+Desktop WSL2 path translation errors), container restarts unless stopped.
+Without Docker web search stays disabled.
 
-> **SearXNG not reachable?** Make sure Docker Desktop is running, then rebuild:
-> `searxng.bat install <port>` (uses `--force-recreate --renew-anon-volumes`, so
-> a stale baked config is replaced automatically).
->
-> **Stale-container error** (`invalid mount config for type "bind"`, or JSON
-> searches return HTTP 403/empty): a leftover `hivemind-searxng` container from an
-> older HiveMind version carries an old config that shadows the current image.
-> Fix: `docker rm -f hivemind-searxng`, then `searxng.bat install` again.
+Not reachable? Make sure Docker Desktop is running, then
+`searxng.bat install <port>` again (force-recreates the container). If you
+get `invalid mount config for type "bind"` or HTTP 403/empty results, a stale
+`hivemind-searxng` container from an older version is the usual cause:
+`docker rm -f hivemind-searxng`, then install again.
 
-### Other scripts
+### Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `start_hivemind.bat` | Start the server (port from `settings.json`, default 8001) |
-| `start_llama.bat` | Alias for `start_hivemind.bat` |
-| `stop_llama.bat` | Stop server + all `llama-server.exe` (frees VRAM) |
-| `update_llama.bat` | Update llama.cpp to the latest nightly |
-| `setup_models.bat` | Download / register / **add custom** models |
-| `start_mcp.bat` | MCP HTTP server for IDEs on port 8090 |
-| `searxng.bat` | SearXNG manager (install/start/stop/restart/status/external) |
+| `start_hivemind.bat` | start the server (port from settings.json, default 8001) |
+| `start_llama.bat` | alias for start_hivemind.bat |
+| `stop_llama.bat` | stop server + all llama-server.exe (frees VRAM) |
+| `update_llama.bat` | update llama.cpp to the latest nightly |
+| `setup_models.bat` | download / register / add custom models |
+| `start_mcp.bat` | MCP HTTP server for IDEs, port 8090 |
+| `searxng.bat` | SearXNG manager |
 
 ## Configuration
 
-All settings live in `settings.json` (auto-generated from `settings.py`
-defaults). Key settings:
+All settings live in `settings.json`, generated from the `settings.py`
+defaults. The important ones:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `vram_budget_gb` | 7.5 | GPU VRAM limit for model loading |
-| `duo_worker_slots` | 2 | Parallel llama-server slots |
-| `duo_tree_scout_enabled` | true | Tree-Scout codebase analysis |
-| `duo_static_map_chars` | 0 | Static Repo-Map budget (0 = auto) |
-| `duo_pre_explore` | false | LLM Pre-Explore before planning |
-| `duo_chunking` | true | Task decomposition into subtasks |
-| `duo_agentic_mode` | false | Agentic (single-model) instead of Duo |
-| `duo_git_autocommit` | false | Auto-commit after each chunk |
-| `duo_git_checkpoints` | true | Git checkpoint at chunk start |
-| `duo_websearch_enabled` | false | Web search as real tool calls in coding |
+| `duo_worker_slots` | 2 | parallel llama-server slots |
+| `duo_tree_scout_enabled` | true | tree-scout codebase analysis |
+| `duo_static_map_chars` | 0 | static repo-map budget (0 = auto) |
+| `duo_pre_explore` | false | LLM pre-explore before planning |
+| `duo_chunking` | true | task decomposition into subtasks |
+| `duo_agentic_mode` | false | agentic (single-model) instead of duo |
+| `duo_git_autocommit` | false | auto-commit after each chunk |
+| `duo_git_checkpoints` | true | git checkpoint at chunk start |
+| `duo_websearch_enabled` | false | web search as real tool calls in coding |
 | `searxng_host` | http://localhost:8888 | SearXNG instance URL |
 | `duo_runtime_profile` | balanced | fast / balanced / critical |
 | `duo_coder_fallback_model` | qwen3.5:4b-ud | VRAM fallback for the coder (empty = off) |
-| `duo_partial_compression` | false | Keep a byte-identical raw tail at compression (KV-cache reuse); helps on slow-prefill setups |
-| `duo_compress_local_only` | false | Skip the compression LLM summary (instant local fallback) — for setups where that call routinely hits the read timeout |
-| `duo_test_feedback_final` | true | Auto-run tests before `task_complete` |
-| `duo_planner_max_tokens` | 8000 | Planner output budget (0 = none) |
-| `duo_planner_thinking_budget` | 8000 | Planner thinking budget (0 = none) |
-| `disable_thinking_in_planner` | false | Force planner to skip thinking |
-| `model_capability_overrides` | {} | Per-model capability overrides |
-| `ctx_overrides` | {} | Per-role / per-model context overrides |
+| `duo_partial_compression` | false | keep a byte-identical raw tail at compression (KV-cache reuse) |
+| `duo_compress_local_only` | false | skip the compression LLM summary, instant local fallback |
+| `duo_test_feedback_final` | true | auto-run tests before task_complete |
+| `duo_planner_max_tokens` | 8000 | planner output budget (0 = none) |
+| `duo_planner_thinking_budget` | 8000 | planner thinking budget (0 = none) |
+| `disable_thinking_in_planner` | false | force planner to skip thinking |
+| `model_capability_overrides` | {} | per-model capability overrides |
+| `ctx_overrides` | {} | per-role / per-model context overrides |
 | `duo_tool_sandbox` | true | Windows Job-Object tool sandbox |
-| `keep_awake_during_run` | true | System wake-lock during runs |
+| `keep_awake_during_run` | true | system wake-lock during runs |
 | `desktop_notifications` | true | Windows toast notifications |
 
-See `settings.py` for the full list (197 configurable settings; auto-generated reference in `docs/settings.md`).
+Full list (generated): `docs/settings.md`, source of truth `settings.py`.
 
 ## Updating llama.cpp
 
-**Easy way — `update_llama.bat`.** Manual: `python deploy\fetch_llamacpp.py
---backend vulkan --force` (add `--cuda-version X.Y` for a specific CUDA
-runtime; the driver's CUDA version is auto-detected via `nvidia-smi`).
+`update_llama.bat`, or manually
+`python deploy\fetch_llamacpp.py --backend vulkan --force` (add
+`--cuda-version X.Y` for a specific runtime; otherwise detected via
+nvidia-smi).
 
 ## Troubleshooting
 
-### "Model not found" or llama-server.exe fails to start
+Model not found / llama-server.exe won't start: discovery searches
+`<repo>\llama\llama-bXXXX-*\llama-server.exe` (highest build, backend match,
+CUDA version). Re-run installer step 5 or fetch_llamacpp.py, or set
+`HIVEMIND_LLAMA_BIN`. "Model not found" for a loaded model means its GGUF is
+neither in `models\` nor in `models.json` — use `setup_models.bat`.
 
-Auto-discovery: `<repo>\llama\llama-bXXXX-*\llama-server.exe` (highest build,
-then backend match, then CUDA version). Re-run `install.bat` step 5 or
-`python deploy\fetch_llamacpp.py --backend vulkan`. Override explicitly with
-`HIVEMIND_LLAMA_BIN`. A model is "not found" when its GGUF is neither in
-`models\` nor mapped in `models.json` — use `setup_models.bat` → `[C]`/`[R]`.
+`web_fetch` returns HTTP 403: some sites block plain fetches. HiveMind sends
+a browser User-Agent first and retries with a bot User-Agent on 403, which
+fixes Wikipedia-style blocks. Cloudflare-protected sites (StackOverflow,
+OpenAI) need JavaScript and keep returning 403 — use `web_search` there.
 
-### `web_fetch` returns `HTTP 403`
-
-Some sites (e.g. Wikipedia, stackoverflow.com, openai.com) block plain HTTP
-fetches. HiveMind sends a real browser User-Agent first and — on HTTP 403 —
-automatically retries with a descriptive bot User-Agent, which fixes
-Wikipedia-style 403s. Cloudflare-protected sites (StackOverflow, OpenAI) still
-require JavaScript and keep returning `403`. Prefer `web_search` (SearXNG
-snippets) over `web_fetch` for those; `web_fetch` works best on sites that do
-not hard-block bots.
-
-### Port 8001 already in use
+Port 8001 in use:
 
 ```cmd
 netstat -ano | findstr :8001
 taskkill /F /PID <pid>
 ```
 
-### VRAM overflow / CUDA out of memory
+VRAM overflow: lower `vram_budget_gb` (6.5 on 8 GB cards), smaller context or
+coder model, disable the vision agent if unused.
 
-- Reduce `vram_budget_gb` (try 6.5 on 8 GB cards).
-- Reduce context sizes / use a smaller coder model.
-- Disable vision agent if not needed.
+Vulkan errors: update GPU drivers, use the `win-vulkan-x64` build (not
+cuda). If a model fails to start on the GPU, HiveMind retries it once with
+`--n-gpu-layers 0`.
 
-### Vulkan errors
+llama.cpp download slow/fails: grab the release manually from
+https://github.com/ggml-org/llama.cpp/releases.
 
-- Update GPU drivers.
-- Use the `win-vulkan-x64` build (not `win-cuda-x64`).
-- CPU fallback: when a model fails to start on the GPU, HiveMind automatically
-  retries that model once with `--n-gpu-layers 0` (CPU-only inference).
+Web search empty: is SearXNG up? `docker compose -f
+searxng-config/docker-compose.yml up -d`, then `curl -m 10
+http://localhost:8888/healthz`. `searxng_language` takes one language
+(`all` = unrestricted).
 
-### llama.cpp download slow or fails
+PowerShell quirks: 5.1 aliases curl (stripped automatically); native commands
+writing to stderr may exit 1 despite success; add `-m 10` to curl health
+checks.
 
-- Download manually from https://github.com/ggml-org/llama.cpp/releases
-
-### Web search returns no results
-
-- SearXNG running? `docker compose -f searxng-config/docker-compose.yml up -d`
-- Reachable? `curl -m 10 http://localhost:8888/healthz`
-- `searxng_language` accepts **one** language (`all` = unrestricted).
-
-### PowerShell (Windows) specials
-
-- PowerShell 5.1 aliases `curl` → the tool strips it automatically.
-- Native commands writing to stderr may exit 1 despite success — check output.
-- Add `-m 10` to curl health checks to avoid hangs.
-
-### Frontend blank page
-
-- Browser dev tools (F12) → Console.
-- Make sure you're on http://localhost:8001.
-- Clear cache (Ctrl+Shift+R). Check `server.py` console output.
+Blank frontend: F12 console, make sure you're on http://localhost:8001,
+Ctrl+Shift+R, check the server console output.
 
 ## Deployment
 
-- **Linux**: `sudo bash deploy/install_linux.sh` (systemd, auto-restart).
-- **Windows**: `deploy\install_windows.bat` as Administrator (NSSM,
-  auto-restart after crash/OOM/power loss).
-- Health monitoring: llama-server `/health` pings with auto-slot restart,
-  orphan-process rehabilitation on startup.
+- Linux: `sudo bash deploy/install_linux.sh` (systemd, auto-restart).
+- Windows: `deploy\install_windows.bat` as Administrator (NSSM, auto-restart
+  after crash/OOM/power loss).
+- Health monitoring: /health pings with auto-slot restart, orphan-process
+  rehabilitation on startup.
 
 ## Testing
 
-HiveMind ships a **deterministic regression suite** — no LLM, no running
-server, no models needed. It guards release-blocking behavior (tool dispatch,
-context budgets, sandboxing, planner/coder wiring, model registry, workspace
-guards, release integrity):
+The regression suite is deterministic — no LLM, no running server, no models:
 
 ```bat
 python tests\run_regressions.py
 ```
 
-Add a new test as `tests\test_<area>.py` (standalone script, exit 0/1) and
-register it in `tests\run_regressions.py`. For a release, run the suite and a
-quick smoke test (start `run.py`, open `http://localhost:8001`, check
-`/websearch/status`).
+It guards tool dispatch, context budgets, sandboxing, planner/coder wiring,
+the model registry, workspace guards and release integrity. New test:
+`tests\test_<area>.py` (standalone script, exit 0/1), registered in
+`tests\run_regressions.py`. Before a release: suite + smoke test (start
+run.py, open the UI, check `/websearch/status`).
 
-## Use Cases
+## Use cases
 
-- **Unattended batch runs** — Until-Finished mode with plan tracking, auto-test,
-  graceful stop, and resume-after-crash.
-- **Save-cost alternative to Claude Code** — an 8h agent run costs <2 EUR
-  (electricity) vs $50-150 API.
-- **Privacy-first** — 100% local.
-- **Multi-agent pipelines** — Analyst, Refiner, Critic, Synthesizer; dual
-  Coder+Critic loop for code.
+Unattended batch runs (Until-Finished with plan tracking, auto-test, graceful
+stop, resume), private local coding without API costs (an 8h agent run costs
+pennies in electricity instead of API dollars), multi-agent pipelines, and a
+fully local alternative to cloud coding tools.
 
-## Competitors & Unique Selling Points
+## Known limitations (v1)
 
-| Dimension | HiveMind | Claude Code | Aider | Cursor/Cline |
-|-----------|----------|-------------|-------|--------------|
-| Local-first (no cloud) | Yes | No | Partial | No |
-| VRAM multi-model orchestration | Yes | N/A | No | No |
-| Deterministic codebase map (no LLM) | Yes | No | No | No |
-| Resume after crash | Yes | No | No | No |
-| Manual pause / graceful stop | Yes | No | No | No |
-| Plan tracker + auto-replan | Yes | Partial | No | No |
-| Ask-user throttle | Yes | No | No | No |
-| Soul evolution + peer ratings | Yes | No | No | No |
-| 8h run cost | <2 EUR | $50-150 | varies | $20/mo cap |
-
-## Known Limitations (v1)
-
-- **~27 tok/s on a mid-range GPU** — slower than API models, acceptable for
-  unattended runs.
-- **Server restart loses in-memory state** — pause/timeout/throttle state not
-  fully persisted.
-- **No Docker sandbox** — `run_bash` runs with filesystem trust (mitigated by
-  the Windows Job-Object sandbox).
-- **No semantic vector DB** — codebase retrieval uses static Repo-Map + optional
-  LLM Pre-Explore; memory uses lightweight 96-dim hash embeddings.
-- **Auto-resume on crash is v2** — chunked runs can be resumed in-session; crash-recovery on restart is not implemented yet.
+- ~27 tok/s on a mid-range GPU. Slower than API models, fine for unattended
+  runs.
+- Server restart loses in-memory state; pause/timeout/throttle state is not
+  fully persisted yet.
+- No Docker sandbox; `run_bash` runs with filesystem trust (mitigated by the
+  Job-Object sandbox).
+- No vector DB; codebase retrieval is static repo-map + optional LLM
+  pre-explore, memory uses 96-dim hash embeddings.
+- Crash-resume across restarts is planned for v2 (in-session resume works).
 
 ## Roadmap
 
-- **v2**: Auto-Resume on crash (server detects pending resume blocks on startup).
-- **v2**: Central SSE event type registry (~56 event types as magic strings).
-- **v3**: Embeddings-based codebase retrieval (alongside the static Repo-Map).
-- **v3**: Docker sandbox for `run_bash` isolation.
-- **v3**: Soul Engine empirical validation (A/B test on 50 standard tasks).
+- v2: auto-resume after crash, central SSE event type registry.
+- v3: embeddings-based codebase retrieval alongside the static repo-map,
+  Docker sandbox for run_bash, soul engine A/B validation.
 
 ## License
 
-HiveMind is licensed under the **Business Source License 1.1**
-(`LICENSE`). Personal, non-commercial use is freely permitted; commercial
-use requires a license from the author. From the Change Date (2030-09-01)
-onward, HiveMind becomes available under the MIT License.
+Business Source License 1.1 (see `LICENSE`). Personal, non-commercial use is
+free; commercial use needs a license from the author. After the Change Date
+(2030-09-01) HiveMind becomes MIT licensed.
 
 © 2026 Luzo (BoredLuzo)
 
-## Linux — Details
+## Linux details
 
-**Backend selection.** `HIVEMIND_GPU_BACKEND=vulkan|cuda|cpu` (env var or
-`gpu_backend` in `settings.json`; the systemd unit ships a commented
-`HIVEMIND_GPU_BACKEND` line).
+Backend selection via `HIVEMIND_GPU_BACKEND=vulkan|cuda|cpu` (env or
+`gpu_backend` in settings.json; the systemd unit ships a commented line):
 
-- `vulkan` — default; AMD/Intel/NVIDIA via Mesa Vulkan drivers
+- `vulkan` — default, AMD/Intel/NVIDIA via Mesa Vulkan drivers
   (`llama-bXXXX-bin-ubuntu-vulkan-x64`).
-- `cuda` — NVIDIA; the downloader matches the runtime to the installed driver
-  via `nvidia-smi`, same as on Windows.
-- `cpu` — no GPU required: the loader skips the VRAM pre-flight entirely
-  (model + KV cache live in system RAM), loads with `--n-gpu-layers 0`, and
-  uses CPU-count-aware thread defaults. Binary discovery prefers the plain
-  `ubuntu-x64` build over vulkan/cuda/rocm builds, because a backend binary
-  cannot start without its loader on a CPU-only host.
+- `cuda` — NVIDIA, runtime matched to the installed driver via nvidia-smi.
+- `cpu` — no GPU needed: the VRAM pre-flight is skipped entirely (model +
+  KV cache in system RAM), loads with `--n-gpu-layers 0`, CPU-count thread
+  defaults. Binary discovery prefers the plain `ubuntu-x64` build over
+  vulkan/cuda/rocm on a CPU-only host, since a backend binary can't start
+  without its loader.
 
-**Process management.** The port-cleanup chain is `fuser` → a `/proc/net/tcp`
-inode scan → `pkill` (in that order, no extra packages required);
-`force_kill_all` maps to `pkill -9 -f llama-server` on POSIX.
+Process management: the port-cleanup chain is `fuser` -> `/proc/net/tcp` inode
+scan -> `pkill` (no extra packages needed); `force_kill_all` maps to
+`pkill -9 -f llama-server`.
 
-**Tool commands.** The language runner templates translate at import time on
-POSIX: `python` → `python3` and PowerShell `Select-Object` pipes →
-`head`/`tail`. For Python linting install pyright globally
-(`npm install -g pyright`); without it the lint tier degrades gracefully.
+Tool commands: `python` maps to `python3` and PowerShell pipes to `head`/
+`tail` at import time. For python linting install pyright globally
+(`npm install -g pyright`), otherwise the lint tier degrades.
 
-**Prefill tuning (CPU hosts).** After every context compression the full
-prompt is re-prefilled — on CPU-only hosts this is the dominant cost. The
-main levers are `llama_ubatch_size` (settings; 512/1024 prefill faster at the
-cost of RAM/compute headroom) and the thread defaults. Test with a real
-agentic run and watch the `[CACHE]` reuse telemetry in `logs/hivemind.log`.
+Prefill tuning on CPU hosts: after every compression the full prompt is
+re-prefilled, which dominates the cost there. Levers: `llama_ubatch_size`
+(512/1024 prefill faster, more RAM/compute) and thread defaults. Test with a
+real run and watch the `[CACHE]` reuse telemetry in `logs/hivemind.log`.
 
-**First-run smoke test.** Start with `./.venv/bin/python run.py`, load a small
-model (e.g. `ling-3.0-tiny` or `lfm2.5:2.6b`) from the UI, send a short
-message, then check `logs/hivemind.log` for `[PRE-FLIGHT] ... → OK` and the
-llama-server banner. If no binary is found, point `HIVEMIND_LLAMA_BIN` at the
-extracted `llama-server` path.
- — llama.cpp is fetched with the
-platform-matching binary and the backend is selectable:
-
-```bash
-# 1. Python venv + dependencies
-python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
-
-# 2. llama.cpp (backend: vulkan | cpu | rocm)
-python3 deploy/fetch_llamacpp.py --backend vulkan
-
-# 3. Start (foreground)
-./.venv/bin/python run.py
-
-# 4. systemd service (optional, installs to /opt/hivemind)
-sudo deploy/install_linux.sh
-```
-
-Notes:
-- Backend selection via `HIVEMIND_GPU_BACKEND=cpu` (or `gpu_backend` in
-  `settings.json`) — `vulkan`, `cuda` and `cpu` are supported; the CPU backend
-  bypasses the VRAM pre-flight (model + KV live in system RAM) and loads with
-  `--n-gpu-layers 0`.
-- `python` in tool/lint command templates maps to `python3` on POSIX; the
-  port-kill chain is `fuser` → `/proc` scan → `pkill`.
-- `llama_ubatch_size` (settings) and thread defaults are the main prefill
-  levers on CPU-only hosts.
+First-run smoke test: `./.venv/bin/python run.py`, load a small model
+(`ling-3.0-tiny` or `lfm2.5:2.6b`), send a short message, check
+`logs/hivemind.log` for `[PRE-FLIGHT] ... -> OK` and the llama-server banner.
+No binary found? Point `HIVEMIND_LLAMA_BIN` at the extracted llama-server.
