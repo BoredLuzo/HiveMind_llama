@@ -12,8 +12,8 @@
   "except_pass": 3
  },
  "backend/llama_manager_utils.py": {
-  "broad_except": 15,
-  "except_pass": 4
+  "broad_except": 23,
+  "except_pass": 5
  },
  "backend/llama_models.py": {
   "broad_except": 9,
@@ -24,8 +24,12 @@
   "except_pass": 4
  },
  "backend/llama_vram_table.py": {
-  "broad_except": 5,
-  "except_pass": 2
+  "broad_except": 6,
+  "except_pass": 3
+ },
+ "backend/manager_evict.py": {
+  "broad_except": 1,
+  "except_pass": 0
  },
  "backend/manager_health.py": {
   "broad_except": 8,
@@ -324,8 +328,8 @@
   "except_pass": 2
  },
  "server.py": {
-  "broad_except": 27,
-  "except_pass": 11
+  "broad_except": 28,
+  "except_pass": 12
  },
  "settings.py": {
   "broad_except": 3,
@@ -348,6 +352,10 @@
   "except_pass": 0
  },
  "tests/test_fallback_ctx_stall.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_linux_paths.py": {
   "broad_except": 1,
   "except_pass": 0
  },
