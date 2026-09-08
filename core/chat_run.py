@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Chat run orchestration (run_stream) â€” extracted from server.py (M2b).
+"""Chat run orchestration (run_stream) -- extracted from server.py (M2b).
 
 run_stream builds the RunContext (settings, presets, prefetch machinery)
 and delegates to run_stream_orchestrated (core/stream.py).
@@ -134,7 +134,7 @@ async def run_stream(
         _run_settings.update(model_overrides)
     logger.warning("[RUN-TRACE] settings-kopie ok (overrides=%s)", sorted(model_overrides or {}))
 
-    # Per-run token estimate accumulator â”€ incremented by emit() on content events
+    # Per-run token estimate accumulator - incremented by emit() on content events
     _run_token_estimate: int = 0
     _run_real_tokens_by_phase: dict = {}
     _run_prompt_by_phase: dict = {}
@@ -192,7 +192,7 @@ async def run_stream(
         _cached_total = sum(int(v) for v in _run_cached_by_phase.values() if isinstance(v, (int, float)))
         _tokens_to_record = _real_total if _real_total > 0 else _run_token_estimate
         if _real_total > 0:
-            logger.info("[A-P2-7] real eval_counts=%d prompt=%d cached=%d (by phase=%s) heuristic=%d â€” recording %d",
+            logger.info("[A-P2-7] real eval_counts=%d prompt=%d cached=%d (by phase=%s) heuristic=%d -- recording %d",
                         _real_total, _prompt_total, _cached_total,
                         _run_real_tokens_by_phase, _run_token_estimate, _tokens_to_record)
         _record_ok = stop_reason in ("completed", "loop_detected", "timeout", "hard_stop", "graceful_stop", "aborted")
@@ -293,7 +293,7 @@ async def run_stream(
     abort_ev      = _register_abort(run_id)
     step_skip_ev = _register_step_skip(run_id)  # NEW
     logger.warning("[RUN-TRACE] abort/stepskip registered run_id=%s", run_id)
-    _agent_elapsed: dict = {}   # agent_key â”€ elapsed seconds, fÃƒÂ¼r Log + Prefetch-Kalibrierung
+    _agent_elapsed: dict = {}   # agent_key - elapsed seconds, fÃƒÂ¼r Log + Prefetch-Kalibrierung
     _vram_cache:    set  = await _get_loaded_models_set() if smart_preload else set()
 
     # Phase H: run-scoped perf metrics + prefetch tuning state.
@@ -368,7 +368,7 @@ async def run_stream(
             return None
         did_load, _vram_cache = await smart_preload_if_needed(model, _vram_cache)
         if did_load:
-            return await emit({"type": "status", "content": f"âš¡ Smart Preload: {model.split(':')[0]} â†’ VRAM"})
+            return await emit({"type": "status", "content": f">> Smart Preload: {model.split(':')[0]} -> VRAM"})
         return None
 
     def _schedule_prefetch(next_model: str, current_agent: str, agent_start_time: float | None = None):
@@ -618,7 +618,7 @@ async def run_stream(
             else:
                 _direct_disp = _multimodal_available[0] if _multimodal_available else "multimodal model"
             yield await emit({"type": "status",
-                "content": f"Multimodal model ({_direct_disp}) processes the image directly â€” no vision preprocessing"})
+                "content": f"Multimodal model ({_direct_disp}) processes the image directly -- no vision preprocessing"})
             _logger.info("[Vision-Trigger] Image direct to multimodal model - prepro skipped (direct=%r, avail=%s)",
                          _configured_direct, _multimodal_available[:3] if _multimodal_available else "configured")
         else:
@@ -652,7 +652,7 @@ async def run_stream(
             if _same_exact:
                 _logger.debug("[Vision-Evict] Reuse: %s == %s", _direct_for_vram, _vision_model_name)
             elif _vision_gb + _direct_gb + _judge_gb > _budget_gb - 0.3:
-                # Too tight â”€ evict vision
+                # Too tight - evict vision
                 await _bk_evict(_vision_model_name)
                 _v_port = next(
                     (s.port for s in _vsm._slots if s.model == _vision_model_name), None
@@ -663,7 +663,7 @@ async def run_stream(
                             break
                         await asyncio.sleep(0.15)
                 await asyncio.sleep(3.0)
-                _logger.debug("[Vision-Evict] Evicted %s â”€ %.1f+%.1f+%.1f=%.1fGB > %.1fGB",
+                _logger.debug("[Vision-Evict] Evicted %s - %.1f+%.1f+%.1f=%.1fGB > %.1fGB",
                               _vision_model_name, _vision_gb, _direct_gb, _judge_gb,
                               _vision_gb + _direct_gb + _judge_gb, _budget_gb)
             else:
@@ -713,9 +713,9 @@ async def run_stream(
             yield await emit({"type": "status",
                 "content": f"Multimodal model ({_disp2}) processes the image directly"})
         elif _va_cfg_enabled:
-            yield await emit({"type": "status", "content": "[Vision preprocessing off â”€ vision-agent uses raw image]"})
+            yield await emit({"type": "status", "content": "[Vision preprocessing off - vision-agent uses raw image]"})
         else:
-            yield await emit({"type": "status", "content": "[Image ignored â”€ no vision model active]"})
+            yield await emit({"type": "status", "content": "[Image ignored - no vision model active]"})
 
     # P1-2 (2026-08-12): Restore the session per chat from .context.json,
     if chat_id and not _state.memory.get_session_messages():
@@ -727,7 +727,7 @@ async def run_stream(
             pass
 
     _pipeline_mem_ctx  = _state.pipeline.memory.as_context_string()
-    _pipeline_sess_msgs = _state.memory.get_session_messages()  # SESSION-CACHE: 8 DB-Calls â”€ 1 pro Run
+    _pipeline_sess_msgs = _state.memory.get_session_messages()  # SESSION-CACHE: 8 DB-Calls - 1 pro Run
     # Threshold: SESSION_COMPRESS_THRESHOLD messages (configurable via settings).
     _sess_compress_threshold = int(settings.get("session_compress_threshold", SESSION_COMPRESS_THRESHOLD))
     _skip_compress = (mode == "code_duo" or duo_config.agentic_mode)
@@ -767,7 +767,7 @@ async def run_stream(
         ):
             if _aborted(): break
             if _step_skipped():   # NEW
-                yield await emit({"type": "status", "content": "â€” Pre-Explore skipped."})
+                yield await emit({"type": "status", "content": "-- Pre-Explore skipped."})
                 _explore_ctx = ""
                 break
             parts.append(tok)
@@ -783,7 +783,7 @@ async def run_stream(
                     yield await emit({"type": "token", "content": after})
             elif not _think_open_i and "<think>" not in tok:
                 yield await emit({"type": "token", "content": tok})
-        intent_out = "".join(parts).strip()  # REMOVED: implicit _re.sub() â”€ Thinking now explicitly controlled
+        intent_out = "".join(parts).strip()  # REMOVED: implicit _re.sub() - Thinking now explicitly controlled
         yield await emit({"type": "agent_done", "elapsed": round(time.time() - t, 1)})
         _state.memory.add_to_session("user", user_input)
         _state.memory.add_to_session("assistant", intent_out)
@@ -846,7 +846,7 @@ async def run_stream(
         complexity = "code_duo"
         _complexity_source = "agentic"
         yield await emit({"type": "status",
-            "content": "Agentic mode active â”€ direct to Pre-Explore/Planner/Coder (no judge routing)"})
+            "content": "Agentic mode active - direct to Pre-Explore/Planner/Coder (no judge routing)"})
     elif force_complexity in ("simple", "complex"):
         complexity = force_complexity
         _complexity_source = "manual"
@@ -939,7 +939,7 @@ async def run_stream(
 
     # DIRECT-CHAT-TOOLS (2026-08-31): when the direct chat has tools enabled,
     # tool-y requests are handled by the direct tool loop (run_direct) instead
-    # of the separate tool-agent path â€” one unified chat context/session.
+    # of the separate tool-agent path -- one unified chat context/session.
     _direct_tools_route = bool(settings.get("direct_tools_enabled", True))
     _route_as_tool = (
         ((_judge_route == "tool") or (not _judge_verdict and detect_tool_request(user_input)))
@@ -954,7 +954,7 @@ async def run_stream(
 
     if _route_as_tool:
         _available = list(S_models_cache) if S_models_cache else []
-        # small: simple file reads, git â”€ qwen2.5:3b suffices
+        # small: simple file reads, git - qwen2.5:3b suffices
         if _judge_toolsize == "large":
             _tool_priority = ["qwen3.5:4b", "qwen3.5:9b-ud", "qwen3.5:2b", "granite-4.1:3b"]
         else:
@@ -966,23 +966,23 @@ async def run_stream(
         _tool_sys = (
             "Use the available tools to complete file and code operations. Be direct and concise.\n\n"
             "Available tools:\n"
-            "  read_file(path, start_line?, end_line?) â”€ read file (optional: line range only)\n"
-            "  get_signatures(path, max_items?) â”€ structural overview with line numbers\n"
-            "  find_files(pattern, path?)  â”€ glob search: '**/*.py', 'src/*.ts'\n"
-            "  list_dir(path)              â”€ list directory contents\n"
-            "  search_code(pattern, path?) â”€ regex search across code files\n"
-            "  patch_file(path, old_str, new_str) â”€ surgical edit (preferred for modifications)\n"
-            "  edit_file(path, edits)      â”€ create new files OR modify existing ones\n"
-            "  run_bash(cmd)               â”€ shell command: tests, pip install, npm run, grep...\n"
-            "  run_python(code)            â”€ execute python snippet directly\n"
-            "  git_status(cmd)             â”€ git: status|diff|log|show\n"
-            "  git_commit(message)         â”€ commit all changes with message\n\n"
+            "  read_file(path, start_line?, end_line?) - read file (optional: line range only)\n"
+            "  get_signatures(path, max_items?) - structural overview with line numbers\n"
+            "  find_files(pattern, path?)  - glob search: '**/*.py', 'src/*.ts'\n"
+            "  list_dir(path)              - list directory contents\n"
+            "  search_code(pattern, path?) - regex search across code files\n"
+            "  patch_file(path, old_str, new_str) - surgical edit (preferred for modifications)\n"
+            "  edit_file(path, edits)      - create new files OR modify existing ones\n"
+            "  run_bash(cmd)               - shell command: tests, pip install, npm run, grep...\n"
+            "  run_python(code)            - execute python snippet directly\n"
+            "  git_status(cmd)             - git: status|diff|log|show\n"
+            "  git_commit(message)         - commit all changes with message\n\n"
             "Workflow:\n"
             "  1. Explore first (list_dir / find_files / read_file)\n"
             "  2. Modify existing files with edit_file or patch_file\n"
             "  3. After implementing, run tests (run_bash pytest / npm test)\n"
-            "  4. On failure: patch_file â”€ test again\n"
-            "  Do not ask for confirmation â”€ just act."
+            "  4. On failure: patch_file - test again\n"
+            "  Do not ask for confirmation - just act."
         )
         _tool_msgs = _make_messages(_state.pipeline, _tool_sys, user_input, effective_images, False, False)
         yield await emit({"type": "complexity", "content": "simple", "source": "tool"})
@@ -1026,7 +1026,7 @@ async def run_stream(
                 _tool_calls = bool(_loop.state.tool_calls_made)
         except httpx.TimeoutException as _te:
             _elapsed_so_far = round(time.time() - _tool_t, 1)
-            _err = f"[Tool timeout after {_elapsed_so_far}s â”€ model did not respond in time. try a smaller model or simplify the request.]"
+            _err = f"[Tool timeout after {_elapsed_so_far}s - model did not respond in time. try a smaller model or simplify the request.]"
             yield await emit({"type": "token", "content": _err})
             _tool_out_parts.append(_err)
             _tool_stop_reason = "timeout"
@@ -1051,7 +1051,7 @@ async def run_stream(
         _unregister_step_skip(run_id)
         return
 
-    # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # --------------------------------------------------------------------------
 
     def _build_run_context():
         """Build RunContext with all shared state for extracted runners."""
@@ -1154,7 +1154,7 @@ async def run_stream(
             append_learning_log=append_learning_log,
         )
 
-    # â”€â”€â”€ Route to extracted runner â”€â”€â”€
+    # --- Route to extracted runner ---
     _ctx = _build_run_context()
     logger.warning("[RUN-TRACE] vor runner-dispatch complexity=%s", _ctx.complexity)
     async for event in run_stream_orchestrated(_ctx):

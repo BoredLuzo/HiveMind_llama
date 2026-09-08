@@ -160,10 +160,24 @@ async def _phase_vram(ctx, state: dict):
                     pass
             _skip_coder_pin = bool(ctx.duo_config.pre_explore and _exec_tc) or ctx.duo_config.agentic_mode
             if not _skip_coder_pin and (ctx.duo_config.chunking or ctx.duo_config.planner):
+                # PRE-PIN-PLANNER-FIX (2026-09-09): resolve the planner model
+                # exactly like duo_runner's planner phase (:890-896) — incl.
+                # duo_planner_use_coder_ctx and the duo_planner_model override,
+                # which were previously ignored here (wrong pin, wasted load).
+                _pre_pin_thinking = (
+                    ctx.duo_config.agentic_thinking
+                    or (not bool(ctx.settings.get("disable_thinking_in_planner", False))
+                        and (ctx.duo_config.chunking
+                             or (bool(ctx.settings.get("duo_planner_default_thinking", True)) and ctx.duo_config.coding_mode)))
+                )
                 _pre_pin_planner_mdl = exec_mdl if (
-                    not bool(ctx.settings.get("disable_thinking_in_planner", False))
-                    and (ctx.duo_config.agentic_thinking or (bool(ctx.settings.get("duo_planner_default_thinking", True)) and ctx.duo_config.coding_mode))
-                ) or bool(ctx.settings.get("duo_planner_use_exec_model", True)) else coder_mdl
+                    _pre_pin_thinking or bool(ctx.settings.get("duo_planner_use_exec_model", True))
+                ) else coder_mdl
+                if bool(ctx.settings.get("duo_planner_use_coder_ctx", True)):
+                    _pre_pin_planner_mdl = coder_mdl
+                _planner_override = str(ctx.settings.get("duo_planner_model", "") or "").strip()
+                if _planner_override:
+                    _pre_pin_planner_mdl = _planner_override
                 _pre_pin_planner_gb = ctx.vram_lookup_gb.get(_pre_pin_planner_mdl, 4.0)
                 try:
                     _pre_pin_coder_gb = float(_vram_ctx_est(exec_mdl if exec_mdl != coder_mdl else coder_mdl, int(_coder_ctx)))

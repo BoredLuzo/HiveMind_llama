@@ -178,11 +178,8 @@ def _compact_round_write_args(messages, assistant_idx, call, dname, raw_args, da
     TODO (2026-09-06, consolidation after live observation ghosts.js/game.js):
     after the stub the model no longer sees the written content and often
     rewrites the same file COMPLETELY in later rounds (write_file churn).
-    Planned ideas: (a) do not compact small files at all (e.g. < _WRITE_ARG_
-    COMPACT_MIN or < ~200 lines), or (b) append a read-first nudge to the stub
-    ("content not in context - read_file the path before further writes"), or
-    (c) size AND round threshold: only compact when the file is large AND the
-    path is not being written again. Do not silently forget - see also
+    IMPLEMENTED (b) 2026-09-09: the stub carries an imperative read-first
+    nudge. (a)/(c) remain available if churn persists - see also
     duo_write_guard_enabled.
     """
     if not (dname in _WRITE_ARG_COMPACT_NAMES and messages and 0 <= int(assistant_idx) < len(messages)):
@@ -203,7 +200,8 @@ def _compact_round_write_args(messages, assistant_idx, call, dname, raw_args, da
     _stub = json.dumps({
         "path": _path,
         "content": f"[executed {dname}: {_alen} arg chars (sha {_dig}) - "
-                   "content written; use read_file to inspect]",
+                   "content NOT in context anymore - read_file this path before "
+                   "any further write/edit to avoid full-file rewrites]",
     }, ensure_ascii=False)
     _cid = (call or {}).get("id")
     for _tc in _tcs:
