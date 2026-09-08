@@ -5,9 +5,11 @@ from __future__ import annotations
 
 
 import asyncio
+import functools
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 logger = logging.getLogger("hivemind.browser")
 
@@ -54,6 +56,86 @@ def _guard_browser_url(url: str) -> str | None:
     except ValueError:
         pass  # normaler DNS-Hostname
     return None
+
+
+class _QuietFileHandler(SimpleHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        logger.debug("[browser-fileserver] " + fmt, *args)
+
+
+_file_server = None
+_file_server_root: str | None = None
+
+
+def _plan_file_navigation(url: str, workspace) -> tuple[str, str]:
+    """Map a workspace file:// URL onto the loopback file server.
+    Returns (http_url, "") or ("", rejection reason)."""
+    from urllib.parse import unquote as _unq, urlparse as _up
+    import pathlib as _pl
+    try:
+        _parts = _up(url)
+    except ValueError:
+        return "", "unparseable file:// URL"
+    if _parts.netloc not in ("", "localhost"):
+        return "", "file:// network hosts are not supported — use a path inside the workspace"
+    _raw = _unq(_parts.path or "")
+    if not _raw:
+        return "", "file:// URL has no path"
+    _path = _pl.Path(_raw)
+    if len(_raw) >= 3 and _raw[0] == "/" and _raw[2] == ":":
+        _path = _pl.Path(_raw[1:])          # "/C:/ws/x" -> "C:/ws/x"
+    try:
+        _path = _path.resolve()
+        _ws = _pl.Path(str(workspace or "")).resolve() if workspace else None
+    except OSError:
+        return "", "cannot resolve the file:// path"
+    if not _ws:
+        return "", ("no workspace set — file:// needs a workspace (files are "
+                    "auto-served) or serve the folder yourself via run_bash "
+                    "(python -m http.server <port> --directory <folder>) and "
+                    "open http://localhost:<port>/")
+    if not _path.is_relative_to(_ws):
+        return "", ("file:// path is outside the workspace — move the file into "
+                    "the workspace (it is then auto-served over loopback HTTP, "
+                    "ES modules and fetch work) or serve the folder yourself via "
+                    "run_bash (python -m http.server <port> --directory <folder>) "
+                    "and open http://localhost:<port>/")
+    if not _path.exists():
+        return "", f"file not found: {_path}"
+    _port = _ensure_file_server(str(_ws))
+    return f"http://127.0.0.1:{_port}/{_path.relative_to(_ws).as_posix()}", ""
+
+
+def _ensure_file_server(root: str) -> int:
+    """(Re)start the loopback file server for the workspace root; return port."""
+    global _file_server, _file_server_root
+    import threading as _th
+    if _file_server is not None and _file_server_root == root:
+        return _file_server.server_address[1]
+    _stop_file_server()
+    _file_server = ThreadingHTTPServer(
+        ("127.0.0.1", 0),
+        functools.partial(_QuietFileHandler, directory=root),
+    )
+    _file_server.daemon_threads = True
+    _file_server_root = root
+    _th.Thread(target=_file_server.serve_forever, daemon=True,
+               name="hivemind-browser-fileserver").start()
+    logger.info("[browser] file server: %s -> http://127.0.0.1:%s/",
+                root, _file_server.server_address[1])
+    return _file_server.server_address[1]
+
+
+def _stop_file_server():
+    global _file_server, _file_server_root
+    if _file_server is not None:
+        try:
+            _file_server.shutdown()
+            _file_server.server_close()
+        except OSError as e:
+            logger.debug("[browser] file server shutdown error: %s", e)
+    _file_server = None
+    _file_server_root = None
 
 
 def _is_thread_affinity_error(e: BaseException) -> bool:
@@ -116,7 +198,7 @@ def _snapshot(page) -> str:
     return out or "(empty page)"
 
 
-def _dispatch(args: dict) -> str:
+def _dispatch(args: dict, workspace) -> str:
     action = str(args.get("action", "")).strip().lower()
     page = _ensure_page()
 
@@ -124,16 +206,30 @@ def _dispatch(args: dict) -> str:
         url = str(args.get("url", "")).strip()
         if not url:
             return "[browser error] action='navigate' requires 'url'"
-        # S-SEC (2026-08-23/25): Scheme-Blockliste + Host-Guard (Metadata/
-        # lokales Dev-Testing).
-        _gerr = _guard_browser_url(url)
-        if _gerr:
-            return f"[browser error] {_gerr}"
+        _orig_url = url
+        _served_via = ""
+        if url.lower().startswith("file://"):
+            # LOCAL-FILE-SERVE (2026-09-08): file:// inside the workspace is
+            # transparently served over a loopback HTTP server, so ES modules
+            # and fetch() work like on a real site. Outside -> guided reject.
+            url, _ferr = _plan_file_navigation(url, workspace)
+            if _ferr:
+                return f"[browser error] {_ferr}"
+            _served_via = url
+        else:
+            # S-SEC (2026-08-23/25): Scheme-Blockliste + Host-Guard (Metadata/
+            # lokales Dev-Testing).
+            _gerr = _guard_browser_url(url)
+            if _gerr:
+                return f"[browser error] {_gerr}"
         _console_msgs.clear()
         _pageerrors.clear()
         resp = page.goto(url, timeout=40000, wait_until="domcontentloaded")
         status = resp.status if resp else "?"
-        return f"[browser] navigated to {url} (status {status})\n\n" + _snapshot(page)
+        _head = f"[browser] navigated to {_orig_url} (status {status})"
+        if _served_via:
+            _head += f"\n[local file served via {_served_via}]"
+        return _head + "\n\n" + _snapshot(page)
 
     if action == "snapshot":
         return _snapshot(page)
@@ -183,6 +279,7 @@ def _dispatch(args: dict) -> str:
             if _playwright is not None:
                 _playwright.stop()
         finally:
+            _stop_file_server()
             _reset_state()
         return "[browser] closed"
 
@@ -192,11 +289,11 @@ def _dispatch(args: dict) -> str:
     )
 
 
-def _dispatch_on_executor(args: dict) -> str:
+def _dispatch_on_executor(args: dict, workspace) -> str:
 
 
     try:
-        return _dispatch(args)
+        return _dispatch(args, workspace)
     except Exception as e:
         if not _is_thread_affinity_error(e):
             raise
@@ -206,14 +303,14 @@ def _dispatch_on_executor(args: dict) -> str:
             type(e).__name__, e,
         )
         _reset_state()
-        return _dispatch(args)
+        return _dispatch(args, workspace)
 
 
 async def browser_tool(args: dict, workspace, workspace_lock) -> str:
     """Inline-Tool-Handler (blocking Playwright sync API, pinned to ONE thread)."""
     loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(_BROWSER_EXECUTOR, _dispatch_on_executor, args or {})
+        return await loop.run_in_executor(_BROWSER_EXECUTOR, _dispatch_on_executor, args or {}, workspace)
     except RuntimeError as e:
         return f"[browser error] {e}"
     except Exception as e:
@@ -230,6 +327,7 @@ def close_browser(timeout: float = 15.0) -> None:
             if _playwright is not None:
                 _playwright.stop()
         finally:
+            _stop_file_server()
             _reset_state()
 
     try:

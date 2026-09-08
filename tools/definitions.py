@@ -358,7 +358,9 @@ _INLINE_CODING_TOOLS = [
             "Actions: navigate(url) loads a page; snapshot returns page text + JS console/errors; "
             "screenshot(path) saves a PNG for vision inspection; click(selector)/type(selector,text) "
             "interact with the UI; evaluate(js) runs JavaScript in the page; console returns captured "
-            "JS console/errors; close shuts the browser down. The browser stays open across calls."
+            "JS console/errors; close shuts the browser down. The browser stays open across calls. "
+            "file:// URLs inside the workspace are auto-served over a loopback HTTP server, so "
+            "ES modules and fetch work; file:// paths outside the workspace are rejected."
         ),
         "parameters": {"type": "object", "properties": {
             "action":   {"type": "string", "enum": ["navigate", "snapshot", "screenshot", "click", "type", "evaluate", "console", "close"],

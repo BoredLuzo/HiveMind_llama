@@ -39,6 +39,14 @@
   patches are flushed before a preset load so they can't overwrite it.
   New suite tests/test_presets_bom.py (43 total).
 
+- Browser tool accepts workspace file:// URLs now: they are transparently
+  served over a loopback HTTP server (bound to 127.0.0.1, random port, server
+  lives until browser close), so ES modules and fetch work like on real
+  hosting and local app verification stops failing with "scheme 'file://' is
+  not allowed". file:// paths outside the workspace and all other disallowed
+  schemes stay rejected — with guidance instead of a dead end. New suite
+  tests/test_browser_fileserve.py (44 total).
+
 ## [1.0.13] - 2026-09-08
 
 ### Added
