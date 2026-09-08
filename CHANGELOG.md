@@ -44,6 +44,17 @@ versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **llama.cpp installer never accepted the downloaded DLLs** (release
+  blocker found during clean-install testing): `_verify_backend_dlls` in
+  `deploy/fetch_llamacpp.py` checked for `ggml-vulkan` / `ggml-cuda`
+  WITHOUT the `.dll` extension on Windows (`_so` mapping was wrong), so
+  every Vulkan/CUDA install failed at step 4 and deleted the intact build.
+  Now checks the correct extension via directory enumeration (robust while
+  antivirus scans fresh files), retries for up to ~90 s before failing,
+  cross-checks the source archive to distinguish a real incomplete ZIP
+  from a quarantined DLL (archive + build are kept, with restore
+  instructions), and the downloader no longer fails with HTTP 416 when the
+  temp file is already fully downloaded.
 - **Per-model config `sampling` block is now applied at runtime**
   (`model_configs/models_registry.py` accessor `get_sampling`,
   `core/model_sampling.py` registry fallback): the documented `sampling` block

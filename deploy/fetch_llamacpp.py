@@ -132,6 +132,19 @@ def download(url: str, dest: Path, max_attempts: int = 6) -> None:
     chunk = 256 * 1024
     for attempt in range(1, max_attempts + 1):
         try:
+            # Already-complete file: a Range request from EOF answers 416.
+            # Probe Content-Length once; if the local size matches, we're done
+            # (the caller CRC-checks archives before extracting anyway).
+            if dest.exists():
+                resume_from = dest.stat().st_size
+                if resume_from:
+                    _probe = urllib.request.Request(url, headers={
+                        "User-Agent": "HiveMind-Installer", "Range": f"bytes={resume_from - 1}-{resume_from - 1}"})
+                    with urllib.request.urlopen(_probe, timeout=60) as pr:
+                        _cr = pr.headers.get("Content-Range") or ""
+                    _m = re.match(r"^bytes \d+-(\d+)/(\d+)$", _cr)
+                    if _m and resume_from == int(_m.group(2)):
+                        return  # fully downloaded already
             resume_from = dest.stat().st_size if dest.exists() else 0
             headers = {"User-Agent": "HiveMind-Installer"}
             if resume_from:
@@ -196,17 +209,20 @@ def _verify_backend_dlls(exe: Path, backend: str) -> list[str]:
     if backend in ("cpu", "rocm"):
         return []  # CPU/ROCm: keine gesonderten Runtime-DLLs neben dem Binary erwartet
     dll_dir = Path(exe).parent
-    _so = "" if _IS_WIN else ".so"
+    _so = ".dll" if _IS_WIN else ".so"
     missing: list[str] = []
     if backend == "cuda":
-        if not (dll_dir / f"ggml-cuda{_so}").exists():
+        if not list(dll_dir.glob(f"ggml-cuda{_so}")):
             missing.append(f"ggml-cuda{_so}")
         if _IS_WIN:
             for base in ("cudart64", "cublas64", "cublasLt64"):
                 if not list(dll_dir.glob(f"{base}*.dll")):
                     missing.append(f"{base}*.dll")
     else:
-        if not (dll_dir / f"ggml-vulkan{_so}").exists():
+        # Directory enumeration, not exists()/stat: while antivirus is actively
+        # scanning a freshly extracted DLL, stat() can fail (ACCESS_DENIED)
+        # while the name is still listed — a healthy build must not look broken.
+        if not list(dll_dir.glob(f"ggml-vulkan{_so}")):
             missing.append(f"ggml-vulkan{_so}")
     return missing
 
@@ -328,7 +344,6 @@ def main() -> int:
         print("        from scratch. If it keeps failing, download the asset")
         print("        manually from: https://github.com/ggml-org/llama.cpp/releases")
         return 1
-    tmp_zip.unlink(missing_ok=True)
 
     exe = target / SERVER_NAME
     if not exe.exists():
@@ -377,18 +392,75 @@ def main() -> int:
     # DLL-VERIFY (2026-08-27): `--device CUDA0` needs the bundled CUDA runtime
     # DLLs next to the exe. A ZIP without them would install a build that
     # "finds no devices" — fail here with a clear message instead.
-    _missing = _verify_backend_dlls(exe, args.backend)
-    if _missing:
+    # AV-RETRY (2026-09-08): Windows Defender real-time scanning can make large
+    # native DLLs (observed: ggml-vulkan.dll) vanish for several seconds right
+    # after extraction (quarantine-then-release or slow scan), so a complete
+    # ZIP looks broken. Retry with a growing wait (~30s total window); after
+    # the final wait re-check once more and treat a now-complete build as
+    # success. If it is still incomplete, cross-check the SOURCE archive:
+    # DLL in the ZIP but not on disk => antivirus removed it — keep the build,
+    # tell the user to restore/allow it, and don't force a re-download that
+    # hits the same scanner. Only a ZIP that genuinely lacks the DLL is deleted.
+    _missing = []
+    _t_verify0 = time.time()
+    for _attempt in range(10):
+        _missing = _verify_backend_dlls(exe, args.backend)
+        if not _missing:
+            break
+        if _attempt < 9:
+            print(f"       DLL check pending ({_m if (_m := _missing[0]) else ''}) — "
+                  f"waiting (antivirus scanning, {int(time.time() - _t_verify0)}s elapsed)...",
+                  flush=True)
+            time.sleep(10.0)
+    if not _missing:
+        tmp_zip.unlink(missing_ok=True)
         print()
-        print(f"[ERROR] {args.backend} runtime DLLs missing in the downloaded build:")
-        for _m in _missing:
+        print(f"[OK] llama.cpp b{build_num} installed.")
+        print(f"     llama-server: {exe}")
+        if have and build_num < have[0]:
+            print(f"     NOTE: b{have[0]} is newer and stays in place (auto-discovery picks the highest build).")
+        return 0
+    _in_archive: dict[str, bool] = {}
+    if tmp_zip.exists():
+        try:
+            if _is_targz:
+                with tarfile.open(tmp_zip) as tf:
+                    _arc_names = set(tf.getnames())
+            else:
+                with zipfile.ZipFile(tmp_zip) as zf:
+                    _arc_names = set(zf.namelist())
+            for _m in _missing:
+                _stem = _m.replace("*.dll", "")
+                _in_archive[_m] = any(_stem in n for n in _arc_names)
+        except (zipfile.BadZipFile, tarfile.TarError, OSError):
+            pass
+    _av_suspected = any(_in_archive.get(_m, False) for _m in _missing)
+    print()
+    print(f"[ERROR] {args.backend} runtime DLLs missing next to the exe:")
+    for _m in _missing:
+        if _av_suspected and _in_archive.get(_m):
+            print(f"    - {_m}  [in the archive, but absent on disk (antivirus?)]")
+        else:
             print(f"    - {_m}")
-        print(f"  Expected next to: {exe}")
-        print(f"  The ZIP seems incomplete. Try again (--force) or download")
+    print(f"  Expected next to: {exe}")
+    _ggml_present = sorted(p.name for p in exe.parent.glob("ggml*.dll")) if exe.parent.exists() else []
+    if _ggml_present:
+        print(f"  ggml DLLs actually on disk: {', '.join(_ggml_present) or '(none)'}")
+    if _av_suspected:
+        print()
+        print("  The downloaded archive is COMPLETE — antivirus/Defender most likely")
+        print("  quarantined the DLL right after extraction. Fix:")
+        print("    1. Windows Security → Protection history → restore/allow the DLL")
+        print("       (or add an exclusion for the llama\\ folder)")
+        print("    2. Re-extract manually from the temp ZIP, or run again with --force")
+        print(f"       (archive kept at: {tmp_zip})")
+    else:
+        print("  The ZIP seems incomplete. Try again (--force) or download")
         print(f"  the {args.backend} asset manually from:")
-        print(f"  https://github.com/ggml-org/llama.cpp/releases")
+        print("  https://github.com/ggml-org/llama.cpp/releases")
         shutil.rmtree(target, ignore_errors=True)
-        return 1
+        tmp_zip.unlink(missing_ok=True)
+    return 1
 
     print()
     print(f"[OK] llama.cpp b{build_num} installed.")

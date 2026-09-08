@@ -349,14 +349,16 @@ def _probe_backend_dlls(llama_bin: str, backend: str) -> bool | None:
     _so = ".so" if _posix else ".dll"
     try:
         if backend == "cuda":
-            if not (dll_dir / f"ggml-cuda{_so}").exists():
+            if not list(dll_dir.glob(f"ggml-cuda{_so}")):
                 return False
             if not _posix:
                 for _base in ("cudart64", "cublas64", "cublasLt64"):
                     if not _glob_dll.glob(str(dll_dir / f"{_base}*.dll")):
                         return False
         else:
-            if not (dll_dir / f"ggml-vulkan{_so}").exists():
+            # Enumerate, don't stat: while antivirus scans a fresh DLL, stat()
+            # can fail while the name is still listed in the directory.
+            if not list(dll_dir.glob(f"ggml-vulkan{_so}")):
                 return False
         return True
     except Exception:
