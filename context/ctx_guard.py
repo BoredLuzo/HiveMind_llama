@@ -245,14 +245,25 @@ def plan_partial_cut_index(
 
     to_remove = total - target
     acc = 0
+    condensable_before_cut = 0
     for i, m in enumerate(msgs):
-        acc += int(_msg_chars(m) / _CPT)
-        # Nachricht i wird Teil des zu komprimierenden Alt-Teils. cut zeigt auf
-        # den ersten Message-Index, der roh erhalten bleibt.
+        # CUT-FIX (2026-09-08, live: before==after 3x -> 3-strike stop at 65%
+        # ctx): the pinned system prompt alone covered to_remove, so the cut
+        # landed BEFORE the first tool output. Compression rebuilds the system
+        # message and skips user/system content in _history_text, so the
+        # condenser had nothing to work with and silently returned the
+        # ORIGINAL list. The accumulator now ignores the system message (it
+        # survives compression anyway) and a cut is only valid if at least one
+        # assistant/tool message lands in the old section.
+        if isinstance(m, dict) and m.get("role") != "system":
+            acc += int(_msg_chars(m) / _CPT)
+            if m.get("role") in ("assistant", "tool") and _msg_chars(m) > 0:
+                condensable_before_cut += 1
         cut = i + 1
         if n - cut < min_tail:
             break
-        if acc >= to_remove:
+        if acc >= to_remove and condensable_before_cut >= 1:
             return max(1, cut)
-    # Nicht genug entfernbar, ohne den Mindest-Tail zu verletzen.
+    # Nicht genug entfernbar, ohne den Mindest-Tail zu verletzen — oder kein
+    # kondensierbares Element vor dem Cut: Aufrufer faellt auf full zurueck.
     return -1

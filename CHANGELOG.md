@@ -47,6 +47,17 @@
   schemes stay rejected — with guidance instead of a dead end. New suite
   tests/test_browser_fileserve.py (44 total).
 
+- Context compression actually condenses now (live failure: "done
+  before=26473 after=26473" three times, then the 3-strike guard stopped the
+  run at ~65% ctx). Root cause: plan_partial_cut_index counted the pinned
+  system prompt toward the cut budget, the cut landed before the first tool
+  output, the condenser found nothing to compress and silently returned the
+  original list — which passed validation vacuously. The cut now ignores the
+  system message and requires condensable content before it (otherwise full
+  mode), a no-op condensation logs a warning instead of pretending success,
+  and a partial attempt that shrank nothing escalates the next attempt to
+  full mode. New suite tests/test_partial_cut.py (45 total).
+
 ## [1.0.13] - 2026-09-08
 
 ### Added

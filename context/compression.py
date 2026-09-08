@@ -369,7 +369,14 @@ async def _compress_tool_context(
             _history_text.append(f"[{role.upper()}]: {content[:_limit]}")
 
     if not _history_text:
-        return messages, set(), {}
+        # CUT-FIX companion (2026-09-08): returning silently looked like a
+        # successful "done before=X after=X" and fed the 3-strike stop.
+        logger.warning(
+            "[CTX-COMPRESS] noop — nothing condensable before the cut "
+            "(msgs=%d mode=%s cut=%d); returning original",
+            len(messages), compression_mode, _cut,
+        )
+        return messages, set(), {"noop": True}
 
     _compress_prompt = (
         f"Summarize the following coding session for context compression.\n\n"

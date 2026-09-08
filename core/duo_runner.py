@@ -3149,6 +3149,7 @@ async def run_code_duo(ctx):
                     ) + _accumulated_replan_bonus
                     _loop_detected = False
                     _chunk_budget_exhausted = False
+                    _partial_escalated = False  # partial no-shrink -> next attempt runs full
                     # PER-CHUNK-BUDGET: rounds spent in earlier chunks must not
                     # shrink this chunk's budget (compression resets at :3830
                     # stay; lifetime totals live in _lifetime_tool_rounds).
@@ -3635,7 +3636,7 @@ async def run_code_duo(ctx):
                             # can rescue the suffix after the rebuild.
                             _comp_mode = "full"
                             _comp_cut = -1
-                            if _cache_friendly_ctx and _partial_compression:
+                            if _cache_friendly_ctx and _partial_compression and not _partial_escalated:
                                 if _ctx_should_use_partial(partial_enabled=True, messages=_dtool_msgs):
                                     _comp_cut = _ctx_plan_partial_cut_index(
                                         _dtool_msgs,
@@ -3926,6 +3927,16 @@ async def run_code_duo(ctx):
                                 _ctx_critical_warned = False
                             # can run up to the run deadline (24h in until_finished). Success = >=10%
                             _est_tokens_after_compress = _estimate_ctx_tokens(_dtool_msgs)
+                            # PARTIAL-ESCALATE (2026-09-08): a partial attempt that
+                            # did not shrink must not repeat identically — the next
+                            # attempt runs full mode (summary + recent tail only).
+                            if (_comp_mode == "partial"
+                                    and _est_tokens_after_compress >= _est_tokens_before_compress * 0.90):
+                                _partial_escalated = True
+                                logger.warning(
+                                    "[CTX-COMPRESS] partial shrank nothing (%d -> %d) — escalating to full mode",
+                                    int(_est_tokens_before_compress), int(_est_tokens_after_compress),
+                                )
                             _compress_fail_streak, _compress_stop = _compress_fail_streak_update(
                                 _compress_fail_streak,
                                 _est_tokens_after_compress < _est_tokens_before_compress * 0.90,

@@ -63,6 +63,7 @@ SUITES = [
     ("compress_local_only",    "tests/test_compress_local_only.py",             60),
     ("presets_bom",            "tests/test_presets_bom.py",                     30),
     ("browser_fileserve",      "tests/test_browser_fileserve.py",               30),
+    ("partial_cut",            "tests/test_partial_cut.py",                     30),
 ]
 
 
