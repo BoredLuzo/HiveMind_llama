@@ -621,3 +621,32 @@ use requires a license from the author. From the Change Date (2030-09-01)
 onward, HiveMind becomes available under the MIT License.
 
 © 2026 Luzo (BoredLuzo)
+
+## Linux
+
+HiveMind runs on Linux from the same codebase — llama.cpp is fetched with the
+platform-matching binary and the backend is selectable:
+
+```bash
+# 1. Python venv + dependencies
+python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+
+# 2. llama.cpp (backend: vulkan | cpu | rocm)
+python3 deploy/fetch_llamacpp.py --backend vulkan
+
+# 3. Start (foreground)
+./.venv/bin/python run.py
+
+# 4. systemd service (optional, installs to /opt/hivemind)
+sudo deploy/install_linux.sh
+```
+
+Notes:
+- Backend selection via `HIVEMIND_GPU_BACKEND=cpu` (or `gpu_backend` in
+  `settings.json`) — `vulkan`, `cuda` and `cpu` are supported; the CPU backend
+  bypasses the VRAM pre-flight (model + KV live in system RAM) and loads with
+  `--n-gpu-layers 0`.
+- `python` in tool/lint command templates maps to `python3` on POSIX; the
+  port-kill chain is `fuser` → `/proc` scan → `pkill`.
+- `llama_ubatch_size` (settings) and thread defaults are the main prefill
+  levers on CPU-only hosts.

@@ -5,6 +5,29 @@ All notable changes to HiveMind are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.14] - 2026-09-08 (linux-support branch, unreleased)
+
+### Added
+
+- **Linux/POSIX support for the llama.cpp backend**: `gpu_backend` now accepts
+  `cpu` (env `HIVEMIND_GPU_BACKEND` / settings), binary discovery is
+  platform-aware (`llama-server` without .exe, POSIX: backend fit outranks
+  build age), RAM via `/proc/meminfo`, port-kill chain `fuser` -> `/proc`
+  inode scan -> `pkill`, backend DLL probe checks `.so` on POSIX and passes
+  for the cpu backend.
+- **CPU backend load path**: `--n-gpu-layers 0`, no `--device`, MoE-offload
+  and device/DLL gates skipped, VRAM pre-flight short-circuited (`cpu-backend`
+  source) and `wait_for_vram_reclaim` returns immediately; thread defaults are
+  CPU-count-aware on POSIX.
+- `deploy/fetch_llamacpp.py` downloads Linux assets (`llama-bXXXX-bin-ubuntu-
+  {vulkan,cpu,rocm}-x64.zip|.tar.gz`), extracts tar.gz, chmods the binary.
+- POSIX tool-command ladder (`hive_functions/language_config.py`): `python`
+  -> `python3`, PowerShell pipe cmdlets -> `head`/`tail` at import time.
+- Full `deploy/install_linux.sh` (system deps, venv, llama.cpp fetch, systemd)
+  and `deploy/hivemind.service` backend env; README Linux section.
+- New regression suite `tests/test_linux_paths.py` (POSIX discovery, meminfo
+  parser, /proc port parser, cpu gating source guards).
+
 ## [1.0.13] - 2026-09-08
 
 ### Added
