@@ -30,6 +30,25 @@ your first message.
 > **Important:** HiveMind has **no default workspace**. Set your project folder
 > in the UI "Workspace" field before the first run.
 
+## Quick Start (Linux)
+
+```bash
+# One-shot installer: system deps, venv, llama.cpp, systemd service → /opt/hivemind
+sudo deploy/install_linux.sh                    # HIVEMIND_GPU_BACKEND=vulkan|cpu|rocm
+
+# … or manually:
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python deploy/fetch_llamacpp.py --backend vulkan   # vulkan | cuda | cpu | rocm
+./.venv/bin/python run.py
+```
+
+Then open **http://localhost:8001**, set a workspace folder in the UI, and send
+your first message — same as on Windows. Models: copy GGUFs into your models
+folder or run `./.venv/bin/python deploy/fetch_models.py`. See
+**Linux — Details** at the bottom of this file for backend selection, the
+CPU-only path, and prefill tuning.
+
 ## How HiveMind Understands Your Code
 
 Codebase understanding is the default `duo_*` / `code_duo` path. It works in
@@ -621,3 +640,66 @@ use requires a license from the author. From the Change Date (2030-09-01)
 onward, HiveMind becomes available under the MIT License.
 
 © 2026 Luzo (BoredLuzo)
+
+## Linux — Details
+
+**Backend selection.** `HIVEMIND_GPU_BACKEND=vulkan|cuda|cpu` (env var or
+`gpu_backend` in `settings.json`; the systemd unit ships a commented
+`HIVEMIND_GPU_BACKEND` line).
+
+- `vulkan` — default; AMD/Intel/NVIDIA via Mesa Vulkan drivers
+  (`llama-bXXXX-bin-ubuntu-vulkan-x64`).
+- `cuda` — NVIDIA; the downloader matches the runtime to the installed driver
+  via `nvidia-smi`, same as on Windows.
+- `cpu` — no GPU required: the loader skips the VRAM pre-flight entirely
+  (model + KV cache live in system RAM), loads with `--n-gpu-layers 0`, and
+  uses CPU-count-aware thread defaults. Binary discovery prefers the plain
+  `ubuntu-x64` build over vulkan/cuda/rocm builds, because a backend binary
+  cannot start without its loader on a CPU-only host.
+
+**Process management.** The port-cleanup chain is `fuser` → a `/proc/net/tcp`
+inode scan → `pkill` (in that order, no extra packages required);
+`force_kill_all` maps to `pkill -9 -f llama-server` on POSIX.
+
+**Tool commands.** The language runner templates translate at import time on
+POSIX: `python` → `python3` and PowerShell `Select-Object` pipes →
+`head`/`tail`. For Python linting install pyright globally
+(`npm install -g pyright`); without it the lint tier degrades gracefully.
+
+**Prefill tuning (CPU hosts).** After every context compression the full
+prompt is re-prefilled — on CPU-only hosts this is the dominant cost. The
+main levers are `llama_ubatch_size` (settings; 512/1024 prefill faster at the
+cost of RAM/compute headroom) and the thread defaults. Test with a real
+agentic run and watch the `[CACHE]` reuse telemetry in `logs/hivemind.log`.
+
+**First-run smoke test.** Start with `./.venv/bin/python run.py`, load a small
+model (e.g. `ling-3.0-tiny` or `lfm2.5:2.6b`) from the UI, send a short
+message, then check `logs/hivemind.log` for `[PRE-FLIGHT] ... → OK` and the
+llama-server banner. If no binary is found, point `HIVEMIND_LLAMA_BIN` at the
+extracted `llama-server` path.
+ — llama.cpp is fetched with the
+platform-matching binary and the backend is selectable:
+
+```bash
+# 1. Python venv + dependencies
+python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+
+# 2. llama.cpp (backend: vulkan | cpu | rocm)
+python3 deploy/fetch_llamacpp.py --backend vulkan
+
+# 3. Start (foreground)
+./.venv/bin/python run.py
+
+# 4. systemd service (optional, installs to /opt/hivemind)
+sudo deploy/install_linux.sh
+```
+
+Notes:
+- Backend selection via `HIVEMIND_GPU_BACKEND=cpu` (or `gpu_backend` in
+  `settings.json`) — `vulkan`, `cuda` and `cpu` are supported; the CPU backend
+  bypasses the VRAM pre-flight (model + KV live in system RAM) and loads with
+  `--n-gpu-layers 0`.
+- `python` in tool/lint command templates maps to `python3` on POSIX; the
+  port-kill chain is `fuser` → `/proc` scan → `pkill`.
+- `llama_ubatch_size` (settings) and thread defaults are the main prefill
+  levers on CPU-only hosts.

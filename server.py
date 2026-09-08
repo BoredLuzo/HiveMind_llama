@@ -346,9 +346,17 @@ def _sync_backend_runtime_config() -> None:
         _lsm_init.MLOCK_MODEL = bool(settings.get("llama_mlock", True))
         import backend.llama_config as _lc_init
         _gb = str(settings.get("gpu_backend", "") or "").strip().lower()
-        if _gb in ("vulkan", "cuda"):
+        if _gb in ("vulkan", "cuda", "cpu"):
             _lc_init.GPU_BACKEND = _gb
             _lsm_init.GPU_BACKEND = _gb
+            # GPU-BACKEND-IMPORT-COPY-FIX (2026-09-08): manager_load reads the
+            # import-time copy for its cpu gates / --device block — sync it too
+            # (same trap the CACHE_REUSE fix covered).
+            try:
+                import backend.manager_load as _ml_gb
+                _ml_gb.GPU_BACKEND = _gb
+            except Exception:
+                pass
             # LLAMA-BIN-RE-RESOLVE (2026-08-27, CUDA-VERSION-FIX): Auto-Discovery
             _lc_init.LLAMA_BIN = _lc_init._find_llama_server()
             _lsm_init.LLAMA_BIN = _lc_init.LLAMA_BIN

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import platform
 import socket
 import subprocess
@@ -137,8 +138,25 @@ async def _kill_slot_async(slot) -> None:
     except Exception as _ke:
         logger.warning("_kill_slot_async failed: %s", type(_ke).__name__)
 
+def _parse_proc_meminfo(text: str) -> float:
+    """MemAvailable in GB aus /proc/meminfo-Inhalt; -1.0 wenn nicht lesbar."""
+    for _line in text.splitlines():
+        if _line.startswith("MemAvailable:"):
+            try:
+                return float(_line.split()[1]) / (1024 * 1024)  # kB -> GB
+            except Exception:
+                return -1.0
+    return -1.0
+
+
 def _available_ram_gb() -> float:
-    """Freier physischer RAM in GB (Windows GlobalMemoryStatusEx). -1.0 bei Fehler."""
+    """Freier physischer RAM in GB (Linux: /proc/meminfo, Windows: GlobalMemoryStatusEx). -1.0 bei Fehler."""
+    try:
+        if platform.system() != "Windows":
+            with open("/proc/meminfo", "r", encoding="utf-8") as _mi:
+                return _parse_proc_meminfo(_mi.read())
+    except Exception:
+        return -1.0
     try:
         import ctypes
 
@@ -322,18 +340,23 @@ def _probe_backend_devices(llama_bin: str, backend: str) -> bool | None:
 def _probe_backend_dlls(llama_bin: str, backend: str) -> bool | None:
 
 
+    if backend == "cpu":
+        return True  # CPU-BACKEND: no backend runtime libs needed
     import glob as _glob_dll
     exe = Path(llama_bin)
     dll_dir = exe.parent
+    _posix = platform.system() != "Windows"
+    _so = ".so" if _posix else ".dll"
     try:
         if backend == "cuda":
-            if not (dll_dir / "ggml-cuda.dll").exists():
+            if not (dll_dir / f"ggml-cuda{_so}").exists():
                 return False
-            for _base in ("cudart64", "cublas64", "cublasLt64"):
-                if not _glob_dll.glob(str(dll_dir / f"{_base}*.dll")):
-                    return False
+            if not _posix:
+                for _base in ("cudart64", "cublas64", "cublasLt64"):
+                    if not _glob_dll.glob(str(dll_dir / f"{_base}*.dll")):
+                        return False
         else:
-            if not (dll_dir / "ggml-vulkan.dll").exists():
+            if not (dll_dir / f"ggml-vulkan{_so}").exists():
                 return False
         return True
     except Exception:
@@ -350,15 +373,86 @@ def _tcp_alive(port: int, timeout: float = 0.4) -> bool:
     except OSError:
         return False
 
+def _inodes_for_port(proc_net: str, port: int) -> set:
+    """Listening-socket inodes for port from /proc/net/tcp{,6} content (pure)."""
+    _inodes: set = set()
+    _want = f"{port:04X}"
+    for _line in proc_net.splitlines()[1:]:
+        _parts = _line.split()
+        if len(_parts) < 10:
+            continue
+        if _parts[3] != "0A":  # TCP_LISTEN
+            continue
+        if _parts[1].split(":")[-1].upper() != _want:
+            continue
+        _inodes.add(_parts[9])
+    return _inodes
+
+
+def _kill_port_via_proc(port: int) -> bool:
+    """Port -> PID via /proc/net/tcp + /proc/<pid>/fd, kill after cmdline check."""
+    import glob as _g
+    import re as _re_p
+    _inodes: set = set()
+    for _pf in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(_pf, "r", encoding="utf-8", errors="replace") as _f:
+                _inodes |= _inodes_for_port(_f.read(), port)
+        except Exception:
+            continue
+    if not _inodes:
+        return False
+    _killed = False
+    for _fd_path in _g.glob("/proc/[0-9]*/fd/*"):
+        try:
+            _target = os.readlink(_fd_path)
+        except Exception:
+            continue
+        _m = _re_p.match(r"socket:\[(\d+)\]", _target)
+        if not _m or _m.group(1) not in _inodes:
+            continue
+        _pid = int(_fd_path.split("/")[2])
+        try:
+            with open(f"/proc/{_pid}/cmdline", "rb") as _cf:
+                _cmd = _cf.read().decode("utf-8", "replace")
+        except Exception:
+            continue
+        if "llama-server" not in _cmd:
+            logger.warning(f"Port-Cleanup: PID {_pid} on port {port} is not a llama-server - skip")
+            continue
+        try:
+            os.kill(_pid, 9)
+            _killed = True
+            logger.info(f"Port-Cleanup: PID {_pid} on port {port} killed (proc-scan)")
+        except Exception:
+            pass
+    return _killed
+
+
 def _kill_port_sync(port: int):
 
 
     if platform.system() != "Windows":
+        # POSIX chain (2026-09-08): fuser (psmisc) -> /proc/net/tcp inode scan
+        # (always available) -> pkill as the last coarse filter.
+        _killed = False
         try:
-            subprocess.run(["fuser", "-k", f"{port}/tcp"],
-                           capture_output=True, timeout=5)
+            _r = subprocess.run(["fuser", "-k", f"{port}/tcp"],
+                                capture_output=True, timeout=5)
+            _killed = _r.returncode == 0
         except Exception:
-            pass
+            _killed = False
+        if not _killed:
+            try:
+                _killed = _kill_port_via_proc(port)
+            except Exception:
+                _killed = False
+        if not _killed:
+            try:
+                subprocess.run(["pkill", "-9", "-f", "llama-server"],
+                               capture_output=True, timeout=5)
+            except Exception:
+                pass
         return
     try:
         r = subprocess.run(

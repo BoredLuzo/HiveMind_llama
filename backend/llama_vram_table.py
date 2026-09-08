@@ -240,7 +240,9 @@ def get_live_gpu_free_mib() -> float | None:
 
     import platform
     if platform.system() != "Windows":
-        _logger.warning("get_live_gpu_free_mib: not Windows - live query unavailable")
+        # POSIX: no live VRAM source (win32pdh) — debug instead of warning,
+        # else the cpu/can_fit fallback path would spam the log per call.
+        _logger.debug("get_live_gpu_free_mib: not Windows - live query unavailable")
         return None
     h = None
     try:
@@ -301,6 +303,12 @@ async def wait_for_vram_reclaim(target_mib: int, timeout_sec: int = 45,
 
     import asyncio as _asyncio
     import time as _time
+    try:
+        from .llama_config import GPU_BACKEND as _wvr_gb
+        if _wvr_gb == "cpu":
+            return True  # CPU-BACKEND: no VRAM to reclaim
+    except Exception:
+        pass
     start = _time.time()
     _first_free: float | None = None
     _best_free: float | None = None
