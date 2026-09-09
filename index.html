@@ -1249,7 +1249,7 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Deterministic error consolidation in the coder fix-loop.</div>
+      <div class="fld-hint">When the same test/compile error repeats across fix rounds, the coder sees "still failing since attempt #N" instead of the full error text again — saves context without hiding new errors (exact-match detection, no LLM).</div>
       <div class="tgl-row">
         <span class="tgl-text">Pin repo-map into system</span>
         <label class="cfl-sw">
@@ -1294,7 +1294,7 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Skips the summarizer LLM: compression finishes instantly, keeps the prefix cache intact and trades some summary detail for speed. Recommended on slow-prefill setups (CPU-expert MoE, Vulkan); the coder reads the recent raw tail regardless.</div>
+      <div class="fld-hint">Compresses without calling an LLM: instead of a generated summary, old context is dropped and replaced by short recall markers. Result: compression takes <1s instead of minutes and never breaks the cache. Trade-off: the older part of the task is reduced to headlines — best when your compression model is slow or you prefer speed over long-term recall.</div>
       <div class="fld-hint" style="margin-top:6px">Flags apply on the next run (Write/No-Op guards also live). Balance check: compression runs at 70% context; with an 8k coder budget a 32k context has ~10k headroom per cycle — raise the context instead of the budget if you see frequent compressions.</div>
     </div>
 
