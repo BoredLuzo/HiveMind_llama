@@ -1,5 +1,59 @@
 # Changelog
 
+## [1.1.0] - 2026-09-09
+
+Context flow and run stability release: compression, planner→coder handoff
+and the agentic tool loop got a round of fixes, plus new model support and
+installer hardening.
+
+### Context flow & stability
+
+- Compression works now where it silently did nothing before: the cut index
+  no longer counts the pinned system prompt, no-ops are logged loudly and
+  escalate instead of tripping the fail guard invisibly.
+- `duo_partial_compression` is on by default: summary + raw tail keeps the
+  llama.cpp prefix cache alive and the raw tail readable for the coder.
+- Grace tool rounds, per-chunk budget resets and chunk containment in the
+  agentic loop: a chunk that runs out of budget no longer eats the loop's
+  detection logic or leaks rounds into the next chunk.
+- Real token numbers in the UI context meter (estimated vs. real, per-round
+  cache-reuse display).
+- Stale-tab protection: settings posts carry a revision; outdated tabs get
+  rejected on protected compression keys instead of silently overwriting.
+
+### Tool calling
+
+- ARG-COMPACT stub now nudges read-before-write; a new STUB-ECHO-GUARD
+  rejects write/edit calls that try to write the internal stub back into a
+  file (observed with small models).
+- Memory/forget keyword routing requires short command-like messages, so a
+  long task spec containing "store"/"note"/"delete" is no longer swallowed
+  by the memory early-return.
+
+### Models
+
+- Spark-X2.5 (4B/1.7B) profiles and per-model configs, verified live on
+  llama.cpp b10872 (thinking + tool calling, ~60 tok/s on Vulkan).
+- Ling-3.0-tiny sampling profile per model card.
+
+### UI
+
+- Three compression toggles surfaced (cache-friendly / partial / local-only);
+  the absolute "Compression Limit" field was removed — the auto floor (70% of
+  ctx) is the baseline, `duo_compress_threshold` stays a settings.json
+  override.
+- Preset loading is reliable (UTF-8 BOM tolerant) and reports success/failure
+  instead of failing silently.
+
+### Installer
+
+- uv-based install with a requirements.txt fallback for pre-uv release
+  folders; `clean_release.bat` strips `.venv` and verifies installer inputs
+  before packaging (a zip without `pyproject.toml` used to crash on first
+  run).
+- English-only keyword matchers and system-facing strings throughout;
+  `AGENTS.md` documents repo conventions.
+
 ## [Unreleased]
 
 - UI: the "Compression Limit" absolute-token field was removed — the auto
