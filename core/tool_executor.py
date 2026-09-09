@@ -261,6 +261,7 @@ async def execute_tool_round(
     _build_fix_insight = None  # lazy import
     _dname = _dresult = ""
     _consecutive_reads = 0
+    _last_read_path = ""  # PATH-RESET (2026-09-09): ladder only counts same-path re-reads
     _read_ladder_fired = False  # READ-LADDER cooldown (2026-09-07): bool flag, reset by write
     _round_noop_hints: list[str] = []  # NO-OP hint (2026-09-07): appended as user msg at end of round
     if trs.total_tool_errors is None:
@@ -727,7 +728,11 @@ async def execute_tool_round(
         _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult,
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)
         # ── Read-file ladder tracker ──
-        _consecutive_reads = _update_read_ladder(_dname, _args_parse_failed, _consecutive_reads)
+        _consecutive_reads = _update_read_ladder(
+            _dname, _args_parse_failed, _consecutive_reads,
+            _focus_path or "", _last_read_path)
+        if _dname == "read_file" and not _args_parse_failed:
+            _last_read_path = _focus_path or ""
         if _dname in ("edit_file", "write_file", "patch_file", "write_file_append",
                       "replace_lines", "run_bash", "run_python"):
             if _read_ladder_fired:

@@ -184,9 +184,17 @@ def _track_edit_noop(dname, dresult, path, round_state) -> str | None:
     )
 
 
-def _update_read_ladder(dname, args_parse_failed, consecutive_reads: int) -> int:
-    """Read-file ladder tracker (S17) — returns a new counter."""
+def _update_read_ladder(dname, args_parse_failed, consecutive_reads: int,
+                        read_path: str = "", last_read_path: str = "") -> int:
+    """Read-file ladder tracker (S17) — returns a new counter.
+
+    PATH-RESET (2026-09-09): only repeated reads of the SAME path escalate.
+    Reading different files is normal multi-file exploration and must reset
+    the counter (live: 3 legit reads of different files fired the ladder).
+    """
     if dname == "read_file" and not args_parse_failed:
+        if read_path and last_read_path and read_path != last_read_path:
+            return 1
         return consecutive_reads + 1
     if dname in ("edit_file", "write_file", "patch_file", "write_file_append",
                  "replace_lines", "run_bash", "run_python"):

@@ -278,6 +278,45 @@ res, hooks, msgs, rs, seen, ltl = run_round(
     duo_deadline_at=_deadline)
 check("deadline-grace not on failure", run_round.last_trs.duo_deadline_at < time.time() + 299)
 
+# ── 15. READ-LADDER PATH-RESET (2026-09-09): only same-path re-reads
+#        escalate; different files reset the counter. ──────────────────────
+_HANDLERS["read_file"] = "content"
+# 3x SAME path with differing args (identical calls are caught earlier by
+# the sig-based loop detection, so vary the args like a real re-read does)
+_prior_write = [{"role": "tool", "name": "write_file", "content": "[write_file: ok]", "tool_call_id": "w1"}]
+res, hooks, msgs, rs, seen, ltl = run_round([
+    tc("read_file", {"path": "a.py", "offset": 1}),
+    tc("read_file", {"path": "a.py", "offset": 2}),
+    tc("read_file", {"path": "a.py", "offset": 3}),
+], dtool_msgs=list(_prior_write))
+check("ladder fires on same-path x3", any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+# 3x DIFFERENT paths -> NO ladder (this was the false positive)
+res, hooks, msgs, rs, seen, ltl = run_round([
+    tc("read_file", {"path": "a.py"}),
+    tc("read_file", {"path": "b.py"}),
+    tc("read_file", {"path": "c.py"}),
+])
+check("ladder silent across different paths",
+      not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+# A-B-A pattern: path change resets, so no ladder
+res, hooks, msgs, rs, seen, ltl = run_round([
+    tc("read_file", {"path": "a.py"}),
+    tc("read_file", {"path": "b.py"}),
+    tc("read_file", {"path": "a.py"}),
+])
+check("ladder silent on A-B-A reads",
+      not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+# write between re-reads resets (existing behavior, regression guard)
+_HANDLERS["write_file"] = "[write_file: created 'w.txt']"
+res, hooks, msgs, rs, seen, ltl = run_round([
+    tc("read_file", {"path": "a.py"}),
+    tc("read_file", {"path": "a.py"}),
+    tc("write_file", {"path": "w.txt", "content": "x"}),
+    tc("read_file", {"path": "a.py"}),
+])
+check("ladder silent after write reset",
+      not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+
 print()
 print(f"{'='*50}")
 print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
