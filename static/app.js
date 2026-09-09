@@ -324,7 +324,6 @@ function setDirectToolsTier(v) {
   postSettings({direct_tools_tier: v});
   updateDirectToolsTierHint();
   updateChatToolsBadge();
-  updateComposerToolStatus();
 }
 
 var _DIRECT_TIER_HINTS = {
@@ -345,48 +344,6 @@ function updateDirectToolsTierHint() {
   if (tier === 'full') h.style.color = 'var(--amber)';
   else if (tier === 'off') h.style.color = 'var(--tx3)';
   else h.style.color = 'var(--tx3)';
-}
-
-// COMPOSER-TOOL-STATUS (2026-08-31): visible tool status right at the input —
-// shows which tools are actually active in the current mode (instead of the
-// subtle header badge). Click opens the chat-tools section.
-function updateComposerToolStatus() {
-  var el = document.getElementById('composer-tool-status');
-  if (!el) return;
-  var tier = (S.directToolsTier || 'readonly').toString();
-  var rounds = S.directToolsRounds || 3;
-  var html = '', color = 'var(--tx3)';
-  if (S.mode === 'simple' || S.mode === 'auto') {
-    if (S.directToolsEnabled && tier !== 'off') {
-      html = '\u2699 Chat Tools: ' + (_TIER_LABEL[tier] || tier) + ' \u00b7 ' + rounds + ' rounds';
-      color = 'var(--green)';
-    } else {
-      html = '\u2699 Chat Tools: off (pure chat)';
-      color = 'var(--tx3)';
-    }
-  } else if (S.mode === 'code_duo') {
-    var _crt = (S.duoToolRounds > 0) ? (S.duoToolRounds + ' rounds') : 'off';
-    html = '\u21C4 Code-Duo: coder tools ' + _crt;
-    color = '#20b0a0';
-  } else {
-    html = '\u2699 ' + (S.mode === 'automap' ? 'AutoMap' : 'Pipeline') + ' \u2014 chat tools inactive';
-    color = 'var(--tx3)';
-  }
-  el.innerHTML = '<span class="st-dot" style="background:' + color + '"></span>' + html;
-  el.style.display = 'inline-flex';
-}
-
-// COMPOSER-TOOL-STATUS click → open the sidebar + Agents tab + scroll to the chat-tools section.
-function openChatToolsSection() {
-  document.body.classList.remove('sidebar-collapsed');
-  var btn = document.getElementById('h-sidebar-btn');
-  if (btn) btn.classList.add('active');
-  var agentsTab = document.querySelector('.tab[data-p="agents"]');
-  if (agentsTab) agentsTab.click();
-  setTimeout(function() {
-    var opts = document.getElementById('direct-tools-opts');
-    if (opts) opts.scrollIntoView({behavior: 'smooth', block: 'center'});
-  }, 60);
 }
 
 function updateChatToolsBadge() {
@@ -1105,7 +1062,6 @@ async function loadSettings() {
     updateDirectToolsHint();
     updateDirectToolsTierHint();
     updateChatToolsBadge();
-    updateComposerToolStatus();
     updateChatToolsSectionVisibility();
     updatePassFilesButtons();
 
@@ -1553,7 +1509,6 @@ function setMode(mode, el) {
   updateAutomapAdvancedVisibility();
   updateWebsearchHint();
   updateChatToolsBadge();
-  updateComposerToolStatus();
   updateChatToolsSectionVisibility();
   updateModeDesc();
   updateComplexityVisibility();
@@ -1585,7 +1540,6 @@ function setModeUI(mode) {
   updateAutomapAdvancedVisibility();
   updateWebsearchHint();
   updateChatToolsBadge();
-  updateComposerToolStatus();
   updateChatToolsSectionVisibility();
   updateModeDesc();
   updateComplexityVisibility();
@@ -9687,4 +9641,5 @@ async function loadGitConfig(s) {
     }
   } catch(e) {}
 }
+
 
