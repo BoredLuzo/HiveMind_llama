@@ -106,6 +106,7 @@ class ToolExecResult:
     last_tool_result: str = ""     # for plan tracker
     task_complete_called: bool = False
     extra_user_msg: str = ""            # injected into dtool_msgs when set
+    deadline_extended_to: float = 0.0   # DEADLINE-GRACE: new run deadline after write progress
 
 
 _RECOVERY_PHRASES = (
@@ -701,6 +702,19 @@ async def execute_tool_round(
                         _dname, _evicted_stale, _focus_path)
             except Exception as _ev_stale_err:
                 _logger.debug("[LRU-STALE] invalidation failed: %s", _ev_stale_err)
+            # DEADLINE-GRACE (2026-09-09): a successful mutation is progress,
+            # not a stuck loop. Large completions on slow backends easily
+            # outlive the run deadline mid-task (live: a 4B coder was killed
+            # before its legitimate recovery read_file after 5 big write
+            # rounds). Push the deadline forward instead of aborting
+            # productive work; the hard tool-round cap still bounds runaways.
+            _grace_at = time.time() + 300.0
+            if _grace_at > trs.duo_deadline_at:
+                trs.duo_deadline_at = _grace_at
+                result.deadline_extended_to = _grace_at
+                _logger.info(
+                    "[DEADLINE-GRACE] %s succeeded - run deadline extended by +300s",
+                    _dname)
             # CONTEXT-COMPACTION: compact this round's huge args after success
             # (never sent as a prompt -> cache-friendly, saves context).
             _saved_chars = _args_str_len(_raw_args)

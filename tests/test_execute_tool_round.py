@@ -111,6 +111,7 @@ def run_round(tool_calls, dtool_msgs=None, round_state=None, **over):
     rs = round_state if round_state is not None else DuoRoundState()
     res = asyncio.run(TE.execute_tool_round(
         tool_calls=tool_calls, dtool_msgs=msgs, round_state=rs, hooks=hooks, trs=trs, **kw))
+    run_round.last_trs = trs  # test hook: grace tests need trs.duo_deadline_at
     return res, hooks, msgs, rs, trs.duo_seen_web_queries, trs.last_too_large_path
 
 
@@ -259,6 +260,23 @@ check("stub-echo no tool_result event",
 _HANDLERS["read_file"] = "note: content not in context anymore is fine to read"
 res, hooks, msgs, rs, seen, ltl = run_round([tc("read_file", {"path": "a.md"})])
 check("stub-echo read still works", "fine to read" in res.last_tool_result)
+
+# ── 14. DEADLINE-GRACE (2026-09-09): a successful write pushes the run
+#        deadline; a failed write does not. ────────────────────────────────
+_deadline = time.time() + 10
+_HANDLERS["write_file"] = "[write_file: created 'g.txt' (+1 lines)]"
+res, hooks, msgs, rs, seen, ltl = run_round(
+    [tc("write_file", {"path": "g.txt", "content": "x"})],
+    duo_deadline_at=_deadline)
+check("deadline-grace extended", run_round.last_trs.duo_deadline_at >= time.time() + 299)
+check("deadline-grace reported", res.deadline_extended_to >= time.time() + 299)
+
+_deadline = time.time() + 10
+_HANDLERS["write_file"] = "[write_file error: disk full]"
+res, hooks, msgs, rs, seen, ltl = run_round(
+    [tc("write_file", {"path": "g.txt", "content": "x"})],
+    duo_deadline_at=_deadline)
+check("deadline-grace not on failure", run_round.last_trs.duo_deadline_at < time.time() + 299)
 
 print()
 print(f"{'='*50}")

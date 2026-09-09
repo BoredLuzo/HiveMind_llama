@@ -1321,6 +1321,16 @@ async def run_code_duo(ctx):
                         _planner_used_fallback = True
                         _planner_fallback_reason = "planner_step_skipped" if _planner_skip_mid else "run_deadline"
                         _planner_parse_mode = "skipped" if _planner_skip_mid else "timeout"
+                    except asyncio.InvalidStateError:
+                        # DEADLINE-CANCEL-RACE (2026-09-09): cancel() is only
+                        # SCHEDULED — calling result() immediately after the
+                        # deadline break hits a still-pending task ("Result is
+                        # not set", live traceback). Same handling as a clean
+                        # cancellation.
+                        _plan_result = None
+                        _planner_used_fallback = True
+                        _planner_fallback_reason = "run_deadline"
+                        _planner_parse_mode = "timeout"
                 except Exception as _plan_exc:
                     logger.error("[Planner] Exception: %s", _plan_exc, exc_info=True)
                     _subtasks = []
@@ -4520,6 +4530,13 @@ async def run_code_duo(ctx):
                                 yield await ctx.emit({"type": "heartbeat", "elapsed": _hb_total})
                             await asyncio.sleep(0.02)
                         _exec_result = _exec_task.result()
+                        # DEADLINE-GRACE (2026-09-09): pull the extended
+                        # deadline back into the runner + state so the outer
+                        # checks and later phases see it too.
+                        if _exec_result.deadline_extended_to:
+                            if _exec_result.deadline_extended_to > _duo_deadline_at:
+                                _duo_deadline_at = _exec_result.deadline_extended_to
+                                state["_duo_deadline_at"] = _duo_deadline_at
                         _last_too_large_path = _last_too_large_ref[0]
                         _cached_coder_port = _cached_port_ref[0]
                         _verify_mutation_serial = _exec_result.verify_mutation_serial
