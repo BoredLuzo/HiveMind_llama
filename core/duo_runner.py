@@ -3144,10 +3144,9 @@ async def run_code_duo(ctx):
                         num_predict=_duo_reserve_cap,
                         ui_threshold=_stored_threshold,
                         auto_floor=_duo_compress_floor,
-                        min_free_tokens=int(ctx.settings.get("duo_min_free_ctx_tokens", 0) or 0),
                         overflow_reserve=int(ctx.settings.get("duo_compress_overflow_reserve", 1024) or 1024),
                     )
-                    _cache_friendly_ctx = bool(ctx.settings.get("duo_cache_friendly_ctx", True))
+
                     _partial_compression = bool(ctx.settings.get("duo_partial_compression", False))
                     _comp_llm_cfg = str(ctx.settings.get("duo_compress_model") or "").strip()
                     _comp_llm_timeout_s = int(ctx.settings.get("duo_compress_llm_timeout_s", 180) or 180)
@@ -3515,53 +3514,51 @@ async def run_code_duo(ctx):
                         # the llama.cpp prefix cache stays alive and rounds
                         # are fast (tail prefill only).
                         _can_compress = (_MAX_COMPRESSIONS != -1 or _force_compress_next)
-                        if not _cache_friendly_ctx:
-                            # LEGACY PATH (A/B control group): same behavior
-                            # as before the cache-friendly switch —
-                            # in-place eviction from 78% + old threshold mix.
-                            _near_limit_legacy = int(_dtool_ctx * 0.78)
-                            if _guard_tokens > _near_limit_legacy:
-                                _est_before_evict = int(_est_tokens)
-                                _evicted_n = _evict_stale_tool_outputs(
-                                    messages=_dtool_msgs,
-                                    lru=_tool_ctx_lru,
-                                    target_token_budget=int(_dtool_ctx * 0.70),
-                                    hard_floor_tokens=int(_dtool_ctx * 0.62),
-                                )
-                                if _evicted_n > 0:
-                                    _ctx_evictions += int(_evicted_n)
-                                    _est_tokens = _estimate_ctx_tokens(_dtool_msgs)
-                                    # METER-FIX (2026-08-25): the real value is now
-                                    # STALE (pre-eviction). Reset -> naechster
-                                    # ctx_meter nutzt den frischen Schaetzer.
-                                    _coder_real_prompt_tokens[0] = 0
-                                    logger.warning(
-                                        "[CTX-EVICT-LEGACY] est_before=%d near_limit=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d",
-                                        _est_before_evict, _near_limit_legacy, _evicted_n, int(_est_tokens),
-                                        int(_dtool_ctx), int(_dtool_ctx * 0.70), int(_dtool_ctx * 0.62), int(_guard_tokens),
-                                    )
-                                    yield await ctx.emit({
-                                        "type": "status",
-                                        "content": (
-                                            f"🧹 Semantic context eviction: {_evicted_n} stale tool output(s) "
-                                            "replaced by recall markers."
-                                        ),
-                                    })
-                            _stored_legacy = int(ctx.settings.get("duo_compress_threshold", 0))
-                            _dyn_legacy = _dtool_ctx - int(_dtool_opts.get("num_predict", 800) or 800) - 8200
-                            _compress_threshold = max(
-                                _stored_legacy if _stored_legacy > 0 else _dyn_legacy,
-                                int(_dtool_ctx * 0.8)
+                        # LEGACY-REMOVAL (2026-09-09): the in-place-eviction A/B branch
+                        # (duo_cache_friendly_ctx=False) is gone; compression-first is the
+                        # only regime.
+                        _guard_decision = _decide_context_action(
+                            guard_tokens=int(_guard_tokens),
+                            ctx_tokens=int(_dtool_ctx),
+                            threshold=int(_compress_threshold),
+                            can_compress=_can_compress,
+                            force_compress=bool(_force_compress_next),
+                        )
+                        _compress_ok = (_guard_decision.action == "compress")
+                        # First-round protection: the initial context
+                        # (explore/static map) may only be compressed via
+                        # threshold after >=1 tool round (emergency >90%
+                        # still OK).
+                        if _compress_ok and _guard_decision.reason == "threshold" and _total_tool_rounds <= 0:
+                            _compress_ok = False
+                        if not _compress_ok and _guard_decision.action == "emergency_evict":
+                            _est_before_evict = int(_est_tokens)
+                            _evicted_n = _evict_stale_tool_outputs(
+                                messages=_dtool_msgs,
+                                lru=_tool_ctx_lru,
+                                target_token_budget=int(_dtool_ctx * 0.70),
+                                hard_floor_tokens=int(_dtool_ctx * 0.62),
                             )
-                            _compress_ok = (
-                                _can_compress
-                                and (
-                                    (_total_tool_rounds > 0 and _guard_tokens > _compress_threshold)
-                                    or _guard_tokens > int(_dtool_ctx * 0.90)
-                                    or _force_compress_next
+                            if _evicted_n > 0:
+                                _ctx_evictions += int(_evicted_n)
+                                _est_tokens = _estimate_ctx_tokens(_dtool_msgs)
+                                # METER-FIX (2026-08-25): the real value is now
+                                # STALE (pre-eviction). Reset -> naechster
+                                # ctx_meter nutzt den frischen Schaetzer.
+                                _coder_real_prompt_tokens[0] = 0
+                                logger.warning(
+                                    "[CTX-EVICT-EMERGENCY] est_before=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d reason=%s",
+                                    _est_before_evict, _evicted_n, int(_est_tokens), int(_dtool_ctx),
+                                    int(_dtool_ctx * 0.70), int(_dtool_ctx * 0.62), int(_guard_tokens),
+                                    _guard_decision.reason,
                                 )
-                            )
-                        else:
+                                yield await ctx.emit({
+                                    "type": "status",
+                                    "content": (
+                                        f"🧹 Emergency context eviction (no compression left): {_evicted_n} "
+                                        "stale tool output(s) replaced by recall markers."
+                                    ),
+                                })
                             _guard_decision = _decide_context_action(
                                 guard_tokens=int(_guard_tokens),
                                 ctx_tokens=int(_dtool_ctx),
@@ -3608,7 +3605,7 @@ async def run_code_duo(ctx):
                             # it's in hivemind.log.
                             _compress_reason = (
                                 "force" if _force_compress_next else
-                                ("90pct" if _guard_tokens > int(_dtool_ctx * 0.90) else "threshold")
+                                getattr(_guard_decision, "reason", "threshold")
                             )
                             logger.warning(
                                 "[CTX-COMPRESS] trigger=%s est=%d threshold=%d ctx=%d rounds=%d real=%d",
@@ -3653,17 +3650,23 @@ async def run_code_duo(ctx):
                             # can rescue the suffix after the rebuild.
                             _comp_mode = "full"
                             _comp_cut = -1
-                            if _cache_friendly_ctx and _partial_compression and not _partial_escalated:
+                            if _partial_compression and not _partial_escalated:
                                 if _ctx_should_use_partial(partial_enabled=True, messages=_dtool_msgs):
+                                    _cut_ratio = (
+                                        (int(_guard_tokens) / int(_est_tokens))
+                                        if int(_est_tokens or 0) > 0 else 1.0
+                                    )
                                     _comp_cut = _ctx_plan_partial_cut_index(
                                         _dtool_msgs,
                                         ctx_tokens=int(_dtool_ctx),
                                         guard_tokens=int(_guard_tokens),
+                                        token_ratio=_cut_ratio,
                                     )
                                     if _comp_cut is not None and int(_comp_cut) >= 2:
                                         _comp_mode = "partial"
                             _msgs_before_compress = _dtool_msgs
-                            _est_tokens_before_compress = _estimate_ctx_tokens(_dtool_msgs)
+                            # EST-REUSE: _est_tokens stays current through the round.
+                            _est_tokens_before_compress = int(_est_tokens)
                             # COMPRESSION-MODEL (2026-09-05): the summary runs
                             # on a light model (duo_compress_model) when it
                             # fits without evicting the coder (VRAM can_fit);
@@ -4121,7 +4124,6 @@ async def run_code_duo(ctx):
                             reserve_tokens=max(
                                 768,
                                 int(ctx.settings.get("duo_compress_overflow_reserve", 1024) or 1024),
-                                int(ctx.settings.get("duo_min_free_ctx_tokens", 0) or 0),
                             ),
                         )
                         if _dtool_ctx > 0 and _max_tokens_round > int(_dtool_ctx):
@@ -4472,7 +4474,7 @@ async def run_code_duo(ctx):
                         # CACHE-HORIZON (2026-09-04): everything < cache_horizon
                         # has already been sent (immutable prefix); everything
                         # from here is this round and may be mutated freely.
-                        _round_cache_horizon = len(_dtool_msgs) if _cache_friendly_ctx else 0
+                        _round_cache_horizon = len(_dtool_msgs)
                         _last_too_large_ref = [_last_too_large_path]
                         _cached_port_ref = [_cached_coder_port]
                         _exec_task = asyncio.create_task(execute_tool_round(
