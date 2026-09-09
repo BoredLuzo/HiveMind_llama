@@ -41,6 +41,24 @@ from context.ctx_guard import (
     clamp_request_max_tokens as _clamp_request_max_tokens,
 )
 
+
+def _build_plan_pin_msg(_subtasks, _di, _n_items):
+    """PLAN-PIN-DEDUP (2026-09-09): shared by the LLM and rule-fallback
+    compression paths (was two identical inline block builds)."""
+    if not (_subtasks and _di is not None and _n_items):
+        return None
+    _pin_lines = []
+    for _pi, _pt in enumerate(_subtasks):
+        if _pi < _di:
+            _pin_lines.append(f"  {_pi+1}. ✓ {str(_pt)[:120]}")
+        elif _pi == _di:
+            _pin_lines.append(f"  {_pi+1}. → {str(_pt)[:120]}  ◀ YOU ARE HERE")
+        else:
+            _pin_lines.append(f"  {_pi+1}. ○ {str(_pt)[:120]}")
+    if not _pin_lines:
+        return None
+    return f"[PLAN-PIN - current subtask {_di+1}/{_n_items}]" + chr(10) + chr(10).join(_pin_lines)
+
 # ── Tools ──
 from tools.definitions import _get_inline_tools, _filter_tools_for_mode
 from tools.runner import _run_inline_tool, _current_project_state
@@ -3888,23 +3906,12 @@ async def run_code_duo(ctx):
                                     except Exception:
                                         pass
                                     try:
-                                        if _subtasks and _di is not None and _n_items:
-                                            _pin_lines = []
-                                            for _pi, _pt in enumerate(_subtasks):
-                                                if _pi < _di:
-                                                    _pin_lines.append(f"  {_pi+1}. \u2713 {str(_pt)[:120]}")
-                                                elif _pi == _di:
-                                                    _pin_lines.append(f"  {_pi+1}. \u2192 {str(_pt)[:120]}  \u25c0 YOU ARE HERE")
-                                                else:
-                                                    _pin_lines.append(f"  {_pi+1}. \u25cb {str(_pt)[:120]}")
-                                            if _pin_lines:
-                                                _dtool_msgs.append({"role": "user", "content":
-                                                    f"[PLAN-PIN - current subtask {_di+1}/{_n_items}]\n"
-                                                    + "\n".join(_pin_lines)
-                                                })
-                                                logger.warning("[COMPRESS-PLAN-PIN] %d subtasks re-injected (rule fallback, current=%d)", _n_items, _di + 1)
-                                    except Exception as _pp_rule_err:
-                                        logger.debug("[COMPRESS-PLAN-PIN] Pin failed: %s", _pp_rule_err)
+                                        _pin = _build_plan_pin_msg(_subtasks, _di, _n_items)
+                                        if _pin:
+                                            _dtool_msgs.append({"role": "user", "content": _pin})
+                                            logger.warning("[COMPRESS-PLAN-PIN] %d subtasks re-injected (current=%d)", _n_items, _di + 1)
+                                    except Exception as _pp_err:
+                                        logger.debug("[COMPRESS-PLAN-PIN] Pin failed: %s", _pp_err)
                                 else:
                                     _rule_compress_fails += 1
                                     yield await ctx.emit({"type": "status",
@@ -4023,21 +4030,10 @@ async def run_code_duo(ctx):
                             # this pin additionally provides done/current/remaining as
                             # a compact checklist.
                             try:
-                                if _subtasks and _di is not None and _n_items:
-                                    _pin_lines = []
-                                    for _pi, _pt in enumerate(_subtasks):
-                                        if _pi < _di:
-                                            _pin_lines.append(f"  {_pi+1}. \u2713 {str(_pt)[:120]}")
-                                        elif _pi == _di:
-                                            _pin_lines.append(f"  {_pi+1}. \u2192 {str(_pt)[:120]}  \u25c0 YOU ARE HERE")
-                                        else:
-                                            _pin_lines.append(f"  {_pi+1}. \u25cb {str(_pt)[:120]}")
-                                    if _pin_lines:
-                                        _dtool_msgs.append({"role": "user", "content":
-                                            f"[PLAN-PIN - current subtask {_di+1}/{_n_items}]\n"
-                                            + "\n".join(_pin_lines)
-                                        })
-                                        logger.warning("[COMPRESS-PLAN-PIN] %d subtasks re-injected (current=%d)", _n_items, _di + 1)
+                                _pin = _build_plan_pin_msg(_subtasks, _di, _n_items)
+                                if _pin:
+                                    _dtool_msgs.append({"role": "user", "content": _pin})
+                                    logger.warning("[COMPRESS-PLAN-PIN] %d subtasks re-injected (current=%d)", _n_items, _di + 1)
                             except Exception as _pp_err:
                                 logger.debug("[COMPRESS-PLAN-PIN] Pin failed: %s", _pp_err)
                             # READ-GUARD-FIX: update _files_in_context with paths from the compression summary
@@ -4083,31 +4079,34 @@ async def run_code_duo(ctx):
                             _json_roles.dumps([m.get("role") for m in _dtool_msgs]),
                         )
                         # D3-NOISE-FIX (2026-08-22): pure tail append (new messages
-                        try:
-                            _sig_now = [(m.get("role", ""), len(str(m.get("content", "") or ""))) for m in _dtool_msgs]
-                            _prev_sig = _prev_msg_sig[0] if _prev_msg_sig else None
-                            _changed_early = []
-                            if _prev_sig:
-                                _cum_chars = 0
-                                for _mi in range(max(len(_sig_now), len(_prev_sig))):
-                                    if _mi >= len(_prev_sig):
-                                        break
-                                    _s_cur = _sig_now[_mi] if _mi < len(_sig_now) else None
-                                    _s_prev = _prev_sig[_mi]
-                                    if _s_cur != _s_prev:
-                                        if _cum_chars / _CHARS_PER_TOKEN < 10000:
-                                            _changed_early.append((_mi, int(_cum_chars / _CHARS_PER_TOKEN), _s_prev, _s_cur))
-                                        break
-                                    if _s_cur:
-                                        _cum_chars += _s_cur[1]
-                            _prev_msg_sig[0] = _sig_now
-                            if _changed_early:
-                                logger.warning(
-                                    "[MSGSIG-CHANGE] round=%d change below 10k tokens: %s (msgs=%d)",
-                                    _dr, _changed_early[:5], len(_sig_now),
-                                )
-                        except Exception as _sig_err:
-                            logger.debug("[MSGSIG-CHANGE] Signature error: %s", _sig_err)
+                        # SCAN-GATE (2026-09-09): pure diagnostics — the per-message signature
+                        # scan only runs with DEBUG logging (was an O(n) scan every round).
+                        if logger.isEnabledFor(logging.DEBUG):
+                            try:
+                                _sig_now = [(m.get("role", ""), len(str(m.get("content", "") or ""))) for m in _dtool_msgs]
+                                _prev_sig = _prev_msg_sig[0] if _prev_msg_sig else None
+                                _changed_early = []
+                                if _prev_sig:
+                                    _cum_chars = 0
+                                    for _mi in range(max(len(_sig_now), len(_prev_sig))):
+                                        if _mi >= len(_prev_sig):
+                                            break
+                                        _s_cur = _sig_now[_mi] if _mi < len(_sig_now) else None
+                                        _s_prev = _prev_sig[_mi]
+                                        if _s_cur != _s_prev:
+                                            if _cum_chars / _CHARS_PER_TOKEN < 10000:
+                                                _changed_early.append((_mi, int(_cum_chars / _CHARS_PER_TOKEN), _s_prev, _s_cur))
+                                            break
+                                        if _s_cur:
+                                            _cum_chars += _s_cur[1]
+                                _prev_msg_sig[0] = _sig_now
+                                if _changed_early:
+                                    logger.warning(
+                                        "[MSGSIG-CHANGE] round=%d change below 10k tokens: %s (msgs=%d)",
+                                        _dr, _changed_early[:5], len(_sig_now),
+                                    )
+                            except Exception as _sig_err:
+                                logger.debug("[MSGSIG-CHANGE] Signature error: %s", _sig_err)
                         # DYNAMIC OUTPUT RESERVE (2026-09-05): max_tokens per
                         # tool round is clamped to the free space (est-based,
                         # worst-case factor 1.35). Full budgets stay as long

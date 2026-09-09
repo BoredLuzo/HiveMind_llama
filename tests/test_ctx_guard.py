@@ -33,11 +33,11 @@ def check(label, cond, extra=""):
 
 
 # ── Threshold: auto = min(P1 = floor*ctx, P2 = ctx - reserve) ──────────────
-check("T1: 32k ctx -> P1 (0.72*ctx) dominant",
-      _thr(ctx_tokens=32768, num_predict=2048) == int(0.72 * 32768),
+check("T1: 32k ctx -> P1 (0.70*ctx) dominant",
+      _thr(ctx_tokens=32768, num_predict=2048) == int(0.70 * 32768),
       f" got={_thr(ctx_tokens=32768, num_predict=2048)}")
 check("T2: 128k ctx -> P1 dominant",
-      _thr(ctx_tokens=131072, num_predict=2048) == int(0.72 * 131072),
+      _thr(ctx_tokens=131072, num_predict=2048) == int(0.70 * 131072),
       f" got={_thr(ctx_tokens=131072, num_predict=2048)}")
 # 4k ctx, num_predict 800 -> reserve 1824, P2 = 2176 < P1 2949 -> P2 wins
 check("T3: small ctx keeps absolute reserve",
@@ -54,32 +54,32 @@ check("T7: custom floor honoured",
       f" got={_thr(ctx_tokens=10000, num_predict=0, auto_floor=0.8)}")
 
 # ── decide_context_action ───────────────────────────────────────────────────
-d = _decide(guard_tokens=24000, ctx_tokens=32768, threshold=int(0.72 * 32768),
+d = _decide(guard_tokens=24000, ctx_tokens=32768, threshold=int(0.70 * 32768),
             can_compress=True)
 check("D1: over threshold -> compress",
       d.action == "compress" and d.reason == "threshold", f" got={d.action}/{d.reason}")
 
-d2 = _decide(guard_tokens=32000, ctx_tokens=32768, threshold=int(0.72 * 32768),
+d2 = _decide(guard_tokens=32000, ctx_tokens=32768, threshold=int(0.70 * 32768),
              can_compress=True)
 check("D2: >90% -> compress (emergency-90)",
       d2.action == "compress" and d2.reason == "emergency-90", f" got={d2.action}/{d2.reason}")
 
-d3 = _decide(guard_tokens=31000, ctx_tokens=32768, threshold=int(0.72 * 32768),
+d3 = _decide(guard_tokens=31000, ctx_tokens=32768, threshold=int(0.70 * 32768),
              can_compress=False)
 check("D3: >90% + no compress -> emergency_evict",
       d3.action == "emergency_evict", f" got={d3.action}")
 
-d4 = _decide(guard_tokens=20000, ctx_tokens=32768, threshold=int(0.72 * 32768),
+d4 = _decide(guard_tokens=20000, ctx_tokens=32768, threshold=int(0.70 * 32768),
              can_compress=False)
 check("D4: below threshold + no compress -> none (append-only)",
       d4.action == "none", f" got={d4.action}")
 
-d5 = _decide(guard_tokens=1000, ctx_tokens=32768, threshold=int(0.72 * 32768),
+d5 = _decide(guard_tokens=1000, ctx_tokens=32768, threshold=int(0.70 * 32768),
              can_compress=True, force_compress=True)
 check("D5: force -> compress", d5.action == "compress" and d5.reason == "force",
       f" got={d5.action}/{d5.reason}")
 
-d6 = _decide(guard_tokens=1000, ctx_tokens=32768, threshold=int(0.72 * 32768),
+d6 = _decide(guard_tokens=1000, ctx_tokens=32768, threshold=int(0.70 * 32768),
              can_compress=True, swa_warn=True)
 check("D6: swa warn -> compress", d6.action == "compress" and d6.reason == "swa",
       f" got={d6.action}/{d6.reason}")

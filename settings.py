@@ -107,8 +107,8 @@ DEFAULT_SETTINGS = {
     "duo_tool_output_ttl":     3,
     "duo_compress_threshold":  0,
     # CACHE-FRIENDLY (2026-09-04): Prefix-Cache von llama.cpp schuetzen.
-    # - duo_cache_friendly_ctx: Kompression primaer statt In-place-Eviction;
-    #   bereits gesendete History wird nicht mehr in-place mutiert.
+    # LEGACY-REMOVAL (2026-09-09): duo_cache_friendly_ctx entfernt —
+    # Kompression-first ist das einzige Regime.
     # - duo_partial_compression: nur den alten Teil verdichten, raw Tail
     #   byte-identisch am Ende behalten (KV-Shift-Reuse). Recommended ON:
     #   schont den llama.cpp Prefix-Cache und der Raw-Tail bleibt fuer den
@@ -127,11 +127,9 @@ DEFAULT_SETTINGS = {
     #   der Summary-Call routinemaessig in den ReadTimeout laeuft (MoE mit
     #   CPU-Experts, langsames Prefill): dort kostet der LLM-Versuch nur
     #   Totzeit und der lokale Summary ist zudem cache-freundlicher.
-    "duo_cache_friendly_ctx":    True,
     "duo_partial_compression":   True,
     "duo_compress_auto_floor":   0.70,
     "duo_compress_overflow_reserve": 1024,
-    "duo_min_free_ctx_tokens":   0,
     "duo_max_compressions":      40,
     "duo_compress_model":        "lfm2.5:2.6b",
     "duo_compress_llm_timeout_s": 180,

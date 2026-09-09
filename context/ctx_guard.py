@@ -24,7 +24,7 @@ from utils.token import CHARS_PER_TOKEN as _CPT
 logger = logging.getLogger("hivemind.ctx_guard")
 
 # ── Defaults (werden pro Aufruf ueber die Settings ueberschrieben) ──────────
-DEFAULT_COMPRESS_FLOOR = 0.72          # P1: komprimieren ab X% Kontext
+DEFAULT_COMPRESS_FLOOR = 0.70          # compress from X% context (matches settings default)
 DEFAULT_EMERGENCY_PCT = 0.90           # Notfall-Eviction erst >90%
 DEFAULT_OVERFLOW_RESERVE = 1024        # extra Reserve neben num_predict (P2)
 DEFAULT_MIN_FREE_TOKENS = 0            # 0 = auto (siehe resolve_compress_threshold)
@@ -218,6 +218,7 @@ def plan_partial_cut_index(
     target_post_fraction: float = DEFAULT_PARTIAL_POST_FRACTION,
     min_tail_msgs: int = DEFAULT_PARTIAL_MIN_TAIL_MSGS,
     estimate_fn: Optional[Callable[[list], int]] = None,
+    token_ratio: float = 1.0,
 ) -> int:
     """Cut-Index fuer partial-Kompression.
 
@@ -243,7 +244,11 @@ def plan_partial_cut_index(
     if total <= target:
         return -1
 
-    to_remove = total - target
+    # CUT-RATIO (2026-09-09): guard_tokens are REAL prompt tokens while the
+    # per-message accumulation is a char heuristic — scale the accumulation
+    # so the cut lands where the real tokens say it should.
+    _ratio = max(0.1, min(4.0, float(token_ratio or 1.0)))
+    to_remove = int((total - target) * _ratio)
     acc = 0
     condensable_before_cut = 0
     for i, m in enumerate(msgs):
@@ -256,7 +261,7 @@ def plan_partial_cut_index(
         # survives compression anyway) and a cut is only valid if at least one
         # assistant/tool message lands in the old section.
         if isinstance(m, dict) and m.get("role") != "system":
-            acc += int(_msg_chars(m) / _CPT)
+            acc += int(_msg_chars(m) / _CPT * _ratio)
             if m.get("role") in ("assistant", "tool") and _msg_chars(m) > 0:
                 condensable_before_cut += 1
         cut = i + 1
