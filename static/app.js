@@ -997,7 +997,6 @@ async function loadSettings() {
     S.duoPinStaticMap  = s.duo_pin_static_map !== false;
     S.duoWriteGuard    = s.duo_write_guard_enabled !== false;
     S.duoNoopHint      = s.duo_noop_hint_enabled !== false;
-    S.duoCacheFriendly = s.duo_cache_friendly_ctx !== false;
     S.duoPartialCompr  = s.duo_partial_compression === true;
     S.duoCompressLocal = s.duo_compress_local_only === true;
     S.settingsRev = parseInt(s.settings_rev || 0, 10) || S.settingsRev || 0;
@@ -1010,7 +1009,6 @@ async function loadSettings() {
     _syncFlagCheck('duo-pin-static-map-toggle', S.duoPinStaticMap);
     _syncFlagCheck('duo-write-guard-toggle', S.duoWriteGuard);
     _syncFlagCheck('duo-noop-hint-toggle', S.duoNoopHint);
-    _syncFlagCheck('duo-cache-friendly-toggle', S.duoCacheFriendly);
     _syncFlagCheck('duo-partial-compression-toggle', S.duoPartialCompr);
     _syncFlagCheck('duo-compress-local-only-toggle', S.duoCompressLocal);
     // Planner / Coder TTL
