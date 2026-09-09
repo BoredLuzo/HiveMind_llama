@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+- Installer hardening: `uv sync` falls back to a plain venv +
+  `requirements.txt` when `pyproject.toml` is missing (older release zips),
+  parenthesized install paths no longer break the dependency step, and
+  `clean_release.bat` now strips `.venv` from releases and verifies the
+  installer inputs (pyproject.toml / requirements.txt / install.bat) before
+  packaging — a zip without them crashed on first run ("No pyproject.toml
+  found", seen with v1.0.13).
 - Spark-X2.5 support: MODEL_PROFILES entries (thinking + tool calling, verified
   live on llama.cpp b10872) and per-model configs (`spark-x2.5:4b` / `:1.7b`,
   sampling temp 1.0 / top_p 0.95 / top_k -1 per the model card and the GGUF's

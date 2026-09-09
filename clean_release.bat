@@ -70,10 +70,12 @@ for %%D in (
     "model_configs\learned"
     "context\projects"
     "custom_prompts"
+    ".venv"
 ) do (
     if exist "%%D" rd /s /q "%%D"
 )
-echo   [OK] Runtime data and generated files removed.
+echo   [OK] Runtime data and generated files removed (.venv included -
+echo        the release must not ship a local environment).
 echo.
 
 REM ----------------------------------------------------------
@@ -106,6 +108,15 @@ for /r "%~dp0" %%F in (*.pyc) do set /a PYC_COUNT+=1
 set "LOG_COUNT=0"
 for /r "%~dp0" %%F in (*.log) do set /a LOG_COUNT+=1
 
+REM PACKER-VERIFY (2026-09-09): install.bat runs `uv sync`, which requires
+REM pyproject.toml. A zip without it dies on first run with
+REM "No pyproject.toml found" (live crash on v1.0.13). Verify the installer's
+REM required inputs are present before packaging.
+set "MISSING_PACK="
+if not exist "pyproject.toml"  set "MISSING_PACK=pyproject.toml "
+if not exist "requirements.txt" set "MISSING_PACK=%MISSING_PACK%requirements.txt "
+if not exist "install.bat"     set "MISSING_PACK=%MISSING_PACK%install.bat "
+
 echo.
 echo  +=============================================================+
 if not "%PYC_COUNT%"=="0" (
@@ -114,7 +125,11 @@ if not "%PYC_COUNT%"=="0" (
 if not "%LOG_COUNT%"=="0" (
     echo  ^|  WARNING: %LOG_COUNT% .log files remain                    ^|
 )
-if "%PYC_COUNT%"=="0" if "%LOG_COUNT%"=="0" (
+if defined MISSING_PACK (
+    echo  ^|  ERROR: installer inputs missing: %MISSING_PACK%^|
+    echo  ^|  The release would crash on install ("No pyproject.toml"). ^|
+)
+if "%PYC_COUNT%"=="0" if "%LOG_COUNT%"=="0" if not defined MISSING_PACK (
     echo  ^|  Release is clean - can be packaged.                      ^|
 )
 echo  +=============================================================+

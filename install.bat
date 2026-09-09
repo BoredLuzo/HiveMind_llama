@@ -75,14 +75,36 @@ echo  ==========================================================
 echo   [venv] Setting up virtual environment
 echo  ==========================================================
 echo.
+REM SYNC-FLOW (2026-09-09): goto-based instead of parenthesized blocks - the
+REM paths involved (%~dp0, %PY%) break cmd's block parser when the install
+REM folder name contains parentheses (see PAREN-PATH-FIX below).
+if exist "%~dp0pyproject.toml" goto uv_sync_project
+
+REM RELEASE-FALLBACK: older release zips ship requirements.txt only (pre-uv
+REM packaging). uv sync needs pyproject.toml and dies with "No pyproject.toml
+REM found" - fall back to a plain venv + requirements install.
+echo   [uv] pyproject.toml not found - using requirements.txt fallback.
+uv venv
+if errorlevel 1 goto uv_failed
+uv pip install --python "%~dp0.venv\Scripts\python.exe" -r requirements.txt
+if errorlevel 1 goto uv_failed
+goto uv_done
+
+:uv_sync_project
 uv sync --all-extras
-if errorlevel 1 (
-    echo.
-    echo   [ERROR] Dependency installation failed (uv sync).
-    echo   Check your internet connection and run install.bat again.
-    echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
-)
+if errorlevel 1 goto uv_failed
+
+:uv_done
+goto venv_py_check
+
+:uv_failed
+echo.
+echo   [ERROR] Dependency installation failed (uv).
+echo   Check your internet connection and run install.bat again.
+echo.
+echo  Press any key to continue... & pause >nul & exit /b 1
+
+:venv_py_check
 
 REM ======================================================
 REM [playwright] Chromium browser (for browser_tool)
@@ -107,12 +129,13 @@ REM interpreter, NOT necessarily the project venv. The venv python is the
 REM deterministic choice - it has the synced dependencies (httpx for
 REM fetch_llamacpp.py, settings imports for the settings writer below).
 set "PY=%~dp0.venv\Scripts\python.exe"
-if not exist "%PY%" (
-    echo.
-    echo   [ERROR] .venv not found after uv sync - install.bat cannot continue.
-    echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
-)
+if exist "%PY%" goto py_ok
+echo.
+echo   [ERROR] .venv not found after dependency install - install.bat cannot continue.
+echo.
+echo  Press any key to continue... & pause >nul & exit /b 1
+
+:py_ok
 
 REM ======================================================
 REM [2/6] GPU backend (auto-detection)
