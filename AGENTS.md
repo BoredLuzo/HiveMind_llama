@@ -36,10 +36,12 @@ python -m ruff check .            # ruff.toml: E9/F821/F601/F811/F841/W605
   `python deploy/gen_settings_docs.py`.
 
 ## Dependencies (dual source of truth)
-- **Windows** (`install.bat`): `uv sync --all-extras` installs from
-  **`pyproject.toml`** (core + extras browser/notifications/recommended).
-  `uv.lock` is gitignored and generated locally on install — do not commit it.
-- **Linux** (`deploy/install_linux.sh`): venv + **`requirements.txt`** (pip).
+- **Windows** (`install.bat`) and **Linux** (`deploy/install_linux.sh`):
+  primary path is **uv** (`uv python install 3.14` + `uv sync --all-extras`
+  from **`pyproject.toml`**). `uv.lock` is gitignored and generated locally
+  on install — do not commit it.
+- **`requirements.txt`** is the fallback path (Windows: pre-uv release
+  folders; Linux: systems without uv / manual venv setup).
 - Adding/changing a dependency means updating **both files**
   (`pyproject.toml` + `requirements.txt`).
 

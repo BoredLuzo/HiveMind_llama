@@ -29,12 +29,12 @@ send a message. There is no default workspace; the first run needs one.
 ## Quick Start (Linux)
 
 ```bash
-# one-shot installer: system deps, venv, llama.cpp, systemd -> /opt/hivemind
+# one-shot installer: uv + Python 3.14, venv, llama.cpp, systemd -> /opt/hivemind
 sudo deploy/install_linux.sh                    # HIVEMIND_GPU_BACKEND=vulkan|cpu|rocm
 
 # or manually:
-python3 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
+uv python install 3.14
+uv sync --all-extras
 ./.venv/bin/python deploy/fetch_llamacpp.py --backend vulkan   # vulkan | cuda | cpu | rocm
 ./.venv/bin/python run.py
 ```

@@ -29,16 +29,25 @@ else
 fi
 
 echo "[2/8] Installing system dependencies..."
+# UV-CONSISTENCY (2026-09-09): uv provisions the interpreter and the venv,
+# so the host only needs curl. python3/pip stay installed where the distro
+# pulls them in anyway - they are the legacy fallback in step [4/8].
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update -qq
-  apt-get install -y -qq python3 python3-venv python3-pip curl ca-certificates
+  apt-get install -y -qq curl ca-certificates
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y python3 python3-pip curl
+  dnf install -y curl
 elif command -v pacman >/dev/null 2>&1; then
-  pacman -Sy --noconfirm python python-pip curl
+  pacman -Sy --noconfirm curl
 else
-  echo "  (unknown package manager — install python3 + venv manually)"
+  echo "  (unknown package manager — install curl manually)"
 fi
+
+command -v uv >/dev/null 2>&1 || {
+  echo "  Installing uv (astral.sh)..."
+  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_PATH="/usr/local/bin" sh
+}
+command -v uv >/dev/null 2>&1 && uv --version
 
 echo "[3/8] Syncing installation to $INSTALL_DIR ..."
 if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
@@ -48,9 +57,21 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
 fi
 
 echo "[4/8] Creating venv + installing Python dependencies..."
-python3 -m venv "$INSTALL_DIR/.venv"
-"$INSTALL_DIR/.venv/bin/pip" install --upgrade pip -q
-"$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q
+cd "$INSTALL_DIR"
+if command -v uv >/dev/null 2>&1 && [ -f pyproject.toml ]; then
+  # Primary path: managed Python 3.14 + locked dependency sync (same flow as
+  # the Windows installer).
+  uv python install 3.14
+  uv sync --all-extras
+elif [ -f requirements.txt ]; then
+  # Legacy fallback: system python3 + pip + requirements.txt.
+  python3 -m venv "$INSTALL_DIR/.venv"
+  "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip -q
+  "$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q
+else
+  echo "Error: neither pyproject.toml nor requirements.txt found in $INSTALL_DIR"
+  exit 1
+fi
 
 echo "[5/8] Fetching llama.cpp (backend: $LLAMA_BACKEND)..."
 cd "$INSTALL_DIR"
