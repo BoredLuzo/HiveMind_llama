@@ -76,6 +76,13 @@ echo   [venv] Setting up virtual environment
 echo  ==========================================================
 echo.
 uv sync --all-extras
+if errorlevel 1 (
+    echo.
+    echo   [ERROR] Dependency installation failed (uv sync).
+    echo   Check your internet connection and run install.bat again.
+    echo.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
 
 REM ======================================================
 REM [playwright] Chromium browser (for browser_tool)
@@ -95,7 +102,17 @@ if errorlevel 1 (
 )
 echo.
 
-for /f "delims=" %%X in ('uv python find') do set "PY=%%X"
+REM VENV-PY-FIX (2026-09-09): `uv python find` returns a managed/system
+REM interpreter, NOT necessarily the project venv. The venv python is the
+REM deterministic choice - it has the synced dependencies (httpx for
+REM fetch_llamacpp.py, settings imports for the settings writer below).
+set "PY=%~dp0.venv\Scripts\python.exe"
+if not exist "%PY%" (
+    echo.
+    echo   [ERROR] .venv not found after uv sync - install.bat cannot continue.
+    echo.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
 
 REM ======================================================
 REM [2/6] GPU backend (auto-detection)

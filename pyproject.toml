@@ -1,10 +1,10 @@
 [project]
 name = "hivemind-llama"
-version = "1.0.7"
+version = "1.0.14"
 description = "HiveMind is a local, privacy-first AI assistant and multi-agent coding platform powered by llama.cpp."
 readme = "README.md"
 authors = [
-    { name = "BoredLuzo", email = "BoredLuzo@users.noreply.github.com" }
+    { name = "BoredLuzo" }
 ]
 requires-python = ">=3.14"
 dependencies = [

@@ -35,6 +35,14 @@ python -m ruff check .            # ruff.toml: E9/F821/F601/F811/F841/W605
 - `docs/settings.md` is GENERATED: after `settings.py` changes run
   `python deploy/gen_settings_docs.py`.
 
+## Dependencies (dual source of truth)
+- **Windows** (`install.bat`): `uv sync --all-extras` installs from
+  **`pyproject.toml`** (core + extras browser/notifications/recommended).
+  `uv.lock` is gitignored and generated locally on install — do not commit it.
+- **Linux** (`deploy/install_linux.sh`): venv + **`requirements.txt`** (pip).
+- Adding/changing a dependency means updating **both files**
+  (`pyproject.toml` + `requirements.txt`).
+
 ## Git
 - No push without explicit user go.
 - Commit identity is repo-local `BoredLuzo <BoredLuzo@users.noreply.github.com>`
