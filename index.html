@@ -1257,7 +1257,7 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Stable cache prefix (pinned map survives compression).</div>
+      <div class="fld-hint">Keeps the repo-map in the cache-stable system prefix — after compression the model still sees the code map without a full re-prefill (biggest single cache saver on large repos).</div>
       <div class="tgl-row">
         <span class="tgl-text">Write-Guard</span>
         <label class="cfl-sw">
@@ -1275,9 +1275,6 @@
       </div>
       <div class="fld-hint">Injects a read_file nudge after 2 ineffective edits on the same file.</div>
       <div class="tgl-row">
-        <span class="tgl-text">Cache-friendly compression</span>
-        <label class="cfl-sw">
-          <input type="checkbox" id="duo-cache-friendly-toggle" onchange="onFlagToggle('duo_cache_friendly_ctx', this.checked)">
           <span class="sl"></span>
         </label>
       </div>
@@ -1289,7 +1286,7 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Only condense the older part; the recent tail stays byte-identical (KV-shift reuse).</div>
+      <div class="fld-hint">Condenses only the old context; the recent tail stays byte-identical, so llama.cpp reuses the cached prefix (typical 80-100% cache reuse per round instead of a full re-prefill — visibly faster rounds on 32k+ contexts).</div>
       <div class="tgl-row">
         <span class="tgl-text">Local-only summary</span>
         <label class="cfl-sw">
@@ -1297,8 +1294,8 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Skip the compression LLM call — instant local fallback summary (best for slow prefill).</div>
-      <div class="fld-hint" style="margin-top:6px">Flags take effect on the next run; the Write- and No-Op guards are also read live during a run.</div>
+      <div class="fld-hint">Skips the summarizer LLM: compression finishes instantly, keeps the prefix cache intact and trades some summary detail for speed. Recommended on slow-prefill setups (CPU-expert MoE, Vulkan); the coder reads the recent raw tail regardless.</div>
+      <div class="fld-hint" style="margin-top:6px">Flags apply on the next run (Write/No-Op guards also live). Balance check: compression runs at 70% context; with an 8k coder budget a 32k context has ~10k headroom per cycle — raise the context instead of the budget if you see frequent compressions.</div>
     </div>
 
     <!-- Learning Preset Mode -->
@@ -1840,6 +1837,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-        <script src="/static/app.js?v=20260909-2"></script>
+        <script src="/static/app.js?v=20260909-3"></script>
 </body>
 </html>

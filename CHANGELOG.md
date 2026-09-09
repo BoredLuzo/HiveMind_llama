@@ -71,6 +71,15 @@ installer hardening.
 
 ## [Unreleased]
 
+- Tool layer cleanup: deduplicated exec branches, recovery phrases and hint
+  chain; single args serialization per write; file IO off the event loop;
+  task_complete block/allow ladder unified with one counter owner; read
+  ladder now persists across rounds (was reset every round).
+- Compression cleanup: removed the legacy in-place-eviction regime and the
+  dead `duo_cache_friendly_ctx` / `duo_min_free_ctx_tokens` settings; cut
+  planning now uses the real/estimated token ratio; fewer full-history scans
+  per round; clearer compression-card hints in the UI.
+
 - UI: the "Compression Limit" absolute-token field was removed — the auto
   floor (70% of ctx) is the intended baseline. `duo_compress_threshold`
   stays available as a settings.json override for power users.
