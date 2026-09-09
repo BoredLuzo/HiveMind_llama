@@ -345,14 +345,26 @@ class Pipeline:
     def _is_self_question(self, t: str) -> bool:
         return _has_keyword(t, SELF_TRIGGERS)
 
+    # Memory/forget keyword routing is a deterministic pre-check that bypasses
+    # the model, so it must be conservative: only short, command-like messages
+    # ("remember that ...", "delete my name") qualify. A task spec that merely
+    # CONTAINS such a word ("Allow the player to store one piece ...") must
+    # never hijack the run. Longer memory intents are still picked up by the
+    # session memory extractor, so nothing is lost.
+    _MEMORY_CMD_MAX_CHARS = 120
+
     def _is_memory_request(self, t: str) -> bool:
         if self._is_forget_request(t):
+            return False
+        if len(t or "") > self._MEMORY_CMD_MAX_CHARS:
             return False
         return _has_keyword(t,
             ["remember", "remember that", "store", "save this", "keep in mind", "note",
              "merke dir", "merk dir", "speichere", "denke daran", "behalte", "notiere"])
 
     def _is_forget_request(self, t: str) -> bool:
+        if len(t or "") > self._MEMORY_CMD_MAX_CHARS:
+            return False
         return _has_keyword(t, ["forget", "delete", "remove", "vergiss", "lösche", "lösch"])
 
     def _is_list_memory_request(self, t: str) -> bool:
