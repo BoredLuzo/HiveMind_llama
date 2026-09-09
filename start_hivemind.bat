@@ -54,14 +54,27 @@ if errorlevel 1 (
 echo  [OK] Python: %PY%
 echo.
 
-REM Quick dependency check (installs missing packages on demand)
+REM Quick dependency check (installs missing packages on demand).
+REM UV-CONSISTENCY (2026-09-09): uv-managed .venvs ship WITHOUT pip, so the
+REM old `python -m pip` fallback was dead exactly when it was needed. Prefer
+REM uv, fall back to pip only for legacy system-python setups.
 "%PY%" -c "import httpx, fastapi, uvicorn, rich" >nul 2>&1
+if not errorlevel 1 goto deps_ok
+echo  [..] Installing missing packages...
+where uv >nul 2>&1
+if not errorlevel 1 goto deps_uv
+"%PY%" -m pip install httpx fastapi uvicorn rich watchfiles --quiet
+goto deps_done
+:deps_uv
+uv pip install --python "%PY%" httpx fastapi uvicorn rich watchfiles --quiet
+:deps_done
 if errorlevel 1 (
-    echo  [..] Installing missing packages...
-    "%PY%" -m pip install httpx fastapi uvicorn rich watchfiles --quiet
+    echo  [WARN] Package install failed - the server may not start.
+) else (
     echo  [OK] Packages installed.
-    echo.
 )
+echo.
+:deps_ok
 
 REM Hints when llama.cpp / models are missing:
 if not exist "llama" (

@@ -31,8 +31,13 @@ if errorlevel 2 (
     exit /b 0
 )
 echo.
+REM UV-CONSISTENCY (2026-09-09): use the project venv like every other
+REM script - a bare `python` resolves to the system interpreter without the
+REM installed dependencies.
+set "PY=%~dp0.venv\Scripts\python.exe"
+if not exist "%PY%" set "PY=python"
 echo  [..] Starting MCP HTTP server on port 8090 (127.0.0.1)...
-python infra/mcp_server.py --http --port 8090
+"%PY%" infra/mcp_server.py --http --port 8090
 if errorlevel 1 (
     echo.
     echo  [ERROR] MCP server exited with an error. Read the message above.
