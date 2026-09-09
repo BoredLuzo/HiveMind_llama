@@ -24,7 +24,7 @@ DEFAULT_AGENT_CFG = {
     "synthesizer": {"model": "qwen3.5:4b-ud", "temperature": 0.2, "max_tokens": 900, "thinking": False, "thinking_budget": 0},
     "direct":      {"model": "lfm2.5:2.6b",   "temperature": 0.4, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
     "judge":       {"model": "lfm2.5:2.6b",   "temperature": 0.1, "max_tokens": 120, "thinking": False, "thinking_budget": 0},
-    "duo_coder":   {"model": "lfm2.5:2.6b",   "temperature": 0.8, "max_tokens": 12000, "thinking": False, "thinking_budget": 0},
+    "duo_coder":   {"model": "lfm2.5:2.6b",   "temperature": 0.8, "max_tokens": 8000, "thinking": False, "thinking_budget": 0},
     "duo_critic":  {"model": "qwen3.5:4b-ud", "temperature": 0.15, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
 }
 

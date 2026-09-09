@@ -16,10 +16,22 @@ installer hardening.
 - Grace tool rounds, per-chunk budget resets and chunk containment in the
   agentic loop: a chunk that runs out of budget no longer eats the loop's
   detection logic or leaks rounds into the next chunk.
+- Deadline grace: a successful write/edit extends the run deadline (+300s),
+  so long productive rounds on slow backends are no longer killed mid-task
+  while loops still abort on schedule.
+- Planner deadline abort is clean: cancelling the planner task at the run
+  deadline no longer produces an "InvalidStateError: Result is not set"
+  traceback, and falls back to best-effort coding as intended.
+- Read ladder path-reset: only repeated reads of the SAME file escalate the
+  "exploring but not implementing" hint — reading different files resets the
+  counter instead of falsely flagging normal multi-file exploration.
 - Real token numbers in the UI context meter (estimated vs. real, per-round
   cache-reuse display).
 - Stale-tab protection: settings posts carry a revision; outdated tabs get
   rejected on protected compression keys instead of silently overwriting.
+- Default duo coder budget lowered to 8000 max tokens (was 12000): a single
+  huge completion round could eat half the post-compression headroom on
+  32-60k contexts; big files are written in multiple appends instead.
 
 ### Tool calling
 
@@ -33,7 +45,7 @@ installer hardening.
 ### Models
 
 - Spark-X2.5 (4B/1.7B) profiles and per-model configs, verified live on
-  llama.cpp b10872 (thinking + tool calling, ~60 tok/s on Vulkan).
+  llama.cpp b10872+ (thinking + tool calling, ~60 tok/s on Vulkan).
 - Ling-3.0-tiny sampling profile per model card.
 
 ### UI
@@ -47,10 +59,13 @@ installer hardening.
 
 ### Installer
 
-- uv-based install with a requirements.txt fallback for pre-uv release
-  folders; `clean_release.bat` strips `.venv` and verifies installer inputs
-  before packaging (a zip without `pyproject.toml` used to crash on first
-  run).
+- uv-based install on Windows AND Linux (`uv python install 3.14` +
+  `uv sync --all-extras`; requirements.txt stays as legacy fallback), with a
+  fresh machine needing no preinstalled Python at all.
+- Paste-safe interactive answers (pasted multi-line replies no longer crash
+  the dependency step with a syntax error).
+- `clean_release.bat` strips `.venv` and verifies installer inputs before
+  packaging (a zip without `pyproject.toml` used to crash on first run).
 - English-only keyword matchers and system-facing strings throughout;
   `AGENTS.md` documents repo conventions.
 
