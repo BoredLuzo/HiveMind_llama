@@ -1856,7 +1856,14 @@ async def run_code_duo(ctx):
                                         f"⏳ {exec_mdl.split(':')[0]} does not fit into VRAM "
                                         f"(free={_vpf.free_mib} MiB) — fallback to {_fb_model}…"
                                     )})
-                                _fb_ctx = min(_coder_ctx_try, 10240)
+                                # FB-CTX-FLOOR (2026-09-09): the duo coder
+                                # payload (system + plan + task) is ~8k tokens
+                                # BEFORE the first tool round — a 10k fallback
+                                # slot starts CTX-FULL and dies in the
+                                # compression 3-strike guard with zero output
+                                # (live finding). Floor at 20k; the VRAM
+                                # pre-flight below still guards the load.
+                                _fb_ctx = max(min(_coder_ctx_try, 10240), 20480)
                                 try:
                                     _coder_port = await asyncio.wait_for(
                                         _lsm2.ensure_loaded(_fb_model, num_ctx=_fb_ctx, n_parallel=1),
@@ -3969,13 +3976,26 @@ async def run_code_duo(ctx):
                                 _est_tokens_after_compress < _est_tokens_before_compress * 0.90,
                                 3,
                             )
-                            if _compress_stop:
+                            if _compress_stop and _total_tool_rounds > 0:
                                 _ld_setter(2906); _loop_detected = True
                                 yield await ctx.emit({
                                     "type": "status",
                                     "content": "⛔ Context compression repeatedly fails to shrink the context (3x) — run stopped.",
                                 })
                                 break
+                            if _compress_stop:
+                                # ROUND0-INCOMPRESSIBLE (2026-09-09): at round 0
+                                # the payload is the injected plan/task itself —
+                                # there is nothing condensable yet. Dying here
+                                # produced zero-output runs (live: fallback coder
+                                # @10k ctx). Continue with a minimal budget;
+                                # compression becomes meaningful once tool
+                                # outputs accumulate.
+                                _compress_fail_streak = 0
+                                _force_compress_next = False
+                                logger.warning(
+                                    "[CTX-COMPRESS] incompressible at round 0 — continuing with minimal output budget"
+                                )
                             _est_tokens = _est_tokens_after_compress
                             # METER-FIX (2026-08-25): real prompt tokens are STALE
                             # after the compression (pre-compress value). The reset
@@ -4145,7 +4165,7 @@ async def run_code_duo(ctx):
                                     "content": "⛔ Context cannot be reduced enough for a tool round — run stopped."})
                                 _ld_setter(3726); _loop_detected = True
                                 break
-                            if _can_compress or _guard_tokens > int(_dtool_ctx * 0.90):
+                            if (_can_compress or _guard_tokens > int(_dtool_ctx * 0.90)) and _total_tool_rounds > 0:
                                 logger.warning(
                                     "[CTX-FULL] insufficient headroom for a safe tool round "
                                     "(max_tokens=%d est=%d real=%d skip=%d/4) - compressing first",

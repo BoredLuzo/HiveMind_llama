@@ -71,6 +71,12 @@ installer hardening.
 
 ## [Unreleased]
 
+- Coder VRAM fallback: the fallback slot now runs at >=20k context (the duo
+  payload alone is ~8k tokens; a 10k fallback slot started CTX-FULL and died
+  in the compression guard with zero output), and an incompressible round-0
+  payload no longer trips the 3-strike stop — the round runs with a minimal
+  output budget instead.
+
 - Tool layer cleanup: deduplicated exec branches, recovery phrases and hint
   chain; single args serialization per write; file IO off the event loop;
   task_complete block/allow ladder unified with one counter owner; read
