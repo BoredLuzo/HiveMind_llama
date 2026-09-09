@@ -335,7 +335,13 @@ class ToolLoop:
 
                 if _content:
                     state.content_parts.append(_content)
-                    yield {"type": "token", "content": _content}
+                    # DOUBLE-EMIT-FIX (2026-09-09): in stream mode the deltas
+                    # were already yielded live by _post_stream — re-emitting the
+                    # full content here duplicated the whole answer (live finding:
+                    # every direct tool-loop reply arrived twice). Only the
+                    # non-stream path needs this final token.
+                    if not self.cfg.stream:
+                        yield {"type": "token", "content": _content}
                 if self.cfg.verify_guard and state.verify_mutation_serial > state.verify_last_ok_serial:
                     state.verify_guard_hits += 1
                     if state.verify_guard_hits >= 2:
