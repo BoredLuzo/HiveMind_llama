@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+- Spark-X2.5 support: MODEL_PROFILES entries (thinking + tool calling, verified
+  live on llama.cpp b10872) and per-model configs (`spark-x2.5:4b` / `:1.7b`,
+  sampling temp 1.0 / top_p 0.95 / top_k -1 per the model card and the GGUF's
+  own embedded defaults).
+- Memory/forget keyword routing now requires short command-like messages
+  (<= 120 chars). A long task spec containing "store"/"note"/"delete" no longer
+  gets swallowed by the memory early-return.
+- STUB-ECHO-GUARD: write/edit tool calls whose arguments contain the internal
+  ARG-COMPACT stub are rejected with STUB_ECHO_BLOCKED instead of writing the
+  stub text into the file (observed with spark-x2.5:4b).
+- `duo_partial_compression` is on by default (was off): summary + raw tail is
+  the recommended baseline — keeps the llama.cpp prefix cache alive and the raw
+  tail readable for the coder.
 - Memory extraction understands english phrasing now: "remember that ...", "my name is",
   "i'm from / i come from", "i live in", "i work as", "i'm N years old", "my project is",
   "my favorite language is". German variants keep working, keys stay the same.

@@ -110,8 +110,9 @@ DEFAULT_SETTINGS = {
     # - duo_cache_friendly_ctx: Kompression primaer statt In-place-Eviction;
     #   bereits gesendete History wird nicht mehr in-place mutiert.
     # - duo_partial_compression: nur den alten Teil verdichten, raw Tail
-    #   byte-identisch am Ende behalten (KV-Shift-Reuse). Default off -> erst
-    #   nach Telemetrie-Phase einschalten.
+    #   byte-identisch am Ende behalten (KV-Shift-Reuse). Recommended ON:
+    #   schont den llama.cpp Prefix-Cache und der Raw-Tail bleibt fuer den
+    #   Coder lesbar; Telemetrie-Phase ist abgeschlossen (2026-09-09).
     # - duo_compress_threshold > 0 = exakter UI-Override (absolute Tokens);
     #   0 = auto: Schwelle = duo_compress_auto_floor*ctx (dynamische
     #   Output-Reserve klemmt jede Tool-Round so, dass prompt+output <= ctx bleibt,
@@ -126,7 +127,7 @@ DEFAULT_SETTINGS = {
     #   CPU-Experts, langsames Prefill): dort kostet der LLM-Versuch nur
     #   Totzeit und der lokale Summary ist zudem cache-freundlicher.
     "duo_cache_friendly_ctx":    True,
-    "duo_partial_compression":   False,
+    "duo_partial_compression":   True,
     "duo_compress_auto_floor":   0.70,
     "duo_compress_overflow_reserve": 1024,
     "duo_min_free_ctx_tokens":   0,
