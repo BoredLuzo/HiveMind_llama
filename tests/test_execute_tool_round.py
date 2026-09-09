@@ -317,6 +317,29 @@ res, hooks, msgs, rs, seen, ltl = run_round([
 check("ladder silent after write reset",
       not any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
 
+# ── 16. LADDER-PERSIST (2026-09-09): the counter survives across rounds ──
+from core.tool_exec_helpers import ToolRoundState as _TRS
+_slot_defs = dict(
+    tool_ctx_lru=_LRU(), duo_deadline_at=time.time() + 60,
+    verify_mutation_serial=0, verify_last_ok_serial=0,
+    last_run_bash_failure=None, changed_since_failure=set(),
+    last_learned_insight_sig="", last_too_large_path=[None],
+    attempts_per_file={}, tool_error_retries={}, call_sigs=[],
+    recent_focus_paths=[], file_changes={}, duo_seen_web_queries=set(),
+    cached_coder_port=[None], task_complete_blocked_count=None, total_tool_errors=None,
+)
+_persist_trs = _TRS(**_slot_defs)
+_prior_write = [{"role": "tool", "name": "write_file", "content": "[write_file: ok]", "tool_call_id": "w1"}]
+# round 1: one read (counter=1, was lost before the fix)
+run_round([tc("read_file", {"path": "a.py"})], trs=_persist_trs, dtool_msgs=list(_prior_write))
+# round 2: two more same-path reads (differing args -> distinct sigs)
+# -> ladder fires on the 3rd TOTAL read
+res, hooks, msgs, rs, seen, ltl = run_round([
+    tc("read_file", {"path": "a.py", "offset": 2}),
+    tc("read_file", {"path": "a.py", "offset": 3}),
+], trs=_persist_trs, dtool_msgs=list(_prior_write))
+check("ladder persists across rounds", any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
+
 print()
 print(f"{'='*50}")
 print(f"  {passed} passed, {failed} failed  (total {passed + failed})")

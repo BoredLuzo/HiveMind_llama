@@ -184,22 +184,25 @@ def _track_edit_noop(dname, dresult, path, round_state) -> str | None:
     )
 
 
-def _update_read_ladder(dname, args_parse_failed, consecutive_reads: int,
-                        read_path: str = "", last_read_path: str = "") -> int:
-    """Read-file ladder tracker (S17) — returns a new counter.
+def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "") -> None:
+    """Read-file ladder tracker (S17) — mutates trs.ladder counters.
 
     PATH-RESET (2026-09-09): only repeated reads of the SAME path escalate.
     Reading different files is normal multi-file exploration and must reset
     the counter (live: 3 legit reads of different files fired the ladder).
+    LADDER-PERSIST: counters live in ToolRoundState across rounds — a local
+    reset every round made the guard dead for 1-call rounds.
     """
     if dname == "read_file" and not args_parse_failed:
-        if read_path and last_read_path and read_path != last_read_path:
-            return 1
-        return consecutive_reads + 1
-    if dname in ("edit_file", "write_file", "patch_file", "write_file_append",
-                 "replace_lines", "run_bash", "run_python"):
-        return 0
-    return consecutive_reads
+        if read_path and trs.last_read_path and read_path != trs.last_read_path:
+            trs.consecutive_reads = 1
+        else:
+            trs.consecutive_reads += 1
+        trs.last_read_path = read_path
+    elif dname in ("edit_file", "write_file", "patch_file", "write_file_append",
+                   "replace_lines", "run_bash", "run_python"):
+        trs.consecutive_reads = 0
+        trs.read_ladder_fired = False
 
 
 # ── Recovery-Saturation (aus tool_executor extrahiert) ──
@@ -246,343 +249,321 @@ async def _handle_too_large(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         )})
     await hooks.emit({"type": "token", "content": f"\n[⚠ {_dname}: too large — forcing split mode]\n"})
 
+def _append_tool_msg(dtool_msgs, tc_id, dname, dresult) -> None:
+    dtool_msgs.append({"role": "tool", "content": dresult,
+                       "tool_call_id": tc_id, "name": dname})
+
+
+def _append_user_hint(dtool_msgs, hint: str | None) -> None:
+    """User-side recovery hint, gated by saturation (hint budget)."""
+    if hint and not _recovery_saturated(dtool_msgs):
+        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX + hint)})
+
+
+def _bump(counter: dict, key: str) -> int:
+    counter[key] = counter.get(key, 0) + 1
+    return counter[key]
+
+
 def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
                               attempts_per_file, tool_error_retries,
                               workspace_lock: str | None = None) -> tuple[str, bool]:
-    """U2: tool-specific error hints (from execute_tool_round).
+    """U2: tool-specific error hints.
+    HINT-DISPATCH (2026-09-09): was a 340-line if/elif chain; the recurring
+    skeleton (tool msg + saturated user hint + counter escalation) lives in
+    the helpers above. Branch order and semantics unchanged.
     Returns (new _dresult, matched).
     """
     _matched = False
+    _tc_id = _dtc_call.get("id", _dname)
+
     if _dname == "edit_file" and _tool_error_has_code(_dresult, "EDIT_FILE_MALFORMED_BLOCK", _dname):
         _matched = True
-        _ei_path = _dargs.get("path", "")
-        tool_error_retries[_ei_path] = tool_error_retries.get(_ei_path, 0) + 1
-        if tool_error_retries[_ei_path] >= 4:
+        _ef_path = _dargs.get("path", "")
+        if _bump(attempts_per_file, f"ef_malformed:{_ef_path}") >= 2:
             _dresult = (
-                f"[SYSTEM] edit_file on '{_ei_path}' failed format 3x.\n"
-                f"Correct SEARCH/REPLACE format:\n"
-                f"<<<<<<< SEARCH\n<exact old code>\n=======\n"
-                f"<new code>\n>>>>>>> REPLACE\n"
-                f"The SEARCH text must match the code in '{_ei_path}' EXACTLY. "
-                f"Read the file with read_file to see the exact text."
+                f"[SYSTEM] edit_file malformed block on '{_ef_path}' repeatedly. "
+                "Use the exact format:\n<<<<<<< SEARCH\n(existing text)\n=======\n(new text)\n>>>>>>> REPLACE\n"
+                "Repeat for each edit. The SEARCH text must match EXACTLY the existing code."
             )
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         else:
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
-            if tool_error_retries[_ei_path] >= 2 and not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"[FORMAT ERROR] edit_file requires SEARCH/REPLACE blocks. Use this EXACT format:\n"
-                    f"<<<<<<< SEARCH\nold code line 1\nold code line 2\n"
-                    f"=======\nnew code line 1\nnew code line 2\n"
-                    f">>>>>>> REPLACE\n"
-                    f"Repeat for each edit. The SEARCH text must match EXACTLY the existing code."
-                )})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_user_hint(dtool_msgs,
+                "EDIT_FILE_MALFORMED_BLOCK: your SEARCH/REPLACE block format was wrong.\n"
+                "Use:\n<<<<<<< SEARCH\n(existing text)\n=======\n(new text)\n>>>>>>> REPLACE\n"
+                "Repeat for each edit. The SEARCH text must match EXACTLY the existing code.")
+
     elif _dname == "patch_file" and _tool_error_has_code(_dresult, "PATCH_FILE_OLD_STR_NOT_FOUND", "patch_file"):
         _matched = True
         _pf_path = _dargs.get("path", "")
-        _ps_key = f"pf_not_found:{_pf_path}"
-        attempts_per_file[_ps_key] = attempts_per_file.get(_ps_key, 0) + 1
-        if attempts_per_file[_ps_key] >= 3:
+        if _bump(attempts_per_file, f"pf_not_found:{_pf_path}") >= 3:
             _dresult = (
                 f"[SYSTEM] patch_file repeatedly failing on '{_pf_path}'. "
-                f"Switch strategy: use edit_file with the full corrected block instead."
+                "Switch strategy: use edit_file with the full corrected block instead."
             )
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         else:
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
-            if attempts_per_file[_ps_key] >= 2 and not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"PATCH_FILE_OLD_STR_NOT_FOUND: your old_str did not match exactly.\n"
-                    f"Call read_file on this path first, then retry with the exact "
-                    f"characters from the file — including whitespace and indentation."
-                )})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_user_hint(dtool_msgs,
+                "PATCH_FILE_OLD_STR_NOT_FOUND: your old_str did not match exactly.\n"
+                "Call read_file on this path first, then retry with the exact "
+                "characters from the file — including whitespace and indentation.")
+
     elif _dname == "patch_file" and _tool_error_has_code(_dresult, "PATCH_FILE_NON_UNIQUE_MATCH", "patch_file"):
         _matched = True
         _pf_path = _dargs.get("path", "")
-        _ps_key = f"pf_non_unique:{_pf_path}"
-        attempts_per_file[_ps_key] = attempts_per_file.get(_ps_key, 0) + 1
-        if attempts_per_file[_ps_key] >= 2:
+        if _bump(attempts_per_file, f"pf_non_unique:{_pf_path}") >= 2:
             _dresult = (
                 f"[SYSTEM] patch_file still non-unique on '{_pf_path}'. "
-                f"Switch to edit_file with complete block content instead."
+                "Switch to edit_file with complete block content instead."
             )
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         else:
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
-            if not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"PATCH_FILE_NON_UNIQUE_MATCH: old_str matched multiple locations.\n"
-                    f"Add more surrounding lines to make it unique, then retry."
-                )})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_user_hint(dtool_msgs,
+                "PATCH_FILE_NON_UNIQUE_MATCH: old_str matched multiple locations.\n"
+                "Add more surrounding lines to make it unique, then retry.")
+
     elif _dname == "edit_file" and _tool_error_has_code(_dresult, "EDIT_FILE_NO_BLOCKS_APPLIED", "edit_file"):
         _matched = True
         _pf_path = _dargs.get("path", "")
         _ws = Path(workspace_lock) if workspace_lock else Path(os.environ.get("HIVEMIND_WORKSPACE", "."))
         _fp = _ws / _pf_path if not Path(_pf_path).is_absolute() else Path(_pf_path)
         _is_empty = not _fp.exists() or _fp.stat().st_size == 0
-        _nb_key = f"nb_{_pf_path}"
-        attempts_per_file[_nb_key] = attempts_per_file.get(_nb_key, 0) + 1
-        if attempts_per_file[_nb_key] >= 2:
+        if _bump(attempts_per_file, f"nb_{_pf_path}") >= 2:
             _dresult = (
                 f"[SYSTEM] Repeated EDIT_FILE_NO_BLOCKS_APPLIED on '{_pf_path}'. "
-                f"Stop using edit_file here. Use write_file with the complete "
-                f"file content as plain text — no SEARCH/REPLACE markers."
+                "Stop using edit_file here. Use write_file with the complete "
+                "file content as plain text — no SEARCH/REPLACE markers."
             )
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         else:
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             if _is_empty:
-                if not _recovery_saturated(dtool_msgs):
-                    dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                        f"EDIT_FILE_NO_BLOCKS_APPLIED on '{_pf_path}': file is new or empty — "
-                        f"edit_file requires existing content to match. "
-                        f"Use write_file with plain content instead (no SEARCH/REPLACE markers)."
-                    )})
+                _append_user_hint(dtool_msgs,
+                    f"EDIT_FILE_NO_BLOCKS_APPLIED on '{_pf_path}': file is new or empty — "
+                    "edit_file requires existing content to match. "
+                    "Use write_file with plain content instead (no SEARCH/REPLACE markers).")
             else:
-                if not _recovery_saturated(dtool_msgs):
-                    dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                        f"edit_file cannot apply to this content on '{_pf_path}'.\n"
-                        f"Call write_file NOW with the complete correct file content.\n"
-                        f"Do NOT call edit_file again on this path.\n"
-                        f"Do NOT generate explanatory text — call write_file immediately."
-                    )})
+                _append_user_hint(dtool_msgs,
+                    f"edit_file cannot apply to this content on '{_pf_path}'.\n"
+                    "Call write_file NOW with the complete correct file content.\n"
+                    "Do NOT call edit_file again on this path.\n"
+                    "Do NOT generate explanatory text — call write_file immediately.")
+
     elif _dname == "edit_file" and _tool_error_has_code(_dresult, "EDIT_FILE_NOOP", "edit_file"):
         _matched = True
         _no_path = _dargs.get("path", "")
-        _no_key = f"noop:{_no_path}"
-        attempts_per_file[_no_key] = attempts_per_file.get(_no_key, 0) + 1
-        if attempts_per_file[_no_key] >= 3:
+        if _bump(attempts_per_file, f"noop:{_no_path}") >= 3:
             _dresult = (
                 f"[SYSTEM] edit_file produced no change on '{_no_path}' 3x. "
-                f"Your SEARCH and REPLACE are identical — the file is NOT modified. "
-                f"Call read_file('{_no_path}') to see the current content, then send "
-                f"a REPLACE block containing the NEW code."
+                "Your SEARCH and REPLACE are identical — the file is NOT modified. "
+                f"Call read_file('{_no_path}') to see the current content, then "
+                "send a REPLACE block containing the NEW code."
             )
         else:
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
-            if not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"EDIT_FILE_NOOP on '{_no_path}': SEARCH and REPLACE were identical — "
-                    f"no change was made. Read the file again, then provide the actual "
-                    f"new code in the REPLACE section (different from SEARCH)."
-                )})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_user_hint(dtool_msgs,
+                f"EDIT_FILE_NOOP on '{_no_path}': SEARCH and REPLACE were identical — "
+                "no change was made. Read the file again, then provide the actual "
+                "new code in the REPLACE section (different from SEARCH).")
+
     elif _tool_error_has_code(_dresult, "RUN_BASH_TIMEOUT", "run_bash"):
         _matched = True
-        tool_error_retries["RUN_BASH_TIMEOUT"] = tool_error_retries.get("RUN_BASH_TIMEOUT", 0) + 1
-        if tool_error_retries["RUN_BASH_TIMEOUT"] >= 2:
+        _n = _bump(tool_error_retries, "RUN_BASH_TIMEOUT")
+        if _n >= 2:
             _dresult = (
-                f"[SYSTEM] run_bash timed out {tool_error_retries['RUN_BASH_TIMEOUT']}x. "
-                f"The command is too expensive. Split it into smaller steps, "
-                f"use run_python for logic, or check if an existing faster tool "
-                f"(find_files, search_code, read_file) can achieve the same result.\n\n"
+                f"[SYSTEM] run_bash timed out {_n}x. "
+                "The command is too expensive. Split it into smaller steps, "
+                "use run_python for logic, or check if an existing faster tool "
+                "(find_files, search_code, read_file) can achieve the same result.\n\n"
                 f"Last result: {_dresult[:600]}"
             )
         else:
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
-            if not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"[TIMEOUT] run_bash timed out. The command is too slow or hung. "
-                    f"Do NOT retry the identical command — it will time out again. "
-                    f"Check if you can: (a) use a faster built-in tool, "
-                    f"(b) split into smaller steps, or (c) use run_python instead."
-                )})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_user_hint(dtool_msgs,
+                "[TIMEOUT] run_bash timed out. The command is too slow or hung. "
+                "Do NOT retry the identical command — it will time out again. "
+                "Check if you can: (a) use a faster built-in tool, "
+                "(b) split into smaller steps, or (c) use run_python instead.")
+
     elif _tool_error_has_code(_dresult, "RUN_BASH_NONZERO", "run_bash"):
         _matched = True
-        tool_error_retries["RUN_BASH_NONZERO"] = tool_error_retries.get("RUN_BASH_NONZERO", 0) + 1
-        if tool_error_retries["RUN_BASH_NONZERO"] >= 4:
+        _n = _bump(tool_error_retries, "RUN_BASH_NONZERO")
+        if _n >= 4:
             _dresult = (
-                f"[SYSTEM] run_bash produced a non-zero exit code 4x. "
-                f"The command or its approach does not work. "
-                f"Change strategy — use Python (run_python), "
-                f"access files directly (read_file/edit_file), "
-                f"or analyze the root cause before continuing.\n\n"
+                "[SYSTEM] run_bash produced a non-zero exit code 4x. "
+                "The command or its approach does not work. "
+                "Change strategy — use Python (run_python), "
+                "access files directly (read_file/edit_file), "
+                "or analyze the root cause before continuing.\n\n"
                 + ('...' if len(_dresult) > 300 else '')
             )
         else:
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
-            if tool_error_retries["RUN_BASH_NONZERO"] >= 2 and not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"[SYSTEM] run_bash returned non-zero exit code "
-                    f"(attempt {tool_error_retries['RUN_BASH_NONZERO']}/4). "
-                    f"Do NOT retry the exact same command. Read documentation, "
-                    f"check file contents, or use a different approach."
-                )})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_user_hint(dtool_msgs,
+                (f"[SYSTEM] run_bash returned non-zero exit code "
+                 f"(attempt {_n}/4). "
+                 "Do NOT retry the exact same command. Read documentation, "
+                 "check file contents, or use a different approach.") if _n >= 2 else None)
+
     elif _tool_error_has_code(_dresult, "RUN_BASH_BLOCKED", "run_bash"):
         _matched = True
-        tool_error_retries["RUN_BASH_BLOCKED"] = tool_error_retries.get("RUN_BASH_BLOCKED", 0) + 1
-        if tool_error_retries["RUN_BASH_BLOCKED"] >= 2:
+        if _bump(tool_error_retries, "RUN_BASH_BLOCKED") >= 2:
             _dresult = (
-                f"[SYSTEM] run_bash blocked 2x — this or similar commands "
-                f"are blocked for security reasons. Use Python (run_python) "
-                f"or git commands as an alternative."
+                "[SYSTEM] run_bash blocked 2x — this or similar commands "
+                "are blocked for security reasons. Use Python (run_python) "
+                "or git commands as an alternative."
             )
         else:
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
-            if not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"[BLOCKED] run_bash command blocked for safety. "
-                    f"Do NOT retry the same command. Use run_python or a safer alternative."
-                )})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_user_hint(dtool_msgs,
+                "[BLOCKED] run_bash command blocked for safety. "
+                "Do NOT retry the same command. Use run_python or a safer alternative.")
+
     elif _tool_error_has_code(_dresult, "RUN_BASH_EXEC_ERROR", "run_bash"):
         _matched = True
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
-        if not _recovery_saturated(dtool_msgs):
-            dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                "run_bash: the shell itself failed to execute (not the command). "
-                "Try run_python for the same logic, or simplify to a single build/test command. "
-                "Do NOT retry the identical run_bash call."
-            )})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+        _append_user_hint(dtool_msgs,
+            "run_bash: the shell itself failed to execute (not the command). "
+            "Try run_python for the same logic, or simplify to a single build/test command. "
+            "Do NOT retry the identical run_bash call.")
+
     elif _tool_error_has_code(_dresult, "FILE_READ_FAILED", "read_file"):
         _matched = True
-        _rf_path = _dargs.get("path", "")
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+        # always surfaced: path guidance is cheap and precise
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-            f"FILE_READ_FAILED on '{_rf_path}': check the path with list_dir, "
-            f"verify the file exists, then retry. If the file is missing, "
-            f"use find_files to locate it or create it with write_file."
+            f"FILE_READ_FAILED on '{_dargs.get('path', '')}': check the path with list_dir, "
+            "verify the file exists, then retry. If the file is missing, "
+            "use find_files to locate it or create it with write_file."
         )})
+
     elif _tool_error_has_code(_dresult, "EDIT_AST_UNAVAILABLE", "edit_ast"):
         _matched = True
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "EDIT_AST_UNAVAILABLE: AST editor not available. "
             "Use edit_file with SEARCH/REPLACE blocks as fallback. "
             "Read the file first, then build a SEARCH block with the "
             "exact target function/class to replace."
         )})
+
     elif _tool_error_has_code(_dresult, "GIT_COMMIT_FAILED", "git_commit"):
         _matched = True
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "GIT_COMMIT_FAILED: run git_status first to check for "
             "conflicts, untracked files, or detached HEAD state, "
             "then resolve and retry the commit."
         )})
+
     elif _tool_error_has_code(_dresult, "WEBSEARCH_UNAVAILABLE", "web_search") or \
          _tool_error_has_code(_dresult, "WEBSEARCH_FAILED", "web_search"):
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "Web search unavailable or failed. "
             "Use search_code to find patterns in the codebase, "
             "or rely on existing code knowledge. Do NOT retry web_search."
         )})
+
     elif _tool_error_has_code(_dresult, "WEBFETCH_UNAVAILABLE", "web_fetch") or \
          _tool_error_has_code(_dresult, "WEBFETCH_FAILED", "web_fetch"):
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "Web fetch unavailable or failed. "
             "Use web_search to find the content elsewhere, "
             "or check if local documentation exists with find_files. "
             "Do NOT retry web_fetch with the same URL."
         )})
+
     elif _tool_error_has_code(_dresult, "GIT_UNAVAILABLE") or \
          _tool_error_has_code(_dresult, "GIT_STATUS_FAILED"):
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "Git tools not available or git status failed — "
             "repo may be damaged or not initialized. "
             "Skip all git operations and use find_files + search_code "
             "to inspect project state. Do NOT retry git commands."
         )})
+
     elif _tool_error_has_code(_dresult, "TOOL_EXEC_CRASH") or \
          _tool_error_has_code(_dresult, "TOOL_NOT_FOUND") or \
          _tool_error_has_code(_dresult, "TOOL_NOT_ALLOWED"):
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "Tool call failed (crash, unknown tool, or not allowed). "
             "Use only the tools listed in your system prompt function list. "
             "Try a different tool to achieve the same result. "
             "Do NOT retry the same call."
         )})
+
     elif _tool_error_has_code(_dresult, "FIND_FILES_FAILED", "find_files"):
         _matched = True
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "FIND_FILES_FAILED: try a simpler glob like *.py or *.ts, "
             "or use list_dir to explore the directory manually."
         )})
+
     elif _tool_error_has_code(_dresult, "LIST_DIR_FAILED", "list_dir"):
         _matched = True
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "LIST_DIR_FAILED: use find_files with **/* pattern "
             "to explore the directory instead."
         )})
+
     elif _tool_error_has_code(_dresult, "GET_SIGNATURES_FAILED", "get_signatures"):
         _matched = True
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "GET_SIGNATURES_FAILED: use read_file with start_line/end_line "
             "to inspect the file section manually."
         )})
+
     elif _tool_error_has_code(_dresult, "WRITE_FILE_APPEND_FAILED", "write_file_append"):
         _matched = True
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "WRITE_FILE_APPEND_FAILED: append failed (disk full or permission). "
             "Use write_file to fully overwrite the target path instead."
         )})
+
     elif _tool_error_has_code(_dresult, "REPLACE_LINES_INVALID_START", "replace_lines") or \
          _tool_error_has_code(_dresult, "REPLACE_LINES_INVALID_END", "replace_lines") or \
          _tool_error_has_code(_dresult, "REPLACE_LINES_FAILED", "replace_lines"):
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "REPLACE_LINES error: line numbers may be stale. "
             "Call read_file to get current line numbers, then retry. "
             "If that fails, use edit_file with SEARCH/REPLACE instead."
         )})
+
     elif _tool_error_has_code(_dresult, "MISSING_ARG", "git_commit"):
         _matched = True
-        dtool_msgs.append({"role": "tool", "content": _dresult,
-                            "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+        _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
             "MISSING_ARG: git_commit requires a non-empty message. "
             "Provide a short one-line description of the changes."
         )})
+
     elif _tool_error_has_code(_dresult, "INVALID_ARGUMENT"):
         _matched = True
-        _ia_key = f"ia_{_dname}"
-        attempts_per_file[_ia_key] = attempts_per_file.get(_ia_key, 0) + 1
-        if attempts_per_file[_ia_key] >= 2:
+        if _bump(attempts_per_file, f"ia_{_dname}") >= 2:
             _dresult = (
                 f"[SYSTEM] Repeated INVALID_ARGUMENT on {_dname}. "
                 f"Do not call {_dname} again until you have verified "
                 f"the exact argument schema. Use a simpler tool if unsure."
             )
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
         else:
-            dtool_msgs.append({"role": "tool", "content": _dresult,
-                                "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
-            if not _recovery_saturated(dtool_msgs):
-                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"INVALID_ARGUMENT on {_dname}. "
-                    f"Check the required arguments for {_dname} and retry "
-                    f"with all required fields correctly formatted."
-                )})
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
+            _append_user_hint(dtool_msgs,
+                f"INVALID_ARGUMENT on {_dname}. "
+                f"Check the required arguments for {_dname} and retry "
+                f"with all required fields correctly formatted.")
     return _dresult, _matched
 
 # ── Batch 3: emit-heavy sections (from execute_tool_round) ─────────────────
@@ -995,3 +976,9 @@ class ToolRoundState:
     # and may be changed freely in-place.
     cache_horizon: int = 0
     superseded_paths: list = field(default_factory=list)
+    # LADDER-PERSIST (2026-09-09): counter lives across rounds — previously a
+    # function-local in execute_tool_round (reset every round), which made the
+    # ladder dead for the common 1-tool-call-per-round case.
+    consecutive_reads: int = 0
+    last_read_path: str = ""
+    read_ladder_fired: bool = False

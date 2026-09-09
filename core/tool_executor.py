@@ -43,6 +43,26 @@ from core.tool_exec_helpers import (
 _logger = logging.getLogger("tool_executor")
 
 
+# ── task_complete block/allow ladder (was 5 near-identical inline copies) ──
+_TC_ALLOWED_MSG = ("[task_complete ALLOWED] Accepted with status=blocked "
+                   "after repeated attempts — proceeding.")
+
+def _task_complete_ladder(trs, dtool_msgs, result, allow_on_blocked: bool,
+                          blocked_msg: str, allowed_msg: str | None = None) -> str:
+    """Count a blocked task_complete attempt. Returns:
+    'block'       -> feedback injected; caller continues the round loop
+    'allow_break' -> accepted (3rd attempt + tc_blocked); caller breaks
+    'allow'       -> accepted without tc_blocked; caller keeps its own flow
+    """
+    trs.task_complete_blocked_count[0] += 1
+    if trs.task_complete_blocked_count[0] < 3:
+        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX + blocked_msg)})
+        return "block"
+    if allowed_msg is not None:
+        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX + allowed_msg)})
+    result.task_complete_called = True
+    return "allow_break" if allow_on_blocked else "allow"
+
 def _render_tool_menu(tool_mode: str, duo_ws: bool, max_items: int = 30) -> str:
     """BASH-LOOP-REINJECT (2026-09-02): build a compact list of the tools that
     are actually available in this mode, so a bash-looping model is reminded of
@@ -240,9 +260,7 @@ async def execute_tool_round(
         changed_since_failure=trs.changed_since_failure,
         last_learned_insight_sig=trs.last_learned_insight_sig)
     _dname = _dresult = ""
-    _consecutive_reads = 0
-    _last_read_path = ""  # PATH-RESET (2026-09-09): ladder only counts same-path re-reads
-    _read_ladder_fired = False  # READ-LADDER cooldown (2026-09-07): bool flag, reset by write
+    # LADDER-PERSIST (2026-09-09): ladder counters live in trs across rounds.
     _round_noop_hints: list[str] = []  # NO-OP hint (2026-09-07): appended as user msg at end of round
     if trs.total_tool_errors is None:
         trs.total_tool_errors = [0]
@@ -457,23 +475,17 @@ async def execute_tool_round(
                             _logger.info("[AUTO-TEST] No tests in the project - task_complete allowed through (manual verification)")
                             result.task_complete_called = True
                             break
-                        trs.task_complete_blocked_count[0] += 1
-                        if trs.task_complete_blocked_count[0] < 3:
-                            dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                                "[AUTO-TEST BLOCKED] task_complete rejected: the test suite is NOT green "
-                                "(see TEST-RESULT above). Fix the failures, then run_tests again — "
-                                "task_complete is only allowed once tests pass."
-                            )})
-                            _auto_test_skips_gate = True
+                        _gate = _task_complete_ladder(
+                            trs, dtool_msgs, result, True,
+                            "[AUTO-TEST BLOCKED] task_complete rejected: the test suite is NOT green "
+                            "(see TEST-RESULT above). Fix the failures, then run_tests again — "
+                            "task_complete is only allowed once tests pass.",
+                            "[task_complete ALLOWED] Tests failed 3x — accepting task_complete "
+                            "with the failing test status so the run can end.")
+                        _auto_test_skips_gate = True
+                        if _gate == "block":
                             continue
-                        else:
-                            result.task_complete_called = True
-                            dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                                "[task_complete ALLOWED] Tests failed 3x — accepting task_complete "
-                                "with the failing test status so the run can end."
-                            )})
-                            _auto_test_skips_gate = True
-                            break
+                        break
 
                 # ── Ordered bash check: last run_bash must be AFTER last edit AND successful ──
                 # (Bei aktivem Auto-Test: BLOCKED → continue, ALLOWED → break oben —
@@ -517,28 +529,15 @@ async def execute_tool_round(
 
 
                     if _last_append_idx >= _last_edit_idx and _last_append_idx != -1:
-                        trs.task_complete_blocked_count[0] += 1
-                        if trs.task_complete_blocked_count[0] >= 3 and _tc_blocked:
-                            dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                                "[task_complete ALLOWED] Accepted with status=blocked "
-                                "after repeated attempts — proceeding."
-                            )})
-                            result.task_complete_called = True
-                        
-                            return True
-                        elif trs.task_complete_blocked_count[0] >= 3:
-                        
-                            result.task_complete_called = True
-                            return True
-                        else:
-                            dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                                "[CHUNK INCOMPLETE] The last file operation was "
-                                "write_file_append — a chunk sequence may be "
-                                "unfinished. Write your final chunk or confirm "
-                                "completion with a different tool call before "
-                                "calling task_complete."
-                            )})
-                            return True
+                        _task_complete_ladder(
+                            trs, dtool_msgs, result, bool(_tc_blocked),
+                            "[CHUNK INCOMPLETE] The last file operation was "
+                            "write_file_append — a chunk sequence may be "
+                            "unfinished. Write your final chunk or confirm "
+                            "completion with a different tool call before "
+                            "calling task_complete.",
+                            _TC_ALLOWED_MSG if _tc_blocked else None)
+                        return True
                     return False
 
                 if not _mutations_made:
@@ -546,22 +545,14 @@ async def execute_tool_round(
                     if _last_bash_idx != -1 and not _last_bash_failed and _last_bash_verified:
                         result.task_complete_called = True
                     else:
-                        trs.task_complete_blocked_count[0] += 1
-                        if trs.task_complete_blocked_count[0] >= 3 and _tc_blocked:
-                            dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                                "[task_complete ALLOWED] Accepted with status=blocked "
-                                "after repeated attempts — proceeding."
-                            )})
-                            result.task_complete_called = True
+                        _gate = _task_complete_ladder(
+                            trs, dtool_msgs, result, bool(_tc_blocked),
+                            "[task_complete BLOCKED] No file edits were made this run. "
+                            "You must make at least one edit (write_file/edit_file) "
+                            "or verify something with run_bash before completing. Continue.",
+                            _TC_ALLOWED_MSG if _tc_blocked else None)
+                        if _gate == "allow_break":
                             break
-                        elif trs.task_complete_blocked_count[0] >= 3:
-                            result.task_complete_called = True
-                        else:
-                            dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                                "[task_complete BLOCKED] No file edits were made this run. "
-                                "You must make at least one edit (write_file/edit_file) "
-                                "or verify something with run_bash before completing. Continue."
-                            )})
 
                 elif _last_bash_idx == -1:
                     if _chunk_incomplete_p():
@@ -572,46 +563,30 @@ async def execute_tool_round(
                         break
 
                 elif _last_bash_idx <= _last_edit_idx:
-                    trs.task_complete_blocked_count[0] += 1
-                    if trs.task_complete_blocked_count[0] >= 3 and _tc_blocked:
-                        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                            "[task_complete ALLOWED] Accepted with status=blocked "
-                            "after repeated attempts — proceeding."
-                        )})
-                        result.task_complete_called = True
-                    
+                    _gate = _task_complete_ladder(
+                        trs, dtool_msgs, result, bool(_tc_blocked),
+                        "[VERIFY REQUIRED] Code was changed since the last "
+                        "run_bash — changes are unverified. Call run_tests now; "
+                        "if it reports no suite, run the project's documented check "
+                        "via run_bash (e.g. python selftest.py) and ensure exit code 0. "
+                        "Then call task_complete.",
+                        _TC_ALLOWED_MSG if _tc_blocked else None)
+                    if _gate == "allow_break":
                         break
-                    elif trs.task_complete_blocked_count[0] >= 3:
+                    if _gate == "allow":
                         _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
-                        result.task_complete_called = True
-                    else:
-                        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                            "[VERIFY REQUIRED] Code was changed since the last "
-                            "run_bash — changes are unverified. Call run_tests now; "
-                            "if it reports no suite, run the project's documented check "
-                            "via run_bash (e.g. python selftest.py) and ensure exit code 0. "
-                            "Then call task_complete."
-                        )})
 
                 elif _last_bash_failed:
-                    trs.task_complete_blocked_count[0] += 1
-                    if trs.task_complete_blocked_count[0] >= 3 and _tc_blocked:
-                        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                            "[task_complete ALLOWED] Accepted with status=blocked "
-                            "after repeated attempts — proceeding."
-                        )})
-                        result.task_complete_called = True
-                    
+                    _gate = _task_complete_ladder(
+                        trs, dtool_msgs, result, bool(_tc_blocked),
+                        "[VERIFY FAILED] The last run_bash exited with a "
+                        "non-zero exit code. Fix the error and run your tests "
+                        "again before calling task_complete.",
+                        _TC_ALLOWED_MSG if _tc_blocked else None)
+                    if _gate == "allow_break":
                         break
-                    elif trs.task_complete_blocked_count[0] >= 3:
+                    if _gate == "allow":
                         _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
-                        result.task_complete_called = True
-                    else:
-                        dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                            "[VERIFY FAILED] The last run_bash exited with a "
-                            "non-zero exit code. Fix the error and run your tests "
-                            "again before calling task_complete."
-                        )})
 
                 else:
                     _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
@@ -709,17 +684,10 @@ async def execute_tool_round(
         # ── Context LRU registration ──
         _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult,
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)
-        # ── Read-file ladder tracker ──
-        _consecutive_reads = _update_read_ladder(
-            _dname, _args_parse_failed, _consecutive_reads,
-            _focus_path or "", _last_read_path)
-        if _dname == "read_file" and not _args_parse_failed:
-            _last_read_path = _focus_path or ""
-        if _dname in ("edit_file", "write_file", "patch_file", "write_file_append",
-                      "replace_lines", "run_bash", "run_python"):
-            if _read_ladder_fired:
-                _logger.info("[READ-LADDER] cooldown reset by write/edit (tool=%s)", _dname)
-            _read_ladder_fired = False
+        # ── Read-file ladder tracker (persistent across rounds) ──
+        _update_read_ladder(trs, _dname, _args_parse_failed, _focus_path or "")
+        _consecutive_reads = trs.consecutive_reads
+        _read_ladder_fired = trs.read_ladder_fired
 
         # ── Loop detection ──
         _args_str = _raw_s
@@ -789,8 +757,8 @@ async def execute_tool_round(
             else:
                 _logger.info("[READ-LADDER] skipped (recovery_saturated=True) consecutive=%d", _consecutive_reads)
             await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_consecutive_reads}x reads ohne Write — Hint injiziert]\n"})
-            _read_ladder_fired = True
-            _consecutive_reads = 0
+            trs.read_ladder_fired = True
+            trs.consecutive_reads = 0
 
     # NO-OP HINT (2026-09-07): append only after all tool results of this
     # round, so the assistant(tool_calls) -> tool-result ordering stays

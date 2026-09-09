@@ -1516,6 +1516,10 @@ async def run_code_duo(ctx):
         _verify_mutation_serial = 0
         _verify_last_ok_serial = 0
         _task_complete_blocked = [0]
+        # VERIFY-GATE-OWNER (2026-09-09): own veto counter. The executor's
+        # task_complete ladder used to pre-satisfy this gate (shared counter),
+        # skipping verification entirely after 3 in-loop blocks.
+        _verify_gate_blocks = 0
         _verify_warned = False
         # laufen via asyncio.gather (tool_executor _PARALLEL_SAFE) in Child-Tasks
         # bliebe _files_read_in_run im Parent None (Compression-Removal + SKIP-
@@ -4628,16 +4632,16 @@ async def run_code_duo(ctx):
                                     and bool(_written_files)
                                     and not _verify_warned
                                 )
-                                if _needs_verify and _task_complete_blocked[0] >= 2:
-                                    _task_complete_blocked[0] += 1
+                                if _needs_verify and _verify_gate_blocks >= 1:
+                                    _verify_gate_blocks += 1
                                     logger.warning(
-                                        "[VERIFY-GATE] task_complete accepted after %d blocks "
+                                        "[VERIFY-GATE] task_complete accepted after %d vetoes "
                                         "(verification not possible in this environment)",
-                                        _task_complete_blocked[0],
+                                        _verify_gate_blocks,
                                     )
                                 elif _needs_verify:
                                     _exec_result.task_complete_called = False
-                                    _task_complete_blocked[0] += 1
+                                    _verify_gate_blocks += 1
                                     _verify_warned = True
                                     # vague "run your tests" — baseline FAIL repo_peon r1
                                     # run_tests → no-suite fallback run_bash → task_complete.

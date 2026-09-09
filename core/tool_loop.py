@@ -120,7 +120,25 @@ def _grammar_compatible(payload: dict) -> bool:
     return not (payload.get("tools") or payload.get("tool_choice"))
 
 
+# RETRY-DEDUPE (2026-09-09): one decision table for the stream and
+# non-stream POST paths (previously duplicated in both retry loops).
+def _retry_allowed(cfg, kind: str, attempt: int) -> bool:
+    """True when this failure kind should be retried now."""
+    if attempt >= cfg.max_post_attempts - 1:
+        return False
+    return bool({
+        "5xx": cfg.retry_on_5xx,
+        "404": cfg.retry_on_404,
+        "connect": cfg.retry_on_connect,
+        "read": cfg.retry_on_read_timeout,
+        "grammar": cfg.retry_on_grammar_crash,
+        "overflow": cfg.retry_on_context_overflow,
+    }.get(kind, False))
+
+
 @dataclass
+
+
 class ToolLoopConfig:
     """All configuration for a ToolLoop run. All fields have sensible defaults."""
     stream: bool = False
@@ -475,13 +493,13 @@ class ToolLoop:
                     json=payload,
                     timeout=_timeout,
                 ) as _resp:
-                    if self.cfg.retry_on_5xx and _resp.status_code in (500, 502, 503, 504) and _attempt < self.cfg.max_post_attempts - 1:
+                    if _resp.status_code in (500, 502, 503, 504) and _retry_allowed(self.cfg, "5xx", _attempt):
                         await _resp.aread()
                         await asyncio.sleep(1.5 + min(1.0, _attempt * 0.1))
                         _events.append({"type": "status", "content": f"⏳ Server {_resp.status_code}, retry {_attempt+1}/{self.cfg.max_post_attempts}…"})
                         continue
 
-                    if self.cfg.retry_on_404 and _resp.status_code == 404 and _attempt < self.cfg.max_post_attempts - 1:
+                    if _resp.status_code == 404 and _retry_allowed(self.cfg, "404", _attempt):
                         await _resp.aread()
                         await asyncio.sleep(2.0)
                         _events.append({"type": "status", "content": f"⚠ HTTP 404, retry {_attempt+1}…"})
@@ -496,14 +514,14 @@ class ToolLoop:
                     return self._parse_nonstream(_resp, _events)
 
             except httpx.ConnectError:
-                if self.cfg.retry_on_connect and _attempt < self.cfg.max_post_attempts - 1:
+                if _retry_allowed(self.cfg, "connect", _attempt):
                     await asyncio.sleep(5.0)
                     _events.append({"type": "status", "content": f"⟳ Connection error, retry {_attempt+2}…"})
                     continue
                 raise
 
             except (httpx.ReadTimeout, httpx.ReadError):
-                if self.cfg.retry_on_read_timeout and _attempt < self.cfg.max_post_attempts - 1:
+                if _retry_allowed(self.cfg, "read", _attempt):
                     await asyncio.sleep(3.0)
                     _events.append({"type": "status", "content": f"⚠ Read timeout, retry {_attempt+1}…"})
                     continue
@@ -525,13 +543,13 @@ class ToolLoop:
                     json=payload,
                     timeout=_timeout,
                 ) as _resp:
-                    if self.cfg.retry_on_5xx and _resp.status_code in (500, 502, 503, 504) and _attempt < self.cfg.max_post_attempts - 1:
+                    if _resp.status_code in (500, 502, 503, 504) and _retry_allowed(self.cfg, "5xx", _attempt):
                         await _resp.aread()
                         await asyncio.sleep(1.5 + min(1.0, _attempt * 0.1))
                         yield {"type": "status", "content": f"⏳ Server {_resp.status_code}, retry {_attempt+1}/{self.cfg.max_post_attempts}…"}
                         continue
 
-                    if self.cfg.retry_on_404 and _resp.status_code == 404 and _attempt < self.cfg.max_post_attempts - 1:
+                    if _resp.status_code == 404 and _retry_allowed(self.cfg, "404", _attempt):
                         await _resp.aread()
                         await asyncio.sleep(2.0)
                         yield {"type": "status", "content": f"⚠ HTTP 404, retry {_attempt+1}…"}
@@ -629,14 +647,14 @@ class ToolLoop:
                     return
 
             except httpx.ConnectError:
-                if self.cfg.retry_on_connect and _attempt < self.cfg.max_post_attempts - 1:
+                if _retry_allowed(self.cfg, "connect", _attempt):
                     await asyncio.sleep(5.0)
                     yield {"type": "status", "content": f"⟳ Connection error, retry {_attempt+2}…"}
                     continue
                 raise
 
             except (httpx.ReadTimeout, httpx.ReadError):
-                if self.cfg.retry_on_read_timeout and _attempt < self.cfg.max_post_attempts - 1:
+                if _retry_allowed(self.cfg, "read", _attempt):
                     await asyncio.sleep(3.0)
                     yield {"type": "status", "content": f"⚠ Read timeout, retry {_attempt+1}…"}
                     continue
