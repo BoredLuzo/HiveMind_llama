@@ -237,6 +237,29 @@ res, hooks, msgs, rs, seen, ltl = run_round([
 ])
 check("read_required cap injected", any("3+ READ_REQUIRED" in str(m.get("content", "")) for m in msgs))
 
+# ── 13. STUB-ECHO-GUARD (2026-09-09): write args containing the
+#        ARG-COMPACT stub must be blocked before execution (spark-4b copied
+#        the stub verbatim back into a file). ─────────────────────────────
+_STUB_TEXT = ("[executed write_file_append: 4931 arg chars (sha 286c3f73) - "
+              "content NOT in context anymore - read_file this path before "
+              "any further write/edit to avoid full-file rewrites]")
+_HANDLERS["write_file_append"] = "[write_file_append: would have been executed!]"
+res, hooks, msgs, rs, seen, ltl = run_round(
+    [tc("write_file_append", {"path": "game.js", "content": _STUB_TEXT})])
+check("stub-echo blocked", any("STUB_ECHO_BLOCKED" in str(m.get("content", "")) for m in msgs))
+check("stub-echo not executed",
+      res.last_tool_name != "write_file_append"
+      or "would have been executed" not in res.last_tool_result)
+check("stub-echo no tool_result event",
+      not any(e.get("type") == "tool_result" and "would have been executed" in str(e)
+              for e in hooks.events))
+
+# Clean content with a passing mention of the phrase must still be blocked
+# only for write tools; a read_file containing the text stays executable.
+_HANDLERS["read_file"] = "note: content not in context anymore is fine to read"
+res, hooks, msgs, rs, seen, ltl = run_round([tc("read_file", {"path": "a.md"})])
+check("stub-echo read still works", "fine to read" in res.last_tool_result)
+
 print()
 print(f"{'='*50}")
 print(f"  {passed} passed, {failed} failed  (total {passed + failed})")

@@ -157,6 +157,13 @@ _WRITE_ARG_COMPACT_NAMES = {
     "patch_file", "replace_lines",
 }
 
+# STUB-ECHO-GUARD (2026-09-09): the ARG-COMPACT stub below is compacted into
+# the conversation history after a successful large write. Small models
+# occasionally copy that stub verbatim out of their own history and "write"
+# it back into the file (observed live with spark-x2.5:4b). Any write/edit
+# whose arguments contain this marker is rejected before execution.
+_WRITE_STUB_MARK = "content not in context anymore"
+
 
 def _args_str_len(raw_args) -> int:
     if isinstance(raw_args, str):
@@ -314,6 +321,21 @@ async def execute_tool_round(
             continue
 
         _focus_path = _track_focus_path(_dargs, _dname, trs.tool_ctx_lru, trs.recent_focus_paths, _MAX_FOCUS_PATHS)
+
+        if _dname in _WRITE_ARG_COMPACT_NAMES and _WRITE_STUB_MARK in json.dumps(_dargs, ensure_ascii=False).lower():
+            _logger.warning("[STUB-ECHO] %s blocked: compaction stub found in write args (path=%s)",
+                            _dname, str((_dargs or {}).get("path", "?")) or "?")
+            dtool_msgs.append({
+                "role": "tool",
+                "content": _tool_error_response(
+                    "STUB_ECHO_BLOCKED",
+                    "Blocked: these arguments contain the internal compaction stub, not real file content. "
+                    "Call read_file on the path to load the current content, then write the real content.",
+                    tool=_dname, mode=tool_mode ),
+                "tool_call_id": _dtc_call.get("id", _dname),
+                "name": _dname,
+            })
+            continue
 
         if not _dargs and _dname in ("patch_file", "edit_file", "write_file", "write_file_append", "read_file"):
             dtool_msgs.append({
