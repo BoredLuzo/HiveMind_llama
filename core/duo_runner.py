@@ -4463,7 +4463,7 @@ async def run_code_duo(ctx):
                             {tc.get("function", {}).get("name", "") for tc in (_dr_tcs or [])}
                             == {"run_bash"}
                         )
-                        _snap_before = _loop_detect_file_snapshot() if _round_bash_only else None
+                        _snap_before = (await asyncio.to_thread(_loop_detect_file_snapshot)) if _round_bash_only else None
                         # ── Execute all tool calls via shared executor ──
                         # CACHE-HORIZON (2026-09-04): everything < cache_horizon
                         # has already been sent (immutable prefix); everything
@@ -4708,7 +4708,7 @@ async def run_code_duo(ctx):
                         elif _round_tool_names & _WRITE_TOOLS:
                             _bash_changed = None
                             if _round_tool_names == {"run_bash"} and _snap_before is not None:
-                                _snap_after = _loop_detect_file_snapshot()
+                                _snap_after = await asyncio.to_thread(_loop_detect_file_snapshot)
                                 from hive_functions.chunking import compute_bash_changed
                                 _bash_changed = compute_bash_changed(_snap_before, _snap_after)
                             from hive_functions.chunking import resolve_explore_reset

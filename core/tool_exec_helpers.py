@@ -629,80 +629,46 @@ async def _handle_ask_user(_dname, _dargs, hooks, exec_model, cached_coder_port,
 async def _execute_one_tool(_dname, _dargs, _dargs_with_model, _i, _pre_results,
                               duo_seen_web_queries, workspace_lock, tool_mode, duo_ws) -> str:
     """S7: web_search dedup + tool execution (from execute_tool_round)."""
+    # DEDUP-EXEC-MERGE (2026-09-09): web_search and the generic path shared
+    # byte-identical execution code; only the dedup prelude differs.
     if _dname == "web_search":
         _ws_query_norm = str(_dargs.get("query", "")).strip().lower()
         if _ws_query_norm and _ws_query_norm in duo_seen_web_queries:
-            _dresult = f"[web_search dedup: duplicate query skipped: {_ws_query_norm[:180]}]"
-        else:
-            if _ws_query_norm:
-                duo_seen_web_queries.add(_ws_query_norm)
-            if _i in _pre_results:
-                _dresult = _pre_results[_i]
-            else:
-                _READ_TOOL_TIMEOUT = 30.0
-                _READ_TOOLS = {"read_file", "search_code", "find_files", "list_dir",
-                               "get_file_summary", "get_signatures"}
-                if _dname in _READ_TOOLS:
-                    try:
-                        _dresult = await asyncio.wait_for(
-                            _run_inline_tool(
-                                _dname, _dargs_with_model,
-                                workspace_lock=workspace_lock,
-                                tool_mode=tool_mode, include_websearch=duo_ws),
-                            timeout=_READ_TOOL_TIMEOUT,
-                        )
-                    except asyncio.TimeoutError:
-                        _dresult = _tool_error_response(
-                            "TOOL_TIMEOUT",
-                            f"{_dname} timed out after {_READ_TOOL_TIMEOUT:.0f}s. "
-                            "The file system may be unresponsive. "
-                            "Try a different path or use find_files with a narrower pattern.",
-                            tool=_dname, mode=tool_mode)
-                else:
-                    try:
-                        _dresult = await _run_inline_tool(
-                            _dname, _dargs_with_model,
-                            workspace_lock=workspace_lock,
-                            tool_mode=tool_mode, include_websearch=duo_ws)
-                    except Exception as _tool_exc:
-                        _dresult = _tool_error_response(
-                            "TOOL_EXEC_CRASH",
-                            f"{type(_tool_exc).__name__}: {str(_tool_exc)[:200]}",
-                            tool=_dname, mode=tool_mode )
-    else:
-        if _i in _pre_results:
-            _dresult = _pre_results[_i]
-        else:
-            _READ_TOOL_TIMEOUT = 30.0
-            _READ_TOOLS = {"read_file", "search_code", "find_files", "list_dir",
-                           "get_file_summary", "get_signatures"}
-            if _dname in _READ_TOOLS:
-                try:
-                    _dresult = await asyncio.wait_for(
-                        _run_inline_tool(
-                            _dname, _dargs_with_model,
-                            workspace_lock=workspace_lock,
-                            tool_mode=tool_mode, include_websearch=duo_ws),
-                        timeout=_READ_TOOL_TIMEOUT,
-                    )
-                except asyncio.TimeoutError:
-                    _dresult = _tool_error_response(
-                        "TOOL_TIMEOUT",
-                        f"{_dname} timed out after {_READ_TOOL_TIMEOUT:.0f}s.",
-                        tool=_dname, mode=tool_mode)
-            else:
-                try:
-                    _dresult = await _run_inline_tool(
-                        _dname, _dargs_with_model,
-                        workspace_lock=workspace_lock,
-                        tool_mode=tool_mode, include_websearch=duo_ws)
-                except Exception as _tool_exc:
-                    _dresult = _tool_error_response(
-                        "TOOL_EXEC_CRASH",
-                        f"{type(_tool_exc).__name__}: {str(_tool_exc)[:200]}",
-                        tool=_dname, mode=tool_mode )
+            return f"[web_search dedup: duplicate query skipped: {_ws_query_norm[:180]}]"
+        if _ws_query_norm:
+            duo_seen_web_queries.add(_ws_query_norm)
 
-    return _dresult
+    if _i in _pre_results:
+        return _pre_results[_i]
+
+    _READ_TOOL_TIMEOUT = 30.0
+    _READ_TOOLS = {"read_file", "search_code", "find_files", "list_dir",
+                   "get_file_summary", "get_signatures"}
+    try:
+        if _dname in _READ_TOOLS:
+            return await asyncio.wait_for(
+                _run_inline_tool(
+                    _dname, _dargs_with_model,
+                    workspace_lock=workspace_lock,
+                    tool_mode=tool_mode, include_websearch=duo_ws),
+                timeout=_READ_TOOL_TIMEOUT,
+            )
+        return await _run_inline_tool(
+            _dname, _dargs_with_model,
+            workspace_lock=workspace_lock,
+            tool_mode=tool_mode, include_websearch=duo_ws)
+    except asyncio.TimeoutError:
+        return _tool_error_response(
+            "TOOL_TIMEOUT",
+            f"{_dname} timed out after {_READ_TOOL_TIMEOUT:.0f}s. "
+            "The file system may be unresponsive. "
+            "Try a different path or use find_files with a narrower pattern.",
+            tool=_dname, mode=tool_mode)
+    except Exception as _tool_exc:
+        return _tool_error_response(
+            "TOOL_EXEC_CRASH",
+            f"{type(_tool_exc).__name__}: {str(_tool_exc)[:200]}",
+            tool=_dname, mode=tool_mode)
 
 async def _maybe_activate_reactive_think(_dname, _dresult, round_state, dtool_msgs,
                                           hooks, tool_think_auto_mode, exec_has_thinking):
@@ -756,7 +722,6 @@ async def _maybe_activate_reactive_think(_dname, _dresult, round_state, dtool_ms
 async def _run_bash_fail_fix_pass_insight(_dname, _dargs, _dresult, result, hooks,
                                             workspace_lock, subtask_index):
     """S10: run_bash fail→fix→pass insight (from execute_tool_round)."""
-    _build_fix_insight = None  # lazy import
     _rb_failed = _run_bash_failed(_dresult)
     if _rb_failed:
         result.last_run_bash_failure = {
@@ -769,10 +734,8 @@ async def _run_bash_fail_fix_pass_insight(_dname, _dargs, _dresult, result, hook
         result.verify_last_ok_serial = max(result.verify_last_ok_serial, result.verify_mutation_serial)
         if result.last_run_bash_failure and result.changed_since_failure:
             _files_for_hint = sorted(result.changed_since_failure)[:3]
-            if _build_fix_insight is None:
-                from utils.text import build_fix_insight_sentence as _bfis
-                _build_fix_insight = _bfis
-            _insight = _build_fix_insight(
+            from utils.text import build_fix_insight_sentence as _bfis
+            _insight = _bfis(
                 result.last_run_bash_failure.get("cmd", "run_bash"),
                 result.last_run_bash_failure.get("err", ""),
                 _files_for_hint)
@@ -864,13 +827,19 @@ async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
     _fc_path = _dargs.get("path", "")
     if _fc_path and not _tool_call_failed(_dresult, _dname):
         _fc_content = ""
+        # SYNC-IO-ASYNC (2026-09-09): file read off the event loop.
+        _ws_root = Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve()
+        def _read_fc_content() -> str:
+            try:
+                _abs = (_ws_root / _fc_path).resolve()
+                if str(_abs).startswith(str(_ws_root)):
+                    if _abs.stat().st_size <= 100 * 1024:
+                        return _abs.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return ""
+            return ""
         try:
-            _ws_root = Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve()
-            _abs = (_ws_root / _fc_path).resolve()
-            if str(_abs).startswith(str(_ws_root)):
-                _fc_size = _abs.stat().st_size
-                if _fc_size <= 100 * 1024:
-                    _fc_content = _abs.read_text(encoding="utf-8", errors="replace")
+            _fc_content = await asyncio.to_thread(_read_fc_content)
         except Exception:
             _fc_content = ""
         if _dname == "write_file":

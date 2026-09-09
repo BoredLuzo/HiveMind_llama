@@ -37,6 +37,7 @@ from core.tool_exec_helpers import (
     _run_bash_fail_fix_pass_insight, _patch_file_fallback_hint,
     _read_required_and_python_hints, _unknown_error_hint,
     _track_file_changes, _register_context_lru, _track_edit_noop,
+    _recovery_saturated,
 )
 
 _logger = logging.getLogger("tool_executor")
@@ -109,26 +110,6 @@ class ToolExecResult:
     deadline_extended_to: float = 0.0   # DEADLINE-GRACE: new run deadline after write progress
 
 
-_RECOVERY_PHRASES = (
-    "Do NOT retry", "Do NOT call", "Use write_file",
-    "Call write_file NOW", "[SYSTEM]", "[REPEATED",
-    "[READ LADDER]", "has occurred", "not working",
-    "You MUST split", "Switch strategy", "Do NOT retry",
-    "CALL A TOOL", "Your approach", "Switch to",
-    "Do NOT repeat", "Try a different", "same result.",
-    "[CTX:", "CTX CRITICAL", "[AUTOMATED TOOL SYSTEM]",
-)
-
-def _recovery_saturated(msgs: list) -> bool:
-    """True if last 6 messages already carry 3+ recovery hints."""
-    recent = msgs[-6:] if len(msgs) >= 6 else msgs
-    count = sum(
-        1 for m in recent
-        if m.get("role") in ("user", "system")
-        and any(phrase in (m.get("content") or "")
-                for phrase in _RECOVERY_PHRASES)
-    )
-    return count >= 3
 
 
 def _cap_tool_result(result: str, max_chars: int = 8000) -> str:
@@ -258,7 +239,6 @@ async def execute_tool_round(
         last_run_bash_failure=trs.last_run_bash_failure,
         changed_since_failure=trs.changed_since_failure,
         last_learned_insight_sig=trs.last_learned_insight_sig)
-    _build_fix_insight = None  # lazy import
     _dname = _dresult = ""
     _consecutive_reads = 0
     _last_read_path = ""  # PATH-RESET (2026-09-09): ladder only counts same-path re-reads
@@ -302,6 +282,9 @@ async def execute_tool_round(
         _dfn = _dtc_call.get("function", {})
         _dname = _dfn.get("name", "")
         _raw_args = _dfn.get("arguments", {})
+        # ARGS-ONCE (2026-09-09): one serialized form reused by stub check,
+        # compaction size and loop sig (was 4x json.dumps/str per big write).
+        _raw_s = _raw_args if isinstance(_raw_args, str) else json.dumps(_raw_args or {}, ensure_ascii=False)
         _dargs = _parse_tool_args(_raw_args)
         _dresult = ""
         _args_parse_failed = (
@@ -324,7 +307,7 @@ async def execute_tool_round(
 
         _focus_path = _track_focus_path(_dargs, _dname, trs.tool_ctx_lru, trs.recent_focus_paths, _MAX_FOCUS_PATHS)
 
-        if _dname in _WRITE_ARG_COMPACT_NAMES and _WRITE_STUB_MARK in json.dumps(_dargs, ensure_ascii=False).lower():
+        if _dname in _WRITE_ARG_COMPACT_NAMES and _WRITE_STUB_MARK in _raw_s.lower():
             _logger.warning("[STUB-ECHO] %s blocked: compaction stub found in write args (path=%s)",
                             _dname, str((_dargs or {}).get("path", "?")) or "?")
             dtool_msgs.append({
@@ -411,7 +394,6 @@ async def execute_tool_round(
             or "[write_file error: content too large" in _dresult
             or "[write_file_append error: chunk too large" in _dresult
         )
-        _dresult = _cap_tool_result(_dresult)
         _dresult = _cap_tool_result(_dresult)
         if _is_too_large:
             await _handle_too_large(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
@@ -718,7 +700,7 @@ async def execute_tool_round(
                     _dname)
             # CONTEXT-COMPACTION: compact this round's huge args after success
             # (never sent as a prompt -> cache-friendly, saves context).
-            _saved_chars = _args_str_len(_raw_args)
+            _saved_chars = len(_raw_s)
             if _compact_round_write_args(dtool_msgs, _assistant_idx, _dtc_call, _dname, _raw_args, _dargs):
                 _logger.info(
                     "[ARG-COMPACT] %s args compacted to stub after success "
@@ -740,7 +722,7 @@ async def execute_tool_round(
             _read_ladder_fired = False
 
         # ── Loop detection ──
-        _args_str = str(_dfn.get("arguments", ""))
+        _args_str = _raw_s
         _new_sig = _dname + "|" + hashlib.md5(_args_str.encode("utf-8", errors="replace")).hexdigest()
         if not str(_dresult or "").startswith("[SKIP:"):
             trs.call_sigs.append(_new_sig)
