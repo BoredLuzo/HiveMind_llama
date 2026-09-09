@@ -66,6 +66,21 @@ if errorlevel 1 (
 uv --version
 
 SET "UV_NO_DEV=1"
+
+REM PYTHON-VIA-UV (2026-09-09): provision the interpreter explicitly instead
+REM of relying on a system Python. A fresh machine then needs NOTHING
+REM preinstalled but this installer - uv downloads a managed CPython 3.14
+REM (matching pyproject's requires-python) and `uv sync` uses it for the venv.
+echo  ==========================================================
+echo   [python] Ensuring Python 3.14 (managed by uv)
+echo  ==========================================================
+echo.
+uv python install 3.14
+if errorlevel 1 (
+    echo   [NOTE] Managed Python install failed - uv will try an
+    echo          existing system Python in the next step.
+    echo.
+)
 echo.
 
 REM ======================================================
