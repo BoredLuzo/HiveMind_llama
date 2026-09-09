@@ -1,5 +1,5 @@
 {
-  "model": "spark-x2.5-1.7b",
+  "model": "spark-x2.5:1.7b",
   "capabilities": {
     "thinking": true,
     "vision": false,
@@ -20,7 +20,15 @@
   "mmproj_filename": null,
   "vram_gb_override": null,
   "sampling": {
-    "thinking": { "temperature": 1.0, "top_p": 0.95, "top_k": -1 },
-    "non_thinking": { "temperature": 1.0, "top_p": 0.95, "top_k": -1 }
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": -1
+    },
+    "non_thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": -1
+    }
   }
 }
