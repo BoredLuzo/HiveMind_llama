@@ -372,9 +372,8 @@ function updateComposerToolStatus() {
     html = '\u2699 ' + (S.mode === 'automap' ? 'AutoMap' : 'Pipeline') + ' \u2014 chat tools inactive';
     color = 'var(--tx3)';
   }
-  el.innerHTML = html;
-  el.style.color = color;
-  el.style.display = 'block';
+  el.innerHTML = '<span class="st-dot" style="background:' + color + '"></span>' + html;
+  el.style.display = 'inline-flex';
 }
 
 // COMPOSER-TOOL-STATUS click → open the sidebar + Agents tab + scroll to the chat-tools section.

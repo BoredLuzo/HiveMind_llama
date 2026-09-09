@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260907-1">
+  <link rel="stylesheet" href="/static/style.css?v=20260909-1">
 </head>
 <body>
 <header>
@@ -35,7 +35,7 @@
 <div id="chat"></div>
 <div id="perf-bar-bottom"></div>
 <div id="input-wrap">
-    <div id="composer-tool-status" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 4px 4px;color:var(--tx3);cursor:pointer;user-select:none;line-height:1.4" onclick="openChatToolsSection()" title="Tool status of the current mode — click to open the Chat Tools section"></div>
+    <div id="composer-tool-status" class="composer-status" style="display:none" onclick="openChatToolsSection()" title="Tool status of the current mode — click to open the Chat Tools section"></div>
     <div id="img-preview"></div>
     <div id="input-row">
       <button class="ibtn" onclick="document.getElementById('file-in').click()" title="Image">&#128444;</button>
@@ -1841,6 +1841,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-        <script src="/static/app.js?v=20260907-1"></script>
+        <script src="/static/app.js?v=20260909-1"></script>
 </body>
 </html>

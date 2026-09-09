@@ -1335,3 +1335,11 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 #p-configs .tgl-text{font-size:11.5px;letter-spacing:.01em}
 #p-configs .fld-label{margin-top:12px}
 #p-configs .tgl-sub{border-left:2px solid rgba(200,150,50,.45);padding-left:12px;margin-top:2px;margin-bottom:10px}
+
+/* ── Composer tool status pill (2026-09-09) ───────────────────────────── */
+.composer-status{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;
+  margin:2px 4px;background:var(--bg2);border:1px solid var(--b2);border-radius:10px;
+  font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.03em;
+  color:var(--tx2);cursor:pointer;user-select:none;width:fit-content;line-height:1.5}
+.composer-status:hover{border-color:var(--tx3)}
+.composer-status .st-dot{width:5px;height:5px;border-radius:50%;display:inline-block;flex:none}
