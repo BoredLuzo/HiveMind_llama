@@ -113,7 +113,8 @@ DEFAULT_SETTINGS = {
     #   byte-identisch am Ende behalten (KV-Shift-Reuse). Recommended ON:
     #   schont den llama.cpp Prefix-Cache und der Raw-Tail bleibt fuer den
     #   Coder lesbar; Telemetrie-Phase ist abgeschlossen (2026-09-09).
-    # - duo_compress_threshold > 0 = exakter UI-Override (absolute Tokens);
+    # - duo_compress_threshold > 0 = exaktes Override in absoluten Tokens
+    #   (settings.json / Power-User, kein UI-Feld);
     #   0 = auto: Schwelle = duo_compress_auto_floor*ctx (dynamische
     #   Output-Reserve klemmt jede Tool-Round so, dass prompt+output <= ctx bleibt,
     #   daher kein statischer max_tokens-Abzug noetig).

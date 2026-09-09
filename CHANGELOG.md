@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- UI: the "Compression Limit" absolute-token field was removed — the auto
+  floor (70% of ctx) is the intended baseline. `duo_compress_threshold`
+  stays available as a settings.json override for power users.
 - Installer hardening: `uv sync` falls back to a plain venv +
   `requirements.txt` when `pyproject.toml` is missing (older release zips),
   parenthesized install paths no longer break the dependency step, and

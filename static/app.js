@@ -977,8 +977,6 @@ async function loadSettings() {
     if (dmtrEl) dmtrEl.value = s.duo_max_tool_rounds || 64;
     var dmtrCapEl = document.getElementById('duo-max-tool-rounds-runtime-cap');
     if (dmtrCapEl) dmtrCapEl.value = s.duo_max_tool_rounds_runtime_cap || 300;
-    var dctEl = document.getElementById('duo-compress-threshold');
-    if (dctEl) dctEl.value = typeof s.duo_compress_threshold === 'number' ? s.duo_compress_threshold : 0;
     var dpmsEl = document.getElementById('duo-planner-max-steps');
     if (dpmsEl) dpmsEl.value = typeof s.duo_planner_max_steps === 'number' ? s.duo_planner_max_steps : 0;
     S.duoProfileSpeedModel = (s.duo_profile_speed_model || 'qwen3.5:4b');
