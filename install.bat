@@ -204,19 +204,19 @@ echo.
 REM Optional VRAM budget
 set "VRAM=8.0"
 set /p "VRAM_IN=VRAM in GB [Enter = 8.0]: "
-if not "%VRAM_IN%"=="" set "VRAM=%VRAM_IN%"
+if defined VRAM_IN set "VRAM=!VRAM_IN!"
 echo.
 
 REM Optional server port
 set "HM_PORT=8001"
 set /p "PORT_IN=Server port [Enter = 8001]: "
-if not "%PORT_IN%"=="" set "HM_PORT=%PORT_IN%"
+if defined PORT_IN set "HM_PORT=!PORT_IN!"
 echo.
 
 REM Optional SearXNG port (only used if SearXNG is installed in step 6)
 set "SEARXNG_PORT=8888"
 set /p "SPORT_IN=SearXNG port for web search [Enter = 8888]: "
-if not "%SPORT_IN%"=="" set "SEARXNG_PORT=%SPORT_IN%"
+if defined SPORT_IN set "SEARXNG_PORT=!SPORT_IN!"
 echo.
 
 REM Write settings (gpu_backend + vram_budget_gb + server_port; workspace stays EMPTY).
