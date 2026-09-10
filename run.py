@@ -19,6 +19,29 @@ from logging.handlers import RotatingFileHandler
 
 _LOG_FMT = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
 
+# CONSOLE-KILL (2026-09-10, Windows): bind the whole process tree (python +
+# all spawned llama-server children) to a Job object with kill-on-close.
+# Closing the console window then reliably terminates the entire stack
+# instead of leaving orphaned llama-servers on the GPU. Linux/uv-managed
+# setups use systemd which already reaps children.
+if sys.platform == "win32":
+    _win32job = None
+    try:
+        import win32api
+        import win32job as _win32job
+    except ImportError:
+        print("[WARN] pywin32 missing - console-close will not kill llama-servers")
+    if _win32job is not None:
+        try:
+            _hjob = _win32job.CreateJob()
+            _info = _win32job.QueryInformationJobObject(_hjob, _win32job.JobObjectExtendedLimitInformation)
+            _info["BasicLimitInformation"]["LimitFlags"] = _win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            _win32job.SetInformationJobObject(_hjob, _win32job.JobObjectExtendedLimitInformation, _info)
+            _win32job.AssignProcessToJobObject(_hjob, win32api.GetCurrentProcess())
+        except _win32job.error as _job_err:
+            # best-effort: startup_cleanup still kills leftovers by port scan
+            print(f"[WARN] Job-object console-kill unavailable: {_job_err}")
+
 logging.basicConfig(
     level=logging.INFO,
     format=_LOG_FMT,

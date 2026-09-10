@@ -87,6 +87,7 @@ echo    6. qwen3.5:4b-ud         Analyst/Critic/Speed
 echo    7. qwen3.5:9b-ud         Direct/Duo-Coder
 echo    8. qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact  Coder/Hermes (MoE+MTP)
 echo    9. ling-3.0-tiny           Low-resource Coder (hybrid MoE)
+echo   10. qwen3.5:4b-mtp         Duo Coder/Planner default (MTP spec-decode)
 echo.
 set "MODELS_SEL="
 set /p "MODELS_SEL=Numbers: "

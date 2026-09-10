@@ -18,14 +18,20 @@ CUSTOM_PROMPTS_DIR = Path(__file__).parent / "custom_prompts"
 # CODER-TEMP (2026-08-31): higher than for Refiner/Critic — creative coding.
 
 DEFAULT_AGENT_CFG = {
-    "analyst":     {"model": "qwen3.5:4b-ud", "temperature": 0.3, "max_tokens": 1100, "thinking": False, "thinking_budget": 0},
+    # AGENT-DEFAULTS (2026-09-10): qwen3.5:4b(-mtp) als Arbeits-/Subagent-Tier;
+    # duo_coder faehrt den MTP-Build (schnellster 4B durch Speculative Decoding).
+    # Empfehlung fuer starke (langsame) Setup: Coder/Planner auf
+    # hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact, alternativ
+    # qwen3.6:35b-a3b-ud (Unsloth). Kleine Systeme: spark-x2.5:1.7b oder
+    # lfm2.5:2.6b als Coder.
+    "analyst":     {"model": "qwen3.5:4b-mtp", "temperature": 0.3, "max_tokens": 1100, "thinking": False, "thinking_budget": 0},
     "refiner":     {"model": "qwen3.5:2b",    "temperature": 0.3, "max_tokens": 400, "thinking": False, "thinking_budget": 0},
-    "critic":      {"model": "qwen3.5:4b-ud", "temperature": 0.2, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
-    "synthesizer": {"model": "qwen3.5:4b-ud", "temperature": 0.2, "max_tokens": 900, "thinking": False, "thinking_budget": 0},
-    "direct":      {"model": "lfm2.5:2.6b",   "temperature": 0.4, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
+    "critic":      {"model": "qwen3.5:4b-mtp", "temperature": 0.2, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
+    "synthesizer": {"model": "qwen3.5:4b-mtp", "temperature": 0.2, "max_tokens": 900, "thinking": False, "thinking_budget": 0},
+    "direct":      {"model": "qwen3.5:4b-mtp", "temperature": 0.4, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
     "judge":       {"model": "lfm2.5:2.6b",   "temperature": 0.1, "max_tokens": 120, "thinking": False, "thinking_budget": 0},
-    "duo_coder":   {"model": "lfm2.5:2.6b",   "temperature": 0.8, "max_tokens": 8000, "thinking": False, "thinking_budget": 0},
-    "duo_critic":  {"model": "qwen3.5:4b-ud", "temperature": 0.15, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
+    "duo_coder":   {"model": "qwen3.5:4b-mtp", "temperature": 0.8, "max_tokens": 8000, "thinking": False, "thinking_budget": 0},
+    "duo_critic":  {"model": "qwen3.5:4b-mtp", "temperature": 0.15, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
 }
 
 DEFAULT_SETTINGS = {

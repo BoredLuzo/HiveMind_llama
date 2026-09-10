@@ -71,6 +71,14 @@ installer hardening.
 
 ## [Unreleased]
 
+- Agent defaults: qwen3.5:4b-mtp is the default coder/planner/subagent model
+  (MTP speculative decoding); recommended strong setups: hermes v13 or
+  qwen3.6:35b-a3b-ud as coder, lfm2.5:2.6b / spark-x2.5 for small systems.
+- `qwen3.5:4b-mtp` added to the model downloader (strict MTP filename regex).
+- Windows: the whole process tree (python + llama-servers) is bound to a Job
+  object with kill-on-close — closing the console window reliably terminates
+  the stack.
+
 - Tool surface: `patch_file` removed from the model-facing tool list —
   `edit_file` already fuzzy-matches SEARCH blocks internally (the handler
   stays as a legacy alias for resumed sessions).

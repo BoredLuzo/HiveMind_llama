@@ -123,11 +123,9 @@ SPECS: list[dict] = [
     # fallback regexes in the -ud specs.
     # VISION (2026-08-26): mmproj-BF16/F16 is downloaded along — README
     # documents mmproj as the requirement for image processing with qwen3.5.
-    # MTP variants (qwen3.5:4b-mtp): intentionally NOT in the downloader — the
-    # unsloth "Qwen3.5-*-MTP-GGUF" repos contain files with identical names
-    # (parse to qwen3.5:4b, not -mtp); correctly tagged MTP GGUFs exist only
-    # in unofficial mini-repos (provenance risk). MTP users place such files
-    # manually or add a models.json alias.
+    # MTP (2026-09-10): qwen3.5:4b-mtp is now the recommended coder/planner
+    # default and IS downloadable — the file_regex requires "mtp" in the
+    # filename so ambiguous non-MTP repos cannot match.
     {
         "key": "qwen3.5:0.8b-ud",
         "desc": "Qwen3.5 0.8B UD (Subagent ladder, ~0.6GB VRAM)",
@@ -220,6 +218,16 @@ SPECS: list[dict] = [
         "file_regex": [
             r"(?i)ling[-_.]3\.0[-_.]tiny[-_.]q4_k_l\.gguf$",
             r"(?i)ling[-_.]3\.0[-_.]tiny[-_.]q4_k_m\.gguf$",
+        ],
+        "mmproj_regex": [],
+    },
+    {
+        "key": "qwen3.5:4b-mtp",
+        "desc": "Qwen3.5 4B MTP (Duo Coder/Planner default, MTP spec-decode, ~3.3GB VRAM)",
+        "search": "Qwen3.5 4B MTP GGUF",
+        "author_pref": ["unsloth"],
+        "file_regex": [
+            r"(?i)4b[-_.]mtp[-_.]q4_k_m\.gguf$",
         ],
         "mmproj_regex": [],
     },
