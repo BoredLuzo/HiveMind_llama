@@ -71,6 +71,9 @@ installer hardening.
 
 ## [Unreleased]
 
+- Escalate-now: a partial compression that shrinks <10% reruns full mode
+  immediately instead of waiting for the next trigger (was wasting a whole
+  cycle for near-zero gain).
 - Adaptive no-think retries: after repeated think-only coder rounds the
   next attempt disables template thinking (enable_thinking=false), so the
   token budget goes to an actual tool call instead of more reasoning.

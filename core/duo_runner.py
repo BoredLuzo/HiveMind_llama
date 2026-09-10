@@ -3766,8 +3766,9 @@ async def run_code_duo(ctx):
                                         _comp_llm_cfg, _cm_err,
                                     )
                             _mini_retry_done = False  # MINI-SHRINK-RETRY (2026-09-07)
-                            _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(
-                                messages=_dtool_msgs,
+                            # COMP-ARGS-ONCE (2026-09-10): shared kwargs for all
+                            # compression calls this cycle (messages passed per call).
+                            _comp_kwargs = dict(
                                 model=_comp_mdl,
                                 port=_comp_port,
                                 client=_dtc,
@@ -3788,6 +3789,7 @@ async def run_code_duo(ctx):
                                 cut_index=_comp_cut,
                                 local_only=_compress_local_only,
                             )
+                            _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(messages=_dtool_msgs, **_comp_kwargs)
                             # MINI-SHRINK-RETRY (2026-09-07): if the full compression
                             # barely shrank (<15% of the before value), an early
                             # next 2-minute compress follows (cost cascade). Then
@@ -3812,29 +3814,7 @@ async def run_code_duo(ctx):
                                     )
                                     yield await ctx.emit({"type": "status",
                                         "content": "🗜 Mini-shrink detected — second (escalated) compression attempt …"})
-                                    _dtool_msgs2, _condensed_files2, _compress_usage2 = await _compress_tool_context(
-                                        messages=_msgs_before_compress,
-                                        model=_comp_mdl,
-                                        port=_comp_port,
-                                        client=_dtc,
-                                        read_timeout=float(_comp_llm_timeout_s or 180),
-                                        system_prompt=_sys_for_compress,
-                                        original_task=ctx.user_input,
-                                        written_files=_written_files,
-                                        done_tasks=_done_tasks,
-                                        goal_pin=_goal_pin_msg,
-                                        keep_recent_msgs=(18 if ctx.duo_config.until_finished else 12),
-                                        plan_state=_plan_state,
-                                        plan_anchor_text=_plan_anchor_text,
-                                        last_test_status=_last_test_status,
-                                        explore_ctx=_explore_ctx,
-                                        tool_rounds=_total_tool_rounds,
-                                        max_tool_rounds=_max_tool_rounds,
-                                        compression_mode=_comp_mode,
-                                        cut_index=_comp_cut,
-                                        local_only=_compress_local_only,
-                                        aggressive_retry=True,
-                                    )
+                                    _dtool_msgs2, _condensed_files2, _compress_usage2 = await _compress_tool_context(messages=_msgs_before_compress, **_comp_kwargs, aggressive_retry=True)
                                     _after2_est = int(_estimate_ctx_tokens(_dtool_msgs2))
                                     _retry_helped = bool(
                                         (_after2_est < int(_after1_est * 0.85))
@@ -3995,6 +3975,30 @@ async def run_code_duo(ctx):
                                     "[CTX-COMPRESS] partial shrank nothing (%d -> %d) — escalating to full mode",
                                     int(_est_tokens_before_compress), int(_est_tokens_after_compress),
                                 )
+                                # ESCALATE-NOW (2026-09-10): rerun full mode
+                                # immediately instead of waiting for the next
+                                # trigger — a weak partial otherwise wastes a
+                                # whole cycle for ~0 gain (live: 20495->19244).
+                                if _comp_kwargs:
+                                    _kw_full = dict(_comp_kwargs)
+                                    _kw_full.update(
+                                        messages=_msgs_before_compress,
+                                        compression_mode="full",
+                                        cut_index=-1,
+                                        aggressive_retry=True,
+                                    )
+                                    try:
+                                        _msgs_full, _files_full, _usage_full = await _compress_tool_context(**_kw_full)
+                                        _est_full = _estimate_ctx_tokens(_msgs_full)
+                                        if _est_full < _est_tokens_after_compress:
+                                            _dtool_msgs = _msgs_full
+                                            _est_tokens_after_compress = _est_full
+                                            logger.warning(
+                                                "[CTX-COMPRESS] immediate full escalation: -> %d",
+                                                int(_est_full),
+                                            )
+                                    except (RuntimeError, OSError, asyncio.TimeoutError) as _esc_err:
+                                        logger.warning("[CTX-COMPRESS] immediate escalation failed: %s", str(_esc_err)[:120])
                             _compress_fail_streak, _compress_stop = _compress_fail_streak_update(
                                 _compress_fail_streak,
                                 _est_tokens_after_compress < _est_tokens_before_compress * 0.90,
