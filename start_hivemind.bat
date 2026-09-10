@@ -27,8 +27,21 @@ if defined HM_PORT_PID (
     echo.
     choice /c YN /n /m "Kill the running instance and start fresh? [Y/N] "
     if not errorlevel 2 (
-        taskkill /F /T /PID %HM_PORT_PID% >nul 2>&1
-        timeout /t 2 /nobreak >nul
+        echo  [..] Killing PID %HM_PORT_PID% ...
+        taskkill /F /T /PID %HM_PORT_PID%
+        rem KILL-FALLBACK (2026-09-10): taskkill can fail with ACCESS_DENIED
+        rem when the old instance runs elevated — force via PowerShell.
+        powershell -NoProfile -Command "Stop-Process -Id %HM_PORT_PID% -Force -ErrorAction SilentlyContinue"
+        rem KILL-WAIT (2026-09-10): process death + socket release can take
+        longer than a fixed sleep - poll up to ~10s.
+        set /a HM_KILL_WAIT=0
+:kill_wait_loop
+        timeout /t 1 /nobreak >nul
+        set "HM_STILL="
+        for /f "usebackq delims=" %%Q in (`powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue) { '1' }"`) do set HM_STILL=%%Q
+        if not defined HM_STILL goto port_check_done
+        set /a HM_KILL_WAIT+=1
+        if %HM_KILL_WAIT% lss 10 goto kill_wait_loop
         goto port_check_done
     )
     echo  Aborted - existing instance stays running.
