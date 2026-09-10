@@ -1,0 +1,34 @@
+{
+  "model": "qwen3.5:4b-mtp",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 16384,
+  "num_ctx_analyst": 8192,
+  "num_ctx_duo_coder": 32768,
+  "num_ctx_vision": null,
+  "chat_template": "chat_template22.5.jinja",
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 0,
+  "mtp": true,
+  "gpu_layers": null,
+  "mmproj_filename": null,
+  "vram_gb_override": null,
+  "sampling": {
+    "thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "non_thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    }
+  }
+}
