@@ -1790,6 +1790,24 @@ async def run_code_duo(ctx):
                     _coder_ctx_try = _coder_ctx_post
                     _coder_ttl_s = float(ctx.settings.get("duo_coder_ttl_seconds", 0) or 0)
                     _coder_load_timeout = _coder_ttl_s if _coder_ttl_s > 0 else 150.0
+                    # SERIAL-SLOTS (2026-09-10): evict the planner before the
+                    # coder loads when the models differ. Previously both slots
+                    # stayed resident when they fit side by side, which traded
+                    # coder ctx headroom for a reload-free transition.
+                    if bool(ctx.settings.get("duo_evict_planner_on_coder", True)):
+                        try:
+                            _planner_base_cmp = _planner_model.rsplit("#", 1)[0]
+                            _exec_base_cmp = exec_mdl.rsplit("#", 1)[0]
+                            if _planner_base_cmp != _exec_base_cmp:
+                                await _lsm2.evict(_planner_model)
+                                logger.warning(
+                                    "[SERIAL-SLOTS] planner %s evicted for coder %s",
+                                    _planner_model, exec_mdl,
+                                )
+                                yield await ctx.emit({"type": "status",
+                                    "content": f"🧹 Planner unloaded — full VRAM for the coder."})
+                        except (RuntimeError, OSError, asyncio.TimeoutError) as _serial_err:
+                            logger.debug("[SERIAL-SLOTS] planner evict failed: %s", _serial_err)
                     for _cl_attempt in range(3):
                         try:
                             yield await ctx.emit({"type": "status",

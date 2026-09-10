@@ -194,6 +194,10 @@ DEFAULT_SETTINGS = {
 
     # ════════════════════════════════════════════════════════════════════════
     # ════════════════════════════════════════════════════════════════════════
+    # SERIAL-SLOTS (2026-09-10): unload the planner when the coder phase
+    # starts and the models differ (frees VRAM for coder ctx; costs one
+    # reload when switching back).
+    "duo_evict_planner_on_coder": True,
     "duo_coder_ctx_agentic":   None,
     "duo_coder_ctx_normal":    None,
     "duo_coder_tool_thinking": False,
