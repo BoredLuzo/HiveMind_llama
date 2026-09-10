@@ -423,6 +423,15 @@ async def execute_tool_round(
             if _hint_matched:
                 pass
             elif _dname == "task_complete":
+                # TC-DE-NAG (2026-09-10): a task_complete re-call WITHOUT any
+                # other tool in between means the model ignored the previous
+                # feedback — accept instead of nagging again (each blocked call
+                # costs a full LLM round + auto-test probe).
+                trs.tc_consecutive += 1
+                if trs.tc_consecutive >= 2:
+                    _logger.warning("[TC-DE-NAG] consecutive task_complete accepted (call #%d)", trs.tc_consecutive)
+                    result.task_complete_called = True
+                    break
                 dtool_msgs.append({"role": "tool", "content": _dresult,
                                     "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
                 _mutations_made = result.verify_mutation_serial > 0
@@ -430,7 +439,7 @@ async def execute_tool_round(
 
                 # ── AUTO-TEST vor task_complete (2026-08-12, B) ──────────────────
                 _auto_test_skips_gate = False
-                _at_nosuite_nudged = False  # SMOKE-NUDGE (2026-09-10): once per run
+                # SMOKE-NUDGE flag persists in trs (was function-local: reset every round)
                 if auto_test_before_complete and _mutations_made:
                     _last_write_idx_at = -1
                     _last_test_idx_at = -1
@@ -476,8 +485,8 @@ async def execute_tool_round(
                             # SMOKE-NUDGE (2026-09-10): no test framework found —
                             # nudge the coder ONCE to write a minimal smoke test
                             # and run it, instead of silently passing.
-                            if not _at_nosuite_nudged:
-                                _at_nosuite_nudged = True
+                            if not trs.at_nosuite_nudged:
+                                trs.at_nosuite_nudged = True
                                 _logger.info("[AUTO-TEST] No test suite — nudging coder to write a minimal smoke test")
                                 dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
                                     "[NO TEST SUITE] No test framework was detected. Before completing: "
@@ -702,6 +711,8 @@ async def execute_tool_round(
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)
         # ── Read-file ladder tracker (persistent across rounds) ──
         _update_read_ladder(trs, _dname, _args_parse_failed, _focus_path or "")
+        if _dname != "task_complete":
+            trs.tc_consecutive = 0
         _consecutive_reads = trs.consecutive_reads
         _read_ladder_fired = trs.read_ladder_fired
 

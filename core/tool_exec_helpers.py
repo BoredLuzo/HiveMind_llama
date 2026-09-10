@@ -986,6 +986,8 @@ class ToolRoundState:
     cached_coder_port: list = field(default_factory=lambda: [None])
     task_complete_blocked_count: list = field(default_factory=lambda: [0])
     total_tool_errors: list = field(default_factory=lambda: [0])
+    tc_consecutive: int = 0   # TC-DE-NAG: consecutive task_complete calls without acting
+    at_nosuite_nudged: bool = False  # SMOKE-NUDGE: once per RUN (was function-local: nagged every round)
     # CACHE-HORIZON (2026-09-04): first message index of this tool round.
     # Everything < cache_horizon has already been sent to llama.cpp (immutable
     # prefix); mutating it there would kill the prefix cache and is only
