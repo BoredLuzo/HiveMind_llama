@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.1.3] - 2026-09-11
+
+Run-state persistence fixes for the agentic tool loop.
+
+### Fixes
+
+- The smoke-test nudge (`[AUTO-TEST] No test suite`) fired every tool round
+  instead of once per run (live: 10x in one run) — `ToolRoundState` is
+  re-created per round, so the "once per RUN" flag reset each round.
+- Same trap, other victims, all converted to run-persistent list refs now:
+  TC-DE-NAG (`tc_consecutive` — the 2nd consecutive bare `task_complete` was
+  never accepted) and the READ-LADDER counters (dead for the common
+  1-tool-call-per-round pattern despite the LADDER-PERSIST comment).
+- New suite `tests/test_runstate_persistence.py` (49/49 green).
+
 ## [1.1.2] - 2026-09-11
 
 Critical fix for agentic coder runs.

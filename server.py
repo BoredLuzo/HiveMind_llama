@@ -83,7 +83,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.1.2"
+HIVEMIND_VERSION = "1.1.3"
 
 # ─── FrÃ¼he Logger-Definition ────────────────────────────────────────────────────
 logger = logging.getLogger("hivemind.server")
