@@ -1335,4 +1335,4 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 #p-configs .tgl-text{font-size:11.5px;letter-spacing:.01em}
 #p-configs .fld-label{margin-top:12px}
 #p-configs .tgl-sub{border-left:2px solid rgba(200,150,50,.45);padding-left:12px;margin-top:2px;margin-bottom:10px}
-
+.tool-act-delta{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-left:4px}

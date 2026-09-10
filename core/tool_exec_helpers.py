@@ -891,11 +891,28 @@ async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
                 result.changed_since_failure.add(_fc_path)
         elif _dname == "patch_file":
             _pf_m = re.search(r"(\d+)/(\d+) blocks applied", _dresult)
+            # PATCH-LINES (2026-09-10): parse the (+N/-M lines) delta — the UI
+            # showed 0/0 because only the block count was tracked.
+            _pf_delta = re.search(r"\(([+-]\d+) lines\)", _dresult)
+            _pf_added, _pf_removed = 0, 0
+            if _pf_delta:
+                _pf_d = int(_pf_delta.group(1))
+                _pf_added, _pf_removed = max(0, _pf_d), abs(min(0, _pf_d))
             file_changes[_fc_path] = {"op": "edited", "blocks": int(_pf_m.group(1)) if _pf_m else 1,
-                                       "lines_added": 0, "lines_removed": 0}
+                                       "lines_added": _pf_added, "lines_removed": _pf_removed}
             await hooks.emit({"type": "file_change", "path": _fc_path,
                               "op": "edited",
                               "blocks": int(_pf_m.group(1)) if _pf_m else 1,
+                              "lines_added": _pf_added, "lines_removed": _pf_removed,
+                              "content": _fc_content})
+        elif _dname == "replace_lines":
+            # REPLACE-LINES-TRACK (2026-09-10): was not tracked at all.
+            _rl_m = re.search(r"\(\+(\d+)/-(\d+)\)", _dresult)
+            _rl_added = int(_rl_m.group(1)) if _rl_m else 0
+            _rl_removed = int(_rl_m.group(2)) if _rl_m else 0
+            file_changes[_fc_path] = {"op": "edited", "lines_added": _rl_added, "lines_removed": _rl_removed}
+            await hooks.emit({"type": "file_change", "path": _fc_path,
+                              "op": "edited", "lines_added": _rl_added, "lines_removed": _rl_removed,
                               "content": _fc_content})
             if result.last_run_bash_failure:
                 result.changed_since_failure.add(_fc_path)

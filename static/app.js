@@ -5740,8 +5740,13 @@ function handleEvent(d) {
       var _tcLabel = {write: 'WRITE', edit: 'EDIT', append: 'APPEND'}[_tcOp] || _tcOp.toUpperCase();
       var _tcLine = document.createElement('div');
       _tcLine.className = 'tool-act';
+      var _tcDelta = '';
+      if (typeof d.lines_added === 'number' && (d.lines_added || d.lines_removed)) {
+        _tcDelta = ' <span class="tool-act-delta">+' + (d.lines_added || 0)
+          + '/-' + (d.lines_removed || 0) + '</span>';
+      }
       _tcLine.innerHTML = '<span class="tool-act-op ' + _tcOp + '">' + _tcLabel + '</span>'
-        + '<span class="tool-act-path" title="' + esc(d.path) + '">' + esc(_tcShort) + '</span>';
+        + '<span class="tool-act-path" title="' + esc(d.path) + '">' + esc(_tcShort) + '</span>' + _tcDelta;
       _appendToolEl(_tcBody, _tcLine);
       // 1b. file content as expandable preview (2026-08-25: starts COLLAPSED
       //     — no auto-open/auto-close anymore; clicking "📄 N lines · X KB" opens it)
