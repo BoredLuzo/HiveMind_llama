@@ -3,7 +3,7 @@
 Local multi-agent coding assistant on top of llama.cpp. Runs on your own
 hardware, no cloud, no API keys, nothing leaves your machine.
 
-Author: Luzo (BoredLuzo) — https://github.com/BoredLuzo
+Author: Luzo (BoredLuzo) | https://github.com/BoredLuzo
 
 ## What it is
 
