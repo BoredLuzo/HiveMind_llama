@@ -194,15 +194,15 @@ def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "") -> N
     reset every round made the guard dead for 1-call rounds.
     """
     if dname == "read_file" and not args_parse_failed:
-        if read_path and trs.last_read_path and read_path != trs.last_read_path:
-            trs.consecutive_reads = 1
+        if read_path and trs.last_read_path[0] and read_path != trs.last_read_path[0]:
+            trs.consecutive_reads[0] = 1
         else:
-            trs.consecutive_reads += 1
-        trs.last_read_path = read_path
+            trs.consecutive_reads[0] += 1
+        trs.last_read_path[0] = read_path
     elif dname in ("edit_file", "write_file", "patch_file", "write_file_append",
                    "replace_lines", "run_bash", "run_python"):
-        trs.consecutive_reads = 0
-        trs.read_ladder_fired = False
+        trs.consecutive_reads[0] = 0
+        trs.read_ladder_fired[0] = False
 
 
 # ── Recovery-Saturation (aus tool_executor extrahiert) ──
@@ -986,8 +986,13 @@ class ToolRoundState:
     cached_coder_port: list = field(default_factory=lambda: [None])
     task_complete_blocked_count: list = field(default_factory=lambda: [0])
     total_tool_errors: list = field(default_factory=lambda: [0])
-    tc_consecutive: int = 0   # TC-DE-NAG: consecutive task_complete calls without acting
-    at_nosuite_nudged: bool = False  # SMOKE-NUDGE: once per RUN (was function-local: nagged every round)
+    # RUN-PERSISTENT-REFS (2026-09-11): ToolRoundState is re-created EVERY
+    # tool round (duo_runner.py), so plain int/bool fields reset each round
+    # even when their comment says "per RUN". These live as one-element list
+    # refs created once per run in duo_runner and passed in — same pattern as
+    # task_complete_blocked_count / cached_coder_port above.
+    tc_consecutive: list = field(default_factory=lambda: [0])   # TC-DE-NAG: consecutive task_complete calls without acting
+    at_nosuite_nudged: list = field(default_factory=lambda: [False])  # SMOKE-NUDGE: once per RUN
     # CACHE-HORIZON (2026-09-04): first message index of this tool round.
     # Everything < cache_horizon has already been sent to llama.cpp (immutable
     # prefix); mutating it there would kill the prefix cache and is only
@@ -995,9 +1000,9 @@ class ToolRoundState:
     # and may be changed freely in-place.
     cache_horizon: int = 0
     superseded_paths: list = field(default_factory=list)
-    # LADDER-PERSIST (2026-09-09): counter lives across rounds — previously a
-    # function-local in execute_tool_round (reset every round), which made the
-    # ladder dead for the common 1-tool-call-per-round case.
-    consecutive_reads: int = 0
-    last_read_path: str = ""
-    read_ladder_fired: bool = False
+    # LADDER-PERSIST (2026-09-09, ref-converted 2026-09-11): counter lives
+    # across rounds — previously a function-local (then a fresh-per-round
+    # field), which made the ladder dead for 1-tool-call-per-round runs.
+    consecutive_reads: list = field(default_factory=lambda: [0])
+    last_read_path: list = field(default_factory=lambda: [""])
+    read_ladder_fired: list = field(default_factory=lambda: [False])

@@ -427,9 +427,9 @@ async def execute_tool_round(
                 # other tool in between means the model ignored the previous
                 # feedback — accept instead of nagging again (each blocked call
                 # costs a full LLM round + auto-test probe).
-                trs.tc_consecutive += 1
-                if trs.tc_consecutive >= 2:
-                    _logger.warning("[TC-DE-NAG] consecutive task_complete accepted (call #%d)", trs.tc_consecutive)
+                trs.tc_consecutive[0] += 1
+                if trs.tc_consecutive[0] >= 2:
+                    _logger.warning("[TC-DE-NAG] consecutive task_complete accepted (call #%d)", trs.tc_consecutive[0])
                     result.task_complete_called = True
                     break
                 dtool_msgs.append({"role": "tool", "content": _dresult,
@@ -485,8 +485,8 @@ async def execute_tool_round(
                             # SMOKE-NUDGE (2026-09-10): no test framework found —
                             # nudge the coder ONCE to write a minimal smoke test
                             # and run it, instead of silently passing.
-                            if not trs.at_nosuite_nudged:
-                                trs.at_nosuite_nudged = True
+                            if not trs.at_nosuite_nudged[0]:
+                                trs.at_nosuite_nudged[0] = True
                                 _logger.info("[AUTO-TEST] No test suite — nudging coder to write a minimal smoke test")
                                 dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
                                     "[NO TEST SUITE] No test framework was detected. Before completing: "
@@ -712,9 +712,9 @@ async def execute_tool_round(
         # ── Read-file ladder tracker (persistent across rounds) ──
         _update_read_ladder(trs, _dname, _args_parse_failed, _focus_path or "")
         if _dname != "task_complete":
-            trs.tc_consecutive = 0
-        _consecutive_reads = trs.consecutive_reads
-        _read_ladder_fired = trs.read_ladder_fired
+            trs.tc_consecutive[0] = 0
+        _consecutive_reads = trs.consecutive_reads[0]
+        _read_ladder_fired = trs.read_ladder_fired[0]
 
         # ── Loop detection ──
         _args_str = _raw_s
@@ -784,8 +784,8 @@ async def execute_tool_round(
             else:
                 _logger.info("[READ-LADDER] skipped (recovery_saturated=True) consecutive=%d", _consecutive_reads)
             await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_consecutive_reads}x reads ohne Write — Hint injiziert]\n"})
-            trs.read_ladder_fired = True
-            trs.consecutive_reads = 0
+            trs.read_ladder_fired[0] = True
+            trs.consecutive_reads[0] = 0
 
     # NO-OP HINT (2026-09-07): append only after all tool results of this
     # round, so the assistant(tool_calls) -> tool-result ordering stays

@@ -1540,6 +1540,14 @@ async def run_code_duo(ctx):
         _verify_mutation_serial = 0
         _verify_last_ok_serial = 0
         _task_complete_blocked = [0]
+        # RUN-PERSISTENT-REFS (2026-09-11): ToolRoundState is re-created every
+        # round; these must survive the whole run, so they live as list refs
+        # here and are passed into each round's ToolRoundState.
+        _tc_consecutive = [0]          # TC-DE-NAG
+        _at_nosuite_nudged = [False]   # SMOKE-NUDGE (once per run)
+        _consecutive_reads = [0]       # READ-LADDER
+        _last_read_path = [""]         # READ-LADDER (path-reset)
+        _read_ladder_fired = [False]   # READ-LADDER
         # VERIFY-GATE-OWNER (2026-09-09): own veto counter. The executor's
         # task_complete ladder used to pre-satisfy this gate (shared counter),
         # skipping verification entirely after 3 in-loop blocks.
@@ -4580,6 +4588,11 @@ async def run_code_duo(ctx):
                                 cached_coder_port=_cached_port_ref,
                                 task_complete_blocked_count=_task_complete_blocked,
                                 total_tool_errors=_total_tool_errors_ref,
+                                tc_consecutive=_tc_consecutive,
+                                at_nosuite_nudged=_at_nosuite_nudged,
+                                consecutive_reads=_consecutive_reads,
+                                last_read_path=_last_read_path,
+                                read_ladder_fired=_read_ladder_fired,
                             ),
                             tool_mode=_tool_mode,
                             duo_ws=_duo_ws,
