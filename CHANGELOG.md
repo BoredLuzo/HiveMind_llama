@@ -71,6 +71,9 @@ installer hardening.
 
 ## [Unreleased]
 
+- Adaptive no-think retries: after repeated think-only coder rounds the
+  next attempt disables template thinking (enable_thinking=false), so the
+  token budget goes to an actual tool call instead of more reasoning.
 - Coder VRAM fallback: the fallback slot now runs at >=20k context (the duo
   payload alone is ~8k tokens; a 10k fallback slot started CTX-FULL and died
   in the compression guard with zero output), and an incompressible round-0

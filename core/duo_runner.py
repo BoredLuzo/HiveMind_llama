@@ -3196,6 +3196,12 @@ async def run_code_duo(ctx):
                                                dtool_opts=_dtool_opts, tool_read_timeout_s=_tool_read_timeout_s,
                                                cached_port=_cached_coder_port, current_port=_dport)
                     _dr_think_only_retries = 0
+                    # NO-THINK-RETRY (2026-09-10): after repeated think-only
+                    # rounds, disable template thinking for the next attempt
+                    # (chat_template_kwargs enable_thinking=false) so the token
+                    # budget goes to an actual tool call (live: spark-1.7b
+                    # burned every round on reasoning, never called a tool).
+                    _coder_no_think = False
                     _dr_invalid_tool_retries = 0     # tracks rounds where ALL tool-calls were rejected
                     _dr_dropped_tool_retries = 0     # DROPPED-FIX: rounds where tool-calls had malformed JSON args
                     _limit_warned = False  # round-limit warning: inject only once
@@ -4215,6 +4221,10 @@ async def run_code_duo(ctx):
                             _tool_payload["min_p"] = _profile["min_p"]
                         if _profile.get("cache_prompt"):
                             _tool_payload["cache_prompt"] = True
+                        if _coder_no_think:
+                            # template-level thinking off (Spark/Qwen3-style
+                            # templates; unknown keys are ignored by others)
+                            _tool_payload["chat_template_kwargs"] = {"enable_thinking": False}
                         _tool_payload = _apply_thinking_kwargs(
                             _tool_payload, _profile, _thinking,
                             _coder_tool_think and _tool_thinking_budget > 0,
@@ -4391,6 +4401,7 @@ async def run_code_duo(ctx):
                                         continue
                                 _parts.append(_final)
                                 _dr_think_only_retries += 1
+                                _coder_no_think = True
                                 if _dr_think_only_retries > 2:
                                     _ld_setter(3089); _loop_detected = True
                                     yield await ctx.emit({"type": "status",
@@ -4408,6 +4419,7 @@ async def run_code_duo(ctx):
                                 yield await ctx.emit({"type": "token", "content": _empty_err})
                             else:
                                 _dr_think_only_retries += 1
+                                _coder_no_think = True
                                 if _dr_think_only_retries > 2:
                                     _ld_setter(3113); _loop_detected = True
                                     yield await ctx.emit({"type": "status",
