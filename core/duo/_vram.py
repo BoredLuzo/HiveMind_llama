@@ -317,8 +317,9 @@ async def _phase_vram(ctx, state: dict):
 
     # User-override for --reasoning: explicit thinking toggle has priority over model-category heuristic.
     # Always set (or reset to None) to prevent stale override leaking into next run.
+    # Scoped per model: the flag belongs to the tool-round server, not whichever model loads first.
     from backend.llama_server_manager import manager as _lsm_ro
-    _lsm_ro._reasoning_override = _coder_tool_think if ctx.duo_config.coder_tool_thinking_explicit else None
+    _lsm_ro._reasoning_override = {exec_mdl: _coder_tool_think} if ctx.duo_config.coder_tool_thinking_explicit else None
 
     # ── State population ──
     state.update({

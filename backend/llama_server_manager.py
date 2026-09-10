@@ -89,7 +89,7 @@ class LlamaServerManager(LlamaLoadMixin, LlamaEvictMixin, LlamaProcessMixin,
     _device_flag_supported: bool | None = None
     _backend_devices_ok: bool | None = None
     _backend_dlls_ok: bool | None = None
-    _reasoning_override: bool | None = None
+    _reasoning_override: dict[str, bool] | None = None
     _binary_build_number: int | None = None
     def __init__(self):
         self._slots: list[ModelSlot]        = [ModelSlot(i) for i in range(MAX_SLOTS)]

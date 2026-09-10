@@ -1091,11 +1091,16 @@ class LlamaLoadMixin:
         _DISTILLED_MODELS = {"qwen3.5:2b-d", "qwen3.5:4b-d", "qwen3.5:9b-d", "qwen3.5:4b-ud-v3", "qwen3.5:9b-ud"}
         # Server <think>-Inhalte in reasoning_content → split_thinking + thinking_budget greifen.
         _REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes"}
-        if type(self)._reasoning_override is not None:
-            _ro = type(self)._reasoning_override
-            type(self)._reasoning_override = None  # consume override
-            cmd += ["--reasoning", "on" if _ro else "off"]
-            logger.info(f"--reasoning {'on' if _ro else 'off'} for {model} (user override)")
+        # Per-model override (duo tool-thinking toggle): the flag is bound to a
+        # specific server instance, so it must only fire for the model it was
+        # set for — a plain consume-once flag landed on whichever model loaded
+        # first (e.g. the planner) and left the coder server at template default.
+        _ro_for_model = (type(self)._reasoning_override or {}).pop(model, None)
+        if type(self)._reasoning_override is not None and not type(self)._reasoning_override:
+            type(self)._reasoning_override = None
+        if _ro_for_model is not None:
+            cmd += ["--reasoning", "on" if _ro_for_model else "off"]
+            logger.info(f"--reasoning {'on' if _ro_for_model else 'off'} for {model} (user override)")
         elif _reg_reasoning in ("on", "off"):
             cmd += ["--reasoning", _reg_reasoning]
             logger.info(f"--reasoning {_reg_reasoning} for {model} (registry config)")
