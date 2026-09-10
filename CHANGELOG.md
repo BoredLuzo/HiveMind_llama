@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.1.1] - 2026-09-10
+
+Thinking-toggle, model-choice sovereignty and installer startup fixes.
+
+### Fixes
+
+- Windows launcher: the console-kill job object is created with
+  `CreateJobObject()` (the previous `CreateJob()` call does not exist in
+  pywin32 and crashed the launcher on startup).
+- `POST /settings` no longer returns 500 for request bodies without an
+  `agents` block (`UnboundLocalError` on the model-sync role list).
+
+### Thinking toggle (planner vs. tool rounds)
+
+- The `--reasoning on/off` server flag is now scoped per model: the duo
+  tool-thinking override previously landed on whichever model loaded first
+  (typically the planner) and left the coder server at template default —
+  so tool rounds thought even with the toggle off, and the planner's
+  thinking was suppressed despite being enabled. Now the planner thinks
+  and tool rounds don't, exactly as configured.
+
+### Model choice & recommendations (user over policy)
+
+- Explicit model choices from the UI are recorded persistently
+  (`agents_user_model_choice`) and always win: the safe-profile policy
+  matrix no longer reverts a card to its own model — including when the
+  user re-picks the shipped default (the old CARDS-WIN heuristic could not
+  express that and silently swapped e.g. duo_coder back to lfm2.5:2.6b).
+- Explicit card temperatures are recorded too (`agents_user_sampling_choice`)
+  and beat both the policy matrix and the model recommendation.
+- On a pure model change the card adopts the model's recommended
+  temperature from `model_configs/models/*.json` — the model itself, ctx
+  and thinking are never touched by recommendations.
+- The safe-profile matrix no longer pushes fixed ctx defaults
+  (`duo_coder_ctx_agentic/normal`) or `thinking`/`thinking_budget` onto
+  agent cards; ctx is a per-model/per-user decision only.
+- New regression suite `tests/test_safe_profile_choice.py` (12 checks)
+  registered in `tests/run_regressions.py`.
+
 ## [1.1.0] - 2026-09-09
 
 Context flow and run stability release: compression, planner→coder handoff
