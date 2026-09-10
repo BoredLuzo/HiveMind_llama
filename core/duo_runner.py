@@ -4431,7 +4431,9 @@ async def run_code_duo(ctx):
                                     # not a loop. Abort only when nothing was written
                                     # (live: spark-1.7b finished with a verification
                                     # summary and got killed as a 'loop').
-                                    if _file_changes and len(_final) >= 80:
+                                    # substantial summary counts even without
+                                    # own writes (verification-only follow-up runs)
+                                    if (_file_changes and len(_final) >= 80) or len(_final) >= 200:
                                         yield await ctx.emit({"type": "status",
                                             "content": "✅ Coder concluded with a final summary — accepting it as the answer."})
                                         break
