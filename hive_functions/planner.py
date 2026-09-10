@@ -24,6 +24,23 @@ from hive_functions.ctx_utils import compute_char_caps, extract_known_files
 
 logger = logging.getLogger("hivemind.planner")
 
+
+# PLAN-SANITIZE (2026-09-10): thinking models sometimes emit tool-call
+# markup as TEXT inside the plan (live: <tool_calls><invoke ...> run_bash
+# ...). That markup must never reach the coder context — it teaches the
+# coder broken tool syntax and pollutes the injected plan.
+_RE_PLAN_TOOLCALL = re.compile(
+    r"<tool_calls>.*?</tool_calls>|<\|tool_call_(?:start|end)\|>[^<]*",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_toolcall_markup(text: str) -> str:
+    if not text:
+        return text
+    cleaned = _RE_PLAN_TOOLCALL.sub(" ", text)
+    cleaned = re.sub(r"[" + chr(10) + "]{3,}", "[" + chr(10) + chr(10) + "]", cleaned)
+    return cleaned.strip()
 # ── PLANNER-OVERRUN-GUARD (2026-09-02) ─────────────────────────────────────────
 # Some models (observed live: LFM2.5 in duo-agentic) keep generating past the
 # actual plan — they append an "Implementation …" heading + a code block at the
@@ -1318,10 +1335,10 @@ async def run_planner(
             _used_fallback = True
             _fallback_reason = str(quality_meta.get("reason") or "empty_or_unstructured_plan")
 
-    result.thinking = _plan_thinking
+    result.thinking = _strip_toolcall_markup(_plan_thinking)
     result.used_fallback = _used_fallback
     result.fallback_reason = _fallback_reason
-    result.plan_content = _raw_output
+    result.plan_content = _strip_toolcall_markup(_raw_output)
 
     return result
 
