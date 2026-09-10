@@ -71,6 +71,9 @@ installer hardening.
 
 ## [Unreleased]
 
+- Final-summary accept: when the coder wrote files and then delivers a
+  substantial text summary, it is accepted as the run's answer instead of
+  tripping the think-only loop abort; nudges now offer task_complete.
 - Escalate-now: a partial compression that shrinks <10% reruns full mode
   immediately instead of waiting for the next trigger (was wasting a whole
   cycle for near-zero gain).

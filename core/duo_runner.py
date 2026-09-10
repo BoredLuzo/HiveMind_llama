@@ -4425,15 +4425,27 @@ async def run_code_duo(ctx):
                                 _dr_think_only_retries += 1
                                 _coder_no_think = True
                                 if _dr_think_only_retries > 2:
+                                    # FINAL-SUMMARY-ACCEPT (2026-09-10): when real
+                                    # work exists and the model delivers a substantial
+                                    # text summary, this is the task's conclusion —
+                                    # not a loop. Abort only when nothing was written
+                                    # (live: spark-1.7b finished with a verification
+                                    # summary and got killed as a 'loop').
+                                    if _file_changes and len(_final) >= 80:
+                                        yield await ctx.emit({"type": "status",
+                                            "content": "✅ Coder concluded with a final summary — accepting it as the answer."})
+                                        break
                                     _ld_setter(3089); _loop_detected = True
                                     yield await ctx.emit({"type": "status",
                                         "content": f"⚠ Coder replies with text only, no tool call ({_dr_think_only_retries}x) — loop aborted."})
                                     break
                                 if _dr < _max_tool_rounds - 1:
-                                    _dtool_msgs.append({
-                                        "role": "user",
-                                        "content": "You must call a tool now. Do not explain — use edit_file or run_bash directly.",
-                                    })
+                                    _nudge = (
+                                        "If the task is complete, call task_complete now with a brief status summary. "
+                                        "Only call edit_file/run_bash if something is still missing."
+                                    ) if _file_changes else (
+                                        "You must call a tool now. Do not explain — use edit_file or run_bash directly.")
+                                    _dtool_msgs.append({"role": "user", "content": _nudge})
                                     continue
                             elif not _parts:
                                 _empty_err = f"[Tool loop: empty answer from {coder_mdl} — check llama-server log]"
