@@ -157,26 +157,12 @@ _INLINE_CODING_TOOLS = [
         }, "required": ["path", "edits"]}
     }},
     {"type": "function", "function": {
-        "name": "patch_file",
-        "description": (
-            "USE WHEN: replacing ONE small, exact snippet (old_str -> new_str). "
-            "old_str must match character-for-character — copy it from read_file output; "
-            "if it appears multiple times, add surrounding context lines to make it unique. "
-            "For multiple changes or larger edits use edit_file with SEARCH/REPLACE blocks."
-        ),
-        "parameters": {"type": "object", "properties": {
-            "path":    {"type": "string", "description": "File path"},
-            "old_str": {"type": "string", "description": "EXACT text to find and replace — copy verbatim from read_file"},
-            "new_str": {"type": "string", "description": "Replacement text"}
-        }, "required": ["path", "old_str", "new_str"]}
-    }},
-    {"type": "function", "function": {
         "name": "write_file",
         "description": (
             "USE WHEN: creating a file that does NOT exist yet.\n"
             "Pass the COMPLETE plain content — no SEARCH/REPLACE markers (that is edit_file's format).\n"
             "WRONG: using write_file to change an existing file — it overwrites the whole file; "
-            "use edit_file or patch_file instead.\n"
+            "use edit_file instead (it fuzzy-matches SEARCH blocks automatically).\n"
             "For files larger than ~20000 chars: write the FIRST part here, then finish with "
             "write_file_append(path, content='<AUTO_SPLIT_CONTINUE>') — content must be the "
             "bare token <AUTO_SPLIT_CONTINUE> (no quotes); the remainder is stored "
@@ -446,8 +432,7 @@ _TOOL_SUBSETS: dict[str, set[str]] = {
         "get_signatures", "find_references", "subagent_research",
     },
     "write": {
-        "write_file", "edit_file", "patch_file",
-        "write_file_append", "replace_lines", "edit_ast", "undo_last",
+        "write_file", "edit_file", "write_file_append", "replace_lines", "edit_ast", "undo_last",
     },
     "run": {"run_bash", "run_python", "install_package", "start_background",
             "stop_background", "get_background_output"},

@@ -71,6 +71,9 @@ installer hardening.
 
 ## [Unreleased]
 
+- Tool surface: `patch_file` removed from the model-facing tool list —
+  `edit_file` already fuzzy-matches SEARCH blocks internally (the handler
+  stays as a legacy alias for resumed sessions).
 - Smoke-test nudge: when the final auto-test finds no test suite, the coder
   is nudged once to write a minimal smoke test and run it before
   task_complete is accepted (second attempt passes without a suite).
