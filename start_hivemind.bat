@@ -11,7 +11,7 @@ echo   \__/   \__/
 echo      \___/
 echo.
 echo    H I V E M I N D
-    echo    by: Luzo  ^|  v1.1.1
+    echo    by: Luzo  ^|  v1.1.2
 echo.
 
 REM Resolve server port: settings.json "server_port" (set by install.bat), default 8001.

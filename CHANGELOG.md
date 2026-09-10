@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.1.2] - 2026-09-11
+
+Critical fix for agentic coder runs.
+
+### Fixes
+
+- Coder load with a context mismatch (planner slot loaded at a smaller ctx
+  than the agentic coder target, e.g. 10240 vs 32768) now actually reloads
+  the model instead of instantly stopping the run with `loop_detected` after
+  0 tool rounds. Reload failure still stops the run — but only after the
+  reload attempt, with the manager's kill + margin resolution and a
+  diagnostic message.
+- Runs without planner and without chunking no longer hit an
+  `UnboundLocalError` (`_planner_model`) in the post-explore worker evict,
+  which skipped the evict/coder-load cleanup.
+- Docs: architecture.md mermaid fix (file paths rendered behind boxes) and a
+  freshness pass (partial compression documented, removed legacy path,
+  47-suite stand).
+
 ## [1.1.1] - 2026-09-10
 
 Thinking-toggle, model-choice sovereignty and installer startup fixes.
