@@ -32,9 +32,11 @@ _DUO_ROLE_SETTINGS = {
 }
 
 # direct scalar keys adopted 1:1 from the policy.
+# 2026-09-10: duo_coder_ctx_* removed — the matrix no longer pushes fixed
+# ctx defaults (ctx is a per-model/per-user decision, see models registry
+# num_ctx_*). duo_runtime_profile stays: it caps rounds/timeout, not models.
 _SCALAR_SETTINGS = {
     "vram_budget_gb", "duo_runtime_profile",
-    "duo_coder_ctx_agentic", "duo_coder_ctx_normal",
     "default_keep_alive", "smart_preload_keep_alive", "max_concurrent_models",
 }
 
@@ -183,8 +185,8 @@ def _policy_patch(policy: dict) -> dict:
         _put_if_not_none(entry, "model", _as_str(cfg.get("model"), None))
         _put_if_not_none(entry, "max_tokens", _as_int(cfg.get("max_tokens"), None))
         _put_if_not_none(entry, "temperature", _as_float(cfg.get("temperature"), None))
-        _put_if_not_none(entry, "thinking", _as_bool(cfg.get("thinking"), None))
-        _put_if_not_none(entry, "thinking_budget", _as_int(cfg.get("thinking_budget"), None))
+        # 2026-09-10: thinking/ctx are no longer policy business — the matrix
+        # never pushes thinking defaults (user decision per model card).
         if entry:
             agent_patch[role] = entry
         if role in _DUO_ROLE_SETTINGS and cfg.get("model"):
@@ -252,22 +254,46 @@ def apply_safe_profile_policy(settings: dict, workspace_root: Path) -> dict:
 
     patch = _policy_patch(policy)
 
-    # CARDS-WIN (2026-09-01): a safe-profile model_override is only a DEFAULT.
-    # If the user picked a different model on the Agent-tab card (anything != the
-    # shipped default), keep the user's choice and drop the policy's model
-    # override for that role (other keys like max_tokens still apply).
+    # USER-OVER-POLICY (2026-09-10, replaces CARDS-WIN heuristic): the safe
+    # profile matrix only supplies DEFAULTS — an explicit user model choice
+    # always wins. post_settings / /settings/agent record every card-model
+    # decision in agents_user_model_choice; roles without a marker whose card
+    # model differs from the shipped default were chosen under the old regime
+    # and are backfilled here, so the marker is the single source of truth.
+    # The policy model only applies to cards still sitting untouched at the
+    # factory default.
     try:
         from settings import DEFAULT_AGENT_CFG as _DEFAULT_AGENTS
     except Exception:
         _DEFAULT_AGENTS = {}
+    _user_choice = settings.get("agents_user_model_choice")
+    if not isinstance(_user_choice, dict):
+        _user_choice = {}
+        settings["agents_user_model_choice"] = _user_choice
+    _changed = False
+    for _role, _dfl_entry in _DEFAULT_AGENTS.items():
+        if _role in _user_choice:
+            continue
+        _cur = (settings.get("agents", {}).get(_role, {}) or {}).get("model", "")
+        _dfl = (_dfl_entry or {}).get("model", "")
+        if _cur and _cur != _dfl:
+            _user_choice[_role] = _cur
     _agent_patch = patch.get("agents")
+    _user_sampling = settings.get("agents_user_sampling_choice")
+    _user_sampling = _user_sampling if isinstance(_user_sampling, dict) else {}
     if isinstance(_agent_patch, dict):
         for _role, _entry in list(_agent_patch.items()):
-            if not isinstance(_entry, dict) or "model" not in _entry:
+            if not isinstance(_entry, dict):
                 continue
-            _cur = (settings.get("agents", {}).get(_role, {}) or {}).get("model", "")
-            _dfl = (_DEFAULT_AGENTS.get(_role, {}) or {}).get("model", "")
-            if _cur and _cur != _dfl:
+            if _user_sampling.get(_role) and "temperature" in _entry:
+                # user customized the card temperature — matrix value drops
+                _agent_patch[_role] = {k: v for k, v in _entry.items() if k != "temperature"}
+                _entry = _agent_patch[_role]
+            if not isinstance(_entry, dict) or "model" not in _entry:
+                if isinstance(_entry, dict) and not _entry:
+                    del _agent_patch[_role]
+                continue
+            if _user_choice.get(_role):
                 _agent_patch[_role] = {k: v for k, v in _entry.items() if k != "model"}
                 if not _agent_patch[_role]:
                     del _agent_patch[_role]

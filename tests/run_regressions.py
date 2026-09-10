@@ -28,6 +28,7 @@ SUITES = [
     ("loop_detect_chunk_read",    "tests/test_loop_detect_chunk_read.py",      120),
     ("loop_detect_run_bash",      "tests/test_loop_detect_run_bash.py",        120),
     ("models_registry",           "tests/test_models_registry.py",              60),
+    ("safe_profile_choice",       "tests/test_safe_profile_choice.py",          60),
     ("linux_paths",               "tests/test_linux_paths.py",                  60),
     ("planner_coder_port_verify", "tests/test_planner_coder_port_verify.py",    60),
     ("tool_error_taxonomy",       "tests/test_tool_error_taxonomy.py",          60),

@@ -196,6 +196,54 @@ async def get_settings():
     return s
 
 
+def _recommended_card_temperature(model: str, role_cfg: dict) -> float | None:
+    """Model-recommended card temperature from model_configs/models/*.json.
+
+    Picks the mode block matching the model's thinking capability and the
+    card's current thinking flag; falls back to whichever mode exists.
+    Returns None when the model has no registry recommendation."""
+    try:
+        from model_configs.models_registry import (
+            get_capabilities as _reg_caps,
+            get_sampling as _reg_sampling,
+        )
+        _sampling = _reg_sampling(model)
+        _model_thinks = bool((_reg_caps(model) or {}).get("thinking", False))
+    except (ImportError, AttributeError, OSError, TypeError):
+        return None
+    if not isinstance(_sampling, dict) or not _sampling:
+        return None
+    _mode = "thinking" if _model_thinks and role_cfg.get("thinking") else "non_thinking"
+    _block = _sampling.get(_mode)
+    if not isinstance(_block, dict):
+        _block = next((v for v in _sampling.values() if isinstance(v, dict)), None)
+    if not isinstance(_block, dict):
+        return None
+    try:
+        _temp = float(_block.get("temperature"))
+    except (TypeError, ValueError):
+        return None
+    return _temp
+
+
+def _sync_recommended_sampling(settings: dict, roles: list[str]) -> None:
+    """On an explicit MODEL change, adopt the model's recommended card
+    temperature — but only where the user has not set their own (marker).
+    The model itself, ctx and thinking are never touched."""
+    _user_sampling = settings.get("agents_user_sampling_choice")
+    _user_sampling = _user_sampling if isinstance(_user_sampling, dict) else {}
+    _agents = settings.setdefault("agents", {})
+    for _role in roles:
+        _cfg = _agents.get(_role)
+        if not isinstance(_cfg, dict):
+            continue
+        if "temperature" in (_user_sampling.get(_role) or set()):
+            continue  # user customized the card temperature — it wins
+        _rec = _recommended_card_temperature(str(_cfg.get("model") or ""), _cfg)
+        if _rec is not None and float(_cfg.get("temperature") or 0) != _rec:
+            _cfg["temperature"] = _rec
+
+
 @router.post("/settings")
 async def post_settings(req: Request):
     global _settings_rev
@@ -236,8 +284,31 @@ async def post_settings(req: Request):
                 "error": f"Workspace path does not exist: {_ws_raw}",
             }, status_code=400)
         data["workspace"] = _ws_raw  # trim durchreichen (leer = Env/Default)
+    _model_changed_roles: list[str] = []  # set inside the agents block below
     if "agents" in data:
         _incoming_agents = data.pop("agents")
+        # EXPLICIT-MODEL-CHOICE (2026-09-10): a model sent by the UI is a user
+        # decision — record it so apply_safe_profile_policy never stomps it,
+        # even when the choice equals the shipped default (CARDS-WIN blind spot).
+        _model_choice = settings.setdefault("agents_user_model_choice", {})
+        if not isinstance(_model_choice, dict):
+            _model_choice = {}
+            settings["agents_user_model_choice"] = _model_choice
+        _sampling_choice = settings.setdefault("agents_user_sampling_choice", {})
+        if not isinstance(_sampling_choice, dict):
+            _sampling_choice = {}
+            settings["agents_user_sampling_choice"] = _sampling_choice
+        if isinstance(_incoming_agents, dict):
+            for _ak, _av in _incoming_agents.items():
+                if isinstance(_av, dict) and str(_av.get("model") or "").strip():
+                    _model_choice[_ak] = str(_av["model"]).strip()
+                    _model_changed_roles.append(_ak)
+                if isinstance(_av, dict) and "temperature" in _av:
+                    # explicit card sampling edit -> user value wins over any
+                    # model recommendation (see _sync_recommended_sampling).
+                    _sc_list = _sampling_choice.setdefault(_ak, [])
+                    if "temperature" not in _sc_list:
+                        _sc_list.append("temperature")
         _sa = settings.setdefault("agents", {})
         if isinstance(_incoming_agents, dict):
             for _ak, _av in _incoming_agents.items():
@@ -290,6 +361,8 @@ async def post_settings(req: Request):
     _xa = settings.get("exploration_agent")
     if isinstance(_xa, dict) and _xa.get("enabled") and not (_xa.get("model") or "").strip():
         _xa["model"] = DEFAULT_SETTINGS["exploration_agent"]["model"]
+    if _model_changed_roles:
+        _sync_recommended_sampling(settings, _model_changed_roles)
     _refresh_safe_profile_policy()
     apply_settings_to_pipeline(settings)
     if _state._WEBSEARCH_AVAILABLE and any(k in data for k in (
@@ -322,12 +395,18 @@ async def set_agent(req: Request):
         if _model:
             registry_set(key, _model)
             settings.setdefault("agents", {}).setdefault(key, {})["model"] = _model
+            _mc = settings.setdefault("agents_user_model_choice", {})
+            if isinstance(_mc, dict):
+                _mc[key] = _model
             _excluded = settings.setdefault("automap_excluded", [])
             if key not in _excluded:
                 _excluded.append(key)
         if "temperature" in d:
-            if d["temperature"] is None:
-                raise ValueError("temperature missing")
+            _sc = settings.setdefault("agents_user_sampling_choice", {})
+            if isinstance(_sc, dict):
+                _sc_list = _sc.setdefault(key, [])
+                if "temperature" not in _sc_list:
+                    _sc_list.append("temperature")
             v = float(d["temperature"])
             _state.pipeline.agents[key].temperature = v
             settings.setdefault("agents", {}).setdefault(key, {})["temperature"] = v
