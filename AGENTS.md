@@ -52,7 +52,12 @@ python -m ruff check .            # ruff.toml: E9/F821/F601/F811/F841/W605
 
 ## Settings & live install
 - `settings.json` is NOT tracked (user config, differs per install).
-- The live install at `..\HiveMind_install` mirrors this repo: sync changed
+- All HiveMind folders live under `C:\Users\NtheP\Desktop\HiveMind\`:
+  `repo` (this repo), `live` (production install), `test` (test install),
+  `releases` (built zips). Until the repo folder itself is moved out of
+  `Desktop\HiveMind_dev` (blocked while a session runs inside it), the
+  relative paths below are `..\live` / `..\test` from the FINAL layout.
+- The live install at `..\live` mirrors this repo: sync changed
   source files there after fixes and restart the server (old code keeps
   running in RAM until then).
 
