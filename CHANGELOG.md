@@ -75,6 +75,9 @@ installer hardening.
   (MTP speculative decoding); recommended strong setups: hermes v13 or
   qwen3.6:35b-a3b-ud as coder, lfm2.5:2.6b / spark-x2.5 for small systems.
 - `qwen3.5:4b-mtp` added to the model downloader (strict MTP filename regex).
+- start_hivemind.bat: an already-running instance can now be killed and
+  restarted directly from the launcher (port owner is terminated with its
+  process tree).
 - Windows: the whole process tree (python + llama-servers) is bound to a Job
   object with kill-on-close — closing the console window reliably terminates
   the stack.

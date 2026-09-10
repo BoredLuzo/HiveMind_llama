@@ -25,9 +25,23 @@ if defined HM_PORT_PID (
     echo  [INFO] HiveMind is already running on port %HM_PORT% ^(PID: %HM_PORT_PID%^).
     echo  [INFO] Open: http://localhost:%HM_PORT%
     echo.
+    choice /c YN /n /m "Kill the running instance and start fresh? [Y/N] "
+    if not errorlevel 2 (
+        taskkill /F /T /PID %HM_PORT_PID% >nul 2>&1
+        timeout /t 2 /nobreak >nul
+        goto port_check_done
+    )
+    echo  Aborted - existing instance stays running.
+    exit /b 0
+)
+:port_check_done
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { $c }"`) do set HM_PORT_PID=%%P
+if defined HM_PORT_PID (
+    echo  [WARN] Port %HM_PORT% still occupied ^(PID: %HM_PORT_PID%^) - cannot start.
     echo  Press any key to continue...
     pause >nul
-    exit /b 0
+    exit /b 1
+)
 )
 
 REM Find Python: venv first, then py -3.14 (resolved to a real path),
