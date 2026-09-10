@@ -39,6 +39,40 @@ Thinking-toggle, model-choice sovereignty and installer startup fixes.
 - New regression suite `tests/test_safe_profile_choice.py` (12 checks)
   registered in `tests/run_regressions.py`.
 
+### Models & defaults
+
+- `qwen3.5:4b-mtp` is the default coder/planner/subagent model (MTP
+  speculative decoding) and was added to the model downloader.
+
+### Tool loop & stability
+
+- `patch_file` removed from the model-facing tool list (`edit_file`
+  fuzzy-matches SEARCH blocks internally).
+- Final-summary accept, escalate-now for <10% partial compressions, adaptive
+  no-think retries, per-chunk tool budgets, planner plan re-injection.
+- Coder VRAM fallback slot runs at >=20k context; an incompressible round-0
+  payload runs with a minimal budget instead of tripping the 3-strike stop.
+- Grace round actually runs now; a failing chunk ends itself instead of
+  halting the run.
+- Browser tool serves workspace `file://` URLs over a loopback HTTP server
+  (ES modules/fetch work; everything else stays rejected).
+
+### Launcher & installer
+
+- `start_hivemind.bat` can kill + restart an already-running instance.
+- Windows: the whole process tree (python + llama-servers) is bound to a
+  kill-on-close job object — closing the console ends the stack.
+- Installer: `uv sync` falls back to plain venv + `requirements.txt`,
+  parenthesized install paths no longer break the dependency step.
+
+### Language & cleanup
+
+- English-only across MCP tool descriptions, JSON-RPC errors, user-visible
+  strings and LLM-facing scaffolding; memory extraction understands English
+  phrasing (data keys unchanged).
+- Dead settings removed; `hivemind.service` ExecStart points at `.venv`.
+
+
 ## [1.1.0] - 2026-09-09
 
 Context flow and run stability release: compression, planner→coder handoff
@@ -107,156 +141,6 @@ installer hardening.
   packaging (a zip without `pyproject.toml` used to crash on first run).
 - English-only keyword matchers and system-facing strings throughout;
   `AGENTS.md` documents repo conventions.
-
-## [Unreleased]
-
-- Agent defaults: qwen3.5:4b-mtp is the default coder/planner/subagent model
-  (MTP speculative decoding); recommended strong setups: hermes v13 or
-  qwen3.6:35b-a3b-ud as coder, lfm2.5:2.6b / spark-x2.5 for small systems.
-- `qwen3.5:4b-mtp` added to the model downloader (strict MTP filename regex).
-- start_hivemind.bat: an already-running instance can now be killed and
-  restarted directly from the launcher (port owner is terminated with its
-  process tree).
-- Windows: the whole process tree (python + llama-servers) is bound to a Job
-  object with kill-on-close — closing the console window reliably terminates
-  the stack.
-
-- Tool surface: `patch_file` removed from the model-facing tool list —
-  `edit_file` already fuzzy-matches SEARCH blocks internally (the handler
-  stays as a legacy alias for resumed sessions).
-- Smoke-test nudge: when the final auto-test finds no test suite, the coder
-  is nudged once to write a minimal smoke test and run it before
-  task_complete is accepted (second attempt passes without a suite).
-- Final-summary accept: when the coder wrote files and then delivers a
-  substantial text summary, it is accepted as the run's answer instead of
-  tripping the think-only loop abort; nudges now offer task_complete.
-- Escalate-now: a partial compression that shrinks <10% reruns full mode
-  immediately instead of waiting for the next trigger (was wasting a whole
-  cycle for near-zero gain).
-- Adaptive no-think retries: after repeated think-only coder rounds the
-  next attempt disables template thinking (enable_thinking=false), so the
-  token budget goes to an actual tool call instead of more reasoning.
-- Coder VRAM fallback: the fallback slot now runs at >=20k context (the duo
-  payload alone is ~8k tokens; a 10k fallback slot started CTX-FULL and died
-  in the compression guard with zero output), and an incompressible round-0
-  payload no longer trips the 3-strike stop — the round runs with a minimal
-  output budget instead.
-
-- Tool layer cleanup: deduplicated exec branches, recovery phrases and hint
-  chain; single args serialization per write; file IO off the event loop;
-  task_complete block/allow ladder unified with one counter owner; read
-  ladder now persists across rounds (was reset every round).
-- Compression cleanup: removed the legacy in-place-eviction regime and the
-  dead `duo_cache_friendly_ctx` / `duo_min_free_ctx_tokens` settings; cut
-  planning now uses the real/estimated token ratio; fewer full-history scans
-  per round; clearer compression-card hints in the UI.
-
-- UI: the "Compression Limit" absolute-token field was removed — the auto
-  floor (70% of ctx) is the intended baseline. `duo_compress_threshold`
-  stays available as a settings.json override for power users.
-- Installer hardening: `uv sync` falls back to a plain venv +
-  `requirements.txt` when `pyproject.toml` is missing (older release zips),
-  parenthesized install paths no longer break the dependency step, and
-  `clean_release.bat` now strips `.venv` from releases and verifies the
-  installer inputs (pyproject.toml / requirements.txt / install.bat) before
-  packaging — a zip without them crashed on first run ("No pyproject.toml
-  found", seen with v1.0.13).
-- Spark-X2.5 support: MODEL_PROFILES entries (thinking + tool calling, verified
-  live on llama.cpp b10872) and per-model configs (`spark-x2.5:4b` / `:1.7b`,
-  sampling temp 1.0 / top_p 0.95 / top_k -1 per the model card and the GGUF's
-  own embedded defaults).
-- Memory/forget keyword routing now requires short command-like messages
-  (<= 120 chars). A long task spec containing "store"/"note"/"delete" no longer
-  gets swallowed by the memory early-return.
-- STUB-ECHO-GUARD: write/edit tool calls whose arguments contain the internal
-  ARG-COMPACT stub are rejected with STUB_ECHO_BLOCKED instead of writing the
-  stub text into the file (observed with spark-x2.5:4b).
-- `duo_partial_compression` is on by default (was off): summary + raw tail is
-  the recommended baseline — keeps the llama.cpp prefix cache alive and the raw
-  tail readable for the coder.
-- Memory extraction understands english phrasing now: "remember that ...", "my name is",
-  "i'm from / i come from", "i live in", "i work as", "i'm N years old", "my project is",
-  "my favorite language is". German variants keep working, keys stay the same.
-- MCP tool descriptions and JSON-RPC errors in english, same for the remaining
-  user-visible strings (pipeline status events, subagent gate/fallback texts, planner
-  bubble label, config-eval heading, ab_phase1.ps1 and analyze_cache_log.py output).
-- LLM-facing message scaffolding is english now (`[USER]` label, `[MESSAGE ORIGIN]`
-  note instead of the german forms). Poison markers match both forms.
-- hivemind.service ExecStart points at `.venv` (what install_linux.sh actually creates),
-  obsolete "adjust the venv path" hint removed. Stale ~30s retry comment in
-  fetch_llamacpp.py corrected (~90s).
-- README and CHANGELOG rewritten, trimmed.
-- Dead settings removed: `duo_compress_every` (never read anywhere) and
-  `duo_coder_ctx_until_finished` (defined, UI-wired, never read — the agentic
-  ctx applies to until-finished runs anyway). The UI compression hint now
-  states the real auto floor (70%, was 72%).
-- Grace round actually runs now: the old budget-exhaustion path aborted the
-  loop before the grace prompt was ever sent. The tool loop has two extra
-  slots (grace + nudge retry), and a chunk that still fails afterwards only
-  ends itself — the run continues with the next chunk instead of halting.
-- Tool budget is per chunk again: `_total_tool_rounds` resets per chunk, run
-  totals keep counting in the telemetry. Compression-force and fail-streak
-  flags no longer leak across chunk boundaries.
-- Chunk coders receive the planner's `plan_content` (`[IMPLEMENTATION PLAN]`),
-  not only the subtask title list. Non-chunk outer rounds 2+ get it
-  re-injected too (it was previously lost after round 1).
-
-- Preset load reliability: a presets.json with a UTF-8 BOM (external Windows
-  editors add one) made load_presets() fail silently — every preset load 404'd
-  and the UI swallowed the error. BOM-tolerant now; load failures surface as
-  an alert, and the success alert shows what the preset restored (planner
-  on/off + model, chunking on/off). The planner phase is no longer skipped
-  silently when planner + chunking toggles are both off; the planner dropdown
-  clears when a preset removes the planner model override; pending settings
-  patches are flushed before a preset load so they can't overwrite it.
-  New suite tests/test_presets_bom.py (43 total).
-
-- Browser tool accepts workspace file:// URLs now: they are transparently
-  served over a loopback HTTP server (bound to 127.0.0.1, random port, server
-  lives until browser close), so ES modules and fetch work like on real
-  hosting and local app verification stops failing with "scheme 'file://' is
-  not allowed". file:// paths outside the workspace and all other disallowed
-  schemes stay rejected — with guidance instead of a dead end. New suite
-  tests/test_browser_fileserve.py (44 total).
-
-- Context compression actually condenses now (live failure: "done
-  before=26473 after=26473" three times, then the 3-strike guard stopped the
-  run at ~65% ctx). Root cause: plan_partial_cut_index counted the pinned
-  system prompt toward the cut budget, the cut landed before the first tool
-  output, the condenser found nothing to compress and silently returned the
-  original list — which passed validation vacuously. The cut now ignores the
-  system message and requires condensable content before it (otherwise full
-  mode), a no-op condensation logs a warning instead of pretending success,
-  and a partial attempt that shrank nothing escalates the next attempt to
-  full mode. New suite tests/test_partial_cut.py (45 total).
-
-- Context compression actually condenses now (live failure: "done
-  before=26473 after=26473" three times, then the 3-strike guard stopped the
-  run at ~65% ctx). Root cause: plan_partial_cut_index counted the pinned
-  system prompt toward the cut budget, the cut landed before the first tool
-  output, the condenser found nothing to compress and silently returned the
-  original list — which passed validation vacuously. The cut now ignores the
-  system message and requires condensable content before it (otherwise full
-  mode), a no-op condensation logs a warning instead of pretending success,
-  and a partial attempt that shrank nothing escalates the next attempt to
-  full mode. New suite tests/test_partial_cut.py (45 total).
-- Read-first nudge in the write-arg stub: after a large write is compacted,
-  the stub now tells the model to read_file the path before further
-  write/edit calls (write_file churn fix). The per-round output clamp honors
-  duo_compress_overflow_reserve / duo_min_free_ctx_tokens, and the VRAM
-  pre-pin resolves the planner model exactly like the planner phase
-  (duo_planner_use_coder_ctx + duo_planner_model override were ignored).
-- Duplicate plan preview removed from the chunk coder input — the FULL PLAN
-  badge block from build_chunk_context is the single source now.
-- Ctx meter shows real prompt tokens (marked "real" vs heuristic "est") with
-  per-round cache reuse %, and the Compression card gained toggles for
-  cache-friendly compression, partial compression and local-only summary.
-- ui_rev stale-tab guard: POST /settings patches carrying an outdated revision
-  lose the protected compression keys (settings_force: true overrides).
-- Input-detection matchers are english-only (german halves removed for now —
-  restore via git history; legacy output parsers stay bilingual). AGENTS.md
-  added with the repo conventions and matcher inventory. Mojibake cleanup in
-  chat_run.py log/status strings.
 
 ## [1.0.13] - 2026-09-08
 
