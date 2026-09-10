@@ -71,6 +71,9 @@ installer hardening.
 
 ## [Unreleased]
 
+- Smoke-test nudge: when the final auto-test finds no test suite, the coder
+  is nudged once to write a minimal smoke test and run it before
+  task_complete is accepted (second attempt passes without a suite).
 - Final-summary accept: when the coder wrote files and then delivers a
   substantial text summary, it is accepted as the run's answer instead of
   tripping the think-only loop abort; nudges now offer task_complete.

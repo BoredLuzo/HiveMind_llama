@@ -430,6 +430,7 @@ async def execute_tool_round(
 
                 # ── AUTO-TEST vor task_complete (2026-08-12, B) ──────────────────
                 _auto_test_skips_gate = False
+                _at_nosuite_nudged = False  # SMOKE-NUDGE (2026-09-10): once per run
                 if auto_test_before_complete and _mutations_made:
                     _last_write_idx_at = -1
                     _last_test_idx_at = -1
@@ -472,7 +473,22 @@ async def execute_tool_round(
                             _logger.info("[AUTO-TEST] Tests green - task_complete allowed through")
                             break
                         if _at_res.startswith("[TEST-RESULT] ⚠️"):
-                            _logger.info("[AUTO-TEST] No tests in the project - task_complete allowed through (manual verification)")
+                            # SMOKE-NUDGE (2026-09-10): no test framework found —
+                            # nudge the coder ONCE to write a minimal smoke test
+                            # and run it, instead of silently passing.
+                            if not _at_nosuite_nudged:
+                                _at_nosuite_nudged = True
+                                _logger.info("[AUTO-TEST] No test suite — nudging coder to write a minimal smoke test")
+                                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                                    "[NO TEST SUITE] No test framework was detected. Before completing: "
+                                    "write a minimal smoke test that loads/executes the files you created and "
+                                    "fails on errors (e.g. tests/smoke_test.py, or a quick headless check for "
+                                    "HTML/JS projects). Run it via run_bash and ensure exit code 0, then call "
+                                    "task_complete again."
+                                )})
+                                _auto_test_skips_gate = True
+                                continue
+                            _logger.info("[AUTO-TEST] No tests in the project - task_complete allowed through (smoke test nudge already given)")
                             result.task_complete_called = True
                             break
                         _gate = _task_complete_ladder(
