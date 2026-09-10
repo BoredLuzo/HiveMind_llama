@@ -20,32 +20,32 @@ if not defined HM_PORT set "HM_PORT=8001"
 
 REM Port check: is HiveMind already running?
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { $c }"`) do set HM_PORT_PID=%%P
-if defined HM_PORT_PID (
-    echo.
-    echo  [INFO] HiveMind is already running on port %HM_PORT% ^(PID: %HM_PORT_PID%^).
-    echo  [INFO] Open: http://localhost:%HM_PORT%
-    echo.
-    choice /c YN /n /m "Kill the running instance and start fresh? [Y/N] "
-    if not errorlevel 2 (
-        echo  [..] Killing PID %HM_PORT_PID% ...
-        taskkill /F /T /PID %HM_PORT_PID%
-        rem KILL-FALLBACK (2026-09-10): taskkill can fail with ACCESS_DENIED
-        rem when the old instance runs elevated — force via PowerShell.
-        powershell -NoProfile -Command "Stop-Process -Id %HM_PORT_PID% -Force -ErrorAction SilentlyContinue"
-        rem KILL-WAIT (2026-09-10): process death + socket release can take
-        longer than a fixed sleep - poll up to ~10s.
-        set /a HM_KILL_WAIT=0
-:kill_wait_loop
-        timeout /t 1 /nobreak >nul
-        set "HM_STILL="
-        for /f "usebackq delims=" %%Q in (`powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue) { '1' }"`) do set HM_STILL=%%Q
-        if not defined HM_STILL goto port_check_done
-        set /a HM_KILL_WAIT+=1
-        if %HM_KILL_WAIT% lss 10 goto kill_wait_loop
-        goto port_check_done
-    )
+if not defined HM_PORT_PID goto port_check_done
+echo.
+echo  [INFO] HiveMind is already running on port %HM_PORT% (PID: %HM_PORT_PID%).
+echo  [INFO] Open: http://localhost:%HM_PORT%
+echo.
+choice /c YN /n /m "Kill the running instance and start fresh? [Y/N] "
+if errorlevel 2 (
     echo  Aborted - existing instance stays running.
     exit /b 0
+)
+# SERIAL-RESTART (2026-09-10): kill the old instance with its process tree
+# (llama-server children) - no labels inside parenthesized blocks: cmd's
+# parser breaks on them.
+echo  [..] Killing PID %HM_PORT_PID% ...
+taskkill /F /T /PID %HM_PORT_PID%
+powershell -NoProfile -Command "Stop-Process -Id %HM_PORT_PID% -Force -ErrorAction SilentlyContinue"
+# KILL-WAIT: process death + socket release can take several seconds - poll.
+set /a HM_KILL_WAIT=0
+:kill_wait_loop
+timeout /t 1 /nobreak >nul
+set "HM_STILL="
+for /f "usebackq delims=" %%Q in (`powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue) { '1' }"`) do set HM_STILL=%%Q
+if not defined HM_STILL goto port_check_done
+set /a HM_KILL_WAIT+=1
+if %HM_KILL_WAIT% lss 10 goto kill_wait_loop
+:port_check_done
 )
 :port_check_done
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { $c }"`) do set HM_PORT_PID=%%P
