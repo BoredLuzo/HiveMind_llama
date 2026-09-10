@@ -893,6 +893,12 @@ async def run_code_duo(ctx):
             # model ("planner stays off after preset load").
             yield await ctx.emit({"type": "status",
                 "content": "⏹ Planner phase off (planner + chunking toggles both off) — going straight to coder"})
+        # PLANNER-MODEL-DEFAULT (2026-09-10): without planner AND without
+        # chunking the block below never runs, and the post-explore worker
+        # evict hit `UnboundLocalError: _planner_model` (caught as a broad
+        # warning; evict/coder-load cleanup was skipped). Default to the
+        # coder model: the evict logic then simply excludes the coder itself.
+        _planner_model = coder_mdl
         if (ctx.duo_config.chunking or ctx.duo_config.planner) and not ctx.aborted() and not _resume_data and not _planner_skipped:
             _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
             _planner_is_distilled = False
@@ -3089,7 +3095,13 @@ async def run_code_duo(ctx):
                                     "[DUO] Suppressed error at keep-alive touch: %s",
                                     _err, exc_info=True
                                 )
-                    else:
+                    # MISMATCH-RELOAD-FIX (2026-09-10): the ctx-mismatch branch
+                    # above only cleared the cached port — the ensure_loaded call
+                    # lived in the `else` of the cache check, so a mismatch fell
+                    # straight into `_dport is None` → _loop_detected stop with 0
+                    # tool rounds. `_dport` still None (mismatch or empty cache)
+                    # now always runs the reload.
+                    if _dport is None:
                         for _connect_attempt in range(3):
                             try:
                                 _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False)

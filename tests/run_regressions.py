@@ -52,6 +52,7 @@ SUITES = [
     ("write_guard_and_explore_truth", "tests/test_write_guard_and_explore_truth.py", 60),
     ("noop_hint_and_zero_lines",  "tests/test_noop_hint_and_zero_lines.py",       60),
     ("fallback_ctx_stall",     "tests/test_fallback_ctx_stall.py",             60),
+    ("mismatch_reload",        "tests/test_mismatch_reload.py",                60),
     ("mini_shrink_retry",      "tests/test_mini_shrink_retry.py",              60),
     ("output_reserve",         "tests/test_output_reserve.py",                  60),
     ("auto_split_pending",     "tests/test_auto_split_pending.py",              60),
