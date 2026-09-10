@@ -33,7 +33,7 @@ if sys.platform == "win32":
         print("[WARN] pywin32 missing - console-close will not kill llama-servers")
     if _win32job is not None:
         try:
-            _hjob = _win32job.CreateJob()
+            _hjob = _win32job.CreateJobObject(None, "")
             _info = _win32job.QueryInformationJobObject(_hjob, _win32job.JobObjectExtendedLimitInformation)
             _info["BasicLimitInformation"]["LimitFlags"] = _win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             _win32job.SetInformationJobObject(_hjob, _win32job.JobObjectExtendedLimitInformation, _info)
