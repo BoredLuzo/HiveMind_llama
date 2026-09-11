@@ -130,23 +130,22 @@ SPECS: list[dict] = [
             },
         ],
     },
-    # ── Qwen3.6 Genesis Final "APEX-Compact" (2026-09-05) ─────────────────
+    # ── Hermes3.6 Genesis V13 "MTP-APEX-Compact" (2026-09-11) ─────────────
     # Coder/Hermes agent: MoE 35B-A3B with MTP head, quantized as
-    # "APEX-Compact" (~17 GB, experts offloaded to CPU). The per-model config
-    # (model_configs/models/qwen3.6_..._genesis-final-apex-compact.json)
-    # enables the MTP head + 35 CPU experts. Original repo (LuffyTheFox) is
-    # no longer publicly listable (HF 401) — pinned to the verified mirror
-    # (file checked 2026-09-11).
+    # "MTP-APEX-Compact" (~18 GB, experts offloaded to CPU). The per-model
+    # config (model_configs/models/hermes3.6_..._v13-mtp-apex-compact.json)
+    # enables the MTP head + CPU experts, so the DOWNLOAD must be the MTP
+    # variant (registers as hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-
+    # apex-compact). Files verified 2026-09-11.
     {
-        "key": "qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact",
-        "desc": "Qwen3.6 Genesis Final APEX-Compact (Coder/Hermes agent, MoE+MTP, ~17GB download)",
-        "repo": "burningfeet/backup-2026-09-06-Qwen3.6-35B-A3B-Uncensored-Genesis-Final-GGUF",
+        "key": "hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact",
+        "desc": "Hermes3.6 Genesis V13 MTP-APEX-Compact (Coder/Hermes agent, MoE+MTP, ~18GB download)",
+        "repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V13-GGUF",
         "file_regex": [
-            r"(?i)^qwen3\.6-35b-a3b-uncensored-genesis-final-apex-compact\.gguf$",
+            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-v13-mtp-apex-compact\.gguf$",
         ],
         "mmproj_regex": [
-            r"(?i)mmproj[-_.]qwen3\.6[-_.]35b.*genesis[-_.]f16\.gguf$",
-            r"(?i)^mmproj.*(f16|bf16)\.gguf$",
+            r"(?i)^mmproj-hermes3\.6-35b-a3b-uncensored-genesis-f16\.gguf$",
         ],
     },
     # ── Qwen3.5 MTP pair (duo coder/planner + refiner) ────────────────────

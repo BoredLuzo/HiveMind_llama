@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.1.4] - 2026-09-11
+
+Installer model-setup rework.
+
+### Model setup
+
+- Curated 7-model download catalog, every entry pinned to an exact Hugging
+  Face repo (no fuzzy search): gemma-4 E4B/E2B it-QAT (UD-Q4_K_XL, mmproj,
+  MTP drafter), qwen3.6:35b-a3b-ud, Hermes3.6 Genesis V13 MTP-APEX-Compact,
+  qwen3.5:4b-mtp, qwen3.5:2b-mtp, lfm2.5:2.6b (+DSpark drafter).
+- Live bug fixed: the fuzzy search could pull a wrong lookalike repo for the
+  qwen3.5 MTP models. Pinned repos can never do that.
+- Custom models folder (e.g. another drive) is kept: one pass now downloads
+  missing models AND registers the whole folder.
+- setup_models.bat renders its menu from the catalog (single source of
+  truth).
+
 ## [1.1.3] - 2026-09-11
 
 Run-state persistence fixes for the agentic tool loop.

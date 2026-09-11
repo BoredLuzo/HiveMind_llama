@@ -248,40 +248,31 @@ model, temperature, max_tokens, thinking, thinking_budget). Learned configs
 live in `model_configs/learned/<model>/<agent>.json`, managed in the UI
 Configs tab or `/model_configs` API, and override base defaults at runtime.
 
-## Recommended model set
+## Download catalog
 
-| Model | Role | Download | VRAM |
-|-------|------|----------|------|
-| `gemma-4:e4b-it` (Q4_K_M) | allrounder / vision | ~3 GB | ~3 GB |
-| `qwen3.6:35b-a3b-ud` (UD-Q4_K_XL) | coder / planner (MoE) | ~20 GB | ~5 GB (experts in RAM) |
-| `qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact` (APEX-Compact) | coder / hermes agent (MoE, MTP) | ~17 GB | ~6 GB (experts in RAM) |
-| `ling-3.0-tiny` (Q4_K_L) | low-resource coder (hybrid MoE 7.9B/1.3B) | ~4.75 GB | ~5 GB |
-| `qwen3.5:4b-ud` (UD-Q4_K_XL) | analyst / critic / speed | ~3 GB | ~3 GB |
-| `qwen3.5:9b-ud` (UD-Q4_K_XL) | direct / duo-coder | ~6 GB | ~6 GB |
-| `qwen3.5:2b` (Q4_K_M) | refiner | ~1.3 GB | ~1.5 GB |
-| `lfm2.5:2.6b` (Q4_K_M) | subagent / judge | ~2 GB (+0.2 GB DSpark drafter) | ~2 GB |
-| `qwen3.5:0.8b-ud` (UD-Q4_K_XL) | subagent ladder | ~0.6 GB | ~0.6 GB |
+`setup_models.bat` offers exactly these models (every repo is pinned — no
+fuzzy search):
 
-Standard configs:
+| Model | Role | Download |
+|-------|------|----------|
+| `gemma-4:e4b-it-qat` (UD-Q4_K_XL) | allrounder / vision (+MTP drafter) | ~4.2 GB + 1 GB mmproj |
+| `gemma-4:e2b-it-qat` (UD-Q4_K_XL) | small allrounder / vision (+MTP drafter) | ~2.6 GB + 1 GB mmproj |
+| `qwen3.6:35b-a3b-ud` (UD-Q4_K_XL) | coder / planner (MoE) | ~22 GB |
+| `hermes3.6:...-v13-mtp-apex-compact` | coder / hermes agent (MoE, MTP) | ~18 GB |
+| `qwen3.5:4b-mtp` (Q4_K_M) | duo coder/planner default (MTP) | ~2.8 GB |
+| `qwen3.5:2b-mtp` (Q4_K_M) | refiner (MTP) | ~1.3 GB |
+| `lfm2.5:2.6b` (Q4_K_M) | subagent / judge (+DSpark drafter) | ~2 GB |
 
-| Set | Models | VRAM |
-|-----|--------|------|
-| Minimal (1 model) | `lfm2.5:2.6b` or `gemma-4:e4b-it` for everything | ~2-3 GB |
-| Standard (default install) | `qwen3.5:9b-ud` coder + `qwen3.5:4b-ud` analyst/critic/synth + `qwen3.5:2b` refiner + `lfm2.5:2.6b` judge/subagent | ~7-8 GB |
-| Quality | + `qwen3.6:35b-a3b-ud` heavy coder + `gemma-4:e4b-it` vision | ~10 GB |
+Other GGUFs on disk can be registered without downloading anything
+(setup_models.bat -> [R]) or added with a full config via [C].
 
-8 GB GPU + 32 GB RAM: `qwen3.6:35b-a3b-ud` alone as agentic model is the best
-pick. MoE 35B total, ~3B active, experts offloaded to CPU, fits the 8 GB
-budget and codes better than the 9B.
+Multimodal: gemma-4 has a built-in vision encoder; qwen3.5/3.6/hermes use an
+`mmproj` projector (auto-downloaded with the model). Non-multimodal models
+fall back to the vision-agent preprocessing path.
 
-Multimodal: gemma-4 has a built-in vision encoder; qwen3.5/3.6 use an
-`mmproj-BF16.gguf` projector (auto-downloaded or pinned via `models.json` /
-`mmproj_filename`). Non-multimodal models fall back to the vision-agent
-preprocessing path.
-
-`setup_models.bat` also fetches the LFM2.5-2.6B-DSpark speculative-decoding
-drafter together with `lfm2.5:2.6b`; lfm2.5 models launch with `--jinja` and
-attach it via `--model-draft` / `--spec-type draft-dspark`.
+Chat templates: qwen3.5/3.6/hermes models launch with the bundled
+`model_configs/chat_template22.5.jinja`; gemma-4 uses its own built-in
+template. Per-model overrides live in `model_configs/models/<tag>.json`.
 
 ## UI and control
 
