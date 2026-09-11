@@ -38,37 +38,22 @@ if exist "%~dp0.venv\Scripts\python.exe" (
     )
 )
 
-REM ---- GGUF autodetect: models already present? ----
-set "HAS_GGUF="
-for /f %%i in ('dir /b /s "%MODELS_DIR%\*.gguf" 2^>nul ^| find /c /v ""') do set HAS_GGUF=%%i
-if defined HAS_GGUF if not "%HAS_GGUF%"=="0" (
-    echo  [%HAS_GGUF%] GGUF files found in the folder.
-    echo  Missing recommended models will be downloaded,
-    echo  existing ones stay untouched and get registered.
-    echo.
-)
-
-echo  The following models can be loaded:
-echo    1. Gemma-4 E4B-IT          Q4_K_M     ~3 GB    All-rounder/Vision
-echo    2. Qwen3.6 35B A3B UD      Q4_K_XL   ~20 GB    Coder/Planner MoE
-echo    3. Qwen3.5 4B UD           Q4_K_XL    ~3 GB    Analyst/Critic/Speed
-echo    4. Qwen3.5 9B UD           Q4_K_XL    ~6 GB    Direct/Duo-Coder
-echo    5. Qwen3.5 2B              Q4_K_M     ~1.3 GB  Refiner
-echo    6. LFM2.5 2.6B             Q4_K_M     ~2 GB    Subagent/Judge (+DSpark drafter)
-echo    7. Qwen3.5 0.8B UD         Q4_K_XL    ~0.6 GB  Subagent ladder
-echo    8. Qwen3.6 Genesis Final APEX-Compact  APEX-Compact ~17 GB   Coder/Hermes (MoE+MTP)
-echo    9. Ling-3.0-tiny          Q4_K_L    ~4.75 GB  Low-resource Coder (hybrid MoE)
+REM ---- Catalog: single source of truth is fetch_models.py SPECS ----
+echo  Download catalog (existing models stay untouched and get registered):
 echo.
-echo    LFM2.5 2.6B automatically also downloads the DSpark spec-dec drafter.
+"%PY%" deploy\fetch_models.py --print-catalog
 echo.
-choice /c DCRA /m "[D]ownload / [C]ustom model add / [R]egister own folder only / [A]bort"
-if errorlevel 4 exit /b 0
-if errorlevel 3 goto import_only
-if errorlevel 2 goto custom_add
-
+echo    LFM2.5 2.6B also downloads the DSpark spec-dec drafter.
+echo    Gemma-4 E4B/E2B QAT also download their MTP drafter.
 echo.
-REM Single-select mode: pick specific models by number (comma-separated).
-choice /c AS /m "[A]ll recommended models / [S]elect single models"
+echo  D = download all missing, S = select single models,
+echo  C = add own model with config, R = register folder only (no download),
+echo  A = abort.
+echo.
+choice /c DSCRA /m "Your choice"
+if errorlevel 5 exit /b 0
+if errorlevel 4 goto import_only
+if errorlevel 3 goto custom_add
 if errorlevel 2 goto select_single
 
 echo.
@@ -77,21 +62,12 @@ goto done
 
 :select_single
 echo.
-echo  Single-model download - enter numbers, comma-separated, e.g. 1,4:
-echo    1. gemma-4:e4b-it        All-rounder/Vision
-echo    2. qwen3.6:35b-a3b-ud    Coder/Planner MoE
-echo    3. lfm2.5:2.6b           Subagent/Judge (+DSpark drafter)
-echo    4. qwen3.5:0.8b-ud       Subagent ladder
-echo    5. qwen3.5:2b            Refiner
-echo    6. qwen3.5:4b-ud         Analyst/Critic/Speed
-echo    7. qwen3.5:9b-ud         Direct/Duo-Coder
-echo    8. qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact  Coder/Hermes (MoE+MTP)
-echo    9. ling-3.0-tiny           Low-resource Coder (hybrid MoE)
-echo   10. qwen3.5:4b-mtp         Duo Coder/Planner default (MTP spec-decode)
+echo  Single-model download - enter numbers, comma-separated, e.g. 1,4
+echo  (empty input = register the folder only, no download):
 echo.
 set "MODELS_SEL="
 set /p "MODELS_SEL=Numbers: "
-if "%MODELS_SEL%"=="" goto done
+if "%MODELS_SEL%"=="" goto import_only
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only "%MODELS_SEL%"
 goto done
 

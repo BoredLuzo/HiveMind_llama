@@ -56,49 +56,67 @@ def _persist_models_dir(mdir: Path) -> None:
     except Exception as _e:
         print(f"    [WARNING] could not persist models_dir: {_e}")
 
-# ── Recommended model set ─────────────────────────────────────────────────────
-# file_regex: list of patterns, first priority first.
-# author_pref: Preferred repo authors (order = priority).
+# ── Download catalog (2026-09-11, user-curated) ──────────────────────────────
+# Exactly the models the installer offers. file_regex: list of patterns, first
+# priority first. "repo": PINNED repo (no HF fuzzy search — a search once
+# pulled Jackrong/DeepSeek-V4-Pro... for the qwen3.5:4b-mtp spec because
+# unsloth names its MTP files WITHOUT "mtp": unsloth/Qwen3.5-4B-MTP-GGUF →
+# "Qwen3.5-4B-Q4_K_M.gguf". Pinned specs never fall back to search.)
 SPECS: list[dict] = [
     {
-        "key": "gemma-4:e4b-it",
-        "desc": "Gemma-4 E4B-IT (All-rounder/Vision, ~3GB VRAM)",
-        "search": "gemma-4 e4b gguf",
-        # AUTHOR-SCOPE (2026-08-26, live check): ONLY unsloth — google/QAT
-        # ("gemma-4-E4B_q4_0-it.gguf") and bartowski ("google_gemma-4-E4B-...")
-        # produce different tags (gemma-4:e4b-q4-0-it resp. google-gemma-4:e4b-it)
-        # than the spec key promises.
-        "author_pref": ["unsloth"],
+        "key": "gemma-4:e4b-it-qat",
+        "desc": "Gemma-4 E4B-IT QAT (All-rounder/Vision, ~4.2GB + mmproj, +MTP drafter)",
+        "repo": "unsloth/gemma-4-E4B-it-qat-GGUF",
         "file_regex": [
-            r"(?i)e4b[-_.]it[-_.]q4_k_m\.gguf$",
-            r"(?i)e4b[-_.]it[-_.]q4_0\.gguf$",
+            r"(?i)^gemma-4-e4b-it-qat-ud-q4_k_xl\.gguf$",
         ],
         "mmproj_regex": [
-            r"(?i)mmproj[-_.]bf16\.gguf$",
-            r"(?i)e4b.*mmproj.*\.gguf$",
+            r"(?i)^mmproj[-_.]bf16\.gguf$",
+            r"(?i)^mmproj[-_.]f16\.gguf$",
+        ],
+        # MTP speculative-decoding drafter (~60MB, root of the repo)
+        "sidecar": [
+            {
+                "repo": "unsloth/gemma-4-E4B-it-qat-GGUF",
+                "path": "mtp-gemma-4-E4B-it.gguf",
+                "note": "MTP spec-dec drafter (~60MB)",
+            },
+        ],
+    },
+    {
+        "key": "gemma-4:e2b-it-qat",
+        "desc": "Gemma-4 E2B-IT QAT (Small all-rounder/Vision, ~2.6GB + mmproj, +MTP drafter)",
+        "repo": "unsloth/gemma-4-E2B-it-qat-GGUF",
+        "file_regex": [
+            r"(?i)^gemma-4-e2b-it-qat-ud-q4_k_xl\.gguf$",
+        ],
+        "mmproj_regex": [
+            r"(?i)^mmproj[-_.]bf16\.gguf$",
+            r"(?i)^mmproj[-_.]f16\.gguf$",
+        ],
+        "sidecar": [
+            {
+                "repo": "unsloth/gemma-4-E2B-it-qat-GGUF",
+                "path": "mtp-gemma-4-E2B-it.gguf",
+                "note": "MTP spec-dec drafter (~60MB)",
+            },
         ],
     },
     {
         "key": "qwen3.6:35b-a3b-ud",
         "desc": "Qwen3.6 35B A3B unsloth UD (Coder/Planner MoE, ~20GB download)",
-        "search": "Qwen3.6 35B A3B GGUF",
-        "author_pref": ["unsloth", "bartowski"],
+        "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
         "file_regex": [
-            r"(?i)35b[-._]a3b[-._]ud[-._]q4_k_xl\.gguf$",
-            r"(?i)35b.*q4_k_xl\.gguf$",
-            r"(?i)35b.*q4_k_m\.gguf$",
+            r"(?i)^qwen3\.6-35b-a3b-ud-q4_k_xl\.gguf$",
         ],
         "mmproj_regex": [r"(?i)^mmproj[-._]bf16\.gguf$", r"(?i)mmproj.*(f16|bf16)\.gguf$"],
     },
     {
         "key": "lfm2.5:2.6b",
         "desc": "LFM2.5 2.6B (Subagent/Worker, ~2GB VRAM)",
-        "search": "lfm2.5 2.6b gguf",
-        "author_pref": ["liquidai", "unsloth", "bartowski"],
+        "repo": "LiquidAI/LFM2.5-2.6B-GGUF",
         "file_regex": [
-            r"(?i)2\.6b[-._](instruct[-._])?q4_k_m\.gguf$",
-            r"(?i)2\.6b.*q4_k_m\.gguf$",
-            r"(?i)2\.6b.*q4_0\.gguf$",
+            r"(?i)^lfm2\.5-2\.6b-q4_k_m\.gguf$",
         ],
         "mmproj_regex": [],
         # DSpark speculative-decoding drafter (sidecar GGUF, paired with the
@@ -112,122 +130,44 @@ SPECS: list[dict] = [
             },
         ],
     },
-    # ── qwen3.5 family: default agent models (settings alignment 2026-08-26) ──
-    # The default settings (settings.py) reference these tags.
-    # Every entry must match a tag in DEFAULT_SETTINGS with `key` —
-    # safeguarded by T10 in tests/test_installer_setup.py.
-    # NAMING (live check 2026-08-26, unsloth/Qwen3.5-*-GGUF): UD variants only
-    # exist as Q4_K_XL etc., not Q4_K_M ("Qwen3.5-4B-UD-Q4_K_XL.gguf"). A
-    # non-UD file would register with the wrong tag (qwen3.5:4b instead of
-    # qwen3.5:4b-ud) and would be useless for the settings. Hence NO non-UD
-    # fallback regexes in the -ud specs.
-    # VISION (2026-08-26): mmproj-BF16/F16 is downloaded along — README
-    # documents mmproj as the requirement for image processing with qwen3.5.
-    # MTP (2026-09-10): qwen3.5:4b-mtp is now the recommended coder/planner
-    # default and IS downloadable — the file_regex requires "mtp" in the
-    # filename so ambiguous non-MTP repos cannot match.
-    {
-        "key": "qwen3.5:0.8b-ud",
-        "desc": "Qwen3.5 0.8B UD (Subagent ladder, ~0.6GB VRAM)",
-        "search": "Qwen3.5 0.8B GGUF",
-        "author_pref": ["unsloth", "bartowski", "lmstudio-community"],
-        "file_regex": [
-            r"(?i)0\.8b[-_.]ud[-_.]q4_k_xl\.gguf$",
-            r"(?i)0\.8b[-_.]ud.*q4_k_m\.gguf$",
-        ],
-        # NO mmproj: 0.8b is a pure subagent ladder, never for vision.
-        "mmproj_regex": [],
-    },
-    {
-        "key": "qwen3.5:2b",
-        "desc": "Qwen3.5 2B (Refiner, ~1.3GB VRAM)",
-        "search": "Qwen3.5 2B GGUF",
-        "author_pref": ["unsloth", "bartowski", "lmstudio-community"],
-        "file_regex": [
-            r"(?i)(^|[-_.])2b([-_.]|$).*q4_k_m\.gguf$",
-            r"(?i)(^|[-_.])2b([-_.]|$).*q4_0\.gguf$",
-        ],
-        "mmproj_regex": [
-            r"(?i)^mmproj[-_.]bf16\.gguf$",
-            r"(?i)^mmproj[-_.]f16\.gguf$",
-        ],
-    },
-    {
-        "key": "qwen3.5:4b-ud",
-        "desc": "Qwen3.5 4B UD (Analyst/Critic/Speed, ~2.9GB VRAM)",
-        "search": "Qwen3.5 4B GGUF",
-        "author_pref": ["unsloth", "bartowski", "lmstudio-community"],
-        "file_regex": [
-            r"(?i)(^|[-_.])4b[-_.]ud[-_.]q4_k_xl\.gguf$",
-            r"(?i)(^|[-_.])4b[-_.]ud.*q4_k_m\.gguf$",
-        ],
-        "mmproj_regex": [
-            r"(?i)^mmproj[-_.]bf16\.gguf$",
-            r"(?i)^mmproj[-_.]f16\.gguf$",
-        ],
-    },
-    {
-        "key": "qwen3.5:9b-ud",
-        "desc": "Qwen3.5 9B UD (Direct/Coder/Quality, ~6GB VRAM)",
-        "search": "Qwen3.5 9B GGUF",
-        "author_pref": ["unsloth", "bartowski", "lmstudio-community"],
-        "file_regex": [
-            r"(?i)(^|[-_.])9b[-_.]ud[-_.]q4_k_xl\.gguf$",
-            r"(?i)(^|[-_.])9b[-_.]ud.*q4_k_m\.gguf$",
-        ],
-        "mmproj_regex": [
-            r"(?i)^mmproj[-_.]bf16\.gguf$",
-            r"(?i)^mmproj[-_.]f16\.gguf$",
-        ],
-    },
     # ── Qwen3.6 Genesis Final "APEX-Compact" (2026-09-05) ─────────────────
-    # Recommended Coder/Hermes agent: MoE 35B-A3B with MTP head, quantized as
-    # "APEX-Compact" (~17 GB, experts offloaded to CPU). Successor of the
-    # Hermes3.6 Genesis V7/V10/V12 line. The per-model config
+    # Coder/Hermes agent: MoE 35B-A3B with MTP head, quantized as
+    # "APEX-Compact" (~17 GB, experts offloaded to CPU). The per-model config
     # (model_configs/models/qwen3.6_..._genesis-final-apex-compact.json)
-    # enables the MTP head + 35 CPU experts, so the DOWNLOAD must be the MTP
-    # variant — no non-MTP fallback regex here (it would register a different
-    # tag). Quant files verified 2026-09-06 in
-    # LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Final-GGUF.
+    # enables the MTP head + 35 CPU experts. Original repo (LuffyTheFox) is
+    # no longer publicly listable (HF 401) — pinned to the verified mirror
+    # (file checked 2026-09-11).
     {
         "key": "qwen3.6:35b-a3b-uncensored-genesis-final-apex-compact",
         "desc": "Qwen3.6 Genesis Final APEX-Compact (Coder/Hermes agent, MoE+MTP, ~17GB download)",
-        "search": "Qwen3.6 35B A3B Uncensored Genesis Final GGUF",
-        "author_pref": ["LuffyTheFox"],
+        "repo": "burningfeet/backup-2026-09-06-Qwen3.6-35B-A3B-Uncensored-Genesis-Final-GGUF",
         "file_regex": [
-            r"(?i)qwen3\.6[-_.]35b[-_.]a3b[-_.]uncensored[-_.]genesis[-_.]final[-_.]apex[-_.]compact\.gguf$",
-            r"(?i)35b[-_.]a3b[-_.]uncensored[-_.]genesis[-_.]final.*compact\.gguf$",
+            r"(?i)^qwen3\.6-35b-a3b-uncensored-genesis-final-apex-compact\.gguf$",
         ],
         "mmproj_regex": [
             r"(?i)mmproj[-_.]qwen3\.6[-_.]35b.*genesis[-_.]f16\.gguf$",
-            r"(?i)mmproj.*(f16|bf16)\.gguf$",
+            r"(?i)^mmproj.*(f16|bf16)\.gguf$",
         ],
     },
-    # ── Ling-3.0-tiny (InclusionAI, hybrid MoE, low-resource coder) ────────
-    # 7.9B total / 1.3B aktiv, 128 routed + 1 shared Expert (8 aktiv), KDA/MLA.
-    # Thinking per Default. Per-model config model_configs/models/ling-3.0-tiny.json
-    # setzt --reasoning on + jinja. Quant Q4_K_L (bartowski, ~4.75GB) ist der
-    # Low-VRAM-Coder-Standard; Q4_K_M als Fallback (WhiskyAKM/bloomer010 lower-case
-    # oder "Ling-3.0-tiny-..." Dateinamen). Kein mmproj (kein Vision).
-    # Dateien verifiziert 2026-09-05 in bartowski/Ling-3.0-tiny-GGUF (Q4_K_L).
+    # ── Qwen3.5 MTP pair (duo coder/planner + refiner) ────────────────────
+    # unsloth MTP repos name files WITHOUT "mtp" (verified 2026-09-11) — the
+    # regexes are anchored to the exact filenames and the repos are pinned,
+    # so no third-party repo (Jackrong etc.) can ever match.
     {
-        "key": "ling-3.0-tiny",
-        "desc": "Ling-3.0-tiny (Low-resource hybrid MoE coder, 7.9B/1.3B aktiv, ~4.75GB download)",
-        "search": "Ling-3.0-tiny GGUF",
-        "author_pref": ["bartowski", "bloomer010", "inclusionAI", "WhiskyAKM"],
+        "key": "qwen3.5:4b-mtp",
+        "desc": "Qwen3.5 4B MTP (Duo Coder/Planner default, MTP spec-decode, ~3.3GB VRAM)",
+        "repo": "unsloth/Qwen3.5-4B-MTP-GGUF",
         "file_regex": [
-            r"(?i)ling[-_.]3\.0[-_.]tiny[-_.]q4_k_l\.gguf$",
-            r"(?i)ling[-_.]3\.0[-_.]tiny[-_.]q4_k_m\.gguf$",
+            r"(?i)^qwen3\.5-4b-q4_k_m\.gguf$",
         ],
         "mmproj_regex": [],
     },
     {
-        "key": "qwen3.5:4b-mtp",
-        "desc": "Qwen3.5 4B MTP (Duo Coder/Planner default, MTP spec-decode, ~3.3GB VRAM)",
-        "search": "Qwen3.5 4B MTP GGUF",
-        "author_pref": ["unsloth"],
+        "key": "qwen3.5:2b-mtp",
+        "desc": "Qwen3.5 2B MTP (Refiner, MTP spec-decode, ~1.3GB VRAM)",
+        "repo": "unsloth/Qwen3.5-2B-MTP-GGUF",
         "file_regex": [
-            r"(?i)4b[-_.]mtp[-_.]q4_k_m\.gguf$",
+            r"(?i)^qwen3\.5-2b-q4_k_m\.gguf$",
         ],
         "mmproj_regex": [],
     },
@@ -389,10 +329,18 @@ def main() -> int:
     ap.add_argument("--list-only", action="store_true")
     ap.add_argument("--scan-only", action="store_true",
                     help="Only scan local GGUFs + write models.json, NO download, NO network")
+    ap.add_argument("--print-catalog", action="store_true",
+                    help="Print the numbered download catalog and exit (no network, "
+                         "no folder touch) — setup_models.bat renders its menu from this")
     ap.add_argument("--only", default="",
                     help="Only these models: keys or numbers, comma-separated (e.g. 1,4)")
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()
+
+    if args.print_catalog:
+        for _i, _s in enumerate(SPECS):
+            print(f"  {_i + 1}. {_s['key']:<45s} {_s['desc']}")
+        return 0
 
     mdir = Path(args.models_dir).expanduser() if args.models_dir else \
         Path(os.environ.get("HIVEMIND_MODELS_DIR", "") or (ROOT / "models"))
@@ -444,11 +392,17 @@ def main() -> int:
             print(f"    Already present: {have[0]} — skipping (--only-missing)")
             continue
 
-        print(f"    Searching Hugging Face: '{spec['search']}'...")
-        repos = pick_repos(spec)
-        if not repos:
-            print("    [ERROR] No matching repo found — load manually from huggingface.co.")
-            continue
+        if spec.get("repo"):
+            # PINNED REPO (2026-09-11): no HF search at all — the catalog pins
+            # the exact repo, so third-party lookalikes can never be picked.
+            repos = [spec["repo"]]
+            print(f"    Repo (pinned): {spec['repo']}")
+        else:
+            print(f"    Searching Hugging Face: '{spec['search']}'...")
+            repos = pick_repos(spec)
+            if not repos:
+                print("    [ERROR] No matching repo found — load manually from huggingface.co.")
+                continue
 
         # The top repo can contain a GGUF that does not match file_regex
         # (e.g. google/gemma-4-E4B-it-qat-q4_0-gguf) — then try the next candidates.
@@ -457,7 +411,8 @@ def main() -> int:
         files = []
         first_files = []
         for cand in repos:
-            print(f"    Repo candidate: {cand}")
+            if not spec.get("repo"):
+                print(f"    Repo candidate: {cand}")
             try:
                 cand_files = list_repo_files(cand)
             except Exception as e:
