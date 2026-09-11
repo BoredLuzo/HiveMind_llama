@@ -1,61 +1,38 @@
 # Changelog
 
-## [1.1.4] - 2026-09-11
+## [1.1.1] - 2026-09-11
 
-Installer model-setup rework.
+Agentic-run fixes, run-state persistence and installer model-setup rework.
+
+### Fixes — agentic runs
+
+- Coder load with a context mismatch (planner slot at a smaller ctx than the
+  agentic coder target, e.g. 10240 vs 32768) now reloads the model instead of
+  instantly stopping with `loop_detected` after 0 tool rounds.
+- Runs without planner and without chunking no longer hit an
+  `UnboundLocalError` (`_planner_model`) in the post-explore worker evict.
+- The smoke-test nudge (`[AUTO-TEST] No test suite`) fired every tool round
+  instead of once per run; TC-DE-NAG and the READ-LADDER counters suffered
+  the same per-round reset — all run-state is run-persistent now.
 
 ### Model setup
 
 - Curated 7-model download catalog, every entry pinned to an exact Hugging
-  Face repo (no fuzzy search): gemma-4 E4B/E2B it-QAT (UD-Q4_K_XL, mmproj,
-  MTP drafter), qwen3.6:35b-a3b-ud, Hermes3.6 Genesis V13 MTP-APEX-Compact,
+  Face repo (no fuzzy search — it could pull wrong lookalike repos):
+  gemma-4 E4B/E2B it-QAT (UD-Q4_K_XL, mmproj, MTP drafter),
+  qwen3.6:35b-a3b-ud, Hermes3.6 Genesis V13 MTP-APEX-Compact,
   qwen3.5:4b-mtp, qwen3.5:2b-mtp, lfm2.5:2.6b (+DSpark drafter).
-- Live bug fixed: the fuzzy search could pull a wrong lookalike repo for the
-  qwen3.5 MTP models. Pinned repos can never do that.
-- Custom models folder (e.g. another drive) is kept: one pass now downloads
+- A custom models folder (e.g. another drive) is kept: one pass downloads
   missing models AND registers the whole folder.
 - setup_models.bat renders its menu from the catalog (single source of
   truth).
 
-## [1.1.3] - 2026-09-11
+### Docs
 
-Run-state persistence fixes for the agentic tool loop.
+- architecture.md mermaid fix + freshness pass; README download-catalog
+  section rewritten.
 
-### Fixes
-
-- The smoke-test nudge (`[AUTO-TEST] No test suite`) fired every tool round
-  instead of once per run (live: 10x in one run) — `ToolRoundState` is
-  re-created per round, so the "once per RUN" flag reset each round.
-- Same trap, other victims, all converted to run-persistent list refs now:
-  TC-DE-NAG (`tc_consecutive` — the 2nd consecutive bare `task_complete` was
-  never accepted) and the READ-LADDER counters (dead for the common
-  1-tool-call-per-round pattern despite the LADDER-PERSIST comment).
-- New suite `tests/test_runstate_persistence.py` (49/49 green).
-
-## [1.1.2] - 2026-09-11
-
-Critical fix for agentic coder runs.
-
-### Fixes
-
-- Coder load with a context mismatch (planner slot loaded at a smaller ctx
-  than the agentic coder target, e.g. 10240 vs 32768) now actually reloads
-  the model instead of instantly stopping the run with `loop_detected` after
-  0 tool rounds. Reload failure still stops the run — but only after the
-  reload attempt, with the manager's kill + margin resolution and a
-  diagnostic message.
-- Runs without planner and without chunking no longer hit an
-  `UnboundLocalError` (`_planner_model`) in the post-explore worker evict,
-  which skipped the evict/coder-load cleanup.
-- Docs: architecture.md mermaid fix (file paths rendered behind boxes) and a
-  freshness pass (partial compression documented, removed legacy path,
-  47-suite stand).
-
-## [1.1.1] - 2026-09-10
-
-Thinking-toggle, model-choice sovereignty and installer startup fixes.
-
-### Fixes
+### Launcher, settings, thinking toggle (2026-09-10)
 
 - Windows launcher: the console-kill job object is created with
   `CreateJobObject()` (the previous `CreateJob()` call does not exist in
