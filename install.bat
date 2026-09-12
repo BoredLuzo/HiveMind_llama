@@ -213,11 +213,9 @@ set /p "PORT_IN=Server port [Enter = 8001]: "
 if defined PORT_IN set "HM_PORT=!PORT_IN!"
 echo.
 
-REM Optional SearXNG port (only used if SearXNG is installed in step 6)
+REM SearXNG port: fixed default, only relevant if SearXNG is set up later —
+REM not worth a prompt during install (PROMPT-DIET 2026-09-12).
 set "SEARXNG_PORT=8888"
-set /p "SPORT_IN=SearXNG port for web search [Enter = 8888]: "
-if defined SPORT_IN set "SEARXNG_PORT=!SPORT_IN!"
-echo.
 
 REM Write settings (gpu_backend + vram_budget_gb + server_port; workspace stays EMPTY).
 REM Values are passed via environment variables instead of being embedded in
