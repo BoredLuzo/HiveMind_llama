@@ -12,9 +12,9 @@ echo  What this does (you will be asked before every step):
 echo    [1/6] Python            - set up python environment
 echo    [2/6] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
 echo    [3/6] llama.cpp backend - downloaded for the chosen backend
-echo    [4/6] Models            - downloaded into \models
-echo    [5/6] SearXNG           - optional web search (requires Docker)
-echo    [6/6] Desktop shortcut  - optional, with the HiveMind icon
+echo    [4/6] Desktop shortcut  - optional, with the HiveMind icon
+echo    [5/6] Models            - downloaded into your chosen folder
+echo    [6/6] SearXNG           - optional web search (requires Docker)
 echo.
 
 choice /c YN /n /m "Install HiveMind now? [Y/N] "
@@ -278,34 +278,44 @@ if defined HAVE_LLAMA (
 echo.
 
 REM ======================================================
-REM [4/6] Models
+REM [4/6] Desktop shortcut (optional, HiveMind icon)
+REM SHORTCUT-FIRST (2026-09-12): asked BEFORE the long network steps,
+REM so a fresh install always gets the icon even if the user aborts
+REM during model downloads.
 REM ======================================================
 echo  ==========================================================
-echo   [4/6] Models
+echo   [4/6] Desktop shortcut
 echo  ==========================================================
 echo.
-echo   Default: models are downloaded into %~dp0models.
-echo   You can also specify your own models folder.
+echo   Creates "HiveMind.lnk" on the Desktop that starts
+echo   start_hivemind.bat with the HiveMind icon.
 echo.
-set "MODELS_INPUT="
-set /p "MODELS_INPUT=Custom folder? [Enter = default]: "
-if "%MODELS_INPUT%"=="" goto models_default
+choice /c YN /n /m "Create a Desktop shortcut with the HiveMind icon? [Y/N] "
+if errorlevel 2 goto shortcut_done
+call create_shortcut.bat
+:shortcut_done
+echo.
 
-call setup_models.bat "%MODELS_INPUT%"
-goto searxng_step
-
-:models_default
+REM ======================================================
+REM [5/6] Models
+REM ======================================================
+echo  ==========================================================
+echo   [5/6] Models
+echo  ==========================================================
+echo.
+REM No folder prompt here — setup_models.bat asks ONCE (download target;
+REM existing GGUFs in that folder get registered automatically).
 call setup_models.bat
 goto searxng_step
 
 :searxng_step
 
 REM ======================================================
-REM [5/6] SearXNG (optional)
+REM [6/6] SearXNG (optional)
 REM ======================================================
 echo.
 echo  ==========================================================
-echo   [5/6] SearXNG (web search, requires Docker Desktop)
+echo   [6/6] SearXNG (web search, requires Docker Desktop)
 echo  ==========================================================
 echo.
 where docker >nul 2>&1
@@ -318,22 +328,6 @@ if errorlevel 1 (
     if !errorlevel! equ 1 call searxng.bat install %SEARXNG_PORT%
 )
 
-echo.
-REM ======================================================
-REM [6/6] Desktop shortcut (optional, HiveMind icon)
-REM ======================================================
-echo.
-echo  ==========================================================
-echo   [6/6] Desktop shortcut
-echo  ==========================================================
-echo.
-echo   Creates "HiveMind.lnk" on the Desktop that starts
-echo   start_hivemind.bat with the HiveMind icon.
-echo.
-choice /c YN /n /m "Create a Desktop shortcut with the HiveMind icon? [Y/N] "
-if errorlevel 2 goto shortcut_done
-call create_shortcut.bat
-:shortcut_done
 echo.
 
 echo  ==============================================================

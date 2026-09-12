@@ -22,10 +22,15 @@ Agentic-run fixes, run-state persistence and installer model-setup rework.
   gemma-4 E4B/E2B it-QAT (UD-Q4_K_XL, mmproj, MTP drafter),
   qwen3.6:35b-a3b-ud, Hermes3.6 Genesis V13 MTP-APEX-Compact,
   qwen3.5:4b-mtp, qwen3.5:2b-mtp, lfm2.5:2.6b (+DSpark drafter).
-- A custom models folder (e.g. another drive) is kept: one pass downloads
-  missing models AND registers the whole folder.
+- A custom models folder (e.g. another drive) is asked for ONCE and kept:
+  one pass downloads missing models AND registers the whole folder (the
+  installer previously asked twice and could not be used with an own
+  folder at all).
 - setup_models.bat renders its menu from the catalog (single source of
   truth).
+- The desktop-shortcut step now runs BEFORE the long download steps, so a
+  first install gets its icon even if the user aborts during the model
+  downloads.
 
 ### Docs
 

@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 echo.
@@ -12,10 +12,22 @@ echo  Registers and downloads the GGUF models used by HiveMind.
 echo  Target folder: argument 1 ^> env HIVEMIND_MODELS_DIR ^> default \models
 echo.
 
-REM ---- Models folder: arg > env > default <root>\models ----
+REM ---- Models folder: arg > env > interactive prompt > default <root>\models ----
+REM This is the ONLY place the folder is asked. install.bat calls this script
+REM without arguments, so the prompt appears exactly once during an install.
 set "MODELS_DIR=%~1"
 if "%MODELS_DIR%"=="" set "MODELS_DIR=%HIVEMIND_MODELS_DIR%"
-if "%MODELS_DIR%"=="" set "MODELS_DIR=%~dp0models"
+if "%MODELS_DIR%"=="" (
+    echo  Where should models be downloaded / searched?
+    echo  Existing GGUFs in that folder get registered automatically.
+    echo.
+    set "MODELS_DIR="
+    set /p "MODELS_DIR=Folder [Enter = %~dp0models]: "
+    if "!MODELS_DIR!"=="" set "MODELS_DIR=%~dp0models"
+)
+
+REM strip any quotes from pasted paths (delayed expansion keeps it safe)
+set MODELS_DIR=!MODELS_DIR:"=!
 
 echo  Target folder: %MODELS_DIR%
 if not exist "%MODELS_DIR%" (
