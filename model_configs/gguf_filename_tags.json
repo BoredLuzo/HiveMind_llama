@@ -1,0 +1,10 @@
+{
+  "_comment": "Known-GGUF filename → canonical tag. Checked (case-insensitive) by backend/llama_models before filename parsing — some publishers drop semantic markers from filenames (e.g. unsloth names MTP quants WITHOUT 'mtp'), which the parser cannot reconstruct. fetch_models.py appends new entries on download/scan. Edit freely; keep filenames lowercase with underscores preserved (matching is done on name.lower()).",
+  "qwen3.5-4b-q4_k_m.gguf": "qwen3.5:4b-mtp",
+  "qwen3.5-2b-q4_k_m.gguf": "qwen3.5:2b-mtp",
+  "gemma-4-e4b-it-qat-ud-q4_k_xl.gguf": "gemma-4:e4b-it-qat",
+  "gemma-4-e2b-it-qat-ud-q4_k_xl.gguf": "gemma-4:e2b-it-qat",
+  "qwen3.6-35b-a3b-ud-q4_k_xl.gguf": "qwen3.6:35b-a3b-ud",
+  "hermes3.6-35b-a3b-uncensored-genesis-v13-mtp-apex-compact.gguf": "hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact",
+  "lfm2.5-2.6b-q4_k_m.gguf": "lfm2.5:2.6b"
+}

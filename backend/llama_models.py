@@ -123,6 +123,32 @@ def _parse_gguf_filename(filename: str) -> list[str]:
 
 _NON_MODEL_PATTERNS = {"mmproj", "projector", "vision_encoder", "vl-encoder", "dspark"}
 
+# ── Known-GGUF filename → tag manifest (2026-09-12) ──────────────────────────
+# Filename parsing alone cannot always reconstruct the canonical tag: unsloth
+# names MTP quants WITHOUT "mtp" (Qwen3.5-4B-Q4_K_M.gguf parsed as
+# qwen3.5:4b), so the settings default qwen3.5:4b-mtp found no GGUF. The
+# manifest (model_configs/gguf_filename_tags.json, shipped + extended by
+# fetch_models.py) wins over parsing; parsed aliases stay available.
+_FILENAME_TAG_MAP_FILE = _THIS_DIR / "model_configs" / "gguf_filename_tags.json"
+_filename_tag_map: dict[str, str] | None = None
+
+
+def _known_filename_tags() -> dict[str, str]:
+    global _filename_tag_map
+    if _filename_tag_map is not None:
+        return _filename_tag_map
+    try:
+        data = json.loads(_FILENAME_TAG_MAP_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        _filename_tag_map = {}
+        return _filename_tag_map
+    _filename_tag_map = {
+        str(k).lower(): str(v)
+        for k, v in data.items()
+        if not k.startswith("_") and isinstance(v, str) and v
+    }
+    return _filename_tag_map
+
 # ── Ollama-Familien-Exclusion ─────────────────────────────────────────────────
 #
 _OLLAMA_EXCLUDE_FAMILIES: set[str] = {
@@ -213,6 +239,13 @@ def _build_index() -> dict[str, Path]:
 
         # Unterordner-Override anwenden (z.B. Qwen3.5/4B/Qwen3.5-4B-UD.Q6_K.gguf → qwen3.5:4b-ud)
         canonical_names = _apply_folder_override(canonical_names, gguf)
+
+        # KNOWN-FILENAME (2026-09-12): manifest tag wins, parsed names stay as
+        # aliases. Insert at the front so the dedup in list_available_models
+        # (keeps the longest name per file) never drops the canonical tag.
+        _known_tag = _known_filename_tags().get(fname_lower)
+        if _known_tag and _known_tag not in canonical_names:
+            canonical_names = [_known_tag] + [n for n in canonical_names if n != _known_tag]
 
         for name in canonical_names:
             if name in index:

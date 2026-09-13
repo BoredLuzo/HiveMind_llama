@@ -278,9 +278,29 @@ def _spec_matches_file(spec: dict, gguf: Path) -> bool:
     )
 
 
+def _record_known_filename(gguf_name: str, tag: str) -> None:
+    """Append filename→tag to the shipped manifest so the backend registers
+    the file under the catalog tag even without models.json (manual
+    downloads, fresh machines)."""
+    map_file = ROOT / "model_configs" / "gguf_filename_tags.json"
+    try:
+        data = json.loads(map_file.read_text(encoding="utf-8")) if map_file.exists() else {}
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        print(f"    [WARNING] could not read gguf_filename_tags.json: {e}")
+        return
+    if gguf_name.lower() in data and data[gguf_name.lower()] == tag:
+        return
+    data[gguf_name.lower()] = tag
+    try:
+        map_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"    known-filename recorded: {gguf_name} -> {tag}")
+    except OSError as e:
+        print(f"    [WARNING] could not update gguf_filename_tags.json: {e}")
+
 def write_models_json(models_dir: Path) -> int:
     """Populate models.json from all GGUFs in the folder."""
     from backend.llama_models import _parse_gguf_filename  # noqa: E402
+    from backend.llama_models import _known_filename_tags  # noqa: E402
 
     ggufs = sorted(models_dir.rglob("*.gguf"))
     mapping: dict[str, str] = {}
@@ -309,6 +329,8 @@ def write_models_json(models_dir: Path) -> int:
         )
         if _spec_tag:
             mapping[_spec_tag] = str(g)
+            if g.name.lower() not in _known_filename_tags():
+                _record_known_filename(g.name, _spec_tag)
         names = _parse_gguf_filename(g.name)
         if names:
             mapping.setdefault(names[0], str(g))
@@ -468,6 +490,8 @@ def main() -> int:
         else:
             download_file(repo, main_file, mdir, args.yes)
             local_files[main_file["path"].lower()] = mdir / Path(main_file["path"]).name
+            if spec.get("tag"):
+                _record_known_filename(Path(main_file["path"]).name, spec["tag"])
 
         if spec["mmproj_regex"]:
             mm = pick_file(files, spec["mmproj_regex"], exclude_mmproj=False)
