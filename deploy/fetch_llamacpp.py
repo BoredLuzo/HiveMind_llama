@@ -212,8 +212,10 @@ def _verify_backend_dlls(exe: Path, backend: str) -> list[str]:
     _so = ".dll" if _IS_WIN else ".so"
     missing: list[str] = []
     if backend == "cuda":
-        if not list(dll_dir.glob(f"ggml-cuda{_so}")):
-            missing.append(f"ggml-cuda{_so}")
+        # SO-LAYOUT (2026-09-13): ubuntu tarballs ship lib/libggml-cuda.so —
+        # rglob covers lib prefix + lib/ subdir; Windows keeps flat .dll.
+        if not list(dll_dir.rglob(f"*ggml-cuda{_so}")):
+            missing.append(f"*ggml-cuda{_so}")
         if _IS_WIN:
             for base in ("cudart64", "cublas64", "cublasLt64"):
                 if not list(dll_dir.glob(f"{base}*.dll")):
@@ -222,8 +224,11 @@ def _verify_backend_dlls(exe: Path, backend: str) -> list[str]:
         # Directory enumeration, not exists()/stat: while antivirus is actively
         # scanning a freshly extracted DLL, stat() can fail (ACCESS_DENIED)
         # while the name is still listed — a healthy build must not look broken.
-        if not list(dll_dir.glob(f"ggml-vulkan{_so}")):
-            missing.append(f"ggml-vulkan{_so}")
+        # SO-LAYOUT (2026-09-13): ubuntu tarballs ship lib/libggml-vulkan.so —
+        # a flat glob for "ggml-vulkan.so" next to the binary never matched and
+        # the installer hung in the "DLL check pending" loop forever.
+        if not list(dll_dir.rglob(f"*ggml-vulkan{_so}")):
+            missing.append(f"*ggml-vulkan{_so}")
     return missing
 
 

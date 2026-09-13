@@ -844,12 +844,14 @@ class LlamaLoadMixin:
                 )
         if type(self)._backend_dlls_ok is False:
             _be_upper = GPU_BACKEND.upper()
+            _posix_dll = platform.system() != "Windows"
             raise RuntimeError(
                 f"{_be_upper} DLL check failed: the runtime DLLs for "
-                f"'{GPU_BACKEND}' are missing next to {LLAMA_BIN.name}.\n\n"
+                f"'{GPU_BACKEND}' are missing under {LLAMA_BIN.parent}.\n\n"
                 f"  Required ({GPU_BACKEND}): "
-                + ("ggml-cuda.dll, cudart64_*.dll, cublas64_*.dll, cublasLt64_*.dll"
-                   if GPU_BACKEND == "cuda" else "ggml-vulkan.dll")
+                + ("*ggml-cuda.{dll,so} (+ Windows: cudart64_*.dll, cublas64_*.dll, cublasLt64_*.dll)"
+                   if GPU_BACKEND == "cuda" else "*ggml-vulkan.dll"
+                   if not _posix_dll else "lib/libggml-vulkan.so (or flat ggml-vulkan.so)")
                 + "\n"
                 f"  Binary folder: {LLAMA_BIN.parent}\n\n"
                 f"  Fix A: re-download llama.cpp — the official ZIPs bundle "

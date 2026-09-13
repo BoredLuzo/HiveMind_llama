@@ -349,7 +349,9 @@ def _probe_backend_dlls(llama_bin: str, backend: str) -> bool | None:
     _so = ".so" if _posix else ".dll"
     try:
         if backend == "cuda":
-            if not list(dll_dir.glob(f"ggml-cuda{_so}")):
+            # SO-LAYOUT (2026-09-13): ubuntu tarballs ship lib/libggml-cuda.so
+            # (lib prefix + lib/ subdir) — rglob covers both layouts.
+            if not list(dll_dir.rglob(f"*ggml-cuda{_so}")):
                 return False
             if not _posix:
                 for _base in ("cudart64", "cublas64", "cublasLt64"):
@@ -358,7 +360,10 @@ def _probe_backend_dlls(llama_bin: str, backend: str) -> bool | None:
         else:
             # Enumerate, don't stat: while antivirus scans a fresh DLL, stat()
             # can fail while the name is still listed in the directory.
-            if not list(dll_dir.glob(f"ggml-vulkan{_so}")):
+            # SO-LAYOUT (2026-09-13): ubuntu tarballs ship lib/libggml-vulkan.so
+            # — a flat glob never matched and the backend check reported
+            # "DLLs missing" on every Linux start.
+            if not list(dll_dir.rglob(f"*ggml-vulkan{_so}")):
                 return False
         return True
     except Exception:

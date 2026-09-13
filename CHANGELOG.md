@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.3] - 2026-09-13
+
+Linux native-lib check fix.
+
+### Fixes
+
+- The installer hung forever in "DLL check pending (ggml-vulkan.so)" on
+  Linux: the check globbed for a FLAT ggml-vulkan.so next to the binary,
+  but the ubuntu tarballs ship lib/libggml-vulkan.so (lib prefix + lib/
+  subdir). Both the installer check and the backend runtime probe now
+  accept both layouts (rglob); Windows .dll behavior unchanged. Backend
+  error message names the correct file per platform.
+
 ## [1.1.2] - 2026-09-13
 
 Tree-scout workspace fix.
