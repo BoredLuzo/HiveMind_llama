@@ -45,8 +45,16 @@ def _find_llama_server() -> Path:
     _backend_tag = "cuda" if GPU_BACKEND == "cuda" else ("vulkan" if GPU_BACKEND == "vulkan" else "cpu")
     _best: tuple[tuple, Path] | None = None
     if _LLAMA_ROOT.is_dir():
-        for cand in _LLAMA_ROOT.glob(f"*/{_bin_name}"):
-            _name = cand.parent.name.lower()
+        # NESTED-LAYOUT (2026-09-13): the ubuntu tarballs carry a top-level
+        # "llama-b<build>/" folder, so extraction yields
+        # <root>/<target>/<llama-b<build>>/llama-server (double nesting).
+        # A flat "*/llama-server" glob missed those entirely — search
+        # recursively; flat layouts (Windows ZIPs) still match.
+        for cand in _LLAMA_ROOT.rglob(_bin_name):
+            # score over the FULL directory path: in the nested ubuntu layout
+            # the backend tag sits in the OUTER folder (…-ubuntu-vulkan-x64),
+            # the build number in the inner one (llama-b10941).
+            _name = str(cand.parent).lower()
             m = re.search(r"b(\d{4,})", _name)
             build = int(m.group(1)) if m else 0
             if _backend_tag == "cpu":

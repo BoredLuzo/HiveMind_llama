@@ -1431,12 +1431,25 @@ class LlamaLoadMixin:
             logger.info(f"Waiting for GPU-init semaphore for {model} ...")
             async with self._vulkan_init_sem:
                 logger.info(f"GPU-init semaphore acquired for {model}")
+                # POSIX-LIB-PATH (2026-09-13): ubuntu tarball builds carry their
+                # shared libs next to the binary (libggml-vulkan.so etc.).
+                # Without rpath the loader only finds them via LD_LIBRARY_PATH —
+                # prepend the binary dir so the server starts on any distro.
+                _spawn_env = None
+                if platform.system() != "Windows":
+                    import os as _os_spawn
+                    _spawn_env = dict(_os_spawn.environ)
+                    _bin_dir = str(LLAMA_BIN.parent)
+                    _spawn_env["LD_LIBRARY_PATH"] = (
+                        _bin_dir + (":" + _spawn_env["LD_LIBRARY_PATH"] if _spawn_env.get("LD_LIBRARY_PATH") else "")
+                    )
                 slot.process   = subprocess.Popen(
                     cmd,
                     stdout=_log_file,
                     stderr=_log_file,
                     cwd=str(LLAMA_BIN.parent),  # WIN-FIX: DLLs (ggml-vulkan.dll etc.) relativ zur Binary finden
                     creationflags=_WIN_CNF,
+                    env=_spawn_env,
                 )
                 _log_file.close()
                 _log_file_closed = True

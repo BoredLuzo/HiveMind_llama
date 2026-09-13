@@ -435,8 +435,13 @@ def main() -> int:
                 with zipfile.ZipFile(tmp_zip) as zf:
                     _arc_names = set(zf.namelist())
             for _m in _missing:
-                _stem = _m.replace("*.dll", "")
-                _in_archive[_m] = any(_stem in n for n in _arc_names)
+                # SO-LAYOUT (2026-09-13): missing entries can be "*ggml-vulkan.so"
+                # (rglob pattern) — strip the leading "*" and match on the
+                # archive member's FILE NAME (lib/ paths, versioned suffixes).
+                _stem = _m.lstrip("*").replace("*.dll", "")
+                _in_archive[_m] = any(
+                    _stem.lower() in Path(n).name.lower() for n in _arc_names
+                )
         except (zipfile.BadZipFile, tarfile.TarError, OSError):
             pass
     _av_suspected = any(_in_archive.get(_m, False) for _m in _missing)
@@ -448,7 +453,8 @@ def main() -> int:
         else:
             print(f"    - {_m}")
     print(f"  Expected next to: {exe}")
-    _ggml_present = sorted(p.name for p in exe.parent.glob("ggml*.dll")) if exe.parent.exists() else []
+    _ggml_present = sorted(p.name for p in exe.parent.rglob("ggml*.dll")) if exe.parent.exists() else []
+    _ggml_present += sorted(p.name for p in exe.parent.rglob("libggml*.so")) if exe.parent.exists() else []
     if _ggml_present:
         print(f"  ggml DLLs actually on disk: {', '.join(_ggml_present) or '(none)'}")
     if _av_suspected:

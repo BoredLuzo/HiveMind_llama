@@ -98,11 +98,49 @@ def test_probe_windows_layout_unchanged():
         fail("probe_win", f"r={r}")
 
 
+def test_binary_discovery_nested_layout():
+    """ubuntu tarball = double nesting: <root>/<target>/llama-bXXXX/llama-server.
+    Runtime autodiscovery (flat "*/llama-server" glob) missed those entirely."""
+    import tempfile
+    import backend.llama_config as lc
+    tmp = Path(tempfile.mkdtemp(prefix="hvm_disc_"))
+    nested = tmp / "llama-b10941-bin-ubuntu-vulkan-x64" / "llama-b10941"
+    nested.mkdir(parents=True)
+    (nested / "llama-server.exe").write_bytes(b"x")
+    real_root = lc._LLAMA_ROOT
+    try:
+        lc._LLAMA_ROOT = tmp
+        found = lc._find_llama_server()
+    finally:
+        lc._LLAMA_ROOT = real_root
+    if found and found.name == "llama-server.exe" and "llama-b10941-bin-ubuntu-vulkan-x64" in str(found):
+        ok("Autodiscovery findet llama-server im doppelt verschachtelten Layout")
+    else:
+        fail("discovery_nested", f"found={found}")
+
+
+def test_source_guards():
+    root = Path(__file__).parent.parent
+    checks = [
+        ("backend/llama_config.py", "NESTED-LAYOUT (2026-09-13)"),
+        ("backend/manager_load.py", "POSIX-LIB-PATH (2026-09-13)"),
+        ("backend/manager_load.py", "LD_LIBRARY_PATH"),
+        ("deploy/fetch_llamacpp.py", "_stem.lower() in Path(n).name.lower()"),
+    ]
+    bad = [f"{rel}:{needle}" for rel, needle in checks
+           if needle not in (root / rel).read_text(encoding="utf-8")]
+    if not bad:
+        ok("source_guards (Nested-Discovery, LD_LIBRARY_PATH, AV-stem-match)")
+    else:
+        fail("source_guards", f"fehlt: {bad}")
+
 if __name__ == "__main__":
     test_fetch_check_windows_layout()
     test_fetch_check_linux_lib_layout()
     test_probe_linux_lib_layout()
     test_probe_windows_layout_unchanged()
+    test_binary_discovery_nested_layout()
+    test_source_guards()
     print("\n" + "=" * 60)
     print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
     print("=" * 60)
