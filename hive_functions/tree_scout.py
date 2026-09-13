@@ -97,17 +97,18 @@ _UNIX_ABS_PATH_FALLBACK_RE = re.compile(
 )
 
 def _extract_path_from_text(text: str) -> Optional[str]:
+    # WS-PATH-EXIST-CHECK (2026-09-13): a candidate that does not exist is
+    # NEVER returned — the old `elif "\\" in candidate: return candidate`
+    # escape hatch let a path copied inside task text (e.g. a workspace from
+    # ANOTHER machine) win and the repo map analyzed a non-existent folder.
     for m in _WIN_PATH_RE.finditer(text):
         candidate = m.group(1).rstrip(".,;:\"'")
         if len(candidate) > 5:
-            if os.path.exists(candidate):
-                if os.path.isdir(candidate):
-                    return candidate
-                parent = str(Path(candidate).parent)
-                if os.path.isdir(parent):
-                    return parent
-            elif "\\" in candidate or "/" in candidate:
+            if os.path.isdir(candidate):
                 return candidate
+            parent = str(Path(candidate).parent)
+            if os.path.isdir(parent):
+                return parent
 
     for m in _UNIX_PATH_RE.finditer(text):
         candidate = m.group(1).rstrip(".,;:\"'")
@@ -734,15 +735,29 @@ async def get_workspace_tree(
         logger.debug("tree_scout: disabled per enabled=False")
         return ""
 
-    path = _extract_path_from_text(task)
-    if path:
-        logger.info("tree_scout Stufe 1 (Regex): %s", path)
-
-    if not path and ws_str:
+    # WS-PRIORITY (2026-09-13): the RESOLVED workspace wins over any path
+    # found in the task text. Live: a task copied from another machine
+    # contained "C:\Users\Nicolas\Desktop\MyOwnTetris" while the UI workspace
+    # was Test1 — the regex hit won (WS-PATH-EXIST-CHECK would now reject it,
+    # but a same-machine stale path would still override) and the repo map
+    # analyzed the WRONG folder. Text extraction stays as a fallback for
+    # workspace-less chats.
+    _text_path = _extract_path_from_text(task)
+    path = ""
+    if ws_str:
         candidate = ws_str.strip().strip("\"'")
         if candidate and os.path.isdir(candidate):
+            if _text_path and os.path.abspath(_text_path) != os.path.abspath(candidate):
+                logger.info(
+                    "tree_scout: ignoring task-text path '%s' — resolved workspace wins",
+                    _text_path,
+                )
             path = candidate
-            logger.info("tree_scout Stufe 1.5 (ws_str): %s", path)
+            logger.info("tree_scout Stufe 1.5 (ws_str, priority): %s", path)
+
+    if not path and _text_path:
+        path = _text_path
+        logger.info("tree_scout Stufe 1 (Regex): %s", path)
 
     if not path and client and port and model:
         logger.info("tree_scout stage 2 (LLM): starting path extraction")

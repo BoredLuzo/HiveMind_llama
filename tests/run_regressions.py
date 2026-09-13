@@ -55,6 +55,7 @@ SUITES = [
     ("mismatch_reload",        "tests/test_mismatch_reload.py",                60),
     ("runstate_persistence",   "tests/test_runstate_persistence.py",           60),
     ("gguf_tag_pinning",       "tests/test_gguf_tag_pinning.py",               60),
+    ("tree_scout_workspace",   "tests/test_tree_scout_workspace.py",           60),
     ("mini_shrink_retry",      "tests/test_mini_shrink_retry.py",              60),
     ("output_reserve",         "tests/test_output_reserve.py",                  60),
     ("auto_split_pending",     "tests/test_auto_split_pending.py",              60),
