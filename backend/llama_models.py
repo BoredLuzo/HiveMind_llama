@@ -199,6 +199,12 @@ def _build_index() -> dict[str, Path]:
         if any(pat in fname_lower for pat in _NON_MODEL_PATTERNS):
             _logger.debug(f"Skipping non-model: {gguf.name}")
             continue
+        # MTP-DRAFTER (2026-09-12): "mtp-<model>.gguf" sidecars (gemma-4 QAT)
+        # are spec-dec drafters, not standalone models. PREFIX-only check —
+        # mid-name MTP (Hermes …-MTP-APEX-Compact) must keep registering.
+        if fname_lower.startswith("mtp-"):
+            _logger.debug(f"Skipping MTP drafter: {gguf.name}")
+            continue
 
         canonical_names = _parse_gguf_filename(gguf.name)
         if not canonical_names:

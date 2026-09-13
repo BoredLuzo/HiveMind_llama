@@ -65,6 +65,7 @@ def _persist_models_dir(mdir: Path) -> None:
 SPECS: list[dict] = [
     {
         "key": "gemma-4:e4b-it-qat",
+        "tag": "gemma-4:e4b-it-qat",
         "desc": "Gemma-4 E4B-IT QAT (All-rounder/Vision, ~4.2GB + mmproj, +MTP drafter)",
         "repo": "unsloth/gemma-4-E4B-it-qat-GGUF",
         "file_regex": [
@@ -85,6 +86,7 @@ SPECS: list[dict] = [
     },
     {
         "key": "gemma-4:e2b-it-qat",
+        "tag": "gemma-4:e2b-it-qat",
         "desc": "Gemma-4 E2B-IT QAT (Small all-rounder/Vision, ~2.6GB + mmproj, +MTP drafter)",
         "repo": "unsloth/gemma-4-E2B-it-qat-GGUF",
         "file_regex": [
@@ -104,6 +106,7 @@ SPECS: list[dict] = [
     },
     {
         "key": "qwen3.6:35b-a3b-ud",
+        "tag": "qwen3.6:35b-a3b-ud",
         "desc": "Qwen3.6 35B A3B unsloth UD (Coder/Planner MoE, ~20GB download)",
         "repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
         "file_regex": [
@@ -113,6 +116,7 @@ SPECS: list[dict] = [
     },
     {
         "key": "lfm2.5:2.6b",
+        "tag": "lfm2.5:2.6b",
         "desc": "LFM2.5 2.6B (Subagent/Worker, ~2GB VRAM)",
         "repo": "LiquidAI/LFM2.5-2.6B-GGUF",
         "file_regex": [
@@ -139,6 +143,7 @@ SPECS: list[dict] = [
     # apex-compact). Files verified 2026-09-11.
     {
         "key": "hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact",
+        "tag": "hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact",
         "desc": "Hermes3.6 Genesis V13 MTP-APEX-Compact (Coder/Hermes agent, MoE+MTP, ~18GB download)",
         "repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V13-GGUF",
         "file_regex": [
@@ -154,6 +159,7 @@ SPECS: list[dict] = [
     # so no third-party repo (Jackrong etc.) can ever match.
     {
         "key": "qwen3.5:4b-mtp",
+        "tag": "qwen3.5:4b-mtp",
         "desc": "Qwen3.5 4B MTP (Duo Coder/Planner default, MTP spec-decode, ~3.3GB VRAM)",
         "repo": "unsloth/Qwen3.5-4B-MTP-GGUF",
         "file_regex": [
@@ -163,6 +169,7 @@ SPECS: list[dict] = [
     },
     {
         "key": "qwen3.5:2b-mtp",
+        "tag": "qwen3.5:2b-mtp",
         "desc": "Qwen3.5 2B MTP (Refiner, MTP spec-decode, ~1.3GB VRAM)",
         "repo": "unsloth/Qwen3.5-2B-MTP-GGUF",
         "file_regex": [
@@ -263,6 +270,14 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool) -> bool:
     return True
 
 
+def _spec_matches_file(spec: dict, gguf: Path) -> bool:
+    """True if any file_regex of the spec matches this GGUF's name."""
+    return any(
+        re.search(rx, gguf.name, re.IGNORECASE)
+        for rx in spec.get("file_regex", [])
+    )
+
+
 def write_models_json(models_dir: Path) -> int:
     """Populate models.json from all GGUFs in the folder."""
     from backend.llama_models import _parse_gguf_filename  # noqa: E402
@@ -277,9 +292,26 @@ def write_models_json(models_dir: Path) -> int:
             continue
         if "dspark" in g.name.lower():
             continue
+        # MTP-DRAFTER (2026-09-12): "mtp-<model>.gguf" sidecars (gemma-4 QAT)
+        # are spec-dec drafters, NOT standalone models (same rule as dspark).
+        # Only the file-name PREFIX counts — "…-V13-MTP-APEX-Compact.gguf"
+        # (Hermes, contains MTP mid-name) stays a normal model.
+        if g.name.lower().startswith("mtp-"):
+            continue
+        # TAG-PIN (2026-09-12): a spec tag is authoritative — the filename
+        # parser over-normalizes (unsloth names their MTP quants WITHOUT
+        # "mtp": Qwen3.5-4B-Q4_K_M.gguf parsed as qwen3.5:4b, so the
+        # settings default qwen3.5:4b-mtp found nothing). Pin catalog tag →
+        # downloaded file; the parsed alias (qwen3.5:4b) still exists.
+        _spec_tag = next(
+            (s["tag"] for s in SPECS if s.get("tag") and _spec_matches_file(s, g)),
+            None,
+        )
+        if _spec_tag:
+            mapping[_spec_tag] = str(g)
         names = _parse_gguf_filename(g.name)
         if names:
-            mapping[names[0]] = str(g)
+            mapping.setdefault(names[0], str(g))
             families.add(names[0].split(":")[0])
 
     # Assign mmproj entries to the matching family
