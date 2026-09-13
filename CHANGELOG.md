@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.2] - 2026-09-13
+
+Tree-scout workspace fix.
+
+### Fixes
+
+- The repo map could be built from the WRONG folder: a Windows path inside
+  the task text (e.g. copied from another machine) won over the resolved
+  UI workspace, and non-existent paths were accepted without an existence
+  check. The resolved workspace now always wins when valid; text-extracted
+  paths are only a fallback for workspace-less chats and must exist.
+  Ignored text paths are logged.
+
 ## [1.1.1] - 2026-09-11
 
 Agentic-run fixes, run-state persistence and installer model-setup rework.
