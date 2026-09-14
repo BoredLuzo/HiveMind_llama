@@ -63,6 +63,8 @@ rest are **OPEN** (low priority, no behavior bug in the default path).
 | 41 | CRLF preservation dead code: `read_text()` universal newlines made `_has_crlf` always False → CRLF files silently rewritten as LF (edit_file/patch_file/replace_lines/edit_ast) | **FIXED** — `newline=""` reads on the 3 write paths + ast_tools |
 | 42 | write_file_append: remainder >250k chars silently truncated, drain reported "full content written" | **FIXED** — capped flag + honest `AUTO_SPLIT_REMAINDER_CAPPED` error |
 | 43 | empty content destroyed a pending AUTO-SPLIT remainder (pop before empty-check) | **FIXED** — remainder survives; error suggests the marker |
+| 44a | write_file_append glued the first appended line onto a non-newline-terminated file end (looked like "append added only one line") | **FIXED** — newline boundary inserted + honest line count (2026-09-15) |
+| 44b | a self-made model continuation chunk silently destroyed a pending AUTO-SPLIT remainder → truncated file, only the chunk landed | **FIXED** — AUTO_SPLIT_PENDING rejection keeps the remainder; marker drain unaffected (2026-09-15) |
 | 44 | duo_full write-guard covers `write_file` only — write_file_append bypasses READ_REQUIRED on existing files | OPEN (append semantics make blind-guard less harmful; documented) |
 | 45 | undo_last (no path) = git reset to last checkpoint — wipes ALL chunks' work, can revert to a PREVIOUS run's checkpoint; schema text doesn't say so | OPEN (documented risk; git_autocommit users unaffected) |
 | 46 | undo snapshots via read_text/write_text corrupt line endings / non-UTF8 files on restore | OPEN |

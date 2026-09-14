@@ -157,9 +157,10 @@ def main():
             fail("D1: marker-without-pending handled wrong",
                  f"r={rg[:120]} disk={_g_disk!r}")
 
-        # E: real content while a pending split exists -> normal append, pending
-        # dropped (model moved on), marker is NOT drained into it.
-        fe = wd / "e.txt"
+        # E: non-marker content while a pending split exists -> REJECTED
+        # (PENDING-GUARD 2026-09-15: the old drop-and-append silently destroyed
+        # the remainder and produced truncated files/duplicates). The model
+        # must either drain via the marker or explicitly abandon.
         re1 = asyncio.run(_F._inline_tool_write_file(
             {"path": "e.txt", "content": content, "_tool_name": "write_file"}, wd, None))
         if "[AUTO-SPLIT]" in re1:
@@ -169,19 +170,26 @@ def main():
         re2 = asyncio.run(_F._inline_tool_write_file_append(
             {"path": "e.txt", "content": "tail-extra\n",
              "_tool_name": "write_file_append"}, wd, None))
-        _e_disk = fe.read_text(encoding="utf-8")
-        if "tail-extra" in _e_disk:
-            ok("E2: real append content written verbatim while stale pending existed")
+        if "AUTO_SPLIT_PENDING" in re2:
+            ok("E2: self-made chunk rejected while remainder pending (no silent drop)")
         else:
-            fail("E2: real append not written", re2[:120])
-        # pending was dropped -> a later marker must NOT resurrect stale remainder
+            fail("E2: self-chunk not rejected", re2[:120])
+        # explicit ABANDON drops the remainder; a later marker must NOT
+        # resurrect it (no ghost drain)
+        re_ab = asyncio.run(_F._inline_tool_write_file_append(
+            {"path": "e.txt", "content": "<AUTO_SPLIT_ABANDON>",
+             "_tool_name": "write_file_append"}, wd, None))
+        if "AUTO-SPLIT-ABANDONED" in re_ab:
+            ok("E3: explicit abandon drops the remainder")
+        else:
+            fail("E3: abandon failed", re_ab[:120])
         re3 = asyncio.run(_F._inline_tool_write_file_append(
             {"path": "e.txt", "content": _F.AUTO_SPLIT_CONTINUE_MARKER,
              "_tool_name": "write_file_append"}, wd, None))
         if "AUTO_SPLIT_NO_PENDING" in re3:
-            ok("E3: stale pending dropped -> later marker errors (no ghost drain)")
+            ok("E4: abandoned remainder -> later marker errors (no ghost drain)")
         else:
-            fail("E3: stale pending resurrected", re3[:120])
+            fail("E4: stale pending resurrected", re3[:120])
 
     finally:
         shutil.rmtree(str(wd), ignore_errors=True)

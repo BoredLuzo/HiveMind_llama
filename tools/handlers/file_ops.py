@@ -365,6 +365,33 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
         # EMPTY-CONTENT-GUARD (2026-09-13): empty content must NOT pop the
         # pending remainder (old order dropped it first, errored after —
         # file stayed truncated with the remainder unrecoverable).
+        # PENDING-GUARD (2026-09-15): a self-made continuation chunk used to
+        # SILENTLY DESTROY the pending remainder — part1 stayed truncated and
+        # only the model's small chunk landed ("append added just one line").
+        # The remainder is the authoritative tail of the original content; the
+        # model's chunk would duplicate/misalign with it. Reject instead.
+        if content and _pending_now is not None:
+            # ABANDON-VERB (2026-09-15): the model can explicitly drop the
+            # stored remainder when it has genuinely moved on.
+            _cand_abandon = str(content).strip().strip("\"'`")
+            if _cand_abandon == "<AUTO_SPLIT_ABANDON>":
+                _pending_splits.pop(_split_key_, None)
+                return (f"[AUTO-SPLIT-ABANDONED] '{p}': stored remainder dropped. "
+                        "The file currently ends with part1 of the old (truncated) "
+                        "write. read_file the end of it before appending, so you "
+                        "know exactly where it stands.")
+            _pend_chars = len(str(_pending_now.get("content", "")))
+            return _tool_error_response(
+                "AUTO_SPLIT_PENDING",
+                f"[AUTO-SPLIT] '{p}' still has a {_pend_chars}-char remainder stored "
+                "server-side. Do NOT write your own continuation — it would duplicate "
+                "or misalign with the stored tail. Two options:\n"
+                f"1. Finish the intended content: write_file_append(path, content={AUTO_SPLIT_CONTINUE_MARKER})"
+                " (bare marker token, no quotes).\n"
+                "2. Abandon the stored remainder (you rewrote your plan): "
+                "write_file_append(path, content=<AUTO_SPLIT_ABANDON>) — then read_file "
+                "the end of the file and append fresh content.",
+                tool="write_file_append")
         if content:
             _pending_splits.pop(_split_key_, None)
         else:
@@ -378,17 +405,27 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     # Normal append: the content already arrived in full, so append it in one
     # go (no artificial chunking - splitting would only force the model to
     # regenerate the same content again).
+    # NEWLINE-BOUNDARY (2026-09-15): if the file does not end with a newline
+    # and the chunk does not start with one, the first appended line GLUED
+    # onto the last existing line (looked like "append added only one line").
     try:
+        _boundary = {"note": ""}
         def _append_and_size() -> int:
             p.parent.mkdir(parents=True, exist_ok=True)
+            _head = p.read_text(encoding="utf-8", errors="replace", newline="") if p.stat().st_size else ""
+            _body = content
+            if _head and not _head.endswith("\n") and not _body.startswith("\n"):
+                _body = "\n" + _body
+                _boundary["note"] = " (newline boundary inserted)"
             with open(p, "a", encoding="utf-8", newline="") as f:
-                f.write(content)
+                f.write(_body)
             return p.stat().st_size
 
         total = await asyncio.to_thread(_append_and_size)
-        lines = content.count("\n") + 1
+        _appended = ("\n" + content) if _boundary["note"] else content
+        lines = _appended.count("\n")
         _lint = await _auto_lint_result(p, workspace)
-        return f"[Appended: {p} (+{lines} lines, total {total} bytes)]{_lint}"
+        return f"[Appended: {p} (+{lines} lines, total {total} bytes)]{_boundary['note']}{_lint}"
     except Exception as e:
         return _tool_error_response(
             "WRITE_FILE_APPEND_FAILED",

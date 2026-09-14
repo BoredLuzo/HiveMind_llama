@@ -4406,13 +4406,14 @@ async def run_code_duo(ctx):
                                         _salv_path = _salv["args"].get("path", "?")
                                         _salvage_notes.append(
                                             f"[WRITE-SALVAGE] {_vname} for '{_salv_path}' was cut off at the "
-                                            f"output limit — {_salv['_salvaged_chars']} "
+                                            f"output limit — only {_salv['_salvaged_chars']} "
                                             f"chars ({_salv['_salvaged_lines']} lines) were salvaged "
-                                            f"and written. Continue with ONLY the missing remainder via "
-                                            f"write_file_append: start EXACTLY at char position "
-                                            f"{_salv['_salvaged_chars']} (end of line "
-                                            f"{_salv['_salvaged_lines']}), without repeating the already "
-                                            f"written part. Split into chunks of max ~15000 chars."
+                                            f"and written. The file is now INCOMPLETE. Do NOT rewrite "
+                                            f"the whole file (that duplicates content). Instead: "
+                                            f"1) read_file('{_salv_path}', start_line={max(1, _salv['_salvaged_lines'] - 15)}) "
+                                            f"to see exactly where the file ends, 2) write_file_append "
+                                            f"continuing from the LAST line you saw — no repetition. "
+                                            f"Split further appends into chunks of max ~15000 chars."
                                         )
                                         logger.warning(
                                             "[WRITE-SALVAGE] %s '%s' salvaged: %d chars, %d lines",
