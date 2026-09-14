@@ -649,6 +649,12 @@ async def run_code_duo(ctx):
     _exec_ctx = state["_exec_ctx"]
     _critic_ctx = state["_critic_ctx"]
     _duo_ws = state["_duo_ws"]
+    logger.info(
+        "[WEBSEARCH-DIAG] coder tools advertised with websearch=%s (setting=%s, server_available=%s)",
+        bool(_duo_ws),
+        bool(ctx.settings.get("duo_websearch_enabled", False)),
+        bool(ctx.websearch_available),
+    )
     _duo_seen_web_queries = state["_duo_seen_web_queries"]
     _xtools_ws = state["_xtools_ws"]
     _tool_think_auto_mode = state["_tool_think_auto_mode"]
@@ -1604,6 +1610,22 @@ async def run_code_duo(ctx):
         if _follow_up_hint:
             _duo_coder_sys += "\n\n" + _follow_up_hint
 
+
+        # WEBSEARCH-NOTE (2026-09-13): the coder was NEVER told that web_search
+        # exists - the only "PREFER LOOKUP" hint lived in a dead prompt builder
+        # gated on the NON-EXISTENT settings key "websearch" (real key:
+        # duo_websearch_enabled). A plan promising web research then produced a
+        # coder that never searched (live 2026-09-14). Gate on the ACTUAL
+        # per-run availability flag.
+        if _duo_ws:
+            _duo_coder_sys += (
+                "\n\nWEB SEARCH is available via the web_search tool (results via "
+                "web_fetch). PREFER LOOKUP OVER HALLUCINATION: if you are unsure "
+                "about an API signature, library function, framework behavior, or "
+                "config option, web_search FIRST. A wrong assumption breaks the "
+                "build; a web_search call costs seconds. If the plan calls for "
+                "research, actually run the searches - do not skip them."
+            )
         # Writes were being truncated by the token limit or rejected as too large
         # AFTER full generation (7-minute total loss). Instruct proactively with
         # an exact per-call char cap (same source as the runtime tool check:

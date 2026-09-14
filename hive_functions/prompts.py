@@ -145,12 +145,12 @@ def build_execution_block(settings, wf_chunk):
     rules = ["These rules OVERRIDE default behavior:"]
     if settings.get("pre_explore"): rules.append("- Perform exploration before any write.")
     if settings.get("chunking"):    rules.append(f"- If output > {wf_chunk} chars, split before writing.")
-    if settings.get("websearch"):   rules.append("- Web search is available. PREFER looking things up over guessing. If you are unsure about an API, library, or framework detail, use web_search FIRST — wrong assumptions are worse than an extra tool call.")
+    if settings.get("duo_websearch_enabled", False) and settings.get("websearch_available", False):   rules.append("- Web search is available. PREFER looking things up over guessing. If you are unsure about an API, library, or framework detail, use web_search FIRST — wrong assumptions are worse than an extra tool call.")
     return "EXECUTION CONTROL:\n" + "\n".join(rules) + "\n"
 
 def build_duo_coder_prompt(settings, wf_limit, wf_chunk):
     execution_block = build_execution_block(settings, wf_chunk)
-    websearch_note = "\n\nWeb search is available via the web_search tool. PREFER LOOKUP OVER HALLUCINATION: if you are unsure about an API signature, library function, framework behavior, or config option, search FIRST before guessing. A wrong assumption breaks the build; a web_search call costs 2 seconds. When in doubt: search." if settings.get("websearch") else ""
+    websearch_note = "\n\nWeb search is available via the web_search tool. PREFER LOOKUP OVER HALLUCINATION: if you are unsure about an API signature, library function, framework behavior, or config option, search FIRST before guessing. A wrong assumption breaks the build; a web_search call costs 2 seconds. When in doubt: search." if settings.get("duo_websearch_enabled", False) and settings.get("websearch_available", False) else ""
     return (
         BASE_RULE + "\n\n" + execution_block + "\n\n" +
         REASONING_PLANNING_BLOCK + websearch_note + "\n\n" +
