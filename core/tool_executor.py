@@ -176,20 +176,19 @@ def _args_str_len(raw_args) -> int:
         return 0
 
 
-def _compact_round_write_args(messages, assistant_idx, call, dname, raw_args, dargs) -> int:
-    """Compacts the arguments of a successfully executed large write call.
+def _compact_round_write_args(messages, assistant_idx, call, dname, raw_args, dargs, failed: bool = False) -> int:
+    """Compacts the arguments of a large write call (success OR failure).
 
     Shrinks ONLY the assistant entry of this round (never sent as a prompt
     -> cache-friendly). The stub keeps path + a short reference
     (arg chars + sha1 prefix) so undo/diff/reference checks work without
     the full content. Returns the number of compacted entries.
 
-    TODO (2026-09-06, consolidation after live observation ghosts.js/game.js):
-    after the stub the model no longer sees the written content and often
-    rewrites the same file COMPLETELY in later rounds (write_file churn).
-    IMPLEMENTED (b) 2026-09-09: the stub carries an imperative read-first
-    nudge. (a)/(c) remain available if churn persists - see also
-    duo_write_guard_enabled.
+    FAILED-COMPACTION (2026-09-15): a failed/cut write attempt previously
+    kept its full 20k+-char args in history forever (the partial-compression
+    raw tail protects recent messages) — live: 3 x 22k-char write_file
+    finish=length attempts kept the tail huge and compression shrank only
+    ~18%. Failed giants now compact with an explicit FAILED stub.
     """
     if not (dname in _WRITE_ARG_COMPACT_NAMES and messages and 0 <= int(assistant_idx) < len(messages)):
         return 0
@@ -206,11 +205,17 @@ def _compact_round_write_args(messages, assistant_idx, call, dname, raw_args, da
     except Exception:
         _dig = "?"
     _path = str((dargs or {}).get("path", "") or "")
+    if failed:
+        _stub_text = (f"[{dname} attempt FAILED/cut at the output limit ({_alen} arg chars, sha {_dig}) - "
+                      "this content never reached the file. Do NOT assume file state from it - "
+                      "read_file the path before any further write/edit.]")
+    else:
+        _stub_text = (f"[executed {dname}: {_alen} arg chars (sha {_dig}) - "
+                      "content NOT in context anymore - read_file this path before "
+                      "any further write/edit to avoid full-file rewrites]")
     _stub = json.dumps({
         "path": _path,
-        "content": f"[executed {dname}: {_alen} arg chars (sha {_dig}) - "
-                   "content NOT in context anymore - read_file this path before "
-                   "any further write/edit to avoid full-file rewrites]",
+        "content": _stub_text,
     }, ensure_ascii=False)
     _cid = (call or {}).get("id")
     for _tc in _tcs:
@@ -737,6 +742,21 @@ async def execute_tool_round(
                     "[ARG-COMPACT] %s args compacted to stub after success "
                     "(focus=%s, saved_chars=%d)",
                     _dname, _focus_path, _saved_chars)
+        # FAILED-COMPACTION (2026-09-15): a cut/failed 20k+-char write attempt
+        # previously kept its full args in history — the partial-compression
+        # raw tail protects recent messages, so repeated failed giants kept
+        # compression nearly ineffective (live RX 6600: 3 x 22k write attempts,
+        # 54k -> 44k only). Stub them with an explicit FAILED marker.
+        elif (
+            _dname in ("edit_file", "write_file", "patch_file", "write_file_append", "replace_lines")
+            and _focus_path
+            and len(_raw_s) >= _WRITE_ARG_COMPACT_MIN
+        ):
+            if _compact_round_write_args(dtool_msgs, _assistant_idx, _dtc_call, _dname, _raw_args, _dargs, failed=True):
+                _logger.info(
+                    "[ARG-COMPACT] %s args compacted to FAILED-stub "
+                    "(focus=%s, saved_chars=%d)",
+                    _dname, _focus_path, len(_raw_s))
         # ── Context LRU registration ──
         _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult,
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)
