@@ -53,7 +53,12 @@ def main() -> int:
         _check("missing file reported", err3.startswith("file not found:"))
 
         _check("guard still blocks javascript:", bool(_guard_browser_url("javascript:alert(1)")))
-        _check("guard allows loopback http", _guard_browser_url("http://127.0.0.1:12345/x") is None)
+        # LOOPBACK-GUARD (2026-09-13): only the tool's OWN file server origin
+        # is allowed; every other loopback port (llama-server, SearXNG, UI) is
+        # blocked, as are arbitrary ports on localhost by name.
+        _check("guard allows own fileserver origin", _guard_browser_url(http_url) is None)
+        _check("guard blocks foreign loopback port", bool(_guard_browser_url("http://127.0.0.1:12345/x")))
+        _check("guard blocks localhost by name", bool(_guard_browser_url("http://localhost:12345/x")))
 
     _stop_file_server()
     print("PASS" if _ok else "FAIL")

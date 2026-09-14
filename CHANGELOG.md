@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.1.4] - 2026-09-13
+
+Tools deep audit: 14 fixes across the tool loop, file ops and external
+tools. Full findings ledger: docs/tools-audit.md.
+
+### Verify chain (was effectively dead)
+
+- `verify_last_ok_serial` was bumped by every tool type — the duo verify
+  gate, critic veto and final hard-stop could never fire. Only a passing
+  run_bash bumps now.
+- Verification spoofing closed: echoing `[TEST-RESULT] ✅`/`pytest` into
+  run_bash output no longer satisfies the auto-test gate (only real run_tests
+  results or test-command evidence count); the exit-code scan takes the LAST
+  `[exit code: N]` match; a failing run_tests (❌) counts as a failure.
+
+### Correctness
+
+- Four hint-escalation branches replaced the tool result without appending
+  the tool message → dangling tool_call in history (API 400 risk).
+- CRLF files are no longer silently rewritten as LF by edit_file /
+  patch_file / replace_lines / edit_ast (universal-newline reads fixed).
+- write_file_append: a >250k-char remainder was silently truncated with a
+  success message; empty content destroyed a pending auto-split remainder.
+  Both are honest errors now.
+- run_python: non-empty output no longer swallows a non-zero exit (same
+  `[exit code: N]` marker as run_bash).
+- task_complete "blocked" detection actually matches the handler output.
+
+### Safety
+
+- Browser tool: loopback/private IPs and "localhost" are no longer navigable
+  (llama-server, SearXNG, the UI were reachable) — only the tool's own file
+  server origin.
+- critic_verify now runs with the workspace lock (was unconstrained).
+- install_package pip requires a workspace venv (can no longer install into
+  HiveMind's own venv).
+- test_runner timeout kills the whole process tree (taskkill /T), not just
+  the shell; post-eviction read-guard SKIP trap removed; patch_file-branded
+  hint no longer fires on unrelated tool failures.
+
 ## [1.1.3] - 2026-09-13
 
 Linux native-lib check fix.

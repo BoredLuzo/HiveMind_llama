@@ -5480,6 +5480,7 @@ async def run_code_duo(ctx):
                                 _cargs,
                                 tool_mode="critic_verify",
                                 include_websearch=False,
+                                workspace_lock=_ws_str,  # CRITIC-LOCK (2026-09-13): was None -> reads/searches unconstrained
                             )
                             if _cname == "run_bash" and not _run_bash_failed(_cres):
                                 _verify_last_ok_serial = max(_verify_last_ok_serial, _verify_mutation_serial)

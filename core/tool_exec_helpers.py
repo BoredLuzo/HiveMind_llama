@@ -356,6 +356,10 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _matched = True
         _no_path = _dargs.get("path", "")
         if _bump(attempts_per_file, f"noop:{_no_path}") >= 3:
+            # TOOL-MSG-ALWAYS (2026-09-13): replacing _dresult here without
+            # appending left the assistant tool_call dangling in history
+            # (API 400 risk). Append first, then swap in the escalation text.
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _dresult = (
                 f"[SYSTEM] edit_file produced no change on '{_no_path}' 3x. "
                 "Your SEARCH and REPLACE are identical — the file is NOT modified. "
@@ -373,6 +377,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _matched = True
         _n = _bump(tool_error_retries, "RUN_BASH_TIMEOUT")
         if _n >= 2:
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _dresult = (
                 f"[SYSTEM] run_bash timed out {_n}x. "
                 "The command is too expensive. Split it into smaller steps, "
@@ -392,6 +397,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
         _matched = True
         _n = _bump(tool_error_retries, "RUN_BASH_NONZERO")
         if _n >= 4:
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _dresult = (
                 "[SYSTEM] run_bash produced a non-zero exit code 4x. "
                 "The command or its approach does not work. "
@@ -411,6 +417,7 @@ def _inject_tool_error_hints(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
     elif _tool_error_has_code(_dresult, "RUN_BASH_BLOCKED", "run_bash"):
         _matched = True
         if _bump(tool_error_retries, "RUN_BASH_BLOCKED") >= 2:
+            _append_tool_msg(dtool_msgs, _tc_id, _dname, _dresult)
             _dresult = (
                 "[SYSTEM] run_bash blocked 2x — this or similar commands "
                 "are blocked for security reasons. Use Python (run_python) "
@@ -703,6 +710,14 @@ async def _maybe_activate_reactive_think(_dname, _dresult, round_state, dtool_ms
 async def _run_bash_fail_fix_pass_insight(_dname, _dargs, _dresult, result, hooks,
                                             workspace_lock, subtask_index):
     """S10: run_bash fail→fix→pass insight (from execute_tool_round)."""
+    # VERIFY-SERIAL-GUARD (2026-09-13): this hook runs for EVERY tool — the
+    # old unguarded else bumped verify_last_ok_serial on read_file/edit_file/
+    # task_complete/etc., equalizing the serials after the first non-bash
+    # call and permanently disarming the duo verify gates (VERIFY-GATE-OWNER,
+    # critic veto, final hard-stop). Only a passing run_bash says "the last
+    # mutations were verified".
+    if _dname != "run_bash":
+        return
     _rb_failed = _run_bash_failed(_dresult)
     if _rb_failed:
         result.last_run_bash_failure = {
@@ -737,6 +752,13 @@ async def _run_bash_fail_fix_pass_insight(_dname, _dargs, _dresult, result, hook
 
 def _patch_file_fallback_hint(_dname, _dargs, _dresult, attempts_per_file) -> str:
     """S11: auto-retry patch_file fallback hint (from execute_tool_round)."""
+    # DNAME-GUARD (2026-09-13): this hook ran for EVERY failing tool — any
+    # 2nd failure without a path arg incremented attempts_per_file[""] and
+    # appended a patch_file-branded hint to unrelated errors (blocked
+    # run_bash, failing read_file...). Only patch_file/edit_file failures
+    # belong in this counter.
+    if _dname not in ("patch_file", "edit_file"):
+        return _dresult
     _pf_path = _dargs.get("path", "")
     if _tool_call_failed(_dresult, _dname):
         attempts_per_file[_pf_path] = attempts_per_file.get(_pf_path, 0) + 1

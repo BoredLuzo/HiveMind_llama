@@ -96,12 +96,15 @@ def _store_pending_remainder(path: str, content: str, written_chars: int) -> Non
         _oldest = min(_pending_splits, key=lambda k: float(_pending_splits[k].get("ts", 0.0)))
         _pending_splits.pop(_oldest, None)
     _remainder = str(content)[written_chars:]
+    _truncated = False
     if len(_remainder) > _PENDING_MAX_CHARS:
         _remainder = _remainder[:_PENDING_MAX_CHARS]
+        _truncated = True
     _pending_splits[_split_key(path)] = {
         "content": _remainder,
         "ts": time.time(),
         "total": len(content),
+        "truncated": _truncated,
     }
 
 
@@ -321,6 +324,7 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
                     "SEARCH/REPLACE blocks - do NOT send a full rewrite of the whole file.",
                     tool="write_file_append")
             _rest = str(_entry["content"])
+            _rest_truncated = bool(_entry.get("truncated"))
             try:
                 def _drain() -> int:
                     p.parent.mkdir(parents=True, exist_ok=True)
@@ -344,17 +348,32 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
                     f"write_file_append (AUTO-SPLIT drain) failed for '{p}': {e}",
                     tool="write_file_append")
             _lines = _rest.count("\n") + 1
+            if _rest_truncated:
+                return _tool_error_response(
+                    "AUTO_SPLIT_REMAINDER_CAPPED",
+                    f"[AUTO-SPLIT] '{p}' was completed only PARTIALLY: the stored "
+                    f"remainder exceeded the {_PENDING_MAX_CHARS} char server cache and "
+                    "was cut. The file is now TRUNCATED at that point. Do NOT send "
+                    "<AUTO_SPLIT_CONTINUE> again (the cache is gone). Read the end of "
+                    "the file and reconstruct the missing tail (edit_file / "
+                    "write_file_append).",
+                    tool="write_file_append")
             return (f"[AUTO-SPLIT-DONE] '{p}' completed: +{_lines} lines, "
                     f"{_total} bytes total (full content written).")
         # Pending existiert, aber der Content ist KEIN Marker: das Modell ist
         # weitergezogen / resendet selbst - alter Remainder ist veraltet.
-        _pending_splits.pop(_split_key_, None)
-
-    if not content:
-        return _tool_error_response(
-            "EDIT_FILE_EMPTY_EDITS",
-            "write_file_append requires non-empty content.",
-            tool="write_file_append")
+        # EMPTY-CONTENT-GUARD (2026-09-13): empty content must NOT pop the
+        # pending remainder (old order dropped it first, errored after —
+        # file stayed truncated with the remainder unrecoverable).
+        if content:
+            _pending_splits.pop(_split_key_, None)
+        else:
+            return _tool_error_response(
+                "EDIT_FILE_EMPTY_EDITS",
+                "write_file_append requires non-empty content. If you meant to "
+                "finish an auto-split rewrite, send the bare marker "
+                + AUTO_SPLIT_CONTINUE_MARKER + " as content.",
+                tool="write_file_append")
 
     # Normal append: the content already arrived in full, so append it in one
     # go (no artificial chunking - splitting would only force the model to
@@ -390,7 +409,7 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
             "patch_file requires non-empty old_str.",
             tool="patch_file" )
     try:
-        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace")
+        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace", newline="")  # CRLF-PRESERVE (2026-09-13)
         _has_crlf = "\r\n" in content
         _cnorm = content.replace("\r\n", "\n")
         _onorm = old_str.replace("\r\n", "\n")
@@ -590,7 +609,7 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
 
     # ── EXISTING FILE ──
     try:
-        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace")
+        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace", newline="")  # CRLF-PRESERVE (2026-09-13)
         _has_crlf = "\r\n" in content
         working = content.replace("\r\n", "\n")
 
@@ -754,7 +773,7 @@ async def _inline_tool_replace_lines(args: dict, workspace: Path, workspace_lock
     replacement = args.get("replacement", "")
     get_transaction().capture_before(p)
     try:
-        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace")
+        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace", newline="")  # CRLF-PRESERVE (2026-09-13)
         _has_crlf = "\r\n" in content
         working_lines = content.replace("\r\n", "\n").splitlines()
         if not working_lines and content.strip():

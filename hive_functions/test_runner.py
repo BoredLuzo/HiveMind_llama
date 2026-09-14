@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import asyncio
+import platform
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
@@ -165,8 +166,33 @@ async def run_tests(
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            # TREE-KILL (2026-09-13): proc.kill() only killed the SHELL —
+            # pytest/npm children survived as orphans on Windows. Kill the
+            # whole tree, then reap.
+            if platform.system() == "Windows":
+                import subprocess as _sp
+                try:
+                    _sp.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                            capture_output=True, timeout=10)
+                except (OSError, _sp.SubprocessError):
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        logging.debug("test tree already gone (pid %s)", proc.pid)
+            else:
+                try:
+                    import os as _os_kill
+                    import signal as _sig
+                    _os_kill.killpg(proc.pid, _sig.SIGKILL)
+                except (ProcessLookupError, PermissionError, AttributeError):
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        logging.debug("test tree already gone (pid %s)", proc.pid)
+            try:
+                await proc.wait()
+            except ProcessLookupError:
+                logging.debug("test proc already reaped (pid %s)", proc.pid)
             return TestResult(
                 success=False, language=lang, command=cmd,
                 failure_count=0,

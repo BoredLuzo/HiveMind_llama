@@ -99,6 +99,19 @@ def evict_stale_reads_for_path(
         }
         lru.mark_evicted(idx)
         evicted += 1
+    if evicted:
+        # SKIP-TRAP-FIX (2026-09-13): the read-guard set still contains the
+        # path, so a fresh read_file returned "[SKIP: already read ... full
+        # content is in your context]" — which is FALSE after eviction (the
+        # content is gone). Drop the path so re-reads are allowed again.
+        try:
+            from tools.runner import _files_read_in_run as _fri
+            _rs = _fri.get(None)
+            if _rs is not None:
+                _rs.discard(path)
+                _rs.discard(str(path))
+        except (ImportError, AttributeError) as _e:
+            logging.debug("SKIP-TRAP read-guard drop skipped: %s", _e)
     return evicted
 
 

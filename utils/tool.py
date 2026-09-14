@@ -193,8 +193,16 @@ def run_bash_failed(result: str) -> bool:
         return True
     if "[run_bash: timeout" in low:
         return True
+    # TEST-RESULT-FAIL (2026-09-13): run_tests results carry no [exit code:]
+    # marker — a failing suite (server-generated ❌) must count as a failure,
+    # otherwise the verify gates treat mutations as verified despite red tests.
+    if "[test-result] ❌" in low:
+        return True
     if "[exit code:" in txt:
-        m = __import__("re").search(r"\[exit code:\s*(\d+)", txt)
-        if m and int(m.group(1)) != 0:
+        # LAST match wins: the real marker is appended at the very end of the
+        # output; an earlier literal "[exit code: 0]" (echoed by the model)
+        # must not mask a genuine non-zero exit.
+        matches = __import__("re").findall(r"\[exit code:\s*(\d+)", txt)
+        if matches and int(matches[-1]) != 0:
             return True
     return False

@@ -43,6 +43,7 @@ def _guard_browser_url(url: str) -> str | None:
         _host = ""
     if not _host:
         return "invalid URL — no hostname"
+    _parts = _up(url)
     try:
         _ipo = _ipa.ip_address(_host)
         if isinstance(_ipo, _ipa.IPv6Address) and _ipo.ipv4_mapped:
@@ -53,8 +54,27 @@ def _guard_browser_url(url: str) -> str | None:
         if (_ipo.is_link_local or _ipo.is_reserved or _ipo.is_multicast):
             return ("metadata/link-local/reserved/multicast IPs are not "
                     "navigable — use web_fetch targets instead")
+        # LOOPBACK-GUARD (2026-09-13): loopback/private ranges were reachable
+        # (llama-server :8101, SearXNG :8888, the HiveMind UI). The ONLY
+        # permitted loopback origin is the tool's own workspace file server.
+        if (_ipo.is_loopback or _ipo.is_private):
+            _fs_port = _file_server.server_address[1] if _file_server is not None else None
+            _uport = _parts.port or (443 if _parts.scheme == "https" else 80)
+            if not (_fs_port is not None and _ipo.version == 4
+                    and _ipo == _ipa.ip_address("127.0.0.1") and _uport == _fs_port):
+                return ("loopback/private IPs are not navigable (only the tool's "
+                        "own file server origin)")
     except ValueError:
         pass  # normaler DNS-Hostname
+    # DNS-LOOPBACK (2026-09-13): "localhost" & friends resolve to loopback —
+    # block the obvious names (IP-literal + resolution hardening is the
+    # request-level route guard's job, which re-runs this for every request).
+    if _host.lower().strip(".") in ("localhost", "127.0.0.1", "::1", "ip6-localhost"):
+        _fs_port = _file_server.server_address[1] if _file_server is not None else None
+        _uport = _parts.port or (443 if _parts.scheme == "https" else 80)
+        if not (_fs_port is not None and _uport == _fs_port
+                and _parts.scheme in ("http", "https")):
+            return ("localhost is not navigable (only the tool's own file server origin)")
     return None
 
 

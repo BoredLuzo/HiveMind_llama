@@ -90,8 +90,11 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
         result = stdout
         if stderr:
             result += f"\n[stderr]: {stderr[:1000]}"
+        # EXIT-CODE-MARKER (2026-09-13): non-empty output previously swallowed
+        # a non-zero exit entirely — the verify gates saw success. Append the
+        # same marker run_bash uses, as the LAST line.
         if result:
-            return result[:4000]
+            return result[:4000] + f"\n[exit code: {r.returncode}]"
         if r.returncode == 0:
             return "[run_python: executed successfully — no output produced]"
         return _tool_error_response(
@@ -530,7 +533,30 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
     if not ok_pkgs:
         return _tool_error_response("INVALID_ARGUMENT", f"packages rejected: {pkgs_msg}", tool="install_package")
     packages = pkgs_msg
-    _cmd = _INSTALL_CMDS[manager].format(pkgs=packages)
+    # PIP-VENV-GUARD (2026-09-13): "python -m pip" resolves via the inherited
+    # PATH — without a workspace venv it installs into HIVEMIND'S OWN venv and
+    # can break the running server. Require a workspace-local interpreter.
+    _ws_s = str(workspace or "")
+    if manager == "pip":
+        _venv_py = None
+        for _cand in (Path(_ws_s) / ".venv" / "Scripts" / "python.exe",
+                      Path(_ws_s) / ".venv" / "bin" / "python",
+                      Path(_ws_s) / "venv" / "Scripts" / "python.exe",
+                      Path(_ws_s) / "venv" / "bin" / "python"):
+            if _cand.exists():
+                _venv_py = _cand
+                break
+        if _venv_py is None:
+            return _tool_error_response(
+                "PIP_NO_WORKSPACE_VENV",
+                "pip refused: no .venv found in the workspace. Installing into the "
+                "HiveMind server venv is not allowed (it would break the server). "
+                "Create one first via run_bash: 'python -m venv .venv', then retry "
+                "install_package (it will use .venv automatically).",
+                tool="install_package")
+        _cmd = f'"{_venv_py}" -m pip install {packages}'
+    else:
+        _cmd = _INSTALL_CMDS[manager].format(pkgs=packages)
     if dev and manager == "npm":
         _cmd += " --save-dev"
     from tools.runner import _run_inline_tool as _dispatch_bash

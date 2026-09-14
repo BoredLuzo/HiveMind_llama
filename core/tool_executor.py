@@ -435,7 +435,11 @@ async def execute_tool_round(
                 dtool_msgs.append({"role": "tool", "content": _dresult,
                                     "tool_call_id": _dtc_call.get("id", _dname), "name": _dname})
                 _mutations_made = result.verify_mutation_serial > 0
-                _tc_blocked = "blocked" in str(_dresult).lower() and "build_status" in str(_dresult).lower()
+                # TC-BLOCKED-MARKER (2026-09-13): the handler emits
+                # "[task_complete] Build: blocked" — the old check required
+                # the literal "build_status", so _tc_blocked was always False
+                # and the ladder's blocked-aware acceptance never fired.
+                _tc_blocked = ("build: blocked" in str(_dresult).lower())
 
                 # ── AUTO-TEST vor task_complete (2026-08-12, B) ──────────────────
                 _auto_test_skips_gate = False
@@ -452,10 +456,30 @@ async def execute_tool_round(
                             _last_write_idx_at = _at_idx
                         elif _at_name == "run_tests" and not _at_content.startswith("[AUTO-TEST]"):
                             _last_test_idx_at = _at_idx
+                        # ANTI-SPOOF (2026-09-13): a run_bash result only counts
+                        # as a test run if the COMMAND evidence is real — the
+                        # model can echo "[TEST-RESULT] ✅" (or the word
+                        # "pytest") into stdout, so bare content matches no
+                        # longer qualify.
                         elif _at_name == "run_bash":
-                            if ("[TEST-RESULT]" in _at_content
-                                    or re.search(r"\b(pytest|npm test|vitest|jest|cargo test|go test|mvn test|dotnet test)\b",
-                                                 _at_content, re.IGNORECASE)):
+                            _at_cmd = ""
+                            for _at_prev in reversed(dtool_msgs[:_at_idx]):
+                                if _at_prev.get("role") == "assistant" and _at_prev.get("tool_calls"):
+                                    for _at_tc in _at_prev["tool_calls"]:
+                                        if _at_tc.get("function", {}).get("name") == "run_bash":
+                                            _at_cmd = ""
+                                            try:
+                                                _at_args = _at_tc.get("function", {}).get("arguments")
+                                                if isinstance(_at_args, dict):
+                                                    _at_cmd = str(_at_args.get("cmd") or "")
+                                                else:
+                                                    _at_cmd = str(json.loads(_at_args or "{}").get("cmd") or "")
+                                            except (json.JSONDecodeError, TypeError, ValueError, KeyError):
+                                                _at_cmd = ""
+                                            break
+                                    break
+                            if re.search(r"\b(pytest|python\s+-m\s+pytest|npm\s+(run\s+)?test|vitest|jest|cargo\s+test|go\s+test|mvn\s+test|dotnet\s+test)\b",
+                                         _at_cmd, re.IGNORECASE):
                                 _last_test_idx_at = _at_idx
                     if _last_test_idx_at <= _last_write_idx_at:
                         _logger.info("[AUTO-TEST] No test run since last edit - running run_tests")
@@ -532,14 +556,21 @@ async def execute_tool_round(
                     elif _tname == "run_bash":
                         _content = str(_m.get("content") or "")
                         _last_bash_idx = _idx
-                        _ec_match = re.search(r'\[exit code:\s*(\d+)\]', _content)
-                        if _ec_match and int(_ec_match.group(1)) != 0:
+                        # ANTI-SPOOF (2026-09-13): the genuine marker is
+                        # appended at the very END of the output — take the
+                        # LAST [exit code: N] match so an earlier echoed
+                        # "[exit code: 0]" cannot mask a real non-zero exit.
+                        _ec_matches = re.findall(r'\[exit code:\s*(\d+)\]', _content)
+                        if _ec_matches and int(_ec_matches[-1]) != 0:
                             _last_bash_failed = True
                             _last_bash_verified = False
                         else:
                             _last_bash_failed = False
+                            # "TEST-RESULT" removed from the run_bash heuristic:
+                            # that marker is server-generated for run_tests only;
+                            # in run_bash output it is model-echoable noise.
                             _last_bash_verified = bool(re.search(
-                                r"(?i)(\bpassed\b|\bsuccess\b|successful|\u2713|\u2705|TEST-RESULT"
+                                r"(?i)(\bpassed\b|\bsuccess\b|successful|\u2713|\u2705"
                                 r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))",
                                 _content,
                             ))
