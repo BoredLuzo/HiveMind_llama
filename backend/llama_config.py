@@ -232,10 +232,14 @@ _MOE_KV_CACHE_TYPES: dict[str, str] = {}
 
 
 # ── MTP (Multi-Token Prediction / Speculative Decoding) ─────────────────────
-
+# DRAFT-N-MAX 2 (2026-09-15): draft-mtp with n-max 3 has a documented
+# determinism/quality bug for the Qwen3.x MTP family (llama.cpp issue #23302,
+# Qwen3.6-27B dense: output diverges from non-speculative greedy at n-max 3;
+# 35B-A3B uses the same MTP implementation). 2 keeps most of the speedup with
+# clean output. Overridable for experiments via HIVEMIND_MTP_DRAFT_N_MAX.
 MTP_SPEC_TYPE = "draft-mtp"
 
-MTP_DRAFT_N_MAX = 3
+MTP_DRAFT_N_MAX = int(os.environ.get("HIVEMIND_MTP_DRAFT_N_MAX", "2") or 2)
 
 MTP_DRAFT_N_MIN = 1
 
