@@ -1,4 +1,63 @@
 
+// ── GLOBAL ERROR NET (2026-09-15) ────────────────────────────────────────────
+// Runtime errors used to land only in the devtools console ("F12 errors are
+// basically 0 catched"). Everything uncaught now surfaces as a throttled,
+// dismissible toast; console.error stays for debugging.
+(function _installGlobalErrorNet() {
+  var _toastEl = null, _lastAt = 0, _suppressed = 0, _hideTimer = null;
+  var _BENIGN = [
+    'ResizeObserver loop', 'ResizeObserver loop completed with undelivered',
+    'Script error.', 'Load failed', 'The network connection was lost'
+  ];
+  function _benign(msg) {
+    if (!msg) return true;
+    msg = String(msg);
+    for (var i = 0; i < _BENIGN.length; i++) if (msg.indexOf(_BENIGN[i]) !== -1) return true;
+    return false;
+  }
+  window._showErrorToast = function (msg) {
+    try {
+      if (_benign(msg)) return;
+      var now = Date.now();
+      if (now - _lastAt < 8000) {
+        _suppressed++;
+        if (_toastEl) {
+          var cnt = _toastEl.querySelector('.f12-count');
+          if (cnt) cnt.textContent = '+' + _suppressed + ' more — see console (F12)';
+        }
+        return;
+      }
+      _lastAt = now; _suppressed = 0;
+      if (!_toastEl) {
+        _toastEl = document.createElement('div');
+        _toastEl.style.cssText = 'position:fixed;right:14px;bottom:14px;z-index:99999;' +
+          'max-width:420px;background:rgba(60,20,24,.96);color:#ffd7d7;border:1px solid #a33;' +
+          'border-radius:6px;padding:10px 12px;font:11px/1.5 IBM Plex Mono,monospace;' +
+          'box-shadow:0 4px 18px rgba(0,0,0,.5);cursor:pointer;display:none;';
+        _toastEl.title = 'click to dismiss';
+        _toastEl.onclick = function () { _toastEl.style.display = 'none'; };
+        document.body.appendChild(_toastEl);
+      }
+      _toastEl.innerHTML = '<b style="color:#ff9c9c">⚠ Frontend error</b> <span class="f12-count" style="opacity:.75"></span><br>';
+      _toastEl.appendChild(document.createTextNode(String(msg).slice(0, 300)));
+      _toastEl.style.display = 'block';
+      if (_hideTimer) clearTimeout(_hideTimer);
+      _hideTimer = setTimeout(function () { if (_toastEl) _toastEl.style.display = 'none'; }, 12000);
+    } catch (e) { /* the net itself must never throw */ }
+  };
+  window.addEventListener('error', function (ev) {
+    var m = ev && (ev.message || (ev.error && ev.error.message)) || 'unknown script error';
+    console.error('[F12-net]', ev && ev.error ? ev.error : m);
+    window._showErrorToast(m);
+  });
+  window.addEventListener('unhandledrejection', function (ev) {
+    var r = ev && ev.reason;
+    var m = (r && (r.message || String(r))) || 'unhandled promise rejection';
+    console.error('[F12-net] unhandled rejection:', r);
+    window._showErrorToast(m);
+  });
+})();
+
 // -- State ------------------------------------------------------
 let S = {
   models: [],
@@ -488,23 +547,36 @@ function updateForceHeaderBadge() {
 // -- Init -------------------------------------------------------
 // FIX: init is now sequential and more robust.
 // loadModels must complete before renderAgentCards.
+// BOOT-HARDENING (2026-09-15): every step wrapped individually — one failed
+// fetch (backend momentarily down) used to abort the WHOLE boot chain
+// silently, leaving a broken UI with no explanation.
 async function init() {
   const cardsEl = document.getElementById('agent-cards');
   if (cardsEl) cardsEl.innerHTML = '<div class="loading-msg">&#9679; Loading models...</div>';
 
- await loadModels();
-  await fetch('/memory/clear_session', {method:'POST'});  // Seitenreload = neuer Chat
-  await loadAgentMap();
-  await loadSettings();    // renderAgentCards now uses S.currentAssignments
+  async function _step(name, fn) {
+    try { await fn(); }
+    catch (e) {
+      console.error('[boot] ' + name + ' failed:', e);
+      window._showErrorToast && window._showErrorToast('Boot step "' + name + '" failed: ' + (e && e.message || e));
+    }
+  }
+
+  await _step('loadModels', loadModels);
+  await _step('clear_session', () => fetch('/memory/clear_session', {method:'POST'}).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); }));  // Seitenreload = neuer Chat
+  await _step('loadAgentMap', loadAgentMap);
+  await _step('loadSettings', loadSettings);    // renderAgentCards now uses S.currentAssignments
   if (S.duoWebsearch || S.pipelineWebsearch || S.automapPipelineWebsearch) checkWebsearchStatus();
-  await loadPresets();
-  await loadMemory();
-  await loadVisionConfig();
-  await loadSpecialAgentsConfig();
-  loadSoulStatus();
-  loadChatHistory();
-  buildAgentForceButtons();
-  document.getElementById('h-dot').className = 'on';
+  await _step('loadPresets', loadPresets);
+  await _step('loadMemory', loadMemory);
+  await _step('loadVisionConfig', loadVisionConfig);
+  await _step('loadSpecialAgentsConfig', loadSpecialAgentsConfig);
+  _step('loadSoulStatus', loadSoulStatus);
+  _step('loadChatHistory', loadChatHistory);
+  _step('buildAgentForceButtons', buildAgentForceButtons);
+  try {
+    document.getElementById('h-dot').className = 'on';
+  } catch (e) { /* cosmetic */ }
 }
 
 // -- Constraint Mode --------------------------------------------
@@ -1270,6 +1342,7 @@ async function _flushQueuedSettings() {
     } catch (_je) {}
   } catch(e) {
     console.warn('postSettings flush failed:', e);
+    try { showInfo('⚠ Settings change could NOT be saved (' + (e && e.message || e) + ').'); } catch (_se) {}
   }
   var _waiters = _settingsPostWaiters.splice(0);
   _waiters.forEach(function(_resolve){ try { _resolve(); } catch(e) {} });
@@ -2383,6 +2456,25 @@ function showInfo(txt) {
   div.textContent = txt;
   c.appendChild(div);
   scrollBtmIfNearBottom(120);
+}
+
+// SETTINGS-SAVE-VISIBILITY (2026-09-15): fire-and-forget /settings posts used
+// to swallow failures — the UI showed a setting as changed while nothing was
+// persisted. Central helper: on failure surface it and let the caller revert.
+function _postSettingsFF(payload, onFail) {
+  fetch('/settings', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  }).then(function(r) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(d) {
+    if (d && d.ok === false) throw new Error(d.error || 'rejected');
+    if (d && d.settings_rev) S.settingsRev = parseInt(d.settings_rev, 10) || S.settingsRev;
+  }).catch(function(e) {
+    console.error('[settings save failed]', e);
+    showInfo('⚠ Setting could NOT be saved (' + (e && e.message || e) + ') — toggle reverted.');
+    if (typeof onFail === 'function') onFail(e);
+  });
 }
 
 function startAskUserCountdown(seconds) {
@@ -4118,7 +4210,11 @@ async function sendMsg() {
       S.curAgent.body.classList.remove('live');
       S.curAgent = null;
     }
-    if (!_hadBody && !S.curAgent && !_isAbort) {
+    // SSE-DEATH-VISIBILITY (2026-09-15): the chat error line used to be
+    // suppressed when the agent card already had partial text (_hadBody) —
+    // a mid-run stream death then looked like a normal end. The line now
+    // ALWAYS appears.
+    if (!_isAbort) {
       const errDiv = document.createElement('div');
       errDiv.className = 'msg status-txt';
       if (_isConnDrop) {
@@ -8537,11 +8633,9 @@ async function applySpecialAgent(key, btn) {
 // _updateSpecialAgentChips() was never called + temperature never saved).
 
 function setExplorationAgentEnabled(enabled) {
-  S.explorationAgentEnabled = enabled;
-  _updateSpecialAgentChips();
-  const workers = S.explorationWorkers || [];
-  fetch('/settings', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({exploration_agent: {enabled, workers}})
+  _postSettingsFF({exploration_agent: {enabled, workers: S.explorationWorkers || []}}, function() {
+    S.explorationAgentEnabled = !enabled;
+    _updateSpecialAgentChips();
   });
 }
 
@@ -8615,11 +8709,11 @@ async function applyExplorationWorkers(btn) {
 }
 
 function setSoulEvolveAgentEnabled(enabled) {
-  _updateSpecialAgentChips();
-  fetch('/settings', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({soul_evolve_agent: {enabled, model: S.soulEvolveModel||'',
+  _postSettingsFF({soul_evolve_agent: {enabled, model: S.soulEvolveModel||'',
       temperature: parseFloat(document.getElementById('soul-evolve-temp-sl')?.value||0.65),
-      max_tokens: parseInt(document.getElementById('soul-evolve-tok-sl')?.value||800)}})
+      max_tokens: parseInt(document.getElementById('soul-evolve-tok-sl')?.value||800)}}, function() {
+    S.soulEvolveEnabled = !enabled;
+    _updateSpecialAgentChips();
   });
 }
 
@@ -8676,21 +8770,28 @@ function setIntentEnabled(enabled) {
   S.intentEnabled = enabled;
   _updateIntentCard();          // intent-card border + chip in the special-agent panel
   _updateSpecialAgentChips();   // update header chips (AN●, VI● etc.)
-  fetch('/settings', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({intent_agent: {
+  _postSettingsFF({intent_agent: {
       enabled,
       model: S.intentModel || '',
       temperature: parseFloat(document.getElementById('intent-temp-sl')?.value || 0.1)
-    }})
+    }}, function() {
+    S.intentEnabled = !enabled;
+    var t = document.getElementById('intent-enabled');
+    if (t) t.checked = !enabled;
+    _updateIntentCard();
+    _updateSpecialAgentChips();
   });
 }
 
 function setIntentModel(model) {
+  var _prev = S.intentModel;
   S.intentModel = model;
   _updateIntentCard();
   _updateSpecialAgentChips();
-  fetch('/settings', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({intent_agent: {enabled: S.intentEnabled, model}})
+  _postSettingsFF({intent_agent: {enabled: S.intentEnabled, model}}, function() {
+    S.intentModel = _prev;
+    _updateIntentCard();
+    _updateSpecialAgentChips();
   });
 }
 
@@ -8779,8 +8880,10 @@ function setKeepAlive(ka, el) {
   if (el) el.classList.add('on');
   // FIX: set both keys — smart preload uses smart_preload_keep_alive,
   // startup preload uses default_keep_alive
-  fetch('/settings', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({smart_preload_keep_alive: ka, default_keep_alive: ka})}).catch(function(){});
+  _postSettingsFF({smart_preload_keep_alive: ka, default_keep_alive: ka}, function() {
+    document.querySelectorAll('.ka-btn').forEach(function(b) { b.classList.remove('on'); });
+    if (el) el.classList.remove('on');
+  });
 }
 
 function setDefaultKeepalive(ka, el) {
