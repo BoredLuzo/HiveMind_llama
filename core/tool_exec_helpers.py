@@ -184,7 +184,8 @@ def _track_edit_noop(dname, dresult, path, round_state) -> str | None:
     )
 
 
-def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "") -> None:
+def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "",
+                        range_read: bool = False) -> None:
     """Read-file ladder tracker (S17) — mutates trs.ladder counters.
 
     PATH-RESET (2026-09-09): only repeated reads of the SAME path escalate.
@@ -192,8 +193,13 @@ def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "") -> N
     the counter (live: 3 legit reads of different files fired the ladder).
     LADDER-PERSIST: counters live in ToolRoundState across rounds — a local
     reset every round made the guard dead for 1-call rounds.
+    RANGE-READ-NEUTRAL (2026-09-15): start_line/end_line reads are TARGETED
+    lookups (e.g. the write-salvage "read the end of the file" guidance),
+    not blind exploration — they neither escalate nor reset.
     """
     if dname == "read_file" and not args_parse_failed:
+        if range_read:
+            return
         if read_path and trs.last_read_path[0] and read_path != trs.last_read_path[0]:
             trs.consecutive_reads[0] = 1
         else:

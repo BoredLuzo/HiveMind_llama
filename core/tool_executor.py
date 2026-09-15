@@ -761,7 +761,13 @@ async def execute_tool_round(
         _register_context_lru(dtool_msgs, trs.tool_ctx_lru, _focus_path, _dname, _dresult,
                               cache_horizon=trs.cache_horizon, superseded=trs.superseded_paths)
         # ── Read-file ladder tracker (persistent across rounds) ──
-        _update_read_ladder(trs, _dname, _args_parse_failed, _focus_path or "")
+        _update_read_ladder(
+            trs, _dname, _args_parse_failed, _focus_path or "",
+            range_read=bool(
+                _dname == "read_file"
+                and (isinstance(_dargs, dict) and (_dargs.get("start_line") or _dargs.get("end_line")))
+            ),
+        )
         if _dname != "task_complete":
             trs.tc_consecutive[0] = 0
         _consecutive_reads = trs.consecutive_reads[0]
