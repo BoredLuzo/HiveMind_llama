@@ -91,6 +91,15 @@ _MOE_TABLE: dict[str, dict] = {
         "measured_bytes_per_token": 6272,
         "calibrated_n_cpu_moe":     35,
     },
+    # Ling-3.0-tiny: hybrid KDA/MLA — most blocks are linear attention with a
+    # CONSTANT state (no per-token KV), so the generic full-attention KV math
+    # (~30 KB/tok) massively overestimated ctx cost and blocked 70k ctx on an
+    # 8 GB card that actually fits. 12 KB/tok covers the few full-attention
+    # layers + recurrent-state growth; refine after a real load if needed.
+    "ling-3.0-tiny": {
+        "active_gpu_gb":            4.8,
+        "measured_bytes_per_token": 12288,
+    },
 }
 
 
