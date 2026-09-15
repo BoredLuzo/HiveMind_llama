@@ -1904,68 +1904,27 @@ async def run_code_duo(ctx):
                             ))
                             return
                         except _VRAMPreFlightError as _vpf:
-                            # dominant pre-flight block → further ctx reduction
-                            # attempts are structurally pointless (3x 4s+ wait + error
-                            # return never reached — AUDIT-FIX 2026-08-04).
-                            # occupancy (~3.6 GB, browser/desktop) blocked hermes
-                            _fb_model = _resolve_fallback_model(
-                                preferred=str(ctx.settings.get("duo_coder_fallback_model", "") or "").strip(),
-                                exclude_mdl=exec_mdl,
-                                num_ctx=min(int(_coder_ctx_try or 8192), 10240),
+                            # NO-SILENT-FALLBACK (2026-09-15, user decision): a
+                            # different (smaller) model must NEVER take over the
+                            # coder role — a fallback model edits files it does
+                            # not understand (live: 9b request, 4b fallback
+                            # edited files blind). Abort with the exact reason
+                            # instead. The ctx/VRAM guard (vram_guard) already
+                            # catches the worst mismatches pre-run; this branch
+                            # is for everything the guard's table misses.
+                            logger.warning(
+                                "[CODER-VRAM] %s not loadable (free=%d MiB, external=%d MiB, ctx_try=%s) — "
+                                "aborting, no fallback",
+                                exec_mdl, _vpf.free_mib, _vpf.external_usage_est_mib, _coder_ctx_try,
                             )
-                            if _fb_model and _fb_model != exec_mdl:
-                                logger.warning(
-                                    "[CODER-VRAM-FALLBACK] %s not loadable (free=%d MiB, external=%d MiB) — "
-                                    "trying fallback %s",
-                                    exec_mdl, _vpf.free_mib, _vpf.external_usage_est_mib, _fb_model,
-                                )
-                                yield await ctx.emit({"type": "status",
-                                    "content": (
-                                        f"⏳ {exec_mdl.split(':')[0]} does not fit into VRAM "
-                                        f"(free={_vpf.free_mib} MiB) — fallback to {_fb_model}…"
-                                    )})
-                                # FB-CTX-FLOOR (2026-09-09): the duo coder
-                                # payload (system + plan + task) is ~8k tokens
-                                # BEFORE the first tool round — a 10k fallback
-                                # slot starts CTX-FULL and dies in the
-                                # compression 3-strike guard with zero output
-                                # (live finding). Floor at 20k; the VRAM
-                                # pre-flight below still guards the load.
-                                _fb_ctx = max(min(_coder_ctx_try, 10240), 20480)
-                                try:
-                                    _coder_port = await asyncio.wait_for(
-                                        _lsm2.ensure_loaded(_fb_model, num_ctx=_fb_ctx, n_parallel=1),
-                                        timeout=150.0,
-                                    )
-                                    _coder_load_ok = True
-                                    _coder_ctx_post = _fb_ctx
-                                    _cached_coder_port = _coder_port
-                                    _cached_coder_port_ctx = _fb_ctx
-                                    exec_mdl = _fb_model
-                                    coder_mdl = _fb_model
-                                    _duo_pinned.add(_fb_model)
-                                    # CTX-CLAMP (2026-09-07): effective coder ctx
-                                    # follows the fallback slot, else mismatch stop.
-                                    _coder_ctx_override = _fb_ctx
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"✅ Coder fallback active: {_fb_model} (ctx={_fb_ctx})"})
-                                    break
-                                except Exception as _fb_err:
-                                    logger.warning(
-                                        "[CODER-VRAM-FALLBACK] Fallback %s failed: %s",
-                                        _fb_model, str(_fb_err)[:120],
-                                    )
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"⛔ Fallback {_fb_model} also not loadable."})
                             _duo_hard_stop = True
                             yield await ctx.emit({"type": "status",
                                 "content": (
-                                    f"⛔ Coder ({exec_mdl.split(':')[0]}) not loadable: "
-                                    f"~{_vpf.external_usage_est_mib} MiB external usage"
-                                    + (" — impossible even with small ctx (fixed costs)"
-                                       if _vpf.fixed_cost_dominant else "")
-                                    + ". Close GPU-heavy applications or switch model — "
-                                    "run ended with a resume block."
+                                    f"⛔ Coder ({exec_mdl}) does not fit into VRAM: "
+                                    f"needed at ctx {_coder_ctx_try}, only {_vpf.free_mib} MiB free "
+                                    f"(~{_vpf.external_usage_est_mib} MiB used by other apps). "
+                                    "No fallback loaded — reduce the ctx slider, close GPU-heavy "
+                                    "apps, or pick a model that fits. Run ended with a resume block."
                                 )})
                             _write_pre_loop_resume()
                             break
