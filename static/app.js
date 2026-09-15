@@ -5936,7 +5936,8 @@ function handleEvent(d) {
       'tool_round_error':  { icon: '\u26D4', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'Tool round error - run stopped' },
       'verification_required': { icon: '\u26A0', color: '#f0ad4e', border: 'rgba(240,173,78,.35)', label: 'Verification pending - resume available' },
       'halted':            { icon: '\u23F9', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Run halted' },
-      'timeout_guard':     { icon: '\u23F1', color: '#e09030', border: 'rgba(224,144,48,.3)',   label: 'Run timeout (guard)' },
+      'timeout_guard':     { icon: '\u23F1', color: '#e09030', border: 'rgba(224,144,48,.3)',  label: 'Run timeout (guard)' },
+      'vram_guard':        { icon: '\u26D4', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'VRAM too small for coder ctx — reduce the ctx slider' },
     };
     var _sr = _stopMap[d.stop_reason] || _stopMap['completed'];
     if (_sr && d.stop_reason) {
@@ -5959,7 +5960,7 @@ function handleEvent(d) {
     }
     // RETRY-BUTTON (2026-08-31): offer a "Retry" on error/abort runs,
     // which resends the last prompt (help with coder-load failures etc.).
-    var _retryReasons = { error: 1, aborted: 1, hard_stop: 1, tool_round_error: 1, timeout: 1, timeout_guard: 1, stuck_in_loop: 1, loop_detected: 1, blocked: 1, max_tool_rounds: 1, verification_required: 1, halted: 1 };
+    var _retryReasons = { error: 1, aborted: 1, hard_stop: 1, tool_round_error: 1, timeout: 1, timeout_guard: 1, stuck_in_loop: 1, loop_detected: 1, blocked: 1, max_tool_rounds: 1, verification_required: 1, halted: 1, vram_guard: 1 };
     if (d.stop_reason && _retryReasons[d.stop_reason] && S.lastPrompt) {
       var _rtWrap = document.createElement('div');
       _rtWrap.className = 'msg divider';
