@@ -100,11 +100,15 @@ def _store_pending_remainder(path: str, content: str, written_chars: int) -> Non
     if len(_remainder) > _PENDING_MAX_CHARS:
         _remainder = _remainder[:_PENDING_MAX_CHARS]
         _truncated = True
+    # DEFERRED import: tools.runner imports this package top-level
+    from tools.runner import _current_run_id as _cv
+    _owner_run = _cv.get(None)
     _pending_splits[_split_key(path)] = {
         "content": _remainder,
         "ts": time.time(),
         "total": len(content),
         "truncated": _truncated,
+        "run_id": _owner_run,
     }
 
 
@@ -311,6 +315,7 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     _looks_marker = _looks_like_split_marker(content)
     _prune_pending_splits()
     _pending_now = _pending_splits.get(_split_key_)
+    from tools.runner import _current_run_id as _current_run_id_cv
 
     if _looks_marker or _pending_now is not None:
         if _looks_marker:
@@ -370,6 +375,18 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
         # only the model's small chunk landed ("append added just one line").
         # The remainder is the authoritative tail of the original content; the
         # model's chunk would duplicate/misalign with it. Reject instead.
+        # CROSS-RUN-STALE (2026-09-15): a remainder owned by a DIFFERENT (dead)
+        # run must not block this run's legitimate appends — drop it silently.
+        if (_pending_now is not None
+                and _pending_now.get("run_id")
+                and _pending_now.get("run_id") != _current_run_id_cv.get(None)):
+            import logging as _lg_fa
+            _lg_fa.getLogger("hivemind.tools").debug(
+                "[AUTO-SPLIT] stale pending from run %s dropped (current run %s)",
+                _pending_now.get("run_id"), _current_run_id_cv.get(None))
+            _pending_splits.pop(_split_key_, None)
+            _pending_now = None
+
         if content and _pending_now is not None:
             # ABANDON-VERB (2026-09-15): the model can explicitly drop the
             # stored remainder when it has genuinely moved on.

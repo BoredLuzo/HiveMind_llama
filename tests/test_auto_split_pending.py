@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+import tools.runner as _R
 
 from tools.handlers import file_ops as _F  # noqa: E402
 
@@ -190,6 +191,29 @@ def main():
             ok("E4: abandoned remainder -> later marker errors (no ghost drain)")
         else:
             fail("E4: stale pending resurrected", re3[:120])
+
+        # F: pending owned by run A must not block run B's appends
+        # entries carry their owning run_id;
+        # a different current run drops the stale remainder silently.
+        ff = wd / "f.txt"
+        tok_a = _R._current_run_id.set("run-A")
+        try:
+            asyncio.run(_F._inline_tool_write_file(
+                {"path": "f.txt", "content": "part1\n", "_tool_name": "write_file"}, wd, None))
+            # force a pending remainder independent of the write path limits
+            _F._store_pending_remainder(str(ff), "part1\nSTALE\n", 7)
+        finally:
+            _R._current_run_id.reset(tok_a)
+        tok_b = _R._current_run_id.set("run-B")
+        try:
+            rf2 = asyncio.run(_F._inline_tool_write_file_append(
+                {"path": "f.txt", "content": "run-B chunk\n", "_tool_name": "write_file_append"}, wd, None))
+        finally:
+            _R._current_run_id.reset(tok_b)
+        if "AUTO_SPLIT_PENDING" not in rf2 and "run-B chunk" in ff.read_text(encoding="utf-8"):
+            ok("F1: fremd-run Pending blockt den neuen Run nicht (still verworfen)")
+        else:
+            fail("F1: cross-run stale", rf2[:120])
 
     finally:
         shutil.rmtree(str(wd), ignore_errors=True)
