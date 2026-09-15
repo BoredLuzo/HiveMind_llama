@@ -621,6 +621,16 @@ async def run_code_duo(ctx):
         if ctx.chat_id:
             _clear_pause_state(ctx.chat_id)
         _cleanup_governor(ctx.chat_id or ctx.run_id)
+        # VRAM-GUARD-DONE (2026-09-15): this used to be a silent return — no
+        # done event, so the UI just showed nothing happening ("passiert nix").
+        # The vram guard already emitted the reason as a status event; close
+        # the stream properly now.
+        logger.warning(
+            "[VRAM-GUARD] run aborted before any model load (coder ctx/VRAM "
+            "vs budget) — sending done (stop_reason=vram_guard)")
+        yield await ctx.emit(ctx.done_event(
+            round(time.time() - ctx.t_total, 1), "vram_guard",
+            **ctx.collect_done_metrics()))
         return
 
     # Unpack state to locals for Phase B+ backward compatibility
