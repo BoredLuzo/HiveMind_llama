@@ -554,13 +554,25 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
                 "Create one first via run_bash: 'python -m venv .venv', then retry "
                 "install_package (it will use .venv automatically).",
                 tool="install_package")
-        _cmd = f'"{_venv_py}" -m pip install {packages}'
+        _cmd = f'"{_venv_py}" -m pip install --prefer-binary {packages}'
     else:
         _cmd = _INSTALL_CMDS[manager].format(pkgs=packages)
     if dev and manager == "npm":
         _cmd += " --save-dev"
     from tools.runner import _run_inline_tool as _dispatch_bash
-    return await _dispatch_bash("run_bash", {"cmd": _cmd}, workspace_lock=workspace_lock)
+    _res = await _dispatch_bash("run_bash", {"cmd": _cmd}, workspace_lock=workspace_lock)
+    # SOURCE-BUILD-HINT (2026-09-15): when pip falls back to building an sdist
+    # (no prebuilt wheel for this venv's Python version — e.g. pygame on
+    # 3.14), the compiler wall is useless to the model. Translate it.
+    if "RUN_BASH_NONZERO" in _res and ("Building wheel for" in _res or "Preparing metadata" in _res or "config_win.py" in _res):
+        _res += (
+            "\n\n[HINT] pip fell back to building from SOURCE — this package has no "
+            "prebuilt wheel for your venv's Python version (e.g. pygame on 3.14). "
+            "Don't retry the same install. Options: use a wheel-distributed variant "
+            "(e.g. 'pygame-ce'), pick a pure-python alternative, or recreate the "
+            "venv with a Python version that ships wheels for this package."
+        )
+    return _res
 
 
 async def _inline_tool_start_background(args: dict, _workspace: Path, _workspace_lock: str | None) -> str:
