@@ -438,6 +438,10 @@ def build_planner_user_prompt(
             "pygame-ce, tkinter game loops, React, etc.), the plan MUST contain at least "
             "one 'websearch:' step for the CURRENT recommended setup + core API basics of "
             "that framework. Install commands and APIs change; never plan them from memory.\n"
+            "FORMAT: '| websearch: ...' is an extra FIELD on a normal step — attach it to "
+            "the file-step that needs the research (e.g. '2. file: src/main.js | touch: "
+            "scene setup | websearch: current three.js CDN + r160 API changes'). NEVER "
+            "create standalone websearch-only steps: every plan step needs a file: field.\n"
             "When in doubt: search."
         )
     return msg

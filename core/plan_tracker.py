@@ -176,8 +176,33 @@ def _parse_planner_steps(plan_text: str) -> list[PlanStep]:
     seen_ids: set[str] = set()
 
     matches = list(_STEP_LINE_RE.finditer(plan_text))
-    if not matches:
-        matches = list(_STEP_FALLBACK_RE.finditer(plan_text))
+    # SUPPLEMENT (2026-09-15): the strict regex demands touch:+decision:; a
+    # file-step missing decision: (live: "3. file: src/solarSystem.js | touch:
+    # orbital mechanics") was dropped entirely because the fallback only ran
+    # when NOTHING matched. Now per-line: fallback matches outside already
+    # covered spans are added too.
+    if matches:
+        _covered = [(m.start(), m.end()) for m in matches]
+        for _fb in _STEP_FALLBACK_RE.finditer(plan_text):
+            if any(s <= _fb.start() < e for (s, e) in _covered):
+                continue
+            matches.append(_fb)
+        matches.sort(key=lambda m: m.start())
+
+    # WEBSEARCH-FOLD (2026-09-15): small planners sometimes emit standalone
+    # "| websearch: ..." steps without a file: field (the format contract
+    # expects websearch as a FIELD on a file-step). Those lines used to be
+    # silently dropped, so the research intent vanished. Fold each one into
+    # the NEXT file-step (or the last one if none follows).
+    _ws_orphan_re = re.compile(r"^\s*(?:[•*\-–]\s*)?(?:\d+[\.\)]\s*)?\|?\s*websearch:\s*(.+?)\s*$", re.MULTILINE)
+    _websearch_orphans: list[tuple[int, str]] = []
+    for _m in _ws_orphan_re.finditer(plan_text):
+        _line_start = _m.start()
+        _line_end = plan_text.find("\n", _m.end())
+        _line = plan_text[_line_start:_line_end if _line_end != -1 else len(plan_text)]
+        if "file:" in _line:
+            continue  # a real file-step that merely contains websearch — keep as-is
+        _websearch_orphans.append((_m.end(), _m.group(1).strip()))
 
     for m in matches:
         step_id = m.group(1)
@@ -207,6 +232,20 @@ def _parse_planner_steps(plan_text: str) -> list[PlanStep]:
             produces=[f"diff in {file_path}"] if file_path else [],
             done_when=[f"edit to {file_path} complete"] if file_path else [],
         ))
+
+    # WEBSEARCH-FOLD post-pass: an orphaned "| websearch: ..." line reads as a
+    # sub-bullet of the step it sits under — fold it into the PRECEDING
+    # file-step; orphans before the first step fold into the first step.
+    if _websearch_orphans and steps:
+        for (pos, t) in _websearch_orphans:
+            _target = None
+            for _s in steps:
+                _s_pos = next((m.start() for m in matches if m.group(1) == _s.id), None)
+                if _s_pos is not None and _s_pos <= pos:
+                    _target = _s
+            _target = _target or steps[0]
+            _target.intent = (_target.intent + " | " if _target.intent else "") + f"websearch: {t}"
+            _target.keywords = _extract_keywords(_target.intent) or _target.keywords
 
     return steps
 
