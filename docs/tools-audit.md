@@ -64,6 +64,7 @@ rest are **OPEN** (low priority, no behavior bug in the default path).
 | 42 | write_file_append: remainder >250k chars silently truncated, drain reported "full content written" | **FIXED** — capped flag + honest `AUTO_SPLIT_REMAINDER_CAPPED` error |
 | 43 | empty content destroyed a pending AUTO-SPLIT remainder (pop before empty-check) | **FIXED** — remainder survives; error suggests the marker |
 | 44a | write_file_append glued the first appended line onto a non-newline-terminated file end (looked like "append added only one line") | **FIXED** — newline boundary inserted + honest line count (2026-09-15) |
+| 44c | write_file/edit_file could collapse a large file to a single line (truncated-write confusion -> full rewrite with one line, or a stale SEARCH block matching the whole file) | **FIXED** — SHRINK-GUARD: replacing >=30 content lines with <=3 requires explicit `confirm_shrink: true` (2026-09-15) |
 | 44b | a self-made model continuation chunk silently destroyed a pending AUTO-SPLIT remainder → truncated file, only the chunk landed | **FIXED** — AUTO_SPLIT_PENDING rejection keeps the remainder; marker drain unaffected (2026-09-15) |
 | 44 | duo_full write-guard covers `write_file` only — write_file_append bypasses READ_REQUIRED on existing files | OPEN (append semantics make blind-guard less harmful; documented) |
 | 45 | undo_last (no path) = git reset to last checkpoint — wipes ALL chunks' work, can revert to a PREVIOUS run's checkpoint; schema text doesn't say so | OPEN (documented risk; git_autocommit users unaffected) |

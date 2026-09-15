@@ -695,6 +695,20 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
                     f"Your new content is identical to the existing file content.",
                     tool=_display_tool,
                 )
+            # SHRINK-GUARD (2026-09-15): full rewrite collapsing a large file
+            # to a couple of lines — same rationale as the blocks-path guard.
+            _orig_lines_rw = len([l for l in str(content or "").replace("\r\n", "\n").splitlines() if l.strip()])
+            _new_lines_rw = len([l for l in content_new.replace("\r\n", "\n").splitlines() if l.strip()])
+            if (not args.get("confirm_shrink")
+                    and _orig_lines_rw >= 30 and _new_lines_rw <= 3):
+                return _tool_error_response(
+                    "EDIT_FILE_SUSPICIOUS_SHRINK",
+                    f"This full rewrite would shrink '{p}' from {_orig_lines_rw} to "
+                    f"{_new_lines_rw} content lines. Almost always this is a truncated "
+                    "or mistaken write, not a real refactor. If you REALLY want a tiny "
+                    "file: read_file it first, then resend this exact call with "
+                    "\"confirm_shrink\": true.",
+                    tool=_display_tool)
             def _write_rewrite() -> None:
                 _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
                 try:
@@ -752,6 +766,23 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
                 details={"errors": errors[:8]})
 
         final = working.replace("\n", "\r\n") if _has_crlf else working
+
+        # SHRINK-GUARD (2026-09-15): a blocks-apply that collapses a large file
+        # to almost nothing is virtually always a stale/malformed SEARCH block
+        # (live: "write_file replaced everything with a single line"), never a
+        # deliberate refactor. Require an explicit confirmation instead of
+        # silently destroying the file.
+        _orig_lines = len([l for l in str(content or "").replace("\r\n", "\n").splitlines() if l.strip()])
+        _new_lines = len([l for l in final.replace("\r\n", "\n").splitlines() if l.strip()])
+        if (not args.get("confirm_shrink")
+                and _orig_lines >= 30 and _new_lines <= 3):
+            return _tool_error_response(
+                "EDIT_FILE_SUSPICIOUS_SHRINK",
+                f"This would shrink '{p}' from {_orig_lines} to {_new_lines} content "
+                "lines. That is almost always a malformed SEARCH/REPLACE block, not a "
+                "real refactor. If you REALLY want a tiny file: read_file it first, "
+                "then resend this exact call with \"confirm_shrink\": true.",
+                tool=_display_tool)
 
         if final.replace("\r\n", "\n") == str(content or "").replace("\r\n", "\n"):
             return _tool_error_response(
