@@ -168,6 +168,16 @@ SPECS: list[dict] = [
         "mmproj_regex": [],
     },
     {
+        "key": "qwen3.5:9b-mtp",
+        "tag": "qwen3.5:9b-mtp",
+        "desc": "Qwen3.5 9B MTP (Heavy Duo-Coder, MTP spec-decode, ~6GB VRAM)",
+        "repo": "unsloth/Qwen3.5-9B-MTP-GGUF",
+        "file_regex": [
+            r"(?i)^qwen3\.5-9b-q4_k_m\.gguf$",
+        ],
+        "mmproj_regex": [],
+    },
+    {
         "key": "qwen3.5:2b-mtp",
         "tag": "qwen3.5:2b-mtp",
         "desc": "Qwen3.5 2B MTP (Refiner, MTP spec-decode, ~1.3GB VRAM)",
