@@ -433,6 +433,11 @@ def build_planner_user_prompt(
             "mark it for web search. A wrong API assumption breaks the build; a search takes 2 seconds.\n"
             "Mark steps with: | websearch: [what to search for]\n"
             "Example: 3. file: src/api/client.py | touch: APIClient.connect | decision: use OAuth2 flow | websearch: latest OAuth2 RFC for device authorization | risk: API change breaking auth\n"
+            "MANDATORY for NEW apps: if the task creates a new game, GUI, or web app "
+            "(any framework/library not already verified in this workspace — pygame, "
+            "pygame-ce, tkinter game loops, React, etc.), the plan MUST contain at least "
+            "one 'websearch:' step for the CURRENT recommended setup + core API basics of "
+            "that framework. Install commands and APIs change; never plan them from memory.\n"
             "When in doubt: search."
         )
     return msg
