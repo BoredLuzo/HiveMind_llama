@@ -359,7 +359,11 @@ def _build_dtool_base(system_content, explore_history, plan_content, bridge_msg)
 
 
 _FALLBACK_MODEL_PREFERENCE = (
-    "qwen3.5:4b", "qwen3.5:2b-ud", "qwen3.5:2b", "lfm2.5:2.6b",
+    # MTP variants first (2026-09-15): the plain tags resolve to the same
+    # GGUFs nowadays but WITHOUT the mtp/reasoning launch flags — a fallback
+    # to "qwen3.5:4b" ran the coder without spec-decode and reasoning off.
+    "qwen3.5:4b-mtp", "qwen3.5:2b-mtp", "qwen3.5:4b", "qwen3.5:2b-ud",
+    "qwen3.5:2b", "lfm2.5:2.6b",
     "ministral:3b-instruct-2410", "gemma-4:e4b-it-obliterated", "qwen3.5:0.8b-ud",
 )
 
