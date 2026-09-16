@@ -39,8 +39,12 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
     # anchor + char-level ratio are too brittle — one drifted line inside the
     # block (or a changed first line) killed the match entirely. For blocks
     # >= 20 lines: slide a line-window over the file, gate with quick_ratio on
-    # LINE lists, accept at line-ratio >= 0.7. Small blocks keep the strict
-    # first-line + char-ratio 0.85 path.
+    # LINE lists, accept at line-ratio >= 0.85 — drift-tolerant for single
+    # changed lines (197/200 = 0.985 passes), but a window matching a wrong
+    # region at <= 15% similarity never does. The line-granular splice below
+    # replaces exactly the o_len raw lines, so a match can never eat
+    # neighboring lines. Small blocks keep the strict first-line + char-ratio
+    # 0.85 path.
     large_block = o_len >= 20
 
     for start in range(max(0, c_len - o_len + 1)):
@@ -50,31 +54,30 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
         cand = "\n".join(c_lines[start:start + o_len])
         if large_block:
             sm = difflib.SequenceMatcher(None, old_lines, c_lines[start:start + o_len])
-            if sm.quick_ratio() < 0.6:
+            if sm.quick_ratio() < 0.7:
                 continue
             ratio = sm.ratio()
-            _threshold = 0.7
         else:
             ratio = difflib.SequenceMatcher(None, o_norm, cand).ratio()
-            _threshold = 0.85
 
         if ratio > best_ratio:
             best_ratio = ratio
             best_start = start
             best_count = 1
-        elif ratio == best_ratio and ratio >= _threshold:
+        elif ratio == best_ratio:
             best_count += 1
 
-    if large_block:
-        # repetitive code ties windows at near-equal line ratios; the strict
-        # ambiguity counter would kill valid matches. Best window wins.
-        if best_ratio < 0.7:
-            return None
-    elif best_ratio < 0.85 or best_count > 1:
+    if best_ratio < 0.85:
+        return None
+    if not large_block and best_count > 1:
         return None
 
-    content_lines_keepends = content.splitlines(True)
-    char_offset = sum(len(l) for l in content_lines_keepends[:best_start])
-    orig_match = "\n".join(content.splitlines()[best_start:best_start + o_len])
-    result = content[:char_offset] + new_str + content[char_offset + len(orig_match):]
+    # LINE-GRANULAR SPLICE (2026-09-16): cut exactly the o_len raw lines via
+    # keepends — the old char-offset math left CRLF/terminator residue behind
+    # the replacement (blank-line artifacts).
+    keepends = content.splitlines(True)
+    if best_start >= len(keepends):
+        return None
+    new_body = new_str if new_str.endswith("\n") else new_str + "\n"
+    result = "".join(keepends[:best_start]) + new_body + "".join(keepends[best_start + o_len:])
     return result if result != content else None
