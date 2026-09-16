@@ -35,21 +35,42 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
     best_ratio = 0.0
     best_count = 0
 
+    # LARGE-BLOCK MODE (2026-09-16): for big SEARCH blocks the first-line
+    # anchor + char-level ratio are too brittle — one drifted line inside the
+    # block (or a changed first line) killed the match entirely. For blocks
+    # >= 20 lines: slide a line-window over the file, gate with quick_ratio on
+    # LINE lists, accept at line-ratio >= 0.7. Small blocks keep the strict
+    # first-line + char-ratio 0.85 path.
+    large_block = o_len >= 20
+
     for start in range(max(0, c_len - o_len + 1)):
-        if first_search and c_lines[start].strip() != first_search:
+        if not large_block and first_search and c_lines[start].strip() != first_search:
             continue
 
         cand = "\n".join(c_lines[start:start + o_len])
-        ratio = difflib.SequenceMatcher(None, o_norm, cand).ratio()
+        if large_block:
+            sm = difflib.SequenceMatcher(None, old_lines, c_lines[start:start + o_len])
+            if sm.quick_ratio() < 0.6:
+                continue
+            ratio = sm.ratio()
+            _threshold = 0.7
+        else:
+            ratio = difflib.SequenceMatcher(None, o_norm, cand).ratio()
+            _threshold = 0.85
 
         if ratio > best_ratio:
             best_ratio = ratio
             best_start = start
             best_count = 1
-        elif ratio == best_ratio and ratio >= 0.85:
+        elif ratio == best_ratio and ratio >= _threshold:
             best_count += 1
 
-    if best_ratio < 0.85 or best_count > 1:
+    if large_block:
+        # repetitive code ties windows at near-equal line ratios; the strict
+        # ambiguity counter would kill valid matches. Best window wins.
+        if best_ratio < 0.7:
+            return None
+    elif best_ratio < 0.85 or best_count > 1:
         return None
 
     content_lines_keepends = content.splitlines(True)

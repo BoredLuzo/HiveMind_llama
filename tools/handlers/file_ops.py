@@ -775,10 +775,17 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
                     applied += 1
                     continue
                 hint = old_n.splitlines()[0][:80] if old_n.strip() else "(empty)"
+                _block_lines = len(old_n.splitlines())
+                _size_tip = (
+                    "\n  Tip: SEARCH block is large — use a SHORT unique anchor instead "
+                    "(3-5 lines around the change), or switch to replace_lines."
+                    if _block_lines > 15 else
+                    "\n  Tip: copy text verbatim from read_file - check indentation and whitespace"
+                )
                 errors.append(
                     f"Block {idx}: SEARCH text not found (fuzzy-match also failed).\n"
                     f"  Looking for: {hint!r}\n"
-                    "  Tip: copy text verbatim from read_file - check indentation and whitespace"
+                    f"{_size_tip}"
                 )
             elif count > 1:
                 errors.append(
