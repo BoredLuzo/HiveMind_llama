@@ -3452,7 +3452,11 @@ function appendToken(t) {
   if (!S.curAgent) return;
   t = _stripToolCallXmlChunk(t);
   t = _sanitizeRuntimeToken(t);
-  if (!t || !String(t).trim()) return;
+  // WHITESPACE-GUARD (2026-09-16): chunks that are ONLY a space used to be
+  // dropped here — llama.cpp splits streams at spaces before digits, so
+  // "September" + " " + "2026" rendered as "September2026". A whitespace
+  // chunk is meaningful; drop only null/empty.
+  if (t === null || t === undefined || t === "") return;
 
   // Clear load indicator on first token
   if (S.curAgent.lt) {
