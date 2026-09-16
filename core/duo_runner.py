@@ -3302,7 +3302,16 @@ async def run_code_duo(ctx):
                         nonlocal _loop_detected, _read_counts, _last_write_round, _explore_only_rounds, _round_wrote_file
                         if tn == "run_bash":
                             ctx.exec_ctrl.transition(AgentState.VERIFY)
-                            ctx.exec_ctrl.record_output(tr, tool_name="run_bash")
+                            # STUCK-SIGNATURE (2026-09-16): record the COMMAND
+                            # together with the result. Different verification
+                            # commands all return "[run_bash: exit 0 — no output]"
+                            # (successful checks are silent!) — result-only
+                            # signatures flagged that as a stuck loop (live: 3
+                            # different file checks killed the run).
+                            ctx.exec_ctrl.record_output(
+                                str(tr) + "\n[cmd] " + str((ta or {}).get("cmd", ""))[:200],
+                                tool_name="run_bash",
+                            )
                             if ctx.exec_ctrl.is_stuck():
                                 await ctx.emit({"type": "token", "content": f"\n⚠ [Until-Finished] Same test output {ctx.exec_ctrl.max_repeats}× — no progress. Declaring blocker and stopping.\n"})
                                 _ld_setter(2604); _loop_detected = True
