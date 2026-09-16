@@ -34,10 +34,10 @@ def parse_tool_args(raw) -> dict:
 # cap 3.3 (documented real value).
 _WRITE_LIMIT_TIERS = {
     "big":   (20000, 16000),
-    "mid":   (10000, 8000),   # 7-9b
-    "small": (7000, 5000),    # 3-6b
-    "tiny":  (5000, 3500),
-}
+    "mid":   (18000, 14000),   # 7-9b
+    "small": (15000, 12000),   # 3-6b — 4b models emit 9-13k chars routinely
+    "tiny":  (5000, 3500),     # (live spark run); 7000 forced an auto-split on
+}                              # every big write and broke the append flow
 _WRITE_BUDGET_OVERHEAD_CHARS = 2000  # think + tool_call-Wrapper + path
 
 

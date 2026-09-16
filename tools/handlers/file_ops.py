@@ -313,6 +313,7 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     # Append gedrained, nie literal geschrieben.
     _split_key_ = _split_key(p)
     _looks_marker = _looks_like_split_marker(content)
+    _split_discard_note = ""
     _prune_pending_splits()
     _pending_now = _pending_splits.get(_split_key_)
     from tools.runner import _current_run_id as _current_run_id_cv
@@ -398,17 +399,30 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
                         "write. read_file the end of it before appending, so you "
                         "know exactly where it stands.")
             _pend_chars = len(str(_pending_now.get("content", "")))
-            return _tool_error_response(
-                "AUTO_SPLIT_PENDING",
-                f"[AUTO-SPLIT] '{p}' still has a {_pend_chars}-char remainder stored "
-                "server-side. Do NOT write your own continuation — it would duplicate "
-                "or misalign with the stored tail. Two options:\n"
-                f"1. Finish the intended content: write_file_append(path, content={AUTO_SPLIT_CONTINUE_MARKER})"
-                " (bare marker token, no quotes).\n"
-                "2. Abandon the stored remainder (you rewrote your plan): "
-                "write_file_append(path, content=<AUTO_SPLIT_ABANDON>) — then read_file "
-                "the end of the file and append fresh content.",
-                tool="write_file_append")
+            # INSIST-ESCALATION (2026-09-16): a substantial non-marker chunk on
+            # the 2nd consecutive attempt means the model will not use the
+            # marker — rejecting forever just wedges the run (live spark:
+            # append chunks of 6-9k chars rejected in a loop). On the 2nd
+            # attempt: discard the remainder and let the chunk append.
+            if len(str(content)) >= 500:
+                _pending_now["refusals"] = int(_pending_now.get("refusals", 0)) + 1
+                if _pending_now["refusals"] >= 2:
+                    _pending_splits.pop(_split_key_, None)
+                    _pending_now = None
+                    _split_discard_note = (" [stored remainder discarded — read_file "
+                                           "the file end to verify completeness]")
+            if content and _pending_now is not None:
+                return _tool_error_response(
+                    "AUTO_SPLIT_PENDING",
+                    f"[AUTO-SPLIT] '{p}' still has a {_pend_chars}-char remainder stored "
+                    "server-side. Do NOT write your own continuation — it would duplicate "
+                    "or misalign with the stored tail. Two options:\n"
+                    f"1. Finish the intended content: write_file_append(path, content={AUTO_SPLIT_CONTINUE_MARKER})"
+                    " (bare marker token, no quotes).\n"
+                    "2. Abandon the stored remainder (you rewrote your plan): "
+                    "write_file_append(path, content=<AUTO_SPLIT_ABANDON>) — then read_file "
+                    "the end of the file and append fresh content.",
+                    tool="write_file_append")
         if content:
             _pending_splits.pop(_split_key_, None)
         else:
@@ -442,7 +456,7 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
         _appended = ("\n" + content) if _boundary["note"] else content
         lines = _appended.count("\n")
         _lint = await _auto_lint_result(p, workspace)
-        return f"[Appended: {p} (+{lines} lines, total {total} bytes)]{_boundary['note']}{_lint}"
+        return f"[Appended: {p} (+{lines} lines, total {total} bytes)]{_boundary['note']}{_split_discard_note}{_lint}"
     except Exception as e:
         return _tool_error_response(
             "WRITE_FILE_APPEND_FAILED",
