@@ -6324,21 +6324,14 @@ function handleEvent(d) {
         + '<span style="color:#22c55e;font-weight:700;margin-left:8px">+' + _dsAdd + '</span>'
         + '<span style="color:#e06060;font-weight:700;margin-left:6px">&minus;' + _dsRem + '</span>'
         + '<span style="color:var(--tx2);margin-left:10px">' + _dsHunks + ' hunks</span>'
-        + '<span style="color:var(--tx2);margin-left:10px;font-size:10px">diff \u2014 chip click \u2192 full file</span>'
-        + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated \u2014 numbers complete)</span>' : '');
-      // DIFF-FIX (2026-09-17): this branch used to crash — _trPre was used at
-      // the old `_trPre.innerHTML` line before its `var` declaration created
-      // it, the TypeError died in the SSE catch, and NO result block was ever
-      // appended for successful write/edit rows (path-only chips, no diff).
-      // Now: render the actual unified diff body with +/- colouring. Small
-      // diffs auto-open; the chip still opens the live-code panel for context.
+        + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated)</span>' : '');
       var _dsIdx = _trFull.indexOf('[DIFFSTAT]');
       var _dsBody = _dsIdx >= 0 ? _trFull.slice(_dsIdx).replace(/^\[DIFFSTAT\][^\n]*\n?/, '') : _trFull;
       _dsBody = _dsBody.replace(/```[a-z]*\s*$/, '').trim();
       var _trPre = document.createElement('pre');
       _trPre.className = 'tool-result-pre';
       _trPre.innerHTML = _renderDiffBody(_dsBody);
-      if ((_dsAdd + _dsRem) <= 40 && !_dsTrunc) _trBlock.open = true;
+      _trBlock.open = true;
       _trBlock.appendChild(_trSumDs);
       _trBlock.appendChild(_trPre);
       _appendToolEl(_trBody, _trBlock);
