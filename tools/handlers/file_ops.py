@@ -681,6 +681,64 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
         _has_crlf = "\r\n" in content
         working = content.replace("\r\n", "\n")
 
+        # LINE MODE (2026-09-17): start_line/end_line given -> `edits` is the
+        # replacement text for exactly that range (replaces the old separate
+        # replace_lines tool; same bounds, but WITH noop/shrink guards).
+        if args.get("start_line") is not None or args.get("end_line") is not None:
+            try:
+                _s = max(1, int(args.get("start_line") or 0))
+                _e = int(args.get("end_line") if args.get("end_line") is not None else _s)
+            except (TypeError, ValueError):
+                return _tool_error_response(
+                    "EDIT_FILE_INVALID_ARGS",
+                    "start_line/end_line must be integers.",
+                    tool=_display_tool)
+            _wlines = working.splitlines()
+            if _e < _s:
+                return _tool_error_response(
+                    "EDIT_FILE_INVALID_ARGS",
+                    f"end_line ({_e}) is before start_line ({_s}).",
+                    tool=_display_tool)
+            if _e > len(_wlines) + 1:
+                return _tool_error_response(
+                    "EDIT_FILE_INVALID_ARGS",
+                    f"end_line {_e} out of bounds (file has {len(_wlines)} lines; "
+                    f"len+1 = append at end).",
+                    tool=_display_tool)
+            _repl = str(edits_raw).replace("\r\n", "\n")
+            _new_lines = _wlines[:_s - 1] + _repl.split("\n") + _wlines[_e:]
+            _new_content_lf = "\n".join(_new_lines)
+            _new_content = _new_content_lf.replace("\n", "\r\n") if _has_crlf else _new_content_lf
+            if _new_content_lf.strip() == working.strip():
+                return _tool_error_response(
+                    "EDIT_FILE_NOOP",
+                    f"no change — lines {_s}-{_e} already contain exactly this content.",
+                    tool=_display_tool)
+            _orig_n = len([l for l in working.splitlines() if l.strip()])
+            _new_n = len([l for l in _new_content_lf.splitlines() if l.strip()])
+            if (not args.get("confirm_shrink") and _orig_n >= 30 and _new_n <= 3):
+                return _tool_error_response(
+                    "EDIT_FILE_SUSPICIOUS_SHRINK",
+                    f"This would shrink '{p}' from {_orig_n} to {_new_n} content lines. "
+                    "If you REALLY want that: read_file first, then resend with "
+                    "\"confirm_shrink\": true.",
+                    tool=_display_tool)
+
+            def _write_line_mode() -> None:
+                _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+                try:
+                    with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
+                        _f.write(_new_content)
+                    os.replace(_tmp_path, str(p))
+                except Exception:
+                    try: os.unlink(_tmp_path)
+                    except Exception: pass
+                    raise
+            await asyncio.to_thread(_write_line_mode)
+            _lint_lm = await _auto_lint_result(p, workspace)
+            _delta = _new_n - _orig_n
+            return f"[{_display_tool}: lines {_s}-{_e} replaced ({_delta:+d} lines)]{_lint_lm}"
+
         # Auto-convert JSON old_str/new_str format to SEARCH/REPLACE blocks
         parsed = _try_convert_json_edits(edits_raw)
         parsed = parsed.replace("\r\n", "\n")
@@ -778,7 +836,7 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
                 _block_lines = len(old_n.splitlines())
                 _size_tip = (
                     "\n  Tip: SEARCH block is large — use a SHORT unique anchor instead "
-                    "(3-5 lines around the change), or switch to replace_lines."
+                    "(3-5 lines around the change), or use start_line/end_line."
                     if _block_lines > 15 else
                     "\n  Tip: copy text verbatim from read_file - check indentation and whitespace"
                 )

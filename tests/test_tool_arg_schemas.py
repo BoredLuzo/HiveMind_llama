@@ -89,7 +89,10 @@ check("tool names unique", len(set(_names)) == len(_names))
 
 # ── Allowlists / Subsets konsistent ─────────────────────────────────────
 # Externe Tools, die NICHT in _INLINE_CODING_TOOLS liegen, aber real existieren.
-_KNOWN_EXTERNAL = {"web_search", "web_fetch", "hivemind_pipeline"}
+_KNOWN_EXTERNAL = {"web_search", "web_fetch", "hivemind_pipeline",
+                   # CONSOLIDATION 2026-09-17: allowed for old recorded sessions
+                   # but no longer advertised (edit_file covers both).
+                   "replace_lines", "edit_ast"}
 _bad_allow = []
 for mode, allow in _TOOL_MODE_ALLOWLISTS.items():
     for name in allow:
@@ -97,7 +100,9 @@ for mode, allow in _TOOL_MODE_ALLOWLISTS.items():
             _bad_allow.append(f"{mode}:{name}")
 check("allowlists only real tools", not _bad_allow, f" {_bad_allow[:5]}")
 
-_bad_sub = [n for n, _ in _TOOL_SUBSETS.items() for x in _TOOL_SUBSETS[n] if x not in _INLINE_TOOL_NAMES]
+_LEGACY_UNADVERTISED = {"replace_lines", "edit_ast"}
+_bad_sub = [n for n, _ in _TOOL_SUBSETS.items() for x in _TOOL_SUBSETS[n]
+            if x not in _INLINE_TOOL_NAMES and x not in _LEGACY_UNADVERTISED]
 check("subsets only real tools", not _bad_sub, f" {_bad_sub[:5]}")
 
 # ── Validator-Verhalten an bekannten Schemas ────────────────────────────

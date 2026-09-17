@@ -88,7 +88,7 @@
   "except_pass": 1
  },
  "core/duo_runner.py": {
-  "broad_except": 100,
+  "broad_except": 99,
   "except_pass": 29
  },
  "core/model_sampling.py": {
@@ -112,7 +112,7 @@
   "except_pass": 2
  },
  "core/tool_exec_helpers.py": {
-  "broad_except": 10,
+  "broad_except": 9,
   "except_pass": 3
  },
  "core/tool_executor.py": {
@@ -400,8 +400,8 @@
   "except_pass": 7
  },
  "tools/handlers/file_ops.py": {
-  "broad_except": 31,
-  "except_pass": 10
+  "broad_except": 33,
+  "except_pass": 11
  },
  "tools/handlers/git_tools.py": {
   "broad_except": 2,

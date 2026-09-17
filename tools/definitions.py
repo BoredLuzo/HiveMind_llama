@@ -159,34 +159,6 @@ _INLINE_CODING_TOOLS = [
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {
-        "name": "replace_lines",
-        "description": (
-            "Replace an exact line range whose numbers you JUST confirmed via "
-            "read_file (1-indexed, inclusive). Prefer edit_file for most edits — "
-            "line numbers shift after other edits. Not for new files."
-        ),
-        "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "File path"},
-            "start_line": {"type": "integer", "description": "First line to replace (1-indexed, inclusive)"},
-            "end_line": {"type": "integer", "description": "Last line to replace (inclusive)"},
-            "replacement": {"type": "string", "description": "Replacement code block"}
-        }, "required": ["path", "start_line", "end_line", "replacement"]}
-    }},
-    {"type": "function", "function": {
-        "name": "edit_ast",
-        "description": (
-            "Replace one whole Python function/class/variable at once (.py only) — "
-            "no indentation/text matching involved. target_name: 'ClassName.method' "
-            "for class methods. new_code: full replacement."
-        ),
-        "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "File path (.py only)"},
-            "target_type": {"type": "string", "enum": ["function", "class", "variable"]},
-            "target_name": {"type": "string", "description": "Name of the target node. Use ClassName.method for class methods."},
-            "new_code": {"type": "string", "description": "Full replacement code for the target node"}
-        }, "required": ["path", "target_type", "target_name", "new_code"]}
-    }},
-    {"type": "function", "function": {
         "name": "git_status",
         "description": (
             "USE WHEN: checking git state before committing or reviewing what changed. "
@@ -380,7 +352,11 @@ _READ_ONLY_INLINE_TOOL_NAMES = {
 }
 
 _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
-    "duo_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
+    # CONSOLIDATION (2026-09-17): replace_lines/edit_ast stay ALLOWED here for
+    # old recorded sessions, but are no longer advertised (not in
+    # _INLINE_CODING_TOOLS) — the coder uses edit_file (+start_line/end_line).
+    "duo_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch",
+                                           "replace_lines", "edit_ast"},
     "duo_readonly": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
     "pre_explore": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
     "critic_verify": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"run_bash"},
