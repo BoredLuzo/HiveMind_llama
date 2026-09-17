@@ -41,11 +41,9 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "find_references",
         "description": (
-            "Find all references/uses of a symbol (function, class, method, variable) across the workspace. "
-            "LSP-like: returns file paths + line numbers tagged as definition vs. use. "
-            "Use instead of run_bash grep/Select-String to trace 'who calls X' or 'where is Y defined'. "
-            "path can be a file or a directory (scan root, default: workspace root). "
-            "Max 160 results."
+            "Find all references/uses of a symbol across the workspace. "
+            "Returns file paths + line numbers (definition vs. use). "
+            "Preferred over run_bash grep for 'who calls X'. Max 160 results."
         ),
         "parameters": {"type": "object", "properties": {
             "symbol": {"type": "string", "description": "The symbol to find (e.g. 'calculateTotal' or 'Handler')"},
@@ -73,11 +71,9 @@ _INLINE_CODING_TOOLS = [
     }},
     {"type": "function", "function": {
         "name": "search_code", "description": (
-            "Search file CONTENTS with regex or plain text (NOT file names — use find_files for name matching). "
-            "This is the PREFERRED tool for content searches — do NOT use run_bash with Select-String/Get-Content for that. "
-            "Returns matching file paths and line numbers. Example: pattern='class.*Handler' finds all Handler classes. "
-            "Plain search strings work too (no regex needed). Path filters to a directory (default: project root); "
-            "searches are confined to the workspace. Result volume is capped (platform-dependent)."
+            "Search file CONTENTS with regex or plain text (file names: find_files). "
+            "Preferred over run_bash for content searches. Returns file paths + line "
+            "numbers; confined to the workspace."
         ),
         "parameters": {"type": "object", "properties": {
             "pattern": {"type": "string", "description": "Regex pattern or plain search string"},
@@ -100,11 +96,9 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "install_package",
         "description": (
-            "Install a dependency/package into the project (the CONTROLLED way to "
-            "install — never use raw run_bash 'npm install'/'pip install'). "
-            "Supported managers: npm, pip, cargo, go, dotnet, composer. "
-            "Limited budget per run (duo_install_max_calls). After installing, "
-            "verify the import/build works via run_bash."
+            "Install a dependency (controlled way — never raw run_bash installs). "
+            "Managers: npm, pip, cargo, go, dotnet, composer. Budgeted per run. "
+            "Verify the import/build via run_bash afterwards."
         ),
         "parameters": {"type": "object", "properties": {
             "manager":  {"type": "string", "enum": ["npm", "pip", "cargo", "go", "dotnet", "composer"],
@@ -116,20 +110,17 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "run_bash",
         "description": (
-            "Execute a shell command. Windows shell is PowerShell 5.1: use Get-ChildItem / "
-            "Get-Content / Select-String / Test-Path / Remove-Item; chain with "
-            "'cmd1; if ($?) { cmd2 }' — never '&&'. Linux/Mac: bash.\n"
-            "TOOL PREFERENCE — run_bash only for what no dedicated tool covers "
-            "(build, run, test commands): content search -> search_code; file names -> find_files; "
-            "'who calls X' -> find_references/get_signatures; git state -> git_status; "
-            "package installs -> install_package.\n"
-            "LONG-RUNNING services (dev servers, 'docker compose up'): use start_background — "
-            "run_bash waits for completion and times out (90s default, 600s for builds).\n"
-            "PowerShell stderr trap: native tools (git/docker/npm) can print progress to stderr and "
-            "still succeed while the exit code reads 1 — check the OUTPUT for success markers before "
-            "retrying. NEVER retry identical failing arguments blindly.\n"
-            "curl: real curl.exe runs (alias removed); add '-m 10' to health checks so half-open "
-            "ports don't hang until timeout."
+            "Execute a shell command. Windows: PowerShell 5.1 (Get-ChildItem, "
+            "Get-Content, Select-String, Test-Path, Remove-Item; chain with "
+            "'cmd1; if ($?) { cmd2 }' — never '&&'). Linux/Mac: bash.\n"
+            "Only for what no dedicated tool covers: content search -> search_code, "
+            "file names -> find_files, references -> find_references, git -> git_status, "
+            "installs -> install_package.\n"
+            "Long-running services: use start_background — run_bash waits and times "
+            "out (90s default, 600s builds).\n"
+            "PowerShell stderr trap: native tools can print progress to stderr and "
+            "still succeed with exit code 1 — check OUTPUT before retrying. Never "
+            "blindly retry identical failing args. curl: add '-m 10' to health checks."
         ),
         "parameters": {"type": "object", "properties": {
             "cmd": {"type": "string", "description": "Shell command (PowerShell 5.1 on Windows, bash on Linux/Mac)"}
@@ -138,16 +129,13 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "edit_file",
         "description": (
-            "USE WHEN: changing parts of a file that ALREADY exists.\n"
-            "Send SEARCH/REPLACE blocks in `edits`. COPY the SEARCH text verbatim from read_file; "
-            "add surrounding lines so each block is unique. Multiple blocks per call OK "
-            "(do NOT issue one call per block).\n"
-            "Matching: exact first; if that fails, a conservative fuzzy match may apply "
-            "(result tells you when). Ambiguous matches are rejected, not guessed.\n"
-            "WRONG: JSON args {\"old_str\": ..., \"new_str\": ...} — that is patch_file's format.\n"
-            "CORRECT block: <<<<<<< SEARCH\\n<exact existing code>\\n=======\\n<replacement>\\n>>>>>>> REPLACE\n"
-            "Keep each call within your OUTPUT-BUDGET hint (system prompt); split very large rewrites "
-            "into several targeted blocks instead of one huge call."
+            "Change parts of an EXISTING file. Send SEARCH/REPLACE blocks in "
+            "`edits`; copy SEARCH text verbatim from read_file, add surrounding "
+            "lines for uniqueness. Multiple blocks per call OK. Exact match first, "
+            "conservative fuzzy fallback; ambiguous = rejected. Block format:\n"
+            "<<<<<<< SEARCH\\n<exact existing code>\\n=======\\n<replacement>\\n>>>>>>> REPLACE\n"
+            "Stay within your OUTPUT-BUDGET hint; split very large rewrites into "
+            "several targeted blocks."
         ),
         "parameters": {"type": "object", "properties": {
             "path":  {"type": "string", "description": "File path"},
@@ -159,14 +147,11 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "write_file",
         "description": (
-            "USE WHEN: creating a file that does NOT exist yet.\n"
-            "Pass the COMPLETE plain content — no SEARCH/REPLACE markers (that is edit_file's format).\n"
-            "WRONG: using write_file to change an existing file — it overwrites the whole file; "
-            "use edit_file instead (it fuzzy-matches SEARCH blocks automatically).\n"
-            "For files larger than ~20000 chars: write the FIRST part here, then finish with "
-            "write_file_append(path, content='<AUTO_SPLIT_CONTINUE>') — content must be the "
-            "bare token <AUTO_SPLIT_CONTINUE> (no quotes); the remainder is stored "
-            "server-side. Never resend the whole content."
+            "Create a NEW file with complete plain content (no SEARCH/REPLACE "
+            "markers — that is edit_file). Existing files: use edit_file instead.\n"
+            "If too large for one call: write the FIRST part, then finish with "
+            "write_file_append(path, content='<AUTO_SPLIT_CONTINUE>') — bare token, "
+            "no quotes; the remainder is stored server-side. Never resend content."
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path"},
@@ -176,10 +161,9 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "replace_lines",
         "description": (
-            "USE WHEN: swapping an exact line range whose numbers you JUST confirmed via read_file — "
-            "and nothing else changed the file since. PREFER edit_file for most edits: line numbers "
-            "shift after other edits to the same file. start_line/end_line are 1-indexed and inclusive. "
-            "NOT for creating new files."
+            "Replace an exact line range whose numbers you JUST confirmed via "
+            "read_file (1-indexed, inclusive). Prefer edit_file for most edits — "
+            "line numbers shift after other edits. Not for new files."
         ),
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string", "description": "File path"},
@@ -191,11 +175,9 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "edit_ast",
         "description": (
-            "USE WHEN: replacing one whole Python function/class/variable at once — safest for large "
-            "nodes because there is no indentation or text matching involved (.py only). "
-            "target_type: 'function', 'class', or 'variable'. "
-            "Qualified names for class methods: target_name='ClassName.method'. "
-            "new_code: complete replacement code for the node."
+            "Replace one whole Python function/class/variable at once (.py only) — "
+            "no indentation/text matching involved. target_name: 'ClassName.method' "
+            "for class methods. new_code: full replacement."
         ),
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string", "description": "File path (.py only)"},
@@ -225,13 +207,11 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "write_file_append",
         "description": (
-            "Append a continuation chunk VERBATIM to the end of a file. "
-            "ONLY valid as a follow-up in the SAME write sequence that created/last touched the file.\n"
-            "CORRECT sequence: write_file(path, part1) -> write_file_append(path, part2) -> write_file_append(path, part3).\n"
-            "WRONG: append before the file exists, or append to an unrelated file.\n"
-            "Each call holds at most ~20000 chars. For AUTO-SPLIT follow-ups send only "
-            "content='<AUTO_SPLIT_CONTINUE>' — the bare token, NO quotes around it; the "
-            "remainder is stored server-side and will be appended automatically; never "
+            "Append a continuation chunk VERBATIM to the end of a file — only as "
+            "follow-up in the SAME write sequence (write_file part1 -> append "
+            "part2 -> append part3). Max ~20000 chars per call. After an "
+            "AUTO-SPLIT: send only content='<AUTO_SPLIT_CONTINUE>' (bare token, "
+            "no quotes) — the stored remainder appends automatically; never "
             "resend the content."
         ),
         "parameters": {"type": "object", "properties": {
@@ -267,12 +247,10 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "run_tests",
         "description": (
-            "Run the project's test suite (auto-detects language: pytest, npm test, "
-            "vitest, jest, cargo test, go test, maven, dotnet). "
-            "MUST be used BEFORE task_complete to verify your changes. "
-            "Returns structured [TEST-RESULT] feedback with pass/fail and error lines. "
-            "If the project has no test suite, it reports that — then verify manually "
-            "with run_bash (e.g. build/start the app)."
+            "Run the project's test suite (auto-detects pytest/npm/vitest/jest/"
+            "cargo/go/maven/dotnet). MUST run before task_complete. Returns "
+            "[TEST-RESULT] pass/fail lines. No suite found -> verify manually "
+            "via run_bash."
         ),
         "parameters": {"type": "object", "properties": {
             "timeout": {"type": "integer", "description": "Timeout in seconds (default 90, max 300)", "default": 90},
@@ -315,8 +293,9 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "task_complete",
         "description": (
-            "Signal that the coding task is finished. Call this when all requested changes are implemented "
-            "and verified. Must include a status object with completed, blockers, and build_status fields."
+            "Signal the coding task is finished (all changes implemented and "
+            "verified). Requires a status object: completed, blockers, "
+            "build_status."
         ),
         "parameters": {"type": "object", "properties": {
             "status": {
@@ -340,13 +319,10 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "browser",
         "description": (
-            "Control a headless browser (Playwright/Chromium) to verify web apps end-to-end. "
-            "Actions: navigate(url) loads a page; snapshot returns page text + JS console/errors; "
-            "screenshot(path) saves a PNG for vision inspection; click(selector)/type(selector,text) "
-            "interact with the UI; evaluate(js) runs JavaScript in the page; console returns captured "
-            "JS console/errors; close shuts the browser down. The browser stays open across calls. "
-            "file:// URLs inside the workspace are auto-served over a loopback HTTP server, so "
-            "ES modules and fetch work; file:// paths outside the workspace are rejected."
+            "Headless browser (stays open across calls). Actions: navigate, snapshot "
+            "(page text + console/errors), screenshot, click, type, evaluate (JS), "
+            "console, close. In-workspace file:// URLs are auto-served over loopback "
+            "HTTP (ES modules/fetch work); outside-workspace file:// is rejected."
         ),
         "parameters": {"type": "object", "properties": {
             "action":   {"type": "string", "enum": ["navigate", "snapshot", "screenshot", "click", "type", "evaluate", "console", "close"],
