@@ -61,6 +61,13 @@ def test_static_wiring():
     # The code streams into the RIGHT code panel — not an inline pre in chat.
     check("panel stream helper wired (_tgPanelStream -> _cpAddOrUpdateFile)",
           "_tgPanelStream" in src and "_cpAddOrUpdateFile(st.path" in src)
+    # The stream must NOT gate on the path: models that emit content before
+    # path otherwise stream into nothing (live: chip "…" at 4.7k chars).
+    check("pending tab when path not yet parsed", "_TG_PENDING_KEY" in src)
+    check("pending rekeyed to real path on arrival", "_tgPendingRekey" in src)
+    check("pending dropped at stream end", "_tgPanelDropPending" in src)
+    check("tab name is a renameable span (.cp-name)", 'class="cp-name"' in src)
+    check("path-fail leaves console diagnose", "path not parsed" in src)
     check("plain render mode for streaming (no highlight)", "'plain'" in src)
     check("throttled panel renders", "_TG_PANEL_RENDER_MS" in src)
     check("no inline stream pre left in chat", "tg-pre" not in src)

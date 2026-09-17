@@ -113,6 +113,14 @@ def _note_successful_write(dname, dresult, result, round_state, total_tool_error
         result.verify_mutation_serial += 1
         round_state.parse_errors = max(0, round_state.parse_errors - 1)
         total_tool_errors[0] = 0
+    # ERROR-CAP-DECAY (2026-09-18): a successful non-write call also earns
+    # credit back (-1, floor 0). Live RX: a model previewing its work burned
+    # the 6-error cap on 2 run_bash timeouts + 3 browser blocks + 1 path
+    # typo and was hard-stopped mid-verification, despite actively switching
+    # strategy. Only a no-progress run (6 fails, nothing succeeded between)
+    # still reaches the cap.
+    elif not _tool_call_failed(dresult, dname) and total_tool_errors[0] > 0:
+        total_tool_errors[0] -= 1
 
 
 # ── NO-OP hint (2026-09-07) ────────────────────────────────────────────────────

@@ -3471,6 +3471,7 @@ var _TOKEN_PER_FRAME = 3;  // Tokens pro Frame (~180/s bei 60fps)
 var _tgCards = {};
 var _tgPanelLastRender = 0;
 var _TG_PANEL_RENDER_MS = 120;
+var _TG_PENDING_KEY = '\u0000pending-write';   // panel tab key until the path parses
 
 function _tgUnescape(s) {
   // JSON string body → text. Single left-to-right pass so multi-char
@@ -3510,10 +3511,11 @@ function _tgExtractField(buf, field) {
 
 function _tgPanelStream(st) {
   // Push the streamed value into the right code panel. The tab appears as
-  // soon as the path is known; content renders plain + throttled while
-  // streaming, and is replaced by the real file on the file_change event
-  // after execution.
-  if (!st.path) return;
+  // soon as anything streams — under a PENDING key when the path hasn't
+  // parsed yet (some models emit content before path) and is re-keyed to
+  // the real file the moment the path parses out of the buffer. Content
+  // renders plain + throttled while streaming; the file_change event after
+  // execution replaces it with the real file.
   var field = (st.tool === 'edit_file') ? 'new_text' : 'content';
   var txt = _tgExtractField(st.buf, field);
   if (txt == null) return;
@@ -3522,7 +3524,23 @@ function _tgPanelStream(st) {
   var nearBtm = body ? ((body.scrollTop + body.clientHeight) >= (body.scrollHeight - 40)) : false;
   var now = Date.now();
   var doRender = (now - _tgPanelLastRender) >= _TG_PANEL_RENDER_MS;
-  _cpAddOrUpdateFile(st.path, txt, op, doRender ? 'plain' : undefined);
+  if (st.path) {
+    if (_cpFiles[_TG_PENDING_KEY]) _tgPendingRekey(st.path);
+    _cpAddOrUpdateFile(st.path, txt, op, doRender ? 'plain' : false);
+  } else {
+    // Diagnose (2026-09-18): path extraction failed on real fragment data
+    // once (chip stayed "…" at 4.7k chars) — leave a trace in the console.
+    if (st.buf.length > 300 && !st.pathWarned) {
+      st.pathWarned = true;
+      console.warn('[tool-gen] path not parsed, streaming under pending tab. buf head:', st.buf.slice(0, 160));
+    }
+    _cpAddOrUpdateFile(_TG_PENDING_KEY, txt, op, doRender ? 'plain' : false);
+    if (_cpFiles[_TG_PENDING_KEY]) {
+      _cpFiles[_TG_PENDING_KEY].tab.title = 'streaming (file name pending)';
+      var pn = _cpFiles[_TG_PENDING_KEY].tab.querySelector('.cp-name');
+      if (pn) pn.textContent = 'streaming\u2026';
+    }
+  }
   if (doRender) _tgPanelLastRender = now;
   // follow the stream when the user is at the bottom anyway
   if (doRender && nearBtm && body && document.body.classList.contains('code-panel-open')) {
@@ -3530,18 +3548,43 @@ function _tgPanelStream(st) {
   }
 }
 
+function _tgPendingRekey(realPath) {
+  // Move the pending stream tab to the real file path once known.
+  var pend = _cpFiles[_TG_PENDING_KEY];
+  if (!pend) return;
+  var content = pend.content, op = pend.op;
+  delete _cpFiles[_TG_PENDING_KEY];
+  pend.tab.remove();
+  if (_cpActive === _TG_PENDING_KEY) _cpActive = null;
+  _cpAddOrUpdateFile(realPath, content, op, 'plain');
+}
+
+function _tgPanelDropPending() {
+  var pend = _cpFiles[_TG_PENDING_KEY];
+  if (pend) {
+    delete _cpFiles[_TG_PENDING_KEY];
+    pend.tab.remove();
+    if (_cpActive === _TG_PENDING_KEY) _cpActive = null;
+  }
+}
+
 function _tgPanelFlush() {
   // Final unthrottled render of every streaming tab (throttle may have
-  // skipped the tail of the stream).
+  // skipped the tail of the stream). Pending entries move to their real
+  // path when known; a path-less pending tab is dropped by _toolGenDone
+  // (the file_change event brings the real file after execution).
   for (var k in _tgCards) {
     var st = _tgCards[k];
-    if (st && st.path) {
-      var field = (st.tool === 'edit_file') ? 'new_text' : 'content';
-      var txt = _tgExtractField(st.buf, field);
-      if (txt != null) {
-        var op = (st.tool === 'edit_file') ? 'edit' : (st.tool === 'write_file_append' ? 'append' : 'write');
-        _cpAddOrUpdateFile(st.path, txt, op, 'plain');
-      }
+    if (!st) continue;
+    var field = (st.tool === 'edit_file') ? 'new_text' : 'content';
+    var txt = _tgExtractField(st.buf, field);
+    if (txt == null) continue;
+    var op = (st.tool === 'edit_file') ? 'edit' : (st.tool === 'write_file_append' ? 'append' : 'write');
+    if (st.path) {
+      if (_cpFiles[_TG_PENDING_KEY]) _tgPendingRekey(st.path);
+      _cpAddOrUpdateFile(st.path, txt, op, 'plain');
+    } else {
+      _cpAddOrUpdateFile(_TG_PENDING_KEY, txt, op, 'plain');
     }
   }
 }
@@ -3595,8 +3638,10 @@ function _toolGenStream(d) {
 function _toolGenDone() {
   // Flush the last stream state into the panel (throttle may have skipped
   // the tail), then drop the compact chips — the real tool_call chips and
-  // the result metrics take over from here.
+  // the result metrics take over from here. A still-pending panel tab is
+  // dropped too (the file_change event brings the real file after exec).
   _tgPanelFlush();
+  _tgPanelDropPending();
   for (var k in _tgCards) {
     var st = _tgCards[k];
     if (st && st.row && st.row.parentNode) st.row.parentNode.removeChild(st.row);
@@ -9776,7 +9821,7 @@ function _cpAddOrUpdateFile(path, content, op, render) {
     // New tab
     var tab = document.createElement('button');
     tab.className = 'cp-tab';
-    tab.innerHTML = '<span class="cp-op '+opLabel+'">'+opLabel.toUpperCase()+'</span>'+esc(shortName);
+    tab.innerHTML = '<span class="cp-op '+opLabel+'">'+opLabel.toUpperCase()+'</span><span class="cp-name">'+esc(shortName)+'</span>';
     tab.title = path;
     tab.onclick = (function(p){return function(){_cpShowFile(p)}})(path);
     // Insert before close button
