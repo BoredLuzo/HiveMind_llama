@@ -129,20 +129,17 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "edit_file",
         "description": (
-            "Change parts of an EXISTING file. Send SEARCH/REPLACE blocks in "
-            "`edits`; copy SEARCH text verbatim from read_file, add surrounding "
-            "lines for uniqueness. Multiple blocks per call OK. Exact match first, "
-            "conservative fuzzy fallback; ambiguous = rejected. Block format:\n"
-            "<<<<<<< SEARCH\\n<exact existing code>\\n=======\\n<replacement>\\n>>>>>>> REPLACE\n"
-            "Stay within your OUTPUT-BUDGET hint; split very large rewrites into "
-            "several targeted blocks."
+            "Replace ONE unique passage in an EXISTING file. Copy old_text "
+            "VERBATIM from your last read_file (exact match — no markers, no "
+            "fuzzy guessing); it must appear exactly once. new_text is the "
+            "replacement. For multiple changes send multiple calls. To create a "
+            "new file use write_file."
         ),
         "parameters": {"type": "object", "properties": {
-            "path":  {"type": "string", "description": "File path"},
-            "edits": {"type": "string", "maxLength": 20000, "description": (
-                "One or more SEARCH/REPLACE blocks (plain text markers, NOT JSON)."
-            )}
-        }, "required": ["path", "edits"]}
+            "path":     {"type": "string", "description": "File path"},
+            "old_text": {"type": "string", "description": "Exact text to replace — copied verbatim from read_file, unique in the file"},
+            "new_text": {"type": "string", "description": "Replacement text"}
+        }, "required": ["path", "old_text", "new_text"]}
     }},
     {"type": "function", "function": {
         "name": "write_file",

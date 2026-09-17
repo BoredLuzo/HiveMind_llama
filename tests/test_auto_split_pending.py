@@ -44,7 +44,8 @@ def main():
     try:
         print("\n=== AUTO-SPLIT server-side remainder (2026-09-03) ===\n")
         content = "".join("line %05d - %s\n" % (i, "x" * 40) for i in range(900))
-        base = content.strip()  # normal write_file stores the stripped content
+        # BYTE-EXACT (2026-09-17): write_file stores content as sent — no strip
+        base = content
 
         r1 = asyncio.run(_F._inline_tool_write_file(
             {"path": "f.txt", "content": content, "_tool_name": "write_file"}, wd, None))

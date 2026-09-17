@@ -1658,11 +1658,12 @@ async def run_code_duo(ctx):
             # also lives in the write_file/write_file_append tool descriptions
             # — the system block now carries only the per-model numbers.
             _duo_coder_sys += (
-                f"\n\nWRITE RULES (hard limits): write_file / write_file_append / "
-                f"edit_file full-rewrite accept at most ~{_wb_limit} characters per "
-                f"call (chunks well below ~{_wb_hint_safe}). Never full-rewrite an "
-                f"EXISTING file — read_file it, then edit_file SEARCH/REPLACE. "
-                f"Oversized writes are auto-split: finish via write_file_append(path, "
+                f"\n\nWRITE RULES (hard limits): write_file accepts at most ~{_wb_limit} "
+                f"characters per call (chunks well below ~{_wb_hint_safe}) and writes the "
+                f"COMPLETE file (create or overwrite). To change parts of an existing "
+                f"file: edit_file with old_text copied VERBATIM from your last read_file "
+                f"(must be unique in the file) and new_text as the replacement. Oversized "
+                f"writes are auto-split: finish via write_file_append(path, "
                 f"content='<AUTO_SPLIT_CONTINUE>')."
             )
         except Exception:

@@ -605,38 +605,65 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
             tool="patch_file" )
 
 
-async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
+async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
+    """Create or overwrite a file with the COMPLETE content.
+
+    The primary write tool (2026-09-17 consolidation): the result on disk is
+    exactly what the model wrote — no matching, no drift. Oversized content is
+    auto-split (part 1 written, remainder stored server-side, finished via a
+    write_file_append marker call).
+    """
     p = _inline_resolve_path(workspace, args.get("path", ""))
-    if err := _inline_check_workspace(p, workspace_lock, "edit_file"):
+    if err := _inline_check_workspace(p, workspace_lock, "write_file"):
         return err
-    # HEADER-FIX (2026-08-10): write_file delegiert hierher (_tool_name="write_file").
-    _display_tool = str(args.get("_tool_name", "") or "edit_file")
-    if not p.exists():
-        _tool_name = args.get("_tool_name", "edit_file")
-        if _tool_name == "edit_file":
-            return _tool_error_response(
-                "EDIT_FILE_INVALID_PATH",
-                f"'{args.get('path')}' does not exist. Use write_file (NOT write_file_append) to create new files.",
-                tool="edit_file")
-    edits_raw = args.get("edits", "")
-    edits_raw = re.sub(r"<think[^>]*>[\s\S]*?</think(?:ing)?>", "", edits_raw, flags=re.DOTALL).strip()
-    get_transaction().capture_before(p)
-    if not edits_raw:
+    content = str(args.get("content", ""))
+    # BLOCK-FORMAT SNIFF (2026-09-17): SEARCH/REPLACE markers belong to
+    # edit_file. A truncated/malformed marker call used to reach this handler
+    # as "full content" and destroy the file (live: 1259-line collapse).
+    if "<<<<<<<" in content or "<parameter=" in content:
+        return _tool_error_response(
+            "WRITE_FILE_BLOCK_FORMAT",
+            "content contains SEARCH/REPLACE or foreign call markers — that format "
+            "is gone. write_file expects the COMPLETE plain file content. To change "
+            "parts of an existing file use edit_file (old_text/new_text).",
+            tool="write_file")
+    if not content.strip():
         return _tool_error_response(
             "EDIT_FILE_EMPTY_EDITS",
-            f"{_display_tool} requires non-empty content or SEARCH/REPLACE edits.",
-            tool=_display_tool )
+            "write_file requires non-empty content.",
+            tool="write_file")
 
-    # ── Sanity check: parent directory must exist ──
-    if not p.parent.exists():
+    existed = p.exists()
+    get_transaction().capture_before(p)
+    _had_crlf = False
+    _old_n = 0
+    if existed:
+        try:
+            _old_raw = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace", newline="")
+            _had_crlf = "\r\n" in _old_raw
+            _old_n = len([l for l in _old_raw.splitlines() if l.strip()])
+        except Exception:
+            _old_raw, _had_crlf, _old_n = "", False, 0
+    else:
+        _old_raw = ""
+
+    if content.replace("\r\n", "\n").strip() == _old_raw.replace("\r\n", "\n").strip():
         return _tool_error_response(
-            "EDIT_FILE_INVALID_PATH",
-            f"Parent directory '{p.parent}' does not exist. Create it first (e.g. run_bash mkdir).",
-            tool=_display_tool )
+            "WRITE_FILE_NOOP",
+            f"no change — '{p}' already contains exactly this content.",
+            tool="write_file")
+    if existed and _old_n >= 30:
+        _new_n = len([l for l in content.replace("\r\n", "\n").splitlines() if l.strip()])
+        if _new_n <= 3 and not args.get("confirm_shrink"):
+            return _tool_error_response(
+                "WRITE_FILE_SUSPICIOUS_SHRINK",
+                f"This overwrite would shrink '{p}' from {_old_n} to {_new_n} content "
+                "lines — almost always a truncated or mistaken write. If you REALLY "
+                "want a tiny file: read_file it first, then resend with "
+                "\"confirm_shrink\": true.",
+                tool="write_file")
 
-    # ── Model-dependent char limits (shared between write/edit paths) ──
-    # LIMITS-RAISE (2026-08-22): 12000→20000 (14b+), 7000→10000, 5000→7000, 3500→5000 —
-    # MINUS Budget-Deckel (via _set_write_budget, Kalibrierung [WRITE-CALIBRATION]).
+    # ── Model-dependent char limit + AUTO-SPLIT ──
     try:
         from utils.tool import resolve_write_char_limits as _resolve_limits
         from tools.runner import _get_write_budget as _get_wb
@@ -645,288 +672,186 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
     except Exception:
         _wf_limit = 5000
 
-    # ── NEW FILE: edits = full content ──
-    if not p.exists():
-        content = edits_raw
-        if len(content) > _wf_limit:
-            part1, rest_at = _stage_split(content, _wf_limit)
-            await asyncio.to_thread(_atomic_write_text, p, part1)
-            _store_pending_remainder(str(p), content, rest_at)
-            return _auto_split_instr(p, len(part1), len(content))
+    if len(content) > _wf_limit:
+        part1, rest_at = _stage_split(content, _wf_limit)
+        await asyncio.to_thread(_atomic_write_text, p, part1)
+        _store_pending_remainder(str(p), content, rest_at)
+        return _auto_split_instr(p, len(part1), len(content))
+
+    if _had_crlf:
+        content = content.replace("\n", "\r\n")
+
+    def _write_now() -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
         try:
-            def _write_new() -> None:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
-                try:
-                    with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                        _f.write(content)
-                    os.replace(_tmp_path, str(p))
-                except Exception:
-                    try: os.unlink(_tmp_path)
-                    except Exception: pass
-                    raise
-            await asyncio.to_thread(_write_new)
-            lines = content.count("\n") + 1
-            _lint = await _auto_lint_result(p, workspace)
-            return f"[{_display_tool}: created '{p}' (+{lines} lines)]{_lint}"
-        except Exception as e:
-            return _tool_error_response(
-                "EDIT_FILE_FAILED",
-                f"{_display_tool} failed for '{p}': {e}",
-                tool=_display_tool )
+            with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
+                _f.write(content)
+            os.replace(_tmp_path, str(p))
+        except Exception:
+            try: os.unlink(_tmp_path)
+            except Exception: pass
+            raise
 
-    # ── EXISTING FILE ──
+    await asyncio.to_thread(_write_now)
+    _lint = await _auto_lint_result(p, workspace)
+    _lines = content.count("\n") + 1
+    if existed:
+        return f"[write_file: rewrote '{p}' (+{_lines}/-{_old_n or '?'} lines)]{_lint}"
+    return f"[write_file: created '{p}' (+{_lines} lines)]{_lint}"
+
+
+async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
+    """Exact-match edit: replace ONE unique occurrence of old_text.
+
+    THE edit tool (2026-09-17 consolidation): no SEARCH/REPLACE markers, no
+    fuzzy rate-guessing. old_text must be copied verbatim from the last
+    read_file and must appear exactly once — anything else is a clear,
+    deterministic error that tells the model how to fix it.
+    """
+    p = _inline_resolve_path(workspace, args.get("path", ""))
+    if err := _inline_check_workspace(p, workspace_lock, "edit_file"):
+        return err
+    if not p.exists():
+        return _tool_error_response(
+            "EDIT_FILE_INVALID_PATH",
+            f"'{args.get('path')}' does not exist. read_file it first (to create a "
+            "new file use write_file).",
+            tool="edit_file")
+    old_text = str(args.get("old_text", ""))
+    new_text = str(args.get("new_text", ""))
+    # FOREIGN/TRUNCATED-FORMAT SNIFF (2026-09-17): a cut-off call in a foreign
+    # marker style (live: <parameter=SEARCH> with no REPLACE — 1259 lines lost)
+    # used to fall through to the full-rewrite path and destroy the file.
+    for _frag in ("<<<<<<<", "=======", ">>>>>>>", "<parameter="):
+        if _frag in old_text or _frag in new_text:
+            return _tool_error_response(
+                "EDIT_FILE_MALFORMED_BLOCK",
+                "old_text/new_text contains block/parameter marker fragments — that "
+                "format is gone. old_text = the EXACT text to replace (copied "
+                "verbatim from read_file, unique in the file); new_text = the "
+                "replacement.",
+                tool="edit_file")
+    get_transaction().capture_before(p)
+    if not old_text.strip():
+        return _tool_error_response(
+            "EDIT_FILE_EMPTY_OLD_TEXT",
+            "edit_file requires non-empty old_text (the exact text to replace). "
+            "read_file the file first, then copy the passage verbatim.",
+            tool="edit_file")
+    if not new_text.strip():
+        return _tool_error_response(
+            "EDIT_FILE_EMPTY_NEW_TEXT",
+            "new_text is empty — replace the passage with the corrected version "
+            "instead, or use run_bash if you truly need an empty result.",
+            tool="edit_file")
+
     try:
-        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace", newline="")  # CRLF-PRESERVE (2026-09-13)
-        _has_crlf = "\r\n" in content
-        working = content.replace("\r\n", "\n")
-
-        # LINE MODE (2026-09-17): start_line/end_line given -> `edits` is the
-        # replacement text for exactly that range (replaces the old separate
-        # replace_lines tool; same bounds, but WITH noop/shrink guards).
-        if args.get("start_line") is not None or args.get("end_line") is not None:
-            try:
-                _s = max(1, int(args.get("start_line") or 0))
-                _e = int(args.get("end_line") if args.get("end_line") is not None else _s)
-            except (TypeError, ValueError):
-                return _tool_error_response(
-                    "EDIT_FILE_INVALID_ARGS",
-                    "start_line/end_line must be integers.",
-                    tool=_display_tool)
-            _wlines = working.splitlines()
-            if _e < _s:
-                return _tool_error_response(
-                    "EDIT_FILE_INVALID_ARGS",
-                    f"end_line ({_e}) is before start_line ({_s}).",
-                    tool=_display_tool)
-            if _e > len(_wlines) + 1:
-                return _tool_error_response(
-                    "EDIT_FILE_INVALID_ARGS",
-                    f"end_line {_e} out of bounds (file has {len(_wlines)} lines; "
-                    f"len+1 = append at end).",
-                    tool=_display_tool)
-            _repl = str(edits_raw).replace("\r\n", "\n")
-            _new_lines = _wlines[:_s - 1] + _repl.split("\n") + _wlines[_e:]
-            _new_content_lf = "\n".join(_new_lines)
-            _new_content = _new_content_lf.replace("\n", "\r\n") if _has_crlf else _new_content_lf
-            if _new_content_lf.strip() == working.strip():
-                return _tool_error_response(
-                    "EDIT_FILE_NOOP",
-                    f"no change — lines {_s}-{_e} already contain exactly this content.",
-                    tool=_display_tool)
-            _orig_n = len([l for l in working.splitlines() if l.strip()])
-            _new_n = len([l for l in _new_content_lf.splitlines() if l.strip()])
-            if (not args.get("confirm_shrink") and _orig_n >= 30 and _new_n <= 3):
-                return _tool_error_response(
-                    "EDIT_FILE_SUSPICIOUS_SHRINK",
-                    f"This would shrink '{p}' from {_orig_n} to {_new_n} content lines. "
-                    "If you REALLY want that: read_file first, then resend with "
-                    "\"confirm_shrink\": true.",
-                    tool=_display_tool)
-
-            def _write_line_mode() -> None:
-                _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
-                try:
-                    with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                        _f.write(_new_content)
-                    os.replace(_tmp_path, str(p))
-                except Exception:
-                    try: os.unlink(_tmp_path)
-                    except Exception: pass
-                    raise
-            await asyncio.to_thread(_write_line_mode)
-            _lint_lm = await _auto_lint_result(p, workspace)
-            _delta = _new_n - _orig_n
-            return f"[{_display_tool}: lines {_s}-{_e} replaced ({_delta:+d} lines)]{_lint_lm}"
-
-        # Auto-convert JSON old_str/new_str format to SEARCH/REPLACE blocks
-        parsed = _try_convert_json_edits(edits_raw)
-        parsed = parsed.replace("\r\n", "\n")
-        blocks = _RE_SEARCH_REPLACE_BLOCK.findall(parsed)
-        if not blocks:
-            blocks = _RE_SEARCH_REPLACE_BLOCK_LENIENT.findall(parsed)
-
-        # ── No SEARCH/REPLACE blocks → full rewrite (was write_file with allow_overwrite) ──
-        if not blocks:
-            if re.search(r'(?:<<<<<<<|>>>>>>>|^=======$)', parsed, re.MULTILINE):
-                return _tool_error_response(
-                    "EDIT_FILE_MALFORMED_BLOCK",
-                    "Content has SEARCH/REPLACE markers but no valid blocks found. "
-                    "Use exact format:\n<<<<<<< SEARCH\n<text>\n=======\n<replacement>\n>>>>>>> REPLACE",
-                    tool=_display_tool,
-                )
-            # Voll-Rewrite legitimerweise).
-            if _display_tool == "edit_file" and _looks_like_json_edit_args(edits_raw):
-                return _tool_error_response(
-                    "EDIT_FILE_MALFORMED_BLOCK",
-                    "edits was sent as JSON (old_string/new_string or old_str/new_str) "
-                    "and could not be converted. Use SEARCH/REPLACE blocks instead:\n"
-                    "<<<<<<< SEARCH\n<exact existing code>\n=======\n<new code>\n>>>>>>> REPLACE\n"
-                    "Copy the SEARCH text VERBATIM from read_file output.",
-                    tool=_display_tool,
-                )
-            content_new = edits_raw
-            if len(content_new) > _wf_limit:
-                # AUTO-SPLIT (2026-09-03): an oversized full rewrite of an EXISTING
-                # file used to be rejected AFTER the model had already generated
-                # the whole content (7-minute total loss). Now the first chunk is
-                # written immediately and the remainder is cached server-side; a
-                # tiny write_file_append(path, content="<AUTO_SPLIT_CONTINUE>")
-                # finishes the file without any regeneration.
-                part1, rest_at = _stage_split(content_new, _wf_limit)
-                await asyncio.to_thread(_atomic_write_text, p, part1)
-                _store_pending_remainder(str(p), content_new, rest_at)
-                return _auto_split_instr(p, len(part1), len(content_new))
-            if content_new.replace("\r\n", "\n").strip() == str(content or "").replace("\r\n", "\n").strip():
-                return _tool_error_response(
-                    "EDIT_FILE_NOOP",
-                    f"no change — '{p}' already contains exactly this content. "
-                    f"Your new content is identical to the existing file content.",
-                    tool=_display_tool,
-                )
-            # SHRINK-GUARD (2026-09-15): full rewrite collapsing a large file
-            # to a couple of lines — same rationale as the blocks-path guard.
-            _orig_lines_rw = len([l for l in str(content or "").replace("\r\n", "\n").splitlines() if l.strip()])
-            _new_lines_rw = len([l for l in content_new.replace("\r\n", "\n").splitlines() if l.strip()])
-            if (not args.get("confirm_shrink")
-                    and _orig_lines_rw >= 30 and _new_lines_rw <= 3):
-                return _tool_error_response(
-                    "EDIT_FILE_SUSPICIOUS_SHRINK",
-                    f"This full rewrite would shrink '{p}' from {_orig_lines_rw} to "
-                    f"{_new_lines_rw} content lines. Almost always this is a truncated "
-                    "or mistaken write, not a real refactor. If you REALLY want a tiny "
-                    "file: read_file it first, then resend this exact call with "
-                    "\"confirm_shrink\": true.",
-                    tool=_display_tool)
-            def _write_rewrite() -> None:
-                _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
-                try:
-                    with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                        _f.write(content_new)
-                    os.replace(_tmp_path, str(p))
-                except Exception:
-                    try: os.unlink(_tmp_path)
-                    except Exception: pass
-                    raise
-            await asyncio.to_thread(_write_rewrite)
-            old_lines = content.count("\n") + 1
-            new_lines = content_new.count("\n") + 1
-            _lint = await _auto_lint_result(p, workspace)
-            return f"[{_display_tool}: rewrote '{p}' (+{new_lines}/-{old_lines} lines)]{_lint}"
-
-        # ── SEARCH/REPLACE blocks found → apply patches ──
-        old_lines = content.count("\n") + 1
-        applied = 0
-        errors = []
-        for idx, (old, new) in enumerate(blocks, 1):
-            old_n = old.replace("\r\n", "\n")
-            new_n = new.replace("\r\n", "\n")
-            count = working.count(old_n)
-            if count == 0:
-                try:
-                    from tools.patch_2_fuzzy_edit import fuzzy_replace as _p2_fzr
-                    _p2_result = _p2_fzr(working, old_n, new_n)
-                except Exception:
-                    _p2_result = None
-                if _p2_result is not None:
-                    working = _p2_result
-                    applied += 1
-                    continue
-                hint = old_n.splitlines()[0][:80] if old_n.strip() else "(empty)"
-                _block_lines = len(old_n.splitlines())
-                _size_tip = (
-                    "\n  Tip: SEARCH block is large — use a SHORT unique anchor instead "
-                    "(3-5 lines around the change), or use start_line/end_line."
-                    if _block_lines > 15 else
-                    "\n  Tip: copy text verbatim from read_file - check indentation and whitespace"
-                )
-                errors.append(
-                    f"Block {idx}: SEARCH text not found (fuzzy-match also failed).\n"
-                    f"  Looking for: {hint!r}\n"
-                    f"{_size_tip}"
-                )
-            elif count > 1:
-                errors.append(
-                    f"Block {idx}: SEARCH text appears {count}x (must be unique).\n"
-                    "  Tip: include more surrounding context lines to make it unique"
-                )
-            else:
-                working = working.replace(old_n, new_n, 1)
-                applied += 1
-
-        if errors and applied == 0:
-            return _tool_error_response(
-                "EDIT_FILE_NO_BLOCKS_APPLIED",
-                "No SEARCH/REPLACE blocks could be applied.",
-                tool=_display_tool ,
-                details={"errors": errors[:8]})
-
-        final = working.replace("\n", "\r\n") if _has_crlf else working
-
-        # SHRINK-GUARD (2026-09-15): a blocks-apply that collapses a large file
-        # to almost nothing is virtually always a stale/malformed SEARCH block
-        # (live: "write_file replaced everything with a single line"), never a
-        # deliberate refactor. Require an explicit confirmation instead of
-        # silently destroying the file.
-        _orig_lines = len([l for l in str(content or "").replace("\r\n", "\n").splitlines() if l.strip()])
-        _new_lines = len([l for l in final.replace("\r\n", "\n").splitlines() if l.strip()])
-        if (not args.get("confirm_shrink")
-                and _orig_lines >= 30 and _new_lines <= 3):
-            return _tool_error_response(
-                "EDIT_FILE_SUSPICIOUS_SHRINK",
-                f"This would shrink '{p}' from {_orig_lines} to {_new_lines} content "
-                "lines. That is almost always a malformed SEARCH/REPLACE block, not a "
-                "real refactor. If you REALLY want a tiny file: read_file it first, "
-                "then resend this exact call with \"confirm_shrink\": true.",
-                tool=_display_tool)
-
-        if final.replace("\r\n", "\n") == str(content or "").replace("\r\n", "\n"):
-            return _tool_error_response(
-                "EDIT_FILE_NOOP",
-                f"no change — '{p}' is already up to date. The SEARCH/REPLACE blocks "
-                f"produced no new content (SEARCH and REPLACE were identical). "
-                f"Provide the actually NEW code in the REPLACE block.",
-                tool=_display_tool,
-            )
-
-        def _write_edit_result() -> None:
-            _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
-            try:
-                with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                    _f.write(final)
-                os.replace(_tmp_path, str(p))
-            except Exception:
-                try: os.unlink(_tmp_path)
-                except Exception: pass
-                raise
-
-        await asyncio.to_thread(_write_edit_result)
-
-        new_lines = final.count("\n") + 1
-        delta = new_lines - old_lines
-        # 0-LINES-CLARITY (2026-09-07): delta==0 can be a real inline fix
-        # (same line count, different content) — then report the char delta
-        # so the UI does not misleadingly show "0 lines".
-        result = f"[{_display_tool}: '{p}' - {applied}/{len(blocks)} blocks applied ({delta:+d} lines)"
-        if delta == 0:
-            _chard = len(final.replace("\r\n", "\n")) - len(str(content or "").replace("\r\n", "\n"))
-            result += f", {_chard:+d} chars"
-        result += "]"
-        if errors:
-            result += "\nWarnings:\n" + "\n".join(errors)
-        if blocks and applied > 0:
-            _first_old = blocks[0][0].replace("\r\n", "\n")
-            _snippet = _old_str_snippet(_first_old)
-            if _snippet:
-                result += _snippet
-        _lint = await _auto_lint_result(p, workspace)
-        return result + _lint
+        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace", newline="")
     except Exception as e:
         return _tool_error_response(
-            "EDIT_FILE_FAILED",
-            f"{_display_tool} failed for '{p}': {e}",
-            tool=_display_tool )
+            "EDIT_FILE_READ_FAILED",
+            f"Failed to read '{p}': {e}",
+            tool="edit_file")
+    _has_crlf = "\r\n" in content
+    working = content.replace("\r\n", "\n")
+    old_n = old_text.replace("\r\n", "\n")
+    new_n = new_text.replace("\r\n", "\n")
 
+    count = working.count(old_n)
+    _first_hint = old_n.splitlines()[0][:80] if old_n.strip() else "(empty)"
+    if count == 0:
+        # Fuzzy fallback: ONE best window, line-level ratio >= 0.85, spliced at
+        # line granularity (replaces exactly the matched raw lines).
+        try:
+            from tools.patch_2_fuzzy_edit import fuzzy_replace as _p2_fzr
+            _fzr = _p2_fzr(working, old_n, new_n)
+        except ImportError:
+            _fzr = None
+        if _fzr is not None:
+            working = _fzr
+            final = working.replace("\n", "\r\n") if _has_crlf else working
+
+            def _write_fuzzy() -> None:
+                _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+                try:
+                    with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
+                        _f.write(final)
+                    os.replace(_tmp_path, str(p))
+                except Exception:
+                    try: os.unlink(_tmp_path)
+                    except Exception: pass
+                    raise
+            await asyncio.to_thread(_write_fuzzy)
+            _lint = await _auto_lint_result(p, workspace)
+            return f"[edit_file: '{p}' edited via fuzzy match]{_lint}"
+        return _tool_error_response(
+            "EDIT_FILE_OLD_TEXT_NOT_FOUND",
+            f"old_text not found in '{p}' (exact or fuzzy).\n"
+            f"  Looking for: {_first_hint!r}\n"
+            "  read_file the file and COPY the passage verbatim — check indentation "
+            "and whitespace; add surrounding lines to make it unique.",
+            tool="edit_file")
+    if count > 1:
+        return _tool_error_response(
+            "EDIT_FILE_NOT_UNIQUE",
+            f"old_text appears {count} times in '{p}' — it must be unique. Add "
+            "surrounding lines from read_file to make it unique.",
+            tool="edit_file")
+
+    working = working.replace(old_n, new_n, 1)
+    if working.strip() == content.replace("\r\n", "\n").strip():
+        return _tool_error_response(
+            "EDIT_FILE_NOOP",
+            f"no change — '{p}' already contains exactly this content.",
+            tool="edit_file")
+    _orig_n = len([l for l in working.splitlines() if l.strip()])
+    _new_n = len([l for l in new_n.splitlines() if l.strip()])
+    if (not args.get("confirm_shrink") and _orig_n >= 30 and _new_n <= 3):
+        return _tool_error_response(
+            "EDIT_FILE_SUSPICIOUS_SHRINK",
+            f"This replacement would shrink '{p}' from {_orig_n} to {_new_n} content "
+            "lines — almost always a malformed edit, not a real refactor. If you "
+            "REALLY want that: read_file first, then resend with "
+            "\"confirm_shrink\": true.",
+            tool="edit_file")
+
+    final = working.replace("\n", "\r\n") if _has_crlf else working
+
+    def _write_exact() -> None:
+        _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+        try:
+            with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
+                _f.write(final)
+            os.replace(_tmp_path, str(p))
+        except Exception:
+            try: os.unlink(_tmp_path)
+            except Exception: pass
+            raise
+
+    await asyncio.to_thread(_write_exact)
+    _old_lines_n = content.count("\n") + 1
+    _new_lines_n = final.count("\n") + 1
+    _delta = _new_lines_n - _old_lines_n
+    _lint = await _auto_lint_result(p, workspace)
+    result = f"[edit_file: '{p}' replaced ({_delta:+d} lines)]"
+    if _delta == 0:
+        # 0-LINES-CLARITY: same line count, different content — report the
+        # char delta so the UI does not misleadingly show "0 lines".
+        _chard = len(new_n) - len(old_n)
+        result += f", {_chard:+d} chars"
+    return result + _lint
+
+
+async def _inline_tool_replace_lines(args: dict, workspace: Path, workspace_lock: str | None) -> str:
+    """Removed from the coder toolset (2026-09-17 consolidation) — edit_file
+    covers exact-replace (old_text/new_text). Kept dispatchable for old
+    recorded sessions."""
+    return _tool_error_response(
+        "TOOL_REMOVED",
+        "replace_lines was consolidated into edit_file: use edit_file with "
+        "old_text/new_text (exact, copied verbatim from read_file).",
+        tool="replace_lines")
 
 async def _inline_tool_replace_lines(args: dict, workspace: Path, workspace_lock: str | None) -> str:
     p = _inline_resolve_path(workspace, args.get("path", ""))
