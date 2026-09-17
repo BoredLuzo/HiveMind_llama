@@ -279,16 +279,6 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
             tool="read_file" )
 
 
-async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
-    """Backward compat alias — delegates to unified edit_file handler."""
-    return await _inline_tool_edit_file(
-        {"path": args.get("path", ""), "edits": args.get("content", ""),
-         "__model__": args.get("__model__", ""),
-         "__allow_overwrite__": args.get("allow_overwrite", False),
-         "_tool_name": "write_file"},
-        workspace, workspace_lock)
-
-
 async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_lock: str | None) -> str:
     target = workspace / args.get("path", "")
     if not target.exists():
@@ -654,7 +644,7 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
             tool="write_file")
     if existed and _old_n >= 30:
         _new_n = len([l for l in content.replace("\r\n", "\n").splitlines() if l.strip()])
-        if _new_n <= 3 and not args.get("confirm_shrink"):
+        if (_new_n <= 3 or (_old_n >= 100 and _new_n <= 10)) and not args.get("confirm_shrink"):
             return _tool_error_response(
                 "WRITE_FILE_SUSPICIOUS_SHRINK",
                 f"This overwrite would shrink '{p}' from {_old_n} to {_new_n} content "
@@ -762,12 +752,39 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
     _first_hint = old_n.splitlines()[0][:80] if old_n.strip() else "(empty)"
     if count == 0:
         # Fuzzy fallback: ONE best window, line-level ratio >= 0.85, spliced at
-        # line granularity (replaces exactly the matched raw lines).
+        # line granularity. STALE-GATE (2026-09-17): fuzzy only when the model
+        # has actually READ this file this run AND the file is unchanged since
+        # that read (mtime+size signature) — editing a never-read or externally
+        # modified version must fail clearly, not fuzzy-match "something".
+        _fuzzy_ok = False
+        _stale_note = ""
         try:
-            from tools.patch_2_fuzzy_edit import fuzzy_replace as _p2_fzr
-            _fzr = _p2_fzr(working, old_n, new_n)
+            from tools.runner import _files_read_in_run as _fri, _read_signatures as _rsig, _normalize_tool_path as _ntp
+            _rs = _fri.get(None)
+            _ek = _ntp(args.get("path", ""), workspace)
+            _fuzzy_ok = bool(_rs and _ek in _rs)
+            _sig = _rsig.get(_ek)
+            if _sig:
+                try:
+                    _st = p.stat()
+                    _sig_now = (_st.st_mtime_ns, _st.st_size)
+                    if _sig_now != _sig:
+                        _stale_note = (
+                            " The file changed on disk since your last read_file "
+                            "(or was never read this run) — read_file it again to "
+                            "see its current state.")
+                        _fuzzy_ok = False
+                except OSError:
+                    _fuzzy_ok = False
         except ImportError:
-            _fzr = None
+            _fuzzy_ok = False
+        _fzr = None
+        if _fuzzy_ok:
+            try:
+                from tools.patch_2_fuzzy_edit import fuzzy_replace as _p2_fzr
+                _fzr = _p2_fzr(working, old_n, new_n)
+            except ImportError:
+                _fzr = None
         if _fzr is not None:
             working = _fzr
             final = working.replace("\n", "\r\n") if _has_crlf else working
@@ -790,7 +807,8 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             f"old_text not found in '{p}' (exact or fuzzy).\n"
             f"  Looking for: {_first_hint!r}\n"
             "  read_file the file and COPY the passage verbatim — check indentation "
-            "and whitespace; add surrounding lines to make it unique.",
+            "and whitespace; add surrounding lines to make it unique."
+            + (_stale_note if _stale_note else ""),
             tool="edit_file")
     if count > 1:
         return _tool_error_response(
@@ -807,7 +825,8 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             tool="edit_file")
     _orig_n = len([l for l in working.splitlines() if l.strip()])
     _new_n = len([l for l in new_n.splitlines() if l.strip()])
-    if (not args.get("confirm_shrink") and _orig_n >= 30 and _new_n <= 3):
+    if (not args.get("confirm_shrink") and _orig_n >= 30
+            and (_new_n <= 3 or (_orig_n >= 100 and _new_n <= 10))):
         return _tool_error_response(
             "EDIT_FILE_SUSPICIOUS_SHRINK",
             f"This replacement would shrink '{p}' from {_orig_n} to {_new_n} content "
@@ -846,76 +865,22 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
 async def _inline_tool_replace_lines(args: dict, workspace: Path, workspace_lock: str | None) -> str:
     """Removed from the coder toolset (2026-09-17 consolidation) — edit_file
     covers exact-replace (old_text/new_text). Kept dispatchable for old
-    recorded sessions."""
+    recorded sessions. Legacy sniffs (2026-09-17): marker fragments and
+    truncated foreign calls are rejected, never written into files."""
+    _legacy_payload = str(args.get("replacement", "")) + str(args.get("content", ""))
+    for _frag in ("<<<<<<<", ">>>>>>>',", ">>>>>>>", "<parameter=", "======="):
+        _f = _frag.replace("',", "")
+        if _f in _legacy_payload:
+            return _tool_error_response(
+                "REPLACE_LINES_BLOCK_FORMAT",
+                "replacement contains SEARCH/REPLACE or foreign call marker "
+                "fragments — that format is gone and is never written into files.",
+                tool="replace_lines")
     return _tool_error_response(
         "TOOL_REMOVED",
         "replace_lines was consolidated into edit_file: use edit_file with "
         "old_text/new_text (exact, copied verbatim from read_file).",
         tool="replace_lines")
-
-async def _inline_tool_replace_lines(args: dict, workspace: Path, workspace_lock: str | None) -> str:
-    p = _inline_resolve_path(workspace, args.get("path", ""))
-    if err := _inline_check_workspace(p, workspace_lock, "replace_lines"):
-        return err
-    start_line = int(args.get("start_line", 0))
-    end_line = int(args.get("end_line", 0))
-    replacement = args.get("replacement", "")
-    get_transaction().capture_before(p)
-    try:
-        content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace", newline="")  # CRLF-PRESERVE (2026-09-13)
-        _has_crlf = "\r\n" in content
-        working_lines = content.replace("\r\n", "\n").splitlines()
-        if not working_lines and content.strip():
-            working_lines = [content]
-
-        if start_line < 1 or start_line > len(working_lines) + 1:
-            return _tool_error_response(
-                "REPLACE_LINES_INVALID_START",
-                f"start_line {start_line} out of bounds (1-{len(working_lines)}).",
-                tool="replace_lines" )
-        if end_line < start_line or end_line > len(working_lines) + 1:
-            return _tool_error_response(
-                "REPLACE_LINES_INVALID_END",
-                f"end_line {end_line} out of bounds ({start_line}-{len(working_lines)}).",
-                tool="replace_lines" )
-
-        prefix = working_lines[:start_line - 1]
-        suffix = working_lines[end_line:]
-        repl_lines = replacement.replace("\r\n", "\n").splitlines() if replacement else []
-        new_lines = prefix + repl_lines + suffix
-
-        _ends_with_nl = content.endswith("\n") or content.endswith("\r\n")
-        new_content = "\n".join(new_lines) + ("\n" if _ends_with_nl else "")
-        if _has_crlf:
-            new_content = new_content.replace("\n", "\r\n")
-
-        def _write_replace_lines() -> None:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
-            try:
-                with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                    _f.write(new_content)
-                os.replace(_tmp_path, str(p))
-            except Exception:
-                try:
-                    os.unlink(_tmp_path)
-                except Exception:
-                    pass
-                raise
-
-        await asyncio.to_thread(_write_replace_lines)
-
-        _lint = await _auto_lint_result(p, workspace)
-        added = len(repl_lines)
-        removed = end_line - start_line + 1
-        return f"[replace_lines: {p} updated lines {start_line}-{end_line} (+{added}/-{removed})]{_lint}"
-
-    except Exception as e:
-        return _tool_error_response(
-            "REPLACE_LINES_FAILED",
-            f"replace_lines failed for '{p}': {e}",
-            tool="replace_lines" )
-
 
 async def _inline_tool_undo_last(args: dict, workspace: Path, workspace_lock: str | None) -> str:
 

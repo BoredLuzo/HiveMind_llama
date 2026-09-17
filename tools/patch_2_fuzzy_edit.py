@@ -33,7 +33,8 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
 
     best_start = -1
     best_ratio = 0.0
-    best_count = 0
+    good_windows = 0
+    second_ratio = 0.0
 
     # LARGE-BLOCK MODE (2026-09-16): for big SEARCH blocks the first-line
     # anchor + char-level ratio are too brittle — one drifted line inside the
@@ -61,15 +62,18 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
             ratio = difflib.SequenceMatcher(None, o_norm, cand).ratio()
 
         if ratio > best_ratio:
+            second_ratio = best_ratio
             best_ratio = ratio
             best_start = start
-            best_count = 1
+            good_windows = 1
         elif ratio == best_ratio:
-            best_count += 1
+            good_windows += 1
 
-    if best_ratio < 0.85:
-        return None
-    if not large_block and best_count > 1:
+    # AMBIGUITY (2026-09-17, margin rule): EVERY window above the threshold
+    # counts — not just exact ties. AND a near-tie second window (within 0.05
+    # of the best, e.g. 0.99 vs 0.985 in repetitive code) means the edit is
+    # genuinely ambiguous: reject and let the model add surrounding context.
+    if best_ratio < 0.85 or good_windows > 1 or second_ratio >= best_ratio - 0.05:
         return None
 
     # LINE-GRANULAR SPLICE (2026-09-16): cut exactly the o_len raw lines via

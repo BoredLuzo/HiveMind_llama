@@ -44,6 +44,10 @@ from tools.browser import browser_tool as _browser_tool
 _files_read_in_run: _contextvars.ContextVar[set] = _contextvars.ContextVar(
     "_files_read_in_run", default=None
 )
+# READ-SIGNATURES (2026-09-17): path -> (mtime_ns, size) captured at read_file
+# time; edit_file's fuzzy fallback requires an unchanged signature so edits on
+# stale/externally-modified files fail clearly instead of fuzzy-matching.
+_read_signatures: dict = {}
 _files_in_context: _contextvars.ContextVar[set] = _contextvars.ContextVar(
     "_files_in_context", default=None
 )
@@ -796,6 +800,19 @@ async def _run_inline_tool(
             if "[FILE TRUNCATED" in _result or "[TRUNCATED:" in _result:
                 _rp_trunc = _normalize_tool_path(args["path"], workspace)
                 _read_set.discard(_rp_trunc)
+            # READ-SIGNATURE (2026-09-17): remember mtime+size at read time so
+            # edit_file's fuzzy fallback can verify the file hasn't changed
+            # since the model last saw it (stale edits must fail clearly).
+            try:
+                _rs_fp = Path(workspace) / args.get("path", "")
+                if not _rs_fp.is_absolute():
+                    _rs_fp = workspace / _rs_fp
+                _rs_fp = _rs_fp.resolve()
+                _rs_st = _rs_fp.stat()
+                _read_signatures[_normalize_tool_path(str(_rs_fp), workspace)] = (
+                    _rs_st.st_mtime_ns, _rs_st.st_size)
+            except OSError:
+                pass
 
         # WRITTEN-SET (2026-08-21): erfolgreiche write_file/write_file_append
         if name in ("write_file", "write_file_append"):
