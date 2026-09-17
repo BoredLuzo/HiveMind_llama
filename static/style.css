@@ -1043,6 +1043,18 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 .think-body::-webkit-scrollbar { width: 3px; }
 .think-body::-webkit-scrollbar-thumb { background: rgba(72,120,192,.3); border-radius: 2px; }
 .think-block.open .think-body { display: block; }
+.think-body pre.think-code {
+  background: rgba(10, 14, 24, .6);
+  border: 1px solid rgba(90, 130, 200, .18);
+  border-radius: 4px;
+  padding: 7px 9px;
+  margin: 5px 0;
+  overflow-x: auto;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre;
+  color: #cfe3ff;
+}
 .think-block.live .think-body { display: block; }
 /* ── Chunk-plan CSS removed — chunking runs invisibly in the background ──── */
 

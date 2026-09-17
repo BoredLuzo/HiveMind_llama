@@ -2999,6 +2999,35 @@ function startDuoAgent(role, label, model, roundInfo) {
   scrollBtmIfNearBottom(120);
 }
 
+function _renderThinkCodeBlocks(thinkBodyEl) {
+  // THINK-CODE-FORMAT (2026-09-17): reasoning text often contains ```lang
+  // fenced code (the model explains a bug by quoting code). Render those
+  // fences as styled <pre> blocks once the block closes — streaming keeps
+  // plain textContent for speed.
+  try {
+    var raw = thinkBodyEl.textContent || '';
+    if (raw.indexOf('```') === -1) return;
+    var out = '';
+    var parts = raw.split('```');
+    for (var i = 0; i < parts.length; i++) {
+      if (i % 2 === 1) {
+        var body = parts[i];
+        var nl = body.indexOf('\n');
+        if (nl !== -1 && nl <= 20 && /^[a-zA-Z0-9+#._-]*$/.test(body.slice(0, nl).trim())) {
+          body = body.slice(nl + 1);  // strip the language tag line
+        }
+        out += '<pre class="think-code">' + body
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          + '</pre>';
+      } else {
+        out += document.createElement('div').appendChild(
+          document.createTextNode(parts[i])).parentNode.innerHTML;
+      }
+    }
+    thinkBodyEl.innerHTML = out;
+  } catch (e) { /* formatting must never break the stream */ }
+}
+
 function _createThinkBlock() {
   var _body = document.getElementById('ab-' + S.curAgent.tid);
   if (!_body) return null;
@@ -3430,6 +3459,9 @@ function _tokenFlushLoop() {
         var after = combined.split('</think>').slice(1).join('</think>');
         S.curAgent._thinkBuf = '';
         if (thinkBlockEl) thinkBlockEl.classList.remove('live', 'open');
+        // THINK-CODE-FORMAT (2026-09-17): on close, render ``` fences in the
+        // reasoning text as real code blocks (plain textContent otherwise).
+        if (thinkBodyEl) _renderThinkCodeBlocks(thinkBodyEl);
         if (after) _liveMdAppend(body, after);
       }
     } else {
@@ -3530,6 +3562,8 @@ function doneAgent(elapsed) {
       // if the think block has content: leave it open so the user can read it
       var _tkBody = document.getElementById('thb-' + S.curAgent.tid);
       if (_tkBody && _tkBody.textContent.trim()) {
+        // THINK-CODE-FORMAT: fenced code in reasoning renders as code blocks
+        _renderThinkCodeBlocks(_tkBody);
         // show "🧠 Thinking · X chars · ✓" to indicate thinking is complete
         var _tktEl = document.getElementById('tkt-' + S.curAgent.tid);
         if (_tktEl) _tktEl.textContent = ' \u00b7 ' + _tkBody.textContent.length + ' chars \u00b7 \u2713';

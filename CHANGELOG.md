@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.5] - 2026-09-17
+
+UI polish and streaming fix.
+
+### UI
+
+- Reasoning blocks now render ```-fenced code as styled code blocks (was
+  plain text) — formatting applies when the block closes.
+- Fixed: whitespace-only stream chunks were dropped, gluing words together
+  around numbers ("September2026", "um20 Uhr"). Chat history was always
+  correct server-side; this was display only.
+- vram_guard stop reason now shows as an error with retry buttons instead
+  of a green "completed".
+
 ## [1.1.4] - 2026-09-13
 
 Tools deep audit: 14 fixes across the tool loop, file ops and external
