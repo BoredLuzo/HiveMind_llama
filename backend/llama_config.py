@@ -237,7 +237,13 @@ _MOE_KV_CACHE_TYPES: dict[str, str] = {}
 # Qwen3.6-27B dense: output diverges from non-speculative greedy at n-max 3;
 # 35B-A3B uses the same MTP implementation). 2 keeps most of the speedup with
 # clean output. Overridable for experiments via HIVEMIND_MTP_DRAFT_N_MAX.
+# SPEC OFF-SWITCH (2026-09-17): HIVEMIND_MTP_SPEC=0 disables the spec-decode
+# flags entirely — draft-mtp also disables llama-server's prompt cache-reuse
+# and has reported heavy prefill regressions on some backends (Vulkan/Metal,
+# 35B-A3B). A/B via env before pinning per-model config.
 MTP_SPEC_TYPE = "draft-mtp"
+
+MTP_ENABLED = os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off")
 
 MTP_DRAFT_N_MAX = int(os.environ.get("HIVEMIND_MTP_DRAFT_N_MAX", "2") or 2)
 

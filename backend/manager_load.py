@@ -1003,7 +1003,12 @@ class LlamaLoadMixin:
         except Exception:
             pass
         _is_mtp = bool(_mtp_from_registry) if _mtp_from_registry is not None else (_mtp_model_key in _MTP_MODELS)
-        if _is_mtp:
+        # SPEC OFF-SWITCH (2026-09-17): HIVEMIND_MTP_SPEC=0 disables the
+        # draft-mtp flags entirely — draft-mtp disables llama-server's
+        # prompt cache-reuse and has heavy prefill regressions on some
+        # backends. A/B via env without touching model configs.
+        if os.environ.get("HIVEMIND_MTP_SPEC", "1") in ("0", "false", "off"):
+            _is_mtp = False
             cmd += [
                 "--spec-type", MTP_SPEC_TYPE,
                 "--spec-draft-n-max", str(MTP_DRAFT_N_MAX),
