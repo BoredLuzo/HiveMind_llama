@@ -2,18 +2,20 @@
 
 Live complaint: during write generation the UI only showed
 "✍️ code generated 5913 chars" — no target file, no content. The rework
-turns the tool_gen event stream into a real tool card: chip appears at
-generation start, shows the target path as soon as it parses out of the
-streaming JSON, and an expandable pre the code streams into (old_text/
-new_text split for edit_file).
+streams the generated code into the RIGHT code panel (tab per file,
+plain render while streaming), while the chat keeps only a compact chip
+(tool + target path + char counter) that disappears once the real
+tool_call chip arrives. The DIFFSTAT result block starts collapsed —
+the summary carries the +N/−M metrics, the diff body opens on click.
 
 Checked here:
-  - static analysis of static/app.js: card wiring exists, cleanup hooks
-    are called from BOTH the tool_call and tool_result handlers (otherwise
-    the streaming card duplicates the real chip);
+  - static analysis of static/app.js: panel-stream wiring, throttle,
+    cleanup hooks called from BOTH the tool_call and tool_result handlers
+    (otherwise the streaming chip duplicates the real chip), DIFFSTAT
+    collapsed by default;
   - behavioral: the argument-stream parser (path extraction, JSON string
-    unescape incl. windows paths and partial \\u tails, edit_file old/new
-    split) via the node sim in tg_stream_sim.js.
+    unescape incl. windows paths and partial \\u tails, edit_file new_text
+    extraction) via the node sim in tg_stream_sim.js.
 
 Run: python tests/test_toolgen_stream_card.py
 Exit 0 = all pass, Exit 1 = failures.
@@ -54,9 +56,14 @@ def test_static_wiring():
     src = APP.read_text(encoding="utf-8")
     check("card state keyed by index (_tgCards)", "_tgCards" in src)
     check("path extracted from streaming args", '"path"\\s*:\\s*"' in src.replace("\\\\", "\\"))
-    check("edit_file old/new split in stream body", "'old_text'" in src and "'new_text'" in src)
-    check("stream panel is a real pre (.tg-pre)", "tg-pre" in src)
-    # Cleanup: without this the streaming card duplicates the real chip.
+    check("edit_file streams new_text into panel", "'new_text'" in src)
+    # The code streams into the RIGHT code panel — not an inline pre in chat.
+    check("panel stream helper wired (_tgPanelStream -> _cpAddOrUpdateFile)",
+          "_tgPanelStream" in src and "_cpAddOrUpdateFile(st.path" in src)
+    check("plain render mode for streaming (no highlight)", "'plain'" in src)
+    check("throttled panel renders", "_TG_PANEL_RENDER_MS" in src)
+    check("no inline stream pre left in chat", "tg-pre" not in src)
+    # Cleanup: without this the streaming chip duplicates the real chip.
     tc_idx = src.find("d.type === 'tool_call'")
     tr_idx = src.find("d.type === 'tool_result'")
     check("tool_call handler found", tc_idx >= 0)
@@ -65,6 +72,10 @@ def test_static_wiring():
           0 < src.find("_toolGenDone();", tc_idx, tr_idx if tr_idx > tc_idx else len(src)))
     check("_toolGenDone called in tool_result handler",
           src.find("_toolGenDone();", tr_idx) > 0)
+    # DIFFSTAT result block: collapsed by default (summary carries the
+    # +N/−M metrics; the diff body opens on click). Only short results
+    # auto-open.
+    check("DIFFSTAT block not auto-opened", src.count("_trBlock.open = true") == 1)
 
 
 def test_behavior_sim():

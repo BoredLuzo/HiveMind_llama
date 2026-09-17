@@ -3452,14 +3452,15 @@ var _TOKEN_PER_FRAME = 3;  // Tokens pro Frame (~180/s bei 60fps)
 
 // Flush all pending text tokens synchronously — call before tool_call/tool_result
 // rendering so mid-sentence text is committed before the tool chip appears.
-// ── TOOL-GEN-STREAM (2026-09-17, card rework 2026-09-18) ────────────────────
-// Live-streaming of write-family tool call arguments as a REAL tool card:
-// the chip appears the moment generation starts, shows the target path as
-// soon as it parses out of the streaming JSON, and the expandable body is
-// what the code streams into (content/new_text as the new side, old_text
-// as the removed side). Keyed by tool-call index so parallel writes in one
-// round don't mix their arguments.
+// ── TOOL-GEN-STREAM (2026-09-17, panel-stream rework 2026-09-18) ────────────
+// Live-streaming of write-family tool call arguments. The chat shows only a
+// COMPACT chip (tool + target path + char counter, gone once the real
+// tool_call chip arrives) — the generated code itself streams into the
+// RIGHT code panel (tab per file, plain render while streaming, throttled).
+// edit_file streams its new_text; writes stream the full content.
 var _tgCards = {};
+var _tgPanelLastRender = 0;
+var _TG_PANEL_RENDER_MS = 120;
 
 function _tgUnescape(s) {
   // JSON string body → text. Single left-to-right pass so multi-char
@@ -3497,6 +3498,44 @@ function _tgExtractField(buf, field) {
   return _tgUnescape(end >= 0 ? rest.slice(0, end) : rest);
 }
 
+function _tgPanelStream(st) {
+  // Push the streamed value into the right code panel. The tab appears as
+  // soon as the path is known; content renders plain + throttled while
+  // streaming, and is replaced by the real file on the file_change event
+  // after execution.
+  if (!st.path) return;
+  var field = (st.tool === 'edit_file') ? 'new_text' : 'content';
+  var txt = _tgExtractField(st.buf, field);
+  if (txt == null) return;
+  var op = (st.tool === 'edit_file') ? 'edit' : (st.tool === 'write_file_append' ? 'append' : 'write');
+  var body = document.getElementById('code-panel-body');
+  var nearBtm = body ? ((body.scrollTop + body.clientHeight) >= (body.scrollHeight - 40)) : false;
+  var now = Date.now();
+  var doRender = (now - _tgPanelLastRender) >= _TG_PANEL_RENDER_MS;
+  _cpAddOrUpdateFile(st.path, txt, op, doRender ? 'plain' : undefined);
+  if (doRender) _tgPanelLastRender = now;
+  // follow the stream when the user is at the bottom anyway
+  if (doRender && nearBtm && body && document.body.classList.contains('code-panel-open')) {
+    body.scrollTop = body.scrollHeight;
+  }
+}
+
+function _tgPanelFlush() {
+  // Final unthrottled render of every streaming tab (throttle may have
+  // skipped the tail of the stream).
+  for (var k in _tgCards) {
+    var st = _tgCards[k];
+    if (st && st.path) {
+      var field = (st.tool === 'edit_file') ? 'new_text' : 'content';
+      var txt = _tgExtractField(st.buf, field);
+      if (txt != null) {
+        var op = (st.tool === 'edit_file') ? 'edit' : (st.tool === 'write_file_append' ? 'append' : 'write');
+        _cpAddOrUpdateFile(st.path, txt, op, 'plain');
+      }
+    }
+  }
+}
+
 function _toolGenStream(d) {
   try {
     if (!S.curAgent) return;
@@ -3510,28 +3549,18 @@ function _toolGenStream(d) {
       row.dataset.tid = S.curAgent.tid;
       var chip = document.createElement('div');
       chip.className = 'tool-call-chip tc-write tg-card';
-      var icon = _TOOL_ICONS[d.name] || '\u270d\ufe0f';
       chip.innerHTML =
-        '<span class="tc-icon">' + icon + '</span>' +
+        '<span class="tc-icon">' + (_TOOL_ICONS[d.name] || '\u270d\ufe0f') + '</span>' +
         '<span class="tc-name">' + esc(d.name || 'write') + '</span>' +
         '<span class="tg-sep">\u00b7</span>' +
         '<span class="tc-label tg-path">\u2026</span>' +
-        '<span class="tg-chars"></span>' +
-        '<span class="tg-caret">\u25b8</span>';
-      var pre = document.createElement('pre');
-      pre.className = 'tg-pre';
-      pre.style.display = 'none';
-      chip.addEventListener('click', function() {
-        var open = pre.style.display !== 'none';
-        pre.style.display = open ? 'none' : 'block';
-        chip.querySelector('.tg-caret').textContent = open ? '\u25b8' : '\u25be';
-        if (!open) st.dirty = true;
-      });
+        '<span class="tg-chars"></span>';
+      // click: open the right code panel — the code streams there
+      chip.addEventListener('click', function() { toggleCodePanel(true); });
       row.appendChild(chip);
-      row.appendChild(pre);
       body.appendChild(row);
       scrollBtmIfNearBottom(60);
-      st = _tgCards[idx] = { row: row, chip: chip, pre: pre, buf: '', path: '', tool: d.name || '', dirty: true };
+      st = _tgCards[idx] = { row: row, chip: chip, buf: '', path: '', tool: d.name || '' };
     }
     st.buf += (d.content || '');
     if (d.name && st.tool !== d.name) {
@@ -3545,41 +3574,19 @@ function _toolGenStream(d) {
       if (p !== st.path) {
         st.path = p;
         st.chip.querySelector('.tg-path').textContent = p;
-        st.chip.title = 'click: watch the code stream into ' + p;
+        st.chip.title = 'click: watch the code stream into the panel';
       }
     }
     st.chip.querySelector('.tg-chars').textContent = st.buf.length + ' chars';
-    if (st.pre.style.display !== 'none') _tgRenderBody(st);
+    _tgPanelStream(st);
   } catch(e) { /* never break the stream */ }
 }
 
-function _tgRenderBody(st) {
-  // Stream view: edit_file shows old (red) vs new (green); writes show the
-  // content field. Re-render from the raw buffer each time — the buffer is
-  // small (a few KB per call) and this only runs while the panel is open.
-  var html = '';
-  if (st.tool === 'edit_file' || st.buf.indexOf('"old_text"') >= 0) {
-    var oldT = _tgExtractField(st.buf, 'old_text');
-    var newT = _tgExtractField(st.buf, 'new_text');
-    if (oldT != null && oldT.length) {
-      html += '<span class="tg-h">old_text</span>\n' + _escHtml(oldT) + '\n';
-    }
-    if (newT != null && newT.length) {
-      html += '<span class="tg-h">new_text</span>\n' + _escHtml(newT);
-    }
-    if (!html) html = _escHtml('\u2026');
-  } else {
-    var c = _tgExtractField(st.buf, 'content');
-    html = (c != null && c.length) ? _escHtml(c) : _escHtml('\u2026');
-  }
-  var nearBtm = (st.pre.scrollTop + st.pre.clientHeight) >= (st.pre.scrollHeight - 30);
-  st.pre.innerHTML = html;
-  if (nearBtm) st.pre.scrollTop = st.pre.scrollHeight;
-}
-
 function _toolGenDone() {
-  // Cards are removed once the real tool_call chip / tool_result block takes
-  // over — keeping both would duplicate name + path in the bubble.
+  // Flush the last stream state into the panel (throttle may have skipped
+  // the tail), then drop the compact chips — the real tool_call chips and
+  // the result metrics take over from here.
+  _tgPanelFlush();
   for (var k in _tgCards) {
     var st = _tgCards[k];
     if (st && st.row && st.row.parentNode) st.row.parentNode.removeChild(st.row);
@@ -6475,7 +6482,8 @@ function handleEvent(d) {
       var _trPre = document.createElement('pre');
       _trPre.className = 'tool-result-pre';
       _trPre.innerHTML = _renderDiffBody(_dsBody);
-      _trBlock.open = true;
+      // 2026-09-18: collapsed by default — the summary carries the metrics
+      // (+N/−M/hunks); the diff body opens on click for those interested.
       _trBlock.appendChild(_trSumDs);
       _trBlock.appendChild(_trPre);
       _appendToolEl(_trBody, _trBlock);
@@ -9724,7 +9732,7 @@ function _cpFindEntry(p) {
   return null;
 }
 
-function _cpShowFile(path) {
+function _cpShowFile(path, plain) {
   var entry = _cpFiles[path];
   if (!entry) return;
   _cpActive = path;
@@ -9736,14 +9744,15 @@ function _cpShowFile(path) {
   // Render content
   var body = document.getElementById('code-panel-body');
   if (!body) return;
+  var hl = plain ? function(l) { return _escHtml(l); } : _cpSyntaxHighlight;
   var lines = entry.content.split('\n');
   var lineNums = lines.map(function(l, i) {
-    return '<span style="color:var(--tx2);user-select:none;margin-right:14px;display:inline-block;min-width:28px;text-align:right;opacity:.45">'+(i+1)+'</span>'+_cpSyntaxHighlight(l);
+    return '<span style="color:var(--tx2);user-select:none;margin-right:14px;display:inline-block;min-width:28px;text-align:right;opacity:.45">'+(i+1)+'</span>'+hl(l);
   }).join('\n');
   body.innerHTML = '<pre>' + lineNums + '</pre>';
 }
 
-function _cpAddOrUpdateFile(path, content, op) {
+function _cpAddOrUpdateFile(path, content, op, render) {
   var hdr = document.getElementById('code-panel-hdr');
   if (!hdr) return;
   // Clear placeholder text if first file
@@ -9770,8 +9779,10 @@ function _cpAddOrUpdateFile(path, content, op) {
     var opBadge = _cpFiles[path].tab.querySelector('.cp-op');
     if (opBadge) { opBadge.className='cp-op '+opLabel; opBadge.textContent=opLabel.toUpperCase(); }
   }
-  // Auto-show this file (panel contents update invisibly along)
-  _cpShowFile(path);
+  // Auto-show this file (panel contents update invisibly along).
+  // render: 'plain' → no syntax highlight (streaming), false → skip render
+  // entirely (throttled streaming tick), undefined → normal highlighted.
+  if (render !== false) _cpShowFile(path, render === 'plain' ? true : undefined);
   // 2026-08-25: the panel no longer opens by itself — manually via
   // the "⌨ Code" button or a click on a write/edit tool chip.
   var btn = document.getElementById('h-code-btn');
