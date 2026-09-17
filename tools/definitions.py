@@ -47,7 +47,7 @@ _INLINE_CODING_TOOLS = [
         ),
         "parameters": {"type": "object", "properties": {
             "symbol": {"type": "string", "description": "The symbol to find (e.g. 'calculateTotal' or 'Handler')"},
-            "path":   {"type": "string", "description": "File or directory to scan (default: workspace root, optional)"},
+            "path":   {"type": "string", "description": "Scan root (default: workspace)"},
             "max_items": {"type": "integer", "description": "Optional max results (default: 160)"}
         }, "required": ["symbol"]}
     }},
@@ -90,7 +90,7 @@ _INLINE_CODING_TOOLS = [
             "long-running processes, or shell commands — use run_bash or write a real file + run_tests."
         ),
         "parameters": {"type": "object", "properties": {
-            "code": {"type": "string", "description": "The Python code to execute. Must be a valid Python snippet. Output is captured from stdout. Use print() to produce output."}
+            "code": {"type": "string", "description": "Python snippet; output from stdout (use print())."}
         }, "required": ["code"]}
     }},
     {"type": "function", "function": {
@@ -103,8 +103,8 @@ _INLINE_CODING_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "manager":  {"type": "string", "enum": ["npm", "pip", "cargo", "go", "dotnet", "composer"],
                          "description": "Package manager"},
-            "packages": {"type": "string", "description": "Space-separated package names to install, e.g. 'fabric ws pg'"},
-            "dev":      {"type": "boolean", "description": "Install as dev dependency (npm only, --save-dev; default false)"}
+            "packages": {"type": "string", "description": "Space-separated package names"},
+            "dev":      {"type": "boolean", "description": "npm --save-dev"}
         }, "required": ["manager", "packages"]}
     }},
     {"type": "function", "function": {
@@ -155,7 +155,7 @@ _INLINE_CODING_TOOLS = [
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path"},
-            "content": {"type": "string", "maxLength": 20000, "description": "Complete file content as plain text — no SEARCH/REPLACE markers. Max ~20000 chars per call."}
+            "content": {"type": "string", "maxLength": 20000, "description": "Complete file content (plain text, no markers)."}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {
@@ -201,7 +201,7 @@ _INLINE_CODING_TOOLS = [
         "name": "git_commit", "description": "Commit all staged and unstaged changes in the workspace to git. Use after completing a chunk or a significant implementation step. Message should be a concise one-line description of what was implemented.",
         "parameters": {"type": "object", "properties": {
             "message": {"type": "string", "description": "Commit message (one line, imperative mood, max 72 chars)"},
-            "workspace": {"type": "string", "description": "Absolute path to the git repository root — OMIT to commit in the current workspace"}
+            "workspace": {"type": "string", "description": "Git repo root (omit: workspace)"}
         }, "required": ["message"]}
     }},
     {"type": "function", "function": {
@@ -216,7 +216,7 @@ _INLINE_CODING_TOOLS = [
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path (must already exist)"},
-            "content": {"type": "string", "maxLength": 20000, "description": "Content chunk to append. For AUTO-SPLIT continuation use exactly the bare token <AUTO_SPLIT_CONTINUE> - without quotes."}
+            "content": {"type": "string", "maxLength": 20000, "description": "Content chunk. AUTO-SPLIT continuation: bare token <AUTO_SPLIT_CONTINUE> (no quotes)."}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {
@@ -229,7 +229,7 @@ _INLINE_CODING_TOOLS = [
             "After undoing, re-read the file before further edits."
         ),
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string", "description": "Optional file path to undo. Omit to undo all files changed in this round."}
+            "path": {"type": "string", "description": "File to undo (omit: all changes this round)."}
         }, "required": []}
     }},
     {"type": "function", "function": {
@@ -300,10 +300,7 @@ _INLINE_CODING_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "status": {
                 "type": "object",
-                "description": (
-                    "Report object with three fields: completed (what was done), "
-                    "blockers (what could NOT be done and why), build_status (verification result)."
-                ),
+                "description": "See fields.",
                 "properties": {
                     "completed": {"type": "array", "items": {"type": "string"},
                                   "description": "What was implemented/verified"},
@@ -333,7 +330,7 @@ _INLINE_CODING_TOOLS = [
             "path":     {"type": "string", "description": "Output PNG path (for action='screenshot')"},
             "js":       {"type": "string", "description": "JavaScript expression (for action='evaluate')"},
             "full_page": {"type": "boolean", "default": False,
-                          "description": "(action='screenshot') capture the full scrollable page instead of the viewport"}
+                          "description": "Capture full scrollable page (screenshot)"}
         }, "required": ["action"]}
     }},
     {"type": "function", "function": {

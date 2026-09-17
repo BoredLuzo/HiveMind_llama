@@ -499,7 +499,11 @@ async def execute_tool_round(
                                 "RUN_TESTS_EXEC_ERROR",
                                 f"{type(_ate).__name__}: {str(_ate)[:150]}",
                                 tool="run_tests" )
-                        dtool_msgs.append({"role": "tool", "content": "[AUTO-TEST]" + _at_res,
+                        # AUTO-TEST-CAP (2026-09-17): the only tool message that
+                        # bypassed _cap_tool_result — large suites injected 1k+
+                        # tokens. The status checks below use the original
+                        # _at_res; history gets a bounded copy.
+                        dtool_msgs.append({"role": "tool", "content": "[AUTO-TEST]" + _at_res[:1200],
                                             "tool_call_id": _dtc_call.get("id", _dname), "name": "run_tests"})
                         try:
                             await hooks.emit({"type": "token",

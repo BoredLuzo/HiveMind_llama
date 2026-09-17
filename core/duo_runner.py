@@ -1654,23 +1654,16 @@ async def run_code_duo(ctx):
             except Exception:
                 pass
             _wb_hint_safe = max(2000, int(_wb_limit) - 1000)
+            # WRITE-RULES-DEDUPE (2026-09-17): the full chunk/marker contract
+            # also lives in the write_file/write_file_append tool descriptions
+            # — the system block now carries only the per-model numbers.
             _duo_coder_sys += (
-                f"\n\nWRITE RULES (hard limits):\n"
-                f"- write_file / write_file_append / edit_file full-rewrite accept at "
-                f"most ~{_wb_limit} characters per call.\n"
-                f"- If the target file already exists, NEVER overwrite it with the full "
-                f"content in a single write_file call. First read_file it, then use "
-                f"edit_file SEARCH/REPLACE blocks for partial changes. Full rebuilds via "
-                f"write_file are only for NEW files.\n"
-                f"- If a file needs more than ~{_wb_limit} chars: write_file with the "
-                f"first part, then write_file_append for each further part (each chunk "
-                f"well below ~{_wb_hint_safe} chars).\n"
-                f"- If a call is auto-split the harness replies [AUTO-SPLIT]: the "
-                f"remainder is stored server-side. Finish it with one SHORT call:\n"
-                f"  write_file_append(path, content='<AUTO_SPLIT_CONTINUE>')\n"
-                f"  content must be exactly <AUTO_SPLIT_CONTINUE> (bare token, no quotes "
-                f"around it). Never resend the content - an oversized single call wastes "
-                f"minutes and is split/rejected."
+                f"\n\nWRITE RULES (hard limits): write_file / write_file_append / "
+                f"edit_file full-rewrite accept at most ~{_wb_limit} characters per "
+                f"call (chunks well below ~{_wb_hint_safe}). Never full-rewrite an "
+                f"EXISTING file — read_file it, then edit_file SEARCH/REPLACE. "
+                f"Oversized writes are auto-split: finish via write_file_append(path, "
+                f"content='<AUTO_SPLIT_CONTINUE>')."
             )
         except Exception:
             pass
