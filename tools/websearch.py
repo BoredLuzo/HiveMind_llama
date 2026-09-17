@@ -64,7 +64,11 @@ logger = logging.getLogger("hivemind.websearch")
 
 _SEARXNG_HOST        = "http://localhost:8888"
 _SEARXNG_ENABLED     = False
-_SEARXNG_ENGINES     = "google,bing,wikipedia,github"
+# ENGINE-SET (2026-09-17): google is CAPTCHA-suspended on most self-hosted
+# SearXNG instances (0 results forever) and wikipedia returns 0 results under
+# language="all" — both only add dead latency. bing + duckduckgo + github are
+# the engines that actually answer. Users can still override via settings.
+_SEARXNG_ENGINES     = "bing,duckduckgo,github"
 # "de-DE,en-US" lieferte 400 Bad Request (Live-Test gegen lokalen SearXNG).
 _SEARXNG_LANGUAGE    = "all"
 _MAX_RESULTS_DEFAULT = 5
@@ -194,7 +198,12 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
 
     results = data.get("results", [])
     if not results:
-        return f"[web_search: No results for '{query}']"
+        return (
+            f"[web_search: No results for '{query}']\n"
+            "Do NOT retry the same topic with reshuffled words. Either use a much more "
+            "specific query (exact library/product name, version, exact error string) "
+            "or continue the task without web data."
+        )
 
     lines = [f"Search results for: {query}\n"]
     _first_url = None

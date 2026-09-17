@@ -1591,6 +1591,7 @@ async def run_code_duo(ctx):
         _consecutive_reads = [0]       # READ-LADDER
         _last_read_path = [""]         # READ-LADDER (path-reset)
         _read_ladder_fired = [False]   # READ-LADDER
+        _ws_budget_streak = [0]        # WEBSEARCH-BUDGET-STOP
         _wedge_handoffs_used = [0]     # WEDGE-HANDOFF: per-run budget ref
         _wedge_escalated = False       # WEDGE-HANDOFF: run stopped via failed/exhausted handoff
         # VERIFY-GATE-OWNER (2026-09-09): own veto counter. The executor's
@@ -1663,7 +1664,11 @@ async def run_code_duo(ctx):
                 "about an API signature, library function, framework behavior, or "
                 "config option, web_search FIRST. A wrong assumption breaks the "
                 "build; a web_search call costs seconds. If the plan calls for "
-                "research, actually run the searches - do not skip them."
+                "research, actually run the searches - do not skip them. "
+                "Search EXTERNAL knowledge only (docs, APIs, error messages). "
+                "Never search for this project's own name, private repos, or the "
+                "user's identity - search engines return only junk for those, and "
+                "a search budget is spent fast."
             )
         # Writes were being truncated by the token limit or rejected as too large
         # AFTER full generation (7-minute total loss). Instruct proactively with
@@ -4625,6 +4630,7 @@ async def run_code_duo(ctx):
                                 consecutive_reads=_consecutive_reads,
                                 last_read_path=_last_read_path,
                                 read_ladder_fired=_read_ladder_fired,
+                                ws_budget_streak=_ws_budget_streak,
                             ),
                             tool_mode=_tool_mode,
                             duo_ws=_duo_ws,

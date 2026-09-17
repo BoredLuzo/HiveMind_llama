@@ -2,7 +2,7 @@
 
 Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_settings_docs.py` — do not edit by hand.
 
-197 settings keys, based on DEFAULT_SETTINGS.
+202 settings keys, based on DEFAULT_SETTINGS.
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -30,7 +30,6 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_agentic_mode` | bool | `False` | — |
 | `duo_agentic_thinking` | bool | `False` | — |
 | `duo_autolint_python_engine` | str | `"auto"` | — |
-| `duo_cache_friendly_ctx` | bool | `True` | — |
 | `duo_caps` | object | `{}` | — |
 | `duo_chunking` | bool | `True` | — |
 | `duo_coder_ctx_agentic` | null | `null` | — |
@@ -53,6 +52,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_critic_tools` | bool | `False` | — |
 | `duo_distilled_executor` | bool | `False` | — |
 | `duo_error_rollup` | bool | `True` | — |
+| `duo_evict_planner_on_coder` | bool | `True` | — |
 | `duo_git_autocommit` | bool | `False` | — |
 | `duo_git_checkpoints` | bool | `True` | — |
 | `duo_install_max_calls` | int | `3` | — |
@@ -60,12 +60,11 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_max_compressions` | int | `40` | — |
 | `duo_max_tool_rounds` | int | `64` | — |
 | `duo_max_tool_rounds_runtime_cap` | int | `300` | — |
-| `duo_min_free_ctx_tokens` | int | `0` | — |
 | `duo_noop_hint_enabled` | bool | `True` | — |
 | `duo_p3_max_fix_attempts` | int | `3` | — |
 | `duo_pair` | str | `"focused"` | — |
 | `duo_parallel_preexplore` | bool | `False` | — |
-| `duo_partial_compression` | bool | `False` | — |
+| `duo_partial_compression` | bool | `True` | — |
 | `duo_partition_max_files` | int | `30` | — |
 | `duo_pass_explore_files` | str | `"touched"` | — |
 | `duo_peer_ratings_agentic` | bool | `False` | — |
@@ -128,6 +127,12 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_websearch_timeout_critical_seconds` | int | `24` | — |
 | `duo_websearch_timeout_fast_seconds` | int | `13` | — |
 | `duo_websearch_timeout_seconds` | int | `20` | — |
+| `duo_wedge_handoff_enabled` | bool | `False` | — |
+| `duo_wedge_handoff_max_per_run` | int | `2` | — |
+| `duo_wedge_handoff_max_rounds` | int | `10` | — |
+| `duo_wedge_handoff_model` | str | `""` | empty = coder model (fresh context, same weights) |
+| `duo_wedge_handoff_streak_threshold` | int | `4` | — |
+| `duo_wedge_handoff_timeout_s` | int | `900` | — |
 | `duo_worker_slots` | int | `2` | — |
 | `duo_write_chars_per_token` | float | `2.5` | — |
 | `duo_write_guard_enabled` | bool | `True` | — |
@@ -169,7 +174,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `read_guard_enabled` | bool | `True` | — |
 | `safe_profile_matrix_file` | str | `"model_configs/safe_profile_matrix.json"` | — |
 | `safe_profile_policy` | str | `"default_8gb_v1"` | — |
-| `searxng_engines` | str | `"google,bing,wikipedia,github"` | — |
+| `searxng_engines` | str | `"bing,duckduckgo,github"` | — |
 | `searxng_host` | str | `"http://localhost:8888"` | — |
 | `searxng_language` | str | `"all"` | — |
 | `server_port` | int | `8001` | — |

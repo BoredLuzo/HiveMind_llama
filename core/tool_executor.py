@@ -374,6 +374,19 @@ async def execute_tool_round(
         _dresult = await _execute_one_tool(
             _dname, _dargs, _dargs_with_model, _i, _pre_results,
             trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws)
+        # WEBSEARCH-BUDGET-STOP (2026-09-17): after 2 consecutive budget-
+        # exhausted web_search calls the model still retries with different
+        # queries — stop the run instead of burning rounds (live: 28 rounds,
+        # 0 files written, every call hit the budget wall).
+        if "WEBSEARCH_BUDGET_EXHAUSTED" in str(_dresult):
+            trs.ws_budget_streak[0] += 1
+            if trs.ws_budget_streak[0] >= 2:
+                await hooks.emit({"type": "status",
+                    "content": "⛔ Web search budget is GONE for this run — do NOT call web_search again. Continue with your task using the information you already have."})
+                result.loop_detected = True
+                break
+        else:
+            trs.ws_budget_streak[0] = 0
         await hooks.emit(_make_tool_result_event(_dname, _dresult))
         if _dname == "ask_user":
             # ASK-USER-GATE-FIX (2026-09-02): agent_resumed only when the run

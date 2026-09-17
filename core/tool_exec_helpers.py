@@ -1037,3 +1037,6 @@ class ToolRoundState:
     consecutive_reads: list = field(default_factory=lambda: [0])
     last_read_path: list = field(default_factory=lambda: [""])
     read_ladder_fired: list = field(default_factory=lambda: [False])
+    # WEBSEARCH-BUDGET-STOP (2026-09-17): consecutive budget-exhausted
+    # web_search calls; >=2 stops the run (run-persistent ref).
+    ws_budget_streak: list = field(default_factory=lambda: [0])

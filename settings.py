@@ -276,7 +276,9 @@ DEFAULT_SETTINGS = {
     # J) WEBSEARCH & SEARXNG
     # ════════════════════════════════════════════════════════════════════════
     "searxng_host":            "http://localhost:8888",
-    "searxng_engines":         "google,bing,wikipedia,github",
+    # bing/duckduckgo/github actually answer on stock instances; google is
+    # CAPTCHA-suspended and wikipedia needs a concrete language (dead under "all").
+    "searxng_engines":         "bing,duckduckgo,github",
     "searxng_language":        "all",
     "pipeline_websearch_enabled": True,
     "duo_websearch_enabled":   False,
