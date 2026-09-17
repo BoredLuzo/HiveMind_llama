@@ -1044,14 +1044,29 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 .think-body::-webkit-scrollbar-thumb { background: rgba(72,120,192,.3); border-radius: 2px; }
 .think-block.open .think-body { display: block; }
 
-.tool-gen-indicator {
-  padding: 4px 10px;
+/* TOOL-GEN-STREAM card (2026-09-18): live streaming write card — same chip
+   language as .tool-call-chip, plus an expandable pre the code streams into. */
+.tg-card { cursor: pointer; animation: tg-pulse 1.5s ease-in-out infinite; }
+.tg-card.done { animation: none; }
+.tg-card .tg-sep { color: var(--tx2); margin: 0 2px; }
+.tg-card .tg-path { font-family: 'IBM Plex Mono', monospace; opacity: .9; }
+.tg-card .tg-chars { color: var(--tx2); margin-left: 8px; font-size: 10px; }
+.tg-card .tg-caret { margin-left: 8px; color: var(--tx2); }
+.tg-card.done .tg-chars { color: #22c55e; }
+.tg-pre {
+  background: rgba(10, 14, 24, .6);
+  border: 1px solid rgba(90, 130, 200, .18);
+  border-radius: 4px;
+  padding: 7px 9px;
+  margin: 3px 0 5px;
+  max-height: 240px;
+  overflow: auto;
   font-size: 10px;
-  color: var(--tx2);
-  font-family: 'IBM Plex Mono', monospace;
-  animation: tg-pulse 1.5s ease-in-out infinite;
+  line-height: 1.45;
+  white-space: pre;
+  color: #cfe3ff;
 }
-.tool-gen-indicator.done { animation: none; color: #22c55e; }
+.tg-pre .tg-h { display: block; color: #7aa2f7; margin: 4px 0 2px; font-weight: 700; }
 @keyframes tg-pulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
 
 .think-body pre.think-code {

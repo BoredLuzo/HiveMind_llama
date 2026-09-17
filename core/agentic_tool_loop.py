@@ -335,6 +335,7 @@ class AgenticToolLoop(ToolLoop):
                                 if _acc_fn in ("write_file", "write_file_append", "edit_file"):
                                     await self._emit({"type": "tool_gen",
                                                       "name": _acc_fn,
+                                                      "index": _tc_idx,
                                                       "content": _tc_args})
 
                     # send usage EXACTLY ONCE after the stream ends

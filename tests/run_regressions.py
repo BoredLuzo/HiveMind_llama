@@ -58,6 +58,7 @@ SUITES = [
     ("tree_scout_workspace",   "tests/test_tree_scout_workspace.py",           60),
     ("native_lib_check",       "tests/test_native_lib_check.py",               60),
     ("websearch_budget_stop",  "tests/test_websearch_budget_stop.py",          60),
+    ("toolgen_stream_card",    "tests/test_toolgen_stream_card.py",            60),
     ("tools_audit_fixes",      "tests/test_tools_audit_fixes.py",             120),
     ("mini_shrink_retry",      "tests/test_mini_shrink_retry.py",              60),
     ("output_reserve",         "tests/test_output_reserve.py",                  60),

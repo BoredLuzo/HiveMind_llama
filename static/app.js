@@ -3452,34 +3452,138 @@ var _TOKEN_PER_FRAME = 3;  // Tokens pro Frame (~180/s bei 60fps)
 
 // Flush all pending text tokens synchronously — call before tool_call/tool_result
 // rendering so mid-sentence text is committed before the tool chip appears.
-// ── TOOL-GEN-STREAM (2026-09-17) ────────────────────────────────────────────
-// Live-streaming of write-family tool call arguments. Shows the code being
-// generated in a streaming pre block under the tool call chip.
-var _tgEl = null, _tgBuf = '';
+// ── TOOL-GEN-STREAM (2026-09-17, card rework 2026-09-18) ────────────────────
+// Live-streaming of write-family tool call arguments as a REAL tool card:
+// the chip appears the moment generation starts, shows the target path as
+// soon as it parses out of the streaming JSON, and the expandable body is
+// what the code streams into (content/new_text as the new side, old_text
+// as the removed side). Keyed by tool-call index so parallel writes in one
+// round don't mix their arguments.
+var _tgCards = {};
+
+function _tgUnescape(s) {
+  // JSON string body → text. Single left-to-right pass so multi-char
+  // sequences decode atomically ("\\\\t" must stay "\\t", never become TAB).
+  // Tolerates a trailing partial "\\uXX" (stream cut mid-escape).
+  try {
+    var done = s.replace(/\\u[0-9a-fA-F]{0,3}$/, '');
+    done = done.replace(/\\(u[0-9a-fA-F]{4}|[\s\S])/g, function(_, g) {
+      if (g[0] === 'u') return String.fromCharCode(parseInt(g.slice(1), 16));
+      switch (g) {
+        case 'n': return '\n';
+        case 't': return '\t';
+        case 'r': return '\r';
+        case '"': return '"';
+        case '\\': return '\\';
+        case '/': return '/';
+        default: return g;
+      }
+    });
+    return done;
+  } catch(e) { return s; }
+}
+
+function _tgExtractField(buf, field) {
+  // Value of "field": "..." from a possibly-incomplete args JSON. The value
+  // runs to the buffer end (stream open) or to the closing quote.
+  var m = buf.match(new RegExp('"' + field + '"\\s*:\\s*"'));
+  if (!m) return null;
+  var rest = buf.slice(m.index + m[0].length);
+  var end = -1;
+  for (var i = 0; i < rest.length; i++) {
+    if (rest[i] === '\\') { i++; continue; }
+    if (rest[i] === '"') { end = i; break; }
+  }
+  return _tgUnescape(end >= 0 ? rest.slice(0, end) : rest);
+}
 
 function _toolGenStream(d) {
   try {
     if (!S.curAgent) return;
     var body = document.getElementById('ab-' + S.curAgent.tid);
     if (!body) return;
-    if (!_tgEl || !_tgEl.isConnected) {
-      _tgEl = document.createElement('div');
-      _tgEl.className = 'tool-gen-indicator';
-      _tgEl.innerHTML = '<span class="tg-icon">✍️</span> <span class="tg-label">generating code…</span> <span class="tg-chars"></span>';
-      body.appendChild(_tgEl);
-      _tgBuf = '';
+    var idx = (d.index != null) ? d.index : 0;
+    var st = _tgCards[idx];
+    if (!st || !st.row || !st.row.isConnected) {
+      var row = document.createElement('div');
+      row.className = 'tool-call-row';
+      row.dataset.tid = S.curAgent.tid;
+      var chip = document.createElement('div');
+      chip.className = 'tool-call-chip tc-write tg-card';
+      var icon = _TOOL_ICONS[d.name] || '\u270d\ufe0f';
+      chip.innerHTML =
+        '<span class="tc-icon">' + icon + '</span>' +
+        '<span class="tc-name">' + esc(d.name || 'write') + '</span>' +
+        '<span class="tg-sep">\u00b7</span>' +
+        '<span class="tc-label tg-path">\u2026</span>' +
+        '<span class="tg-chars"></span>' +
+        '<span class="tg-caret">\u25b8</span>';
+      var pre = document.createElement('pre');
+      pre.className = 'tg-pre';
+      pre.style.display = 'none';
+      chip.addEventListener('click', function() {
+        var open = pre.style.display !== 'none';
+        pre.style.display = open ? 'none' : 'block';
+        chip.querySelector('.tg-caret').textContent = open ? '\u25b8' : '\u25be';
+        if (!open) st.dirty = true;
+      });
+      row.appendChild(chip);
+      row.appendChild(pre);
+      body.appendChild(row);
       scrollBtmIfNearBottom(60);
+      st = _tgCards[idx] = { row: row, chip: chip, pre: pre, buf: '', path: '', tool: d.name || '', dirty: true };
     }
-    _tgBuf += (d.content || '');
-    _tgEl.querySelector('.tg-chars').textContent = _tgBuf.length + ' chars';
+    st.buf += (d.content || '');
+    if (d.name && st.tool !== d.name) {
+      st.tool = d.name;
+      st.chip.querySelector('.tc-name').textContent = d.name;
+      st.chip.querySelector('.tc-icon').textContent = _TOOL_ICONS[d.name] || '\u270d\ufe0f';
+    }
+    var pm = st.buf.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (pm) {
+      var p = _tgUnescape(pm[1]);
+      if (p !== st.path) {
+        st.path = p;
+        st.chip.querySelector('.tg-path').textContent = p;
+        st.chip.title = 'click: watch the code stream into ' + p;
+      }
+    }
+    st.chip.querySelector('.tg-chars').textContent = st.buf.length + ' chars';
+    if (st.pre.style.display !== 'none') _tgRenderBody(st);
   } catch(e) { /* never break the stream */ }
 }
 
+function _tgRenderBody(st) {
+  // Stream view: edit_file shows old (red) vs new (green); writes show the
+  // content field. Re-render from the raw buffer each time — the buffer is
+  // small (a few KB per call) and this only runs while the panel is open.
+  var html = '';
+  if (st.tool === 'edit_file' || st.buf.indexOf('"old_text"') >= 0) {
+    var oldT = _tgExtractField(st.buf, 'old_text');
+    var newT = _tgExtractField(st.buf, 'new_text');
+    if (oldT != null && oldT.length) {
+      html += '<span class="tg-h">old_text</span>\n' + _escHtml(oldT) + '\n';
+    }
+    if (newT != null && newT.length) {
+      html += '<span class="tg-h">new_text</span>\n' + _escHtml(newT);
+    }
+    if (!html) html = _escHtml('\u2026');
+  } else {
+    var c = _tgExtractField(st.buf, 'content');
+    html = (c != null && c.length) ? _escHtml(c) : _escHtml('\u2026');
+  }
+  var nearBtm = (st.pre.scrollTop + st.pre.clientHeight) >= (st.pre.scrollHeight - 30);
+  st.pre.innerHTML = html;
+  if (nearBtm) st.pre.scrollTop = st.pre.scrollHeight;
+}
+
 function _toolGenDone() {
-  if (_tgEl) {
-    _tgEl.querySelector('.tg-label').textContent = 'code generated';
-    _tgEl.classList.add('done');
-    _tgEl = null; _tgBuf = '';
+  // Cards are removed once the real tool_call chip / tool_result block takes
+  // over — keeping both would duplicate name + path in the bubble.
+  for (var k in _tgCards) {
+    var st = _tgCards[k];
+    if (st && st.row && st.row.parentNode) st.row.parentNode.removeChild(st.row);
+    delete _tgCards[k];
   }
 }
 
@@ -6146,6 +6250,8 @@ function handleEvent(d) {
     // model-initiated tool call — as a chip in the current coder bubble
     // Flush pending text tokens first so mid-sentence text is committed before the tool chip
     _flushTokenQueueSync();
+    // TOOL-GEN-DONE: the streaming card is replaced by this real chip
+    _toolGenDone();
     if (!S.curAgent) return;
     // phase switch: first tool call → header changes from "Code" to "Execution"
     if (!S._coderHadToolCall) {
