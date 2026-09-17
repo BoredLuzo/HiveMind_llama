@@ -1044,34 +1044,16 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 .think-body::-webkit-scrollbar-thumb { background: rgba(72,120,192,.3); border-radius: 2px; }
 .think-block.open .think-body { display: block; }
 
-.tool-gen-stream {
-  margin: 3px 0;
-  border: 1px solid rgba(100, 140, 200, .15);
-  border-radius: 4px;
-  overflow: hidden;
-}
-.tool-gen-stream.live { border-color: rgba(100, 160, 255, .25); }
-.tool-gen-hdr {
-  padding: 3px 8px;
+.tool-gen-indicator {
+  padding: 4px 10px;
   font-size: 10px;
   color: var(--tx2);
   font-family: 'IBM Plex Mono', monospace;
-  background: rgba(100, 140, 200, .05);
-  cursor: pointer;
+  animation: tg-pulse 1.5s ease-in-out infinite;
 }
-.tool-gen-pre {
-  max-height: 300px;
-  overflow-y: auto;
-  margin: 0;
-  padding: 6px 10px;
-  font-size: 10px;
-  line-height: 1.5;
-  font-family: 'IBM Plex Mono', monospace;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: #a0c4e0;
-  background: rgba(0, 0, 0, .2);
-}
+.tool-gen-indicator.done { animation: none; color: #22c55e; }
+@keyframes tg-pulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+
 .think-body pre.think-code {
   background: rgba(10, 14, 24, .6);
   border: 1px solid rgba(90, 130, 200, .18);

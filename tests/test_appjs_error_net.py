@@ -112,8 +112,8 @@ def test_sse_death_always_visible():
 
 def test_cache_bust():
     html = IDX.read_text(encoding="utf-8")
-    if "app.js?v=20260917-3" in html:
-        ok("Cache-Bust: index.html verweist auf app.js?v=20260917-3")
+    if "app.js?v=20260917-4" in html:
+        ok("Cache-Bust: index.html verweist auf app.js?v=20260917-4")
     else:
         fail("cache_bust", "Version nicht gebustet")
 

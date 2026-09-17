@@ -3463,28 +3463,22 @@ function _toolGenStream(d) {
     var body = document.getElementById('ab-' + S.curAgent.tid);
     if (!body) return;
     if (!_tgEl || !_tgEl.isConnected) {
-      _tgEl = document.createElement('details');
-      _tgEl.className = 'tool-gen-stream live';
-      _tgEl.open = true;
-      _tgEl.innerHTML = '<summary class="tool-gen-hdr">✍️ <span class="tg-name"></span> — generating…</summary>'
-        + '<pre class="tool-gen-pre"></pre>';
+      _tgEl = document.createElement('div');
+      _tgEl.className = 'tool-gen-indicator';
+      _tgEl.innerHTML = '<span class="tg-icon">✍️</span> <span class="tg-label">generating code…</span> <span class="tg-chars"></span>';
       body.appendChild(_tgEl);
       _tgBuf = '';
+      scrollBtmIfNearBottom(60);
     }
-    _tgEl.querySelector('.tg-name').textContent = d.name || 'write';
     _tgBuf += (d.content || '');
-    var pre = _tgEl.querySelector('.tool-gen-pre');
-    pre.textContent = _tgBuf.slice(-800);
-    pre.scrollTop = pre.scrollHeight;
-    scrollBtmIfNearBottom(60);
+    _tgEl.querySelector('.tg-chars').textContent = _tgBuf.length + ' chars';
   } catch(e) { /* never break the stream */ }
 }
 
 function _toolGenDone() {
   if (_tgEl) {
-    _tgEl.classList.remove('live');
-    var pre = _tgEl.querySelector('.tool-gen-pre');
-    if (pre) pre.textContent = pre.textContent.slice(-800) + '\n✓ complete';
+    _tgEl.querySelector('.tg-label').textContent = 'code generated';
+    _tgEl.classList.add('done');
     _tgEl = null; _tgBuf = '';
   }
 }
