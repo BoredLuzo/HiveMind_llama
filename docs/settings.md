@@ -176,7 +176,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `safe_profile_policy` | str | `"default_8gb_v1"` | — |
 | `searxng_engines` | str | `"bing,duckduckgo,github"` | — |
 | `searxng_host` | str | `"http://localhost:8888"` | — |
-| `searxng_language` | str | `"all"` | — |
+| `searxng_language` | str | `"en"` | — |
 | `server_port` | int | `8001` | — |
 | `session_compress_threshold` | int | `20` | — |
 | `smart_preload_enabled` | bool | `True` | — |

@@ -279,7 +279,7 @@ DEFAULT_SETTINGS = {
     # bing/duckduckgo/github actually answer on stock instances; google is
     # CAPTCHA-suspended and wikipedia needs a concrete language (dead under "all").
     "searxng_engines":         "bing,duckduckgo,github",
-    "searxng_language":        "all",
+    "searxng_language":        "en",
     "pipeline_websearch_enabled": True,
     "duo_websearch_enabled":   False,
     "websearch_auto_trigger":  True,

@@ -11,10 +11,13 @@ from __future__ import annotations
 import os
 import shutil
 
-DEV = r"C:\Users\NtheP\Desktop\HiveMind_dev"
+# NO-HARDCODED-PATHS (2026-09-18): no username in this file — it ships in the
+# repo and release zips. DEV defaults to this script's repo root; targets can
+# be overridden via HIVEMIND_SYNC_TARGETS (os.pathsep-separated).
+DEV = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TARGETS = [
-    r"C:\Users\NtheP\Desktop\HiveMind_install",
-    r"C:\Users\NtheP\Desktop\HiveMind_install_test",
+    p for p in os.environ.get("HIVEMIND_SYNC_TARGETS", "").split(os.pathsep)
+    if p.strip()
 ]
 SKIP_TOP = ("logs", "sessions", "models", "llama", "chats", ".git", "__pycache__",
             ".venv", "build", ".ruff_cache", ".pytest_cache", ".zcode", ".opencode")

@@ -69,8 +69,10 @@ _SEARXNG_ENABLED     = False
 # language="all" — both only add dead latency. bing + duckduckgo + github are
 # the engines that actually answer. Users can still override via settings.
 _SEARXNG_ENGINES     = "bing,duckduckgo,github"
-# "de-DE,en-US" lieferte 400 Bad Request (Live-Test gegen lokalen SearXNG).
-_SEARXNG_LANGUAGE    = "all"
+# English results by default — "all" pulls region noise (e.g. German retail
+# chains for tech queries). Comma-lists like "de-DE,en-US" 400 on SearXNG,
+# single values are fine.
+_SEARXNG_LANGUAGE    = "en"
 _MAX_RESULTS_DEFAULT = 5
 _FETCH_TIMEOUT       = 10.0
 _SEARCH_TIMEOUT      = 8.0
@@ -78,8 +80,10 @@ _SEARCH_TIMEOUT      = 8.0
 # UA-FALLBACK (2026-09-02): some sites (Wikipedia) return 403 for browser UAs on
 # certain IPs but accept a descriptive bot UA. Used as the second web_fetch
 # attempt when the browser UA gets an HTTP 403.
+# NO-CONTACT-URL (2026-09-18): no operator URL in the UA — every 403 retry
+# sends this header to third-party sites and it must not identify the owner.
 _FETCH_UA_FALLBACK = [
-    "Mozilla/5.0 (compatible; HiveMind/1.0; +https://github.com/BoredLuzo/HiveMind_llama)",
+    "Mozilla/5.0 (compatible; HiveMind-local/1.0)",
 ]
 
 _SEARCH_CACHE: dict[str, tuple[float, str]] = {}

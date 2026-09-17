@@ -157,7 +157,7 @@ def test_no_results_hint():
     check("no-results: Reformulierungs-Hint vorhanden", "Do NOT retry" in out, out[:200])
 
 
-# ── 3. Default engine set: only living engines ─────────────────────────────
+# ── 3. Default engine set: only living engines, English results, no dox ────
 def test_default_engines():
     from settings import DEFAULT_SETTINGS
     import tools.websearch as wsm
@@ -170,6 +170,17 @@ def test_default_engines():
         check(f"engines {label}: google entfernt (CAPTCHA-tot)", "google" not in parts, str(parts))
         check(f"engines {label}: wikipedia entfernt (0 Treffer unter language=all)",
               "wikipedia" not in parts, str(parts))
+
+    for label, lang in (("settings.default", str(DEFAULT_SETTINGS.get("searxng_language", ""))),
+                        ("websearch.fallback", wsm._SEARXNG_LANGUAGE)):
+        check(f"language {label}: en (englische Results, kein Region-Noise)",
+              lang == "en", lang)
+
+    # NO-CONTACT-URL: the 403-retry UA goes to third-party sites and must not
+    # carry the operator's identity (repo URL, username, ...).
+    for ua in wsm._FETCH_UA_FALLBACK:
+        check(f"ua no-dox: '{ua[:40]}' ohne URL/Handle",
+              "http" not in ua and "BoredLuzo" not in ua, ua)
 
 
 if __name__ == "__main__":
