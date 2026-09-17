@@ -28,6 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 APP = ROOT / "static" / "app.js"
 SIM = ROOT / "tests" / "tg_stream_sim.js"
+DIFF_SIM = ROOT / "tests" / "tg_diff_cleanup_sim.js"
 
 passed = 0
 failed = 0
@@ -76,6 +77,10 @@ def test_static_wiring():
     # +N/−M metrics; the diff body opens on click). Only short results
     # auto-open.
     check("DIFFSTAT block not auto-opened", src.count("_trBlock.open = true") == 1)
+    # Diff-body cleanup: file headers dropped, hunk headers humanized,
+    # summary says "changed blocks" not diff-jargon "hunks".
+    check("diff body cleaned via _cleanDiffBody", "_cleanDiffBody(_dsBody)" in src)
+    check("no 'hunks' jargon in summary", "' hunks'" not in src and "changed block" in src)
 
 
 def test_behavior_sim():
@@ -83,12 +88,13 @@ def test_behavior_sim():
     if not node:
         print("  SKIP  behavioral sim (node not available)")
         return
-    r = subprocess.run([node, str(SIM)], capture_output=True, text=True)
-    print(r.stdout.rstrip())
-    if r.returncode != 0:
-        fail("node sim exit code", r.stderr[-300:])
-    else:
-        ok("node sim: all parser cases pass")
+    for sim in (SIM, DIFF_SIM):
+        r = subprocess.run([node, str(sim)], capture_output=True, text=True)
+        print(r.stdout.rstrip())
+        if r.returncode != 0:
+            fail(f"node sim {sim.name} exit code", r.stderr[-300:])
+            return
+    ok("node sims: all parser + diff-cleanup cases pass")
 
 
 if __name__ == "__main__":

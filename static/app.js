@@ -3354,6 +3354,16 @@ function _renderDirTree(raw) {
   return html;
 }
 
+// DIFF-CLEANUP (2026-09-18): drop the --- a/... +++ b/... file header lines
+// (the file is already named in the tool chip) and humanize the hunk header:
+// "@@ -7,6 +7,7 @@" is diff-internal line counting — "@@ line 7 @@" says
+// what a reader actually wants (where in the new file this block lands).
+function _cleanDiffBody(body) {
+  return body
+    .replace(/^---\s+\S+[^\n]*\n\+\+\+\s+\S+[^\n]*\n?/, '')
+    .replace(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@[^\n]*$/gm, '@@ line $1 @@');
+}
+
 // DIFF-BODY (2026-09-17): colour a unified diff body line by line
 // (+ green / - red / @@ hunk header / --- +++ meta). Input is already
 // length-capped server-side (tool_result.full <= 4000 chars).
@@ -6474,16 +6484,17 @@ function handleEvent(d) {
       _trSumDs.innerHTML = '<span class="tr-name">' + (_TOOL_ICONS[_trToolName] || '\uD83D\uDD27') + ' ' + esc(_trToolName) + '</span>'
         + '<span style="color:#22c55e;font-weight:700;margin-left:8px">+' + _dsAdd + '</span>'
         + '<span style="color:#e06060;font-weight:700;margin-left:6px">&minus;' + _dsRem + '</span>'
-        + '<span style="color:var(--tx2);margin-left:10px">' + _dsHunks + ' hunks</span>'
+        + '<span style="color:var(--tx2);margin-left:10px">' + _dsHunks + (_dsHunks === 1 ? ' changed block' : ' changed blocks') + '</span>'
         + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated)</span>' : '');
       var _dsIdx = _trFull.indexOf('[DIFFSTAT]');
       var _dsBody = _dsIdx >= 0 ? _trFull.slice(_dsIdx).replace(/^\[DIFFSTAT\][^\n]*\n?/, '') : _trFull;
       _dsBody = _dsBody.replace(/```[a-z]*\s*$/, '').trim();
+      _dsBody = _cleanDiffBody(_dsBody);
       var _trPre = document.createElement('pre');
       _trPre.className = 'tool-result-pre';
       _trPre.innerHTML = _renderDiffBody(_dsBody);
       // 2026-09-18: collapsed by default — the summary carries the metrics
-      // (+N/−M/hunks); the diff body opens on click for those interested.
+      // (+N/−M/blocks); the diff body opens on click for those interested.
       _trBlock.appendChild(_trSumDs);
       _trBlock.appendChild(_trPre);
       _appendToolEl(_trBody, _trBlock);
