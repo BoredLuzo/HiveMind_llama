@@ -169,6 +169,44 @@ _STEP_FALLBACK_RE = re.compile(
     re.MULTILINE,
 )
 
+# PLAN-STEP-TITLE (2026-09-17): display-side parser for a raw planner step
+# line. Tolerant variant of _STEP_LINE_RE: file: is mandatory, ALL other
+# fields are free-form pipe segments (the strict contract wants touch:/
+# decision:, small models emit read:/fix:/... — all accepted as intent text).
+_STEP_DISPLAY_RE = re.compile(
+    r"^\s*(?:\d+[\.\)]\s*)?file:\s*(?P<file>[^|]+?)\s*(?:\|\s*(?P<rest>.*?))?\s*$"
+)
+_STEP_INTENT_KEYS = ("touch", "decision", "read", "fix", "change", "action", "implement")
+
+
+def derive_step_title(raw: str, max_len: int = 110) -> str:
+    """Concise, human-readable display title for one planner step line.
+
+    The raw step is a pipe-field contract ("1. file: src/x.py | touch: Foo.bar
+    | decision: add hook | risk: signature break") — fine as the coder
+    contract, unreadable as a UI task title. Returns "<file>: <intent text>"
+    (intent = first touch/decision/read-style field), with sensible fallbacks.
+    DISPLAY ONLY: callers must keep shipping the raw line to the coder.
+    """
+    s = str(raw or "").strip()
+    m = _STEP_DISPLAY_RE.match(s)
+    if not m:
+        return (s[:max_len] + "…") if len(s) > max_len else s
+    file_part = m.group("file").strip().rstrip(".,;")
+    intent = ""
+    for part in (m.group("rest") or "").split("|"):
+        k, _, v = part.partition(":")
+        if k.strip().lower() in _STEP_INTENT_KEYS and v.strip():
+            intent = v.strip()
+            break
+    if file_part and intent:
+        title = f"{file_part}: {intent}"
+    elif file_part:
+        title = f"Implement changes to {file_part}"
+    else:
+        title = s
+    return (title[:max_len] + "…") if len(title) > max_len else title
+
 
 def _parse_planner_steps(plan_text: str) -> list[PlanStep]:
     """Parse planner output text into PlanStep list."""

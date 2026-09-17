@@ -151,6 +151,7 @@ from core.duo_helpers import (
 )
 
 from core.plan_tracker import build_tracker_from_planner as _build_tracker_from_planner
+from core.plan_tracker import derive_step_title as _derive_step_title
 
 # ── Extracted pure utilities (core/duo/_utils.py) ──
 from core.duo._utils import (
@@ -1505,7 +1506,16 @@ async def run_code_duo(ctx):
                 ctx.phase_timer.end("soft_planner", status=_planner_status)
             # When chunking is off, don't send chunks to the UI — prevents
             # confusing "CHUNK-PLAN" panel when only a briefing was requested.
-            _emit_chunks = list(_subtasks) if ctx.duo_config.chunking else []
+            # PLAN-TITLES (2026-09-17): ship {"title","raw"} objects so the UI
+            # checklist shows a concise readable title per chunk instead of the
+            # raw pipe-format step line ("file: ... | read: ... | risk: ...").
+            # The frontend already prefers c.title (app.js planner_result
+            # handler) and falls back to the string. DISPLAY ONLY: _loop_items
+            # below keep the RAW strings — the coder contract is unchanged.
+            _emit_chunks = (
+                [{"title": _derive_step_title(_s), "raw": _s} for _s in _subtasks]
+                if ctx.duo_config.chunking else []
+            )
             yield await ctx.emit({
                 "type":          "planner_result",
                 "chunks":        _emit_chunks,

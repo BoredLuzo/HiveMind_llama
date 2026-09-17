@@ -3249,6 +3249,33 @@ function _mdInlinePlan(s) {
   return s;
 }
 
+// PLAN-STEP-DISPLAY (2026-09-17): planner step lines are pipe-field contracts
+// ("1. file: src/x.js | touch: Foo.bar | decision: add hook | risk: ...") —
+// fine for the coder, unreadable as a task bullet. Show "<file>: <intent>"
+// (first touch/decision/read-style field), keep the full contract as tooltip.
+function _planStepDisplay(stepText) {
+  var s = String(stepText || '');
+  var m = s.match(/^\s*(?:\d+[.)]\s*)?file:\s*([^|]+?)\s*(?:\|(.*))?$/);
+  if (!m) return _mdInlinePlan(s);
+  var file = m[1].trim().replace(/[.,;]+$/, '');
+  var intent = '';
+  var keys = ['touch', 'decision', 'read', 'fix', 'change', 'action', 'implement'];
+  var parts = (m[2] || '').split('|');
+  for (var i = 0; i < parts.length; i++) {
+    var idx = parts[i].indexOf(':');
+    if (idx < 0) continue;
+    var k = parts[i].slice(0, idx).trim().toLowerCase();
+    var v = parts[i].slice(idx + 1).trim();
+    if (keys.indexOf(k) >= 0 && v) { intent = v; break; }
+  }
+  var title = (file && intent) ? (file + ': ' + intent)
+            : file ? ('Implement changes to ' + file)
+            : s;
+  if (title.length > 110) title = title.slice(0, 110) + '\u2026';
+  var full = _escHtml(s.length > 200 ? s.slice(0, 200) + '\u2026' : s).replace(/"/g, '&quot;');
+  return _mdInlinePlan(title) + ' <span class="pm-step-full" title="' + full + '">\u2139</span>';
+}
+
 function _buildPlanMarkdown(text) {
   var out = [];
   var lines = String(text || '').split('\n');
@@ -3267,7 +3294,7 @@ function _buildPlanMarkdown(text) {
     m = ln.match(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/);
     if (m) { flushP(); var chk = (m[1] === 'x' || m[1] === 'X') ? '\u2611' : '\u2610'; out.push('<div class="pm-li pm-task"><span class="pm-chk">' + chk + '</span>' + _mdInlinePlan(m[2]) + '</div>'); continue; }
     m = ln.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (m) { flushP(); out.push('<div class="pm-li"><span class="pm-bul">\u2022</span>' + _mdInlinePlan(m[1]) + '</div>'); continue; }
+    if (m) { flushP(); out.push('<div class="pm-li"><span class="pm-bul">\u2022</span>' + _planStepDisplay(m[1]) + '</div>'); continue; }
     m = ln.match(/^\s*[-*]\s+(.+)$/);
     if (m) { flushP(); out.push('<div class="pm-li"><span class="pm-bul">\u2022</span>' + _mdInlinePlan(m[1]) + '</div>'); continue; }
     if (!ln.trim()) { flushP(); continue; }
@@ -3325,6 +3352,25 @@ function _renderDirTree(raw) {
           + icon + '&thinsp;' + _escHtml(name) + '</span>\n';
   });
   return html;
+}
+
+// DIFF-BODY (2026-09-17): colour a unified diff body line by line
+// (+ green / - red / @@ hunk header / --- +++ meta). Input is already
+// length-capped server-side (tool_result.full <= 4000 chars).
+function _renderDiffBody(body) {
+  var lines = String(body || '').split('\n');
+  var out = [];
+  for (var i = 0; i < lines.length; i++) {
+    var ln = lines[i];
+    var style = '';
+    if (/^(\+\+\+|---)\s/.test(ln))      style = 'color:#686868';
+    else if (/^@@/.test(ln))             style = 'color:#7aa2f7';
+    else if (/^\+/.test(ln))             style = 'color:#22c55e';
+    else if (/^-/.test(ln))              style = 'color:#e06060';
+    if (ln.length > 400) ln = ln.slice(0, 400) + '\u2026';
+    out.push('<span style="' + style + '">' + _escHtml(ln) + '</span>');
+  }
+  return out.join('\n');
 }
 
 // Apply markdown rendering to direct text nodes of a coder bubble body
@@ -6278,13 +6324,21 @@ function handleEvent(d) {
         + '<span style="color:#22c55e;font-weight:700;margin-left:8px">+' + _dsAdd + '</span>'
         + '<span style="color:#e06060;font-weight:700;margin-left:6px">&minus;' + _dsRem + '</span>'
         + '<span style="color:var(--tx2);margin-left:10px">' + _dsHunks + ' hunks</span>'
-        + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated — numbers complete)</span>' : '');
-      var _dsTbl = '<table class="tc-extra-table" style="margin:2px 0 4px">'
-        + '<tr><td>added</td><td style="color:#22c55e;font-weight:700">+' + _dsAdd + ' lines</td></tr>'
-        + '<tr><td>removed</td><td style="color:#e06060;font-weight:700">&minus;' + _dsRem + ' lines</td></tr>'
-        + '<tr><td>Hunks (change blocks)</td><td>' + _dsHunks + '</td></tr>'
-        + '</table>';
-      _trPre.innerHTML = _dsTbl;
+        + '<span style="color:var(--tx2);margin-left:10px;font-size:10px">diff \u2014 chip click \u2192 full file</span>'
+        + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated \u2014 numbers complete)</span>' : '');
+      // DIFF-FIX (2026-09-17): this branch used to crash — _trPre was used at
+      // the old `_trPre.innerHTML` line before its `var` declaration created
+      // it, the TypeError died in the SSE catch, and NO result block was ever
+      // appended for successful write/edit rows (path-only chips, no diff).
+      // Now: render the actual unified diff body with +/- colouring. Small
+      // diffs auto-open; the chip still opens the live-code panel for context.
+      var _dsIdx = _trFull.indexOf('[DIFFSTAT]');
+      var _dsBody = _dsIdx >= 0 ? _trFull.slice(_dsIdx).replace(/^\[DIFFSTAT\][^\n]*\n?/, '') : _trFull;
+      _dsBody = _dsBody.replace(/```[a-z]*\s*$/, '').trim();
+      var _trPre = document.createElement('pre');
+      _trPre.className = 'tool-result-pre';
+      _trPre.innerHTML = _renderDiffBody(_dsBody);
+      if ((_dsAdd + _dsRem) <= 40 && !_dsTrunc) _trBlock.open = true;
       _trBlock.appendChild(_trSumDs);
       _trBlock.appendChild(_trPre);
       _appendToolEl(_trBody, _trBlock);
