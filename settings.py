@@ -249,6 +249,17 @@ DEFAULT_SETTINGS = {
     # NO-OP hint (2026-09-07): injects a read_file nudge after 2x ineffective
     # edits on the same path (Python run-state, compression-proof).
     "duo_noop_hint_enabled":    True,
+    # WEDGE-HANDOFF (2026-09-17): when the coder fails the same edit on one
+    # file repeatedly (streak threshold, or the identical call twice within a
+    # streak), the run delegates that ONE edit to a fresh-context fix agent
+    # (same model weights, clean window) and continues. Off by default until
+    # validated in live/test — flip duo_wedge_handoff_enabled to true there.
+    "duo_wedge_handoff_enabled":         False,
+    "duo_wedge_handoff_streak_threshold": 4,
+    "duo_wedge_handoff_max_per_run":     2,
+    "duo_wedge_handoff_timeout_s":       900,
+    "duo_wedge_handoff_max_rounds":      10,
+    "duo_wedge_handoff_model":           "",   # empty = coder model (fresh context, same weights)
     "keep_awake_during_run":   True,
     # DESKTOP-NOTIFICATIONS (2026-08-27, User-Wunsch): Windows-Toasts via
     "desktop_notifications":   True,

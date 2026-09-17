@@ -354,6 +354,13 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # _INLINE_CODING_TOOLS) — the coder uses edit_file (+start_line/end_line).
     "duo_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch",
                                            "replace_lines", "edit_ast"},
+    # WEDGE-HANDOFF (2026-09-17): fresh-context repair delegate. Read + write
+    # family, deliberately NO run_bash/git/ask_user/browser — minimal-invasive
+    # fix only; all handler-level guards (noop, shrink, block-sniff,
+    # READ_REQUIRED) apply unchanged.
+    "fix_agent": {"read_file", "get_signatures", "list_dir", "find_files",
+                  "search_code", "edit_file", "write_file",
+                  "write_file_append", "undo_last", "get_datetime"},
     "duo_readonly": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
     "pre_explore": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
     "critic_verify": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"run_bash"},

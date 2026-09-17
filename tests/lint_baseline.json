@@ -91,6 +91,10 @@
   "broad_except": 99,
   "except_pass": 29
  },
+ "core/fix_agent.py": {
+  "broad_except": 5,
+  "except_pass": 1
+ },
  "core/model_sampling.py": {
   "broad_except": 2,
   "except_pass": 1
@@ -124,6 +128,10 @@
   "except_pass": 0
  },
  "core/toolcall_sanitize.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "core/wedge_handoff.py": {
   "broad_except": 1,
   "except_pass": 0
  },
@@ -375,6 +383,10 @@
   "broad_except": 1,
   "except_pass": 0
  },
+ "tests/test_wedge_handoff.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
  "tools/background.py": {
   "broad_except": 8,
   "except_pass": 6
@@ -400,8 +412,8 @@
   "except_pass": 7
  },
  "tools/handlers/file_ops.py": {
-  "broad_except": 33,
-  "except_pass": 11
+  "broad_except": 27,
+  "except_pass": 9
  },
  "tools/handlers/git_tools.py": {
   "broad_except": 2,

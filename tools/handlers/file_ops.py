@@ -823,13 +823,17 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             "EDIT_FILE_NOOP",
             f"no change — '{p}' already contains exactly this content.",
             tool="edit_file")
+    # SHRINK-GUARD (2026-09-17, FIXED): compare the RESULTING FILE's line
+    # count against the CURRENT file's — not the replacement text's. A 1-line
+    # replacement in a 50-line file is a normal edit; only a rewrite that
+    # collapses the FILE is suspicious.
     _orig_n = len([l for l in working.splitlines() if l.strip()])
-    _new_n = len([l for l in new_n.splitlines() if l.strip()])
+    _after_n = len([l for l in working.replace(old_n, new_n, 1).splitlines() if l.strip()])
     if (not args.get("confirm_shrink") and _orig_n >= 30
-            and (_new_n <= 3 or (_orig_n >= 100 and _new_n <= 10))):
+            and (_after_n <= 3 or (_orig_n >= 100 and _after_n <= _orig_n // 10))):
         return _tool_error_response(
             "EDIT_FILE_SUSPICIOUS_SHRINK",
-            f"This replacement would shrink '{p}' from {_orig_n} to {_new_n} content "
+            f"This replacement would shrink '{p}' from {_orig_n} to {_after_n} content "
             "lines — almost always a malformed edit, not a real refactor. If you "
             "REALLY want that: read_file first, then resend with "
             "\"confirm_shrink\": true.",

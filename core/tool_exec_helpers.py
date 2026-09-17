@@ -1006,6 +1006,9 @@ class ToolRoundState:
     last_learned_insight_sig: str = ""
     last_too_large_path: list = field(default_factory=lambda: [None])
     attempts_per_file: dict = field(default_factory=dict)
+    # WEDGE-HANDOFF (2026-09-17): per-chunk detection state from duo_runner
+    # (same object every round, like attempts_per_file). None = feature off.
+    wedge_state: dict | None = None
     tool_error_retries: dict = field(default_factory=dict)
     call_sigs: list = field(default_factory=list)
     recent_focus_paths: list = field(default_factory=list)

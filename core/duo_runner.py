@@ -123,6 +123,19 @@ from core.model_sampling import get_sampling_profile
 from core.agentic_duo_state import DuoRoundState
 from core.tool_executor import execute_tool_round, ToolExecHooks, ToolRoundState
 
+# ── WEDGE-HANDOFF (2026-09-17): fresh-agent handoff for wedging edits ─────
+from core.wedge_handoff import (
+    new_wedge_state as _wedge_new_state,
+    note_edit_success as _wedge_note_success,
+    streak_of as _wedge_streak_of,
+    attempts_of as _wedge_attempts_of,
+    build_handover as _wedge_build_handover,
+    build_resolved_notice as _wedge_build_resolved,
+    build_escalated_notice as _wedge_build_escalated,
+    invalidate_read_signature as _wedge_invalidate_sig,
+)
+from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
+
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
@@ -1568,6 +1581,8 @@ async def run_code_duo(ctx):
         _consecutive_reads = [0]       # READ-LADDER
         _last_read_path = [""]         # READ-LADDER (path-reset)
         _read_ladder_fired = [False]   # READ-LADDER
+        _wedge_handoffs_used = [0]     # WEDGE-HANDOFF: per-run budget ref
+        _wedge_escalated = False       # WEDGE-HANDOFF: run stopped via failed/exhausted handoff
         # VERIFY-GATE-OWNER (2026-09-09): own veto counter. The executor's
         # task_complete ladder used to pre-satisfy this gate (shared counter),
         # skipping verification entirely after 3 in-loop blocks.
@@ -3261,6 +3276,13 @@ async def run_code_duo(ctx):
                     _call_sigs: list = []  # loop detection: incremental signatures
                     _last_too_large_path: str = ""
                     _attempts_per_file: dict = {}
+                    # WEDGE-HANDOFF (2026-09-17): per-chunk detection state,
+                    # passed as the same object into every ToolRoundState.
+                    # None = feature off (executor skips all wedge accounting).
+                    _wedge_state = (
+                        _wedge_new_state(threshold=int(ctx.settings.get("duo_wedge_handoff_streak_threshold", 4) or 4))
+                        if bool(ctx.settings.get("duo_wedge_handoff_enabled", False)) else None
+                    )
                     _tool_error_retries: dict = {}
                     _tool_ctx_lru = ToolContextLRU(default_ttl=int(ctx.settings.get("duo_tool_output_ttl", 3) or 3))
                     # P2-7 FIX: Use module-level keyword tuple + reuse _read_only_task_request
@@ -4579,6 +4601,7 @@ async def run_code_duo(ctx):
                                 last_learned_insight_sig=_last_learned_insight_sig,
                                 last_too_large_path=_last_too_large_ref,
                                 attempts_per_file=_attempts_per_file,
+                                wedge_state=_wedge_state,
                                 tool_error_retries=_tool_error_retries,
                                 call_sigs=_call_sigs,
                                 recent_focus_paths=_recent_focus_paths,
@@ -4634,6 +4657,71 @@ async def run_code_duo(ctx):
                             if _exec_result.deadline_extended_to > _duo_deadline_at:
                                 _duo_deadline_at = _exec_result.deadline_extended_to
                                 state["_duo_deadline_at"] = _duo_deadline_at
+                        # ── WEDGE-HANDOFF (2026-09-17): fresh-agent handoff ──
+                        # The executor detected a wedging edit (same file,
+                        # repeated failures). Delegation, not abort: run the
+                        # fix agent, feed the outcome back as ONE compact
+                        # notice, continue the chunk with a clean slate.
+                        if getattr(_exec_result, "wedge_file", "") and not _loop_detected:
+                            _wedge_path = str(_exec_result.wedge_file)
+                            _wedge_max = int(ctx.settings.get("duo_wedge_handoff_max_per_run", 2) or 2)
+                            if _wedge_handoffs_used[0] >= _wedge_max:
+                                yield await ctx.emit({"type": "status",
+                                    "content": f"⚠️ Wedge on {Path(_wedge_path).name} — handoff budget exhausted, escalating to human."})
+                                _ld_setter(4650); _loop_detected = True
+                                _wedge_escalated = True
+                                break
+                            yield await ctx.emit({"type": "wedge_handoff",
+                                "file": _wedge_path,
+                                "attempt": _wedge_handoffs_used[0] + 1})
+                            yield await ctx.emit({"type": "status",
+                                "content": f"🧩 Wedge on {Path(_wedge_path).name} — handing the edit to a fresh-context fix agent…"})
+                            _wedge_t0 = time.time()
+                            _handover = _wedge_build_handover(
+                                path=_wedge_path,
+                                intent=(f"Plan chunk {_di + 1}/{_n_items}: {str(_subtask)[:300]}" if _subtask else ""),
+                                attempts=_wedge_attempts_of(_wedge_state, _wedge_path),
+                                streak=_wedge_streak_of(_wedge_state, _wedge_path),
+                                threshold=int(_wedge_state.get("threshold", 4)),
+                            )
+                            # Same weights as the coder (fresh context, no model
+                            # switch); duo_wedge_handoff_model is an explicit
+                            # escape hatch only — never a silent fallback.
+                            _fix_model = str(ctx.settings.get("duo_wedge_handoff_model", "") or "").strip() or exec_mdl
+                            _fx = await _wedge_run_fix_agent(
+                                path=_wedge_path,
+                                handover=_handover,
+                                model=_fix_model,
+                                workspace_lock=_ws_str,
+                                port=_cached_coder_port,
+                                max_rounds=int(ctx.settings.get("duo_wedge_handoff_max_rounds", 10) or 10),
+                                timeout_s=float(ctx.settings.get("duo_wedge_handoff_timeout_s", 900) or 900),
+                            )
+                            # BUDGET-EXEMPT: the handoff wait does not burn the
+                            # chunk deadline — push it forward by the elapsed
+                            # time so a successful handoff cannot time the run out.
+                            _duo_deadline_at += (time.time() - _wedge_t0)
+                            state["_duo_deadline_at"] = _duo_deadline_at
+                            _wedge_handoffs_used[0] += 1
+                            if _fx.get("status") in ("resolved", "no_fix_needed"):
+                                # The handoff counts as the successful write on
+                                # this path (or as verified-correct): reset the
+                                # streak so the coder gets a clean slate.
+                                _wedge_note_success(_wedge_state, _wedge_path)
+                                _wedge_invalidate_sig(_wedge_path, _ws_str)
+                                _dtool_msgs.append({"role": "user", "content": _wedge_build_resolved(
+                                    _wedge_path, str(_fx.get("summary", "")),
+                                    no_fix=(_fx.get("status") == "no_fix_needed"))})
+                                yield await ctx.emit({"type": "status",
+                                    "content": f"✅ Wedge handoff on {Path(_wedge_path).name}: {_fx.get('status')}"})
+                            else:
+                                _dtool_msgs.append({"role": "user", "content": _wedge_build_escalated(
+                                    _wedge_path, str(_fx.get("summary", "fix agent failed")))})
+                                yield await ctx.emit({"type": "status",
+                                    "content": f"⚠️ Wedge handoff failed on {Path(_wedge_path).name} — escalating to human."})
+                                _ld_setter(4651); _loop_detected = True
+                                _wedge_escalated = True
+                                break
                         _last_too_large_path = _last_too_large_ref[0]
                         _cached_coder_port = _cached_port_ref[0]
                         _verify_mutation_serial = _exec_result.verify_mutation_serial
@@ -5253,7 +5341,8 @@ async def run_code_duo(ctx):
                     )
                 except Exception:
                     pass
-                _halt_with_resume("timeout_guard" if _duo_timed_out else "loop_detected")
+                _halt_with_resume("wedge_escalated" if _wedge_escalated
+                                  else ("timeout_guard" if _duo_timed_out else "loop_detected"))
                 break
 
             _is_last = (_di == _n_items - 1)
@@ -6069,6 +6158,10 @@ async def run_code_duo(ctx):
         ctx.duo_stop_reason = "timeout"
     elif _duo_hard_stop:
         ctx.duo_stop_reason = "hard_stop"
+    elif _loop_detected and _wedge_escalated:
+        # WEDGE-HANDOFF: distinct stop reason — the run died on a wedged edit
+        # whose repair handoff failed or exhausted its budget (human escalation).
+        ctx.duo_stop_reason = "wedge_escalated"
     elif _loop_detected:
         ctx.duo_stop_reason = "loop_detected"
     elif ctx.exec_ctrl.state == AgentState.HALTED:

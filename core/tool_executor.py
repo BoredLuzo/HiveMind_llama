@@ -27,6 +27,7 @@ from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
 from tools.errors import tool_call_failed as _tool_call_failed, tool_error_has_code as _tool_error_has_code, tool_error_response as _tool_error_response
 from core.agentic_duo_state import DuoRoundState
+from core import wedge_handoff as _wedge
 from core.tool_exec_helpers import (
     ToolRoundState,
     _SYS_PREFIX,
@@ -128,6 +129,7 @@ class ToolExecResult:
     task_complete_called: bool = False
     extra_user_msg: str = ""            # injected into dtool_msgs when set
     deadline_extended_to: float = 0.0   # DEADLINE-GRACE: new run deadline after write progress
+    wedge_file: str = ""                # WEDGE-HANDOFF: path whose edit keeps failing
 
 
 
@@ -669,6 +671,25 @@ async def execute_tool_round(
         )
         if _tool_call_failed(_dresult, _dname) and not _is_verify_feedback:
             _total_tool_errors[0] += 1
+            # ── WEDGE-DETECT (2026-09-17) ────────────────────────────────
+            # The file-specific streak beats the generic >=6 error cap:
+            # checked FIRST, and the break below skips the cap. The existing
+            # stuck hook (on_tool_result) already ran above — if IT declared
+            # the loop, no handoff happens (generic stop keeps priority).
+            # Failures still count toward the global cap (unchanged).
+            if (getattr(trs, "wedge_state", None) is not None
+                    and _focus_path
+                    and _dname in _wedge.EDIT_FAMILY_TOOLS):
+                _wedge_repeat = _wedge.note_edit_failure(
+                    trs.wedge_state, _dname, _focus_path, _raw_s, _dresult)
+                if (not result.loop_detected
+                        and _wedge.detect_wedge(trs.wedge_state, _focus_path, _wedge_repeat)):
+                    result.wedge_file = _focus_path
+                    _logger.warning(
+                        "[WEDGE] %s wedged on %s (streak=%d) — handoff signal",
+                        _dname, _focus_path,
+                        _wedge.streak_of(trs.wedge_state, _focus_path))
+                    break
             if _total_tool_errors[0] >= 6:
                 if not _recovery_saturated(dtool_msgs):
                     dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
@@ -710,6 +731,11 @@ async def execute_tool_round(
             and _focus_path
             and not _tool_call_failed(_dresult, _dname)
         ):
+            # WEDGE-RESET (2026-09-17): a successful write on the path clears
+            # its streak/hashes/history. A read alone must NOT reset —
+            # re-read + retry of the same wrong edit IS the wedge pattern.
+            if getattr(trs, "wedge_state", None) is not None:
+                _wedge.note_edit_success(trs.wedge_state, _focus_path)
             try:
                 from context.compression import evict_stale_reads_for_path as _evict_stale
                 _evicted_stale = _evict_stale(
