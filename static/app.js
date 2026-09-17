@@ -3452,6 +3452,43 @@ var _TOKEN_PER_FRAME = 3;  // Tokens pro Frame (~180/s bei 60fps)
 
 // Flush all pending text tokens synchronously — call before tool_call/tool_result
 // rendering so mid-sentence text is committed before the tool chip appears.
+// ── TOOL-GEN-STREAM (2026-09-17) ────────────────────────────────────────────
+// Live-streaming of write-family tool call arguments. Shows the code being
+// generated in a streaming pre block under the tool call chip.
+var _tgEl = null, _tgBuf = '';
+
+function _toolGenStream(d) {
+  try {
+    if (!S.curAgent) return;
+    var body = document.getElementById('ab-' + S.curAgent.tid);
+    if (!body) return;
+    if (!_tgEl || !_tgEl.isConnected) {
+      _tgEl = document.createElement('details');
+      _tgEl.className = 'tool-gen-stream live';
+      _tgEl.open = true;
+      _tgEl.innerHTML = '<summary class="tool-gen-hdr">✍️ <span class="tg-name"></span> — generating…</summary>'
+        + '<pre class="tool-gen-pre"></pre>';
+      body.appendChild(_tgEl);
+      _tgBuf = '';
+    }
+    _tgEl.querySelector('.tg-name').textContent = d.name || 'write';
+    _tgBuf += (d.content || '');
+    var pre = _tgEl.querySelector('.tool-gen-pre');
+    pre.textContent = _tgBuf.slice(-800);
+    pre.scrollTop = pre.scrollHeight;
+    scrollBtmIfNearBottom(60);
+  } catch(e) { /* never break the stream */ }
+}
+
+function _toolGenDone() {
+  if (_tgEl) {
+    _tgEl.classList.remove('live');
+    var pre = _tgEl.querySelector('.tool-gen-pre');
+    if (pre) pre.textContent = pre.textContent.slice(-800) + '\n✓ complete';
+    _tgEl = null; _tgBuf = '';
+  }
+}
+
 function _flushTokenQueueSync() {
   if (!_tokenQueue.length) return;
   if (_tokenRafId) { cancelAnimationFrame(_tokenRafId); _tokenRafId = null; }
@@ -4840,6 +4877,11 @@ function handleEvent(d) {
   else if (d.type === 'image_description') {
     // Show vision preprocessing result in chat
     showImageDescription(d.content);
+  }
+  else if (d.type === 'tool_gen') {
+    // TOOL-GEN-STREAM (2026-09-17): live streaming of write-family tool call
+    // arguments — the user sees the code being generated instead of waiting.
+    _toolGenStream(d);
   }
   else if (d.type === 'complexity') {
     // COMPLEXITY-UI (2026-08-27): badge only in the pipeline/automap/duo context
@@ -6274,6 +6316,8 @@ function handleEvent(d) {
     // Output des Tool-Calls — aufklappbar unter dem letzten Chip
     // Flush pending text tokens first
     _flushTokenQueueSync();
+    // TOOL-GEN-DONE: close the live streaming block
+    _toolGenDone();
     // BUG-4 FIX: don't rely on S.curAgent which may have changed between
     // tool_call and tool_result events. Instead find the most recent
     // tool-call-row in the DOM and use its stamped data-tid to resolve

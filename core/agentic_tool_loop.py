@@ -322,6 +322,20 @@ class AgenticToolLoop(ToolLoop):
                             self._dr_thinking_parts.append(_sse_think)
                             await self._emit({"type": "thinking_token", "content": _sse_think})
                             _dr_stream_partial = True
+                        # TOOL-GEN-STREAM (2026-09-17): live-stream write-family
+                        # tool call arguments so the user sees the code being
+                        # generated instead of waiting in silence.
+                        _wtc = _sse_delta.get("tool_calls") or []
+                        for _tc_d in _wtc:
+                            _tc_args = str(((_tc_d.get("function") or {}).get("arguments")) or "")
+                            if _tc_args:
+                                _tc_idx = _tc_d.get("index", 0)
+                                _acc = result["dr_tool_calls_acc"].get(_tc_idx, {})
+                                _acc_fn = str((_acc.get("function") or {}).get("name", "") or "")
+                                if _acc_fn in ("write_file", "write_file_append", "edit_file"):
+                                    await self._emit({"type": "tool_gen",
+                                                      "name": _acc_fn,
+                                                      "content": _tc_args})
 
                     # send usage EXACTLY ONCE after the stream ends
                     if _dr_usage_final:
