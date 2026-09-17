@@ -157,7 +157,7 @@ def test_no_results_hint():
     check("no-results: Reformulierungs-Hint vorhanden", "Do NOT retry" in out, out[:200])
 
 
-# ── 3. Default engine set: only living engines, English results, no dox ────
+# ── 3. Default engine set: reliable engines, safe params, domain cap ───────
 def test_default_engines():
     from settings import DEFAULT_SETTINGS
     import tools.websearch as wsm
@@ -165,16 +165,24 @@ def test_default_engines():
     for label, engines in (("settings.default", str(DEFAULT_SETTINGS.get("searxng_engines", ""))),
                            ("websearch.fallback", wsm._SEARXNG_ENGINES)):
         parts = [e.strip().lower() for e in engines.split(",") if e.strip()]
-        check(f"engines {label}: bing+duckduckgo+github aktiv",
-              {"bing", "duckduckgo", "github"} <= set(parts), str(parts))
+        check(f"engines {label}: bing+duckduckgo aktiv",
+              {"bing", "duckduckgo"} <= set(parts), str(parts))
         check(f"engines {label}: google entfernt (CAPTCHA-tot)", "google" not in parts, str(parts))
-        check(f"engines {label}: wikipedia entfernt (0 Treffer unter language=all)",
+        check(f"engines {label}: wikipedia entfernt (0 Treffer unter fast jedem language-Tag)",
               "wikipedia" not in parts, str(parts))
+        check(f"engines {label}: github entfernt (flutet Ranking mit ~30 Repos)",
+              "github" not in parts, str(parts))
 
+    # Language tags ("en", "en-US", ...) break every engine on stock instances
+    # (region-fallback garbage, live-tested 2026-09-18).
     for label, lang in (("settings.default", str(DEFAULT_SETTINGS.get("searxng_language", ""))),
                         ("websearch.fallback", wsm._SEARXNG_LANGUAGE)):
-        check(f"language {label}: en (englische Results, kein Region-Noise)",
-              lang == "en", lang)
+        check(f"language {label}: all (kein Region-Tag -> keine Fallback-Muell-Results)",
+              lang == "all", lang)
+
+    params = wsm._build_search_params("test query")
+    check("params: safesearch=1 gesetzt", str(params.get("safesearch")) == "1", str(params))
+    check("params: format=json", params.get("format") == "json", str(params))
 
     # NO-CONTACT-URL: the 403-retry UA goes to third-party sites and must not
     # carry the operator's identity (repo URL, username, ...).
@@ -183,10 +191,29 @@ def test_default_engines():
               "http" not in ua and "BoredLuzo" not in ua, ua)
 
 
+# ── 4. Domain cap: one hostname must not fill the result list ──────────────
+def test_cap_per_host():
+    import tools.websearch as wsm
+
+    results = [
+        {"url": "https://mail.google.com/a"}, {"url": "https://mail.google.com/b"},
+        {"url": "https://mail.google.com/c"}, {"url": "https://qwen.ai/home"},
+        {"url": "https://github.com/QwenLM/Qwen3"}, {"url": "https://bad-url %%"},
+    ]
+    capped = wsm._cap_per_host(results, cap=2)
+    urls = [r["url"] for r in capped]
+    check("cap: google.com auf 2 begrenzt", sum("mail.google.com" in u for u in urls) == 2, str(urls))
+    check("cap: andere Domains unangetastet",
+          "https://qwen.ai/home" in urls and "https://github.com/QwenLM/Qwen3" in urls, str(urls))
+    check("cap: kaputte URL faellt durch (kein Crash)", len(capped) == 5, str(len(capped)))
+    check("cap: leer Input -> leer Output", wsm._cap_per_host([]) == [])
+
+
 if __name__ == "__main__":
     test_executor_budget_stop()
     test_no_results_hint()
     test_default_engines()
+    test_cap_per_host()
     print("\n" + "=" * 60)
     print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
     print("=" * 60)

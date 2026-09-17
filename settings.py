@@ -276,10 +276,15 @@ DEFAULT_SETTINGS = {
     # J) WEBSEARCH & SEARXNG
     # ════════════════════════════════════════════════════════════════════════
     "searxng_host":            "http://localhost:8888",
-    # bing/duckduckgo/github actually answer on stock instances; google is
-    # CAPTCHA-suspended and wikipedia needs a concrete language (dead under "all").
-    "searxng_engines":         "bing,duckduckgo,github",
-    "searxng_language":        "en",
+    # Only bing + duckduckgo answer reliably on stock SearXNG instances:
+    # google sits CAPTCHA-suspended, wikipedia returns 0 under most language
+    # tags, github floods the ranking with 30 keyword-matched repos per query.
+    "searxng_engines":         "bing,duckduckgo",
+    # DO NOT set a region/language tag ("en", "en-US", ...): on stock instances
+    # that makes every engine return region-fallback garbage (google.fr login
+    # pages for a "qwen3 context length" query — live-tested 2026-09-18).
+    # "all" returns English results for English queries, which the coder emits.
+    "searxng_language":        "all",
     "pipeline_websearch_enabled": True,
     "duo_websearch_enabled":   False,
     "websearch_auto_trigger":  True,

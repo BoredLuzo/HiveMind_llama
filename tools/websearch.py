@@ -64,15 +64,17 @@ logger = logging.getLogger("hivemind.websearch")
 
 _SEARXNG_HOST        = "http://localhost:8888"
 _SEARXNG_ENABLED     = False
-# ENGINE-SET (2026-09-17): google is CAPTCHA-suspended on most self-hosted
-# SearXNG instances (0 results forever) and wikipedia returns 0 results under
-# language="all" — both only add dead latency. bing + duckduckgo + github are
-# the engines that actually answer. Users can still override via settings.
-_SEARXNG_ENGINES     = "bing,duckduckgo,github"
-# English results by default — "all" pulls region noise (e.g. German retail
-# chains for tech queries). Comma-lists like "de-DE,en-US" 400 on SearXNG,
-# single values are fine.
-_SEARXNG_LANGUAGE    = "en"
+# ENGINE-SET (2026-09-18, live-tested): only bing + duckduckgo answer reliably
+# on stock SearXNG instances. google sits CAPTCHA-suspended (0 results forever),
+# wikipedia returns 0 under most language tags, and the github engine floods
+# the merged ranking with ~30 keyword-matched repos per query, burying the
+# authoritative docs pages. Users can still override via settings.
+_SEARXNG_ENGINES     = "bing,duckduckgo"
+# Language tags ("en", "en-US", ...) BREAK every engine on stock instances:
+# they return region-fallback garbage (google.fr login pages for a technical
+# query — live-tested 2026-09-18). "all" returns English results for English
+# queries, which is what the coder emits anyway.
+_SEARXNG_LANGUAGE    = "all"
 _MAX_RESULTS_DEFAULT = 5
 _FETCH_TIMEOUT       = 10.0
 _SEARCH_TIMEOUT      = 8.0
@@ -144,12 +146,30 @@ def configure(
 
 def _build_search_params(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> dict:
 
-    _params: dict = {"q": query, "format": "json"}
+    _params: dict = {"q": query, "format": "json", "safesearch": "1"}
     if _SEARXNG_ENGINES:
         _params["engines"] = _SEARXNG_ENGINES
     if _SEARXNG_LANGUAGE:
         _params["language"] = _SEARXNG_LANGUAGE
     return _params
+
+
+def _cap_per_host(results: list, cap: int = 2) -> list:
+    """Post-filter: a single hostname must not fill the whole result list.
+    Without this, one engine having a keyword-salad day (or the github engine
+    flooding ~30 repos) buries every other perspective under one domain."""
+    from urllib.parse import urlparse as _urlparse
+    _seen: dict = {}
+    _out: list = []
+    for _r in results:
+        try:
+            _h = (_urlparse(str(_r.get("url", ""))).hostname or "").lower()
+        except ValueError:
+            _h = ""
+        _seen[_h] = _seen.get(_h, 0) + 1
+        if _seen[_h] <= cap:
+            _out.append(_r)
+    return _out
 
 
 async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str:
@@ -201,6 +221,7 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
         return f"[web_search: All attempts failed for '{query}']"
 
     results = data.get("results", [])
+    results = _cap_per_host(results, cap=2)
     if not results:
         return (
             f"[web_search: No results for '{query}']\n"
