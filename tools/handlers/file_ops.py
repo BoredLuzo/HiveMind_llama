@@ -692,12 +692,12 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
 
 
 async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
-    """Exact-match edit: replace ONE unique occurrence of old_text.
+    """Exact-match edit: replace ONE unique occurrence of old_text with new_text.
 
-    THE edit tool (2026-09-17 consolidation): no SEARCH/REPLACE markers, no
-    fuzzy rate-guessing. old_text must be copied verbatim from the last
-    read_file and must appear exactly once — anything else is a clear,
-    deterministic error that tells the model how to fix it.
+    Accepts BOTH formats: plain old_text/new_text AND SEARCH/REPLACE marker
+    blocks (the models emit these naturally from pre-training). If markers are
+    found in old_text, they are parsed as a block and the extracted texts are
+    used for the replacement.
     """
     p = _inline_resolve_path(workspace, args.get("path", ""))
     if err := _inline_check_workspace(p, workspace_lock, "edit_file"):
@@ -710,18 +710,29 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             tool="edit_file")
     old_text = str(args.get("old_text", ""))
     new_text = str(args.get("new_text", ""))
-    # FOREIGN/TRUNCATED-FORMAT SNIFF (2026-09-17): a cut-off call in a foreign
-    # marker style (live: <parameter=SEARCH> with no REPLACE — 1259 lines lost)
-    # used to fall through to the full-rewrite path and destroy the file.
-    for _frag in ("<<<<<<<", "=======", ">>>>>>>", "<parameter="):
-        if _frag in old_text or _frag in new_text:
-            return _tool_error_response(
-                "EDIT_FILE_MALFORMED_BLOCK",
-                "old_text/new_text contains block/parameter marker fragments — that "
-                "format is gone. old_text = the EXACT text to replace (copied "
-                "verbatim from read_file, unique in the file); new_text = the "
-                "replacement.",
-                tool="edit_file")
+
+    # MARKER-PARSE (2026-09-17): models naturally emit SEARCH/REPLACE blocks —
+    # accept them instead of rejecting. If old_text contains a block, extract
+    # the search and replace text from within the markers.
+    _block_re = re.compile(
+        r"<{5,}\s*SEARCH\s*\n(.*?)\n[ \t]*={3,}[ \t]*\n(.*?)\n[ \t]*>{5,}\s*REPLACE",
+        re.DOTALL)
+    _bm = _block_re.search(old_text)
+    if _bm:
+        old_text = _bm.group(1)
+        if not new_text.strip():
+            new_text = _bm.group(2)
+
+    # FOREIGN-TRUNCATION SNIFF: a cut-off call in a foreign marker style
+    # (live: <parameter=SEARCH> with no REPLACE) is genuinely malformed —
+    # reject with a clear error instead of writing a fragment.
+    if "<parameter=" in old_text or "<parameter=" in new_text:
+        return _tool_error_response(
+            "EDIT_FILE_MALFORMED_BLOCK",
+            "old_text/new_text contains <parameter= fragments from a truncated "
+            "tool call. The file was NOT modified. read_file the current state "
+            "and resend with the correct old_text/new_text.",
+            tool="edit_file")
     get_transaction().capture_before(p)
     if not old_text.strip():
         return _tool_error_response(
