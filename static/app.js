@@ -162,6 +162,7 @@ let S = {
   automapPipelineWebsearch: false,
   // Git Integration
   duoGitAutocommit: false,
+  duoActionApproval: false,
   gitRepoUrl: '',
   gitUsername: '',
   gitToken: '',
@@ -1112,6 +1113,13 @@ async function loadSettings() {
     if (_dwsEl) _dwsEl.checked = S.duoWebsearch;
     var _pwsEl = document.getElementById('pipeline-websearch-toggle');
     if (_pwsEl) _pwsEl.checked = S.pipelineWebsearch;
+    // Action approval gate (2026-09-18)
+    S.duoActionApproval = s.duo_action_approval_enabled || false;
+    var _aaEl = document.getElementById('duo-action-approval-toggle');
+    if (_aaEl) _aaEl.checked = S.duoActionApproval;
+    var _aatEl = document.getElementById('approval-tools-inp');
+    if (_aatEl) _aatEl.value = s.duo_action_approval_tools || 'run_bash,run_python,install_package,start_background';
+    updateApprovalUI();
     // Websearch timeout values — single slider (v0.96.5)
     var _wsSlider = document.getElementById('ws-timeout-slider');
     var _wsV = document.getElementById('ws-timeout-v');
@@ -9859,6 +9867,12 @@ function _cpReset() {
   if (btn) btn.style.display = 'none';
 }
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Action approval gate sub-options visibility (2026-09-18)
+function updateApprovalUI() {
+  var _apEl = document.getElementById('approval-options');
+  if (_apEl) _apEl.style.display = S.duoActionApproval ? 'block' : 'none';
+}
 
 // -- Git Integration ------------------------------------------------
 function updateGitIntegrationUI() {
