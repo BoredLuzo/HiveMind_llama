@@ -75,6 +75,11 @@ def test_static_wiring():
     check("sticky follow tracked by scroll listener",
           "_cpFollowStream" in src and "_cpEnsureFollowListener" in src
           and "body.scrollTop = body.scrollHeight" in src)
+    # The chat itself follows with the same sticky semantics (scroll
+    # listener tracks intent; appends pin while the user is at the bottom).
+    check("chat sticky follow (_chatFollow listener)",
+          "_chatFollow" in src and "_chatEnsureFollowListener" in src
+          and "if (!_chatFollow) return;" in src)
     check("no inline stream pre left in chat", "tg-pre" not in src)
     # Cleanup: without this the streaming chip duplicates the real chip.
     tc_idx = src.find("d.type === 'tool_call'")

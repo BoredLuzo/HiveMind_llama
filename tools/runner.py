@@ -283,8 +283,13 @@ def _parse_approval_answer(text: str) -> str:
     return "deny"
 
 
-# Everything that executes code/commands asks when the gate is on.
-_APPROVAL_TOOLS = frozenset({"run_bash", "run_python", "install_package", "start_background"})
+# Everything that changes the project asks when the gate is on:
+# code/cmd execution, file writes and commits.
+_APPROVAL_TOOLS = frozenset({
+    "run_bash", "run_python", "install_package", "start_background",
+    "write_file", "edit_file", "write_file_append",
+    "git_commit",
+})
 
 
 def _approval_preview(args: dict) -> str:

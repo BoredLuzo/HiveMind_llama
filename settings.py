@@ -370,9 +370,11 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # P2) ACTION APPROVAL (user confirms code/cmd execution) + ERROR CAP
     # ════════════════════════════════════════════════════════════════════════
-    # When on, the run pauses before everything that executes code/commands
-    # (run_bash, run_python, install_package, start_background) and the UI
-    # shows Approve-once / Approve-in-workspace / Deny buttons. Autonomous/
+    # When on, the run pauses before everything that changes the project —
+    # code/cmd execution (run_bash, run_python, install_package,
+    # start_background), file writes (write_file, edit_file,
+    # write_file_append) and git_commit — and the UI shows
+    # Approve-once / Approve-in-workspace / Deny buttons. Autonomous/
     # throttled runs bypass the gate.
     "duo_action_approval_enabled": False,
     # Tool-error hard-stop cap for agentic runs. Successful non-write calls

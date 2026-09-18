@@ -3947,22 +3947,33 @@ function scrollBtm() {
   }
 }
 
+// STICKY-FOLLOW (2026-09-18): chat intent is tracked by a scroll listener —
+// while the user sits at the bottom, every append pins the view (no matter
+// how much ONE render grew); scrolling up pauses the follow, returning to
+// the bottom resumes it. The old per-call delta guess (delta <= threshold)
+// died permanently the first time a single render grew past the threshold.
+var _chatFollow = true;
+
+function _chatEnsureFollowListener() {
+  var c = document.getElementById('chat');
+  if (!c || c._followWired) return;
+  c._followWired = true;
+  c.addEventListener('scroll', function() {
+    _chatFollow = (c.scrollHeight - (c.scrollTop + c.clientHeight)) <= 60;
+  });
+}
+
 function scrollBtmIfNearBottom(thresholdPx) {
-  // FIX: _partRunning guard removed — same reason as scrollBtm().
-  // partition events scroll themselves via scrollBtm(), but other events
-  // (file_read, file_change, agent bubbles) must still be able to scroll.
-  // Batched: coalesce into single rAF per frame to avoid forced layout recalc.
-  // STICKY-FIX (2026-08-10): double rAF so the delta check runs on the layout
-  // AFTER the content append (otherwise stale scrollHeight → no scroll).
+  // thresholdPx kept for the 50+ call sites; intent now lives in _chatFollow.
+  _chatEnsureFollowListener();
+  if (!_chatFollow) return;
   if (!window._scrollNearRaf) {
-    var _th = Math.max(24, parseInt(thresholdPx || 80, 10) || 80);
     window._scrollNearRaf = requestAnimationFrame(function() {
       requestAnimationFrame(function() {
         window._scrollNearRaf = null;
         const c = document.getElementById('chat');
         if (!c) return;
-        var delta = c.scrollHeight - (c.scrollTop + c.clientHeight);
-        if (delta <= _th) c.scrollTop = c.scrollHeight;
+        c.scrollTop = c.scrollHeight;
       });
     });
   }

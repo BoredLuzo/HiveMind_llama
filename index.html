@@ -595,7 +595,7 @@
       <div class="opt-row" style="margin-top:6px">
         <div class="opt-row-left">
           <span class="opt-name">&#x1F6E1; Action Approval</span>
-          <span class="opt-hint">Ask before run-family tool calls</span>
+          <span class="opt-hint">Ask before writes &amp; code/cmd execution</span>
         </div>
         <label class="cfl-sw" style="margin:0">
           <input type="checkbox" id="duo-action-approval-toggle"
@@ -605,8 +605,8 @@
       </div>
       <div id="approval-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(72,120,192,.25);margin-left:10px;margin-top:2px">
         <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:0 4px;line-height:1.5">
-          The run pauses before everything that executes code/commands
-          (run_bash, run_python, install_package, start_background) and shows
+          The run pauses before everything that changes the project —
+          code/cmd execution, file writes and git commits — and shows
           Approve&nbsp;once / Approve&nbsp;workspace / Deny buttons.
           Workspace approvals are remembered in tool_approvals.json.
         </div>

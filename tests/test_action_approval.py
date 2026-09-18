@@ -154,9 +154,21 @@ def test_gate_flow():
         tr._current_run_id.set(None)
 
 
+def test_gate_scope():
+    from tools.runner import _APPROVAL_TOOLS as T
+    check("code/cmd tools gated",
+          {"run_bash", "run_python", "install_package", "start_background"} <= T, str(T))
+    check("file writes gated (2 files slipped through once)",
+          {"write_file", "edit_file", "write_file_append"} <= T, str(T))
+    check("git_commit gated", "git_commit" in T, str(T))
+    check("read-only tools NOT gated",
+          not T & {"read_file", "search_code", "list_dir", "find_files", "web_search"}, str(T))
+
+
 if __name__ == "__main__":
     test_answer_parsing()
     test_persistence_and_scope()
+    test_gate_scope()
     test_gate_flow()
     print("\n" + "=" * 60)
     print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
