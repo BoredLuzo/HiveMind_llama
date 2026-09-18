@@ -57,17 +57,29 @@ def test_persistence_and_scope():
 
     ws = tmp / "projA"
     ws.mkdir()
-    check("fresh: no approval", not tr._repo_approval_granted(ws, "run_bash"))
-    tr._remember_repo_approval(ws, "run_bash")
-    check("after remember: granted", tr._repo_approval_granted(ws, "run_bash"))
-    check("other tool: NOT granted", not tr._repo_approval_granted(ws, "run_python"))
+    cmd = {"command": "python -m pytest -q"}
+    check("fresh: no approval", not tr._repo_approval_granted(ws, "run_bash", cmd))
+    tr._remember_repo_approval(ws, "run_bash", cmd)
+    # EXACT-MATCH: the same 1:1 command is remembered, anything else asks again
+    check("same command: granted", tr._repo_approval_granted(ws, "run_bash", cmd))
+    check("different command: NOT granted",
+          not tr._repo_approval_granted(ws, "run_bash", {"command": "python -m pytest -q -x"}))
+    check("different tool: NOT granted", not tr._repo_approval_granted(ws, "run_python", cmd))
     ws_b = tmp / "projB"
     ws_b.mkdir()
-    check("other workspace: NOT granted", not tr._repo_approval_granted(ws_b, "run_bash"))
-    # file really persisted
+    check("other workspace: NOT granted", not tr._repo_approval_granted(ws_b, "run_bash", cmd))
+    # writes remember per FILE
+    tr._remember_repo_approval(ws, "edit_file", {"path": "src/a.js", "old_text": "x", "new_text": "y"})
+    check("same file: granted (any write tool)",
+          tr._repo_approval_granted(ws, "write_file", {"path": "src/a.js", "content": "z"}))
+    check("other file: NOT granted",
+          not tr._repo_approval_granted(ws, "edit_file", {"path": "src/b.js", "old_text": "x", "new_text": "y"}))
+    # file persisted
     import json
     on_disk = json.loads((tmp / "tool_approvals.json").read_text(encoding="utf-8"))
-    check("persisted to disk", "run_bash" in on_disk.get(str(ws.resolve()), {}), str(on_disk)[:120])
+    _entries = on_disk.get(str(ws.resolve()), {})
+    check("persisted to disk", any(k.startswith("cmd:run_bash") for k in _entries)
+          and any(k.startswith("file:") for k in _entries), str(_entries)[:160])
 
 
 def test_gate_flow():
@@ -117,17 +129,22 @@ def test_gate_flow():
         out = asyncio.run(tr._check_action_approval("read_file", {"path": "x"}, ws))
         check("non-listed tool: proceeds", out is None and not paused)
 
-        # '2' -> proceeds AND remembers; pending info cleaned up
+        # '2' -> proceeds AND remembers EXACTLY this command
         out = asyncio.run(tr._check_action_approval("run_bash", {"command": "rm -rf /tmp/x"}, ws))
         check("'2' -> proceeds", out is None, str(out)[:120])
         check("pause happened once", len(paused) == 1 and "run_bash" in paused[0][1])
         check("pending info popped after decision",
               tr._pending_approval_info("test-run-1") is None)
-        check("'2' remembered for workspace", tr._repo_approval_granted(ws, "run_bash"))
+        check("'2' remembered for the exact command",
+              tr._repo_approval_granted(ws, "run_bash", {"command": "rm -rf /tmp/x"}))
 
-        # second call: approved via repo memory -> NO pause
+        # exact-match: SAME command proceeds without a new pause, a
+        # DIFFERENT command asks again
+        out = asyncio.run(tr._check_action_approval("run_bash", {"command": "rm -rf /tmp/x"}, ws))
+        check("same command: proceeds without new pause",
+              out is None and len(paused) == 1)
         out = asyncio.run(tr._check_action_approval("run_bash", {"command": "echo hi"}, ws))
-        check("repo-approved: proceeds without new pause", out is None and len(paused) == 1)
+        check("different command: asks again", out is None and len(paused) == 2)
 
         # deny path
         async def fake_resume_deny(run_id, timeout_s=600):
@@ -138,7 +155,8 @@ def test_gate_flow():
         out = asyncio.run(tr._check_action_approval("run_bash", {"command": "ls"}, ws2))
         check("'3' -> denied error", out is not None and out[0] == "DENY"
               and "ACTION_APPROVAL_DENIED" in str(out[1]))
-        check("deny: nothing remembered", not tr._repo_approval_granted(ws2, "run_bash"))
+        check("deny: nothing remembered",
+              not tr._repo_approval_granted(ws2, "run_bash", {"command": "ls"}))
 
         # unclear answer -> deny (fail-safe)
         async def fake_resume_unclear(run_id, timeout_s=600):

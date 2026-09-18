@@ -251,14 +251,34 @@ def _workspace_approval_key(workspace) -> str:
         return str(workspace)
 
 
-def _repo_approval_granted(workspace, tool: str) -> bool:
-    d = _load_approvals()
-    return tool in d.get(_workspace_approval_key(workspace), {})
+def _approval_call_key(name: str, args: dict) -> str:
+    """EXACT-MATCH memory (2026-09-18 user spec): a workspace approval covers
+    precisely this call — writes per FILE, commands per exact 1:1 arguments
+    (a new command with different content asks again). Legacy tool-level
+    entries are ignored."""
+    if name in ("write_file", "edit_file", "write_file_append"):
+        return "file:" + _norm_write_path(args)
+    import hashlib as _hl
+    _raw = json.dumps(
+        {k: v for k, v in (args or {}).items() if not str(k).startswith("__")},
+        sort_keys=True, ensure_ascii=False)
+    return "cmd:" + name + "|" + _hl.md5(_raw.encode("utf-8", "replace")).hexdigest()
 
 
-def _remember_repo_approval(workspace, tool: str) -> None:
+def _repo_approval_granted(workspace, name: str, args: dict) -> bool:
     d = _load_approvals()
-    d.setdefault(_workspace_approval_key(workspace), {})[tool] = int(time.time())
+    _key = _approval_call_key(name, args)
+    if not _key or _key.endswith(":") or _key.endswith("|"):
+        return False
+    return _key in d.get(_workspace_approval_key(workspace), {})
+
+
+def _remember_repo_approval(workspace, name: str, args: dict) -> None:
+    _key = _approval_call_key(name, args)
+    if not _key or _key.endswith(":") or _key.endswith("|"):
+        return
+    d = _load_approvals()
+    d.setdefault(_workspace_approval_key(workspace), {})[_key] = int(time.time())
     _save_approvals(d)
 
 
@@ -360,7 +380,7 @@ async def _check_action_approval(name: str, args: dict, workspace):
     run_id = _current_run_id.get()
     if not run_id:
         return None
-    if _repo_approval_granted(workspace, name):
+    if _repo_approval_granted(workspace, name, args or {}):
         return None
     # "once" for writes covers the path: continuations of an approved write
     # (auto-split part 2, follow-up edits) must not re-ask.
@@ -399,7 +419,7 @@ async def _check_action_approval(name: str, args: dict, workspace):
     _lg.warning("[APPROVAL] decision=%s run=%s tool=%s note=%r (raw answer: %r)",
                 decision, run_id, name, _note[:80], str(answer)[:60])
     if decision == "repo":
-        _remember_repo_approval(workspace, name)
+        _remember_repo_approval(workspace, name, args or {})
         if _note:
             return ("NOTE", _note)
         return None

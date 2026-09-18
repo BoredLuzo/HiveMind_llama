@@ -3974,10 +3974,12 @@ function _renderApprovalCard(d) {
   _apNote.type = 'text';
   _apNote.placeholder = 'Optional message to the agent (guidance / reason for deny)\u2026';
   _apNote.style.cssText = 'width:100%;background:var(--bg);border:1px solid var(--b2);border-radius:4px;padding:5px 8px;color:var(--tx);font-size:11px;margin-bottom:8px';
+  // EXACT-MATCH memory: writes remember the FILE, commands the exact call
+  var _isWrite = /^(write_file|edit_file|write_file_append)$/.test(d.tool || '');
   var _apRow = document.createElement('div');
   _apRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
   [['1', '\u2713 Approve once', '#22c55e'],
-   ['2', '\u2713 Approve in this workspace', '#60a0e0'],
+   ['2', _isWrite ? '\u2713 Approve this file (remember)' : '\u2713 Approve this exact call (remember)', '#60a0e0'],
    ['3', '\u2715 Deny', '#e06060'],
    ['0', '\u2709 Input only', '#c8a04a']].forEach(function(b) {
     var btn = document.createElement('button');

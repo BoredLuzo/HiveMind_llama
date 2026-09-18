@@ -405,11 +405,11 @@
         <div id="approval-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(72,120,192,.25);margin-left:10px;margin-top:2px">
           <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:0 4px;line-height:1.5">
             The run pauses before everything that changes the project —
-            code/cmd execution, file writes and git commits — and shows
-            Approve&nbsp;once / Approve&nbsp;workspace / Deny buttons plus an
-            optional message to the agent. Toggling applies immediately
-            (next tool call, mid-run). Workspace approvals are remembered
-            in tool_approvals.json.
+            code/cmd execution, file writes and git commits. Approve once,
+            or remember EXACTLY this call: writes per file, commands per
+            exact command (anything new asks again). Includes an optional
+            message to the agent; toggling applies immediately mid-run.
+            Memory lives in tool_approvals.json.
           </div>
         </div>
 
@@ -1866,6 +1866,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-        <script src="/static/app.js?v=20260918-4"></script>
+        <script src="/static/app.js?v=20260918-5"></script>
 </body>
 </html>
