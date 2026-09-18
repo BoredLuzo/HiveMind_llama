@@ -388,6 +388,31 @@
           </label>
         </div>
 
+        <!-- Action Approval Gate (2026-09-18): pairs with Until Finished —
+             the safety valve for unlimited runs. Toggling applies to the NEXT
+             tool call, mid-run, no restart. -->
+        <div class="opt-row" style="margin-top:4px">
+          <div class="opt-row-left">
+            <span class="opt-name">&#x1F6E1; Action Approval</span>
+            <span class="opt-hint">Ask before writes &amp; code/cmd execution &mdash; works mid-run</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="duo-action-approval-toggle"
+              onchange="S.duoActionApproval=this.checked;postSettings({duo_action_approval_enabled:S.duoActionApproval});updateApprovalUI()">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div id="approval-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(72,120,192,.25);margin-left:10px;margin-top:2px">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:0 4px;line-height:1.5">
+            The run pauses before everything that changes the project —
+            code/cmd execution, file writes and git commits — and shows
+            Approve&nbsp;once / Approve&nbsp;workspace / Deny buttons plus an
+            optional message to the agent. Toggling applies immediately
+            (next tool call, mid-run). Workspace approvals are remembered
+            in tool_approvals.json.
+          </div>
+        </div>
+
         <div class="opt-row" style="margin-top:2px" id="duo-test-feedback-final-row">
           <div class="opt-row-left">
             <span class="opt-name">Final test</span>
@@ -592,26 +617,9 @@
           <span id="git-auth-status">&#x26A0; No git configured</span>
         </div>
       </div>
-      <!-- Action Approval Gate (2026-09-18) -->
-      <div class="opt-row" style="margin-top:6px">
-        <div class="opt-row-left">
-          <span class="opt-name">&#x1F6E1; Action Approval</span>
-          <span class="opt-hint">Ask before writes &amp; code/cmd execution</span>
-        </div>
-        <label class="cfl-sw" style="margin:0">
-          <input type="checkbox" id="duo-action-approval-toggle"
-            onchange="S.duoActionApproval=this.checked;postSettings({duo_action_approval_enabled:S.duoActionApproval});updateApprovalUI()">
-          <span class="sl"></span>
-        </label>
-      </div>
-      <div id="approval-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(72,120,192,.25);margin-left:10px;margin-top:2px">
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:0 4px;line-height:1.5">
-          The run pauses before everything that changes the project —
-          code/cmd execution, file writes and git commits — and shows
-          Approve&nbsp;once / Approve&nbsp;workspace / Deny buttons.
-          Workspace approvals are remembered in tool_approvals.json.
-        </div>
-      </div>
+      <!-- Action Approval Gate moved into the agentic EXECUTION section
+           (2026-09-18): it pairs with Until Finished there. -->
+
       <!-- Advanced: ctx + timeout -->
       <div onclick="toggleDuoCtxAdv()" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;padding:7px 0 3px;margin-top:2px">
         <span id="duo-ctx-arrow" style="font-size:11px;color:#4a8a9a;transition:transform .2s">&#9654;</span>
