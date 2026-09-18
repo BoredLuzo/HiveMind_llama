@@ -140,13 +140,18 @@ def test_gate_flow():
         out = asyncio.run(tr._check_action_approval("run_python", {"code": "1+1"}, ws2))
         check("unclear -> denied", out is not None and "ACTION_APPROVAL_DENIED" in str(out))
 
-        # autonomous mode -> bypass entirely (no pause)
-        rc.wait_for_resume = fake_resume  # would proceed, must NOT be reached
+        # Gate-mode independence (2026-09-18 live bug): until_finished duo
+        # runs set the ask_user gate to throttled_autonomous — that is the
+        # user's NORMAL interactive mode, approvals must still fire there.
+        rc.wait_for_resume = fake_resume   # answers "2" (approve workspace)
         tr._ask_user_gate.set("throttled_autonomous")
-        _n_before = len(paused)
-        out = asyncio.run(tr._check_action_approval("run_python", {"code": "1+1"}, ws2))
-        check("autonomous mode: bypass without pause",
-              out is None and len(paused) == _n_before)
+        ws3 = tmp / "ws3"
+        ws3.mkdir()
+        _n_before2 = len(paused)
+        out = asyncio.run(tr._check_action_approval("run_python", {"code": "1+1"}, ws3))
+        check("throttled mode still pauses (no silent bypass)",
+              out is None and len(paused) == _n_before2 + 1,
+              f"out={str(out)[:80]} paused={len(paused)}")
     finally:
         rc.initiate_pause, rc.wait_for_resume = orig_pause, orig_resume
         st.settings["duo_action_approval_enabled"] = False

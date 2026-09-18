@@ -316,6 +316,8 @@ async def _safe_emit(ev) -> None:
 async def _check_action_approval(name: str, args: dict, workspace) -> str | None:
     """Returns None to let the tool run, or a TOOL_ERROR string when the
     user denied (or the answer was unclear)."""
+    import logging as _appr_log
+    _lg = _appr_log.getLogger("hivemind.tools")
     try:
         from core.state import settings as _ws_settings
         _enabled = bool(_ws_settings.get("duo_action_approval_enabled", False))
@@ -323,8 +325,10 @@ async def _check_action_approval(name: str, args: dict, workspace) -> str | None
         return None
     if not _enabled or name not in _APPROVAL_TOOLS:
         return None
-    if _ask_user_gate.get("open") != "open":
-        return None  # autonomous/throttled run: never pause mid-flight
+    # NO gate-mode bypass (2026-09-18, live bug): until_finished duo runs set
+    # the ask_user gate to "throttled_autonomous" — approvals must still fire
+    # there, that IS the user's normal interactive mode. The toggle is the
+    # only control.
     run_id = _current_run_id.get()
     if not run_id:
         return None
@@ -333,6 +337,7 @@ async def _check_action_approval(name: str, args: dict, workspace) -> str | None
 
     _preview = _approval_preview(args)
     question = f"APPROVAL NEEDED: the agent wants to run {name}."
+    _lg.warning("[APPROVAL] pausing run=%s tool=%s (waiting for user decision)", run_id, name)
     await _safe_emit({"type": "agent_asking", "question": question, "run_id": run_id})
     # Buttons card in the UI — posts the decision to /api/run/{id}/resume.
     await _safe_emit({"type": "approval_request",
@@ -348,6 +353,8 @@ async def _check_action_approval(name: str, args: dict, workspace) -> str | None
     answer = await _rc.wait_for_resume(run_id, timeout_s=3600)
     await _safe_emit({"type": "agent_resumed"})
     decision = _parse_approval_answer(answer)
+    _lg.warning("[APPROVAL] decision=%s run=%s tool=%s (raw answer: %r)",
+                decision, run_id, name, str(answer)[:60])
     if decision == "repo":
         _remember_repo_approval(workspace, name)
         return None
