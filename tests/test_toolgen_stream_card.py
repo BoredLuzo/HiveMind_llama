@@ -70,6 +70,11 @@ def test_static_wiring():
     check("path-fail leaves console diagnose", "path not parsed" in src)
     check("plain render mode for streaming (no highlight)", "'plain'" in src)
     check("throttled panel renders", "_TG_PANEL_RENDER_MS" in src)
+    # Sticky follow: while the user sits at the panel bottom, the view
+    # scrolls along; a scroll listener tracks the intent.
+    check("sticky follow tracked by scroll listener",
+          "_cpFollowStream" in src and "_cpEnsureFollowListener" in src
+          and "body.scrollTop = body.scrollHeight" in src)
     check("no inline stream pre left in chat", "tg-pre" not in src)
     # Cleanup: without this the streaming chip duplicates the real chip.
     tc_idx = src.find("d.type === 'tool_call'")

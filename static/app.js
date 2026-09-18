@@ -3478,6 +3478,26 @@ var _tgCards = {};
 var _tgPanelLastRender = 0;
 var _TG_PANEL_RENDER_MS = 120;
 var _TG_PENDING_KEY = '\u0000pending-write';   // panel tab key until the path parses
+// Sticky follow (2026-09-18): while the user is at the panel bottom, the
+// stream scrolls along; scrolling up pauses it, returning to the bottom
+// resumes it. Tracked by a scroll listener, not per-render heuristics —
+// content growth alone never fires scroll, so the flag stays honest.
+var _cpFollowStream = true;
+
+function _cpNearBottom() {
+  var b = document.getElementById('code-panel-body');
+  if (!b) return true;
+  return (b.scrollTop + b.clientHeight) >= (b.scrollHeight - 60);
+}
+
+function _cpEnsureFollowListener() {
+  var b = document.getElementById('code-panel-body');
+  if (!b || b._followWired) return;
+  b._followWired = true;
+  b.addEventListener('scroll', function() {
+    _cpFollowStream = _cpNearBottom();
+  });
+}
 
 function _tgUnescape(s) {
   // JSON string body → text. Single left-to-right pass so multi-char
@@ -3526,8 +3546,8 @@ function _tgPanelStream(st) {
   var txt = _tgExtractField(st.buf, field);
   if (txt == null) return;
   var op = (st.tool === 'edit_file') ? 'edit' : (st.tool === 'write_file_append' ? 'append' : 'write');
+  _cpEnsureFollowListener();
   var body = document.getElementById('code-panel-body');
-  var nearBtm = body ? ((body.scrollTop + body.clientHeight) >= (body.scrollHeight - 40)) : false;
   var now = Date.now();
   var doRender = (now - _tgPanelLastRender) >= _TG_PANEL_RENDER_MS;
   if (st.path) {
@@ -3548,8 +3568,8 @@ function _tgPanelStream(st) {
     }
   }
   if (doRender) _tgPanelLastRender = now;
-  // follow the stream when the user is at the bottom anyway
-  if (doRender && nearBtm && body && document.body.classList.contains('code-panel-open')) {
+  // follow the stream while the user sits at the bottom
+  if (doRender && _cpFollowStream && body && document.body.classList.contains('code-panel-open')) {
     body.scrollTop = body.scrollHeight;
   }
 }
@@ -6200,6 +6220,12 @@ function handleEvent(d) {
     // 2a. live code panel — show content if present
     if (d.content) {
       _cpAddOrUpdateFile(d.path || '', d.content, d.op || 'write');
+      // keep the stream-follow position across the stream→real-file swap
+      if (typeof _cpFollowStream === 'boolean' && _cpFollowStream &&
+          document.body.classList.contains('code-panel-open')) {
+        var _cpb = document.getElementById('code-panel-body');
+        if (_cpb) _cpb.scrollTop = _cpb.scrollHeight;
+      }
     }
   }
   // ── Files summary (after the tool loop, shows all touched files) ──────────
