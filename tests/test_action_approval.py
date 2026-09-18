@@ -155,6 +155,18 @@ def test_gate_flow():
         check("note: approve with guidance -> NOTE",
               out is not None and out[0] == "NOTE" and out[1] == "please use fetch instead of curl",
               str(out))
+
+        # input-only: "0|..." sends the message WITHOUT approving or denying —
+        # the tool does not run, the note goes back as the call's outcome
+        async def fake_resume_input(run_id, timeout_s=600):
+            return "0|mach es leichter"
+        rc.wait_for_resume = fake_resume_input
+        out = asyncio.run(tr._check_action_approval("run_python", {"code": "x"}, ws2))
+        check("input-only -> INPUT_ONLY with note",
+              out is not None and out[0] == "INPUT_ONLY" and out[1] == "mach es leichter", str(out))
+        check("input-only parser: '0' prefix", tr._parse_approval_answer("0|hi") == "input")
+        check("parser: 'no' still deny, not eaten by input",
+              tr._parse_approval_answer("no") == "deny", tr._parse_approval_answer("no"))
         async def fake_resume_deny_note(run_id, timeout_s=600):
             return "3|too dangerous"
         rc.wait_for_resume = fake_resume_deny_note

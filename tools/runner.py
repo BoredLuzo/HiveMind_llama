@@ -263,11 +263,15 @@ def _remember_repo_approval(workspace, tool: str) -> None:
 
 
 def _parse_approval_answer(text: str) -> str:
-    """User reply -> 'once' | 'repo' | 'deny'. Anything unclear = deny
-    (fail-safe: without a clear approval the tool does not run)."""
+    """User reply -> 'once' | 'repo' | 'deny' | 'input'. Anything unclear =
+    deny (fail-safe: without a clear approval the tool does not run).
+    NOTE: the input check MUST come before the deny prefixes — "note"
+    starts with "no"."""
     t = str(text or "").strip().lower()
     if not t:
         return "deny"
+    if t.startswith(("0", "input", "note:", "just send", "nur input")):
+        return "input"
     if t.startswith(("1", "once", "approve once", "einmal")):
         return "once"
     if t.startswith(("2", "repo", "always", "immer", "approve repo")):
@@ -399,6 +403,10 @@ async def _check_action_approval(name: str, args: dict, workspace):
         if _note:
             return ("NOTE", _note)
         return None
+    if decision == "input":
+        # "send my input only": the tool does NOT run, the note goes back to
+        # the model as the call's outcome so it can adjust and retry.
+        return ("INPUT_ONLY", _note or "(empty)")
     if decision == "once":
         if name in ("write_file", "edit_file", "write_file_append") and _wpath:
             _approval_once_paths.setdefault(run_id, set()).add(_wpath)
@@ -994,6 +1002,9 @@ async def _run_inline_tool(
                 _kind, _payload = _appr
                 if _kind == "DENY":
                     return _payload
+                if _kind == "INPUT_ONLY":
+                    return (f"[USER INPUT \u2014 tool NOT executed]: {_payload}\n"
+                            "React to this message: adjust the approach and call again if needed.")
                 _appr_note = _payload
 
         # ── A-P1-6: Dependency-Install-Call-Budget ──

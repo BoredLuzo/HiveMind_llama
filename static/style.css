@@ -17,7 +17,7 @@ body{background:var(--bg);color:var(--tx);font-family:'IBM Plex Sans',sans-serif
   grid-template-columns:minmax(0,1fr) var(--cp-w) var(--sb-w);
   grid-template-rows:48px minmax(0,1fr);column-gap:16px;padding-right:14px;
   overflow:hidden;font-size:14px;transition:grid-template-columns .28s cubic-bezier(.4,0,.2,1)}
-body.code-panel-open{--cp-w:440px}
+body.code-panel-open{--cp-w:var(--cp-w-user,440px)}
 body.sidebar-collapsed{--sb-w:0px}
 body.sidebar-collapsed #sidebar{display:none}
 /* Sidebar-Toggles: « im Tab-Balken + Reopen-Handle am rechten Rand */

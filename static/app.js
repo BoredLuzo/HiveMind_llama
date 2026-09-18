@@ -3978,16 +3978,18 @@ function _renderApprovalCard(d) {
   _apRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
   [['1', '\u2713 Approve once', '#22c55e'],
    ['2', '\u2713 Approve in this workspace', '#60a0e0'],
-   ['3', '\u2715 Deny', '#e06060']].forEach(function(b) {
+   ['3', '\u2715 Deny', '#e06060'],
+   ['0', '\u2709 Input only', '#c8a04a']].forEach(function(b) {
     var btn = document.createElement('button');
     btn.className = 'ghost';
     btn.style.cssText = 'font-size:10px;padding:5px 10px;border:1px solid ' + b[2] + '55;color:' + b[2];
     btn.textContent = b[1];
     btn.onclick = function() {
+      var _n = (_apNote.value || '').trim();
+      if (b[0] === '0' && !_n) { _apNote.focus(); _apNote.style.borderColor = '#e06060'; return; }
       _apRow.querySelectorAll('button').forEach(function(x) { x.disabled = true; x.style.opacity = .45; });
       btn.style.opacity = 1;
       var _ans = b[0];
-      var _n = (_apNote.value || '').trim();
       if (_n) _ans += '|' + _n;
       fetch('/api/run/' + encodeURIComponent(d.run_id || S.currentRunId || '') + '/resume', {
         method: 'POST',
@@ -4026,22 +4028,24 @@ setInterval(function() {
     var h = document.getElementById('cp-resize');
     if (!h || h._wired) return;
     h._wired = true;
+    // --cp-w-user is INERT while the panel is closed (only
+    // body.code-panel-open consumes it) — a stale width can't leave a gap.
     var saved = parseInt(localStorage.getItem('cp_w') || '0', 10);
-    if (saved >= 280 && saved <= 1000) document.body.style.setProperty('--cp-w', saved + 'px');
+    if (saved >= 280 && saved <= 1000) document.body.style.setProperty('--cp-w-user', saved + 'px');
     h.addEventListener('mousedown', function(e) {
       e.preventDefault();
       var startX = e.clientX;
-      var startW = parseFloat(getComputedStyle(document.body).getPropertyValue('--cp-w')) || 440;
+      var startW = parseInt(localStorage.getItem('cp_w') || '440', 10) || 440;
       document.body.classList.add('resizing-col');
       function onMove(ev) {
         var w = Math.max(280, Math.min(1000, startW + (startX - ev.clientX)));
-        document.body.style.setProperty('--cp-w', w + 'px');
+        document.body.style.setProperty('--cp-w-user', w + 'px');
       }
       function onUp() {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
         document.body.classList.remove('resizing-col');
-        var w = parseInt(getComputedStyle(document.body).getPropertyValue('--cp-w'), 10);
+        var w = parseInt(getComputedStyle(document.body).getPropertyValue('--cp-w-user'), 10);
         if (w) { try { localStorage.setItem('cp_w', String(w)); } catch (e2) {} }
       }
       document.addEventListener('mousemove', onMove);
