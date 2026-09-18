@@ -80,6 +80,10 @@ def test_static_wiring():
     check("chat sticky follow (_chatFollow listener)",
           "_chatFollow" in src and "_chatEnsureFollowListener" in src
           and "if (!_chatFollow) return;" in src)
+    # Approval card recovery: the SSE event is fire-and-forget, a reload
+    # during the pause must not orphan the run — the UI polls the server.
+    check("approval card recovery poll",
+          "'/approval/pending/'" in src and "_renderApprovalCard" in src)
     check("no inline stream pre left in chat", "tg-pre" not in src)
     # Cleanup: without this the streaming chip duplicates the real chip.
     tc_idx = src.find("d.type === 'tool_call'")

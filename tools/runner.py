@@ -291,6 +291,16 @@ _APPROVAL_TOOLS = frozenset({
     "git_commit",
 })
 
+# Pending approvals keyed by run_id (2026-09-18): the approval_request SSE
+# event is fire-and-forget — a page reload during the pause loses the
+# buttons card while the run keeps waiting. The UI polls this via
+# GET /approval/pending/{run_id} and re-renders the card.
+_pending_approvals: dict = {}
+
+
+def _pending_approval_info(run_id: str) -> dict | None:
+    return _pending_approvals.get(str(run_id))
+
 
 def _approval_preview(args: dict) -> str:
     for _k in ("command", "code", "package", "url", "path"):
@@ -338,6 +348,7 @@ async def _check_action_approval(name: str, args: dict, workspace) -> str | None
     _preview = _approval_preview(args)
     question = f"APPROVAL NEEDED: the agent wants to run {name}."
     _lg.warning("[APPROVAL] pausing run=%s tool=%s (waiting for user decision)", run_id, name)
+    _pending_approvals[run_id] = {"tool": name, "preview": _preview}
     await _safe_emit({"type": "agent_asking", "question": question, "run_id": run_id})
     # Buttons card in the UI — posts the decision to /api/run/{id}/resume.
     await _safe_emit({"type": "approval_request",
@@ -351,6 +362,7 @@ async def _check_action_approval(name: str, args: dict, workspace) -> str | None
     from infra import run_control as _rc
     await _rc.initiate_pause(run_id, question)
     answer = await _rc.wait_for_resume(run_id, timeout_s=3600)
+    _pending_approvals.pop(run_id, None)
     await _safe_emit({"type": "agent_resumed"})
     decision = _parse_approval_answer(answer)
     _lg.warning("[APPROVAL] decision=%s run=%s tool=%s (raw answer: %r)",

@@ -96,6 +96,10 @@ def test_gate_flow():
 
     async def fake_pause(run_id, question):
         paused.append((run_id, question))
+        # while paused, the pending info must be visible to the recovery
+        # endpoint (page reload during the pause loses the SSE event)
+        info = tr._pending_approval_info(run_id)
+        assert info and info.get("tool") in question, f"pending info missing: {info}"
 
     async def fake_resume(run_id, timeout_s=600):
         return "2"   # approve for this repo
@@ -113,10 +117,12 @@ def test_gate_flow():
         out = asyncio.run(tr._check_action_approval("read_file", {"path": "x"}, ws))
         check("non-listed tool: proceeds", out is None and not paused)
 
-        # enabled, listed tool -> pause + '2' -> proceeds AND remembers
+        # '2' -> proceeds AND remembers; pending info cleaned up
         out = asyncio.run(tr._check_action_approval("run_bash", {"command": "rm -rf /tmp/x"}, ws))
         check("'2' -> proceeds", out is None, str(out)[:120])
         check("pause happened once", len(paused) == 1 and "run_bash" in paused[0][1])
+        check("pending info popped after decision",
+              tr._pending_approval_info("test-run-1") is None)
         check("'2' remembered for workspace", tr._repo_approval_granted(ws, "run_bash"))
 
         # second call: approved via repo memory -> NO pause

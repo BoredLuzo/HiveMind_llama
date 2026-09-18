@@ -128,6 +128,18 @@ async def get_pause_state(chat_id: str):
     return {"active": True, **ps}
 
 
+@router.get("/approval/pending/{run_id}")
+async def approval_pending(run_id: str):
+    """Recovery source for the approval buttons card: the approval_request
+    SSE event is fire-and-forget, so a page reload during the pause loses
+    the card while the run keeps waiting. The UI polls this while streaming."""
+    from tools.runner import _pending_approval_info
+    info = _pending_approval_info(run_id)
+    if not info:
+        return {"active": False}
+    return {"active": True, **info}
+
+
 @router.post("/internal/tool/exec")
 async def internal_tool_exec(req: Request):
     try:
