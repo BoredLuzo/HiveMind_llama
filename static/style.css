@@ -38,6 +38,11 @@ body.sidebar-collapsed #sb-toggle{display:block}
   opacity:0;pointer-events:none;transition:opacity .2s .05s;
 }
 body.code-panel-open #code-panel{opacity:1;pointer-events:auto}
+/* PANEL-RESIZE (2026-09-18): drag handle on the panel's left edge */
+#code-panel{position:relative}
+#cp-resize{position:absolute;left:0;top:0;bottom:0;width:7px;cursor:ew-resize;z-index:40}
+#cp-resize:hover{background:linear-gradient(90deg,transparent,rgba(96,160,224,.25))}
+body.resizing-col{transition:none !important;cursor:ew-resize;user-select:none}
 #code-panel-hdr{
   display:flex;align-items:center;gap:0;border-bottom:1px solid var(--b);
   background:var(--bg3);flex-shrink:0;overflow-x:auto;

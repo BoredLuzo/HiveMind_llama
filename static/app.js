@@ -3968,8 +3968,12 @@ function _renderApprovalCard(d) {
   _apLbl.style.cssText = 'font-size:12px;color:#f0ad4e;font-weight:600;margin-bottom:6px';
   _apLbl.textContent = '\uD83D\uDEE1 ' + (d.tool || 'tool') + ' wants to run \u2014 your approval is needed';
   var _apPre = document.createElement('pre');
-  _apPre.style.cssText = 'font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:#cfe3ff;background:rgba(0,0,0,.3);border-radius:4px;padding:6px 8px;margin:0 0 8px;max-height:130px;overflow:auto;white-space:pre-wrap';
+  _apPre.style.cssText = 'font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:#cfe3ff;background:rgba(0,0,0,.3);border-radius:4px;padding:6px 8px;margin:0 0 8px;max-height:130px;overflow:auto;white-space:pre-wrap;word-break:break-all';
   _apPre.textContent = d.preview || '';
+  var _apNote = document.createElement('input');
+  _apNote.type = 'text';
+  _apNote.placeholder = 'Optional message to the agent (guidance / reason for deny)\u2026';
+  _apNote.style.cssText = 'width:100%;background:var(--bg);border:1px solid var(--b2);border-radius:4px;padding:5px 8px;color:var(--tx);font-size:11px;margin-bottom:8px';
   var _apRow = document.createElement('div');
   _apRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
   [['1', '\u2713 Approve once', '#22c55e'],
@@ -3982,16 +3986,20 @@ function _renderApprovalCard(d) {
     btn.onclick = function() {
       _apRow.querySelectorAll('button').forEach(function(x) { x.disabled = true; x.style.opacity = .45; });
       btn.style.opacity = 1;
+      var _ans = b[0];
+      var _n = (_apNote.value || '').trim();
+      if (_n) _ans += '|' + _n;
       fetch('/api/run/' + encodeURIComponent(d.run_id || S.currentRunId || '') + '/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answer: b[0] })
+        body: JSON.stringify({ answer: _ans })
       }).catch(function(e) { if (typeof showErrorToast === 'function') showErrorToast('Approval failed: ' + e); });
     };
     _apRow.appendChild(btn);
   });
   _ap.appendChild(_apLbl);
   _ap.appendChild(_apPre);
+  _ap.appendChild(_apNote);
   _ap.appendChild(_apRow);
   document.getElementById('chat').appendChild(_ap);
   scrollBtmIfNearBottom(120);
@@ -4010,6 +4018,39 @@ setInterval(function() {
       }
     }).catch(function() {});
 }, 2000);
+
+// PANEL-RESIZE (2026-09-18): drag the code panel's left edge to resize
+// (--cp-w on body). Width persists in localStorage.
+(function() {
+  function initCpResize() {
+    var h = document.getElementById('cp-resize');
+    if (!h || h._wired) return;
+    h._wired = true;
+    var saved = parseInt(localStorage.getItem('cp_w') || '0', 10);
+    if (saved >= 280 && saved <= 1000) document.body.style.setProperty('--cp-w', saved + 'px');
+    h.addEventListener('mousedown', function(e) {
+      e.preventDefault();
+      var startX = e.clientX;
+      var startW = parseFloat(getComputedStyle(document.body).getPropertyValue('--cp-w')) || 440;
+      document.body.classList.add('resizing-col');
+      function onMove(ev) {
+        var w = Math.max(280, Math.min(1000, startW + (startX - ev.clientX)));
+        document.body.style.setProperty('--cp-w', w + 'px');
+      }
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('resizing-col');
+        var w = parseInt(getComputedStyle(document.body).getPropertyValue('--cp-w'), 10);
+        if (w) { try { localStorage.setItem('cp_w', String(w)); } catch (e2) {} }
+      }
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initCpResize);
+  else initCpResize();
+})();
 
 var _chatFollow = true;
 

@@ -136,7 +136,8 @@ def test_gate_flow():
         ws2.mkdir()
         rc.wait_for_resume = fake_resume_deny
         out = asyncio.run(tr._check_action_approval("run_bash", {"command": "ls"}, ws2))
-        check("'3' -> denied error", out is not None and "ACTION_APPROVAL_DENIED" in str(out))
+        check("'3' -> denied error", out is not None and out[0] == "DENY"
+              and "ACTION_APPROVAL_DENIED" in str(out[1]))
         check("deny: nothing remembered", not tr._repo_approval_granted(ws2, "run_bash"))
 
         # unclear answer -> deny (fail-safe)
@@ -144,7 +145,43 @@ def test_gate_flow():
             return "hmm what?"
         rc.wait_for_resume = fake_resume_unclear
         out = asyncio.run(tr._check_action_approval("run_python", {"code": "1+1"}, ws2))
-        check("unclear -> denied", out is not None and "ACTION_APPROVAL_DENIED" in str(out))
+        check("unclear -> denied", out is not None and out[0] == "DENY")
+
+        # note pass-through: approve WITH guidance -> ("NOTE", text)
+        async def fake_resume_note(run_id, timeout_s=600):
+            return "1|please use fetch instead of curl"
+        rc.wait_for_resume = fake_resume_note
+        out = asyncio.run(tr._check_action_approval("run_python", {"code": "req"}, ws2))
+        check("note: approve with guidance -> NOTE",
+              out is not None and out[0] == "NOTE" and out[1] == "please use fetch instead of curl",
+              str(out))
+        async def fake_resume_deny_note(run_id, timeout_s=600):
+            return "3|too dangerous"
+        rc.wait_for_resume = fake_resume_deny_note
+        out = asyncio.run(tr._check_action_approval("run_python", {"code": "x"}, ws2))
+        check("note: deny with reason -> DENY + User message",
+              out is not None and out[0] == "DENY" and "User message: too dangerous" in str(out[1]),
+              str(out)[:140])
+
+        # 'once' for a write covers the SAME PATH (auto-split continuations,
+        # follow-up edits) — no second ask. Different path still asks.
+        wsp = tmp / "wsp"
+        wsp.mkdir()
+        async def fake_resume_once(run_id, timeout_s=600):
+            return "1"
+        rc.wait_for_resume = fake_resume_once
+        _nb = len(paused)
+        wf = {"path": "src/game.js", "content": "..."}
+        out = asyncio.run(tr._check_action_approval("write_file", dict(wf), wsp))
+        check("write once: first ask proceeds", out is None and len(paused) == _nb + 1)
+        out = asyncio.run(tr._check_action_approval("write_file_append",
+                                                    {"path": "src/game.js", "content": "more"}, wsp))
+        check("write once: same path auto-approved (no new pause)",
+              out is None and len(paused) == _nb + 1)
+        out = asyncio.run(tr._check_action_approval("edit_file",
+                                                    {"path": "src/other.js", "old_text": "a", "new_text": "b"}, wsp))
+        check("write once: DIFFERENT path asks again",
+              out is None and len(paused) == _nb + 2)
 
         # Gate-mode independence (2026-09-18 live bug): until_finished duo
         # runs set the ask_user gate to throttled_autonomous — that is the

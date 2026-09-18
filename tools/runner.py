@@ -297,18 +297,32 @@ _APPROVAL_TOOLS = frozenset({
 # GET /approval/pending/{run_id} and re-renders the card.
 _pending_approvals: dict = {}
 
+# "Approve once" for write tools covers the PATH for the rest of the run:
+# auto-split continuations and follow-up writes to the same file must not
+# re-ask (live: wrote snake.html, then the continuation asked again).
+_approval_once_paths: dict = {}
+
 
 def _pending_approval_info(run_id: str) -> dict | None:
     return _pending_approvals.get(str(run_id))
+
+
+def _norm_write_path(args: dict) -> str:
+    try:
+        return os.path.normpath(str((args or {}).get("path", ""))).lower()
+    except (OSError, TypeError, ValueError):
+        return ""
 
 
 def _approval_preview(args: dict) -> str:
     for _k in ("command", "code", "package", "url", "path"):
         _v = args.get(_k)
         if isinstance(_v, str) and _v.strip():
-            return _v.strip()[:300]
-    return "; ".join(f"{k}={str(v)[:60]}" for k, v in list(args.items())[:3]
-                     if not str(k).startswith("__"))[:300]
+            _v = _v.strip()
+            return _v[:300] + ("\u2026" if len(_v) > 300 else "")
+    _joined = "; ".join(f"{k}={str(v)[:60]}" for k, v in list(args.items())[:3]
+                        if not str(k).startswith("__"))
+    return _joined[:300] + ("\u2026" if len(_joined) > 300 else "")
 
 
 async def _safe_emit(ev) -> None:
@@ -323,9 +337,9 @@ async def _safe_emit(ev) -> None:
         pass
 
 
-async def _check_action_approval(name: str, args: dict, workspace) -> str | None:
-    """Returns None to let the tool run, or a TOOL_ERROR string when the
-    user denied (or the answer was unclear)."""
+async def _check_action_approval(name: str, args: dict, workspace):
+    """Returns None to let the tool run, ("NOTE", text) to run with a user
+    message appended to the result, or ("DENY", tool_error) when denied."""
     import logging as _appr_log
     _lg = _appr_log.getLogger("hivemind.tools")
     try:
@@ -344,13 +358,21 @@ async def _check_action_approval(name: str, args: dict, workspace) -> str | None
         return None
     if _repo_approval_granted(workspace, name):
         return None
+    # "once" for writes covers the path: continuations of an approved write
+    # (auto-split part 2, follow-up edits) must not re-ask.
+    _wpath = _norm_write_path(args)
+    if (name in ("write_file", "edit_file", "write_file_append")
+            and _wpath and _wpath in _approval_once_paths.get(run_id, set())):
+        _lg.info("[APPROVAL] skip: %s on %s already approved this run", name, _wpath)
+        return None
 
     _preview = _approval_preview(args)
     question = f"APPROVAL NEEDED: the agent wants to run {name}."
     _lg.warning("[APPROVAL] pausing run=%s tool=%s (waiting for user decision)", run_id, name)
     _pending_approvals[run_id] = {"tool": name, "preview": _preview}
     await _safe_emit({"type": "agent_asking", "question": question, "run_id": run_id})
-    # Buttons card in the UI — posts the decision to /api/run/{id}/resume.
+    # Buttons card in the UI — posts the decision (+"|user note") to
+    # /api/run/{id}/resume.
     await _safe_emit({"type": "approval_request",
                       "run_id": run_id, "tool": name, "preview": _preview})
     await _safe_emit({"type": "status", "content": "Approval needed \u2014 waiting for your decision\u2026"})
@@ -364,19 +386,35 @@ async def _check_action_approval(name: str, args: dict, workspace) -> str | None
     answer = await _rc.wait_for_resume(run_id, timeout_s=3600)
     _pending_approvals.pop(run_id, None)
     await _safe_emit({"type": "agent_resumed"})
+    # "1|please use fetch instead" -> decision + user note for the model
+    _note = ""
+    if "|" in str(answer):
+        answer, _note = str(answer).split("|", 1)
+        _note = _note.strip()
     decision = _parse_approval_answer(answer)
-    _lg.warning("[APPROVAL] decision=%s run=%s tool=%s (raw answer: %r)",
-                decision, run_id, name, str(answer)[:60])
+    _lg.warning("[APPROVAL] decision=%s run=%s tool=%s note=%r (raw answer: %r)",
+                decision, run_id, name, _note[:80], str(answer)[:60])
     if decision == "repo":
         _remember_repo_approval(workspace, name)
+        if _note:
+            return ("NOTE", _note)
         return None
     if decision == "once":
+        if name in ("write_file", "edit_file", "write_file_append") and _wpath:
+            _approval_once_paths.setdefault(run_id, set()).add(_wpath)
+            if len(_approval_once_paths) > 64:
+                _approval_once_paths.clear()
+                _approval_once_paths[run_id] = {_wpath}
+        if _note:
+            return ("NOTE", _note)
         return None
-    return _tool_error_response(
-        "ACTION_APPROVAL_DENIED",
-        f"The user did not approve this {name} call (answer: {str(answer)[:80]!r}). "
-        f"Do not repeat the same call — pick a different approach that does not need {name}.",
-        tool=name )
+    _deny_msg = (
+        f"The user did not approve this {name} call (answer: {str(answer)[:60]!r}). "
+        + (f"User message: {_note} " if _note else "")
+        + f"Do not repeat the same call — pick a different approach that does not need {name}."
+    )
+    return ("DENY", _tool_error_response(
+        "ACTION_APPROVAL_DENIED", _deny_msg, tool=name ))
 
 
 async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
@@ -949,10 +987,14 @@ async def _run_inline_tool(
 
         # ── ACTION-APPROVAL-GATE (2026-09-18): before the call burns any
         # budget, let the user approve/deny it (duo_action_approval_enabled).
+        _appr_note = ""
         if name in _APPROVAL_TOOLS:
             _appr = await _check_action_approval(name, args or {}, workspace)
             if _appr is not None:
-                return _appr
+                _kind, _payload = _appr
+                if _kind == "DENY":
+                    return _payload
+                _appr_note = _payload
 
         # ── A-P1-6: Dependency-Install-Call-Budget ──
         if name == "install_package" and _consume_install_budget():
@@ -974,6 +1016,11 @@ async def _run_inline_tool(
             _result = await handler(args or {}, workspace, workspace_lock)
         finally:
             _dispatch_active_cv.reset(_tok)
+
+        if _appr_note:
+            # user note from the approval card rides along with the result,
+            # so the model reads the guidance together with the outcome
+            _result = f"{_result}\n[USER NOTE]: {_appr_note}"
 
         if name == "read_file" and not args.get("start_line") and not args.get("end_line"):
             if "[FILE TRUNCATED" in _result or "[TRUNCATED:" in _result:
