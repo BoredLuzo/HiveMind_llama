@@ -60,6 +60,7 @@ SUITES = [
     ("websearch_budget_stop",  "tests/test_websearch_budget_stop.py",          60),
     ("toolgen_stream_card",    "tests/test_toolgen_stream_card.py",            60),
     ("error_cap_decay",        "tests/test_error_cap_decay.py",                60),
+    ("action_approval",        "tests/test_action_approval.py",                60),
     ("tools_audit_fixes",      "tests/test_tools_audit_fixes.py",             120),
     ("mini_shrink_retry",      "tests/test_mini_shrink_retry.py",              60),
     ("output_reserve",         "tests/test_output_reserve.py",                  60),

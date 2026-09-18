@@ -368,6 +368,21 @@ DEFAULT_SETTINGS = {
     "ask_user_throttle_pause_message": "Agent is asking too many questions \u2014 manual help required. Check the agent status and Resume with clarification.",
 
     # ════════════════════════════════════════════════════════════════════════
+    # P2) ACTION APPROVAL (user confirms run-family tool calls) + ERROR CAP
+    # ════════════════════════════════════════════════════════════════════════
+    # Pause the run and ask before executing the listed tools (interactive
+    # mode only). The user answers "1" (approve once), "2" (approve this
+    # tool in this workspace, remembered in tool_approvals.json) or "3"
+    # (deny). Autonomous/throttled runs bypass the gate.
+    "duo_action_approval_enabled": False,
+    "duo_action_approval_tools": "run_bash,run_python,install_package,start_background",
+    # Tool-error hard-stop cap for agentic runs. Successful non-write calls
+    # decay the counter by 1, successful writes reset it to 0 — only a
+    # no-progress run (this many fails with nothing succeeded in between)
+    # is stopped.
+    "duo_max_tool_errors": 12,
+
+    # ════════════════════════════════════════════════════════════════════════
     # Q) MCP & AGENT-SUB-KONFIGURATIONEN
     # ════════════════════════════════════════════════════════════════════════
     #   {"name": "...", "command": "npx", "args": ["-y", "@playwright/mcp@latest"]}   (stdio)

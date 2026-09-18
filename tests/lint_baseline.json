@@ -432,8 +432,8 @@
   "except_pass": 0
  },
  "tools/runner.py": {
-  "broad_except": 18,
-  "except_pass": 12
+  "broad_except": 20,
+  "except_pass": 14
  },
  "tools/sandbox.py": {
   "broad_except": 10,

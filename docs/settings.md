@@ -2,7 +2,7 @@
 
 Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_settings_docs.py` — do not edit by hand.
 
-202 settings keys, based on DEFAULT_SETTINGS.
+205 settings keys, based on DEFAULT_SETTINGS.
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -27,6 +27,8 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `direct_tools_max_rounds` | int | `12` | — |
 | `direct_tools_tier` | str | `"readonly"` | off | readonly(websearch only) | python(read+python) | full |
 | `disable_thinking_in_planner` | bool | `False` | — |
+| `duo_action_approval_enabled` | bool | `False` | — |
+| `duo_action_approval_tools` | str | `"run_bash,run_python,install_package,start_background"` | — |
 | `duo_agentic_mode` | bool | `False` | — |
 | `duo_agentic_thinking` | bool | `False` | — |
 | `duo_autolint_python_engine` | str | `"auto"` | — |
@@ -58,6 +60,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_install_max_calls` | int | `3` | — |
 | `duo_llm_slow_timeout_s` | int | `300` | — |
 | `duo_max_compressions` | int | `40` | — |
+| `duo_max_tool_errors` | int | `12` | — |
 | `duo_max_tool_rounds` | int | `64` | — |
 | `duo_max_tool_rounds_runtime_cap` | int | `300` | — |
 | `duo_noop_hint_enabled` | bool | `True` | — |

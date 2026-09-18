@@ -275,6 +275,16 @@ async def execute_tool_round(
     _ws_root = Path(workspace_lock) if workspace_lock else Path(os.environ.get("HIVEMIND_WORKSPACE", "."))
     _is_git_repo = (_ws_root / ".git").exists()
 
+    # ERROR-CAP (2026-09-18): configurable (duo_max_tool_errors, default 12).
+    # With ERROR-CAP-DECAY (successful non-write calls -1, writes reset) this
+    # only stops genuinely no-progress runs.
+    _err_cap = 12
+    try:
+        from core.state import settings as _cap_settings
+        _err_cap = max(4, int(_cap_settings.get("duo_max_tool_errors", 12)))
+    except (ImportError, AttributeError, TypeError, ValueError):
+        pass
+
     # CONTEXT-COMPACTION: this round's assistant message (last one with tool_calls)
     # - never sent as a prompt, so safe to compact right after success.
     _assistant_idx = -1
@@ -703,10 +713,10 @@ async def execute_tool_round(
                         _dname, _focus_path,
                         _wedge.streak_of(trs.wedge_state, _focus_path))
                     break
-            if _total_tool_errors[0] >= 6:
+            if _total_tool_errors[0] >= _err_cap:
                 if not _recovery_saturated(dtool_msgs):
                     dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                        "[SYSTEM] 6 tool calls have failed across different "
+                        f"[SYSTEM] {_err_cap} tool calls have failed across different "
                         "error types. The current approach is fundamentally "
                         "not working. Call task_complete with a summary of "
                         "what was accomplished and what remains."

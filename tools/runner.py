@@ -1,8 +1,10 @@
 """Tool runner and path utilities (extracted from server.py)."""
 from __future__ import annotations
 import contextvars as _contextvars
+import json
 import os
 import re
+import time
 from pathlib import Path
 
 from tools.errors import tool_error_response as _tool_error_response
@@ -205,6 +207,150 @@ def _normalize_meta_paths(text: str) -> str:
             _ln = _RE_META_WINPATH.sub(lambda m: m.group(0).replace("\\", "/"), _ln)
         out.append(_ln)
     return "\n".join(out)
+
+
+# ── ACTION-APPROVAL-GATE (2026-09-18) ───────────────────────────────────────
+# Optional (duo_action_approval_enabled): before a state-changing tool runs,
+# pause the run and let the user decide — answer "1" approves this call,
+# "2" approves this TOOL in this WORKSPACE (persisted in tool_approvals.json
+# next to settings.json), "3" denies. Autonomous/throttled runs bypass the
+# gate (no pauses there), and so do runs without a run_id.
+_action_approvals_cache: dict | None = None
+
+
+def _approvals_file():
+    from settings import SETTINGS_FILE as _sf
+    return _sf.parent / "tool_approvals.json"
+
+
+def _load_approvals() -> dict:
+    global _action_approvals_cache
+    if _action_approvals_cache is None:
+        try:
+            _loaded = json.loads(_approvals_file().read_text(encoding="utf-8"))
+            _action_approvals_cache = _loaded if isinstance(_loaded, dict) else {}
+        except (OSError, ValueError):
+            _action_approvals_cache = {}
+    return _action_approvals_cache
+
+
+def _save_approvals(d: dict) -> None:
+    global _action_approvals_cache
+    _action_approvals_cache = d
+    try:
+        _approvals_file().write_text(
+            json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass  # unreadable disk: approvals stay in-memory for this run
+
+
+def _workspace_approval_key(workspace) -> str:
+    try:
+        return str(Path(workspace).resolve())
+    except OSError:
+        return str(workspace)
+
+
+def _repo_approval_granted(workspace, tool: str) -> bool:
+    d = _load_approvals()
+    return tool in d.get(_workspace_approval_key(workspace), {})
+
+
+def _remember_repo_approval(workspace, tool: str) -> None:
+    d = _load_approvals()
+    d.setdefault(_workspace_approval_key(workspace), {})[tool] = int(time.time())
+    _save_approvals(d)
+
+
+def _parse_approval_answer(text: str) -> str:
+    """User reply -> 'once' | 'repo' | 'deny'. Anything unclear = deny
+    (fail-safe: without a clear approval the tool does not run)."""
+    t = str(text or "").strip().lower()
+    if not t:
+        return "deny"
+    if t.startswith(("1", "once", "approve once", "einmal")):
+        return "once"
+    if t.startswith(("2", "repo", "always", "immer", "approve repo")):
+        return "repo"
+    if t.startswith(("3", "deny", "denied", "no", "nein", "block", "stop")):
+        return "deny"
+    if "repo" in t or "always" in t or "immer" in t:
+        return "repo"
+    if "deny" in t or "block" in t or "stop" in t:
+        return "deny"
+    if "once" in t or "approve" in t or "yes" in t or "ok" in t:
+        return "once"
+    return "deny"
+
+
+def _approval_preview(args: dict) -> str:
+    for _k in ("command", "code", "package", "url", "path"):
+        _v = args.get(_k)
+        if isinstance(_v, str) and _v.strip():
+            return _v.strip()[:300]
+    return "; ".join(f"{k}={str(v)[:60]}" for k, v in list(args.items())[:3]
+                     if not str(k).startswith("__"))[:300]
+
+
+async def _safe_emit(ev) -> None:
+    """One guarded emit for the approval gate — UI events must never break
+    tool dispatch, regardless of what the sink raises."""
+    emit = _tool_loop_emit.get(None)
+    if not emit:
+        return
+    try:
+        await emit(ev)
+    except Exception:
+        pass
+
+
+async def _check_action_approval(name: str, args: dict, workspace) -> str | None:
+    """Returns None to let the tool run, or a TOOL_ERROR string when the
+    user denied (or the answer was unclear)."""
+    try:
+        from core.state import settings as _ws_settings
+        _enabled = bool(_ws_settings.get("duo_action_approval_enabled", False))
+        _tools = [t.strip() for t in
+                  str(_ws_settings.get("duo_action_approval_tools", "")).split(",") if t.strip()]
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return None
+    if not _enabled or name not in _tools:
+        return None
+    if _ask_user_gate.get("open") != "open":
+        return None  # autonomous/throttled run: never pause mid-flight
+    run_id = _current_run_id.get()
+    if not run_id:
+        return None
+    if _repo_approval_granted(workspace, name):
+        return None
+
+    question = (
+        f"APPROVAL NEEDED: the agent wants to run {name}:\n"
+        f"  {_approval_preview(args)}\n"
+        "Reply  1 = approve once   |   2 = approve this tool in this workspace (remembered)   |   3 = deny"
+    )
+    await _safe_emit({"type": "agent_asking", "question": question, "run_id": run_id})
+    await _safe_emit({"type": "status", "content": "Approval needed \u2014 waiting for your decision\u2026"})
+    try:
+        from infra.notify import notify_agent_needs_input
+        notify_agent_needs_input(str(run_id), f"Approval needed: {name}")
+    except Exception:
+        pass
+    from infra import run_control as _rc
+    await _rc.initiate_pause(run_id, question)
+    answer = await _rc.wait_for_resume(run_id, timeout_s=3600)
+    await _safe_emit({"type": "agent_resumed"})
+    decision = _parse_approval_answer(answer)
+    if decision == "repo":
+        _remember_repo_approval(workspace, name)
+        return None
+    if decision == "once":
+        return None
+    return _tool_error_response(
+        "ACTION_APPROVAL_DENIED",
+        f"The user did not approve this {name} call (answer: {str(answer)[:80]!r}). "
+        f"Do not repeat the same call — pick a different approach that does not need {name}.",
+        tool=name )
 
 
 async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
@@ -774,6 +920,14 @@ async def _run_inline_tool(
                 "or document the open point in task_complete.",
                 tool=name,
                 mode=str(tool_mode or "") )
+
+        # ── ACTION-APPROVAL-GATE (2026-09-18): before the call burns any
+        # budget, let the user approve/deny it (duo_action_approval_enabled).
+        if name in ("run_bash", "run_python", "install_package", "start_background",
+                    "git_commit", "browser"):
+            _appr = await _check_action_approval(name, args or {}, workspace)
+            if _appr is not None:
+                return _appr
 
         # ── A-P1-6: Dependency-Install-Call-Budget ──
         if name == "install_package" and _consume_install_budget():
