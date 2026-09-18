@@ -19,43 +19,41 @@ for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$j = Get-Cont
 if not defined HM_PORT set "HM_PORT=8001"
 
 REM Port check: is HiveMind already running?
+set "HM_PORT_PID="
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { $c }"`) do set HM_PORT_PID=%%P
-if not defined HM_PORT_PID goto port_check_done
+if not defined HM_PORT_PID goto port_free
 echo.
 echo  [INFO] HiveMind is already running on port %HM_PORT% (PID: %HM_PORT_PID%).
 echo  [INFO] Open: http://localhost:%HM_PORT%
 echo.
 choice /c YN /n /m "Kill the running instance and start fresh? [Y/N] "
-if errorlevel 2 (
-    echo  Aborted - existing instance stays running.
-    exit /b 0
-)
-# SERIAL-RESTART (2026-09-10): kill the old instance with its process tree
-# (llama-server children) - no labels inside parenthesized blocks: cmd's
-# parser breaks on them.
+if errorlevel 2 exit /b 0
+
+REM SERIAL-RESTART (2026-09-10): kill the old instance with its process tree
+REM (llama-server children). Linear flow: labels must stay at top level, cmd
+REM breaks on goto/labels inside parenthesized blocks.
 echo  [..] Killing PID %HM_PORT_PID% ...
 taskkill /F /T /PID %HM_PORT_PID%
 powershell -NoProfile -Command "Stop-Process -Id %HM_PORT_PID% -Force -ErrorAction SilentlyContinue"
-# KILL-WAIT: process death + socket release can take several seconds - poll.
+
+REM KILL-WAIT: process death + socket release can take a second - poll.
+REM HM_PORT_PID doubles as the "still occupied" marker and MUST be cleared
+REM before every check, otherwise a freed port looks taken (stale PID).
 set /a HM_KILL_WAIT=0
 :kill_wait_loop
 timeout /t 1 /nobreak >nul
-set "HM_STILL="
-for /f "usebackq delims=" %%Q in (`powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue) { '1' }"`) do set HM_STILL=%%Q
-if not defined HM_STILL goto port_check_done
+set "HM_PORT_PID="
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { $c }"`) do set HM_PORT_PID=%%P
+if not defined HM_PORT_PID goto port_free
 set /a HM_KILL_WAIT+=1
 if %HM_KILL_WAIT% lss 10 goto kill_wait_loop
-:port_check_done
-)
-:port_check_done
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { $c }"`) do set HM_PORT_PID=%%P
-if defined HM_PORT_PID (
-    echo  [WARN] Port %HM_PORT% still occupied ^(PID: %HM_PORT_PID%^) - cannot start.
-    echo  Press any key to continue...
-    pause >nul
-    exit /b 1
-)
-)
+
+echo  [WARN] Port %HM_PORT% still occupied (PID: %HM_PORT_PID%) - cannot start.
+echo  Press any key to continue...
+pause >nul
+exit /b 1
+
+:port_free
 
 REM Find Python: venv first, then py -3.14 (resolved to a real path),
 REM then known install locations. "%PY%" is always quote-safe this way.
