@@ -109,6 +109,9 @@ def test_gate_flow():
 
     async def fake_pause(run_id, question):
         paused.append((run_id, question))
+        # mirror the real initiate_pause so the gate's abort-aware wait
+        # finds a pause event
+        rc._pause_events[run_id] = asyncio.Event()
         # while paused, the pending info must be visible to the recovery
         # endpoint (page reload during the pause loses the SSE event)
         info = tr._pending_approval_info(run_id)
@@ -226,6 +229,34 @@ def test_gate_flow():
         check("throttled mode still pauses (no silent bypass)",
               out is None and len(paused) == _n_before2 + 1,
               f"out={str(out)[:80]} paused={len(paused)}")
+
+        # Abort during pause (browser closed): the gate must wake on the
+        # run's abort event instead of sleeping for 3600s while a
+        # disconnected run keeps firing toasts.
+        async def fake_never_resume(run_id, timeout_s=600):
+            await asyncio.sleep(30)
+            return "1"
+        rc.wait_for_resume = fake_never_resume
+        ws4 = tmp / "ws4"
+        ws4.mkdir()
+        rc._run_abort_registry.setdefault("test-run-1", asyncio.Event())
+        rc._run_abort_registry["test-run-1"].clear()
+        _nb3 = len(paused)
+
+        async def abort_scenario():
+            gate_task = asyncio.ensure_future(
+                tr._check_action_approval("run_bash", {"command": "long"}, ws4))
+            for _ in range(200):
+                await asyncio.sleep(0.01)
+                if len(paused) > _nb3:
+                    break
+            await asyncio.sleep(0.05)   # let the gate reach its wait
+            rc._run_abort_registry["test-run-1"].set()
+            return await asyncio.wait_for(gate_task, timeout=5)
+
+        out = asyncio.run(abort_scenario())
+        check("abort during pause -> immediate deny (no hour-long sleep)",
+              out is not None and out[0] == "DENY" and "aborted" in str(out[1]), str(out)[:120])
     finally:
         rc.initiate_pause, rc.wait_for_resume = orig_pause, orig_resume
         st.settings["duo_action_approval_enabled"] = False

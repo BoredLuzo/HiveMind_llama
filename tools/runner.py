@@ -393,7 +393,35 @@ async def _check_action_approval(name: str, args: dict, workspace):
         pass
     from infra import run_control as _rc
     await _rc.initiate_pause(run_id, question)
-    answer = await _rc.wait_for_resume(run_id, timeout_s=3600)
+    # ABORT-AWARE WAIT (2026-09-18): when the browser closes mid-pause, the
+    # UI posts /abort/{run_id} — the gate must wake on that instead of
+    # sleeping up to 3600s while the disconnected run keeps the model
+    # loaded (live: approval toasts minutes after closing the UI). Deny on
+    # abort; the run's own abort checks stop it right after this round.
+    import asyncio as _appr_asyncio
+    _pause_ev = _rc._pause_events.get(run_id)
+    _abort_ev = _rc._run_abort_registry.get(run_id)
+    if _pause_ev is not None and _abort_ev is not None:
+        _wait_t = _appr_asyncio.ensure_future(_pause_ev.wait())
+        _abort_t = _appr_asyncio.ensure_future(_abort_ev.wait())
+        _done, _still = await _appr_asyncio.wait(
+            {_wait_t, _abort_t}, timeout=3600, return_when=_appr_asyncio.FIRST_COMPLETED)
+        for _t in _still:
+            _t.cancel()
+        if _abort_t in _done and _wait_t not in _done:
+            _lg.warning("[APPROVAL] run aborted during pause (browser closed) — denying, run will stop")
+            _pending_approvals.pop(run_id, None)
+            _rc.cleanup_pause(run_id)
+            await _safe_emit({"type": "agent_resumed"})
+            return ("DENY", _tool_error_response(
+                "ACTION_APPROVAL_DENIED",
+                "The run was aborted while waiting for approval (UI closed). "
+                "Do not continue this approach.",
+                tool=name ))
+        answer = _rc._user_answers.pop(run_id, "")
+        _rc.cleanup_pause(run_id)
+    else:
+        answer = await _rc.wait_for_resume(run_id, timeout_s=3600)
     _pending_approvals.pop(run_id, None)
     await _safe_emit({"type": "agent_resumed"})
     # "1|please use fetch instead" -> decision + user note for the model
