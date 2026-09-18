@@ -4,10 +4,12 @@
 Feature: optional pause-and-ask before state-changing tool calls
 (duo_action_approval_enabled). The user answers
   1 = approve once        -> this call proceeds, nothing remembered
-  2 = approve this tool in this workspace -> persisted in
-      tool_approvals.json (next to settings.json), future calls of the
-      same tool in the same workspace skip the gate
+  2 = approve this exact call -> remembered for the CURRENT CHAT only
+      (in-memory; writes per file, commands per exact arguments) — a new
+      chat asks again
   3 / anything unclear    -> deny: tool returns ACTION_APPROVAL_DENIED
+  0|<note>                -> "input only": the tool does not run, the note
+      goes back to the model as the call's outcome
 
 Autonomous/throttled runs and runs without a run_id bypass the gate.
 
@@ -49,37 +51,36 @@ def test_answer_parsing():
     check("unclear -> deny (fail-safe)", p("what do you want?") == "deny")
 
 
-def test_persistence_and_scope():
+def test_memory_scope():
+    """Approvals are exact-match AND chat-scoped, in-memory only: a new chat
+    (new _current_run_id scope) asks again; nothing persists to disk."""
     import tools.runner as tr
-    tmp = Path(tempfile.mkdtemp(prefix="hvm_appr_"))
-    tr._action_approvals_cache = None
-    tr._approvals_file = lambda: tmp / "tool_approvals.json"
+    tr._approval_memory.clear()
+    tr._approval_once_paths.clear()
 
-    ws = tmp / "projA"
-    ws.mkdir()
+    ws = Path(tempfile.mkdtemp(prefix="hvm_appr_"))
     cmd = {"command": "python -m pytest -q"}
-    check("fresh: no approval", not tr._repo_approval_granted(ws, "run_bash", cmd))
+    tr._current_run_id.set("chat-A")
+    check("fresh chat: no approval", not tr._repo_approval_granted(ws, "run_bash", cmd))
     tr._remember_repo_approval(ws, "run_bash", cmd)
     # EXACT-MATCH: the same 1:1 command is remembered, anything else asks again
-    check("same command: granted", tr._repo_approval_granted(ws, "run_bash", cmd))
-    check("different command: NOT granted",
+    check("same chat, same command: granted", tr._repo_approval_granted(ws, "run_bash", cmd))
+    check("same chat, different command: NOT granted",
           not tr._repo_approval_granted(ws, "run_bash", {"command": "python -m pytest -q -x"}))
-    check("different tool: NOT granted", not tr._repo_approval_granted(ws, "run_python", cmd))
-    ws_b = tmp / "projB"
-    ws_b.mkdir()
+    check("same chat, different tool: NOT granted", not tr._repo_approval_granted(ws, "run_python", cmd))
+    ws_b = Path(tempfile.mkdtemp(prefix="hvm_appr_b_"))
     check("other workspace: NOT granted", not tr._repo_approval_granted(ws_b, "run_bash", cmd))
     # writes remember per FILE
     tr._remember_repo_approval(ws, "edit_file", {"path": "src/a.js", "old_text": "x", "new_text": "y"})
-    check("same file: granted (any write tool)",
+    check("same chat: same file granted (any write tool)",
           tr._repo_approval_granted(ws, "write_file", {"path": "src/a.js", "content": "z"}))
-    check("other file: NOT granted",
+    check("same chat: other file NOT granted",
           not tr._repo_approval_granted(ws, "edit_file", {"path": "src/b.js", "old_text": "x", "new_text": "y"}))
-    # file persisted
-    import json
-    on_disk = json.loads((tmp / "tool_approvals.json").read_text(encoding="utf-8"))
-    _entries = on_disk.get(str(ws.resolve()), {})
-    check("persisted to disk", any(k.startswith("cmd:run_bash") for k in _entries)
-          and any(k.startswith("file:") for k in _entries), str(_entries)[:160])
+    # NEW CHAT: the memory does not cross the chat boundary
+    tr._current_run_id.set("chat-B")
+    check("NEW chat: asks again", not tr._repo_approval_granted(ws, "run_bash", cmd))
+    check("NEW chat: writes ask again",
+          not tr._repo_approval_granted(ws, "edit_file", {"path": "src/a.js", "old_text": "x", "new_text": "y"}))
 
 
 def test_gate_flow():
@@ -97,8 +98,8 @@ def test_gate_flow():
     tmp = Path(tempfile.mkdtemp(prefix="hvm_appr_gate_"))
     ws = tmp / "ws"
     ws.mkdir()
-    tr._action_approvals_cache = None
-    tr._approvals_file = lambda: tmp / "tool_approvals.json"
+    tr._approval_memory.clear()
+    tr._approval_once_paths.clear()
     st.settings["duo_action_approval_enabled"] = True
     tr._ask_user_gate.set("open")
     tr._current_run_id.set("test-run-1")
@@ -245,7 +246,7 @@ def test_gate_scope():
 
 if __name__ == "__main__":
     test_answer_parsing()
-    test_persistence_and_scope()
+    test_memory_scope()
     test_gate_scope()
     test_gate_flow()
     print("\n" + "=" * 60)

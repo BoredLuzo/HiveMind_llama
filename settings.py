@@ -374,9 +374,9 @@ DEFAULT_SETTINGS = {
     # code/cmd execution (run_bash, run_python, install_package,
     # start_background), file writes (write_file, edit_file,
     # write_file_append) and git_commit. "Approve" buttons: once, or
-    # remember EXACTLY this call (writes per file, commands 1:1 per exact
-    # arguments — anything new asks again). Autonomous/throttled runs
-    # bypass nothing; the toggle applies mid-run.
+    # remember EXACTLY this call for the CURRENT CHAT (writes per file,
+    # commands 1:1 per exact arguments — anything new or a new chat asks
+    # again). The toggle applies mid-run.
     "duo_action_approval_enabled": False,
     # Tool-error hard-stop cap for agentic runs. Successful non-write calls
     # decay the counter by 1, successful writes reset it to 0 — only a

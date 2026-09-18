@@ -211,39 +211,13 @@ def _normalize_meta_paths(text: str) -> str:
 
 # ── ACTION-APPROVAL-GATE (2026-09-18) ───────────────────────────────────────
 # Optional (duo_action_approval_enabled): before a state-changing tool runs,
-# pause the run and let the user decide — answer "1" approves this call,
-# "2" approves this TOOL in this WORKSPACE (persisted in tool_approvals.json
-# next to settings.json), "3" denies. Autonomous/throttled runs bypass the
-# gate (no pauses there), and so do runs without a run_id.
-_action_approvals_cache: dict | None = None
-
-
-def _approvals_file():
-    from settings import SETTINGS_FILE as _sf
-    return _sf.parent / "tool_approvals.json"
-
-
-def _load_approvals() -> dict:
-    global _action_approvals_cache
-    if _action_approvals_cache is None:
-        try:
-            _loaded = json.loads(_approvals_file().read_text(encoding="utf-8"))
-            _action_approvals_cache = _loaded if isinstance(_loaded, dict) else {}
-        except (OSError, ValueError):
-            _action_approvals_cache = {}
-    return _action_approvals_cache
-
-
-def _save_approvals(d: dict) -> None:
-    global _action_approvals_cache
-    _action_approvals_cache = d
-    try:
-        _approvals_file().write_text(
-            json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        pass  # unreadable disk: approvals stay in-memory for this run
-
-
+# pause the run and let the user decide — "1" approves this call, "2"
+# remembers EXACTLY this call for this CHAT (writes per file, commands 1:1
+# per arguments — anything new asks again), "3" denies.
+# Memory is IN-MEMORY and CHAT-SCOPED (scope = _current_run_id, which is
+# chat_id-or-run_id): a new chat asks again, nothing survives restarts.
+# The old tool_approvals.json persistence was removed on purpose (live: a
+# remembered write from an old chat silenced the gate in a brand-new one).
 def _workspace_approval_key(workspace) -> str:
     try:
         return str(Path(workspace).resolve())
@@ -266,20 +240,16 @@ def _approval_call_key(name: str, args: dict) -> str:
 
 
 def _repo_approval_granted(workspace, name: str, args: dict) -> bool:
-    d = _load_approvals()
-    _key = _approval_call_key(name, args)
-    if not _key or _key.endswith(":") or _key.endswith("|"):
-        return False
-    return _key in d.get(_workspace_approval_key(workspace), {})
+    d = _approval_memory.get(_approval_scope(), {})
+    _key = _workspace_approval_key(workspace) + "::" + _approval_call_key(name, args)
+    return _key in d
 
 
 def _remember_repo_approval(workspace, name: str, args: dict) -> None:
-    _key = _approval_call_key(name, args)
-    if not _key or _key.endswith(":") or _key.endswith("|"):
-        return
-    d = _load_approvals()
-    d.setdefault(_workspace_approval_key(workspace), {})[_key] = int(time.time())
-    _save_approvals(d)
+    _mem = _approval_memory.setdefault(_approval_scope(), {})
+    if len(_mem) > 512:
+        _mem.clear()
+    _mem[_workspace_approval_key(workspace) + "::" + _approval_call_key(name, args)] = int(time.time())
 
 
 def _parse_approval_answer(text: str) -> str:
@@ -321,10 +291,23 @@ _APPROVAL_TOOLS = frozenset({
 # GET /approval/pending/{run_id} and re-renders the card.
 _pending_approvals: dict = {}
 
+# Approval memory (2026-09-18, exact-match + CHAT-SCOPED, in-memory only):
+# "approve ... (remember)" lives for the CURRENT CHAT (scope = the runner's
+# _current_run_id, which is chat_id-or-run_id). A new chat asks again —
+# nothing survives restarts or crosses chats. The old tool_approvals.json
+# persistence was removed on purpose (live: a remembered first write from an
+# old chat silenced the gate in a brand-new one).
+_approval_memory: dict = {}
+
 # "Approve once" for write tools covers the PATH for the rest of the run:
 # auto-split continuations and follow-up writes to the same file must not
 # re-ask (live: wrote snake.html, then the continuation asked again).
 _approval_once_paths: dict = {}
+
+
+def _approval_scope() -> str:
+    """chat_id-or-run_id (the same value ask_user keys on)."""
+    return str(_current_run_id.get() or "")
 
 
 def _pending_approval_info(run_id: str) -> dict | None:
@@ -384,10 +367,13 @@ async def _check_action_approval(name: str, args: dict, workspace):
         return None
     # "once" for writes covers the path: continuations of an approved write
     # (auto-split part 2, follow-up edits) must not re-ask.
+    _scope = _approval_scope()
     _wpath = _norm_write_path(args)
+    if _wpath:
+        _wpath = _workspace_approval_key(workspace) + "::" + _wpath
     if (name in ("write_file", "edit_file", "write_file_append")
-            and _wpath and _wpath in _approval_once_paths.get(run_id, set())):
-        _lg.info("[APPROVAL] skip: %s on %s already approved this run", name, _wpath)
+            and _wpath and _wpath in _approval_once_paths.get(_scope, set())):
+        _lg.info("[APPROVAL] skip: %s on %s already approved in this chat", name, _wpath)
         return None
 
     _preview = _approval_preview(args)
@@ -429,10 +415,10 @@ async def _check_action_approval(name: str, args: dict, workspace):
         return ("INPUT_ONLY", _note or "(empty)")
     if decision == "once":
         if name in ("write_file", "edit_file", "write_file_append") and _wpath:
-            _approval_once_paths.setdefault(run_id, set()).add(_wpath)
+            _approval_once_paths.setdefault(_scope, set()).add(_wpath)
             if len(_approval_once_paths) > 64:
                 _approval_once_paths.clear()
-                _approval_once_paths[run_id] = {_wpath}
+                _approval_once_paths[_scope] = {_wpath}
         if _note:
             return ("NOTE", _note)
         return None
