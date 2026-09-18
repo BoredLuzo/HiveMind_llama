@@ -88,7 +88,6 @@ def test_gate_flow():
     tr._action_approvals_cache = None
     tr._approvals_file = lambda: tmp / "tool_approvals.json"
     st.settings["duo_action_approval_enabled"] = True
-    st.settings["duo_action_approval_tools"] = "run_bash,run_python"
     tr._ask_user_gate.set("open")
     tr._current_run_id.set("test-run-1")
     tr._tool_loop_emit.set(None)

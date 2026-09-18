@@ -1117,8 +1117,6 @@ async function loadSettings() {
     S.duoActionApproval = s.duo_action_approval_enabled || false;
     var _aaEl = document.getElementById('duo-action-approval-toggle');
     if (_aaEl) _aaEl.checked = S.duoActionApproval;
-    var _aatEl = document.getElementById('approval-tools-inp');
-    if (_aatEl) _aatEl.value = s.duo_action_approval_tools || 'run_bash,run_python,install_package,start_background';
     updateApprovalUI();
     // Websearch timeout values — single slider (v0.96.5)
     var _wsSlider = document.getElementById('ws-timeout-slider');
@@ -5448,6 +5446,49 @@ function handleEvent(d) {
     if (_inpRes) { _inpRes.placeholder = 'Message...'; _inpRes.value = ''; _inpRes.disabled = false; }
     var _qDiv = document.getElementById('ask-user-question');
     if (_qDiv) _qDiv.remove();
+    var _apCard = document.getElementById('approval-request-card');
+    if (_apCard) _apCard.remove();
+  }
+  else if (d.type === 'approval_request') {
+    // ACTION-APPROVAL (2026-09-18): buttons instead of typed answers —
+    // posts the decision to the existing resume endpoint.
+    var _apOld = document.getElementById('approval-request-card');
+    if (_apOld) _apOld.remove();
+    var _ap = document.createElement('div');
+    _ap.id = 'approval-request-card';
+    _ap.className = 'msg divider';
+    _ap.style.cssText = 'border-color:rgba(240,173,78,.4);background:rgba(240,173,78,.06);padding:9px 13px';
+    var _apLbl = document.createElement('div');
+    _apLbl.style.cssText = 'font-size:12px;color:#f0ad4e;font-weight:600;margin-bottom:6px';
+    _apLbl.textContent = '\uD83D\uDEE1 ' + (d.tool || 'tool') + ' wants to run \u2014 your approval is needed';
+    var _apPre = document.createElement('pre');
+    _apPre.style.cssText = 'font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:#cfe3ff;background:rgba(0,0,0,.3);border-radius:4px;padding:6px 8px;margin:0 0 8px;max-height:130px;overflow:auto;white-space:pre-wrap';
+    _apPre.textContent = d.preview || '';
+    var _apRow = document.createElement('div');
+    _apRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
+    [['1', '\u2713 Approve once', '#22c55e'],
+     ['2', '\u2713 Approve in this workspace', '#60a0e0'],
+     ['3', '\u2715 Deny', '#e06060']].forEach(function(b) {
+      var btn = document.createElement('button');
+      btn.className = 'ghost';
+      btn.style.cssText = 'font-size:10px;padding:5px 10px;border:1px solid ' + b[2] + '55;color:' + b[2];
+      btn.textContent = b[1];
+      btn.onclick = function() {
+        _apRow.querySelectorAll('button').forEach(function(x) { x.disabled = true; x.style.opacity = .45; });
+        btn.style.opacity = 1;
+        fetch('/api/run/' + encodeURIComponent(d.run_id || S.currentRunId || '') + '/resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answer: b[0] })
+        }).catch(function(e) { if (typeof showErrorToast === 'function') showErrorToast('Approval failed: ' + e); });
+      };
+      _apRow.appendChild(btn);
+    });
+    _ap.appendChild(_apLbl);
+    _ap.appendChild(_apPre);
+    _ap.appendChild(_apRow);
+    document.getElementById('chat').appendChild(_ap);
+    scrollBtmIfNearBottom(120);
   }
   else if (d.type === 'run_paused_manual') {
     setPauseBtnState('paused_manual');

@@ -2,7 +2,7 @@
 
 Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_settings_docs.py` — do not edit by hand.
 
-205 settings keys, based on DEFAULT_SETTINGS.
+204 settings keys, based on DEFAULT_SETTINGS.
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -28,7 +28,6 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `direct_tools_tier` | str | `"readonly"` | off | readonly(websearch only) | python(read+python) | full |
 | `disable_thinking_in_planner` | bool | `False` | — |
 | `duo_action_approval_enabled` | bool | `False` | — |
-| `duo_action_approval_tools` | str | `"run_bash,run_python,install_package,start_background"` | — |
 | `duo_agentic_mode` | bool | `False` | — |
 | `duo_agentic_thinking` | bool | `False` | — |
 | `duo_autolint_python_engine` | str | `"auto"` | — |

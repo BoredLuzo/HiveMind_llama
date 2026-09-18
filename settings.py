@@ -368,14 +368,13 @@ DEFAULT_SETTINGS = {
     "ask_user_throttle_pause_message": "Agent is asking too many questions \u2014 manual help required. Check the agent status and Resume with clarification.",
 
     # ════════════════════════════════════════════════════════════════════════
-    # P2) ACTION APPROVAL (user confirms run-family tool calls) + ERROR CAP
+    # P2) ACTION APPROVAL (user confirms code/cmd execution) + ERROR CAP
     # ════════════════════════════════════════════════════════════════════════
-    # Pause the run and ask before executing the listed tools (interactive
-    # mode only). The user answers "1" (approve once), "2" (approve this
-    # tool in this workspace, remembered in tool_approvals.json) or "3"
-    # (deny). Autonomous/throttled runs bypass the gate.
+    # When on, the run pauses before everything that executes code/commands
+    # (run_bash, run_python, install_package, start_background) and the UI
+    # shows Approve-once / Approve-in-workspace / Deny buttons. Autonomous/
+    # throttled runs bypass the gate.
     "duo_action_approval_enabled": False,
-    "duo_action_approval_tools": "run_bash,run_python,install_package,start_background",
     # Tool-error hard-stop cap for agentic runs. Successful non-write calls
     # decay the counter by 1, successful writes reset it to 0 — only a
     # no-progress run (this many fails with nothing succeeded in between)

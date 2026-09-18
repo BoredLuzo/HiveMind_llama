@@ -283,6 +283,10 @@ def _parse_approval_answer(text: str) -> str:
     return "deny"
 
 
+# Everything that executes code/commands asks when the gate is on.
+_APPROVAL_TOOLS = frozenset({"run_bash", "run_python", "install_package", "start_background"})
+
+
 def _approval_preview(args: dict) -> str:
     for _k in ("command", "code", "package", "url", "path"):
         _v = args.get(_k)
@@ -310,11 +314,9 @@ async def _check_action_approval(name: str, args: dict, workspace) -> str | None
     try:
         from core.state import settings as _ws_settings
         _enabled = bool(_ws_settings.get("duo_action_approval_enabled", False))
-        _tools = [t.strip() for t in
-                  str(_ws_settings.get("duo_action_approval_tools", "")).split(",") if t.strip()]
     except (ImportError, AttributeError, TypeError, ValueError):
         return None
-    if not _enabled or name not in _tools:
+    if not _enabled or name not in _APPROVAL_TOOLS:
         return None
     if _ask_user_gate.get("open") != "open":
         return None  # autonomous/throttled run: never pause mid-flight
@@ -324,12 +326,12 @@ async def _check_action_approval(name: str, args: dict, workspace) -> str | None
     if _repo_approval_granted(workspace, name):
         return None
 
-    question = (
-        f"APPROVAL NEEDED: the agent wants to run {name}:\n"
-        f"  {_approval_preview(args)}\n"
-        "Reply  1 = approve once   |   2 = approve this tool in this workspace (remembered)   |   3 = deny"
-    )
+    _preview = _approval_preview(args)
+    question = f"APPROVAL NEEDED: the agent wants to run {name}."
     await _safe_emit({"type": "agent_asking", "question": question, "run_id": run_id})
+    # Buttons card in the UI — posts the decision to /api/run/{id}/resume.
+    await _safe_emit({"type": "approval_request",
+                      "run_id": run_id, "tool": name, "preview": _preview})
     await _safe_emit({"type": "status", "content": "Approval needed \u2014 waiting for your decision\u2026"})
     try:
         from infra.notify import notify_agent_needs_input
@@ -923,8 +925,7 @@ async def _run_inline_tool(
 
         # ── ACTION-APPROVAL-GATE (2026-09-18): before the call burns any
         # budget, let the user approve/deny it (duo_action_approval_enabled).
-        if name in ("run_bash", "run_python", "install_package", "start_background",
-                    "git_commit", "browser"):
+        if name in _APPROVAL_TOOLS:
             _appr = await _check_action_approval(name, args or {}, workspace)
             if _appr is not None:
                 return _appr

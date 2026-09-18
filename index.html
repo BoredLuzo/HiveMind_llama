@@ -604,16 +604,12 @@
         </label>
       </div>
       <div id="approval-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(72,120,192,.25);margin-left:10px;margin-top:2px">
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:0 4px 4px;line-height:1.5">
-          The run pauses before each listed tool. Answer in chat:
-          <span style="color:#22c55e">1</span> = approve once &middot;
-          <span style="color:#60a0e0">2</span> = this tool in this workspace (remembered) &middot;
-          <span style="color:#e06060">3</span> = deny
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:0 4px;line-height:1.5">
+          The run pauses before everything that executes code/commands
+          (run_bash, run_python, install_package, start_background) and shows
+          Approve&nbsp;once / Approve&nbsp;workspace / Deny buttons.
+          Workspace approvals are remembered in tool_approvals.json.
         </div>
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin:2px 4px 2px">Tools</div>
-        <input type="text" id="approval-tools-inp" placeholder="run_bash,run_python,install_package,start_background"
-          style="width:calc(100% - 8px);margin:0 4px 6px;background:var(--bg);border:1px solid var(--b2);border-radius:3px;padding:3px 6px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px"
-          onchange="postSettings({duo_action_approval_tools:this.value})">
       </div>
       <!-- Advanced: ctx + timeout -->
       <div onclick="toggleDuoCtxAdv()" style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;padding:7px 0 3px;margin-top:2px">
