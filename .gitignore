@@ -78,3 +78,13 @@ backups/
 
 # Learned routing weights (generated at runtime)
 routing_weights.json
+
+# Dev-only: not needed to run HiveMind (kept locally, not pushed)
+tests/
+ruff.toml
+requirements-dev.txt
+docs/tools-audit.md
+docs/structure-backlog.md
+deploy/analyze_cache_log.py
+deploy/ab_phase1.ps1
+clean_release.bat

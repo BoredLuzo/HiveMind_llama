@@ -1,3 +1,0 @@
-# HiveMind — development & quality (not needed for production)
-ruff>=0.6
-pytest>=8.0
