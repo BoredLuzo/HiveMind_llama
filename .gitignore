@@ -88,3 +88,10 @@ docs/structure-backlog.md
 deploy/analyze_cache_log.py
 deploy/ab_phase1.ps1
 clean_release.bat
+
+# Dev-only helpers & agent notes (kept locally, not pushed)
+AGENTS.md
+tools/sync_to_installs.py
+deploy/backup_data.py
+deploy/gen_settings_docs.py
+deploy/hivemind_windows.py
