@@ -202,7 +202,19 @@ def derive_step_title(raw: str, max_len: int = 110) -> str:
     if file_part and intent:
         title = f"{file_part}: {intent}"
     elif file_part:
-        title = f"Implement changes to {file_part}"
+        # FALLBACK-TITLE (2026-09-20): small planners emit free-form rest
+        # text without a recognized intent key ("1. file: index.html — make
+        # the canvas responsive to full HD screens"). Use that text as the
+        # intent instead of stamping every step with the same generic
+        # "Implement changes to <file>" (live: six identical task titles).
+        _loose = re.sub(
+            r"^(?:implement\s+changes?\s*(?:to|for|in)?\s*(?:to|for|in)?\s*[:\-]?\s*|implement\s+[:\-]?\s*)",
+            "", (m.group("rest") or "").strip(), flags=re.IGNORECASE)
+        _loose = _loose.strip(" |:–-")
+        if _loose:
+            title = f"{file_part}: {_loose[:64]}"
+        else:
+            title = f"Implement changes to {file_part}"
     else:
         title = s
     return (title[:max_len] + "…") if len(title) > max_len else title
