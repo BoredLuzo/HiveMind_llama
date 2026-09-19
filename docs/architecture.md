@@ -1,562 +1,480 @@
 # HiveMind Architecture
 
-This document describes how the main components of HiveMind fit together.
-**Part I** gives a high-level visual overview of the components (the matching
-sections of the [README](../README.md) contain the detailed text). **Part II**
-is the technical reference for how context is built, pinned, guarded, and
-compressed across a `code_duo` agentic run — the mechanics an incoming
-engineer needs, verified against the code as of 2026-09-10 (regression suite
-`python tests/run_regressions.py`: 47/47 suites pass).
+How the main pieces of HiveMind fit together, and how context is built, pinned,
+guarded and compressed during a `code_duo` agentic run. Part 1 is the map, the
+rest is the reference. For usage and settings see the [README](../README.md).
 
 ## 1. System Overview
 
-HiveMind is a FastAPI server (`server.py`) that streams requests through a
-routing layer and one of several run pipelines, down to locally loaded
-llama.cpp models. Everything runs on your own machine.
+HiveMind is a FastAPI server (`server.py`) that routes each request into one of
+several run pipelines and down to locally loaded llama.cpp models. Everything
+runs on your own machine.
 
 ```mermaid
 flowchart TD
-    User[User] --> UI["Web UI (index.html)<br/>SSE live streaming, VRAM monitor, agent toggles"]
-    UI --> |POST /stream| Server["server.py<br/>FastAPI app + CSRF origin guard"]
-    Server --> Routers["Routers (routers/)<br/>chats, config, core, vram, websearch,<br/>models, git, learning, soul, vision,<br/>skills, debug, automap"]
+    U["User"] --> W["Web UI<br>index.html, SSE streaming,<br>VRAM monitor, agent toggles"]
+    W -->|"POST /stream"| S["FastAPI server<br>server.py"]
 
-    Server --> Routing["Routing (routing/)<br/>Judge classifies complexity<br/>AutoMap picks model per agent"]
-    Routing --> Direct["Direct / Simple<br/>single model + tool tier"]
-    Routing --> Pipeline["Pipeline<br/>Analyst → Refiner → Critic → Synthesizer"]
-    Routing --> Duo["Code Duo (core/)<br/>Planner → Coder → Critic loop<br/>chunking, agentic, plan tracker"]
+    S --> RT["routing/<br>complexity judge, AutoMap"]
+    S --> RO["routers/<br>HTTP API surface"]
 
-    Direct --> Core
-    Pipeline --> Core
-    Duo --> Core
+    RT --> D1["Direct chat"]
+    RT --> D2["Pipeline<br>Analyst, Refiner, Critic, Synthesizer"]
+    RT --> D3["Code Duo<br>Planner, Coder, Critic"]
 
-    Core["Core run logic (core/)<br/>duo_runner, tool_loop,<br/>pipeline_runner, chat_run"]
-    Core --> Context["Context (context/)<br/>resume, pause, compression<br/>chat sessions"]
-    Core --> Tools["Tools (tools/)<br/>read/write/run/test/git/web/browser"]
-    Core --> Infra["Infra (infra/)<br/>security, run-control,<br/>notifications, MCP server"]
-    Core --> Preload["Codebase understanding<br/>Tree-Scout → Static Repo-Map →<br/>optional LLM Pre-Explore"]
+    D1 --> CORE["core/<br>duo_runner, tool_loop,<br>pipeline_runner, chat_run"]
+    D2 --> CORE
+    D3 --> CORE
 
-    Context --> Backend
-    Tools --> Backend
-    Infra --> Backend
-    Preload --> Backend
+    CORE --> CTX["context/<br>resume, pause, compression"]
+    CORE --> TLS["tools/<br>read, write, run, test, git, web, browser"]
+    CORE --> INF["infra/<br>security, run control, notify, MCP"]
+    CORE --> PRE["codebase understanding<br>Tree-Scout, Static Repo-Map, Pre-Explore"]
 
-    Backend["Backend (backend/)<br/>llama-server manager<br/>VRAM-budgeted, multi-slot,<br/>prefetch + eviction"]
-    Backend --> Models["Local models (llama.cpp)<br/>Vulkan / CUDA / CPU<br/>one port per loaded model"]
-    Models --> |SSE events back to UI| UI
+    CTX --> BE["backend/<br>llama-server manager<br>VRAM budget, multi-slot, prefetch"]
+    TLS --> BE
+    INF --> BE
+    PRE --> BE
+    BE --> LM["local llama.cpp<br>Vulkan / CUDA / CPU<br>one port per model"]
+    LM -.->|"SSE events"| W
 ```
 
-The `routers/` layer exposes the HTTP API, while the actual run orchestration
-(planning, tool loops, critic reviews, chunking) lives in `core/`. The
-`backend/` package manages llama-server worker processes within a VRAM budget
-and streams results back to the UI.
+The `routers/` package exposes the HTTP API; orchestration (planning, tool
+loops, critic reviews, chunking) lives in `core/`. `backend/` manages the
+llama-server worker processes within a VRAM budget and streams results back
+to the UI.
 
-## 2. Codebase Understanding Layers
+## 2. Codebase Understanding
 
-When HiveMind analyzes a workspace for a coding task, it does so in three
-layers. Two of them are pure, deterministic code analysis with no LLM involved;
-the third is optional and uses worker models. The resulting map is injected into
-the Planner and Coder context.
+Before a coding task runs, HiveMind builds a picture of the workspace in three
+layers. The first two are deterministic code analysis with no LLM involved, the
+third is optional. The resulting map is injected into Planner and Coder
+context.
 
 ```mermaid
 flowchart TD
-    WS["Workspace folder"] --> L1
+    WS["workspace folder"] --> L1
 
-    subgraph L1["Layer 1 - Tree-Scout (deterministic, no LLM)"]
-        TF["hive_functions/tree_scout.py"]
-        T1["Project tree<br/>filters build artifacts / binaries"]
-        T2["File-level import graph<br/>PageRank-ranked → central files"]
+    subgraph L1["Tree-Scout, no LLM"]
+        A1["project tree, filtered"]
+        A2["import graph, PageRank ranked"]
     end
 
-    subgraph L2["Layer 2 - Static Repo-Map (deterministic, no LLM)"]
-        SF["hive_functions/static_repomap.py"]
-        S1["Per-partition symbol + import extraction<br/>tree-sitter / AST (regex fallback)"]
-        S2["Cross-partition dependency graph"]
-        S3["Token-budgeted map"]
+    subgraph L2["Static Repo-Map, no LLM"]
+        B1["symbols + imports per partition"]
+        B2["dependency graph, token budget"]
     end
 
-    subgraph L3["Layer 3 - LLM Pre-Explore (optional)"]
-        PF["hive_functions/pre_explore/"]
-        P1["Parallel worker models read the codebase"]
-        P2["Emit structured TOML contracts:<br/>exports, deps, entry points, complexity"]
+    subgraph L3["LLM Pre-Explore, optional"]
+        C1["worker models read the code"]
+        C2["TOML contracts: exports, deps, entry points"]
     end
 
     L1 --> L2
     L2 --> L3
-    L2 --> Map["Injected into Planner + Coder context"]
-    L3 --> Map
-
-    Map --> Context["Coder context"]
-    Map --> Planner["Planner context"]
-    RS["Repo-Memory + symbol-reference hints"] --> Context
+    L2 --> M["repo map"]
+    L3 --> M
+    M --> CC["coder context"]
+    M --> PC["planner context"]
+    RM["repo memory + symbol hints"] -.-> CC
 ```
 
-Layer 1 is on by default (`duo_tree_scout_enabled=true`). Layer 2 is also on by
-default, with an auto-budgeted map (`duo_static_map_chars=0`). Layer 3 is off by
-default (`duo_pre_explore=false`) — enable it in `settings.json` when the static
-map alone is not enough.
-
-The distinction between "static map only" and "real pre-explore ran" is the
-context-truth flag described in §6; how the resulting context is pinned,
-guarded, and compressed is Part II of this document.
+Tree-Scout and the static map are on by default (`duo_tree_scout_enabled`,
+`duo_static_map_chars=0` for the auto budget), pre-explore is off
+(`duo_pre_explore=false`) and worth enabling when the static map alone is not
+enough. Whether the coder context contains a symbol index or real file
+contents matters a lot downstream; that distinction is covered in section 6.
 
 ---
 
-# Part II — Context Flow & Compression (agentic coder run)
+# Part 2: Context Flow and Compression
 
-## 3. Pipeline overview — where context lives at each stage
+How context behaves across an agentic coder run: where it lives, what survives
+compression, what breaks the prompt cache, and which guards keep the loop
+honest. Verified against the code; a few numbers are measured from live runs
+and marked as such.
+
+## 3. The run at a glance
 
 ```
-RepoMap Build (deterministic, paths+symbols only, no file contents)
-        │
-        ▼
-Planner phase  (system + RepoMap + user goal → task list)
-        │
-        ▼
-Coder tool-loop (read_file / write_file / edit_file / run_tests / browser)
-        │   ↕ compression fires when context nears budget
-        ▼
-Verify (browser text-snapshot + console, or vision model if screenshots needed)
+Repo map build    (deterministic: paths + symbols, no file contents)
+      |
+      v
+Planner phase     (system + repo map + user goal -> task list)
+      |
+      v
+Coder tool loop   (read / write / edit / run_tests / browser)
+      |            compression fires when context nears the budget
+      v
+Verify            (browser text snapshot + console, or vision model)
 ```
 
-Two models are typically involved: a Planner (often the same model instance as
-the Coder, reused only when the loaded slot ctx is large enough, see §12) and
-the Coder, which runs the actual tool loop.
+Two models are typically involved: the Planner (often the same loaded model
+instance as the Coder, reused only when the slot ctx is large enough, see
+section 12) and the Coder running the tool loop.
 
 ## 4. Message tiers
 
-The context is conceptually split into four tiers. Only the first is truly
-immutable; the rest degrade in stability toward the tail.
+The context splits into four tiers. Only the first is truly immutable; the
+rest get less stable toward the tail.
 
-| Tier | Contents | Survives compression? |
+| Tier | Contents | Survives compression |
 |---|---|---|
-| **Pinned / stable** | System message, tool definitions, pinned RepoMap | Yes — byte-identical, never rewritten |
-| **Structured state** | Plan, decisions, error-rollup summaries | Partially — re-injected after compression (`[COMPRESS-PLAN-PIN]`) |
-| **Hot raw tail** | Recent turns, current tool calls/results | No — this is exactly what compression rewrites |
-| **Run-state (Python-side, not a message tier)** | Error counters, read-tracking sets, no-op counters | Yes — lives outside the LLM message history entirely |
+| Pinned / stable | System message, tool definitions, pinned repo map | Yes, byte-identical |
+| Structured state | Plan, decisions, error-rollup summaries | Partially, re-injected after compression (`[COMPRESS-PLAN-PIN]`) |
+| Hot raw tail | Recent turns, current tool calls and results | No, this is what compression rewrites |
+| Run-state (Python side) | Error counters, read-tracking sets, no-op counters | Yes, lives outside the LLM history entirely |
 
-The last row is the most important architectural principle in this codebase:
-**anything that must survive compression is Python run-state, never something
-inferred from message history.**
+The last row is the rule that shapes most of this design: anything that must
+survive compression is Python run-state, never something inferred from message
+history.
 
-## 5. RepoMap pinning
+## 5. Repo map pinning
 
-- `core/repomap_pin.py` extracts the `## Static Repo-Map` block (paths +
-  symbols, deterministically built, no file contents) out of the first user
-  message and moves it into the system message under a
-  `[REPO-MAP — pinned, byte-stable]` marker (em-dash — `_PIN_MARKER`,
-  repomap_pin.py:21).
-- Runs once per built message list, before the first request (gate:
-  `duo_pin_static_map`, default on). Idempotent via a marker guard
-  (`_already_pinned()`) — re-pinning an already-pinned system is a no-op.
-- The map is frozen for the life of a run. There is currently **no delta
-  generator** — new/deleted files created during the run are not reflected in
-  the pinned map until the next run. This is a deliberate, documented gap (TODO
-  in `core/repomap_pin.py`), not an oversight.
-- Effect: extends the stable cache prefix from ~7.1k tokens (system + tool defs
-  only) to ~8k+ tokens (system + tool defs + map). *(Measured from live logs,
-  not code-derivable.)* Confirmed live: `[MSGSIG-CHANGE]` after compression
-  only ever touches `user[1]`, never `system[0]`. The live `[MSGSIG-CHANGE]`
-  warning (core/duo_runner.py:4153) flags any signature change below the ~10k-token
-  prefix horizon; a historical incident where compression wrote to `system[0]`
-  is preserved as a proof comment at core/duo_runner.py:3534–3536.
-- `## Codebase Architecture Map` (partitions/contracts) is deliberately **not**
-  pinned — it stays in the compressible tier, protected instead by the
-  compression validator's anchor check (see §7).
+`core/repomap_pin.py` extracts the `## Static Repo-Map` block (paths and
+symbols, no file contents) from the first user message and moves it into the
+system message under a `[REPO-MAP — pinned, byte-stable]` marker
+(`_PIN_MARKER`). It runs once per built message list, before the first
+request, gated by `duo_pin_static_map` (default on). Re-pinning an
+already-pinned system is a no-op.
 
-## 6. Context-truth flag (why the write-guard needed a fix)
+The map is frozen for the life of a run. There is no delta generator, so files
+created or deleted mid-run do not appear in the pinned map until the next run.
+That is a known, deliberate gap (there is a TODO in `core/repomap_pin.py`).
 
-`has_explore_ctx` must reflect whether **real file contents** are in context,
-not just whether *any* pre-explore artifact exists. A static symbol-only map is
-not file content.
+The point of the pinning is cache stability: the stable prefix grows from
+system + tool definitions (~7.1k tokens) to system + tools + map (~8k+),
+measured live. After a compression the `[MSGSIG-CHANGE]` diagnostic
+(duo_runner.py) may only ever flag `user[1]`, never `system[0]`; a historical
+incident where compression wrote into the system message is preserved as a
+proof comment in `core/duo_runner.py`.
 
-- Correct source: `_explore_has_contents = bool(state.get("_pre_explore_msgs"))
-  or bool(state.get("_contracts_raw"))` (core/duo_runner.py:1582).
-- Map-only → `DUO_CODER_UNEXPLORED` system template (hive_functions/prompts.py:289,
-  starting `CODEBASE — UNEXPLORED:` … `Read exactly ONE file, then edit/write
-  it before reading the next.`) plus the `[Codebase analysis]` rule text
-  `STATIC SYMBOL INDEX ONLY — the list below contains file paths, symbols, and
-  imports, NOT the files' contents` (core/duo_runner.py:2365), which orders
-  `read_file` before changing any existing file and reserves `write_file` with
-  full content for NEW files.
-- Real LLM pre-explore results → `DUO_CODER_EXPLORED` template
-  (hive_functions/prompts.py:268, `CODEBASE — EXPLORED:`), whose
-  "no read_file needed" shortcut (@279) is valid there, because content
-  genuinely is in context.
+The `## Codebase Architecture Map` block (partitions and contracts) is
+deliberately not pinned. It stays in the compressible tier and is protected
+instead by the compression validator's anchor check (section 7).
 
-Getting this flag wrong was the root cause of blind full-file overwrites on
-existing files — the model was told twice (template + rule text) that it didn't
-need to read, when only a symbol index was present. The `tools/runner.py`
-write-guard (§9) backstops the same rule deterministically.
+## 6. The context-truth flag
+
+`has_explore_ctx` must reflect whether real file contents are in context. A
+static symbol map is not file content, and confusing the two was once the root
+cause of blind full-file overwrites: the model was told twice (template plus
+rule text) that it did not need to read, when only a symbol index was present.
+
+The flag's source of truth is Python state, not message sniffing:
+`_explore_has_contents = bool(state.get("_pre_explore_msgs")) or
+bool(state.get("_contracts_raw"))` in `core/duo_runner.py`.
+
+- Map only: the coder gets the `DUO_CODER_UNEXPLORED` template
+  (`hive_functions/prompts.py`) plus the rule text `STATIC SYMBOL INDEX ONLY`,
+  which orders `read_file` before changing any existing file and reserves
+  `write_file` with full content for new files.
+- Real pre-explore content in context: the `DUO_CODER_EXPLORED` template, whose
+  "no read_file needed" shortcut is valid there because the content genuinely
+  is present.
+
+The write-guard in `tools/runner.py` (section 9) backstops the same rule
+deterministically.
 
 ## 7. Compression
 
 ### Trigger
-`[CTX-FULL]` fires when the estimated token count leaves insufficient headroom
-for a safe tool round relative to the resolved threshold
-(`resolve_compress_threshold` in `context/ctx_guard.py:55`: the smaller of
-`floor·ctx` and `ctx − overflow_reserve`, where `overflow_reserve` defaults to
-1024 — note it only sizes this threshold; it does **not** clamp `max_tokens`).
 
-The threshold itself sits on a **dynamic output reserve** (duo_runner.py:3166–3190):
-compression normally kicks in at ~70% of ctx (`duo_compress_auto_floor`, default
-0.70), and as the context approaches the threshold the per-round output budget
-(`max_tokens`) is shrunk to the remaining free space instead of letting the
-request overflow — a sub-1024 budget then triggers the `[CTX-FULL]` path.
+`[CTX-FULL]` fires when the estimated token count leaves too little headroom
+for a safe tool round. The threshold comes from `resolve_compress_threshold`
+(`context/ctx_guard.py`): the smaller of `floor * ctx` and
+`ctx - overflow_reserve`, with the reserve defaulting to 1024. It sizes the
+threshold only; `max_tokens` is handled separately.
 
-A forced compression (`trigger=force`) has **three** distinct causes:
+The threshold sits on a dynamic output reserve: compression normally kicks in
+at about 70 percent of ctx (`duo_compress_auto_floor`), and as the context
+approaches it, the per-round output budget is shrunk to the remaining free
+space instead of letting the request overflow. A budget under 1024 then takes
+the `[CTX-FULL]` path.
 
-1. **SWA reprefill zone** — the model warned about sliding-window reprefill
-   (core/duo_runner.py:3532, once per run via `_swa_triggered_compress`).
-2. **Mid-round HTTP 400 context overflow** — the tool POST was rejected by the
-   server with a prompt/context/token overflow (`core/agentic_tool_loop.py:233–239`
-   → sets `result["force_compress"]` → core/duo_runner.py:4303–4306).
-3. **`[CTX-FULL]` min-viable guard** — after `clamp_request_max_tokens`
-   (factor 1.35, reserve 768, min output 256; ctx_guard.py:170–200) and the
-   hard `> ctx` cap, a max_tokens budget under 1024 for 4 consecutive rounds
-   forces compression (core/duo_runner.py:4167–4205).
+A forced compression (`trigger=force`) has three causes:
 
-`max_tokens` itself is only ever clamped, never compressed away: the clamps
-above plus the raw ctx cap at core/duo_runner.py:4158–4180.
+1. The model warned about sliding-window reprefill (once per run).
+2. The tool POST was rejected with an HTTP 400 context overflow, which sets
+   `force_compress` in the tool loop result.
+3. The min-viable guard: after `clamp_request_max_tokens` and the raw ctx cap,
+   a `max_tokens` budget under 1024 for four consecutive rounds.
+
+`max_tokens` itself is only ever clamped, never compressed away.
 
 ### Model selection
-1. Try the configured light model (`duo_compress_model`, default `lfm2.5:2.6b`)
-   — logged `[COMPRESS-MODEL] compression via <model>`.
-2. If it doesn't fit in free VRAM, fall back to the Coder model itself — logged
-   `[COMPRESS-MODEL] light model ... does not fit ... using coder model for
-   compression`. This is the common case on tight VRAM and costs ~100–140 s per
-   compression instead of a lighter/faster pass. *(Measured from live logs.)*
-   Trade-off: `ensure_loaded` for the light model can evict the coder (Vulkan
-   serialization) and lose the whole KV cache; candidates to fix this are
-   `duo_partial_compression` (now the default first resort, see below) and/or
-   pinning the coder during a run — see the TODO block at
-   core/duo_runner.py:3731.
+
+First choice is the configured light model (`duo_compress_model`, default
+`lfm2.5:2.6b`). If it does not fit into free VRAM, the coder model runs the
+compression instead. That fallback is the common case on tight VRAM and costs
+about 100 to 140 seconds per compression, measured. The trade-off to know
+about: loading the light model can evict the coder (Vulkan serialization) and
+throw away the whole KV cache. Candidate mitigations are partial compression
+(the default first resort, below) and pinning the coder during a run; there is
+a TODO block for it in `core/duo_runner.py`.
 
 ### Summary generation
+
 `_compress_tool_context()` (`context/compression.py`) asks the model for a
-compact summary (**max 400 words** for the tool-context compressor,
-compression.py:355; the separate chat-session compressor uses 300,
-compression.py:554), with **partition labels and plan-anchor words injected as
-required-verbatim anchors** in the prompt — this is what
-`_validate_compression_summary()` checks afterward (labels present, plan anchor
-words present, no hallucination phrases, minimum length). If validation fails,
-a rule-based fallback compressor (`_compress_rule_based`, compression.py:167)
-runs instead of trusting a bad LLM summary.
+compact summary, max 400 words for the tool-context compressor (the separate
+chat-session compressor uses 300). Partition labels and plan-anchor words are
+injected into the prompt as required-verbatim anchors, which is exactly what
+`_validate_compression_summary()` checks afterwards: labels present, anchors
+present, no hallucination phrases, minimum length. If validation fails, a
+rule-based fallback compressor runs instead of trusting a bad summary.
 
-### Mini-shrink retry (escalation, not a hard target)
-If a completed **full** compression shrinks the context by **<15%** (and the
-pre-compression estimate was above 2048 tokens), one additional escalated retry
-runs automatically (core/duo_runner.py:3795–3830; the retry only applies when
-the compression ran in `full` mode — partial compression escalates differently,
-see below):
+### Mini-shrink retry
 
-- Same `_compress_tool_context()` call on the pre-compression messages, with
-  `aggressive_retry=True` appending a soft escalation to the prompt: cut
-  aggressively this time, "relevance before quota, but do not shy away from a
-  large reduction" (compression.py:370–379).
-- No hard token-count target is ever enforced — cutting is always
-  relevance-driven, never quota-driven, to avoid the retry itself becoming a
-  source of information loss.
-- The retry runs **before** the existing validator, so the validator
-  automatically checks the retry's output too (no second validator needed).
-- The retry's result replaces attempt 1 unconditionally (last attempt wins);
-  quality is then gated by the same validator + rule-based fallback path.
-- Logged as `[CTX-COMPRESS-RETRY] before=… after1=… after2=… retry_helped=<bool>`
-  — `retry_helped` is true if attempt 2 shrank meaningfully further (≥15% below
-  attempt 1) or the total shrink vs. `before` cleared the 15% bar.
+If a completed full compression shrank the context by less than 15 percent,
+with the pre-compression estimate above 2048 tokens, one escalated retry runs
+automatically. It calls the same compressor with an added prompt nudge to cut
+more aggressively, on the pre-compression messages. There is never a hard
+token quota; cutting stays relevance-driven so the retry cannot become its own
+source of information loss. The retry runs before the validator, so its output
+is checked like any other, and its result replaces attempt one unconditionally
+(last attempt wins). Logged as `[CTX-COMPRESS-RETRY]` with a `retry_helped`
+field. This applies to full mode only; partial compression escalates by a
+different route.
 
 ### Post-compression cleanup
-- `[READ-GUARD] Compression: removed N compacted read_file paths from the read
-  guard` — this trims the *short-term* "recently read, don't re-inject" hint
-  list (`_read_set`), **never** the compression-resilient `_any_read_set` that
-  the write-guard depends on (§9).
+
+- `[READ-GUARD]` trims the short-term "recently read, don't re-inject" hint
+  list. The compression-resilient `_any_read_set` the write-guard depends on
+  is never touched.
 - `[COMPRESS-CLEANUP]` clears stale call signatures and CTX notices.
-- `[COMPRESS-PLAN-PIN]` re-injects the current plan/subtask list so it isn't
-  lost inside the rewritten tail (core/duo_runner.py:3923, and :4084 on the
-  rule-fallback path).
-- Pin-preserving rebuild: the compression rebuild keeps the **live** system
-  message (with the pinned map) instead of re-deriving it from a template —
-  this is what keeps `system[0]` byte-stable.
+- `[COMPRESS-PLAN-PIN]` re-injects the current plan so it survives the
+  rewritten tail.
+- The rebuild keeps the live system message (with the pinned map) instead of
+  re-deriving it from a template. That is what keeps `system[0]` byte-stable.
 
-### Partial compression (prefix-cache-preserving, default)
-`duo_partial_compression` (default **on**, settings.py:136) adds a
-cache-friendly first resort before a full rewrite:
+### Partial compression (default first resort)
 
-- `should_use_partial` / `plan_partial_cut_index` (`context/ctx_guard.py:150`
-  and :213) decide whether the overflow can be relieved by cutting only the
-  older part of the raw tail: everything up to the cut index is replaced by the
-  summary, while the **most recent messages (min 8) stay byte-identical** —
-  target ≤60% post-compression context.
-- Execution lives in `context/compression.py:329` (summary covers only the
-  messages before the cut; the tail is reattached untouched). Because the tail
-  after the rewritten summary is byte-stable, llama.cpp's suffix shift
-  (`--cache-reuse`) can re-apply — the prefix cache survives far better than
-  after a full compression.
-- If a partial pass shrank nothing meaningful, it escalates to a **full**
-  compression (`PARTIAL-ESCALATE`, core/duo_runner.py:3968–3980).
+`duo_partial_compression` (default on) adds a cache-friendly pass before any
+full rewrite. A cut index splits the raw tail: everything before the cut is
+replaced by the summary, while the most recent messages (at least eight) stay
+byte-identical, targeting 60 percent or less of the pre-compression context.
+Because the tail after the summary is unchanged, llama.cpp's suffix shift
+(`--cache-reuse`) can re-apply and the prompt cache survives far better than
+after a full compression. If the partial pass shrank nothing meaningful, it
+escalates to a full compression.
 
-Full compressions remain the fallback when partial is insufficient or disabled.
-Two structural limits keep full compression expensive (measured from live
-logs): llama.cpp's suffix-shift is anchored at the point of divergence, and
-models with hybrid/recurrent attention (e.g. Ling's KDA linear-attention
-layers) have no KV matrix to shift at all — their state must be recomputed.
-Consequence after every **full** compression: cache reuse drops to roughly
-30–50% and climbs back to 90–100% over the next rounds. This is expected,
-not a bug — and the main reason partial compression is tried first.
+Full compression remains the fallback and has two structural costs, both
+measured: the suffix shift is anchored at the point of divergence, and models
+with hybrid attention (Ling's KDA linear-attention layers, for example) have no
+KV matrix to shift at all, so their state is recomputed. After every full
+compression, cache reuse drops to roughly 30 to 50 percent and climbs back to
+90 to 100 percent over the next rounds. That is expected, not a bug, and it is
+the main reason partial compression runs first.
 
-### Emergency valves (evict, demoted)
-In-place history eviction is no longer a normal-path mechanism:
+### Emergency eviction
 
-- `[CTX-EVICT-EMERGENCY]` fires only when the compression cap is exhausted
-  (`duo_max_compressions`, default 40) **and** the ctx guard reports >90% —
-  the last resort before a stop (core/duo_runner.py:3599, :3641).
-- It goes through `evict_stale_tool_outputs` /
-  `evict_stale_reads_for_path` (`context/compression.py`), which respect
-  `cache_horizon`: messages already sent to llama.cpp are never mutated
-  in-place — the prompt prefix cache stays valid; only the tail is rewritten.
-- The old `duo_cache_friendly_ctx` A/B path (and its `[CTX-EVICT-LEGACY]`
-  marker) was removed entirely on 2026-09-09 — compression-first is now
-  unconditional.
+In-place history eviction is no longer a normal-path mechanism.
+`[CTX-EVICT-EMERGENCY]` fires only when the compression cap
+(`duo_max_compressions`, default 40) is exhausted and the ctx guard reports
+over 90 percent. It goes through `evict_stale_tool_outputs` /
+`evict_stale_reads_for_path`, which respect `cache_horizon`: messages already
+sent to llama.cpp are never mutated in place, only the tail is rewritten. The
+old `duo_cache_friendly_ctx` path was removed entirely; compression-first is
+unconditional now.
 
-Slot-level eviction (LRU / pre-flight / idle, `backend/manager_evict.py`) is
-VRAM management, not context management — but a VRAM-driven slot kill does wipe
-the coder's KV cache; that residual risk is the accepted trade-off documented
-above (compression model selection).
+Slot eviction (LRU, pre-flight, idle, in `backend/manager_evict.py`) is VRAM
+management, not context management. A VRAM-driven slot kill does wipe the
+coder's KV cache; that residual risk is the accepted trade-off noted under
+model selection.
 
-### Stability mechanisms for smaller models (added 2026-09-10)
-- **No-Think retries:** tool-call JSON parse failures trigger an automatic
-  retry with `enable_thinking: False` for that round (core/duo_runner.py:
-  3217–3222, 4246–4249) — small models that burn their budget on a thinking
-  block get a clean second attempt.
-- **Stub-echo guard:** `[STUB-ECHO]` (core/tool_executor.py:162–167, :329)
-  detects a model echoing the placeholder/stub text back as a tool result and
-  replaces it with an error notice instead of letting the loop continue on
-  garbage.
-- **Smoke-test nudge:** if the coder finishes a fix-loop without ever running
-  the test suite, a nudge pushes one `run_tests` round (state flag
-  `at_nosuite_nudged`, core/tool_exec_helpers.py:990; core/tool_executor.py
-  :442, :485).
+### Stability mechanisms for smaller models
 
-## 8. Deterministic error rollup (test/lint fix-loop)
+- No-think retries: tool-call JSON parse failures get an automatic retry with
+  `enable_thinking: false` for that round. Small models that burn their budget
+  on a thinking block get a clean second attempt.
+- Stub-echo guard: `[STUB-ECHO]` detects a model echoing placeholder text back
+  as a tool result and replaces it with an error notice.
+- Smoke-test nudge: if the coder finishes a fix loop without ever running the
+  test suite, a nudge pushes one `run_tests` round.
 
-`core/error_rollup.py` — pure parse/diff logic, no LLM involved.
+## 8. Error rollup
 
-- Per-formatter parsing: pytest (bottom-up), tsc/eslint (top-down), generic
-  `file:line:col:message`.
-- **Identity = exact `(error_type, message_body)` — never fuzzy-matched.**
-  File/line/col are metadata only, not part of identity, so a fix that shifts
-  an error from line 42 to 43 is still recognized as the same error
-  (`PERSISTS`), while any change to the message body itself is always treated
-  as `NEW` — the codebase's explicit rule is *"never semantically guess that
-  two different messages are the same error; better to under-deduplicate than
-  hide a real new error from the model."*
-- States rendered (core/error_rollup.py:250–262; note the code says "attempt"
-  where it means tool round): `NEW` (full detail) / `PERSISTS` (one line:
-  *"(first seen attempt #N, fix attempt #M)"*) / `FIXED` (one line,
-  *"(attempt #r)"*) / `REOPENED` (a `FIXED` signature reappears later —
-  attempts restart at 1, *"(was fixed in attempt #K)"* pointing at the round
-  it was previously fixed in, so the model sees an honest regression marker
-  rather than a misleadingly continuous counter).
-- `RollupState` (first_seen, attempts, resolved history) is Python run-state,
-  explicitly proven to survive a full compression event
-  (`on_message_history_compressed()` is a no-op marker documenting the
-  intentional non-coupling).
-- Integration point: the **run_tests result path only** —
-  `tools/handlers/exec_tools.py` wires `_rollup_test_failure` (:423, called at
-  :511) and `_rollup_note_clean` (:504), gated by `duo_error_rollup`. It is
-  independent of `_cap_tool_result` (core/tool_executor.py:133), which is the
-  generic 8000-char tail-cut applied to any oversized tool output.
+`core/error_rollup.py` is pure parse and diff logic, no LLM involved.
 
-## 9. Write-guard (blind-overwrite prevention)
+Parsing is per formatter: pytest bottom-up, tsc and eslint top-down, generic
+`file:line:col:message`. Identity is the exact `(error_type, message_body)`
+pair, never fuzzy matched. File and line are metadata only, so an error that
+moves from line 42 to 43 is still the same error and shows as `PERSISTS`;
+any change to the message body counts as `NEW`. The rule the codebase follows:
+never guess that two different messages are the same error. Better to
+under-deduplicate than to hide a real new error from the model.
 
-Two deterministic guards in `tools/runner.py`:
+Rendered states: `NEW` in full detail, `PERSISTS` as one line with first-seen
+and fix-attempt counters, `FIXED` as one line, and `REOPENED` when a `FIXED`
+signature reappears later, resetting the counter and pointing at the round
+where it was previously fixed, so the model sees an honest regression marker
+rather than a misleadingly continuous one. `RollupState` is Python run-state
+and survives compression by design; `on_message_history_compressed()` is a
+no-op marker documenting that non-coupling.
 
-- **Narrow `duo_full` guard** (:713–735, gate `duo_write_guard_enabled`,
-  default on): blocks `write_file` (and only `write_file`) targeting an
-  **existing** file that has not, in this run, been
-  - read (`_read_set` or the compression-resilient `_any_read_set`), or
-  - written by the agent itself already (`_written_set`), or
-  - genuinely present in context from real pre-explore content (`_in_context`),
-  - or explicitly overridden (`allow_overwrite`).
-- **RELAX guard for other tool modes** (:684–701, gate `read_guard_enabled`):
-  outside `duo_full`, the write/edit family (`edit_file`, `patch_file`,
-  `write_file`, `write_file_append`, `replace_lines`) is blocked on existing,
-  never-seen files with the same `[TOOL_ERROR: READ_REQUIRED]` mechanics.
+The integration point is the run_tests result path only, gated by
+`duo_error_rollup`. It is independent of the generic 8000-character tail-cut
+applied to any oversized tool output.
 
-Note on `patch_file`: it remains a registered (dispatchable) tool
-(tools/runner.py:374) for compatibility with old persisted sessions, but it is
-**no longer advertised** to models in `tools/definitions.py` — the model-facing
-toolset is `edit_file` (SEARCH/REPLACE) + `write_file`. This is deliberate —
-an earlier, broader version of the guard (active until 2026-09-02) also blocked
-`edit_file`, which produced unusable "empty diff" errors on legitimate
-full-file rewrites; the current guard is scoped narrowly enough to not
-reproduce that failure mode.
+## 9. Write-guard
 
-## 10. No-op edit detection (and the write-churn follow-up)
+Two deterministic guards live in `tools/runner.py`.
 
-Separate from the write-guard: tracks, per file path, consecutive zero-effect
-`edit_file`/`patch_file`/`write_file` calls (markers like
-`EDIT_FILE_NOOP`, `PATCH_FILE_OLD_STR_NOT_FOUND`, often caused by a stale
-SEARCH block referencing pre-compression content). The streak lives in
-`DuoRoundState.edit_noop_streak` (`core/agentic_duo_state.py`) — Python
-run-state, compression-proof. After 2 consecutive no-ops on the same path,
-`core/tool_exec_helpers._track_edit_noop` injects a `[NO-OP]` hint suggesting a
-fresh `read_file`; a successful edit resets it. Gated by
+The narrow `duo_full` guard (gate `duo_write_guard_enabled`, default on)
+blocks `write_file`, and only `write_file`, when it targets an existing file
+that has not, in this run, been read (via `_read_set` or the
+compression-resilient `_any_read_set`), written by the agent itself, genuinely
+present in context from real pre-explore content, or explicitly allowed via
+`allow_overwrite`.
+
+Outside `duo_full`, the relaxed guard (gate `read_guard_enabled`) blocks the
+whole write and edit family (`edit_file`, `patch_file`, `write_file`,
+`write_file_append`, `replace_lines`) on existing, never-seen files with the
+same `READ_REQUIRED` mechanics.
+
+A note on `patch_file`: it stays registered so old persisted sessions keep
+working, but it is no longer advertised to models. The model-facing toolset is
+`edit_file` (search/replace) plus `write_file`. An earlier, broader version of
+the guard also blocked `edit_file`, which produced unusable empty-diff errors
+on legitimate full-file rewrites; the current narrow scope does not reproduce
+that failure mode.
+
+## 10. No-op edit detection
+
+Separate from the write-guard, the system tracks consecutive zero-effect
+`edit_file` / `patch_file` / `write_file` calls per path (markers like
+`EDIT_FILE_NOOP` or `PATCH_FILE_OLD_STR_NOT_FOUND`, often a stale search block
+pointing at pre-compression content). The streak lives in
+`DuoRoundState.edit_noop_streak`, Python run-state, so it is compression-proof.
+After two consecutive no-ops on one path, a `[NO-OP]` hint suggests a fresh
+`read_file`; a successful edit resets the streak. Gated by
 `duo_noop_hint_enabled` (default on). Related: `edit_file` results report
-`+0 lines, +N chars` when a same-line-count change actually happened
-(`tools/handlers/file_ops.py`).
+`+0 lines, +N chars` when a same-line-count change actually happened.
 
-Follow-up (TODO in `core/tool_executor.py` `_compact_round_write_args`):
-ARG-COMPACT strips written content from the history, which can push later
-rounds into full-file rewrite churn (`write_file` on files whose content is no
-longer visible); size/round thresholds or a read-first nudge are planned — do
-not forget, see also `duo_write_guard_enabled`.
+Known follow-up (TODO in `core/tool_executor.py`): arg-compact strips written
+content from history, which can push later rounds into full-file rewrite churn
+on files whose content is no longer visible. Size thresholds or a read-first
+nudge are planned.
 
-## 11. Read-ladder (exploration-without-progress guard)
+## 11. Read ladder
 
-`core/tool_executor.py` — tracks consecutive reads per path
-(`core/tool_exec_helpers._update_read_ladder`, :187).
+`core/tool_executor.py` tracks consecutive reads per path. Only repeated reads
+of the same path escalate the counter; reading a different path resets it, and
+any write, edit or run call resets it to zero and clears the fired flag.
+Re-exploring many different files therefore never fires the ladder. Only
+re-reading the same file without acting does, once the streak reaches three,
+no ladder hint is active, and at least one write/edit/run result is already in
+the round messages. That last condition keeps the ladder quiet during a
+model's first legitimate exploration wave.
 
-- **Per-path escalation (path-reset, 2026-09-09):** only repeated reads of the
-  *same* path escalate the counter; reading a *different* path resets it to 1.
-  A write/edit/`run_bash`/`run_python` call resets it to 0 and clears the
-  fired flag (core/tool_exec_helpers.py:188–207). Re-exploring many different
-  files therefore never fires the ladder — only re-reading the same file
-  without acting does.
-- Fires (injects a `[READ LADDER]` hint) once the same-path streak hits
-  `_consecutive_reads >= 3` **and** no ladder hint is currently active
-  (`_read_ladder_fired`) **and** at least one tool result from the
-  write/edit/run family is already in the round messages
-  (tool_executor.py:770–779). The write/run condition deliberately does not
-  fire during a model's first, legitimate wave of exploration before it has
-  acted at all.
-- Ladder state persists on `ToolRoundState` ("LADDER-PERSIST",
-  core/tool_exec_helpers.py:1000–1003) and is Python run-state, i.e.
-  compression-proof.
-- Related loop mechanics: **grace tool rounds** — when the round budget
-  expires mid-work, one grace round is granted
-  (`_grace_round_active/_grace_round_used`, core/duo_runner.py:3229–3230;
-  `[GRACE ROUND EXPIRED]` at :4480) and a successful write extends the run
-  deadline by +300 s (`[DEADLINE-GRACE]`, core/tool_executor.py:690–700,
-  applied at core/duo_runner.py:4606–4611).
+The ladder state persists on `ToolRoundState` and is Python run-state.
+Related loop mechanics: when the round budget expires mid-work, one grace
+round is granted, and a successful write extends the run deadline by 300
+seconds.
 
-## 12. Ctx sizing and VRAM fallback chain
+## 12. Ctx sizing and VRAM fallbacks
 
-### Pre-flight margin resolution (`resolve_ctx_fit`, backend/llama_manager_utils.py:71)
-1. Try requested ctx at full margin (768 MiB free headroom required beyond
-   model size).
-2. If blocked, try the **same requested ctx** at a reduced margin (256 MiB) —
+### Pre-flight margin chain (`resolve_ctx_fit`, `backend/llama_manager_utils.py`)
+
+1. Try the requested ctx at full margin (768 MiB headroom beyond model size).
+2. If blocked, retry the same ctx at a reduced margin (256 MiB), logged as
    `[PRE-FLIGHT-REDUCED-MARGIN]`.
-3. If still blocked and the caller is **graceful** (`ctx_graceful=True`, the
-   default for non-coder callers): step down a context ladder
-   (16384 → 12288 → 8192), each rung tried at 768 then 256 MiB margin. A 4096
-   fallback is allowed **only** when the request itself was small
-   (`requested_ctx <= CTX_DOWN_MIN = 8192`, llama_manager_utils.py:67–68).
-4. If nothing fits (or the caller is **strict**), raise an explicit
-   `VRAMPreFlightError` with a clear message and model-swap suggestions — for
-   strict requests (`ctx_graceful=False`; all Coder loads, see below) there is
-   **no silent degradation at all**: either the requested ctx fits at full or
-   reduced margin, or the load fails loudly. (This replaced an earlier bug
-   where the system would silently load at ctx=4096, which is too small for a
-   typical coder system prompt and caused an immediate, confusing
-   `LOOP-DETECT-STOP`.)
+3. Still blocked and the caller is graceful (the default for non-coder
+   callers): step down the context ladder 16384, 12288, 8192, each rung at
+   full then reduced margin. A 4096 fallback is allowed only when the request
+   itself was small (at or under `CTX_DOWN_MIN` = 8192).
+4. If nothing fits, or the caller is strict: an explicit `VRAMPreFlightError`
+   with model-swap suggestions. Coder loads are strict. There is no silent
+   degradation for them: the requested ctx either fits at full or reduced
+   margin, or the load fails loudly. This replaced an earlier bug where the
+   system silently loaded at ctx=4096, too small for a typical coder system
+   prompt, and produced an immediate confusing loop-detect stop.
 
-Guard C (`[CTX-FLOOR-STOP]`, core/duo_runner.py:3483) closes the remaining
-gap: if a slot still came up degraded (real slot ctx < requested, e.g. via a
-legacy downgrade path) and the round-1 baseline (pinned system + map + plan +
-goal) already exhausts the usable floor, the run aborts before the first tool
-round instead of churning through compression paths 1/2.
+Guard C (`[CTX-FLOOR-STOP]`) closes the remaining gap: if a slot still came up
+degraded and the round-1 baseline (pinned system, map, plan, goal) already
+exhausts the usable floor, the run aborts before the first tool round instead
+of churning through compression paths.
 
-### Planner→Coder slot reuse
-The Planner loads **gracefully** (its prompts are small; a degraded planner
-slot is acceptable). A warm planner slot is only inherited by the Coder if its
-**actual loaded ctx** is `>=` the Coder's required ctx — inline gate
-`_planner_ctx_ok` (core/duo_runner.py:1675ff; there is no named helper). On
-mismatch: `[PLANNER=CODER-CTX-MISMATCH]` and the Coder loads fresh at
-full ctx, strictly. If the slot's real ctx cannot be queried, reuse is skipped
-conservatively.
+### Planner to coder slot reuse
+
+The Planner loads gracefully, a degraded planner slot is acceptable. A warm
+planner slot is inherited by the Coder only when its actual loaded ctx is at
+least the Coder's requirement. On mismatch (`[PLANNER=CODER-CTX-MISMATCH]`)
+the Coder loads fresh at full ctx, strictly. If the slot's real ctx cannot be
+queried, reuse is skipped conservatively.
 
 ### Model-level VRAM fallback
-If the primary Coder model cannot be loaded at all (even at the ctx floor), the
-system falls back to a smaller model resolved via `_resolve_fallback_model`
-(preferred → deterministic preference list → smallest fitting installed model;
-core/duo_runner.py:367). The actually-loaded fallback ctx is captured as an
-override (`_coder_ctx_override`, `[CODER-FALLBACK-CTX]` at :2052) and clamped
-into every
-downstream ctx-based decision (`_coder_ctx_eff`, budgets, guards) for the rest
-of that run — this prevents the fallback model's smaller slot from being
-compared against the original (larger) target ctx, which previously caused an
-immediate, spurious ctx-mismatch stop. The override does not persist across
-runs — a fresh run always retries the full target ctx first (covered by
-`tests/test_fallback_ctx_stall.py`).
 
-### Reclaim-wait fix
-VRAM reclaim/grace-recheck after an eviction now targets the *achievable*
-(reduced-margin) threshold rather than the original full-margin target, and
-aborts early (`stall_abort_s=12.0`, passed at backend/manager_load.py:603 and
-:651; enforced in `wait_for_vram_reclaim`, llama_vram_table.py:299–340, and
-`_pre_flight_grace_recheck`, manager_evict.py:106) if no
-measurable progress (<64 MiB) is being made — replacing a prior bug where the
-system would wait a guaranteed, futile 45–90 s for a VRAM target that was
-mathematically unreachable given the fixed external GPU load at the time.
-*(Measured from live logs.)*
+If the primary coder model cannot be loaded at all, even at the ctx floor, the
+system falls back to a smaller model (`_resolve_fallback_model`: preferred
+candidate, then a deterministic preference list, then the smallest fitting
+installed model). The actually-loaded fallback ctx is captured as an override
+(`[CODER-FALLBACK-CTX]`) and clamped into every downstream ctx decision for
+the rest of the run, so the smaller slot is never compared against the
+original larger target, which previously caused a spurious ctx-mismatch stop.
+The override does not persist across runs; a fresh run always retries the full
+target ctx first.
 
-## 13. Log marker quick reference
+### Reclaim wait
+
+VRAM reclaim after an eviction targets the achievable reduced-margin threshold
+rather than the original full-margin target, and aborts early when no
+measurable progress (under 64 MiB) is being made. This replaced a prior bug
+where the system waited a futile 45 to 90 seconds for a VRAM target that was
+mathematically unreachable given the GPU load at the time.
+
+## 13. Log marker reference
 
 | Marker | Meaning |
 |---|---|
-| `[STATIC-REPO-MAP-ONLY]` | Symbol-only map built, no LLM pre-explore ran this session |
-| `[REPO-MAP-PIN]` | RepoMap moved into the pinned system message |
-| `[CTX-EFFECTIVE]` / `[CTX-ACTUAL]` | Configured vs. actually-loaded slot ctx (mismatch = guard territory) |
-| `[PLANNER=CODER-CTX-MISMATCH]` | Warm slot ctx too small for Coder; forcing fresh load |
-| `[PRE-FLIGHT] <model> @ctx=N: needed+margin vs free (source) → OK\|BLOCK` | VRAM pre-flight check result before a model load |
-| `[PRE-FLIGHT-REDUCED-MARGIN]` | Loading anyway with 256 MiB instead of 768 MiB margin |
-| `[PRE-FLIGHT-CTX-DOWN]` | Stepping down the context ladder (graceful callers only) |
-| `[PRE-FLIGHT-EVICT]` | Pre-flight evicted a victim slot to make room |
-| `[PRE-FLIGHT-GRACE]` | Post-eviction grace recheck (reduced margin, stall-abort capable) |
-| `[VRAM-RECLAIM]` | VRAM reclaim wait result (target reached / stall-aborted) |
-| `[CODER-VRAM-FALLBACK]` | Primary Coder model didn't fit; switching to a smaller fallback model |
+| `[STATIC-REPO-MAP-ONLY]` | Symbol-only map built, no LLM pre-explore this session |
+| `[REPO-MAP-PIN]` | Repo map moved into the pinned system message |
+| `[CTX-EFFECTIVE]` / `[CTX-ACTUAL]` | Configured vs actually loaded slot ctx |
+| `[PLANNER=CODER-CTX-MISMATCH]` | Warm slot too small for the coder, fresh load forced |
+| `[PRE-FLIGHT]` | VRAM pre-flight result before a model load (OK or BLOCK) |
+| `[PRE-FLIGHT-REDUCED-MARGIN]` | Loading with 256 MiB margin instead of 768 |
+| `[PRE-FLIGHT-CTX-DOWN]` | Stepping down the ctx ladder (graceful callers only) |
+| `[PRE-FLIGHT-EVICT]` | Pre-flight evicted a slot to make room |
+| `[PRE-FLIGHT-GRACE]` | Post-eviction recheck, stall-abort capable |
+| `[VRAM-RECLAIM]` | Reclaim wait result, reached or stall-aborted |
+| `[CODER-VRAM-FALLBACK]` | Primary coder model did not fit, smaller fallback loaded |
 | `[CODER-FALLBACK-CTX]` | Fallback ctx override applied to downstream guards |
-| `[CTX-FLOOR-STOP]` | Guard C: degraded slot below floor + round-1 baseline doesn't fit — abort before compress churn |
-| `[CTX-FULL] ... skip=N/4` | Insufficient headroom for a safe tool round; compressing first (cap at 4 consecutive skips) |
-| `[CTX-COMPRESS] trigger=... est/threshold/...` | Compression start line (`trigger=force\|90pct\|threshold`; core/duo_runner.py:3660) |
-| `[CTX-COMPRESS] done before/after/mode=...` | Compression completion line (`mode=` = `partial` or `full`; core/duo_runner.py:4035) |
-| `[COMPRESS-MODEL]` | Which model actually ran the compression (light vs. coder fallback) |
-| `[CTX-COMPRESS-RETRY]` | Mini-shrink escalated retry result (full mode only), incl. `retry_helped` |
-| `[CTX-COMPRESS-RULE]` | Rule-based fallback compressor applied after LLM validation failed |
-| `[COMPRESS-PLAN-PIN]` | Plan/subtask list re-injected after compression |
-| `[MSGSIG-CHANGE]` | Early-prefix message signature change — must never implicate `system[0]` in live paths |
-| `[CTX-EVICT-EMERGENCY]` | Last-resort stale-output eviction (compression cap exhausted AND ctx >90%) |
-| `[GRACE ROUND EXPIRED]` | Grace tool round used up after budget exhaustion (duo_runner) |
-| `[DEADLINE-GRACE]` | Run deadline extended +300 s after a successful write (tool_executor) |
-| `[STUB-ECHO]` | Model echoed stub/placeholder text as tool output — replaced with an error notice |
-| `[READ-GUARD]` | Short-term read-hint cleanup after compression (not the run-state guard) |
-| `[TOOL_ERROR: READ_REQUIRED]` | Write/read guard blocked a write on an unread existing file |
-| `[NO-OP]` | No-op edit hint injected after 2 consecutive zero-effect edits on one path |
-| `[READ-LADDER] fired / skipped / cooldown reset` | Read-ladder state transitions |
-| `[LOOP-DETECT-STOP]` | Terminal guard firing — check accompanying diagnostic fields (incl. `slot_ctx_floor=`) |
-| `[TOOLCALL-REPAIR]` / `[REMOVED]` | A truncated/invalid tool call was sanitized out of history, with a stub notice left behind |
+| `[CTX-FLOOR-STOP]` | Degraded slot below floor plus baseline does not fit, abort |
+| `[CTX-FULL] skip=N/4` | Not enough headroom for a safe round, compressing first |
+| `[CTX-COMPRESS] trigger=...` | Compression start (force, 90pct or threshold) |
+| `[CTX-COMPRESS] done ...` | Compression done, mode partial or full, before and after sizes |
+| `[COMPRESS-MODEL]` | Which model ran the compression |
+| `[CTX-COMPRESS-RETRY]` | Mini-shrink retry result incl. retry_helped |
+| `[CTX-COMPRESS-RULE]` | Rule-based fallback applied after the LLM summary failed validation |
+| `[COMPRESS-PLAN-PIN]` | Plan re-injected after compression |
+| `[MSGSIG-CHANGE]` | Early-prefix signature change, must never implicate system[0] |
+| `[CTX-EVICT-EMERGENCY]` | Last-resort eviction, compression cap exhausted and ctx over 90% |
+| `[GRACE ROUND EXPIRED]` | Grace round used up after budget exhaustion |
+| `[DEADLINE-GRACE]` | Run deadline extended after a successful write |
+| `[STUB-ECHO]` | Model echoed stub text as tool output, replaced with an error |
+| `[READ-GUARD]` | Short-term read-hint cleanup after compression |
+| `[TOOL_ERROR: READ_REQUIRED]` | Write blocked on an unread existing file |
+| `[NO-OP]` | No-op hint after two consecutive zero-effect edits on one path |
+| `[READ LADDER]` | Read-ladder state transition |
+| `[LOOP-DETECT-STOP]` | Terminal guard, check the diagnostic fields on the line |
+| `[TOOLCALL-REPAIR]` | Truncated or invalid tool call sanitized out of history |
 
-## 14. Design principles this architecture follows
+## 14. Design principles
 
-1. **Deterministic over LLM-dependent**, wherever structure is known (errors,
-   file paths, read-tracking) — reserves LLM judgment for genuinely
-   unstructured content.
-2. **Run-state is not message-history.** Anything that must survive compression
-   is Python-side state, explicitly tested for compression-resilience.
-3. **Fail explicitly, never degrade silently** — a model that can't load at a
-   usable ctx should error clearly, not limp along at ctx=4096. (Graceful
-   callers with small requests are the one sanctioned exception, §12.)
-4. **Every new guard ships with a settings-flag kill switch**, defaulted to the
-   new (safer) behavior.
-5. **Compression optimizes for information relevance, not a token quota** —
-   even the escalated retry only asks for "more aggressive," never a fixed
-   percentage.
+1. Deterministic over LLM-dependent, wherever structure is known: errors,
+   paths, read tracking. LLM judgment is reserved for genuinely unstructured
+   content.
+2. Run-state is not message history. Anything that must survive compression
+   lives on the Python side.
+3. Fail explicitly, never degrade silently. A model that cannot load at a
+   usable ctx errors out clearly instead of limping along at ctx=4096.
+   Graceful callers with small requests are the one sanctioned exception.
+4. Every new guard ships with a settings flag to turn it off, defaulting to
+   the safer behavior.
+5. Compression optimizes for relevance, not a token quota. Even the escalated
+   retry only asks for more aggressive cutting, never a fixed percentage.
 
-**Measured values in this document** (prefix sizes 7.1k→8k+, compression
-duration 100–140 s, cache reuse 30–50%→90–100%, futile 45–90 s reclaim waits)
-are observations from live run logs, consistent with but not derivable from
-the code. Everything else is verified against the code as of 2026-09-10, with
-regression coverage in `tests/run_regressions.py` (47/47 suites, including the
-five dedicated context-flow suites `ctx_fit_and_floor_guard`,
-`fallback_ctx_stall`, `mini_shrink_retry`, `noop_hint_and_zero_lines`,
-`write_guard_and_explore_truth`).
+Some numbers in this document (prefix sizes, compression duration, cache reuse
+ranges, reclaim wait times) are measured from live runs and consistent with,
+but not derivable from, the code. Everything else matches the code; since
+HiveMind moves fast, prefer function names over remembered line numbers when
+you go looking.
