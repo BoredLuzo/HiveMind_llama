@@ -5,6 +5,14 @@
 Action approval gate, websearch reliability, live code panel, Linux fixes.
 
 ### Action Approval
+- Write file tool calls are reworked for efficiency on local models: a
+  call generates exactly once. Approving during generation runs the write
+  with zero extra decoding; denying aborts the stream mid-generation. The
+  earlier hold design regenerated the entire call after the decision,
+  doubling decode time on every approved write_file (a 3k-token write is
+  over a minute of extra decoding at 40 tok/s) and a denied hold wasted
+  the full generation. This makes large writes viable on small models,
+  alongside the existing auto-split and truncation salvage paths.
 - Opt in gate (`duo_action_approval_enabled`, toggle in the agentic settings,
   effective mid run): the coder pauses before run_bash, run_python,
   install_package, start_background, file writes and git_commit.
