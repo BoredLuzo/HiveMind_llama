@@ -6940,6 +6940,15 @@ function handleEvent(d) {
       var _dsBody = _dsIdx >= 0 ? _trFull.slice(_dsIdx).replace(/^\[DIFFSTAT\][^\n]*\n?/, '') : _trFull;
       _dsBody = _dsBody.replace(/```[a-z]*\s*$/, '').trim();
       _dsBody = _cleanDiffBody(_dsBody);
+      // DIFF-VIEW FEED (2026-09-19): record this file's diff so the code
+      // panel's ±Diff view has something to render (per tab, last wins).
+      var _cpKeyD = (_trLastRow && _trLastRow.dataset) ? _trLastRow.dataset.toolPath : '';
+      var _cpEntryKey = _cpKeyD ? _cpFindEntry(_cpKeyD) : null;
+      if (_cpEntryKey && _cpFiles[_cpEntryKey]) {
+        _cpFiles[_cpEntryKey].diffText = _dsBody;
+        if (_cpActive === _cpEntryKey && _cpFiles[_cpEntryKey].view === 'diff') _cpShowFile(_cpEntryKey);
+        _cpUpdateViewToggle();
+      }
       var _trPre = document.createElement('pre');
       _trPre.className = 'tool-result-pre';
       _trPre.innerHTML = _renderDiffBody(_dsBody);
@@ -10206,12 +10215,80 @@ function _cpShowFile(path, plain) {
   // Render content
   var body = document.getElementById('code-panel-body');
   if (!body) return;
+  // DIFF/FILE VIEW (2026-09-19): per-tab switch — 'diff' renders the last
+  // recorded unified diff, 'file' the full disk state.
+  if (entry.view === 'diff' && entry.diffText) {
+    _cpRenderDiff(body, entry.diffText);
+    _cpUpdateViewToggle();
+    return;
+  }
   var hl = plain ? function(l) { return _escHtml(l); } : _cpSyntaxHighlight;
   var lines = entry.content.split('\n');
   var lineNums = lines.map(function(l, i) {
     return '<span style="color:var(--tx2);user-select:none;margin-right:14px;display:inline-block;min-width:28px;text-align:right;opacity:.45">'+(i+1)+'</span>'+hl(l);
   }).join('\n');
   body.innerHTML = '<pre>' + lineNums + '</pre>';
+  _cpUpdateViewToggle();
+}
+
+// View toggle lives in the panel header, pinned right next to the close
+// button (tabs never push it around). Applies to the ACTIVE tab.
+var _cpViewToggle = null;
+function _cpEnsureViewToggle() {
+  if (_cpViewToggle && _cpViewToggle.isConnected) return;
+  var hdr = document.getElementById('code-panel-hdr');
+  var closeBtn = document.getElementById('code-panel-close');
+  if (!hdr || !closeBtn) return;
+  var wrap = document.createElement('span');
+  wrap.style.cssText = 'display:inline-flex;gap:4px;margin-left:auto;margin-right:8px;flex-shrink:0;align-items:center';
+  var mkBtn = function(label, view, title) {
+    var b = document.createElement('button');
+    b.textContent = label; b.title = title;
+    b.setAttribute('data-cp-view', view);
+    b.style.cssText = 'font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;background:none;border:1px solid var(--b2);border-radius:3px;color:var(--tx2);cursor:pointer';
+    b.onclick = function() {
+      var entry = _cpFiles[_cpActive];
+      if (!entry) return;
+      if (view === 'diff' && !entry.diffText) return;
+      entry.view = view;
+      _cpShowFile(_cpActive);
+    };
+    return b;
+  };
+  wrap.appendChild(mkBtn('File', 'file', 'Full file state (as on disk)'));
+  wrap.appendChild(mkBtn('\u00b1Diff', 'diff', 'Last recorded change (unified diff)'));
+  hdr.insertBefore(wrap, closeBtn);
+  closeBtn.style.marginLeft = '0';
+  _cpViewToggle = wrap;
+}
+
+function _cpUpdateViewToggle() {
+  if (!_cpViewToggle || !_cpViewToggle.isConnected) return;
+  var entry = _cpFiles[_cpActive];
+  var view = entry ? (entry.view || 'file') : 'file';
+  var hasDiff = !!(entry && entry.diffText);
+  _cpViewToggle.querySelectorAll('button').forEach(function(b) {
+    var v = b.getAttribute('data-cp-view');
+    var isView = v === view;
+    var dim = (v === 'diff' && !hasDiff);
+    b.style.borderColor = isView ? '#20b0a0' : 'var(--b2)';
+    b.style.color = isView ? '#20b0a0' : 'var(--tx2)';
+    b.style.opacity = dim ? .35 : 1;
+    b.style.pointerEvents = dim ? 'none' : 'auto';
+  });
+}
+
+function _cpRenderDiff(body, diffText) {
+  var html = diffText.split('\n').map(function(l) {
+    var e = _escHtml(l);
+    var st = '';
+    if (/^(\+\+\+|---)/.test(l)) st = 'color:var(--tx2);opacity:.55';
+    else if (/^@@/.test(l)) st = 'color:#f0ad4e;opacity:.8';
+    else if (/^\+/.test(l)) st = 'color:#22c55e;background:rgba(34,197,94,.06);display:inline-block;width:100%';
+    else if (/^-/.test(l)) st = 'color:#e06060;background:rgba(224,96,96,.06);display:inline-block;width:100%';
+    return st ? '<span style="' + st + '">' + e + '</span>' : e;
+  }).join('\n');
+  body.innerHTML = '<pre>' + html + '</pre>';
 }
 
 function _cpAddOrUpdateFile(path, content, op, render) {
@@ -10230,10 +10307,11 @@ function _cpAddOrUpdateFile(path, content, op, render) {
     tab.innerHTML = '<span class="cp-op '+opLabel+'">'+opLabel.toUpperCase()+'</span><span class="cp-name">'+esc(shortName)+'</span>';
     tab.title = path;
     tab.onclick = (function(p){return function(){_cpShowFile(p)}})(path);
-    // Insert before close button
+    // Insert before the view toggle (which sits right before the close btn)
     var closeBtn = document.getElementById('code-panel-close');
-    hdr.insertBefore(tab, closeBtn);
-    _cpFiles[path] = {content: content, op: opLabel, tab: tab};
+    var _cpAnchor = (_cpViewToggle && _cpViewToggle.isConnected) ? _cpViewToggle : closeBtn;
+    hdr.insertBefore(tab, _cpAnchor);
+    _cpFiles[path] = {content: content, op: opLabel, tab: tab, view: 'file', diffText: ''};
   } else {
     _cpFiles[path].content = content;
     _cpFiles[path].op = opLabel;
@@ -10241,10 +10319,15 @@ function _cpAddOrUpdateFile(path, content, op, render) {
     var opBadge = _cpFiles[path].tab.querySelector('.cp-op');
     if (opBadge) { opBadge.className='cp-op '+opLabel; opBadge.textContent=opLabel.toUpperCase(); }
   }
+  _cpEnsureViewToggle();
   // Auto-show this file (panel contents update invisibly along).
   // render: 'plain' → no syntax highlight (streaming), false → skip render
   // entirely (throttled streaming tick), undefined → normal highlighted.
-  if (render !== false) _cpShowFile(path, render === 'plain' ? true : undefined);
+  // An active diff view is NOT clobbered by stream ticks or file_change —
+  // it stays stable until the next tool_result updates the diff.
+  var _viewDiff = _cpFiles[path].view === 'diff' && _cpFiles[path].diffText;
+  if (render !== false && !_viewDiff) _cpShowFile(path, render === 'plain' ? true : undefined);
+  else if (_viewDiff && _cpActive === path) _cpUpdateViewToggle();
   // 2026-08-25: the panel no longer opens by itself — manually via
   // the "⌨ Code" button or a click on a write/edit tool chip.
   var btn = document.getElementById('h-code-btn');
@@ -10255,6 +10338,7 @@ function _cpAddOrUpdateFile(path, content, op, render) {
 function _cpReset() {
   _cpFiles = {};
   _cpActive = null;
+  _cpViewToggle = null;
   var hdr = document.getElementById('code-panel-hdr');
   if (hdr) hdr.innerHTML = '<div id="code-panel-empty" style="padding:10px 16px;flex-direction:row;height:auto;justify-content:flex-start;display:flex;gap:8px;color:var(--tx2);font-family:IBM Plex Mono,monospace;font-size:11px;opacity:.5"><span>⌨</span><span>Waiting for coder output…</span></div>'
     +'<button id="code-panel-close" onclick="toggleCodePanel()" title="Close panel" style="margin-left:auto;flex-shrink:0;background:none;border:none;color:var(--tx2);cursor:pointer;padding:7px 12px;font-size:14px">×</button>';
