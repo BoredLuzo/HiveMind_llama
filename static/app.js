@@ -10288,7 +10288,9 @@ function _cpEnsureViewToggle() {
       var entry = _cpFiles[_cpActive];
       if (!entry) return;
       if (view === 'diff' && !entry.diffText) return;
-      if (view === 'file') entry.pinnedCallId = null;  // File switch releases the pin
+      // VIEW/PIN DECOUPLED (2026-09-19): File vs ±Diff only swaps the
+      // rendering; the pinned call survives so ±Diff comes back to exactly
+      // that call. Pin changes only via ⇱ / chip click.
       entry.view = view;
       _cpShowFile(_cpActive);
     };
