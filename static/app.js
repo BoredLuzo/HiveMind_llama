@@ -6935,18 +6935,40 @@ function handleEvent(d) {
         + '<span style="color:#e06060;font-weight:700;margin-left:6px">&minus;' + _dsRem + '</span>'
         + '<span style="color:var(--tx2);margin-left:10px">' + _dsHunks + (_dsHunks === 1 ? ' changed block' : ' changed blocks') + '</span>'
         + (_dsTok > 0 ? '<span style="color:#60a0e0;margin-left:10px">~' + (_dsTok >= 1000 ? (_dsTok / 1000).toFixed(1) + 'k' : _dsTok) + ' tok</span>' : '')
-        + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated)</span>' : '');
+        + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated)</span>' : '')
+        + '<span data-cp-pin="1" style="float:right;opacity:.5;cursor:pointer;font-size:11px" title="Pin this exact diff in the code panel">\u2931</span>';
+      var _cpPinKey = (_trLastRow && _trLastRow.dataset) ? _trLastRow.dataset.toolPath : '';
+      var _cpPinId = _cpCallId;
+      var _cpPinEl = _trSumDs.querySelector('[data-cp-pin]');
+      if (_cpPinEl) _cpPinEl.onclick = function(ev) {
+        ev.preventDefault(); ev.stopPropagation();
+        var _ek = _cpFindEntry(_cpPinKey);
+        if (!_ek || !_cpFiles[_ek]) return;
+        _cpFiles[_ek].pinnedCallId = _cpPinId;
+        _cpFiles[_ek].view = 'diff';
+        _cpShowFile(_ek);
+        toggleCodePanel(true);
+      };
       var _dsIdx = _trFull.indexOf('[DIFFSTAT]');
       var _dsBody = _dsIdx >= 0 ? _trFull.slice(_dsIdx).replace(/^\[DIFFSTAT\][^\n]*\n?/, '') : _trFull;
       _dsBody = _dsBody.replace(/```[a-z]*\s*$/, '').trim();
       _dsBody = _cleanDiffBody(_dsBody);
       // DIFF-VIEW FEED (2026-09-19): record this file's diff so the code
-      // panel's ±Diff view has something to render (per tab, last wins).
+      // panel's ±Diff view has something to render. Each call keeps its
+      // own entry; the summary's ⇱ icon pins the panel to EXACTLY this
+      // call's diff (no pin = latest call wins).
+      _cpCallSeq++;
+      var _cpCallId = 'cp' + _cpCallSeq;
       var _cpKeyD = (_trLastRow && _trLastRow.dataset) ? _trLastRow.dataset.toolPath : '';
       var _cpEntryKey = _cpKeyD ? _cpFindEntry(_cpKeyD) : null;
       if (_cpEntryKey && _cpFiles[_cpEntryKey]) {
-        _cpFiles[_cpEntryKey].diffText = _dsBody;
-        if (_cpActive === _cpEntryKey && _cpFiles[_cpEntryKey].view === 'diff') _cpShowFile(_cpEntryKey);
+        var _cpEntry = _cpFiles[_cpEntryKey];
+        _cpEntry.diffText = _dsBody;
+        _cpEntry.diffs = _cpEntry.diffs || [];
+        _cpEntry.diffs.push({ id: _cpCallId, name: _trToolName, text: _dsBody });
+        if (_cpEntry.diffs.length > 12) _cpEntry.diffs.shift();
+        if (_cpEntry.pinnedCallId && !_cpEntry.diffs.some(function(d) { return d.id === _cpEntry.pinnedCallId; })) _cpEntry.pinnedCallId = null;
+        if (_cpActive === _cpEntryKey && _cpEntry.view === 'diff' && !_cpEntry.pinnedCallId) _cpShowFile(_cpEntryKey);
         _cpUpdateViewToggle();
       }
       var _trPre = document.createElement('pre');
@@ -10218,7 +10240,15 @@ function _cpShowFile(path, plain) {
   // DIFF/FILE VIEW (2026-09-19): per-tab switch — 'diff' renders the last
   // recorded unified diff, 'file' the full disk state.
   if (entry.view === 'diff' && entry.diffText) {
-    _cpRenderDiff(body, entry.diffText);
+    // pinned call wins over latest; the pin is set via the ⇱ icon in the
+    // chat result metrics
+    var _d = entry.diffs && entry.diffs.length
+      ? (entry.pinnedCallId
+          ? (entry.diffs.filter(function(d) { return d.id === entry.pinnedCallId; })[0]
+             || entry.diffs[entry.diffs.length - 1])
+          : entry.diffs[entry.diffs.length - 1])
+      : null;
+    _cpRenderDiff(body, _d ? _d.text : entry.diffText);
     _cpUpdateViewToggle();
     return;
   }
@@ -10234,6 +10264,7 @@ function _cpShowFile(path, plain) {
 // View toggle lives in the panel header, pinned right next to the close
 // button (tabs never push it around). Applies to the ACTIVE tab.
 var _cpViewToggle = null;
+var _cpCallSeq = 0;
 function _cpEnsureViewToggle() {
   if (_cpViewToggle && _cpViewToggle.isConnected) return;
   var hdr = document.getElementById('code-panel-hdr');
@@ -10250,6 +10281,7 @@ function _cpEnsureViewToggle() {
       var entry = _cpFiles[_cpActive];
       if (!entry) return;
       if (view === 'diff' && !entry.diffText) return;
+      if (view === 'file') entry.pinnedCallId = null;  // File switch releases the pin
       entry.view = view;
       _cpShowFile(_cpActive);
     };
@@ -10311,7 +10343,7 @@ function _cpAddOrUpdateFile(path, content, op, render) {
     var closeBtn = document.getElementById('code-panel-close');
     var _cpAnchor = (_cpViewToggle && _cpViewToggle.isConnected) ? _cpViewToggle : closeBtn;
     hdr.insertBefore(tab, _cpAnchor);
-    _cpFiles[path] = {content: content, op: opLabel, tab: tab, view: 'file', diffText: ''};
+    _cpFiles[path] = {content: content, op: opLabel, tab: tab, view: 'file', diffText: '', diffs: [], pinnedCallId: null};
   } else {
     _cpFiles[path].content = content;
     _cpFiles[path].op = opLabel;
@@ -10339,6 +10371,7 @@ function _cpReset() {
   _cpFiles = {};
   _cpActive = null;
   _cpViewToggle = null;
+  _cpCallSeq = 0;
   var hdr = document.getElementById('code-panel-hdr');
   if (hdr) hdr.innerHTML = '<div id="code-panel-empty" style="padding:10px 16px;flex-direction:row;height:auto;justify-content:flex-start;display:flex;gap:8px;color:var(--tx2);font-family:IBM Plex Mono,monospace;font-size:11px;opacity:.5"><span>⌨</span><span>Waiting for coder output…</span></div>'
     +'<button id="code-panel-close" onclick="toggleCodePanel()" title="Close panel" style="margin-left:auto;flex-shrink:0;background:none;border:none;color:var(--tx2);cursor:pointer;padding:7px 12px;font-size:14px">×</button>';
