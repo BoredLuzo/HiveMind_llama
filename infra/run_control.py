@@ -122,7 +122,26 @@ async def wait_for_resume(run_id: str, timeout_s: int = 600) -> str:
     except asyncio.TimeoutError:
         cleanup_pause(run_id)
         return f"[ask_user TIMEOUT: no response after {timeout_s}s]"
-    return _user_answers.pop(run_id, "")
+    answer = _user_answers.pop(run_id, "")
+    # STALE-PAUSE-CLEANUP (2026-09-19): a resolved pause must leave the
+    # registry. Until now only the timeout branch (and the approval gate's
+    # dual-wait path) cleaned up — after an answered ask_user the dead entry
+    # stayed in _pause_events/_decision_ids, so /approval/decide kept routing
+    # staged-card decisions into the dead pause (set_user_answer landed
+    # nowhere, the pre-decision was lost and the gate paused a second time).
+    cleanup_pause(run_id)
+    return answer
+
+
+def is_pause_waiting(run_id: str) -> bool:
+    """True only while a pause is registered AND not yet answered.
+
+    A set (or missing) event means no pause is waiting: either the answer
+    already arrived or it is a leftover from a resolved pause. Decision
+    endpoints route on this instead of bare dict membership so stale
+    entries cannot swallow fresh decisions."""
+    ev = _pause_events.get(run_id)
+    return ev is not None and not ev.is_set()
 
 
 def set_user_answer(run_id: str, answer: str):

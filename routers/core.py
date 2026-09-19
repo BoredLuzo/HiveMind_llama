@@ -8,10 +8,11 @@ from fastapi.responses import JSONResponse
 
 from infra.run_control import (
     _get_abort_event, _step_skip_event, _abort_event,
-    set_user_answer, _pause_events, get_decision_id,
+    set_user_answer, get_decision_id,
     request_graceful_stop, _run_abort_registry,
     request_pause_after_chunk, signal_resume, is_pause_requested,
     signal_abort_during_pause, _RESUME_SIGNALS, is_pause_pending,
+    is_pause_waiting,
 )
 from infra.ask_user_governor import (
     cancel_timeout as _gov_cancel_timeout,
@@ -61,7 +62,10 @@ async def resume_run(run_id: str, req: Request):
     if not answer:
         return JSONResponse({"error": "Field 'answer' is required"}, status_code=400)
     _d_sent = str(body.get("decision_id", "") or "").strip()
-    if run_id not in _pause_events:
+    # STALE-PAUSE-CLEANUP (2026-09-19): route on a *waiting* pause only —
+    # a leftover set event from an already-answered ask_user must not
+    # swallow this decision.
+    if not is_pause_waiting(run_id):
         return JSONResponse({"error": "Run not paused or not found"}, status_code=404)
     _gov_cancel_timeout(run_id)
     if _gov_timeout_sent(run_id):
@@ -162,7 +166,11 @@ async def approval_decide(run_id: str, req: Request):
     if not answer:
         return JSONResponse({"error": "Field 'answer' is required"}, status_code=400)
     _d_sent = str(body.get("decision_id", "") or "").strip()
-    if run_id in _pause_events:
+    # STALE-PAUSE-CLEANUP (2026-09-19): only a *waiting* pause takes the
+    # pause route. A set leftover event (ask_user already answered) used to
+    # win this branch, silently dropping the pre-decision and forcing the
+    # gate to pause a second time after generation finished.
+    if is_pause_waiting(run_id):
         _gov_cancel_timeout(run_id)
         if _gov_timeout_sent(run_id):
             return JSONResponse({"error": "auto_answer_already_sent"}, status_code=409)
