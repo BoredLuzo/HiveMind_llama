@@ -743,7 +743,7 @@ async def execute_tool_round(
 
         # ── File-change tracking ──
         await _track_file_changes(_dname, _dargs, _dresult, result, trs.file_changes,
-                                   dtool_msgs, hooks, _is_git_repo)
+                                   dtool_msgs, hooks, _is_git_repo, _ws_root)
         # ── LRU-A: stale-read invalidation ──
         # After a successful edit/write/patch/append, any read_file output of the
         # same path already in context is stale (the file on disk changed). Evict

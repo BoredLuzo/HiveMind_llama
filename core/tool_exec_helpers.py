@@ -839,19 +839,24 @@ def _unknown_error_hint(_dname, _dresult, _dtc_call, dtool_msgs, tool_error_retr
 
 
 async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
-                               dtool_msgs, hooks, _is_git_repo):
+                               dtool_msgs, hooks, _is_git_repo, _ws_root=None):
     """S15: file-change tracking incl. git auto-diff (from execute_tool_round)."""
     _fc_path = _dargs.get("path", "")
     if _fc_path and not _tool_call_failed(_dresult, _dname):
         _fc_content = ""
         # SYNC-IO-ASYNC (2026-09-09): file read off the event loop.
-        _ws_root = Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve()
+        # WS-FROM-CALLER (2026-09-19): use the run's real workspace — the
+        # old HIVEMIND_WORKSPACE env fallback made the containment check
+        # fail whenever the workspace came from the UI, so file_change
+        # shipped an EMPTY content and the panel's File view never showed
+        # the whole file.
+        _ws = Path(_ws_root).resolve() if _ws_root else Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve()
         def _read_fc_content() -> str:
             try:
-                _abs = (_ws_root / _fc_path).resolve()
-                if str(_abs).startswith(str(_ws_root)):
-                    if _abs.stat().st_size <= 100 * 1024:
-                        return _abs.read_text(encoding="utf-8", errors="replace")
+                _p = Path(_fc_path)
+                _abs = _p.resolve() if _p.is_absolute() else (_ws / _p).resolve()
+                if _abs.exists() and _abs.stat().st_size <= 256 * 1024:
+                    return _abs.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 return ""
             return ""
