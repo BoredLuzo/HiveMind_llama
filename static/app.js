@@ -6743,6 +6743,7 @@ function handleEvent(d) {
     // this exact bubble even if S.curAgent has changed by then.
     _tcRow.dataset.tid = _tcTid;
     _tcRow.dataset.toolName = d.name;
+    _tcRow.dataset.callId = 'cp' + (++_cpCallSeq);
     var _tcChip  = document.createElement('span');
     _tcChip.className = 'tool-call-chip';
     // Read-Tool-Calls de-emphasized
@@ -6797,15 +6798,21 @@ function handleEvent(d) {
         _tcExtra.appendChild(_pre);
       });
     }
-    // chip click (2026-08-25): write/edit chips toggle the live-code panel
-    // (with exactly this file); all other chips keep showing the
-    // server-delivered extra details.
+    // chip click (2026-08-25, updated 2026-09-19): write/edit chips open the
+    // live-code panel — with THIS call's diff when the call already finished
+    // (pinned in the ±Diff view), or the streaming file view while it runs.
+    // Other chips keep showing the server-delivered extra details.
     _tcChip.addEventListener('click', function(e) {
       e.stopPropagation();
       if (_tcRow.dataset.toolPath) {
         var _cpKey = _cpFindEntry(_tcRow.dataset.toolPath);
-        if (_cpKey) _cpShowFile(_cpKey);
-        toggleCodePanel();
+        if (_cpKey) {
+          var entry = _cpFiles[_cpKey];
+          var d = (entry.diffs || []).filter(function(x) { return x.id === _tcRow.dataset.callId; })[0];
+          if (d) { entry.pinnedCallId = d.id; entry.view = 'diff'; }
+          _cpShowFile(_cpKey);
+        }
+        toggleCodePanel(true);
         return;
       }
       if (_tcExtra) _tcExtra.classList.toggle('open');
@@ -6958,7 +6965,7 @@ function handleEvent(d) {
       // own entry; the summary's ⇱ icon pins the panel to EXACTLY this
       // call's diff (no pin = latest call wins).
       _cpCallSeq++;
-      var _cpCallId = 'cp' + _cpCallSeq;
+      var _cpCallId = (_trLastRow && _trLastRow.dataset && _trLastRow.dataset.callId) || ('cp' + _cpCallSeq);
       var _cpKeyD = (_trLastRow && _trLastRow.dataset) ? _trLastRow.dataset.toolPath : '';
       var _cpEntryKey = _cpKeyD ? _cpFindEntry(_cpKeyD) : null;
       if (_cpEntryKey && _cpFiles[_cpEntryKey]) {
