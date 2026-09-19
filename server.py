@@ -30,6 +30,17 @@ import uuid
 import threading
 import contextvars as _contextvars
 
+# QUIET-POLL (2026-09-19): the UI polls /approval/pending every 2 s while a
+# run streams (card recovery after a page reload, ask_user and destructive
+# gate included). Those access-log lines carry no signal — drop them from
+# the console. Added as a filter on the uvicorn access logger, which keeps
+# it alive across uvicorn's own logging reconfiguration.
+class _AccessPollQuietFilter(logging.Filter):
+    def filter(self, record):
+        return "/approval/pending/" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(_AccessPollQuietFilter())
+
 from utils.math import percentile_float as _percentile_float
 from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
 from routing.agent_intent import detect_agent_intent, get_question_from_intent, detect_tool_request
