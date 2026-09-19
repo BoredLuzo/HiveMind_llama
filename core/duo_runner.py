@@ -4094,7 +4094,7 @@ async def run_code_duo(ctx):
                             )
                             yield await ctx.emit({
                                 "type": "status",
-                                "content": f"✅ Context compressed ({_est_tokens_before_compress} → {_est_tokens_after_compress} est. tokens)",
+                                "content": f"✅ Context compressed ({int(_est_tokens_before_compress)} → {int(_est_tokens_after_compress)} est. tokens, real {int((_est_tokens_before_compress - _est_tokens_after_compress) / max(1, _est_tokens_before_compress) * 100)}%)",
                             })
                             yield await ctx.emit({
                                 "type": "ctx_meter",
