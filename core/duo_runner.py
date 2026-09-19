@@ -4522,9 +4522,29 @@ async def run_code_duo(ctx):
                                     _dtool_msgs.append({"role": "user", "content": _nudge})
                                     continue
                             elif not _parts:
-                                _empty_err = f"[Tool loop: empty answer from {coder_mdl} — check llama-server log]"
-                                _parts.append(_empty_err)
-                                yield await ctx.emit({"type": "token", "content": _empty_err})
+                                # EMPTY-RETRY (2026-09-20): this branch used to
+                                # fall through to the round-loop break, so a
+                                # single empty coder answer ENDED the run as
+                                # "completed" with zero work done (live: Hermes
+                                # emitted reasoning only, no content, no tool
+                                # call). Retry with a nudge, same escalation as
+                                # the non-empty no-tool path.
+                                _dr_think_only_retries += 1
+                                _coder_no_think = True
+                                if _dr_think_only_retries > 2:
+                                    _ld_setter(3113); _loop_detected = True
+                                    yield await ctx.emit({"type": "status",
+                                        "content": f"⚠ Coder returns empty answers ({_dr_think_only_retries}x) — loop aborted."})
+                                    break
+                                if _dr < _max_tool_rounds - 1:
+                                    yield await ctx.emit({"type": "token", "content":
+                                        f"[Tool loop: empty answer from {coder_mdl} — retrying with a nudge]"})
+                                    _dtool_msgs.append({
+                                        "role": "user",
+                                        "content": "You returned an empty response. Call a tool now — edit_file or run_bash.",
+                                    })
+                                    continue
+                                _parts.append(f"[Tool loop: empty answer from {coder_mdl} — check llama-server log]")
                             else:
                                 _dr_think_only_retries += 1
                                 _coder_no_think = True
