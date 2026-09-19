@@ -1,6 +1,6 @@
 [project]
 name = "hivemind-llama"
-version = "1.2.0"
+version = "1.2.1"
 description = "HiveMind is a local, privacy-first AI assistant and multi-agent coding platform powered by llama.cpp."
 readme = "README.md"
 authors = [
