@@ -798,8 +798,8 @@ async def execute_tool_round(
         # FAILED-COMPACTION (2026-09-15): a cut/failed 20k+-char write attempt
         # previously kept its full args in history — the partial-compression
         # raw tail protects recent messages, so repeated failed giants kept
-        # compression nearly ineffective (live RX 6600: 3 x 22k write attempts,
-        # 54k -> 44k only). Stub them with an explicit FAILED marker.
+        # compression nearly ineffective (a few 22k write attempts shaved the
+        # context by only ~10k). Stub them with an explicit FAILED marker.
         elif (
             _dname in ("edit_file", "write_file", "patch_file", "write_file_append", "replace_lines")
             and _focus_path

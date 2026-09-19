@@ -2,6 +2,7 @@
 
 
 import logging
+import sys
 import threading
 import time
 
@@ -35,6 +36,10 @@ def _do_notify(title: str, message: str):
 
 def notify(title: str, message: str, dedup_sig: str = "") -> bool:
     """Feuert eine Notification ab. Rate-limited + Dedup. Non-blocking."""
+    # OS-GUARD (2026-09-19): winotify ist Windows-only — auf POSIX stumm
+    # aussteigen, statt pro Event eine ModuleNotFound-warning zu spammen.
+    if sys.platform != "win32":
+        return False
     if not _notifications_enabled():
         return False
     now = time.time()

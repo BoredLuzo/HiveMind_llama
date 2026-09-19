@@ -4313,11 +4313,12 @@ async def run_code_duo(ctx):
                         _duo_loop = AgenticToolLoop(
                             config=ToolLoopConfig(stream=True, max_post_attempts=20),
                             http_client=_dtc, round_state=_duo_state, emit_fn=_coder_emit_fn,
+                            workspace=_ws_str, run_id=(getattr(ctx, "chat_id", None) or getattr(ctx, "run_id", "") or ""),
                         )
+                        _hb_interval = _read_hb_interval(ctx.settings)
                         _post_task = asyncio.create_task(
                             _duo_loop.post_with_retry(_tool_payload, dtool_msgs=_dtool_msgs, ctx=ctx, _parts=_parts)
                         )
-                        _hb_interval = _read_hb_interval(ctx.settings)
                         _hb_start = time.monotonic()
                         _hb_last = _hb_start
                         while True:

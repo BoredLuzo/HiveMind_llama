@@ -249,10 +249,33 @@ def get_live_gpu_free_mib() -> float | None:
 
     import platform
     if platform.system() != "Windows":
-        # POSIX: no live VRAM source (win32pdh) — debug instead of warning,
-        # else the cpu/can_fit fallback path would spam the log per call.
-        _logger.debug("get_live_gpu_free_mib: not Windows - live query unavailable")
-        return None
+        # POSIX-LIVE-VRAM (2026-09-19): nvidia-smi ships with the driver on
+        # Linux too and reports memory.free directly (no PDH, no
+        # TOTAL_VRAM_MIB guess). CPU-only hosts: debug + None — the static
+        # tables stay the fallback (same as before).
+        import shutil as _shutil, subprocess as _subprocess
+        try:
+            _nsmi = _shutil.which("nvidia-smi")
+            if not _nsmi:
+                _logger.debug("get_live_gpu_free_mib: no nvidia-smi on PATH - no live VRAM source")
+                return None
+            _r = _subprocess.run(
+                [_nsmi, "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                capture_output=True, timeout=5,
+            )
+            _vals = [float(_x) for _x in _r.stdout.decode("ascii", "replace").split()
+                     if _x.strip().isdigit()]
+            if not _vals:
+                _logger.debug("get_live_gpu_free_mib: nvidia-smi returned no values")
+                return None
+            # Mehrere GPUs: der freigebigste. Single-GPU exakt; Multi-GPU
+            # bewusst optimistisch wie die Windows-Heuristik — ein Load, der
+            # real zu viel will, scheitert sichtbar beim llama-server-Start.
+            return round(max(_vals), 1)
+        except Exception as _e:
+            _logger.warning("get_live_gpu_free_mib: nvidia-smi failed (%s: %s)",
+                            type(_e).__name__, _e)
+            return None
     h = None
     try:
         import win32pdh
@@ -316,6 +339,19 @@ async def wait_for_vram_reclaim(target_mib: int, timeout_sec: int = 45,
         from .llama_config import GPU_BACKEND as _wvr_gb
         if _wvr_gb == "cpu":
             return True  # CPU-BACKEND: no VRAM to reclaim
+    except Exception:
+        pass
+    # NO-LIVE-SOURCE SHORT-CIRCUIT (2026-09-19): without a live VRAM source
+    # the loop below can never observe a reclaim — it spun the full timeout
+    # and returned False on every eviction. Can't-measure -> don't block:
+    # report OK once; a real OOM surfaces visibly at the llama-server load.
+    try:
+        if get_live_gpu_free_mib() is None:
+            _logger.info(
+                "[VRAM-RECLAIM] no live VRAM source — skipping wait (target: %d MiB)",
+                target_mib,
+            )
+            return True
     except Exception:
         pass
     start = _time.time()

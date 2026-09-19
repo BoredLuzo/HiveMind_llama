@@ -1,8 +1,7 @@
 # HiveMind — Local Multi-Agent AI Coding Assistant
-# Author: Luzo (BoredLuzo) — https://github.com/BoredLuzo
 from __future__ import annotations
 import asyncio
-# Windows: Proactor-Loop fÃ¼r subprocess-KompatibilitÃ¤t.
+# Windows: Proactor loop for subprocess compatibility.
 import sys as _sys_early
 from pathlib import Path as _Path_early
 _PROJECT_ROOT = str(_Path_early(__file__).parent.resolve())
@@ -83,9 +82,9 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.1.5"
+HIVEMIND_VERSION = "1.2.0"
 
-# ─── FrÃ¼he Logger-Definition ────────────────────────────────────────────────────
+# ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
 
 # ─── sys.path Bootstrap ─────────────────────────────────────────────────────────
@@ -132,7 +131,7 @@ print(f"Hivemind v{HIVEMIND_VERSION} | Backend: {_BACKEND.upper()} ({OLLAMA_HOST
 # ─── Pre-Explore Cache ───────────────────────────────────────────────────────────
 # State + functions imported from explore.cache (via init_explore_cache dependency injection).
 
-# ─── FrÃ¼he Stubs: _cache_lock / _chats_cache ────────────────────────────────────
+# ─── Early stubs: _cache_lock / _chats_cache ───
 _cache_lock: threading.Lock = threading.Lock()
 _chats_cache: dict = {}
 _state._cache_lock = _cache_lock
@@ -257,7 +256,7 @@ from routing.model_automap import (
 
 # ─── Model Capability Overrides (P1 FIX) ─────────────────────────────────────────
 # Kanonische Implementierung: core/model_sampling._model_profile
-# (Hardcoded-Hints + User-Config aus model_configs/models/*.json + Cap-Overrides).
+# (hardcoded hints + user config from model_configs/models/*.json + cap overrides).
 from core.model_sampling import _model_profile
 
 # ─── Websearch ───────────────────────────────────────────────────────────────────
@@ -346,6 +345,16 @@ def _sync_backend_runtime_config() -> None:
         _lsm_init.MLOCK_MODEL = bool(settings.get("llama_mlock", True))
         import backend.llama_config as _lc_init
         _gb = str(settings.get("gpu_backend", "") or "").strip().lower()
+        # ENV-WINS (2026-09-19): a repo-shipped settings.json must not defeat
+        # a container/systemd deployment — HIVEMIND_GPU_BACKEND has priority
+        # over the settings.json 'gpu_backend' key.
+        if str(os.environ.get("HIVEMIND_GPU_BACKEND", "") or "").strip():
+            if _gb:
+                _logger.info(
+                    "gpu_backend: settings.json '%s' ignored — HIVEMIND_GPU_BACKEND env wins",
+                    _gb,
+                )
+            _gb = ""
         if _gb in ("vulkan", "cuda", "cpu"):
             _lc_init.GPU_BACKEND = _gb
             _lsm_init.GPU_BACKEND = _gb
@@ -361,10 +370,10 @@ def _sync_backend_runtime_config() -> None:
             _lc_init.LLAMA_BIN = _lc_init._find_llama_server()
             _lsm_init.LLAMA_BIN = _lc_init.LLAMA_BIN
         # CACHE-REUSE-FIX (2026-09-04): server.py hat nur _lsm_init.CACHE_REUSE
-        # gesetzt; gelesen wird aber die beim Import kopierte Konstante in
-        # backend.manager_load (und backend.llama_config als Quelle). Jetzt
-        # werden alle drei Modul-Globals synchron gesetzt, damit das UI-Setting
-        # (llama_cache_reuse) wirklich den --cache-reuse-Startwert aendert.
+# set; but read back from the constant copied at import time in
+# backend.manager_load (and backend.llama_config as the source). All three
+# module globals are now kept in sync so the UI setting
+# (llama_cache_reuse) really changes the --cache-reuse startup value.
         _cache_reuse_val = int(settings.get("llama_cache_reuse", 256) or 0)
         _lc_init.CACHE_REUSE = _cache_reuse_val
         _lsm_init.CACHE_REUSE = _cache_reuse_val
@@ -577,7 +586,7 @@ async def _shutdown():
                 await _fk
         except Exception:
             pass
-    # Pending Writes beim Shutdown flushen.
+# Flush pending writes on shutdown.
     try:
         save_settings(settings)
     except Exception as _e:
@@ -688,7 +697,7 @@ async def _startup():
                 pipeline_obj=pipeline,
                 memory_obj=memory,
             )
-            # Peer-Ratings: shared semaphore aus server.py in extrahiertes Modul injizieren
+# Peer ratings: inject the shared semaphore from server.py into the extracted module
             import learning.peer_ratings as _peer_ratings
             _peer_ratings._bg_rating_sem = _bg_rating_sem
         except Exception as _e:
@@ -762,7 +771,7 @@ _SIMPLE_DIRECT_MODELS = {
     "creative":     "gemma3:4b",
     "factual":      "qwen3.5:2b",     # qwen3.5:2b: strukturiertes Wissen, neuere Gen als gemma3
     "reasoning":    "gemma3:4b",
-    "code":         "qwen3.5:2b",     # qwen3.5:2b: stÃ¤rker als qwen2.5:3b, Vision+TC
+    "code":         "qwen3.5:2b",     # qwen3.5:2b: stronger than qwen2.5:3b, vision + tool calls
     "math":         "qwen3.5:2b",
     "tool_use":     "qwen3.5:2b",     # TC-nativ
     "vision":       "granite3.2-vision:2b",  # Kleinste Vision
@@ -961,7 +970,7 @@ _vision_cfg: dict = _load_vision_model_cfg()
 _state._vision_cfg = _vision_cfg
 
 # ─── KV-Cache-Poisoning-Erkennung ───────────────────────────────────────────────
-# Marker fÃ¼r offensichtliches Prompt-Leak/KV-Poisoning.
+# Marker for obvious prompt-leak / KV-poisoning.
 _VISION_POISON_MARKERS: tuple[str, ...] = (
     "ich bin hivemind",
     "bin hivemind",
@@ -1041,7 +1050,7 @@ def _flush_prefetch_settings(run_prefetch_state: dict | None = None):
 
 
 
-# ─── Auto-Memory: erkennt Fakten in normalen GesprÃ¤chen ────────────────────────
+# ─── Auto-memory: detects facts in normal conversations ───
 
 
 
@@ -1136,7 +1145,7 @@ async def stream(req: Request):
     judge_bias = int(body.get("judge_bias", 50))
 
     #   1. body (vom Frontend gesendet ─ User-Entscheidung)
-    #   2. settings (settings.json ─ persistierte User-PrÃ¤ferenz)
+#   2. settings (settings.json ─ persisted user preference)
 
     _MISSING = object()
     def _body_or_settings(key: str, settings_key: str | None = None, default=False):

@@ -1,6 +1,6 @@
 """Run control: abort/skip registries (extracted from server.py)."""
 from __future__ import annotations
-import asyncio, logging, threading, time
+import asyncio, logging, threading, time, uuid
 
 logger = logging.getLogger("hivemind.run_control")
 
@@ -95,11 +95,22 @@ async def _abort_registry_cleanup_loop():
 _pause_events: dict[str, asyncio.Event] = {}
 _user_answers: dict[str, str] = {}
 _user_questions: dict[str, str] = {}
+_decision_ids: dict[str, str] = {}
 
 
 async def initiate_pause(run_id: str, question: str):
     _user_questions[run_id] = question
     _pause_events[run_id] = asyncio.Event()
+    # DECISION-NONCE (2026-09-19): jede Pause bekommt eine eigene ID.
+    # Entscheidungen tragen sie mit; eine alte Card (zweiter Tab, spaete
+    # Antwort) passt nicht mehr und wird gedroppt, statt die NAECHSTE
+    # Frage zu ueberschreiben.
+    _decision_ids[run_id] = uuid.uuid4().hex[:12]
+
+
+def get_decision_id(run_id: str) -> str:
+    """Id der aktuell wartenden Pause (leer, wenn keine wartet)."""
+    return _decision_ids.get(run_id, "")
 
 
 async def wait_for_resume(run_id: str, timeout_s: int = 600) -> str:
@@ -141,6 +152,7 @@ def cleanup_pause(run_id: str):
     _pause_events.pop(run_id, None)
     _user_answers.pop(run_id, None)
     _user_questions.pop(run_id, None)
+    _decision_ids.pop(run_id, None)
 
 
 # -- Run-Abort Registry (per-run_id, not chat_id) --

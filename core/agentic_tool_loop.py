@@ -24,7 +24,7 @@ class AgenticToolLoop(ToolLoop):
         self.round_state = round_state
         self._emit_fn = emit_fn
         self._pending_events: list[str] = []
-        # THINKING-RESCUE: Thinking-Parts zustzlich als Instanz-Attribut akkumulieren
+        # THINKING-RESCUE: accumulate thinking parts as an instance attribute too
         self._dr_thinking_parts: list[str] = []
 
     #  Public 
@@ -104,7 +104,7 @@ class AgenticToolLoop(ToolLoop):
 
         for _post_attempt in range(self.cfg.max_post_attempts):
             try:
-                # ── S2 (2026-08-23): Constrained Decoding auf Retry-Runden ──
+                # ── S2 (2026-08-23): constrained decoding on retry rounds ──
                 if _USE_GBNF_GRAMMAR and getattr(self.round_state, "force_grammar", False):
                     self.round_state.force_grammar = False
                     # GRAMMAR-GUARD (2026-08-25): llama.cpp lehnt grammar+tools
@@ -257,13 +257,29 @@ class AgenticToolLoop(ToolLoop):
                         _dr_post_errors[f"unhandled-{_resp.status_code}"] = _dr_post_errors.get(f"unhandled-{_resp.status_code}", 0) + 1
                         raise RuntimeError(f"llama-server {_resp.status_code}: {_err_body}")
 
-                    #  status 200: parse SSE stream 
+                    #  status 200: parse SSE stream
                     result["dr_content_parts"] = []
                     result["dr_thinking_parts"] = []
                     result["dr_tool_calls_acc"] = {}
                     _dr_finish_reason: str | None = None
-                    # (server.py usage_meta) UND Client (perfRealTokens/tok/s).
+                    # (server.py usage_meta) AND client (perfRealTokens/tok/s).
                     _dr_usage_final: dict | None = None
+                    # APPROVAL STAGING (2026-09-18, variant A): gated tool
+                    # calls get their approval card the moment the NAME
+                    # streams in — the generation itself KEEPS RUNNING (the
+                    # content streams to the UI, nothing executes or writes
+                    # before the decision), so an approved call costs zero
+                    # regeneration. The execution gate
+                    # (tools.runner._check_action_approval) consumes the
+                    # decision, or pauses when the user has not decided yet.
+                    from tools import runner as _tr_stage
+                    from tools.runner import (_APPROVAL_TOOLS as _gated_tool_names,
+                                              _parse_approval_answer as _parse_appr_ans)
+                    _appr_scope = str(_tr_stage._current_run_id.get() or "")
+                    _card_live = False        # a card was staged in THIS stream
+                    _dr_denied_mid = False    # user denied the staged card mid-stream
+                    _deny_tool = ""
+                    _deny_note = ""
                     async for _sse_line in _resp.aiter_lines():
                         if not _sse_line.startswith("data:"): continue
                         _sse_data = _sse_line[5:].strip()
@@ -272,7 +288,7 @@ class AgenticToolLoop(ToolLoop):
                         except Exception: continue
                         _sse_usage = _sse_chunk.get("usage")
                         if _sse_usage and _sse_usage.get("completion_tokens"):
-                            # D2-DIAG (2026-08-21): cached_tokens aus
+                            # D2-DIAG (2026-08-21): cached_tokens from
                             # prompt_tokens_details → Cache-Reuse pro Request messbar.
                             _cached = 0
                             try:
@@ -285,9 +301,9 @@ class AgenticToolLoop(ToolLoop):
                                 "cached_tokens": _cached,
                                 "gen_ms": int((time.monotonic() - _gen_t0) * 1000),
                             }
-                            # CACHE-TELEMETRIE (2026-09-04): Reuse% pro Coder-Round.
+                            # CACHE-TELEMETRY (2026-09-04): reuse% per coder round.
                             # prompt gross + cached klein => Prefix/Suffix-Cache
-                            # wurde invalidiert (In-place-Mutation, Kompression).
+                            # was invalidated (in-place mutation, compression).
                             try:
                                 _pt = int(_dr_usage_final.get("prompt_tokens") or 0)
                                 if _pt > 0:
@@ -300,7 +316,7 @@ class AgenticToolLoop(ToolLoop):
                             except Exception:
                                 pass
                         _sse_choices = _sse_chunk.get("choices") or [{}]
-                        # Choice-Chunk ⇒ Generation lief ins max_tokens-Limit ⇒ Tool-Call-
+                        # Choice chunk ⇒ generation hit the max_tokens limit ⇒ tool-call-
                         _sse_fr = _sse_choices[0].get("finish_reason")
                         if _sse_fr:
                             _dr_finish_reason = _sse_fr
@@ -308,6 +324,26 @@ class AgenticToolLoop(ToolLoop):
                         if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
                             _dr_aborted_mid = True
                             break
+                        # DENY-INTERRUPT (2026-09-18): the user denied the
+                        # staged card WHILE the call generates — break the
+                        # read loop NOW (closing the response stops
+                        # llama-server) instead of letting the content run
+                        # out. The partial call is dropped below and the
+                        # model gets the feedback to re-plan.
+                        if _card_live and not _dr_denied_mid:
+                            _pre_dec = _tr_stage._approval_pre_decisions.get(_appr_scope)
+                            if _pre_dec is not None:
+                                _pre_raw = str(_pre_dec.get("answer", "") or "")
+                                if _pre_raw and _parse_appr_ans(_pre_raw) == "deny":
+                                    _deny_tool = str(_pre_dec.get("tool") or "")
+                                    _deny_note = str(_pre_dec.get("note", "") or "")
+                                    _tr_stage._approval_pre_decisions.pop(_appr_scope, None)
+                                    _tr_stage._card_staged.pop(_appr_scope, None)
+                                    _dr_denied_mid = True
+                                    logger.warning(
+                                        "[APPROVAL] denied mid-stream: %s (scope=%r) — aborting generation",
+                                        _deny_tool or "?", _appr_scope)
+                                    break
                         _sse_cont, _sse_think = _parse_sse_delta(
                             _sse_delta,
                             tool_calls_acc=result["dr_tool_calls_acc"],
@@ -322,9 +358,9 @@ class AgenticToolLoop(ToolLoop):
                             self._dr_thinking_parts.append(_sse_think)
                             await self._emit({"type": "thinking_token", "content": _sse_think})
                             _dr_stream_partial = True
-                        # TOOL-GEN-STREAM (2026-09-17): live-stream write-family
-                        # tool call arguments so the user sees the code being
-                        # generated instead of waiting in silence.
+                        # Staging + deny-interrupt work on the tool-name
+                        # deltas below (the name arrives BEFORE the
+                        # arguments — reliable, no JSON parsing).
                         _wtc = _sse_delta.get("tool_calls") or []
                         for _tc_d in _wtc:
                             _tc_args = str(((_tc_d.get("function") or {}).get("arguments")) or "")
@@ -332,11 +368,29 @@ class AgenticToolLoop(ToolLoop):
                                 _tc_idx = _tc_d.get("index", 0)
                                 _acc = result["dr_tool_calls_acc"].get(_tc_idx, {})
                                 _acc_fn = str((_acc.get("function") or {}).get("name", "") or "")
-                                if _acc_fn in ("write_file", "write_file_append", "edit_file"):
+                                # CARD-ARG-FEED (2026-09-19): alle Gated-Tools
+                                # streamen ihre Argument-Deltas — das Frontend
+                                # zeigt daraus live Pfad/Kommando auf der
+                                # Approval-Card ("welcher file/welcher bash").
+                                if _acc_fn in _gated_tool_names:
                                     await self._emit({"type": "tool_gen",
                                                       "name": _acc_fn,
                                                       "index": _tc_idx,
                                                       "content": _tc_args})
+                            _tc_idx = _tc_d.get("index", 0)
+                            _acc = result["dr_tool_calls_acc"].get(_tc_idx, {})
+                            _stage_fn = str((_acc.get("function") or {}).get("name", "") or "")
+                            # Staging scope: the runner ContextVar (chat-or-
+                            # run id) — the same key the execution gate
+                            # consumes. stage_approval_card is idempotent
+                            # per run; _card_live just skips the per-delta
+                            # calls once this stream staged its card.
+                            if not _card_live and _stage_fn in _gated_tool_names \
+                                    and _tr_stage._approval_active_for(_stage_fn):
+                                await _tr_stage.stage_approval_card(
+                                    _appr_scope, _stage_fn, self._emit)
+                                if _appr_scope:
+                                    _card_live = True
 
                     # send usage EXACTLY ONCE after the stream ends
                     if _dr_usage_final:
@@ -371,6 +425,36 @@ class AgenticToolLoop(ToolLoop):
                                         "tool_calls": [] if _dr_aborted_mid else _dr_tcs}
                     if _dr_aborted_mid and not _dr_finish_reason:
                         result["dr_finish_reason"] = "abort"
+
+                    # ── DENY-INTERRUPT (2026-09-18) ─────────────────────
+                    # The user denied the staged card WHILE the call was
+                    # generating (the deny-watch in the stream loop already
+                    # broke the stream and consumed the pre-decision). Drop
+                    # the partial call, inject the feedback and re-POST so
+                    # the model takes a different approach. Approve needs no
+                    # handling here: the stream runs to completion and the
+                    # execution gate consumes the pre-decision silently.
+                    if _dr_denied_mid:
+                        result["dr_msg"] = {"role": "assistant",
+                                            "content": _dr_content_joined or None,
+                                            "tool_calls": []}
+                        result["dr_tool_calls_acc"] = {}
+                        result["dr_finish_reason"] = None
+                        _fb = "The user DENIED this action"
+                        if _deny_tool:
+                            _fb += f" ({_deny_tool})"
+                        _fb += " while it was being generated"
+                        _fb += (f". User message: {_deny_note}" if _deny_note
+                                else ". Take a different approach.")
+                        dtool_msgs.append({"role": "user", "content": f"[SYSTEM] {_fb}"})
+                        payload = {**payload, "messages": dtool_msgs}
+                        if _post_attempt < self.cfg.max_post_attempts - 1:
+                            await self._emit({"type": "status",
+                                "content": "Denied. Generation aborted, the model takes a different approach."})
+                            continue   # re-POST: the model re-plans
+                        result["dr_stream_ok"] = True
+                        break          # no POST budget left: return empty-handed
+
                     result["dr_stream_ok"] = True
                     break
 

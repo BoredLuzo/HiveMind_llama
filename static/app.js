@@ -994,6 +994,7 @@ async function loadSettings() {
     S.askUserTimeoutSeconds = s.ask_user_timeout_until_finished_seconds || 300;
     S.askUserMaxPer10min = s.ask_user_max_per_10min || 5;
     S.askUserAutoAnswer = s.ask_user_auto_answer || 'Use best judgment, document decision in commit message.';
+    S.askUserAutoProceed = !!s.ask_user_auto_proceed;
     // Ensure chunk-dependent toggles are correctly shown/hidden
     onChunkingChange();
     // Until-finished is always ∞ — no cap field anymore
@@ -2491,7 +2492,7 @@ function startAskUserCountdown(seconds) {
     _badge = document.createElement('span');
     _badge.id = 'ask-user-countdown';
     _badge.className = 'ask-user-countdown-badge';
-    var _qDiv = document.getElementById('ask-user-question');
+    var _qDiv = document.getElementById('ask-user-card');
     if (_qDiv) _qDiv.appendChild(_badge);
   }
   function _tick() {
@@ -3615,8 +3616,38 @@ function _tgPanelFlush() {
   }
 }
 
+function _apprCardArgFeed(d) {
+  var _card = document.getElementById('approval-request-card');
+  if (!_card || _card.dataset.apLocked === '1' || _card.dataset.apStaged !== '1') {
+    _apprGenBuf = '';
+    return;
+  }
+  var _pre = _card.querySelector('[data-ap-preview]');
+  if (!_pre) return;
+  if (d.name && d.name !== _apprGenTool) { _apprGenTool = d.name; _apprGenBuf = ''; }
+  _apprGenBuf += (d.content || '');
+  var _what = '';
+  var _pm = _apprGenBuf.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  var _cm = _apprGenBuf.match(/"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  var _pk = _apprGenBuf.match(/"package"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  var _mm = _apprGenBuf.match(/"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  var _km = _apprGenBuf.match(/"code"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  try {
+    if (_pm) _what = _tgUnescape(_pm[1]);
+    else if (_cm) { _what = _tgUnescape(_cm[1]); if (_what.length > 120) _what = _what.slice(0, 120) + '\u2026'; }
+    else if (_pk) _what = _tgUnescape(_pk[1]);
+    else if (_mm) { _what = _tgUnescape(_mm[1]); if (_what.length > 120) _what = _what.slice(0, 120) + '\u2026'; }
+    else if (_km) { _what = _tgUnescape(_km[1]); if (_what.length > 100) _what = _what.slice(0, 100) + '\u2026'; }
+  } catch (e) { _what = ''; }
+  if (_what) _pre.textContent = '\u2192 ' + _what + '  \u00b7  generating\u2026';
+}
+
 function _toolGenStream(d) {
   try {
+    _apprCardArgFeed(d);
+    // CARD-ARG-FEED (2026-09-19): non write tools (run_bash etc.) feed only
+    // the approval card — no chip and no code-panel streaming for them.
+    if (!/^(write_file|write_file_append|edit_file)$/.test(d.name || '')) return;
     if (!S.curAgent) return;
     var body = document.getElementById('ab-' + S.curAgent.tid);
     if (!body) return;
@@ -3957,17 +3988,50 @@ function scrollBtm() {
 // the pause loses the card while the server keeps waiting. The poll asks
 // the server for pending approvals while a run streams and re-renders the
 // card — server truth wins.
+// ARG-FEED (2026-09-19): gated tool args stream into the staged approval
+// card (shows WHICH file / WHICH command early) + instant-clear tombstones
+// against ghost re-renders from the pending poll.
+var _apprGenBuf = '';
+var _apprGenTool = '';
+var _apprClearedAt = 0;
+var _askClearedAt = 0;
+
 function _renderApprovalCard(d) {
+  var _runId = d.run_id || S.currentRunId || '';
   var _apOld = document.getElementById('approval-request-card');
-  if (_apOld) _apOld.remove();
+  // UPDATE-IN-PLACE (2026-09-18): the card is emitted twice per gated call
+  // (staged the moment the tool name streams in + again when the execution
+  // gate pauses). Rebuilding wiped typed notes and re-enabled dimmed
+  // buttons mid-click ("weird reload"). Now: same run -> patch label and
+  // preview only; a locked card (decision already being sent) is never
+  // rebuilt.
+  if (_apOld) {
+    if (_apOld.dataset.apLocked === '1') return;
+    if (_apOld.dataset.runId === _runId) {
+      var _lblUp = _apOld.querySelector('[data-ap-label]');
+      var _preUp = _apOld.querySelector('[data-ap-preview]');
+      if (_lblUp) _lblUp.textContent = '\uD83D\uDEE1 ' + (d.tool || 'tool') + ' wants to run. Your approval is needed';
+      if (_preUp && _preUp.textContent !== (d.preview || '')) _preUp.textContent = d.preview || '';
+      _apOld.dataset.apStaged = '';  // real preview known — the arg feed stops
+      return;
+    }
+    _apOld.remove();
+  }
+  _apprGenBuf = '';
+  _apprGenTool = d.tool || '';
   var _ap = document.createElement('div');
   _ap.id = 'approval-request-card';
   _ap.className = 'msg divider';
+  _ap.dataset.runId = _runId;
+  _ap.dataset.decisionId = d.decision_id || '';
+  _ap.dataset.apStaged = '1';
   _ap.style.cssText = 'border-color:rgba(240,173,78,.4);background:rgba(240,173,78,.06);padding:9px 13px';
   var _apLbl = document.createElement('div');
+  _apLbl.setAttribute('data-ap-label', '1');
   _apLbl.style.cssText = 'font-size:12px;color:#f0ad4e;font-weight:600;margin-bottom:6px';
-  _apLbl.textContent = '\uD83D\uDEE1 ' + (d.tool || 'tool') + ' wants to run \u2014 your approval is needed';
+  _apLbl.textContent = '\uD83D\uDEE1 ' + (d.tool || 'tool') + ' wants to run. Your approval is needed';
   var _apPre = document.createElement('pre');
+  _apPre.setAttribute('data-ap-preview', '1');
   _apPre.style.cssText = 'font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:#cfe3ff;background:rgba(0,0,0,.3);border-radius:4px;padding:6px 8px;margin:0 0 8px;max-height:130px;overflow:auto;white-space:pre-wrap;word-break:break-all';
   _apPre.textContent = d.preview || '';
   var _apNote = document.createElement('input');
@@ -3991,13 +4055,26 @@ function _renderApprovalCard(d) {
       if (b[0] === '0' && !_n) { _apNote.focus(); _apNote.style.borderColor = '#e06060'; return; }
       _apRow.querySelectorAll('button').forEach(function(x) { x.disabled = true; x.style.opacity = .45; });
       btn.style.opacity = 1;
+      _ap.dataset.apLocked = '1';  // poll/pause re-emits must not rebuild now
       var _ans = b[0];
       if (_n) _ans += '|' + _n;
-      fetch('/api/run/' + encodeURIComponent(d.run_id || S.currentRunId || '') + '/resume', {
+      // decide endpoint routes by state: resolves an active pause OR stores
+      // the pre-decision while the content is still generating
+      fetch('/approval/decide/' + encodeURIComponent(d.run_id || S.currentRunId || ''), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answer: _ans })
-      }).catch(function(e) { if (typeof showErrorToast === 'function') showErrorToast('Approval failed: ' + e); });
+        body: JSON.stringify({ answer: _ans, decision_id: (d.decision_id || '') })
+      }).then(function() {
+        // INSTANT-CLEAR (2026-09-19): die Entscheidung ist registriert — die
+        // Card fliegt sofort, nicht erst wenn agent_resumed/poll dazu kommen
+        // (der naechste Prefill kann auf langsamer Hardware Minuten dauern).
+        var _gone = document.getElementById('approval-request-card');
+        if (_gone && _gone.dataset.apLocked === '1') { _apprClearedAt = Date.now(); _gone.remove(); }
+      }).catch(function(e) {
+        _c.dataset.apLocked = '';
+        _row.querySelectorAll('button').forEach(function(x) { x.disabled = false; x.style.opacity = ''; });
+        if (window._showErrorToast) window._showErrorToast('Approval failed: ' + e);
+      });
     };
     _apRow.appendChild(btn);
   });
@@ -4007,18 +4084,194 @@ function _renderApprovalCard(d) {
   _ap.appendChild(_apRow);
   document.getElementById('chat').appendChild(_ap);
   scrollBtmIfNearBottom(120);
+  _apEnsureBottomPin();
 }
 
+// ASK-CARD (2026-09-19): the ask_user twin of the approval card — same
+// lifecycle (pinned at the content end, update in place, lock while the
+// answer is in flight, cleared on resume/done), different buttons: free
+// text answer back to the model, or "proceed autonomously".
+function _renderAskCard(d) {
+  var _runId = d.run_id || S.currentRunId || '';
+  var _old = document.getElementById('ask-user-card');
+  if (_old) {
+    if (_old.dataset.apLocked === '1') return;
+    if (_old.dataset.runId === _runId) {
+      var _qUp = _old.querySelector('[data-ask-q]');
+      if (_qUp && _qUp.textContent !== (d.question || d.preview || '')) {
+        _qUp.textContent = d.question || d.preview || '';
+      }
+      return;
+    }
+    _old.remove();
+  }
+  var _c = document.createElement('div');
+  _c.id = 'ask-user-card';
+  _c.className = 'msg divider';
+  _c.dataset.runId = _runId;
+  _c.dataset.decisionId = d.decision_id || '';
+  _c.style.cssText = 'border-color:rgba(96,160,224,.45);background:rgba(96,160,224,.07);padding:9px 13px';
+  var _lbl = document.createElement('div');
+  _lbl.style.cssText = 'font-size:12px;color:#60a0e0;font-weight:600;margin-bottom:6px';
+  _lbl.textContent = '\u2753 The agent asks. Your answer goes back to the model';
+  var _q = document.createElement('div');
+  _q.setAttribute('data-ask-q', '1');
+  _q.style.cssText = "font-family:'IBM Plex Mono',monospace;font-size:11px;color:#cfe3ff;background:rgba(0,0,0,.3);border-radius:4px;padding:6px 8px;margin:0 0 8px;white-space:pre-wrap;word-break:break-word";
+  _q.textContent = d.question || d.preview || 'Your input is needed.';
+  var _inp = document.createElement('input');
+  _inp.type = 'text';
+  _inp.placeholder = 'Your answer\u2026';
+  _inp.style.cssText = 'width:100%;background:var(--bg);border:1px solid var(--b2);border-radius:4px;padding:5px 8px;color:var(--tx);font-size:11px;margin-bottom:8px';
+  var _row = document.createElement('div');
+  _row.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
+  function _sendAnswer(_txt) {
+    _stopTimer();
+    _row.querySelectorAll('button').forEach(function(x) { x.disabled = true; x.style.opacity = .45; });
+    _inp.disabled = true;
+    _c.dataset.apLocked = '1';
+    fetch('/approval/decide/' + encodeURIComponent(d.run_id || S.currentRunId || ''), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answer: _txt, decision_id: (d.decision_id || '') })
+    }).then(function() {
+      stopAskUserCountdown();
+      // INSTANT-CLEAR (2026-09-19): wie bei der Approval-Card — weg sofort
+      // nach registrierter Antwort, nicht erst nach agent_resumed/poll.
+      var _gone = document.getElementById('ask-user-card');
+      if (_gone && _gone.dataset.apLocked === '1') { _askClearedAt = Date.now(); _gone.remove(); }
+    }).catch(function(e) {
+      _c.dataset.apLocked = '';
+      _row.querySelectorAll('button').forEach(function(x) { x.disabled = false; x.style.opacity = ''; });
+      _inp.disabled = false;
+      if (window._showErrorToast) window._showErrorToast('Answer failed: ' + e);
+    });
+  }
+  var _send = document.createElement('button');
+  _send.className = 'ghost';
+  _send.style.cssText = 'font-size:10px;padding:5px 10px;border:1px solid #60a0e088;color:#60a0e0';
+  _send.textContent = '\u2713 Send answer';
+  _send.onclick = function() {
+    var _t = (_inp.value || '').trim();
+    if (!_t) { _inp.focus(); _inp.style.borderColor = '#e06060'; return; }
+    _sendAnswer(_t);
+  };
+  var _skip = document.createElement('button');
+  _skip.className = 'ghost';
+  _skip.style.cssText = 'font-size:10px;padding:5px 10px;border:1px solid #f0ad4e55;color:#f0ad4e';
+  _skip.textContent = '\u23E9 Proceed autonomously';
+  _skip.onclick = function() { _sendAnswer('(no user input, proceed autonomously)'); };
+  // AUTO-PROCEED (2026-09-19): optional toggle with a visible timer. On:
+  // the question auto answers with the autonomous text after 30s. The
+  // state sticks for the session, later asks auto proceed too.
+  var _tg = document.createElement('label');
+  _tg.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:10px;color:var(--tx2);border:1px solid var(--b2);border-radius:4px;padding:5px 10px;cursor:pointer;user-select:none';
+  var _tgCb = document.createElement('input');
+  _tgCb.type = 'checkbox';
+  _tgCb.checked = !!S.askUserAutoProceed;
+  var _tgTxt = document.createElement('span');
+  _tgTxt.textContent = 'Auto 30s';
+  var _tgTm = document.createElement('span');
+  _tgTm.style.cssText = "color:#f0ad4e;font-family:'IBM Plex Mono',monospace";
+  _tg.appendChild(_tgCb); _tg.appendChild(_tgTxt); _tg.appendChild(_tgTm);
+  var _tgIv = null;
+  function _stopTimer() {
+    if (_tgIv) { clearInterval(_tgIv); _tgIv = null; }
+    _tgTm.textContent = '';
+  }
+  function _startTimer() {
+    _stopTimer();
+    var _left = 30;
+    _tgTm.textContent = '00:30';
+    _tgIv = setInterval(function() {
+      _left--;
+      if (_left <= 0) { _stopTimer(); _sendAnswer('(no user input, proceed autonomously)'); return; }
+      var _m = Math.floor(_left / 60), _s = String(_left % 60).padStart(2, '0');
+      _tgTm.textContent = '0' + _m + ':' + _s;
+    }, 1000);
+  }
+  _tgCb.onchange = function() {
+    S.askUserAutoProceed = _tgCb.checked;
+    // Persisted as a setting: survives reloads and is part of presets
+    // (the preset save snapshots settings.json).
+    postSettings({ ask_user_auto_proceed: _tgCb.checked });
+    if (_tgCb.checked) _startTimer(); else _stopTimer();
+  };
+  if (S.askUserAutoProceed) _startTimer();
+  _inp.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); _send.click(); }
+  });
+  _row.appendChild(_send);
+  _row.appendChild(_skip);
+  _row.appendChild(_tg);
+  _c.appendChild(_lbl);
+  _c.appendChild(_q);
+  _c.appendChild(_inp);
+  _c.appendChild(_row);
+  document.getElementById('chat').appendChild(_c);
+  scrollBtmIfNearBottom(120);
+  _apEnsureBottomPin();
+  _inp.focus();
+}
+
+// BOTTOM-PIN (2026-09-19): a pending card (approval or ask_user) lives at
+// the CONTENT END of #chat — like the last tool-call row. A MutationObserver
+// re-appends it whenever new chat rows land after it, so it stays the
+// bottom-most entry while pending; it scrolls normally with the chat
+// instead of overlaying content (the sticky attempt did that — rejected).
+var _apPinObserver = null;
+function _apEnsureBottomPin() {
+  var _chat = document.getElementById('chat');
+  if (!_chat) return;
+  var _pinAll = function() {
+    // BACK-TO-BACK (2026-09-19): when both cards are pending (ask_user
+    // paused plus a later write already staged), they sit adjacently at
+    // the content end instead of stacking somewhere in the flow.
+    var _pend = ['approval-request-card', 'ask-user-card']
+      .map(function(id) { return document.getElementById(id); })
+      .filter(Boolean);
+    if (!_pend.length) return;
+    var _tail = [].slice.call(_chat.children, -_pend.length);
+    var _inPlace = _tail.length === _pend.length &&
+      _pend.every(function(_c, i) { return _tail[i] === _c; });
+    if (_inPlace) return;
+    _pend.forEach(function(_c) { _chat.appendChild(_c); });
+    scrollBtmIfNearBottom(120);
+  };
+  if (!_apPinObserver) {
+    _apPinObserver = new MutationObserver(_pinAll);
+    _apPinObserver.observe(_chat, { childList: true });
+  }
+  _pinAll();
+}
+
+// POLL-SCOPE (2026-09-19): nicht mehr an S.streaming gekoppelt — ein Reload
+// waehrend einer Pause verliert zwar den SSE-Stream, aber der Run wartet
+// serverseitig weiter. Die Run-ID ueberlebt im sessionStorage, die Card
+// re-rendert und die Entscheidung erreicht das wartende Gate.
+try { S.currentRunId = S.currentRunId || sessionStorage.getItem('hm_run_id') || ''; } catch (e) {}
 setInterval(function() {
-  if (!S.streaming || !S.currentRunId) return;
+  if (!S.currentRunId) return;
+  try { sessionStorage.setItem('hm_run_id', S.currentRunId); } catch (e) {}
   fetch('/approval/pending/' + encodeURIComponent(S.currentRunId))
     .then(function(r) { return r.json(); })
     .then(function(d) {
       var existing = document.getElementById('approval-request-card');
+      var existingAsk = document.getElementById('ask-user-card');
       if (d && d.active) {
-        if (!existing) _renderApprovalCard({ run_id: S.currentRunId, tool: d.tool, preview: d.preview });
-      } else if (existing) {
-        existing.remove();
+        // TOMBSTONE (2026-09-19): direkt nach einem Instant-Clear kann das
+        // Pending noch kurz aktiv sein (das Gate raeumt erst beim Aufwachen
+        // auf). 4s Grace verhindert Geister-Cards, bleibt aber self-healing:
+        // ist das Pending echte weiterhin aktiv, kommt die Card zurueck.
+        if (d.kind === 'ask') {
+          if (!existingAsk && Date.now() - _askClearedAt > 4000) {
+            _renderAskCard({ run_id: S.currentRunId, question: d.question || d.preview, decision_id: d.decision_id });
+          }
+        } else if (!existing && Date.now() - _apprClearedAt > 4000) {
+          _renderApprovalCard({ run_id: S.currentRunId, tool: d.tool, preview: d.preview, decision_id: d.decision_id });
+        }
+      } else {
+        if (existing) existing.remove();
+        if (existingAsk) existingAsk.remove();
       }
     }).catch(function() {});
 }, 2000);
@@ -5506,32 +5759,12 @@ function handleEvent(d) {
     S.agentPaused = true;
     S.agentQuestion = d.question;
     S.currentRunId = d.run_id || S.currentRunId;
+    S.activeDecisionId = d.decision_id || '';
     setPauseBtnState('paused_by_ask_user');
-    // show the question as a system message in the chat
-    var _askDiv = document.createElement('div');
-    _askDiv.id = 'ask-user-question';
-    _askDiv.className = 'msg divider';
-    _askDiv.style.cssText = [
-      'color:#4878c0',
-      'border:1px solid rgba(72,120,192,.4)',
-      'border-left:3px solid #4878c0',
-      'background:rgba(72,120,192,.07)',
-      'border-radius:8px',
-      'padding:10px 14px',
-      'font-size:13px',
-      'font-style:italic',
-      'margin:4px 0'
-    ].join(';');
-    _askDiv.textContent = '\uD83E\uDD14 ' + (d.question || 'Your input is needed.');
-    var _existingAsk = document.getElementById('ask-user-question');
-    if (_existingAsk) {
-      _existingAsk.textContent = _askDiv.textContent;
-    } else {
-      document.getElementById('chat').appendChild(_askDiv);
-    }
-    scrollBtmIfNearBottom(120);
-    var _inpAsk = document.getElementById('input');
-    if (_inpAsk) { _inpAsk.placeholder = 'Your answer\u2026'; _inpAsk.focus(); }
+    // ASK-CARD (2026-09-19): question, input and buttons in one card —
+    // same lifecycle as the approval card (pinned at the content end,
+    // update in place, cleared on resume/done).
+    _renderAskCard({ run_id: d.run_id || S.currentRunId, question: d.question, decision_id: d.decision_id });
     if (S.duoUntilFinished && S.askUserTimeoutSeconds > 0) {
       startAskUserCountdown(S.askUserTimeoutSeconds);
     }
@@ -5541,6 +5774,8 @@ function handleEvent(d) {
     showInfo('Auto-answer sent: "' + (d.auto_answer || S.askUserAutoAnswer) + '"');
     var _qDivTo = document.getElementById('ask-user-question');
     if (_qDivTo) _qDivTo.remove();
+    var _askTo = document.getElementById('ask-user-card');
+    if (_askTo) _askTo.remove();
     S.agentPaused = false;
     S.agentQuestion = null;
     var _inpTo = document.getElementById('input');
@@ -5549,6 +5784,7 @@ function handleEvent(d) {
   }
   else if (d.type === 'agent_throttled') {
     stopAskUserCountdown();
+    S.activeDecisionId = d.decision_id || '';
     setPauseBtnState('paused_by_throttle');
     // FIX (2026-08-31): agent_throttled now sets S.agentPaused/agentQuestion,
     // so Enter in the input goes through sendMsg() → resumeWithAnswer() instead of
@@ -5585,6 +5821,9 @@ function handleEvent(d) {
     if (_qDiv) _qDiv.remove();
     var _apCard = document.getElementById('approval-request-card');
     if (_apCard) _apCard.remove();
+    var _askCard = document.getElementById('ask-user-card');
+    if (_askCard) _askCard.remove();
+    S.activeDecisionId = '';
   }
   else if (d.type === 'approval_request') {
     // ACTION-APPROVAL (2026-09-18): buttons instead of typed answers —
@@ -6354,6 +6593,13 @@ function handleEvent(d) {
     stopAskUserCountdown();
     var _qDivDone = document.getElementById('ask-user-question');
     if (_qDivDone) _qDivDone.remove();
+    // APPROVAL-CARD-CLEAR (2026-09-19): a run can end while a card is still
+    // up (abort paths that bypass agent_resumed, watchdog stop). Streaming
+    // and poll are gone at this point, so clear it here.
+    var _apDone = document.getElementById('approval-request-card');
+    if (_apDone) _apDone.remove();
+    var _askDone = document.getElementById('ask-user-card');
+    if (_askDone) _askDone.remove();
     // Close any still-open coder bubble (no-critic runs skip duo_critic event)
     if (S.curAgent && S.curAgent.body && S.curAgent.body.closest('.duo-coder')) {
       doneAgent(S._coderElapsed || '');
@@ -8105,8 +8351,9 @@ async function resumeWithAnswer() {
     var resp = await fetch('/api/run/' + S.currentRunId + '/resume', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({answer: answer})
+      body: JSON.stringify({answer: answer, decision_id: (S.activeDecisionId || '')})
     });
+    S.activeDecisionId = '';
     if (resp.status === 409) {
       if (inp) { inp.value = ''; inp.placeholder = 'Message...'; inp.disabled = false; }
       showInfo('Auto-answer was already sent \u2014 your answer is ignored.');

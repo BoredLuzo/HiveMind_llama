@@ -440,8 +440,8 @@ def _kill_port_sync(port: int):
 
 
     if platform.system() != "Windows":
-        # POSIX chain (2026-09-08): fuser (psmisc) -> /proc/net/tcp inode scan
-        # (always available) -> pkill as the last coarse filter.
+        # POSIX chain (2026-09-08): fuser (psmisc) -> /proc/net/tcp inode
+        # scan (always available, port-scoped + cmdline-checked).
         _killed = False
         try:
             _r = subprocess.run(["fuser", "-k", f"{port}/tcp"],
@@ -454,12 +454,11 @@ def _kill_port_sync(port: int):
                 _killed = _kill_port_via_proc(port)
             except Exception:
                 _killed = False
-        if not _killed:
-            try:
-                subprocess.run(["pkill", "-9", "-f", "llama-server"],
-                               capture_output=True, timeout=5)
-            except Exception:
-                pass
+        # PKILL-DROPPED (2026-09-19): the old last resort 'pkill -9 -f
+        # llama-server' was name-based and killed EVERY llama-server on the
+        # host — other slots and foreign processes included. The /proc scan
+        # above is port-scoped and cmdline-checked; if it finds nothing,
+        # startup port-conflict handling takes over.
         return
     try:
         r = subprocess.run(

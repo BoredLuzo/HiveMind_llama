@@ -86,6 +86,11 @@ def start_background(cmd: str) -> dict:
 
     try:
         from tools.sandbox import spawn_kwargs as _spawn_kwargs
+        # POSIX-SHELL (2026-09-19): shell=True läuft auf Ubuntu unter /bin/sh
+        # (dash) — Bash-isms ([[ ]], source, &>) vom Modell sterben dort.
+        # Explizit bash via 'executable'; Windows-cmd bleibt unverändert.
+        import os as _os_bg
+        _shell_kwargs = {"executable": "/bin/bash"} if _os_bg.name != "nt" else {}
         proc = subprocess.Popen(
             cmd,
             shell=True,
@@ -95,6 +100,7 @@ def start_background(cmd: str) -> dict:
             encoding="utf-8",
             errors="replace",
             **_spawn_kwargs(),
+            **_shell_kwargs,
         )
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:160]}"}

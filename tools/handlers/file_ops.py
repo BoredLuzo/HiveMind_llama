@@ -66,11 +66,11 @@ def _looks_like_split_marker(content) -> bool:
 
 
 def _heal_trailing_split_marker(text: str, content: str) -> str:
-    """Entfernt am Datei-Ende literal geschriebene Marker-Zeilen.
+    """Remove marker lines written literally at the end of the file.
 
-    War der Marker vor dem Fix einmal als normaler Append gelandet, steht er
-    wörtlich (ggf. mit Quotes) am File-Ende. Vor dem Drain wird er entfernt,
-    damit der Rest sauber an den echten Teil1 anschliesst.
+    If the marker ever landed as a normal append before the fix, it sits
+    verbatim (possibly with quotes) at the end of the file. It is removed
+    before the drain so the remainder cleanly joins the real part 1.
     """
     if content and text.endswith(content):
         return text[:-len(content)]
@@ -203,10 +203,10 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
     end_line = args.get("end_line")
     _full = start_line is None and end_line is None
     try:
-        # READ-EARLY-ABORT (2026-09-04): bei Voll-Reads (kein Range) wird eine
-        # grosse Datei NICHT mehr komplett eingelesen, nur um sie dann als "too
-        # large" abzulehnen. Staette dessen: billiger Binary-Sniff am Anfang +
-        # gestreamter Newline-Count (bricht bei Zeile 401 ab).
+        # READ-EARLY-ABORT (2026-09-04): full reads (no range) no longer read
+        # a huge file completely just to reject it as "too large" afterwards.
+        # Instead: cheap binary sniff up front + streamed newline count
+        # (aborts at line 401).
         if _full:
             _head = await asyncio.to_thread(_read_head_bytes, p, 1024)
             if _looks_binary_bytes(_head):
@@ -228,8 +228,8 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
         content = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
 
-        # Binary file detection (Range-Reads; Voll-Reads wurden oben schon per
-        # Head-Sniff abgefangen). Check first 512 chars for NUL bytes and
+        # Binary file detection (range-reads; full reads were already caught
+        # above via the head sniff). Check first 512 chars for NUL bytes and
         # control characters (excluding \n \r \t).
         _sample = content[:512]
         if _sample:
@@ -240,8 +240,8 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
             if len(_sample) > 0 and (_binary_chars / len(_sample)) > 0.10:
                 return _read_binary_error(p)
 
-        # Hinweis: Voll-Reads mit >400 Zeilen werden oben frueh abgebrochen
-        # (READ-EARLY-ABORT) - hier ist len(lines) <= 400 garantiert.
+        # Note: full reads with >400 lines abort early above
+        # (READ-EARLY-ABORT) - len(lines) <= 400 is guaranteed here.
 
         # Hallucination guard: validate start_line/end_line against actual file length
         _actual_lines = len(lines)
@@ -296,11 +296,11 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     # The remainder of an oversized write_file/edit_file call is stored
     # server-side (see AUTO_SPLIT_CONTINUE_MARKER). This marker appends it in
     # one go without the model re-sending the big content.
-    # FIX (2026-09-04): Modelle kopieren die Quotes in den Content
-    # (content="<AUTO_SPLIT_CONTINUE>") -> strikter Vergleich schlug fehl und
-    # der Marker landete LITERAL in der Datei. Detektion ist jetzt robust
-    # (Quotes/Backticks/kurze Zusatztexte); ein Pending wird beim naechsten
-    # Append gedrained, nie literal geschrieben.
+    # FIX (2026-09-04): models copy the quotes into the content
+    # (content="<AUTO_SPLIT_CONTINUE>") -> the strict comparison failed and
+    # the marker landed LITERALLY in the file. Detection is now robust
+    # (quotes/backticks/short extra text); a pending is drained on the next
+    # append, never written literally.
     _split_key_ = _split_key(p)
     _looks_marker = _looks_like_split_marker(content)
     _split_discard_note = ""
@@ -328,8 +328,8 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
                         _cur = p.read_text(encoding="utf-8", errors="replace")
                     except Exception:
                         _cur = ""
-                    # Heilung: ggf. wörtlich geschriebene Marker-Zeile(n) vom
-                    # File-Ende entfernen, damit der Rest sauber anschliesst.
+                    # Healing: remove marker line(s) possibly written
+                    # verbatim from the file end so the remainder joins cleanly.
                     _healed = _heal_trailing_split_marker(_cur, content)
                     if _healed != _cur:
                         with open(p, "w", encoding="utf-8", newline="") as f:
@@ -356,8 +356,8 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
                     tool="write_file_append")
             return (f"[AUTO-SPLIT-DONE] '{p}' completed: +{_lines} lines, "
                     f"{_total} bytes total (full content written).")
-        # Pending existiert, aber der Content ist KEIN Marker: das Modell ist
-        # weitergezogen / resendet selbst - alter Remainder ist veraltet.
+        # Pending exists but the content is NOT a marker: the model has moved
+        # on / resent on its own - the old remainder is stale.
         # EMPTY-CONTENT-GUARD (2026-09-13): empty content must NOT pop the
         # pending remainder (old order dropped it first, errored after —
         # file stayed truncated with the remainder unrecoverable).

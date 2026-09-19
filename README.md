@@ -44,6 +44,30 @@ Models go into your models folder as GGUFs, or run
 `./.venv/bin/python deploy/fetch_models.py`. See "Linux details" at the bottom
 for backend selection, CPU-only hosts and prefill tuning.
 
+Environment variables (all optional; where they overlap, they beat
+settings.json):
+
+```bash
+export HIVEMIND_HOST=0.0.0.0                  # bind beyond localhost (containers)
+export HIVEMIND_PORT=8001
+export HIVEMIND_GPU_BACKEND=vulkan            # vulkan | cuda | cpu | rocm
+export HIVEMIND_LLAMA_BIN=/path/to/llama-server   # custom build beats discovery
+export HIVEMIND_MODELS_DIR=/path/to/ggufs
+```
+
+Own llama.cpp build instead of the release download:
+
+```bash
+cmake -B build -G Ninja -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF
+cmake --build build
+export HIVEMIND_LLAMA_BIN=$PWD/build/bin/llama-server
+```
+
+mlock: weights are locked in RAM by default (`llama_mlock`). Raise
+RLIMIT_MEMLOCK (systemd: `LimitMEMLOCK=infinity`, docker run:
+`--ulimit memlock=-1`) or set `llama_mlock=false` in settings.json, or the
+model load dies on the mmap/mlock step.
+
 ## Codebase understanding
 
 The default `code_duo` path builds its picture of your repo in three layers,
@@ -96,6 +120,28 @@ In Simple/Direct chat the model can use tools through a tier
 The tier only escalates what the model may call; `full` is what you want for
 real edit/build requests. Without the web-search module the Websearch tier
 falls back to pure chat; an unreachable SearXNG returns an error string.
+
+### Action approval gate
+
+Optional safety valve for agentic runs (`duo_action_approval_enabled`,
+UI: Agents tab → Execution → 🛡 Action Approval, off by default, works
+mid-run). When on, the run pauses before everything that changes the
+project — code/cmd execution (`run_bash`, `run_python`,
+`install_package`, `start_background`), file writes (`write_file`,
+`edit_file`, `write_file_append`) and `git_commit` — and shows an
+approval card with the exact command/code plus an optional message field:
+
+| Button | Effect |
+|--------|--------|
+| ✓ Approve once | this call runs, nothing remembered |
+| ✓ Approve this file / this exact call (remember) | remembered for the current chat — writes per file, commands 1:1 per arguments; a new chat asks again |
+| ✕ Deny | the model gets a denial error (your message included) and must take a different approach |
+| ✉ Input only | sends your message without approving or denying — the tool does not run |
+
+The card appears as soon as the write target is recognizable — while the
+code is still generating — so you decide in parallel and can watch the
+code stream live in the right code panel. If you have not decided by the
+time generation finishes, the run waits for your click. Desktop notifications fire when the run needs you.
 
 ### Code Duo
 
@@ -376,6 +422,18 @@ get `invalid mount config for type "bind"` or HTTP 403/empty results, a stale
 `hivemind-searxng` container from an older version is the usual cause:
 `docker rm -f hivemind-searxng`, then install again.
 
+### Search engines & result quality
+
+Web search runs through a local SearXNG instance. Result quality depends on
+which engines the instance can actually serve: on stock instances google
+sits CAPTCHA-suspended and wikipedia answers almost nothing under broad
+language tags, so HiveMind defaults to `searxng_engines =
+"bing,duckduckgo"` with `searxng_language = "all"` and safesearch on.
+Results are capped per hostname so one domain cannot fill the whole list.
+If search returns junk for everything, open `http://localhost:8888/search?q=test`
+in a browser and check which engines your instance can serve, then adjust
+both keys in the settings.
+
 ### Scripts
 
 | Script | Purpose |
@@ -493,6 +551,9 @@ the model registry, workspace guards and release integrity. New test:
 `tests\run_regressions.py`. Before a release: suite + smoke test (start
 run.py, open the UI, check `/websearch/status`).
 
+Note: the test suite is dev-only and not part of minimal installs (the
+published tree contains only what is needed to run HiveMind).
+
 ## Use cases
 
 Unattended batch runs (Until-Finished with plan tracking, auto-test, graceful
@@ -529,7 +590,8 @@ free; commercial use needs a license from the author. After the Change Date
 ## Linux details
 
 Backend selection via `HIVEMIND_GPU_BACKEND=vulkan|cuda|cpu` (env or
-`gpu_backend` in settings.json; the systemd unit ships a commented line):
+`gpu_backend` in settings.json; the env wins when both are set; the systemd
+unit ships a commented line):
 
 - `vulkan` — default, AMD/Intel/NVIDIA via Mesa Vulkan drivers
   (`llama-bXXXX-bin-ubuntu-vulkan-x64`).
@@ -540,9 +602,13 @@ Backend selection via `HIVEMIND_GPU_BACKEND=vulkan|cuda|cpu` (env or
   vulkan/cuda/rocm on a CPU-only host, since a backend binary can't start
   without its loader.
 
-Process management: the port-cleanup chain is `fuser` -> `/proc/net/tcp` inode
-scan -> `pkill` (no extra packages needed); `force_kill_all` maps to
-`pkill -9 -f llama-server`.
+Live VRAM: measured with `nvidia-smi` (ships with the NVIDIA driver). On
+hosts without it the static size tables are used and reclaim waits are
+skipped instead of stalling.
+
+Process management: the port-cleanup chain is `fuser` -> `/proc/net/tcp`
+inode scan, port scoped and cmdline checked (no extra packages needed).
+`force_kill_all` (UI button) still kills every llama-server by name.
 
 Tool commands: `python` maps to `python3` and PowerShell pipes to `head`/
 `tail` at import time. For python linting install pyright globally

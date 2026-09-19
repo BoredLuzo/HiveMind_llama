@@ -737,7 +737,7 @@ async def get_workspace_tree(
 
     # WS-PRIORITY (2026-09-13): the RESOLVED workspace wins over any path
     # found in the task text. Live: a task copied from another machine
-    # contained "C:\Users\Nicolas\Desktop\MyOwnTetris" while the UI workspace
+    # contained an absolute path of that machine while the UI workspace
     # was Test1 — the regex hit won (WS-PATH-EXIST-CHECK would now reject it,
     # but a same-machine stale path would still override) and the repo map
     # analyzed the WRONG folder. Text extraction stays as a fallback for

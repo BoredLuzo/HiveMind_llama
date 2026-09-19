@@ -8,8 +8,8 @@ Working rules for coding agents (and humans) in this repo.
 - Functional keyword/regex matchers are **English-only as of 2026-09-09**
   (input detection). German halves were removed deliberately ("vorerst") —
   restore via git history if needed. Intentionally kept as-is:
-  - `core/duo_runner.py` legacy marker regexes + `static/app.js` legacy
-    "zu groß" alternation: they parse OLD persisted session output.
+  - `static/app.js` legacy "zu groß" alternation: it parses OLD persisted
+    session output.
   - `server.py` / `vision/preprocess.py` `_VISION_POISON_MARKERS`: match leaks
     of the old German message scaffolding from in-flight sessions.
   - `infra/mcp_server.py` `_looks_like_error_text`: detects German-locale tool
@@ -52,14 +52,12 @@ python -m ruff check .            # ruff.toml: E9/F821/F601/F811/F841/W605
 
 ## Settings & live install
 - `settings.json` is NOT tracked (user config, differs per install).
-- All HiveMind folders live under `C:\Users\NtheP\Desktop\HiveMind\`:
-  `repo` (this repo), `live` (production install), `test` (test install),
-  `releases` (built zips). Until the repo folder itself is moved out of
-  `Desktop\HiveMind_dev` (blocked while a session runs inside it), the
-  relative paths below are `..\live` / `..\test` from the FINAL layout.
-- The live install at `..\live` mirrors this repo: sync changed
+- Local layout convention: the repo, the production install (`live`), a
+  test install and built releases sit side by side; helper scripts may
+  reference the production install as `..\live`.
+- The live install mirrors this repo: sync changed
   source files there after fixes and restart the server (old code keeps
-  running in RAM until then).
+  running in RAM until then). Test on live BEFORE committing when asked.
 
 ## Functional matcher inventory (English-only since 2026-09-09)
 - `core/duo_helpers.py`: `_READ_ONLY_KEYWORDS`, `_IMPL_OVERRIDE_RE`, `_NEGATOR_RE`

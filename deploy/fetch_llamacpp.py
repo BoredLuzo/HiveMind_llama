@@ -43,8 +43,7 @@ ASSET_REGEX = {
     # or llama-b1234-bin-win-cuda-13.3-x64.zip — the version is captured,
     # so that with equal build numbers the NEWER CUDA runtime wins
     # (CUDA-VERSION-FIX 2026-08-27: previously cuda-12.4 was always pulled,
-    # even when the driver supports 13.x — live finding on RTX,
-    # "--list-devices empty").
+    # even when the driver supports 13.x — that left --list-devices empty).
     "cuda": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-cuda-([\d.]+)-x64{_ASSET_EXT}$", re.IGNORECASE),
     # CPU build (no backend tag in the name) + ROCm (Linux):
     "cpu": re.compile(rf"^llama-b(\d+)-bin-{_OS_TAG}-x64{_ASSET_EXT}$", re.IGNORECASE),

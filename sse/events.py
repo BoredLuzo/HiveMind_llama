@@ -20,8 +20,8 @@ def make_tool_call_event(name: str, args: dict) -> dict:
         if name == "patch_file":
             old = str(args.get("old_str", ""))
             new = str(args.get("new_str", ""))
-            old_lines = old.count("\n") + 1 if old.strip() else 0
-            new_lines = new.count("\n") + 1 if new.strip() else 0
+            old_lines = len(old.splitlines()) if old.strip() else 0
+            new_lines = len(new.splitlines()) if new.strip() else 0
             detail = old.strip().splitlines()[0][:50] if old.strip() else ""
             if old_lines:
                 extra["old_lines"] = old_lines
@@ -41,8 +41,8 @@ def make_tool_call_event(name: str, args: dict) -> dict:
                 _eb = _RE_SEARCH_REPLACE_BLOCK.findall(_edits) or _RE_SEARCH_REPLACE_BLOCK_LENIENT.findall(_edits)
                 if _eb:
                     _old, _new = _eb[0]
-                    _old_lines = _old.count("\n") + 1 if _old.strip() else 0
-                    _new_lines = _new.count("\n") + 1 if _new.strip() else 0
+                    _old_lines = len(_old.splitlines()) if _old.strip() else 0
+                    _new_lines = len(_new.splitlines()) if _new.strip() else 0
                     if _old.strip():
                         detail = _old.strip().splitlines()[0][:50]
                     if len(_eb) > 1:
@@ -105,7 +105,7 @@ def make_tool_call_event(name: str, args: dict) -> dict:
     elif name in ("write_file", "write_file_append"):
         label = str(args.get("path", "")).strip()
         content = str(args.get("content", "") or "")
-        lines = content.count("\n") + 1 if content.strip() else 0
+        lines = len(content.splitlines()) if content.strip() else 0
         if lines:
             detail = f"{lines} lines"
             extra["lines"] = lines

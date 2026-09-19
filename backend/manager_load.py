@@ -832,16 +832,25 @@ class LlamaLoadMixin:
         # ── Backend DLL check (CUDA/Vulkan) ───────────────────────────────
         # cryptic start failure. Cached once.
         if type(self)._backend_dlls_ok is None:
-            _dll_ok = await asyncio.to_thread(
-                _probe_backend_dlls, str(LLAMA_BIN), GPU_BACKEND
-            )
-            if _dll_ok is not None:
-                type(self)._backend_dlls_ok = _dll_ok
-                logger.info(
-                    "Backend DLL check (%s, %s): %s",
-                    GPU_BACKEND.upper(), LLAMA_BIN.name,
-                    "DLLs complete" if _dll_ok else "DLLs missing",
+            # OS-GUARD (2026-09-19): DLL probing is Windows-only — on Linux
+            # the .so layout differs and the probe misfires. llama-server
+            # itself fails loudly at startup when its backend is broken,
+            # and the manager's health check catches that (live: Docker/
+            # CUDA host).
+            if os.name == "nt":
+                _dll_ok = await asyncio.to_thread(
+                    _probe_backend_dlls, str(LLAMA_BIN), GPU_BACKEND
                 )
+                if _dll_ok is not None:
+                    type(self)._backend_dlls_ok = _dll_ok
+                    logger.info(
+                        "Backend DLL check (%s, %s): %s",
+                        GPU_BACKEND.upper(), LLAMA_BIN.name,
+                        "DLLs complete" if _dll_ok else "DLLs missing",
+                    )
+            else:
+                type(self)._backend_dlls_ok = True
+                logger.info("Backend DLL check: skipped (non-Windows host)")
         if type(self)._backend_dlls_ok is False:
             _be_upper = GPU_BACKEND.upper()
             _posix_dll = platform.system() != "Windows"
@@ -867,16 +876,25 @@ class LlamaLoadMixin:
         # ── Backend device check (CUDA/Vulkan) ─────────────────────────────
         #      cuda-12.4 build on 13.x driver → cudaGetDeviceCount=0 →
         if type(self)._backend_devices_ok is None:
-            _dev_ok = await asyncio.to_thread(
-                _probe_backend_devices, str(LLAMA_BIN), GPU_BACKEND
-            )
-            if _dev_ok is not None:
-                type(self)._backend_devices_ok = _dev_ok
-                logger.info(
-                    "Backend device check (%s, %s): %s",
-                    GPU_BACKEND.upper(), LLAMA_BIN.name,
-                    "device found" if _dev_ok else "NO device found",
+            # OS-GUARD (2026-09-19): same as the DLL check — --list-devices
+            # misfires on some Linux/CUDA combos (cuda-12.4 build on 13.x
+            # driver -> cudaGetDeviceCount=0), so the probe runs on Windows
+            # only. A genuinely broken backend surfaces at llama-server
+            # startup (health check / crash recovery).
+            if os.name == "nt":
+                _dev_ok = await asyncio.to_thread(
+                    _probe_backend_devices, str(LLAMA_BIN), GPU_BACKEND
                 )
+                if _dev_ok is not None:
+                    type(self)._backend_devices_ok = _dev_ok
+                    logger.info(
+                        "Backend device check (%s, %s): %s",
+                        GPU_BACKEND.upper(), LLAMA_BIN.name,
+                        "device found" if _dev_ok else "NO device found",
+                    )
+            else:
+                type(self)._backend_devices_ok = True
+                logger.info("Backend device check: skipped (non-Windows host)")
         if GPU_BACKEND != "cpu" and type(self)._backend_devices_ok is False and type(self)._device_flag_supported:
             _be_upper = GPU_BACKEND.upper()
             raise RuntimeError(
@@ -899,6 +917,18 @@ class LlamaLoadMixin:
         #   --load-mode mlock      → GGML_ASSERT(addr) in llama-mmap.cpp (crasht)
         if type(self)._load_mode_supported:
             _load_mode = "mmap+mlock" if MLOCK_MODEL else "none"
+            # MEMLOCK-GUARD (2026-09-19): Docker default RLIMIT_MEMLOCK is
+            # 64 MiB — llama.cpp fails the model load when it cannot lock
+            # the weights. One-time warning; fix via --ulimit memlock=-1 in
+            # docker run or llama_mlock=false in settings.
+            if (_load_mode == "mmap+mlock" and os.name != "nt"
+                    and not getattr(type(self), "_memlock_warned", False)):
+                type(self)._memlock_warned = True
+                logger.warning(
+                    "mlock enabled on Linux — needs RLIMIT_MEMLOCK (docker run: "
+                    "--ulimit memlock=-1). If the model load dies on mmap/mlock, "
+                    "set llama_mlock=false in settings."
+                )
             cmd += ["--load-mode", _load_mode]
             logger.info("--load-mode %s (mlock=%s)", _load_mode, bool(MLOCK_MODEL))
         elif (type(self)._binary_build_number or 0) >= NO_MMAP_MIN_BUILD:

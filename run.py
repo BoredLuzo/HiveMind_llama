@@ -3,8 +3,6 @@ run.py  Hivemind Launcher
 =========================
 Setzt PYTHONPATH und sys.path VOR uvicorn-Start.
 os.environ wird von multiprocessing.spawn-Children vererbt (sys.path nicht).
-
-Author: Luzo (BoredLuzo) — https://github.com/BoredLuzo
 """
 from __future__ import annotations
 import sys
@@ -98,7 +96,10 @@ if _missing:
     print("[ERROR] Missing files:")
     for f in _missing:
         print(f"  {f}")
-    input("\nEnter druecken zum Beenden...")
+    # TTY-GUARD (2026-09-19): detached/container starts have no TTY — the
+    # input() would die with EOFError and mask the actual error listing.
+    if sys.stdin.isatty():
+        input("\nEnter druecken zum Beenden...")
     sys.exit(1)
 
 import asyncio

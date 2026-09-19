@@ -54,6 +54,12 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
 
         fname = await asyncio.to_thread(_write_temp_python)
         _py_cmd = "python" if sys.platform == "win32" else "python3"
+        # UTF-8 child IO (2026-09-18): without this, child Python on Windows
+        # pipes stdout through cp1252 and ANY non-ASCII print (✓/✗, umlauts)
+        # raises UnicodeEncodeError inside the snippet — the code crashed on
+        # a cosmetic character, not on its logic.
+        import os as _os
+        _env = {**_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree as _kill_tree
         r = await asyncio.create_subprocess_exec(
             _py_cmd,
@@ -61,6 +67,7 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(workspace),
+            env=_env,
             **_spawn_kwargs())
         _job = _ToolJob.confine(r)
         try:

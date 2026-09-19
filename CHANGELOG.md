@@ -1,5 +1,81 @@
 # Changelog
 
+## [1.2.0] - 2026-09-19
+
+Action approval gate, websearch reliability, live code panel, Linux fixes.
+
+### Action Approval
+- Opt in gate (`duo_action_approval_enabled`, toggle in the agentic settings,
+  effective mid run): the coder pauses before run_bash, run_python,
+  install_package, start_background, file writes and git_commit.
+- Buttons: Approve once, Approve and remember (writes per file, commands per
+  exact arguments), Deny, Input only, plus an optional note to the agent.
+  Chat scoped memory, nothing survives a restart.
+- The card appears the moment the tool name streams in and stays pinned at
+  the chat bottom while the call generates. Approving during generation
+  runs the call without a pause and without regenerating; deny aborts the
+  generation immediately. A decision racing the pause setup is consumed
+  instead of deadlocking the run.
+- Card state survives page reloads (pending approval poll) and clears on
+  decision, abort and run end. No silent bypass in until_finished runs;
+  pauses and decisions are logged ([APPROVAL] lines).
+- Decisions carry the pause's id (decision nonce): a stale tab or a late
+  answer for an already resolved pause is dropped instead of silently
+  overwriting the next question.
+- `ask_user` goes through the same card: question, answer input, buttons for
+  sending the answer or proceeding autonomously. In until_finished runs it
+  now really pauses instead of silently throttling; the governor (max
+  questions per 10 min, timeout auto-answer) stays as the runaway guard.
+  A card toggle with a 30s timer auto answers questions while it is on;
+  the toggle is a setting (`ask_user_auto_proceed`) and part of presets.
+
+### Websearch
+- SearXNG default engines `bing,duckduckgo` (google CAPTCHA suspended,
+  wikipedia dead under most tags, github flooded); safesearch on; per
+  hostname result cap.
+- Budget exhaustion stops the run after 2 consecutive hits instead of
+  burning rounds. No result answers carry a reformulation hint.
+
+### UI
+- Generated code streams into the right code panel (tab per file, plain
+  render, throttled, drag resizable) instead of inline under the tool call.
+- Sticky follow for chat and panel: pinned while you sit at the bottom,
+  scrolling up pauses, returning resumes. Panel stream survives reloads.
+- DIFFSTAT blocks start collapsed and show `@@ line N @@`.
+- Tool gen streaming card keyed by tool call index, parallel writes no
+  longer mix arguments.
+
+### Fixes
+- Error cap `duo_max_tool_errors` (12) decays on successful calls.
+- run_python child IO forced to UTF 8, so check and cross marks no longer
+  crash on cp1252.
+- Browser: repeated navigate attempts to a blocked target escalate after
+  the second try.
+- start_hivemind.bat restart: stale PID no longer aborts a successful kill.
+- run_state refs survive round re creation.
+- edit diffs on repeat writes compare against the pre edit content
+  (workspace snapshots re capture when the file changed between rounds).
+- Tool chips report real line counts; a trailing newline no longer adds a
+  phantom line. Pending approval and ask cards pin back to back at the
+  chat end when both are pending.
+
+### Linux
+- Live VRAM via nvidia-smi (was Windows PDH only). The reclaim wait no
+  longer spins its full timeout when no live source exists.
+- `HIVEMIND_GPU_BACKEND` beats a `gpu_backend` key in settings.json.
+- mlock warns once on Linux; Docker needs `--ulimit memlock=-1` because the
+  default 64 MiB limit breaks the model load.
+- Port cleanup no longer falls back to a name based pkill that would kill
+  every llama-server on the host; the /proc scan stays port scoped.
+- run_tests kills the whole test tree on POSIX (`start_new_session` plus
+  `killpg`) instead of orphaning pytest and npm children.
+- start_background commands run under /bin/bash on POSIX; plain `chmod +x`
+  no longer trips the destructive gate there, recursive chmod still does.
+- DLL and device probes are Windows only; Linux skips them, which removes
+  the false `cudaGetDeviceCount=0` abort in CUDA containers.
+- Desktop notifications are a silent no op off Windows.
+- run.py error output no longer dies with EOFError without a TTY.
+
 ## [1.1.5] - 2026-09-17
 
 UI polish and streaming fix.
@@ -652,7 +728,3 @@ installer hardening.
 - pre_explore sub-phases extracted as functions.
 - Fixed along the way: git_commit referenced workspace_lock instead of _workspace_lock
   and crashed with a NameError whenever git was available.
-
-## [1.1.4] - before the release structure
-
-Internal phase before the public repo layout, no changelog discipline.

@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from infra.run_control import (
     _get_abort_event, _step_skip_event, _abort_event,
-    set_user_answer, _pause_events,
+    set_user_answer, _pause_events, get_decision_id,
     request_graceful_stop, _run_abort_registry,
     request_pause_after_chunk, signal_resume, is_pause_requested,
     signal_abort_during_pause, _RESUME_SIGNALS, is_pause_pending,
@@ -60,12 +60,19 @@ async def resume_run(run_id: str, req: Request):
     answer = body.get("answer", "")
     if not answer:
         return JSONResponse({"error": "Field 'answer' is required"}, status_code=400)
+    _d_sent = str(body.get("decision_id", "") or "").strip()
     if run_id not in _pause_events:
         return JSONResponse({"error": "Run not paused or not found"}, status_code=404)
     _gov_cancel_timeout(run_id)
     if _gov_timeout_sent(run_id):
         return JSONResponse({"error": "auto_answer_already_sent"}, status_code=409)
     _gov_clear_throttle_state(run_id)
+    # DECISION-NONCE (2026-09-19): eine Entscheidung fuer eine bereits
+    # beantwortete/abgeloefte Pause wird gedroppt (stale Tab), statt die
+    # naechste Frage zu ueberschreiben.
+    _d_cur = get_decision_id(run_id)
+    if _d_cur and _d_sent and _d_sent != _d_cur:
+        return JSONResponse({"routed": "stale", "run_id": run_id})
     set_user_answer(run_id, answer)
     return {"status": "resumed", "run_id": run_id}
 
@@ -138,6 +145,40 @@ async def approval_pending(run_id: str):
     if not info:
         return {"active": False}
     return {"active": True, **info}
+
+
+@router.post("/approval/decide/{run_id}")
+async def approval_decide(run_id: str, req: Request):
+    """Decision endpoint for the approval card buttons. Routes by state:
+    - pause already active (generation finished, gate waiting) -> resolve it
+    - card staged during generation -> store a pre-decision that the gate
+      consumes when execution reaches the call (no pause at all).
+    Accepts plain "1"/"2"/"3" or "1|user note"."""
+    try:
+        body = await req.json()
+    except ValueError:
+        return JSONResponse({"error": "JSON body expected"}, status_code=400)
+    answer = str(body.get("answer", "") or "").strip()
+    if not answer:
+        return JSONResponse({"error": "Field 'answer' is required"}, status_code=400)
+    _d_sent = str(body.get("decision_id", "") or "").strip()
+    if run_id in _pause_events:
+        _gov_cancel_timeout(run_id)
+        if _gov_timeout_sent(run_id):
+            return JSONResponse({"error": "auto_answer_already_sent"}, status_code=409)
+        _gov_clear_throttle_state(run_id)
+        # DECISION-NONCE (2026-09-19): Mismatch = Entscheidung fuer eine
+        # bereits abgeloefte Pause (stale Tab) — droppen, nicht anwenden.
+        _d_cur = get_decision_id(run_id)
+        if _d_cur and _d_sent and _d_sent != _d_cur:
+            return JSONResponse({"routed": "stale", "run_id": run_id})
+        set_user_answer(run_id, answer)
+        return {"routed": "pause", "run_id": run_id}
+    from tools import runner as _tr
+    _ans, _, _note = answer.partition("|")
+    _tr._approval_pre_decisions[str(run_id)] = {"answer": _ans.strip(), "note": _note.strip()}
+    _tr._pending_approvals.pop(str(run_id), None)
+    return {"routed": "preview", "run_id": run_id}
 
 
 @router.post("/internal/tool/exec")

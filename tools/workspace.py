@@ -20,15 +20,21 @@ class WorkspaceTransaction:
             return
         p = Path(filepath).resolve()
         p_str = str(p)
-        if p_str in self._snapshots:
-            return
         try:
             if p.exists():
-                self._snapshots[p_str] = p.read_text(encoding="utf-8", errors="replace")
+                _cur: str | None = p.read_text(encoding="utf-8", errors="replace")
             else:
-                self._snapshots[p_str] = None
+                _cur = None
         except Exception:
-            pass
+            return
+        if p_str in self._snapshots and self._snapshots[p_str] == _cur:
+            return
+        # RE-CAPTURE (2026-09-19): a second write/edit to the same file in a
+        # later round previously kept the round-1 baseline (for a new file:
+        # None), so its diff showed the whole file as new (+N -0). The
+        # snapshot now always holds the content right before the LATEST
+        # modification; rollback and undo_path restore to that point.
+        self._snapshots[p_str] = _cur
 
     def rollback(self) -> list[str]:
         if not self._active:

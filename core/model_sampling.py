@@ -10,8 +10,8 @@ QWEN36_PROFILE = {
         "min_p": 0.0, "presence_penalty": 1.5, "repetition_penalty": 1.0,
         "preserve_thinking": True, "cache_prompt": True,
     },
-    # Non-Thinking Coding (Coder) — Unsloth Qwen3.6 Agent-Loop-Empfehlung
-    # (docs/models/qwen3.6.md): presence_penalty=1.5 als Anti-Repetition im
+    # Non-thinking coding (coder) — Unsloth Qwen3.6 agent-loop recommendation
+    # (docs/models/qwen3.6.md): presence_penalty=1.5 as anti-repetition in the
     "sampling_thinking_code": {
         "temperature": 0.6, "top_p": 0.95, "top_k": 20,
         "min_p": 0.0, "presence_penalty": 1.5, "repetition_penalty": 1.0,
@@ -24,7 +24,7 @@ QWEN36_PROFILE = {
         "cache_prompt": True,
     },
     # Legacy aliases: thinking=True → sampling_thinking_text (Planner)
-    #                  thinking=False → sampling_text (Coder)
+    #                  thinking=False → sampling_text (coder)
     "thinking":     {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5, "repetition_penalty": 1.0, "preserve_thinking": True, "cache_prompt": True},
     "non_thinking": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 1.5, "repetition_penalty": 1.0, "cache_prompt": True},
 }

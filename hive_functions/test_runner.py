@@ -157,11 +157,17 @@ async def run_tests(
         )
 
     try:
+        # SPAWN-SESSION (2026-09-19): start_new_session makes proc.pid a
+        # process-group leader on POSIX — the killpg() in the timeout path
+        # below then really kills the whole tree (pytest/npm children),
+        # not just the /bin/sh wrapper. Windows keeps taskkill /T.
+        from tools.sandbox import spawn_kwargs as _spawn_kwargs
         proc = await asyncio.create_subprocess_shell(
             cmd,
             cwd=workspace,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            **_spawn_kwargs(),
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -236,11 +242,33 @@ async def run_tests(
                         cwd=workspace,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.STDOUT,
+                        **_spawn_kwargs(),
                     )
                     try:
                         stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=timeout)
                     except asyncio.TimeoutError:
-                        proc2.kill()
+                        # Tree-kill wie oben (2026-09-19): killpg/taskkill
+                        # statt nur der Shell-Wrapper.
+                        if platform.system() == "Windows":
+                            import subprocess as _sp2
+                            try:
+                                _sp2.run(["taskkill", "/F", "/T", "/PID", str(proc2.pid)],
+                                         capture_output=True, timeout=10)
+                            except (OSError, _sp2.SubprocessError):
+                                try:
+                                    proc2.kill()
+                                except ProcessLookupError:
+                                    pass
+                        else:
+                            try:
+                                import os as _os_k2
+                                import signal as _sig2
+                                _os_k2.killpg(proc2.pid, _sig2.SIGKILL)
+                            except (ProcessLookupError, PermissionError, AttributeError):
+                                try:
+                                    proc2.kill()
+                                except ProcessLookupError:
+                                    pass
                         await proc2.communicate()
                         stdout2 = b"TIMEOUT"
                     raw2 = stdout2.decode("utf-8", errors="replace")

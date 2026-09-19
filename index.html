@@ -404,9 +404,11 @@
         </div>
         <div id="approval-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(72,120,192,.25);margin-left:10px;margin-top:2px">
           <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:0 4px;line-height:1.5">
-            The run pauses before everything that changes the project —
-            code/cmd execution, file writes and git commits. Approve once,
-            or remember EXACTLY this call for this chat: writes per file,
+            The run asks before everything that changes the project —
+            code/cmd execution, file writes and git commits. The card
+            appears as soon as the write target is known (while the code
+            still generates), so you decide in parallel. Approve once, or
+            remember EXACTLY this call for this chat: writes per file,
             commands per exact command (anything new asks again — a new
             chat asks again too). Includes an optional message to the
             agent; toggling applies immediately mid-run.
@@ -1866,6 +1868,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-        <script src="/static/app.js?v=20260918-5"></script>
+        <script src="/static/app.js?v=20260919-8"></script>
 </body>
 </html>

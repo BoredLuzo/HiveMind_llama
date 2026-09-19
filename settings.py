@@ -1,5 +1,4 @@
 # HiveMind — Local Multi-Agent AI Coding Assistant
-# Author: Luzo (BoredLuzo) — https://github.com/BoredLuzo
 
 
 from __future__ import annotations
@@ -18,9 +17,9 @@ CUSTOM_PROMPTS_DIR = Path(__file__).parent / "custom_prompts"
 # CODER-TEMP (2026-08-31): higher than for Refiner/Critic — creative coding.
 
 DEFAULT_AGENT_CFG = {
-    # AGENT-DEFAULTS (2026-09-10): qwen3.5:4b(-mtp) als Arbeits-/Subagent-Tier;
-    # duo_coder faehrt den MTP-Build (schnellster 4B durch Speculative Decoding).
-    # Empfehlung fuer starke (langsame) Setup: Coder/Planner auf
+    # AGENT-DEFAULTS (2026-09-10): qwen3.5:4b(-mtp) as the work/subagent tier;
+    # duo_coder runs the MTP build (fastest 4B via speculative decoding).
+    # Recommendation for strong (slow) setups: Coder/Planner on
     # hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact, alternativ
     # qwen3.6:35b-a3b-ud (Unsloth). Kleine Systeme: spark-x2.5:1.7b oder
     # lfm2.5:2.6b als Coder.
@@ -66,7 +65,7 @@ DEFAULT_SETTINGS = {
     "moe_cpu_experts":         {},
     "llama_mlock":             True,
     "gpu_backend":             "",
-    # 0 = aus, 256 = llama.cpp-Empfehlung.
+    # 0 = off, 256 = llama.cpp recommendation.
     "llama_cache_reuse":       256,
     # Prompt-processing chunk size (llama.cpp --ubatch-size). Larger values
     # (512/1024) speed up prefill substantially for MoE models with CPU expert
@@ -92,7 +91,7 @@ DEFAULT_SETTINGS = {
     "duo_agentic_thinking":    False,
     "_thinking_before_chunking": None,  # persisted user-preference before chunking forced thinking ON
     # Explizit in DEFAULT_SETTINGS aufgedeckte Automatik-/Override-Keys
-    # (vorher nur implizite Lese-Fallbacks in den Konsumenten).
+    # (previously only implicit read fallbacks in the consumers).
     "duo_coder_model":          "",
     "duo_critic_model":         "",
     "duo_caps":                 {},
@@ -112,27 +111,27 @@ DEFAULT_SETTINGS = {
     "duo_max_tool_rounds":     64,
     "duo_tool_output_ttl":     3,
     "duo_compress_threshold":  0,
-    # CACHE-FRIENDLY (2026-09-04): Prefix-Cache von llama.cpp schuetzen.
+    # CACHE-FRIENDLY (2026-09-04): protect the llama.cpp prefix cache.
     # LEGACY-REMOVAL (2026-09-09): duo_cache_friendly_ctx entfernt —
-    # Kompression-first ist das einzige Regime.
-    # - duo_partial_compression: nur den alten Teil verdichten, raw Tail
+    # Compression-first is the only regime.
+    # - duo_partial_compression: condense only the old part, keep the raw tail
     #   byte-identisch am Ende behalten (KV-Shift-Reuse). Recommended ON:
-    #   schont den llama.cpp Prefix-Cache und der Raw-Tail bleibt fuer den
-    #   Coder lesbar; Telemetrie-Phase ist abgeschlossen (2026-09-09).
+    #   preserves the llama.cpp prefix cache and the raw tail stays readable
+    #   for the coder; telemetry phase is done (2026-09-09).
     # - duo_compress_threshold > 0 = exaktes Override in absoluten Tokens
     #   (settings.json / Power-User, kein UI-Feld);
     #   0 = auto: Schwelle = duo_compress_auto_floor*ctx (dynamische
-    #   Output-Reserve klemmt jede Tool-Round so, dass prompt+output <= ctx bleibt,
+    #   output reserve clamps every tool round so prompt+output <= ctx holds,
     #   daher kein statischer max_tokens-Abzug noetig).
-    # - duo_compress_model: Light-Modell fuer die Kompressions-Zusammenfassung
-    #   (wenn VRAM ohne Coder-Evict reicht, sonst Fallback auf das Coder-Modell).
-    # - duo_compress_llm_timeout_s: Read-Timeout der Kompressions-LLM (120s war
-    #   fuer den 35B-CPU-MoE zu knapp -> ReadTimeout -> Fallback-Summaries).
-    # - duo_compress_local_only: LLM-Summary komplett ueberspringen und direkt
-    #   den lokalen (instantanen) Fallback-Summary bauen. Fuer Hardware, auf der
-    #   der Summary-Call routinemaessig in den ReadTimeout laeuft (MoE mit
-    #   CPU-Experts, langsames Prefill): dort kostet der LLM-Versuch nur
-    #   Totzeit und der lokale Summary ist zudem cache-freundlicher.
+    # - duo_compress_model: light model for the compression summary
+    #   (if VRAM suffices without evicting the coder, else falls back to the coder model).
+    # - duo_compress_llm_timeout_s: read timeout of the compression LLM (120s was
+    #   too tight for the 35B CPU MoE -> ReadTimeout -> fallback summaries).
+    # - duo_compress_local_only: skip the LLM summary entirely and build the
+    #   local (instant) fallback summary directly. For hardware where the
+    #   summary call routinely runs into the read timeout (MoE with CPU
+    #   experts, slow prefill): there the LLM attempt only costs dead time
+    #   and the local summary is also more cache-friendly.
     "duo_partial_compression":   True,
     "duo_compress_auto_floor":   0.70,
     "duo_compress_overflow_reserve": 1024,
@@ -149,11 +148,11 @@ DEFAULT_SETTINGS = {
     "duo_tree_scout_max_depth": 4,
     "duo_tree_scout_max_files": 200,
     "duo_static_map_chars":    0,   # 0 = Tier-abgeleitet (rich: 8000); >0 = explizites Static-Repo-Map-Char-Budget
-    # REPO-MAP-PIN (2026-09-06): "## Static Repo-Map" in die System-Message legen
+    # REPO-MAP-PIN (2026-09-06): put "## Static Repo-Map" into the system message
     # (byte-stabil = cache-stabil ueber Kompressionen). Deltas/TODO-Konsolidierung
     # siehe core/repomap_pin.py. Baseline (Live 2026-09-06, PacMan/8 Dateien):
-    # Post-Compress-cached war ~6905/7137 (System+Tools) und ist mit Pinning auf
-    # ~8003 gestiegen - Referenzwert, falls ein Change die Prefix-Stabilitaet bricht.
+    # post-compress cached was ~6905/7137 (system+tools) and rose to ~8003 with
+    # pinning - reference value in case a change breaks prefix stability.
     "duo_pin_static_map":      True,
     "duo_coder_explore_chars": 0,
     "duo_parallel_preexplore": False,
@@ -208,7 +207,7 @@ DEFAULT_SETTINGS = {
     "duo_coder_ctx_normal":    None,
     "duo_coder_tool_thinking": False,
     "duo_coder_tool_thinking_auto_mode": "off",
-    # am Output-Token-Limit abgeschnitten (finish_reason=length → DROPPED → Loop),
+    # truncated at the output-token limit (finish_reason=length → DROPPED → loop),
     # Token-Budget gekoppelt: max_chars ≈ budget_tokens * Faktor - Overhead.
     # Sprung; Deckel 3.3 (dokumentierter Realwert).
     "duo_write_chars_per_token": 2.5,
@@ -309,9 +308,9 @@ DEFAULT_SETTINGS = {
     "vision_agent_mode":       "sequential",
     "vision_preprocess_timeout_seconds": 30,
     "vision_preprocess_load_timeout_seconds": 120,
-    # PIPELINE-VISION (2026-08-19): Bilder direkt an multimodale Pipeline-Agenten?
+    # PIPELINE-VISION (2026-08-19): feed images directly to multimodal pipeline agents?
     "pipeline_vision_direct":  False,
-    # auf pipeline_vision_direct (→ {"analyst": True}).
+    # on pipeline_vision_direct (→ {"analyst": True}).
     "pipeline_vision_roles":   {},
     "image_desc_full_pipeline": False,
 
@@ -341,7 +340,7 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # N) SUBAGENT-LITE
     # ════════════════════════════════════════════════════════════════════════
-    # SUBAGENT-LITE (2026-08-24, Option A aus Feasibility-Report): serielles
+    # SUBAGENT-LITE (2026-08-24, option A from the feasibility report): serial
     "subagent_lite_enabled":   True,
     "subagent_lite_model_ladder": ["lfm2.5:2.6b", "qwen3.5:0.8b-ud"],
     "subagent_lite_ctx_default": 8192,
@@ -389,7 +388,7 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     #   {"name": "...", "command": "npx", "args": ["-y", "@playwright/mcp@latest"]}   (stdio)
     #   {"name": "...", "url": "http://localhost:9000/mcp"}                            (streamable HTTP)
-    # als zusaetzliche Tools angeboten.
+    # as additional tools.
     "mcp_servers":             [],
     "soul_evolve_agent": {
         "enabled":     False,
@@ -496,7 +495,7 @@ def _load_settings_from_disk() -> dict:
                 if _ws_val is not None and not str(_ws_val).strip():
                     data[_ws_key] = None
             data.pop("pre_explore_parallel", None)
-            # MIGRATION: duo_test_feedback → neue Split-Toggles (chunk/final)
+    # MIGRATION: duo_test_feedback → new split toggles (chunk/final)
             _legacy_tf = data.get("duo_test_feedback") if "duo_test_feedback" in data else None
             if "duo_test_feedback_chunk" not in data and _legacy_tf is not None:
                 data["duo_test_feedback_chunk"] = bool(_legacy_tf)
@@ -513,7 +512,7 @@ def _load_settings_from_disk() -> dict:
                 data["moe_cpu_experts"] = {}
             for k, v in DEFAULT_SETTINGS.items():
                 data.setdefault(k, v)
-            # Fix: Einzelne Agent-Keys aus DEFAULT_AGENT_CFG mergen.
+    # Fix: merge individual agent keys from DEFAULT_AGENT_CFG.
             _sa = data.setdefault("agents", {})
             for _ak, _av in DEFAULT_AGENT_CFG.items():
                 _sa.setdefault(_ak, _av)

@@ -1,4 +1,4 @@
-"""Tool-Handler (Fassade) — re-exports aus den Submodulen."""
+"""Tool handler facade — re-exports from the submodules."""
 from __future__ import annotations
 
 from ._shared import init_runtime_deps

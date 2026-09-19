@@ -5,6 +5,7 @@ from __future__ import annotations
 
 
 import asyncio
+import contextvars
 import functools
 import logging
 import os
@@ -18,6 +19,39 @@ _browser = None
 _page = None
 _console_msgs: list[str] = []
 _pageerrors: list[str] = []
+
+# RUN-SCOPED blocked-navigation memory (2026-09-18): without this the model
+# retries blocked targets (loopback/private hosts, file:// outside the
+# workspace) with reshuffled paths until the round budget dies (live: 3
+# navigates to the same blocked preview server). The second attempt on the
+# same block escalates hard instead.
+_blocked_navigations: contextvars.ContextVar[dict] = contextvars.ContextVar(
+    "blocked_navigations", default=None)
+
+
+def _check_blocked_repeat(url: str, err: str) -> str | None:
+    """First blocked attempt -> None (normal error). Second attempt on the
+    same block -> escalation telling the model to stop navigating."""
+    from urllib.parse import urlparse as _urlparse
+    try:
+        _host = (_urlparse(str(url)).hostname or str(url)).lower()
+    except ValueError:
+        _host = str(url)[:60]
+    ident = f"{str(err)[:40]}|{_host}"
+    _m = _blocked_navigations.get(None)
+    if _m is None:
+        _m = {}
+        _blocked_navigations.set(_m)
+    _m[ident] = _m.get(ident, 0) + 1
+    if _m[ident] < 2:
+        return None
+    return (
+        f"[browser error] {err} \u2014 attempt #{_m[ident]} on the SAME blocked "
+        "target. STOP using the browser here: this target can never be reached "
+        "(SSRF guard \u2014 only the tool's own file server origin is navigable). "
+        "Do NOT retry navigation, not with other paths or hosts of the same "
+        "server \u2014 continue the task without browser verification."
+    )
 
 _SNAPSHOT_MAX_CHARS = 8000
 
@@ -234,14 +268,16 @@ def _dispatch(args: dict, workspace) -> str:
             # and fetch() work like on a real site. Outside -> guided reject.
             url, _ferr = _plan_file_navigation(url, workspace)
             if _ferr:
-                return f"[browser error] {_ferr}"
+                _esc = _check_blocked_repeat(_orig_url, _ferr)
+                return _esc or f"[browser error] {_ferr}"
             _served_via = url
         else:
             # S-SEC (2026-08-23/25): Scheme-Blockliste + Host-Guard (Metadata/
             # lokales Dev-Testing).
             _gerr = _guard_browser_url(url)
             if _gerr:
-                return f"[browser error] {_gerr}"
+                _esc = _check_blocked_repeat(url, _gerr)
+                return _esc or f"[browser error] {_gerr}"
         _console_msgs.clear()
         _pageerrors.clear()
         resp = page.goto(url, timeout=40000, wait_until="domcontentloaded")

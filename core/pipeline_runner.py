@@ -23,7 +23,7 @@ async def run_pipeline(ctx):
     _pinned_models: set[str] = set()
     _restore_keep_alive = str(ctx.settings.get("smart_preload_keep_alive", "10m"))
 
-    # Korrekt: MAX(GB(seq[i]) + GB(seq[i+1])) = maximaler SIMULTANER Bedarf (aktiv + prefetch).
+    # Correct: MAX(GB(seq[i]) + GB(seq[i+1])) = peak SIMULTANEOUS need (active + prefetch).
     _judge_m = ctx.registry.get("judge", "")
     if _judge_m:
         _pipeline_unique = list(dict.fromkeys(
@@ -158,7 +158,7 @@ async def run_pipeline(ctx):
                 yield await ctx.emit({"type": "token", "content": err})
 
             out = "".join(parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
-            # Trailing Sondertokens abschneiden
+            # Trim trailing special tokens
             for _stop in ("<|im_end|>", "<|endoftext|>", "<|"):
                 if _stop in out:
                     out = out[:out.index(_stop)].strip()
@@ -269,7 +269,7 @@ async def run_pipeline(ctx):
                 parts, t = [], time.time()
                 if "refiner" not in ctx.skip_agents:
                     ctx.schedule_prefetch(ctx.registry_get("refiner"), "analyst", t)
-                # AGENT-THINKING (2026-08-19): Per-Agent-Schalter aus AgentConfig.
+                # AGENT-THINKING (2026-08-19): per-agent switches from AgentConfig.
                 _ag_think = bool(getattr(a, "thinking", False))
                 _ag_budget = int(getattr(a, "thinking_budget", 0) or 0)
                 _ag_no_cache = bool(_analyst_vision and ctx.images)
@@ -498,7 +498,7 @@ async def run_pipeline(ctx):
                 })
 
                 parts, t = [], time.time()
-                # → Ollama evictet Synthesizer → VRAM-Spike (rein/raus/rein).
+                # → ollama evicts the synthesizer → VRAM spike (in/out/in).
                 _is_last_iter = (i == ctx.iterations - 1)
                 if "synthesizer" not in ctx.skip_agents and _is_last_iter:
                     ctx.schedule_prefetch(ctx.registry_get("synthesizer"), "critic", t)
@@ -591,7 +591,7 @@ async def run_pipeline(ctx):
                 except Exception:
                     _vision_agent_out = ""
                 _va_parallel_task = None
-                # Vision-Output als eigene Bubble im Chat anzeigen
+                # Show vision output as its own bubble in the chat
                 if _vision_agent_out:
                     yield await ctx.emit({"type": "agent", "content": "Vision-Agent", "model": _va_model,
                                           "role": "Image analysis (parallel)"})
@@ -741,7 +741,7 @@ async def run_pipeline(ctx):
             ctx.memory.add_to_session("user", ctx.user_input)  # SESSION-ORDER FIX
             ctx.memory.add_to_session("assistant", synth_out)
 
-            # FIX: Peer-Ratings VOR "done" starten
+            # FIX: start peer ratings BEFORE "done"
             run_count = ctx.increment_run_counter()
             asyncio.create_task(run_peer_ratings(
                 run_id      = ctx.run_id,
@@ -773,7 +773,7 @@ async def run_pipeline(ctx):
         asyncio.create_task(_unpin_pipeline_models(ctx, _pinned_models, _restore_keep_alive))
         asyncio.create_task(_refresh_judge_keepalive())
 
-# -- Pipeline-Helfer (aus run_pipeline-Closures extrahiert, mechanisch) -------
+# -- Pipeline helpers (extracted from run_pipeline closures, mechanical) -------
 
 
 async def _pin_pipeline_models(ctx, pinned_models: set) -> None:

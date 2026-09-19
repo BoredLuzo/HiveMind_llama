@@ -42,7 +42,7 @@ from tools.handlers import (
 
 from tools.browser import browser_tool as _browser_tool
 
-# Phase A.3: Read-Guard ContextVar (in server.py als Module-Level definiert)
+# Phase A.3: Read-Guard ContextVar (defined as module level in server.py)
 _files_read_in_run: _contextvars.ContextVar[set] = _contextvars.ContextVar(
     "_files_read_in_run", default=None
 )
@@ -304,6 +304,15 @@ _approval_memory: dict = {}
 # re-ask (live: wrote snake.html, then the continuation asked again).
 _approval_once_paths: dict = {}
 
+# PRE-GENERATION APPROVALS (2026-09-18): the card is staged the moment a
+# gated call's target is recognizable in the streaming arguments — while the
+# model is still generating the content. The decision is stored here (FIFO
+# per run, same "1|note" format) and consumed at execution time, so the
+# question overlaps generation instead of appearing after it.
+_approval_pre_decisions: dict = {}
+
+# one card per run until it is answered/consumed
+_card_staged: dict = {}
 
 def _approval_scope() -> str:
     """chat_id-or-run_id (the same value ask_user keys on)."""
@@ -319,6 +328,118 @@ def _norm_write_path(args: dict) -> str:
         return os.path.normpath(str((args or {}).get("path", ""))).lower()
     except (OSError, TypeError, ValueError):
         return ""
+
+
+async def wait_approval_decision(run_id, name: str, preview: str, emit) -> tuple[str, str]:
+    """PRE-GENERATION WAIT (2026-09-18): called from the generation loop the
+    moment a gated call's NAME is recognized (before any content generates).
+    Pauses the run, shows the card, waits abort-aware for the decision.
+    Returns (decision, note): "once" | "repo" | "deny" | "input"."""
+    import logging as _appr_log
+    _lg = _appr_log.getLogger("hivemind.tools")
+    _lg.warning("[APPROVAL-WAIT] entered run=%r tool=%s", str(run_id), name)
+    scope = str(run_id or "")
+    if not scope:
+        import logging as _empty_log
+        _empty_log.getLogger("hivemind.tools").warning(
+            "[APPROVAL] wait: empty run scope — denying immediately (would loop)")
+        return ("deny", "")
+    _preview = (preview or "").strip() or "(content not generated yet, approval requested before generation)"
+    _lg.warning("[APPROVAL] pre-generation hold run=%s tool=%s (waiting for user decision)", scope, name)
+    _pending_approvals[scope] = {"tool": name, "preview": _preview}
+    try:
+        await emit({"type": "approval_request",
+                    "run_id": scope, "tool": name, "preview": _preview})
+        await emit({"type": "status",
+                    "content": f"Approval needed — {name} is on hold, waiting for your decision…"})
+    except Exception:
+        pass
+    try:
+        from infra.notify import notify_agent_needs_input
+        notify_agent_needs_input(scope, f"Approval needed: {name}")
+    except Exception:
+        pass
+
+    from infra import run_control as _rc
+    question = f"APPROVAL NEEDED: the agent wants to run {name}."
+    await _rc.initiate_pause(scope, question)
+    # ABORT-AWARE WAIT: wake on /abort/{run_id} (browser closed) instead of
+    # sleeping for the full timeout while the run sits disconnected.
+    import asyncio as _aio
+    _pause_ev = _rc._pause_events.get(scope)
+    _abort_ev = _rc._run_abort_registry.get(scope)
+    if _pause_ev is not None and _abort_ev is not None:
+        _wait_t = _aio.ensure_future(_pause_ev.wait())
+        _abort_t = _aio.ensure_future(_abort_ev.wait())
+        _done, _still = await _aio.wait(
+            {_wait_t, _abort_t}, timeout=3600, return_when=_aio.FIRST_COMPLETED)
+        for _t in _still:
+            _t.cancel()
+        _aborted = _abort_t in _done and _wait_t not in _done
+        answer = "" if _aborted else _rc._user_answers.pop(scope, "")
+        _rc.cleanup_pause(scope)
+    else:
+        _aborted = False
+        answer = await _rc.wait_for_resume(scope, timeout_s=3600)
+    _pending_approvals.pop(scope, None)
+    try:
+        await emit({"type": "agent_resumed"})
+    except Exception:
+        pass
+    if _aborted:
+        _lg.warning("[APPROVAL] run aborted during pre-generation hold (browser closed)")
+        return ("deny", "")
+    _note = ""
+    if "|" in str(answer):
+        answer, _note = str(answer).split("|", 1)
+        _note = _note.strip()
+    decision = _parse_approval_answer(answer)
+    _lg.warning("[APPROVAL] pre-generation decision=%s run=%s tool=%s note=%r",
+                decision, scope, name, _note[:80])
+    return (decision, _note)
+
+
+def _approval_active_for(name: str) -> bool:
+    """Settings + tool-set gate shared by staging and the pause path."""
+    try:
+        from core.state import settings as _ws_settings
+        _enabled = bool(_ws_settings.get("duo_action_approval_enabled", False))
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return False
+    return _enabled and name in _APPROVAL_TOOLS
+
+
+# One-shot free pass (2026-09-18): after an approved WRITE the next gated
+# WRITE call skips its pre-generation hold — auto-split continuations and
+# follow-ups on the approved file flow without a second question.
+_approval_free_pass: dict = {}
+
+
+async def stage_approval_card(run_id, name: str, emit) -> None:
+    """Emit the approval card the moment a gated call's NAME is recognized
+    in the generation stream (idempotent per run). The user decides WHILE
+    the content generates; the decision lands in _approval_pre_decisions
+    and the execution-time gate consumes it (or pauses if undecided)."""
+    import logging as _appr_log
+    scope = str(run_id or "")
+    if not scope or _card_staged.get(scope):
+        return
+    if _approval_free_pass.get(scope) == "write" and             name in ("write_file", "edit_file", "write_file_append"):
+        return
+    if _approval_pre_decisions.get(scope):
+        return  # already decided while generating
+    _card_staged[scope] = True
+    _appr_log.getLogger("hivemind.tools").info(
+        "[APPROVAL] card staged run=%s tool=%s (decision during generation)", scope, name)
+    _pending_approvals[scope] = {"tool": name, "preview": "(generating, content streams in the panel)"}
+    try:
+        await emit({"type": "approval_request",
+                    "run_id": scope, "tool": name,
+                    "preview": "(generating, content streams in the panel)"})
+    except Exception:
+        pass
+
+
 
 
 def _approval_preview(args: dict) -> str:
@@ -365,6 +486,50 @@ async def _check_action_approval(name: str, args: dict, workspace):
         return None
     if _repo_approval_granted(workspace, name, args or {}):
         return None
+
+    # PRE-DECISION (2026-09-18): the card was staged during generation and
+    # the user already decided — consume that answer without pausing.
+    _pre = _approval_pre_decisions.get(str(run_id))
+    if _pre is not None and _pre.get("tool") not in (None, name):
+        # stale decision for a DIFFERENT tool (model changed course in the
+        # re-POST) — drop it and ask fresh
+        _approval_pre_decisions.pop(str(run_id), None)
+        _pending_approvals.pop(str(run_id), None)
+        _card_staged.pop(str(run_id), None)
+        _pre = None
+    if _pre is not None:
+        _approval_pre_decisions.pop(str(run_id), None)
+        _pending_approvals.pop(str(run_id), None)
+        _card_staged.pop(str(run_id), None)
+        _ans, _note = _pre.get("answer", ""), _pre.get("note", "")
+        decision = _parse_approval_answer(_ans)
+        _lg.warning("[APPROVAL] pre-decision=%s run=%s tool=%s note=%r",
+                    decision, run_id, name, _note[:80])
+        if decision == "repo":
+            _remember_repo_approval(workspace, name, args or {})
+            if name in ("write_file", "edit_file", "write_file_append"):
+                _approval_free_pass[str(run_id)] = "write"
+            if _note:
+                return ("NOTE", _note)
+            return None
+        if decision == "once":
+            if name in ("write_file", "edit_file", "write_file_append"):
+                _wpp = _workspace_approval_key(workspace) + "::" + _norm_write_path(args)
+                if _wpp:
+                    _approval_once_paths.setdefault(_approval_scope(), set()).add(_wpp)
+                _approval_free_pass[str(run_id)] = "write"
+            if _note:
+                return ("NOTE", _note)
+            return None
+        if decision == "input":
+            return ("INPUT_ONLY", _note or "(empty)")
+        _lg.warning("[APPROVAL] pre-decision=deny run=%s tool=%s", run_id, name)
+        return ("DENY", _tool_error_response(
+            "ACTION_APPROVAL_DENIED",
+            "The user did not approve this call while it was being generated."
+            + (f" User message: {_note}" if _note else "")
+            + " Pick a different approach that does not need " + name + ".",
+            tool=name ))
     # "once" for writes covers the path: continuations of an approved write
     # (auto-split part 2, follow-up edits) must not re-ask.
     _scope = _approval_scope()
@@ -374,25 +539,69 @@ async def _check_action_approval(name: str, args: dict, workspace):
     if (name in ("write_file", "edit_file", "write_file_append")
             and _wpath and _wpath in _approval_once_paths.get(_scope, set())):
         _lg.info("[APPROVAL] skip: %s on %s already approved in this chat", name, _wpath)
+        _pending_approvals.pop(str(run_id), None)
+        _card_staged.pop(str(run_id), None)
         return None
 
     _preview = _approval_preview(args)
     question = f"APPROVAL NEEDED: the agent wants to run {name}."
     _lg.warning("[APPROVAL] pausing run=%s tool=%s (waiting for user decision)", run_id, name)
-    _pending_approvals[run_id] = {"tool": name, "preview": _preview}
+    from infra import run_control as _rc
+    # PAUSE-SETUP RACE FIX (2026-09-19): register the pause BEFORE the card
+    # and _pending_approvals go out. The old order (publish -> initiate_pause)
+    # had a window where a decide POST took the preview route (pre-decision
+    # stored, pending popped) while the gate below waited on a pause event
+    # nobody would ever set: the card re-spawned from the late emit and the
+    # UI poll wiped it seconds later (spawn+fade), with the run stuck until
+    # the watchdog answered.
+    await _rc.initiate_pause(run_id, question)
+    # A decision that slipped in between the pre-decision check above and
+    # the pause setup is consumed here instead of waiting forever.
+    _pre_late = _approval_pre_decisions.pop(str(run_id), None)
+    if _pre_late is not None and _pre_late.get("tool") in (None, name):
+        _rc.cleanup_pause(run_id)
+        _pending_approvals.pop(str(run_id), None)
+        _card_staged.pop(str(run_id), None)
+        _ans_l, _note_l = _pre_late.get("answer", ""), _pre_late.get("note", "")
+        _dec_l = _parse_approval_answer(_ans_l)
+        _lg.warning("[APPROVAL] late pre-decision=%s run=%s tool=%s note=%r",
+                    _dec_l, run_id, name, str(_note_l)[:80])
+        if _dec_l == "repo":
+            _remember_repo_approval(workspace, name, args or {})
+            if name in ("write_file", "edit_file", "write_file_append"):
+                _approval_free_pass[str(run_id)] = "write"
+            return (("NOTE", _note_l) if _note_l else None)
+        if _dec_l == "once":
+            if name in ("write_file", "edit_file", "write_file_append"):
+                _wpp_l = _workspace_approval_key(workspace) + "::" + _norm_write_path(args)
+                if _wpp_l:
+                    _approval_once_paths.setdefault(_approval_scope(), set()).add(_wpp_l)
+                _approval_free_pass[str(run_id)] = "write"
+            return (("NOTE", _note_l) if _note_l else None)
+        if _dec_l == "input":
+            return ("INPUT_ONLY", _note_l or "(empty)")
+        return ("DENY", _tool_error_response(
+            "ACTION_APPROVAL_DENIED",
+            "The user did not approve this call while it was being generated."
+            + (f" User message: {_note_l}" if _note_l else "")
+            + " Pick a different approach that does not need " + name + ".",
+            tool=name ))
+    _decision_id = _rc.get_decision_id(run_id)
+    _pending_approvals[run_id] = {"tool": name, "preview": _preview,
+                                  "decision_id": _decision_id}
+    _card_staged.pop(str(run_id), None)  # the pause re-owns the card lifecycle
     await _safe_emit({"type": "agent_asking", "question": question, "run_id": run_id})
     # Buttons card in the UI — posts the decision (+"|user note") to
     # /api/run/{id}/resume.
     await _safe_emit({"type": "approval_request",
-                      "run_id": run_id, "tool": name, "preview": _preview})
-    await _safe_emit({"type": "status", "content": "Approval needed \u2014 waiting for your decision\u2026"})
+                      "run_id": run_id, "tool": name, "preview": _preview,
+                      "decision_id": _decision_id})
+    await _safe_emit({"type": "status", "content": "Approval needed. Waiting for your decision\u2026"})
     try:
         from infra.notify import notify_agent_needs_input
         notify_agent_needs_input(str(run_id), f"Approval needed: {name}")
     except Exception:
         pass
-    from infra import run_control as _rc
-    await _rc.initiate_pause(run_id, question)
     # ABORT-AWARE WAIT (2026-09-18): when the browser closes mid-pause, the
     # UI posts /abort/{run_id} — the gate must wake on that instead of
     # sleeping up to 3600s while the disconnected run keeps the model
@@ -434,6 +643,8 @@ async def _check_action_approval(name: str, args: dict, workspace):
                 decision, run_id, name, _note[:80], str(answer)[:60])
     if decision == "repo":
         _remember_repo_approval(workspace, name, args or {})
+        if name in ("write_file", "edit_file", "write_file_append"):
+            _approval_free_pass[str(run_id)] = "write"
         if _note:
             return ("NOTE", _note)
         return None
@@ -447,6 +658,7 @@ async def _check_action_approval(name: str, args: dict, workspace):
             if len(_approval_once_paths) > 64:
                 _approval_once_paths.clear()
                 _approval_once_paths[_scope] = {_wpath}
+            _approval_free_pass[str(run_id)] = "write"
         if _note:
             return ("NOTE", _note)
         return None
@@ -479,33 +691,11 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
             _pps_log.getLogger("hivemind.tools").warning(
                 "[PROJECT] Pre-Pause-Save fehlgeschlagen: %s", _pps_err)
 
-    if _gate == "throttled_autonomous":
-        _count = _ask_user_throttled_count.get(0) + 1
-        _ask_user_throttled_count.set(_count)
-        if _count >= 3:
-            return (
-                "[ASK_USER_BLOCKED] You have called ask_user "
-                f"{_count} times while throttled. "
-                "Stop calling this tool and proceed autonomously."
-            )
-        return (
-            "[ASK_USER_THROTTLED] In autonomous mode. "
-            "Make your best attempt. Only escalate after "
-            "2 failed fix attempts."
-        )
-    if _gate == "throttled_retries":
-        _count = _ask_user_throttled_count.get(0) + 1
-        _ask_user_throttled_count.set(_count)
-        if _count >= 3:
-            return (
-                "[ASK_USER_BLOCKED] You have called ask_user "
-                f"{_count} times while throttled. "
-                "Stop calling this tool and proceed autonomously."
-            )
-        return (
-            "[ASK_USER_THROTTLED] Retries not exhausted. "
-            "Attempt fix autonomously first."
-        )
+    # GATE-RETIRED (2026-09-19): the throttled_autonomous / throttled_retries
+    # branches never surfaced a UI (until_finished runs simply never asked —
+    # live: no ask_user card was ever seen). ask_user now behaves 1:1 like
+    # the approval gate: a real pause with a card in the chat. The governor
+    # (max per 10 min + timeout auto-answer) stays as the runaway guard.
 
     run_id = _current_run_id.get()
     if not run_id:
@@ -527,11 +717,14 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
         _exceeded, _ask_count = _gov_check(run_id, _gcfg["max_per_10min"])
         if _exceeded and not _gov_is_throttled(run_id):
             _gov_set_throttle(run_id)
+            _save_project_state()
+            await run_control.initiate_pause(run_id, _gcfg["throttle_message"])
             if _emit:
                 try:
                     await _emit({"type": "agent_throttled", "run_id": run_id,
                                  "question": question, "ask_user_count": _ask_count,
-                                 "message": _gcfg["throttle_message"]})
+                                 "message": _gcfg["throttle_message"],
+                                 "decision_id": run_control.get_decision_id(run_id)})
                     await _emit({"type": "status",
                                  "content": "\u26a0 Agent is asking too many questions \u2014 manual help required"})
                     try:
@@ -541,8 +734,6 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
                         pass
                 except Exception:
                     pass
-            _save_project_state()
-            await run_control.initiate_pause(run_id, _gcfg["throttle_message"])
             _t_answer = await run_control.wait_for_resume(run_id, timeout_s=3600)
             if _emit:
                 try:
@@ -550,10 +741,25 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
                 except Exception:
                     pass
             return _t_answer
+    # PAUSE-FIRST (2026-09-19): register the pause BEFORE publishing the
+    # question (same race as the approval gate — a fast answer must resolve
+    # this pause, not fall into a dead route). The question goes into
+    # _pending_approvals with kind "ask" so the UI poll re-renders the ask
+    # card after a reload, exactly like the approval card.
+    _save_project_state()
+    await run_control.initiate_pause(run_id, question)
+    _ask_decision_id = run_control.get_decision_id(run_id)
+    _pending_approvals[str(run_id)] = {
+        "kind": "ask", "tool": "ask_user",
+        "preview": str(question or "")[:300],
+        "question": str(question or ""),
+        "decision_id": _ask_decision_id,
+    }
     if _emit:
         try:
-            await _emit({"type": "agent_asking", "question": question, "run_id": run_id})
-            await _emit({"type": "status", "content": "Agent asks — waiting for answer\u2026"})
+            await _emit({"type": "agent_asking", "question": question, "run_id": run_id,
+                         "decision_id": _ask_decision_id})
+            await _emit({"type": "status", "content": "Agent asks. Waiting for your answer\u2026"})
             try:
                 from infra.notify import notify_agent_needs_input
                 notify_agent_needs_input(str(run_id or ""), str(question or ""))
@@ -561,8 +767,6 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
                 pass
         except Exception:
             pass
-    _save_project_state()
-    await run_control.initiate_pause(run_id, question)
     if _gcfg and _gcfg["until_finished"] and _gcfg["timeout_s"] > 0:
         await _gov_start_timeout(run_id, _gcfg["timeout_s"], _gcfg["auto_answer"])
     timeout = _pause_timeout_s.get()
@@ -589,6 +793,7 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
     _ask_diag2.getLogger("hivemind.tools").warning(
         "[ASK-DIAG] resumed run_id=%s after %.1fs answer_len=%d",
         run_id, _ask_diag_t.monotonic() - _ask_t0, len(answer or ""))
+    _pending_approvals.pop(str(run_id), None)
     _note_tool_use(
         run_id, "ask_user",
         "paused_timeout"
@@ -647,7 +852,7 @@ _INLINE_TOOL_HANDLER_MAP = {
     "browser": _browser_tool,
 }
 
-# ── 2.9 ZENTRALER ENFORCEMENT-FUNNEL (2026-08-24) ─────────────────────────────
+# ── 2.9 CENTRAL ENFORCEMENT FUNNEL (2026-08-24) ─────────────────────────────
 #
 # Regeln:
 #   - Legitime Intra-Modul-Delegationen (z.B. write_file → edit_file in
@@ -701,13 +906,20 @@ _DESTRUCTIVE_BASH_PATTERNS = [
     r"\btaskkill\b",
     # Permission changes
     r"\bicacls\b",
-    r"\bchmod\s+[-+]\w",
     r"\bcacls\b",
     # Network/registry
     r"\bSet-ItemProperty\b",
     r"\bNew-ItemProperty\b",
     r"\breg\s+(add|delete)\b",
 ]
+# CHMOD-GATE-SCOPE (2026-09-19): 'chmod +x script.sh' ist auf POSIX
+# Routinelast (Container/Builds) — das bare chmod-Pattern hat dort jeden
+# Aufruf durch den Destructive-Gate geschleust. POSIX gated nur rekursives
+# chmod; Windows behält das strenge Pattern (dort ist chmod exotisch).
+if os.name != "nt":
+    _DESTRUCTIVE_BASH_PATTERNS.append(r"\bchmod\s+(-R|--recursive)\b")
+else:
+    _DESTRUCTIVE_BASH_PATTERNS.append(r"\bchmod\s+[-+]\w")
 
 
 def _is_destructive_bash(cmd: str) -> str | None:
@@ -1108,7 +1320,7 @@ async def _run_inline_tool(
                 except Exception:
                     pass
 
-        # ── ProjectState: Build-Steps aufzeichnen ──
+        # ── ProjectState: record build steps ──
         _ps = _current_project_state.get()
         if _ps is not None and name in ("write_file", "edit_file", "run_bash", "run_tests", "task_complete"):
             _path = args.get("path", "")
