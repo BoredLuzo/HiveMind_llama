@@ -573,12 +573,6 @@ fully local alternative to cloud coding tools.
   pre-explore, memory uses 96-dim hash embeddings.
 - Crash-resume across restarts is planned for v2 (in-session resume works).
 
-## Roadmap
-
-- v2: auto-resume after crash, central SSE event type registry.
-- v3: embeddings-based codebase retrieval alongside the static repo-map,
-  Docker sandbox for run_bash, soul engine A/B validation.
-
 ## License
 
 Business Source License 1.1 (see `LICENSE`). Personal, non-commercial use is
