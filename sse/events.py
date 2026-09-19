@@ -102,27 +102,12 @@ def make_tool_call_event(name: str, args: dict) -> dict:
             detail = path
             extra["search_root"] = path
 
-    elif name in ("write_file", "write_file_append"):
+    elif name in ("write_file", "write_file_append", "edit_file"):
+        # METRICS-MOVE (2026-09-19): no line count on the chip anymore —
+        # what a call changed is shown in the result metrics below the chip
+        # (added/removed/changed blocks + the call's token size, added by
+        # the [DIFFSTAT] header in tools/workspace.diff_for).
         label = str(args.get("path", "")).strip()
-        content = str(args.get("content", "") or "")
-        # AUTO-SPLIT continuation (2026-09-19): the follow-up call sends the
-        # bare marker token instead of content (the remainder is appended
-        # server-side). Counting the marker string's lines produced "1 lines"
-        # next to a +234 result diffstat — show what it actually is.
-        _asm = "<AUTO_SPLIT_CONTINUE>"
-        if name == "write_file_append" and content.strip() == _asm:
-            detail = "append continuation (server-side remainder)"
-            extra["auto_split"] = True
-        else:
-            _c = content
-            if name == "write_file_append" and _c.rstrip().endswith(_asm):
-                # part 1 of a split: the trailing marker line is stripped
-                # server-side before writing, don't count it
-                _c = _c.rstrip()[: -len(_asm)]
-            lines = len(_c.splitlines()) if _c.strip() else 0
-            if lines:
-                detail = f"{lines} lines"
-            extra["lines"] = lines
 
     elif name == "replace_lines":
         label = str(args.get("path", "")).strip()

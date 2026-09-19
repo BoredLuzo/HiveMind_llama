@@ -1331,7 +1331,9 @@ async def _run_inline_tool(
         if name in ("write_file", "edit_file", "patch_file", "replace_lines", "write_file_append"):
             if not _result.startswith("[TOOL_ERROR") and args.get("path"):
                 try:
-                    _diff = get_transaction().diff_for(args["path"])
+                    import json as _json_call
+                    _call_chars = len(_json_call.dumps(args, ensure_ascii=False))
+                    _diff = get_transaction().diff_for(args["path"], call_chars=_call_chars)
                     if _diff:
                         _result += "\n\n[Diff — what changed]\n```diff\n" + _diff + "\n```"
                 except Exception:

@@ -6923,15 +6923,18 @@ function handleEvent(d) {
     // metrics instead of the raw +/- diff text ([DIFFSTAT] header from
     // tools/workspace.diff_for). The code itself is readable in the live-code
     // panel — clicking the tool chip opens it with this file.
-    var _dsM = _trOk ? _trFull.match(/^\[DIFFSTAT\] added=(\d+) removed=(\d+) hunks=(\d+) truncated=([01])$/m) : null;
+    var _dsM = _trOk ? _trFull.match(/^\[DIFFSTAT\] added=(\d+) removed=(\d+) hunks=(\d+)(?: tokens=(\d+))? truncated=([01])$/m) : null;
     if (/^(write_file|write_file_append|edit_file|patch_file|replace_lines|edit_ast)$/.test(_trToolName) && _dsM) {
       var _dsAdd = parseInt(_dsM[1], 10), _dsRem = parseInt(_dsM[2], 10),
-          _dsHunks = parseInt(_dsM[3], 10), _dsTrunc = _dsM[4] === '1';
+          _dsHunks = parseInt(_dsM[3], 10),
+          _dsTok = _dsM[4] != null ? parseInt(_dsM[4], 10) : 0,
+          _dsTrunc = _dsM[5] === '1';
       var _trSumDs = document.createElement('summary');
       _trSumDs.innerHTML = '<span class="tr-name">' + (_TOOL_ICONS[_trToolName] || '\uD83D\uDD27') + ' ' + esc(_trToolName) + '</span>'
         + '<span style="color:#22c55e;font-weight:700;margin-left:8px">+' + _dsAdd + '</span>'
         + '<span style="color:#e06060;font-weight:700;margin-left:6px">&minus;' + _dsRem + '</span>'
         + '<span style="color:var(--tx2);margin-left:10px">' + _dsHunks + (_dsHunks === 1 ? ' changed block' : ' changed blocks') + '</span>'
+        + (_dsTok > 0 ? '<span style="color:#60a0e0;margin-left:10px">~' + (_dsTok >= 1000 ? (_dsTok / 1000).toFixed(1) + 'k' : _dsTok) + ' tok</span>' : '')
         + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated)</span>' : '');
       var _dsIdx = _trFull.indexOf('[DIFFSTAT]');
       var _dsBody = _dsIdx >= 0 ? _trFull.slice(_dsIdx).replace(/^\[DIFFSTAT\][^\n]*\n?/, '') : _trFull;

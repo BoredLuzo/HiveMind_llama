@@ -85,7 +85,8 @@ class WorkspaceTransaction:
     def has_changes(self) -> bool:
         return len(self._snapshots) > 0
 
-    def diff_for(self, filepath: str | Path, max_chars: int = 3000) -> str:
+    def diff_for(self, filepath: str | Path, max_chars: int = 3000,
+                 call_chars: int | None = None) -> str:
 
 
         import difflib
@@ -112,7 +113,13 @@ class WorkspaceTransaction:
         _removed = sum(1 for _l in _diff_lines[2:] if _l.startswith("-"))
         _hunks = sum(1 for _l in _diff_lines if _l.startswith("@@"))
         _truncated = 1 if len("\n".join(_diff_lines)) > max_chars else 0
-        _head = f"[DIFFSTAT] added={_added} removed={_removed} hunks={_hunks} truncated={_truncated}"
+        # TOOL-TOKENS (2026-09-19): estimated size of the whole call
+        # (serialized args, ~4 chars per token, same factor the context
+        # estimator uses) — shown in the result metrics instead of a line
+        # count on the chip.
+        _tokens = max(1, round(call_chars / 4)) if call_chars else 0
+        _head = (f"[DIFFSTAT] added={_added} removed={_removed} hunks={_hunks} "
+                 f"tokens={_tokens} truncated={_truncated}")
         _diff = "\n".join(_diff_lines)
         if len(_diff) > max_chars:
             _diff = _diff[:max_chars] + "\n... [diff truncated]"

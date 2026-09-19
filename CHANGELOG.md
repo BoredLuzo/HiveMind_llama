@@ -2,7 +2,7 @@
 
 ## [1.2.1] - 2026-09-19
 
-Pause lifecycle fixes from the first full Linux/Docker E2E pass.
+Pause lifecycle and tool metrics fixes from the first full Linux/Docker E2E pass.
 
 - A resolved pause now leaves the pause registry (`wait_for_resume` cleans
   up after a successful resume, not only on timeout). Until now an
@@ -19,6 +19,11 @@ Pause lifecycle fixes from the first full Linux/Docker E2E pass.
   card: the UI poll reported nothing, nobody could answer, and the run sat
   silent for the full pause timeout before declining. Button answers
   ("1", "approve", "once") now count as confirmation.
+- Tool chips no longer show a line count next to the path. What a call
+  changed lives in the result metrics below (added, removed, changed
+  blocks), now including the call's estimated token size.
+- Auto-split continuation calls no longer report the marker token's line
+  count as if it were content.
 
 ## [1.2.0] - 2026-09-19
 
