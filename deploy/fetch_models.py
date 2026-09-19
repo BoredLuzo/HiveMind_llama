@@ -134,20 +134,21 @@ SPECS: list[dict] = [
             },
         ],
     },
-    # ── Hermes3.6 Genesis V13 "MTP-APEX-Compact" (2026-09-11) ─────────────
+    # ── Hermes3.6 Genesis Final "MTP-APEX-Compact" (2026-09-19) ───────────
     # Coder/Hermes agent: MoE 35B-A3B with MTP head, quantized as
     # "MTP-APEX-Compact" (~18 GB, experts offloaded to CPU). The per-model
-    # config (model_configs/models/hermes3.6_..._v13-mtp-apex-compact.json)
-    # enables the MTP head + CPU experts, so the DOWNLOAD must be the MTP
-    # variant (registers as hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-
-    # apex-compact). Files verified 2026-09-11.
+    # config (model_configs/models/hermes3.6_..._final-mtp-apex-compact.json)
+    # enables the MTP head + CPU experts and carries the author's agentic
+    # coding sampling in the "thinking" profile key (temp 0.6, top_p 0.95,
+    # top_k 20, seed 42, repeat 1.05). Link updated from the V13 repo to
+    # the author's Final re-release.
     {
-        "key": "hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact",
-        "tag": "hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact",
-        "desc": "Hermes3.6 Genesis V13 MTP-APEX-Compact (Coder/Hermes agent, MoE+MTP, ~18GB download)",
-        "repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-V13-GGUF",
+        "key": "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact",
+        "tag": "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact",
+        "desc": "Hermes3.6 Genesis Final MTP-APEX-Compact (Coder/Hermes agent, MoE+MTP, ~18GB download)",
+        "repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-Final-GGUF",
         "file_regex": [
-            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-v13-mtp-apex-compact\.gguf$",
+            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-final-mtp-apex-compact\.gguf$",
         ],
         "mmproj_regex": [
             r"(?i)^mmproj-hermes3\.6-35b-a3b-uncensored-genesis-f16\.gguf$",
