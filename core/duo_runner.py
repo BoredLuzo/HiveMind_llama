@@ -3418,14 +3418,26 @@ async def run_code_duo(ctx):
                     # never blocks (queue never fills up). Pattern like the planner bridge.
                     _coder_event_q: asyncio.Queue = asyncio.Queue(maxsize=20)
                     _coder_real_prompt_tokens: list = [0]
+                    # est of the messages that produced the last real value
+                    # (calibration basis for the chars/4 estimate)
+                    _coder_est_at_real: list = [0]
                     _coder_real_cached_tokens: list = [0]
                     _prev_msg_sig: list = [None]
 
                     async def _coder_emit_fn(event: dict) -> str:
                         if isinstance(event, dict) and event.get("type") == "usage_meta" and event.get("prompt_tokens"):
                             _coder_real_prompt_tokens[0] = int(event["prompt_tokens"])
+                            _coder_est_at_real[0] = _estimate_ctx_tokens(_dtool_msgs)
                             _coder_real_cached_tokens[0] = int(event.get("cached_tokens") or 0)
                         _sse = await ctx.emit(event)
+
+                    def _calib_est_tokens(raw_est: int) -> int:
+                        """REAL-CALIBRATED (2026-09-20): scale the chars/4 estimate
+                        with the last measured prompt_tokens ratio — the raw
+                        estimate ran ~9% under the real prompt on some models."""
+                        if _coder_real_prompt_tokens[0] > 0 and _coder_est_at_real[0] > 0:
+                            return int(_coder_real_prompt_tokens[0] * (raw_est / max(1, _coder_est_at_real[0])))
+                        return raw_est
                         try:
                             _coder_event_q.put_nowait(_sse)
                         except asyncio.QueueFull:
@@ -3506,7 +3518,7 @@ async def run_code_duo(ctx):
                                     )
                             except Exception as _pin_err:
                                 logger.debug("[REPO-MAP-PIN] skipped: %s", _pin_err)
-                        _est_tokens = _estimate_ctx_tokens(_dtool_msgs)
+                        _est_tokens = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
                         # GUARD-REAL-BASIS (2026-08-26): all guard decisions on the
                         # (evict/compress/90%/72%/notices) use the real
                         # prompt_tokens value of the last round, fallback to the
@@ -3645,11 +3657,12 @@ async def run_code_duo(ctx):
                             )
                             if _evicted_n > 0:
                                 _ctx_evictions += int(_evicted_n)
-                                _est_tokens = _estimate_ctx_tokens(_dtool_msgs)
+                                _est_tokens = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
                                 # METER-FIX (2026-08-25): the real value is now
                                 # STALE (pre-eviction). Reset -> naechster
                                 # ctx_meter nutzt den frischen Schaetzer.
                                 _coder_real_prompt_tokens[0] = 0
+                                _coder_est_at_real[0] = 0
                                 logger.warning(
                                     "[CTX-EVICT-EMERGENCY] est_before=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d reason=%s",
                                     _est_before_evict, _evicted_n, int(_est_tokens), int(_dtool_ctx),
@@ -3687,11 +3700,12 @@ async def run_code_duo(ctx):
                                 )
                                 if _evicted_n > 0:
                                     _ctx_evictions += int(_evicted_n)
-                                    _est_tokens = _estimate_ctx_tokens(_dtool_msgs)
+                                    _est_tokens = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
                                     # METER-FIX (2026-08-25): the real value is now
                                     # STALE (pre-eviction). Reset -> naechster
                                     # ctx_meter nutzt den frischen Schaetzer.
                                     _coder_real_prompt_tokens[0] = 0
+                                    _coder_est_at_real[0] = 0
                                     logger.warning(
                                         "[CTX-EVICT-EMERGENCY] est_before=%d evicted=%d est_after=%d ctx=%d target=%d hard_floor=%d real_before=%d reason=%s",
                                         _est_before_evict, _evicted_n, int(_est_tokens), int(_dtool_ctx),
@@ -4085,6 +4099,7 @@ async def run_code_duo(ctx):
                             # forces the next ctx_meter onto the fresh heuristic,
                             # until the next usage_meta delivers the new real value.
                             _coder_real_prompt_tokens[0] = 0
+                            _coder_est_at_real[0] = 0
                             # D1-DIAG: log the result (shrinkage).
                             logger.warning(
                                 "[CTX-COMPRESS] done before=%d after=%d condensed_files=%d mode=%s llm_fails=%d rule_fails=%d rule_used=%s",
@@ -4215,7 +4230,7 @@ async def run_code_duo(ctx):
                         # worst-case factor 1.35). Full budgets stay as long
                         # as there is room; near the compression threshold
                         # the output budget shrinks instead of overflowing.
-                        _est_now = _estimate_ctx_tokens(_dtool_msgs)
+                        _est_now = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
                         _max_tokens_round = _clamp_request_max_tokens(
                             est_tokens=int(_est_now),
                             ctx_tokens=int(_dtool_ctx),
