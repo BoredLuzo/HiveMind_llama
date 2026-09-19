@@ -17,19 +17,21 @@ CUSTOM_PROMPTS_DIR = Path(__file__).parent / "custom_prompts"
 # CODER-TEMP (2026-08-31): higher than for Refiner/Critic — creative coding.
 
 DEFAULT_AGENT_CFG = {
-    # AGENT-DEFAULTS (2026-09-10): qwen3.5:4b(-mtp) as the work/subagent tier;
-    # duo_coder runs the MTP build (fastest 4B via speculative decoding).
-    # Recommendation for strong (slow) setups: Coder/Planner on
-    # hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact, alternativ
-    # qwen3.6:35b-a3b-ud (Unsloth). Kleine Systeme: spark-x2.5:1.7b oder
-    # lfm2.5:2.6b als Coder.
+    # AGENT-DEFAULTS (2026-09-19): the recommended set for new users. The
+    # coder runs Hermes3.6 Genesis FINAL (MTP-APEX-Compact, MoE 35B-A3B) —
+    # its per-model config carries the author's agentic coding sampling,
+    # so the coder temperature stays None and the profile (0.6) wins over
+    # a hardcoded value. Helpers stay on the qwen3.5:4b/2b work tier.
+    # Strong setups (alternative coder): qwen3.6:35b-a3b-ud (Unsloth).
+    # Small systems: duo_coder on spark-x2.5:1.7b / lfm2.5:2.6b, or the
+    # previous default qwen3.5:4b-mtp.
     "analyst":     {"model": "qwen3.5:4b-mtp", "temperature": 0.3, "max_tokens": 1100, "thinking": False, "thinking_budget": 0},
     "refiner":     {"model": "qwen3.5:2b",    "temperature": 0.3, "max_tokens": 400, "thinking": False, "thinking_budget": 0},
     "critic":      {"model": "qwen3.5:4b-mtp", "temperature": 0.2, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
     "synthesizer": {"model": "qwen3.5:4b-mtp", "temperature": 0.2, "max_tokens": 900, "thinking": False, "thinking_budget": 0},
     "direct":      {"model": "qwen3.5:4b-mtp", "temperature": 0.4, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
     "judge":       {"model": "lfm2.5:2.6b",   "temperature": 0.1, "max_tokens": 120, "thinking": False, "thinking_budget": 0},
-    "duo_coder":   {"model": "qwen3.5:4b-mtp", "temperature": 0.8, "max_tokens": 8000, "thinking": False, "thinking_budget": 0},
+    "duo_coder":   {"model": "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact", "temperature": None, "max_tokens": 8000, "thinking": False, "thinking_budget": 0},
     "duo_critic":  {"model": "qwen3.5:4b-mtp", "temperature": 0.15, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
 }
 

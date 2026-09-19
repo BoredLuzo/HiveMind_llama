@@ -304,7 +304,7 @@ fuzzy search):
 | `gemma-4:e4b-it-qat` (UD-Q4_K_XL) | allrounder / vision (+MTP drafter) | ~4.2 GB + 1 GB mmproj |
 | `gemma-4:e2b-it-qat` (UD-Q4_K_XL) | small allrounder / vision (+MTP drafter) | ~2.6 GB + 1 GB mmproj |
 | `qwen3.6:35b-a3b-ud` (UD-Q4_K_XL) | coder / planner (MoE) | ~22 GB |
-| `hermes3.6:...-v13-mtp-apex-compact` | coder / hermes agent (MoE, MTP) | ~18 GB |
+| `hermes3.6:...-final-mtp-apex-compact` | coder / hermes agent default (MoE, MTP) | ~18 GB |
 | `qwen3.5:4b-mtp` (Q4_K_M) | duo coder/planner default (MTP) | ~2.8 GB |
 | `qwen3.5:2b-mtp` (Q4_K_M) | refiner (MTP) | ~1.3 GB |
 | `lfm2.5:2.6b` (Q4_K_M) | subagent / judge (+DSpark drafter) | ~2 GB |
