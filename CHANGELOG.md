@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.2.1] - 2026-09-19
+
+Pause lifecycle fixes from the first full Linux/Docker E2E pass.
+
+- A resolved pause now leaves the pause registry (`wait_for_resume` cleans
+  up after a successful resume, not only on timeout). Until now an
+  answered ask_user left a dead entry in `_pause_events`/`_decision_ids`,
+  so `/approval/decide` kept routing staged-card decisions into the dead
+  pause: the pre-decision was silently lost and the gate paused a second
+  time after generation finished.
+- Decision endpoints (`/api/run/{id}/resume`, `/approval/decide/{id}`)
+  route on a *waiting* pause only (`is_pause_waiting`) instead of bare
+  registry membership, so stale entries can no longer swallow fresh
+  decisions.
+- The destructive gate publishes its pause like the approval gate does
+  (`/approval/pending`, kind "ask"). Previously the gate paused without a
+  card: the UI poll reported nothing, nobody could answer, and the run sat
+  silent for the full pause timeout before declining. Button answers
+  ("1", "approve", "once") now count as confirmation.
+
 ## [1.2.0] - 2026-09-19
 
 Action approval gate, websearch reliability, live code panel, Linux fixes.

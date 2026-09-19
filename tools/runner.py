@@ -1025,7 +1025,21 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
 
     _timeout = _pause_timeout_s.get()
     await run_control.initiate_pause(run_id, _question)
+    # DESTRUCTIVE-CARD (2026-09-19): publish the pause like the approval gate
+    # does (kind "ask"), or /approval/pending reports nothing and neither the
+    # UI nor an automation can answer — the run then sits silent for the full
+    # pause timeout and the action is declined without the user ever seeing
+    # a question. The SSE emit above is best-effort (_tool_loop_emit is unset
+    # in the agentic loop), so the pending poll is the reliable channel.
+    _pending_approvals[str(run_id)] = {
+        "kind": "ask",
+        "tool": name,
+        "preview": str(_details)[:300],
+        "question": str(_question),
+        "decision_id": run_control.get_decision_id(run_id),
+    }
     _answer = await run_control.wait_for_resume(run_id, timeout_s=_timeout)
+    _pending_approvals.pop(str(run_id), None)
 
     if _emit:
         try:
@@ -1034,7 +1048,10 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
             pass
 
     _answer_lower = _answer.strip().lower() if isinstance(_answer, str) else ""
-    if _answer_lower in ("ja", "yes", "y", "ok", "ausfuehren", "execute", "go", "confirm"):
+    # "1"/"approve": the ask card may be answered with the approval buttons
+    # ("approve once") — treat those as confirmation, not as a decline.
+    if _answer_lower in ("ja", "yes", "y", "ok", "ausfuehren", "execute", "go",
+                         "confirm", "1", "approve", "once", "einmal"):
         import logging as _dgl3
         _dgl3.getLogger("hivemind.tools").info(
             "[GATE] Destructive action CONFIRMED: %s — %s | cmd=%s",
