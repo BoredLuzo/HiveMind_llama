@@ -6941,7 +6941,7 @@ function handleEvent(d) {
         + '<span style="color:#22c55e;font-weight:700;margin-left:8px">+' + _dsAdd + '</span>'
         + '<span style="color:#e06060;font-weight:700;margin-left:6px">&minus;' + _dsRem + '</span>'
         + '<span style="color:var(--tx2);margin-left:10px">' + _dsHunks + (_dsHunks === 1 ? ' changed block' : ' changed blocks') + '</span>'
-        + (_dsTok > 0 ? '<span style="color:#60a0e0;margin-left:10px">~' + (_dsTok >= 1000 ? (_dsTok / 1000).toFixed(1) + 'k' : _dsTok) + ' tok</span>' : '')
+        + (_dsTok > 0 ? '<span style="color:#60a0e0;margin-left:10px">~' + (_dsTok >= 1000 ? (_dsTok / 1000).toFixed(1) + 'k' : _dsTok) + ' tok call</span>' : '')
         + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated)</span>' : '')
         + '<span data-cp-pin="1" style="float:right;opacity:.5;cursor:pointer;font-size:11px" title="Pin this exact diff in the code panel">\u2931</span>';
       var _cpPinKey = (_trLastRow && _trLastRow.dataset) ? _trLastRow.dataset.toolPath : '';
@@ -10260,12 +10260,17 @@ function _cpShowFile(path, plain) {
     return;
   }
   var hl = plain ? function(l) { return _escHtml(l); } : _cpSyntaxHighlight;
-  var lines = entry.content.split('\n');
+  _cpRenderPre(body, entry.content, plain);
+  _cpUpdateViewToggle();
+}
+
+function _cpRenderPre(body, text, plain) {
+  var hl = plain ? function(l) { return _escHtml(l); } : _cpSyntaxHighlight;
+  var lines = text.split('\n');
   var lineNums = lines.map(function(l, i) {
     return '<span style="color:var(--tx2);user-select:none;margin-right:14px;display:inline-block;min-width:28px;text-align:right;opacity:.45">'+(i+1)+'</span>'+hl(l);
   }).join('\n');
   body.innerHTML = '<pre>' + lineNums + '</pre>';
-  _cpUpdateViewToggle();
 }
 
 // View toggle lives in the panel header, pinned right next to the close
@@ -10352,13 +10357,27 @@ function _cpAddOrUpdateFile(path, content, op, render) {
     var closeBtn = document.getElementById('code-panel-close');
     var _cpAnchor = (_cpViewToggle && _cpViewToggle.isConnected) ? _cpViewToggle : closeBtn;
     hdr.insertBefore(tab, _cpAnchor);
-    _cpFiles[path] = {content: content, op: opLabel, tab: tab, view: 'file', diffText: '', diffs: [], pinnedCallId: null};
+    _cpFiles[path] = {content: '', op: opLabel, tab: tab, view: 'file', diffText: '', diffs: [], pinnedCallId: null, streamText: ''};
   } else {
-    _cpFiles[path].content = content;
     _cpFiles[path].op = opLabel;
     // Update op badge
     var opBadge = _cpFiles[path].tab.querySelector('.cp-op');
     if (opBadge) { opBadge.className='cp-op '+opLabel; opBadge.textContent=opLabel.toUpperCase(); }
+  }
+  // STREAM/FILE SPLIT (2026-09-19): edit/append streams carry only a
+  // FRAGMENT (the search/replace block, the appended tail) — never treat
+  // it as the file state. A write stream IS the file being born.
+  // Fragment lives in streamText; content holds only disk truth
+  // (final file_change). File view therefore never shows fragment garbage.
+  var _e = _cpFiles[path];
+  var _isFrag = (opLabel === 'edit' || opLabel === 'append');
+  if (_isFrag && render !== undefined) {
+    _e.streamText = content;
+  } else if (_isFrag) {
+    _e.content = content;   // final event: disk truth
+    _e.streamText = '';
+  } else {
+    _e.content = content;   // write: the file is being born (stream or final)
   }
   _cpEnsureViewToggle();
   // Auto-show this file (panel contents update invisibly along).
@@ -10366,8 +10385,18 @@ function _cpAddOrUpdateFile(path, content, op, render) {
   // entirely (throttled streaming tick), undefined → normal highlighted.
   // An active diff view is NOT clobbered by stream ticks or file_change —
   // it stays stable until the next tool_result updates the diff.
-  var _viewDiff = _cpFiles[path].view === 'diff' && _cpFiles[path].diffText;
-  if (render !== false && !_viewDiff) _cpShowFile(path, render === 'plain' ? true : undefined);
+  var _viewDiff = _e.view === 'diff' && _e.diffText;
+  if (render !== false && !_viewDiff) {
+    if (_isFrag && render === 'plain') {
+      // stream tick: render the fragment live without touching file state
+      if (_cpActive === path) {
+        var _sBody = document.getElementById('code-panel-body');
+        if (_sBody) _cpRenderPre(_sBody, _e.streamText, true);
+      }
+    } else {
+      _cpShowFile(path, render === 'plain' ? true : undefined);
+    }
+  }
   else if (_viewDiff && _cpActive === path) _cpUpdateViewToggle();
   // 2026-08-25: the panel no longer opens by itself — manually via
   // the "⌨ Code" button or a click on a write/edit tool chip.
