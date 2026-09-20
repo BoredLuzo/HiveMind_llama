@@ -3553,6 +3553,16 @@ function _tgPanelStream(st) {
   var doRender = (now - _tgPanelLastRender) >= _TG_PANEL_RENDER_MS;
   if (st.path) {
     if (_cpFiles[_TG_PENDING_KEY]) _tgPendingRekey(st.path);
+    // AUTO-FOLLOW (2026-09-20): a streaming write takes over the open
+    // panel — jump to the file and force File view. A pinned diff of an
+    // earlier call suppresses the stream ticks, which made a second write
+    // unwatchable while the first diff stayed pinned.
+    if (document.body.classList.contains('code-panel-open') && _cpFiles[st.path]) {
+      if (_cpActive !== st.path || _cpFiles[st.path].view === 'diff') {
+        _cpFiles[st.path].view = 'file';
+        _cpShowFile(st.path, true);
+      }
+    }
     _cpAddOrUpdateFile(st.path, txt, op, doRender ? 'plain' : false);
   } else {
     // Diagnose (2026-09-18): path extraction failed on real fragment data
@@ -6883,7 +6893,7 @@ function handleEvent(d) {
         var _cpKey = _cpFindEntry(_tcRow.dataset.toolPath);
         if (_cpKey) {
           var entry = _cpFiles[_cpKey];
-          var d = (entry.diffs || []).filter(function(x) { return x.id === _tcRow.dataset.callId; })[0];
+          var d = (entry.diffs || []).filter(function(x) { return x.id === (_tcRow.dataset.cpDiffId || _tcRow.dataset.callId); })[0];
           if (d) { entry.pinnedCallId = d.id; entry.view = 'diff'; }
           _cpShowFile(_cpKey);
         }
@@ -7052,6 +7062,11 @@ function handleEvent(d) {
         _cpEntry.diffText = _dsBody;
         _cpEntry.diffs = _cpEntry.diffs || [];
         _cpEntry.diffs.push({ id: _cpCallId, name: _trToolName, text: _dsBody });
+        // PER-CALL CHIP STAMP (2026-09-20): tool_call events carry no
+        // call_id, so chip clicks could never find THEIR call's diff and
+        // every click showed the pinned/first one. The result row stamps
+        // its diff id here — the click handler reads it back.
+        if (_trLastRow && _trLastRow.dataset) _trLastRow.dataset.cpDiffId = _cpCallId;
         if (_cpEntry.diffs.length > 12) _cpEntry.diffs.shift();
         if (_cpEntry.pinnedCallId && !_cpEntry.diffs.some(function(d) { return d.id === _cpEntry.pinnedCallId; })) _cpEntry.pinnedCallId = null;
         if (_cpActive === _cpEntryKey && _cpEntry.view === 'diff' && !_cpEntry.pinnedCallId) _cpShowFile(_cpEntryKey);
