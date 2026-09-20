@@ -1193,7 +1193,13 @@ async def run_code_duo(ctx):
             ctx.phase_timer.start("soft_planner")
 
             # ── Context Pipeline: explore → planner ─────────────────────────────
-            _exec_ctx = (int(ctx.settings.get("duo_planner_ctx_target", 0) or 0) or resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")) if ctx.duo_config.agentic_mode else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
+            # CTX-PRIORITY (2026-09-20): the coder exec ctx resolves from the
+            # coder's OWN setting (duo_coder_ctx_agentic). It previously read
+            # duo_planner_ctx_target first, so a non-zero planner target (8192)
+            # silently truncated coder prompts to 8k while the server held KV
+            # for the full agentic ctx (live: 7762-token prefills vs 20k
+            # internal count — empty coder rounds).
+            _exec_ctx = resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic") if ctx.duo_config.agentic_mode else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
             try:
                 _over = ((ctx.settings.get("ctx_overrides") or {}).get("roles") or {}).get("duo_coder")
                 logger.info(
@@ -4531,6 +4537,12 @@ async def run_code_duo(ctx):
                                 # the non-empty no-tool path.
                                 _dr_think_only_retries += 1
                                 _coder_no_think = True
+                                logger.warning(
+                                    "[CODER-EMPTY-RAW] round=%d finish=%s content=%r think=%r",
+                                    _dr, _result.get("dr_finish_reason"),
+                                    (_dr_msg.get("content") or "")[:300],
+                                    "".join(_dr_thinking_parts or [])[:300],
+                                )
                                 if _dr_think_only_retries > 2:
                                     _ld_setter(3113); _loop_detected = True
                                     yield await ctx.emit({"type": "status",
@@ -4548,6 +4560,12 @@ async def run_code_duo(ctx):
                             else:
                                 _dr_think_only_retries += 1
                                 _coder_no_think = True
+                                logger.warning(
+                                    "[CODER-EMPTY-RAW] round=%d finish=%s content=%r think=%r",
+                                    _dr, _result.get("dr_finish_reason"),
+                                    (_dr_msg.get("content") or "")[:300],
+                                    "".join(_dr_thinking_parts or [])[:300],
+                                )
                                 if _dr_think_only_retries > 2:
                                     _ld_setter(3113); _loop_detected = True
                                     yield await ctx.emit({"type": "status",
