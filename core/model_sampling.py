@@ -101,6 +101,31 @@ LING3_PROFILE = {
     "non_thinking": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0, "cache_prompt": True},
 }
 
+# MiniCPM5-2B (openbmb, LlamaForCausalLM, XML-style tool calls).
+# Card sampling: temp 1.0, top_p 0.95, min_p 0.0 — llama.cpp's default
+# min_p 0.05 causes repetitive output on this family, min_p MUST stay 0.
+# If output repeats anyway: repetition_penalty 1.05 (card fallback).
+# Card names no top_k → 0 (disabled) keeps the payload faithful.
+MINICPM5_PROFILE = {
+    "sampling_text": {
+        "temperature": 1.0, "top_p": 0.95, "top_k": 0,
+        "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0,
+        "cache_prompt": True,
+    },
+    "sampling_thinking_text": {
+        "temperature": 1.0, "top_p": 0.95, "top_k": 0,
+        "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0,
+        "preserve_thinking": True, "cache_prompt": True,
+    },
+    "sampling_thinking_code": {
+        "temperature": 1.0, "top_p": 0.95, "top_k": 0,
+        "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.05,
+        "cache_prompt": True,
+    },
+    "thinking":     {"temperature": 1.0, "top_p": 0.95, "top_k": 0, "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0, "preserve_thinking": True, "cache_prompt": True},
+    "non_thinking": {"temperature": 1.0, "top_p": 0.95, "top_k": 0, "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0, "cache_prompt": True},
+}
+
 DEFAULT_PROFILE = {
     #   Qwen (offiziell, Agent/Non-Thinking): temp 0.7, top_p 0.8, top_k 20, presence 1.5
     #   Gemma 3 Instruct (offiziell):         temp 1.0, top_p 0.95, top_k 64, presence k.A.
@@ -123,6 +148,7 @@ FAMILY_PROFILES: dict[str, dict] = {
     "lfm2.5":  LFM25_PROFILE,
     "ling-3.0-tiny": LING3_PROFILE,
     "hermes3.6": QWEN36_PROFILE,
+    "minicpm5": MINICPM5_PROFILE,
     # "qwen4.0": QWEN40_PROFILE,
     # "deepseek-v4": DEEPSEEK_PROFILE,
 }

@@ -26,6 +26,9 @@ MODEL_PROFILES: dict[str, dict] = {
     "lfm2.5":      {"thinking": False, "vision": False, "tool_call": True},
     # Ling-3.0-tiny (InclusionAI, 2026-08-19): MoE, Thinking per Default an.
     "ling-3.0-tiny": {"thinking": True, "vision": False, "tool_call": True},
+    # MiniCPM5-2B (openbmb): LlamaForCausalLM, thinking via template
+    # (enable_thinking), XML-style tool calls handled by --jinja.
+    "minicpm5":    {"thinking": True, "vision": False, "tool_call": True},
     # Spark-X2.5 (XHToken, 2026-09): hybrid SWA, 1M ctx, thinking default on,
     # structured <tool_call>/<arg_key> format. Verified live via b10872 smoke test.
     "spark-x2.5":      {"thinking": True, "vision": False, "tool_call": True},

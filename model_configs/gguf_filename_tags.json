@@ -8,5 +8,6 @@
   "hermes3.6-35b-a3b-uncensored-genesis-v13-mtp-apex-compact.gguf": "hermes3.6:35b-a3b-uncensored-genesis-v13-mtp-apex-compact",
   "hermes3.6-35b-a3b-uncensored-genesis-final-mtp-apex-compact.gguf": "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact",
   "lfm2.5-2.6b-q4_k_m.gguf": "lfm2.5:2.6b",
-  "qwen3.5-9b-q4_k_m.gguf": "qwen3.5:9b-mtp"
+  "qwen3.5-9b-q4_k_m.gguf": "qwen3.5:9b-mtp",
+  "minicpm5-2b-q4_k_m.gguf": "minicpm5:2b"
 }

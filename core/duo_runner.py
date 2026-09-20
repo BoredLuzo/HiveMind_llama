@@ -4369,7 +4369,11 @@ async def run_code_duo(ctx):
                         }
                         if _profile.get("seed") is not None:
                             _tool_payload["seed"] = int(_profile["seed"])
-                        if _profile.get("min_p", 0.0) != 0.0:
+                        # MIN-P-EXPLICIT (2026-09-20): min_p 0.0 must SHIP — the
+                        # llama-server API default is 0.05, and dropping a
+                        # declared 0.0 re-enables exactly the repetition filter
+                        # some model cards (MiniCPM5) warn against.
+                        if "min_p" in _profile:
                             _tool_payload["min_p"] = _profile["min_p"]
                         if _profile.get("cache_prompt"):
                             _tool_payload["cache_prompt"] = True
@@ -5755,7 +5759,9 @@ async def run_code_duo(ctx):
                 }
                 if _critic_profile.get("seed") is not None:
                     _critic_plain_payload["seed"] = int(_critic_profile["seed"])
-                if _critic_profile.get("min_p", 0.0) != 0.0:
+                # MIN-P-EXPLICIT (2026-09-20): see the coder payload — a
+                # declared min_p 0.0 must ship (API default is 0.05).
+                if "min_p" in _critic_profile:
                     _critic_plain_payload["min_p"] = _critic_profile["min_p"]
                 if _critic_profile.get("cache_prompt"):
                     _critic_plain_payload["cache_prompt"] = True
