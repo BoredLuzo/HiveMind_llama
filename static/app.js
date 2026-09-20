@@ -7020,6 +7020,11 @@ function handleEvent(d) {
         + (_dsTrunc ? '<span style="color:#f0ad4e;margin-left:10px;font-size:10px">(diff truncated)</span>' : '')
         + '<span data-cp-pin="1" style="float:right;opacity:.5;cursor:pointer;font-size:11px" title="Pin this exact diff in the code panel">\u2931</span>';
       var _cpPinKey = (_trLastRow && _trLastRow.dataset) ? _trLastRow.dataset.toolPath : '';
+      // CALL-ID ORDER FIX (2026-09-20): _cpCallId was read before its
+      // declaration (hoisted undefined) — the ⇱ pin stored undefined and
+      // the panel never pinned to this exact call.
+      _cpCallSeq++;
+      var _cpCallId = (_trLastRow && _trLastRow.dataset && _trLastRow.dataset.callId) || ('cp' + _cpCallSeq);
       var _cpPinId = _cpCallId;
       var _cpPinEl = _trSumDs.querySelector('[data-cp-pin]');
       if (_cpPinEl) _cpPinEl.onclick = function(ev) {
@@ -7038,9 +7043,8 @@ function handleEvent(d) {
       // DIFF-VIEW FEED (2026-09-19): record this file's diff so the code
       // panel's ±Diff view has something to render. Each call keeps its
       // own entry; the summary's ⇱ icon pins the panel to EXACTLY this
-      // call's diff (no pin = latest call wins).
-      _cpCallSeq++;
-      var _cpCallId = (_trLastRow && _trLastRow.dataset && _trLastRow.dataset.callId) || ('cp' + _cpCallSeq);
+      // call's diff (no pin = latest call wins). _cpCallId is computed
+      // above (CALL-ID ORDER FIX).
       var _cpKeyD = (_trLastRow && _trLastRow.dataset) ? _trLastRow.dataset.toolPath : '';
       var _cpEntryKey = _cpKeyD ? _cpFindEntry(_cpKeyD) : null;
       if (_cpEntryKey && _cpFiles[_cpEntryKey]) {
@@ -10339,7 +10343,10 @@ function _cpShowFile(path, plain) {
     return;
   }
   var hl = plain ? function(l) { return _escHtml(l); } : _cpSyntaxHighlight;
-  _cpRenderPre(body, entry.content, plain);
+  // LIVESTREAM FILE VIEW (2026-09-20): while an edit/append is streaming,
+  // disk truth is not in yet (file_change ships after execution) — render
+  // the streamed fragment instead of an empty panel.
+  _cpRenderPre(body, entry.content || entry.streamText || '', plain);
   _cpUpdateViewToggle();
 }
 

@@ -907,6 +907,20 @@ async def _track_file_changes(_dname, _dargs, _dresult, result, file_changes,
                 file_changes[_fc_path] = {"op": "edited", "blocks": _applied, "lines_added": _added, "lines_removed": _removed}
                 await hooks.emit({"type": "file_change", "path": _fc_path,
                                   "op": "edited", "blocks": _applied, "lines_added": _added, "lines_removed": _removed, "content": _fc_content})
+            else:
+                # REPLACED FORMAT (2026-09-20): the v1.2.1 edit_file rework
+                # phrases single-block results as "[edit_file: 'p' replaced
+                # (+N lines)]" — none of the three patterns above matched,
+                # so file_change was never emitted and the panel's File view
+                # stayed empty for the whole run.
+                _rp = re.search(r"\[(?:edit_file|write_file): '[^']+' replaced \(([+-]\d+) lines\)\]", _dresult)
+                if _rp:
+                    _delta = int(_rp.group(1))
+                    _added = max(0, _delta)
+                    _removed = abs(min(0, _delta))
+                    file_changes[_fc_path] = {"op": "edited", "blocks": 1, "lines_added": _added, "lines_removed": _removed}
+                    await hooks.emit({"type": "file_change", "path": _fc_path,
+                                      "op": "edited", "blocks": 1, "lines_added": _added, "lines_removed": _removed, "content": _fc_content})
             if result.last_run_bash_failure:
                 result.changed_since_failure.add(_fc_path)
             if _is_git_repo:
