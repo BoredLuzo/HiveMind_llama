@@ -5077,7 +5077,10 @@ function handleEvent(d) {
       _hbEl.style.cssText = 'color:#e0a030;font-style:italic;font-weight:600';
       document.getElementById('chat').appendChild(_hbEl);
     }
-    _hbEl.textContent = '\u23F3 Processing context\u2026 ' + (d.elapsed || '') + 's';
+    _hbEl.textContent = '\u23F3 Processing context\u2026 ' + (d.elapsed || '') + 's'
+      + (d.prefill ? ' \u00b7 Prefill ' + Math.round((d.prefill.progress || 0) * 100) + '% ('
+        + ((d.prefill.n || 0) >= 1000 ? ((d.prefill.n / 1000).toFixed(1) + 'k') : (d.prefill.n || 0)) + ' tok \u00b7 '
+        + Math.round(d.prefill.tps || 0) + ' tok/s)' : '');
     scrollBtmIfNearBottom(120);
   }
   else if (d.type === 'usage_meta') {

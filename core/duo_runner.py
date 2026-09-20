@@ -207,6 +207,40 @@ def _read_hb_interval(settings: dict | None) -> int:
         return _DUO_HEARTBEAT_DEFAULT
 
 
+def _llama_prefill_progress(port) -> dict | None:
+    """PREFILL-METER (2026-09-20): tail the coder slot's llama-server log for
+    the newest prompt-processing progress line, so the heartbeat can show a
+    real prefill percentage instead of a blind elapsed counter. Long
+    re-prefills (post-compression, ctx reload) grind 10-20 min on Vulkan and
+    looked identical to a hang. Returns None while not prefilling."""
+    if not port:
+        return None
+    try:
+        from pathlib import Path as _Path
+        import re as _re
+        _lp = _Path(__file__).parent.parent / "logs" / f"llama_server_{int(port)}.log"
+        if not _lp.exists():
+            return None
+        with _lp.open("r", encoding="utf-8", errors="replace") as _f:
+            _lines = _f.readlines()[-60:]
+        for _ln in reversed(_lines):
+            if "prompt eval time" in _ln or "        eval time" in _ln:
+                # newest completed task already passed prefill → decode phase
+                return None
+            _m = _re.search(
+                r"prompt processing, n_tokens =\s*(\d+), progress = ([\d.]+),"
+                r" t =\s*[\d.]+ s / ([\d.]+) tokens per second",
+                _ln,
+            )
+            if _m:
+                return {"n": int(_m.group(1)),
+                        "progress": min(1.0, float(_m.group(2))),
+                        "tps": float(_m.group(3))}
+        return None
+    except Exception:
+        return None
+
+
 async def _await_with_hb(
     coro_factory,
     *,
@@ -4358,7 +4392,15 @@ async def run_code_duo(ctx):
                             if time.monotonic() - _hb_last >= _hb_interval:
                                 _hb_total = int(time.monotonic() - _hb_start)
                                 _hb_last = time.monotonic()
-                                yield await ctx.emit({"type": "heartbeat", "elapsed": _hb_total})
+                                # PREFILL-METER (2026-09-20): attach live llama-server
+                                # prefill progress when one is running (post-compress
+                                # re-prefill, ctx reload) so the UI shows percent + rate
+                                # instead of a blind elapsed counter.
+                                _hb_ev = {"type": "heartbeat", "elapsed": _hb_total}
+                                _hb_pf = _llama_prefill_progress(_dport)
+                                if _hb_pf:
+                                    _hb_ev["prefill"] = _hb_pf
+                                yield await ctx.emit(_hb_ev)
                             await asyncio.sleep(0.02)
                         _result = _post_task.result()
                         # _duo_state mutated in-place by AgenticToolLoop — no sync needed
