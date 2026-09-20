@@ -3436,6 +3436,11 @@ async def run_code_duo(ctx):
                             _coder_est_at_real[0] = _estimate_ctx_tokens(_dtool_msgs)
                             _coder_real_cached_tokens[0] = int(event.get("cached_tokens") or 0)
                         _sse = await ctx.emit(event)
+                        try:
+                            _coder_event_q.put_nowait(_sse)
+                        except asyncio.QueueFull:
+                            pass
+                        return _sse
 
                     def _calib_est_tokens(raw_est: int) -> int:
                         """REAL-CALIBRATED (2026-09-20): scale the chars/4 estimate
@@ -3444,11 +3449,6 @@ async def run_code_duo(ctx):
                         if _coder_real_prompt_tokens[0] > 0 and _coder_est_at_real[0] > 0:
                             return int(_coder_real_prompt_tokens[0] * (raw_est / max(1, _coder_est_at_real[0])))
                         return raw_est
-                        try:
-                            _coder_event_q.put_nowait(_sse)
-                        except asyncio.QueueFull:
-                            pass
-                        return _sse
 
                     _tool_exec_hooks = ToolExecHooks(
                         emit=_coder_emit_fn,
