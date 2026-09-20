@@ -4951,9 +4951,15 @@ async def run_code_duo(ctx):
                             )
                             if ctx.duo_config.until_finished:
                                 _READ_ONLY_THRESHOLD *= 2
-                            logger.warning("[LOOP-DETECT] _explore_only_rounds=%d _total_exports=%d _explore_was_partial=%s any_fallback=%s threshold=%d _explore_ctx_len=%d",
-                                           _explore_only_rounds, _total_exports, _explore_was_partial, _any_fallback, _READ_ONLY_THRESHOLD,
-                                           len(_explore_ctx) if _explore_ctx else 0)
+                            # EXPLORE-METER (2026-09-20): this used to log
+                            # "[LOOP-DETECT] _explore_only_rounds=0 ..." on
+                            # WARNING after EVERY read round — looked like a
+                            # loop alarm during perfectly healthy chunked
+                            # reads. Only report once the streak climbs.
+                            if _explore_only_rounds:
+                                logger.warning("[EXPLORE-METER] explore_only_rounds=%d/%d (exports=%d partial=%s fallback=%s)",
+                                               _explore_only_rounds, _READ_ONLY_THRESHOLD,
+                                               _total_exports, _explore_was_partial, _any_fallback)
                             if _explore_only_rounds >= _READ_ONLY_THRESHOLD:
                                 await ctx.emit({"type": "status",
                                     "content": f"⚠ Aborting: {_explore_only_rounds} explore-only rounds without progress."})
