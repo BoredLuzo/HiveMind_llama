@@ -3312,6 +3312,7 @@ async def run_code_duo(ctx):
                                                dtool_opts=_dtool_opts, tool_read_timeout_s=_tool_read_timeout_s,
                                                cached_port=_cached_coder_port, current_port=_dport)
                     _dr_think_only_retries = 0
+                    _zero_activity_nudged = False
                     # NO-THINK-RETRY (2026-09-10): after repeated think-only
                     # rounds, disable template thinking for the next attempt
                     # (chat_template_kwargs enable_thinking=false) so the token
@@ -4572,10 +4573,31 @@ async def run_code_duo(ctx):
                                     # summary and got killed as a 'loop').
                                     # substantial summary counts even without
                                     # own writes (verification-only follow-up runs)
-                                    if (_file_changes and len(_final) >= 80) or len(_final) >= 200:
+                                    # ZERO-ACTIVITY GUARD (2026-09-20): a summary with
+                                    # zero reads AND zero writes is not a conclusion —
+                                    # the model just echoed the briefing (live: Hermes
+                                    # restated "[Plan Briefing - IMPLEMENT THIS]" for 3
+                                    # rounds, the text was accepted as the answer and
+                                    # the run completed without touching a file).
+                                    # Accepting now requires tool activity; a
+                                    # zero-activity summary gets one targeted
+                                    # start-working nudge before the loop abort.
+                                    _any_activity = bool(_file_changes) or bool(_seen_explore_paths)
+                                    if _any_activity and ((_file_changes and len(_final) >= 80) or len(_final) >= 200):
                                         yield await ctx.emit({"type": "status",
                                             "content": "✅ Coder concluded with a final summary — accepting it as the answer."})
                                         break
+                                    if (not _any_activity and not _zero_activity_nudged
+                                            and _dr < _max_tool_rounds - 1):
+                                        _zero_activity_nudged = True
+                                        _dr_think_only_retries = 0
+                                        _dtool_msgs.append({"role": "user", "content": (
+                                            "[ZERO PROGRESS] You replied with text but have not read "
+                                            "or changed any file. Start implementing NOW: read_file the "
+                                            "relevant files, then edit_file the changes. Call "
+                                            "task_complete only once the work is done (or if the task "
+                                            "is genuinely answer-only).")})
+                                        continue
                                     _ld_setter(3089); _loop_detected = True
                                     yield await ctx.emit({"type": "status",
                                         "content": f"⚠ Coder replies with text only, no tool call ({_dr_think_only_retries}x) — loop aborted."})
