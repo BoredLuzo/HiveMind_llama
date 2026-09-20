@@ -5917,6 +5917,9 @@ function handleEvent(d) {
   else if (d.type === 'approval_request') {
     // ACTION-APPROVAL (2026-09-18): buttons instead of typed answers —
     // posts the decision to the existing resume endpoint.
+    // STALE-HEARTBEAT (2026-09-20): the run is PAUSED here — a leftover
+    // "Processing context… Ns" line must not keep implying work.
+    rmEl('status-el');
     _renderApprovalCard(d);
   }
   else if (d.type === 'run_paused_manual') {

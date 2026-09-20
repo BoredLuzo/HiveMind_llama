@@ -3381,7 +3381,14 @@ async def run_code_duo(ctx):
                     # real run_id that the UI uses for pause/resume. Keying the
                     # ask_user pause on chat_id alone left run_id=None -> no pause
                     # event under the UI's run_id -> /resume returned 404.
-                    _run_id_global = ctx.chat_id or ctx.run_id
+                    # APPROVAL-SCOPE FIX (2026-09-20): run_id FIRST. The UI polls
+                    # /approval/pending with the run_id from the run_id event
+                    # (the registered id, e.g. 1789...-hex); keying approvals on
+                    # a persisted chat_id made the poll miss the pending entry,
+                    # wipe the staged card and park the run forever (live:
+                    # edit_file approval pending 15+ min, no card, "Processing
+                    # context 941s").
+                    _run_id_global = ctx.run_id or ctx.chat_id
                     _current_run_id.set(_run_id_global)
                     _pause_timeout_s.set(ctx.duo_config.pause_timeout_s)
                     _web_search_count.set([0])
