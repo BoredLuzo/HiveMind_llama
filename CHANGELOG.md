@@ -1,5 +1,63 @@
 # Changelog
 
+## [1.2.2] - 2026-09-20
+
+Agentic coder pipeline repair: events, context, approvals, code panel.
+
+### Coder core
+- Coder events (tokens, tool chips, results) never reached the browser.
+  The 2026-09-20 estimate calibration edit had cut `_coder_emit_fn` in
+  half, leaving the SSE queue insert as unreachable code: runs worked
+  server-side while the UI sat on an empty bubble with a running
+  "Loading" timer. Function restored.
+- The coder's exec context resolves from `duo_coder_ctx_agentic` again.
+  It previously read the planner target first, so a non-zero planner
+  target (8192) truncated every coder prompt to 8k while the server held
+  KV for the full agentic context: 7762-token prefills against a 20k
+  internal count, empty 32-token answers.
+- Hermes Final sampling back on the model card: seed 42 restored in all
+  profiles, top_p disabled (1.0) in the agent profile.
+- Zero-activity guard: a text-only summary with zero reads and zero
+  writes is no longer accepted as run completion. The model could echo
+  the plan briefing for three rounds and finish as "completed" without
+  touching a file. One targeted start-working nudge is sent first; if it
+  keeps talking, the run aborts as a loop instead of faking completion.
+
+### Approvals
+- Approval and ask_user scope keyed on the persisted chat id while the
+  UI polls with the registered run id. In saved chats the poll missed
+  the pending entry, wiped the staged card, and the run waited forever
+  behind a stale "Processing context" counter. Scope is run id first
+  now; the card handler also clears the stale heartbeat line.
+
+### UI
+- Run journal: every SSE frame is journaled per run and replayable. A
+  page reload or a silently dropped stream no longer detaches the UI
+  from a running run. The frontend reattaches on load and tails the
+  journal when the live stream ends without a done event.
+- Prefill meter: the coder heartbeat shows real llama-server prefill
+  progress (percent, tokens, tok/s), interpolated between the log's
+  batch lines and hidden below 3k tokens. Long post-compression
+  re-prefills stop looking like a hang.
+- Code panel: `file_change` ships again for `replaced` edit results
+  (the v1.2.1 result phrasing matched none of the tracker patterns, so
+  the File view stayed empty for whole runs), the File view shows the
+  streamed text while an edit generates, a newly streaming write takes
+  over the open panel, and every finished chip carries its diff id so a
+  click pins that exact call instead of the first one.
+
+### Tools and models
+- run_bash description warns off shell-written file contents on
+  Windows: no heredocs, `>` redirects write UTF-16, backticks are
+  PowerShell escapes. File content belongs to write_file/edit_file.
+- New model: minicpm5:2b (config, GGUF tag, card sampling temp 1.0,
+  top_p 0.95, min_p 0.0, automap caps). Related fix: a declared
+  min_p 0.0 now ships in coder and critic payloads. The old guards
+  dropped it, re-enabling the server's 0.05 default that model cards
+  explicitly warn against.
+- The explore meter no longer logs a LOOP-DETECT warning on every
+  healthy read round (it reported a streak of 0 at warning level).
+
 ## [1.2.1] - 2026-09-19
 
 Pause lifecycle and tool metrics fixes from the first full Linux/Docker E2E pass.
