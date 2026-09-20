@@ -209,18 +209,23 @@ def _read_hb_interval(settings: dict | None) -> int:
 
 def _llama_prefill_progress(port) -> dict | None:
     """PREFILL-METER (2026-09-20): tail the coder slot's llama-server log for
-    the newest prompt-processing progress line, so the heartbeat can show a
-    real prefill percentage instead of a blind elapsed counter. Long
-    re-prefills (post-compression, ctx reload) grind 10-20 min on Vulkan and
-    looked identical to a hang. Returns None while not prefilling."""
+    the newest prompt-processing progress line and interpolate forward from
+    it (llama.cpp only logs once per 1024-token batch — on a 40 tok/s Vulkan
+    slot that is one line per ~25s, which read raw looked useless). The file
+    mtime gives the line's age, the line itself gives total (n/progress) and
+    rate, so the meter moves smoothly between log flushes. Returns None for
+    small prompts (<3k tokens — they finish before the first log line and
+    the plain elapsed counter is the better UI) and while decoding."""
     if not port:
         return None
     try:
         from pathlib import Path as _Path
         import re as _re
+        import time as _time
         _lp = _Path(__file__).parent.parent / "logs" / f"llama_server_{int(port)}.log"
         if not _lp.exists():
             return None
+        _mtime = _lp.stat().st_mtime
         with _lp.open("r", encoding="utf-8", errors="replace") as _f:
             _lines = _f.readlines()[-60:]
         for _ln in reversed(_lines):
@@ -233,9 +238,23 @@ def _llama_prefill_progress(port) -> dict | None:
                 _ln,
             )
             if _m:
-                return {"n": int(_m.group(1)),
-                        "progress": min(1.0, float(_m.group(2))),
-                        "tps": float(_m.group(3))}
+                _n = int(_m.group(1))
+                _prog = float(_m.group(2))
+                _tps = float(_m.group(3))
+                if _prog <= 0.0 or _prog >= 0.999 or _tps <= 1.0:
+                    return None
+                _total = _n / _prog
+                if _total < 3000:
+                    return None
+                _age = _time.time() - _mtime
+                if _age > 45.0:
+                    # log silent for 45s+ → not actively prefilling
+                    return None
+                _est_n = min(_total, _n + max(0.0, _age) * _tps)
+                return {"n": int(_est_n),
+                        "total": int(_total),
+                        "progress": min(0.995, _est_n / _total),
+                        "tps": _tps}
         return None
     except Exception:
         return None
