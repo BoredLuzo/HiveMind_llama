@@ -37,7 +37,13 @@ import contextvars as _contextvars
 # it alive across uvicorn's own logging reconfiguration.
 class _AccessPollQuietFilter(logging.Filter):
     def filter(self, record):
-        return "/approval/pending/" not in record.getMessage()
+        _m = record.getMessage()
+        if "/approval/pending/" in _m:
+            return False
+        # RUN-JOURNAL tail polls every 2 s while reattached — no signal either
+        if "/run/journal" in _m:
+            return False
+        return True
 
 logging.getLogger("uvicorn.access").addFilter(_AccessPollQuietFilter())
 
@@ -1137,6 +1143,31 @@ async def _maybe_trigger_soul_evolution(run_count: int):
 
 # -- REST Endpoints --------------------------------------------
 
+# RUN-JOURNAL (2026-09-20): SSE frames of recent runs are journaled so the
+# UI can reattach after a page reload or a silently dropped stream
+# connection (GET /run/journal). Frames are the exact "data: ...\n\n"
+# strings that went over the wire; the frontend counts them in delivery
+# order (seq = list index) and fetches only the tail it has not seen.
+_RUN_JOURNAL: dict = {}
+_RUN_JOURNAL_KEEP_S = 1800
+_RUN_JOURNAL_MAX_RUNS = 6
+_RUN_JOURNAL_MAX_FRAMES = 20000
+
+
+def _run_journal_touch(run_id: str) -> dict:
+    reg = _RUN_JOURNAL.get(run_id)
+    if reg is None:
+        reg = {"frames": [], "done": False, "aborted": False, "ts": time.time()}
+        _RUN_JOURNAL[run_id] = reg
+        try:
+            while len(_RUN_JOURNAL) > _RUN_JOURNAL_MAX_RUNS:
+                _oldest = min(_RUN_JOURNAL, key=lambda k: _RUN_JOURNAL[k]["ts"])
+                _RUN_JOURNAL.pop(_oldest, None)
+        except Exception:
+            pass
+    return reg
+
+
 @app.post("/stream")
 async def stream(req: Request):
     body = await req.json()
@@ -1294,11 +1325,40 @@ async def stream(req: Request):
     async def _safe_stream_gen_inner():
         _sse_events = 0
         _saw_done = False
+        _jr_id = ""
+        _jr_reg = None
+        _jr_pending: list = []
         try:
             async for _chunk in _stream_gen:
                 _sse_events += 1
                 if not _saw_done and isinstance(_chunk, str) and '"type": "done"' in _chunk:
                     _saw_done = True
+                    if _jr_reg is not None:
+                        _jr_reg["done"] = True
+                # RUN-JOURNAL: record frames for UI reattach. run_id arrives
+                # as the first frame; anything before it is buffered.
+                try:
+                    if isinstance(_chunk, str) and _chunk:
+                        if _jr_reg is None and not _jr_id and '"type": "run_id"' in _chunk:
+                            try:
+                                _jd = json.loads(_chunk[6:])
+                                if isinstance(_jd, dict) and _jd.get("type") == "run_id":
+                                    _jr_id = str(_jd.get("run_id") or "")
+                                    if _jr_id:
+                                        _jr_reg = _run_journal_touch(_jr_id)
+                                        _jr_reg["frames"].extend(_jr_pending)
+                                        _jr_pending = []
+                            except Exception:
+                                pass
+                        if _jr_reg is not None:
+                            _jr_reg["frames"].append(_chunk)
+                            _jr_reg["ts"] = time.time()
+                            if len(_jr_reg["frames"]) > _RUN_JOURNAL_MAX_FRAMES:
+                                _jr_reg["frames"] = _jr_reg["frames"][-_RUN_JOURNAL_MAX_FRAMES:]
+                        elif not _jr_id:
+                            _jr_pending.append(_chunk)
+                except Exception:
+                    pass
                 yield _chunk
         except BaseException as _se:
             if isinstance(_se, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
@@ -1321,8 +1381,16 @@ async def stream(req: Request):
                     "If a run was active it was parked — send a message to resume.",
                     chat_id, _sse_events,
                 )
+                if _jr_reg is not None:
+                    _jr_reg["aborted"] = True
+                    _jr_reg["done"] = True
+                    _jr_reg["ts"] = time.time()
                 raise
             logger.exception("/stream unhandled error: mode=%s duo_agentic=%s pre_explore=%s", mode, duo_agentic_mode, duo_pre_explore)
+            if _jr_reg is not None:
+                _jr_reg["aborted"] = True
+                _jr_reg["done"] = True
+                _jr_reg["ts"] = time.time()
             _err = f"{type(_se).__name__}: {str(_se)[:160]}"
             yield f"data: {json.dumps({'type': 'status', 'content': '⚠️ Internal stream error — fallback answer sent.'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'error', 'content': _err}, ensure_ascii=False)}\n\n"
@@ -1344,6 +1412,41 @@ async def stream(req: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
     )
+
+@app.get("/run/journal", include_in_schema=False)
+async def run_journal(run_id: str = "", after: int = 0):
+    """RUN-JOURNAL: replay frames of the current/most recent run for UI reattach.
+
+    without run_id -> the most recently active journal; `after` = first frame
+    index the caller already has (0 = full replay)."""
+    try:
+        _now = time.time()
+        for _k in list(_RUN_JOURNAL.keys()):
+            _r = _RUN_JOURNAL[_k]
+            if (_r["done"] or _r["aborted"]) and _now - float(_r["ts"]) > _RUN_JOURNAL_KEEP_S:
+                _RUN_JOURNAL.pop(_k, None)
+        reg = None
+        if run_id:
+            reg = _RUN_JOURNAL.get(run_id)
+        else:
+            for _k, _r in _RUN_JOURNAL.items():
+                if reg is None or float(_r["ts"]) > float(reg["ts"]):
+                    reg = _r
+                    run_id = _k
+        if not reg:
+            return {"active": False}
+        _frames = reg["frames"]
+        return {
+            "active": True,
+            "run_id": run_id,
+            "n": len(_frames),
+            "done": bool(reg["done"]),
+            "aborted": bool(reg["aborted"]),
+            "ts": float(reg["ts"]),
+            "frames": list(_frames[max(0, int(after)):]),
+        }
+    except Exception as e:
+        return JSONResponse({"active": False, "error": str(e)[:200]}, status_code=500)
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():

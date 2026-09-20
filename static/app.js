@@ -4851,17 +4851,19 @@ async function sendMsg() {
     });
     const reader = res.body.getReader();
     const dec = new TextDecoder();
-    let buf = '';
+    S._sseBuf = '';
+    S._sseFrameSeq = 0;
+    S._sawDoneEvent = false;
     while (true) {
       const chunk = await reader.read();
       if (chunk.done) break;
-      buf += dec.decode(chunk.value, {stream:true});
-      const lines = buf.split('\n'); buf = lines.pop();
-      for (let li = 0; li < lines.length; li++) {
-        const line = lines[li];
-        if (line.indexOf('data:') !== 0) continue;
-        try { handleEvent(JSON.parse(line.slice(5))); } catch(e) { console.warn('[SSE] Bad JSON:', line.slice(5,80), e); }
-      }
+      _sseFeedLines(dec.decode(chunk.value, {stream:true}));
+    }
+    // RUN-JOURNAL (2026-09-20): a clean stream end WITHOUT a done event used
+    // to leave the bubble on "⟳ Loading" forever. Reattach via the journal.
+    if (!S._sawDoneEvent && S.currentRunId && !S._journalTailing) {
+      _journalNote('Verbindung verloren - hänge per Run-Journal wieder an ...');
+      _journalStartTail(S.currentRunId);
     }
   } catch(e) {
     if (window._plannerTickInterval) { clearInterval(window._plannerTickInterval); window._plannerTickInterval = null; }
@@ -4979,6 +4981,78 @@ function _appendToolEl(body, el) {
   if (anchor) { anchor.insertAdjacentElement('afterend', el); }
   else { body.appendChild(el); }
 }
+
+// ── RUN-JOURNAL REATTACH (2026-09-20) ─────────────────────────────
+// The /stream response is single-use: a page reload or a silently dropped
+// connection used to detach the UI from a running run forever (bubble stuck
+// on "⟳ Loading" while the backend kept working). The server journals every
+// SSE frame, so frames are replayable by index and the UI can reattach.
+
+function _sseFeedLines(text) {
+  S._sseBuf = (S._sseBuf || '') + text;
+  var _ls = S._sseBuf.split('\n'); S._sseBuf = _ls.pop();
+  for (var li = 0; li < _ls.length; li++) {
+    var _ln = _ls[li];
+    if (_ln.indexOf('data:') !== 0) continue;
+    S._sseFrameSeq = (S._sseFrameSeq || 0) + 1;
+    try { handleEvent(JSON.parse(_ln.slice(5))); } catch(e) { console.warn('[SSE] Bad JSON:', _ln.slice(5,80), e); }
+  }
+}
+
+function _journalNote(txt) {
+  try {
+    var chatEl = document.getElementById('chat');
+    if (!chatEl) return;
+    var d = document.createElement('div');
+    d.className = 'msg status-txt';
+    d.style.cssText = 'color:#b08a40;font-size:10px;border:1px solid rgba(200,160,64,.25);padding:6px 8px;border-radius:4px';
+    d.textContent = '\u26A0 ' + txt;
+    chatEl.appendChild(d);
+    scrollBtmIfNearBottom(120);
+  } catch (e) {}
+}
+
+function _journalStopTail() { S._journalTailing = null; }
+
+function _journalStartTail(runId) {
+  if (!runId || S._journalTailing) return;
+  S._journalTailing = runId;
+  var _iv = setInterval(function() {
+    if (S._journalTailing !== runId) { clearInterval(_iv); return; }
+    fetch('/run/journal?run_id=' + encodeURIComponent(runId) + '&after=' + (S._sseFrameSeq || 0))
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (!j || j.active === false) { _journalStopTail(); return; }
+        if (j.frames && j.frames.length) {
+          for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
+        }
+        if (S._sawDoneEvent || j.done || j.aborted) {
+          _journalStopTail();
+          if (j.aborted && !S._sawDoneEvent) _journalNote('Run wurde unterbrochen (Verbindung/Tab). Sende eine Nachricht zum Fortsetzen.');
+        }
+      })
+      .catch(function() {});
+  }, 2000);
+}
+
+function _journalInitAttach() {
+  if (S.streaming || S._journalTailing) return;
+  fetch('/run/journal')
+    .then(function(r) { return r.json(); })
+    .then(function(j) {
+      if (!j || !j.active || !j.frames || !j.frames.length) return;
+      if (j.done && ((Date.now() / 1000) - (j.ts || 0)) > 300) return;
+      S._sseFrameSeq = 0; S._sseBuf = ''; S._sawDoneEvent = false;
+      _journalNote(j.done ? 'Run-Verlauf wiederhergestellt.' : 'An laufenden Run angehängt.');
+      for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
+      if (!S._sawDoneEvent && !j.done && !j.aborted) _journalStartTail(j.run_id);
+      else if (j.aborted) _journalNote('Run wurde unterbrochen (Verbindung/Tab). Sende eine Nachricht zum Fortsetzen.');
+    })
+    .catch(function() {});
+}
+
+// Reattach shortly after page load (script sits at end of body, #chat exists).
+setTimeout(_journalInitAttach, 1500);
 
 function handleEvent(d) {
   if (d.type === 'run_id') {
@@ -6586,6 +6660,7 @@ function handleEvent(d) {
     loadMemory();
   }
   else if (d.type === 'done') {
+    S._sawDoneEvent = true;
     _cleanupLoadTimers();
     _perfOnDone(d);
     setPauseBtnState('idle');
