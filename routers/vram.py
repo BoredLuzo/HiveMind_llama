@@ -144,6 +144,26 @@ async def vram_status(req: Request):
             biggest = max(non_judge)
             solo_mode = (biggest + judge_gb > budget_eff)
 
+    # ORPHAN-DETECT (2026-09-20): llama-server processes holding no VRAM
+    # model (zombie after a restart — mmap RAM only, no port) are invisible
+    # to the models list but still eat RAM/CPU. The Force Kill button shows
+    # whenever a llama-server process exists without a matching loaded slot.
+    _llama_procs = -1
+    try:
+        import subprocess as _sp
+        if os.name == "nt":
+            _r = _sp.run(["tasklist", "/FI", "IMAGENAME eq llama-server.exe"],
+                         capture_output=True, text=True, timeout=8,
+                         encoding="utf-8", errors="replace")
+            _llama_procs = sum(1 for _l in _r.stdout.splitlines()
+                               if "llama-server.exe" in _l)
+        else:
+            _r = _sp.run(["pgrep", "-c", "-f", "llama-server"],
+                         capture_output=True, text=True, timeout=8)
+            _llama_procs = int((_r.stdout or "0").strip() or 0)
+    except Exception:
+        _llama_procs = -1
+
     payload = {
         "models": models,
         "used_gb": round(used_gb, 2),
@@ -153,9 +173,11 @@ async def vram_status(req: Request):
         "loaded_agents": loaded_agents,
         "solo_mode": solo_mode,
         "judge_gb": judge_gb,
+        "llama_procs": _llama_procs,
     }
 
-    _etag_src = f"{[m['name'] for m in models]}:{round(used_gb, 1)}:{round(budget_gb, 2)}"
+    _etag_src = (f"{[m['name'] for m in models]}:{round(used_gb, 1)}:"
+                 f"{round(budget_gb, 2)}:{_llama_procs}")
     etag = '"' + _hashlib.md5(_etag_src.encode()).hexdigest()[:12] + '"'
     _vram_status_cache["ts"] = time.time()
     _vram_status_cache["payload"] = payload

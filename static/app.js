@@ -9854,11 +9854,15 @@ async function refreshVram() {
     if (listEl) listEl.innerHTML = rows;
 
     // force kill button: show when the VRAM bar is >10% but no models are listed
-    // (= suspected orphan process — e.g. after a server restart)
+    // (= suspected orphan process — e.g. after a server restart), OR whenever a
+    // llama-server process runs without a matching loaded slot (zombie with
+    // mmap RAM only, invisible to the VRAM list).
     var fkBtn = document.getElementById('force-kill-btn');
     if (fkBtn) {
-      var hasOrphan = (data.pct > 10 && !models.length);
+      var _procs = (data.llama_procs != null) ? data.llama_procs : -1;
+      var hasOrphan = (data.pct > 10 && !models.length) || (_procs > models.length);
       fkBtn.style.display = hasOrphan ? '' : 'none';
+      fkBtn.title = _procs >= 0 ? (data.llama_procs + ' llama-server process(es), ' + models.length + ' loaded slot(s)') : fkBtn.title;
     }
 
   } catch(e) {
@@ -9905,7 +9909,7 @@ async function unloadAllModels() {
     var data   = await fetch('/vram/status').then(function(r) { return r.json(); });
     var models = (data.models||[]).map(function(m) { return m.name; });
     if (!models.length) {
-      // no models detected but VRAM full → offer force kill
+      // no models detected but llama processes exist → offer force kill
       var fk = document.getElementById('force-kill-btn');
       if (fk) fk.style.display = '';
       showStatus('No models detected. Use \u26a0 Force Kill if VRAM is full.');
