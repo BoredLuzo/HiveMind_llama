@@ -194,11 +194,30 @@ def derive_step_title(raw: str, max_len: int = 110) -> str:
         return (s[:max_len] + "…") if len(s) > max_len else s
     file_part = m.group("file").strip().rstrip(".,;")
     intent = ""
+    fallback_intent = ""
+    # INTENT-PRIORITY (2026-09-21): known keys first; then the FIRST unknown
+    # non-risk segment. Planners invent their own verbs ("modify:", "update:")
+    # — the fixed whitelist stamped five identical "Implement changes to
+    # index.html" titles over five distinct steps (live: FPS-optimization
+    # plan with "| modify: canvas resolution …" lines). risk is last resort.
     for part in (m.group("rest") or "").split("|"):
         k, _, v = part.partition(":")
-        if k.strip().lower() in _STEP_INTENT_KEYS and v.strip():
-            intent = v.strip()
+        v = v.strip()
+        if not v:
+            continue
+        if k.strip().lower() in _STEP_INTENT_KEYS:
+            intent = v
             break
+        if not fallback_intent and k.strip().lower() != "risk":
+            fallback_intent = v
+    if not intent:
+        intent = fallback_intent
+    if not intent:
+        for part in (m.group("rest") or "").split("|"):
+            k, _, v = part.partition(":")
+            if k.strip().lower() == "risk" and v.strip():
+                intent = v.strip()
+                break
     if file_part and intent:
         title = f"{file_part}: {intent}"
     elif file_part:

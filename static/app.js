@@ -3265,15 +3265,29 @@ function _planStepDisplay(stepText) {
   var m = s.match(/^\s*(?:\d+[.)]\s*)?file:\s*([^|]+?)\s*(?:\|(.*))?$/);
   if (!m) return _mdInlinePlan(s);
   var file = m[1].trim().replace(/[.,;]+$/, '');
+  // INTENT-PRIORITY (2026-09-21): known keys first; then the FIRST unknown
+  // non-risk segment ("modify: canvas resolution …" — MiniCPM/Qwen planners
+  // invent their own verbs). risk is the last resort.
   var intent = '';
-  var keys = ['touch', 'decision', 'read', 'fix', 'change', 'action', 'implement'];
+  var fallbackIntent = '';
+  var keys = ['touch', 'decision', 'modify', 'read', 'fix', 'change', 'action', 'implement'];
   var parts = (m[2] || '').split('|');
   for (var i = 0; i < parts.length; i++) {
     var idx = parts[i].indexOf(':');
     if (idx < 0) continue;
     var k = parts[i].slice(0, idx).trim().toLowerCase();
     var v = parts[i].slice(idx + 1).trim();
-    if (keys.indexOf(k) >= 0 && v) { intent = v; break; }
+    if (!v) continue;
+    if (keys.indexOf(k) >= 0) { intent = v; break; }
+    if (!fallbackIntent && k !== 'risk') fallbackIntent = v;
+  }
+  if (!intent) intent = fallbackIntent;
+  if (!intent) {
+    for (var i = 0; i < parts.length; i++) {
+      var idx = parts[i].indexOf(':');
+      if (idx < 0) continue;
+      if (parts[i].slice(0, idx).trim().toLowerCase() === 'risk') { intent = parts[i].slice(idx + 1).trim(); break; }
+    }
   }
   var title = (file && intent) ? (file + ': ' + intent)
             : file ? ('Implement changes to ' + file)
