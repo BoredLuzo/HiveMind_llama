@@ -126,6 +126,29 @@ MINICPM5_PROFILE = {
     "non_thinking": {"temperature": 1.0, "top_p": 0.95, "top_k": 0, "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0, "cache_prompt": True},
 }
 
+# Gemma 4 family (Google official): temp 1.0, top_p 0.95, top_k 64.
+# Applies to the IT quants and the uncensored fine-tunes alike. --jinja
+# is required per card; vision needs the matching mmproj file.
+GEMMA4_PROFILE = {
+    "sampling_text": {
+        "temperature": 1.0, "top_p": 0.95, "top_k": 64,
+        "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0,
+        "cache_prompt": True,
+    },
+    "sampling_thinking_text": {
+        "temperature": 1.0, "top_p": 0.95, "top_k": 64,
+        "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0,
+        "cache_prompt": True,
+    },
+    "sampling_thinking_code": {
+        "temperature": 1.0, "top_p": 0.95, "top_k": 64,
+        "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.05,
+        "cache_prompt": True,
+    },
+    "thinking":     {"temperature": 1.0, "top_p": 0.95, "top_k": 64, "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0, "cache_prompt": True},
+    "non_thinking": {"temperature": 1.0, "top_p": 0.95, "top_k": 64, "min_p": 0.0, "presence_penalty": 0.0, "repetition_penalty": 1.0, "cache_prompt": True},
+}
+
 DEFAULT_PROFILE = {
     #   Qwen (offiziell, Agent/Non-Thinking): temp 0.7, top_p 0.8, top_k 20, presence 1.5
     #   Gemma 3 Instruct (offiziell):         temp 1.0, top_p 0.95, top_k 64, presence k.A.
@@ -149,6 +172,7 @@ FAMILY_PROFILES: dict[str, dict] = {
     "ling-3.0-tiny": LING3_PROFILE,
     "hermes3.6": QWEN36_PROFILE,
     "minicpm5": MINICPM5_PROFILE,
+    "gemma-4": GEMMA4_PROFILE,
     # "qwen4.0": QWEN40_PROFILE,
     # "deepseek-v4": DEEPSEEK_PROFILE,
 }

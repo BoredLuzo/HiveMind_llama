@@ -1,0 +1,22 @@
+{
+  "model": "gemma-4:e4b-uncensored-hauhaucs-aggressive",
+  "capabilities": {
+    "thinking": false,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 8192,
+  "num_ctx_analyst": null,
+  "num_ctx_duo_coder": null,
+  "num_ctx_vision": null,
+  "chat_template": null,
+  "jinja": true,
+  "reasoning": null,
+  "distilled": false,
+  "moe_cpu_experts": 0,
+  "mtp": false,
+  "gpu_layers": 99,
+  "mmproj_filename": null,
+  "vram_gb_override": 4.5
+}
