@@ -3479,6 +3479,12 @@ var _tgCards = {};
 var _tgPanelLastRender = 0;
 var _TG_PANEL_RENDER_MS = 120;
 var _TG_PENDING_KEY = '\u0000pending-write';   // panel tab key until the path parses
+// Stream-follow state (2026-09-21): which file the panel auto-follows, the
+// last tick time per streaming file (sticky switch, no two-file yoyo), and
+// the file a live stream currently feeds (for the panel-open jump).
+var _tgFollowKey = null;
+var _tgFollowTick = {};
+var _tgLivePath = null;
 // Sticky follow (2026-09-18): while the user is at the panel bottom, the
 // stream scrolls along; scrolling up pauses it, returning to the bottom
 // resumes it. Tracked by a scroll listener, not per-render heuristics —
@@ -3522,18 +3528,30 @@ function _tgUnescape(s) {
   } catch(e) { return s; }
 }
 
-function _tgExtractField(buf, field) {
-  // Value of "field": "..." from a possibly-incomplete args JSON. The value
-  // runs to the buffer end (stream open) or to the closing quote.
-  var m = buf.match(new RegExp('"' + field + '"\\s*:\\s*"'));
+function _tgFieldSpan(buf, field, fromIdx) {
+  // Position span of a JSON string field in a possibly-incomplete args
+  // buffer: {start, end, value}. end === null while the string is still
+  // streaming (no closing quote yet). fromIdx: search after this index —
+  // lets new_text skip everything the old_text value occupied.
+  var at = fromIdx || 0;
+  var m = buf.slice(at).match(new RegExp('"' + field + '"\\s*:\\s*"'));
   if (!m) return null;
-  var rest = buf.slice(m.index + m[0].length);
-  var end = -1;
+  var start = at + m.index + m[0].length;
+  var rest = buf.slice(start);
   for (var i = 0; i < rest.length; i++) {
     if (rest[i] === '\\') { i++; continue; }
-    if (rest[i] === '"') { end = i; break; }
+    if (rest[i] === '"') {
+      return { start: start, end: start + i + 1, value: _tgUnescape(rest.slice(0, i)) };
+    }
   }
-  return _tgUnescape(end >= 0 ? rest.slice(0, end) : rest);
+  return { start: start, end: null, value: _tgUnescape(rest) };
+}
+
+function _tgExtractField(buf, field, fromIdx) {
+  // Value of "field": "..." from a possibly-incomplete args JSON. The value
+  // runs to the buffer end (stream open) or to the closing quote.
+  var _sp = _tgFieldSpan(buf, field, fromIdx);
+  return _sp ? _sp.value : null;
 }
 
 function _tgPanelStream(st) {
@@ -3544,25 +3562,51 @@ function _tgPanelStream(st) {
   // renders plain + throttled while streaming; the file_change event after
   // execution replaces it with the real file.
   var field = (st.tool === 'edit_file') ? 'new_text' : 'content';
-  var txt = _tgExtractField(st.buf, field);
+  // NEW_TEXT AFTER OLD_TEXT (2026-09-20): edit_file streams path, old_text,
+  // new_text in order. An old_text body that itself contains the literal
+  // `"new_text": "` (code that edits code) made the naive first-match
+  // extractor lock onto the wrong position forever. Search for new_text
+  // only AFTER the old_text value ends.
+  var txt = null;
+  var _otInfo = null;
+  if (st.tool === 'edit_file') {
+    _otInfo = _tgFieldSpan(st.buf, 'old_text');
+    var _ntFrom = (_otInfo && _otInfo.end != null) ? _otInfo.end : 0;
+    var _nt = _tgFieldSpan(st.buf, 'new_text', _ntFrom);
+    if (_nt) {
+      // started = closed, or streaming with actual content. An open span
+      // with an empty value means new_text has not really begun (pure
+      // deletions close the span with an empty value and render as such).
+      if (_nt.end != null || _nt.value !== '') txt = _nt.value;
+    }
+  } else {
+    txt = _tgExtractField(st.buf, field);
+  }
+  // OLD_TEXT DEAD-AIR (2026-09-20): while new_text has not started, the
+  // panel sat frozen on its previous content for the whole old_text stream
+  // (often minutes at local speeds) — the "inconsistent streaming" feel.
+  // Show the matching progress instead.
+  if (txt == null && st.tool === 'edit_file' && _otInfo && _otInfo.value != null) {
+    var _otTail = _otInfo.value;
+    if (_otTail.length > 600) _otTail = '\u2026' + _otTail.slice(-600);
+    txt = '\u23F3 edit_file: old_text gefunden (' + _otInfo.value.length
+        + ' Zeichen) \u2014 neuer Text folgt\u2026\n\n' + _otTail;
+  }
   if (txt == null) return;
   var op = (st.tool === 'edit_file') ? 'edit' : (st.tool === 'write_file_append' ? 'append' : 'write');
   _cpEnsureFollowListener();
   var body = document.getElementById('code-panel-body');
   var now = Date.now();
   var doRender = (now - _tgPanelLastRender) >= _TG_PANEL_RENDER_MS;
+  // FOLLOW KEY: the file this card currently streams into (real path, or
+  // the pending tab until the path parses out of the buffer).
+  var _fkey = st.path || ((_cpFiles[_TG_PENDING_KEY] || st.buf.length > 0) ? _TG_PENDING_KEY : '');
+  if (st.path && _cpFiles[_TG_PENDING_KEY]) _tgPendingRekey(st.path);
+  if (_fkey) _tgFollowTick[_fkey] = now;
+  st._ticks = (st._ticks || 0) + 1;
+  // ENTRY FIRST (2026-09-21): register the file before the follow switch —
+  // a first tick must be able to create AND show the tab in one pass.
   if (st.path) {
-    if (_cpFiles[_TG_PENDING_KEY]) _tgPendingRekey(st.path);
-    // AUTO-FOLLOW (2026-09-20): a streaming write takes over the open
-    // panel — jump to the file and force File view. A pinned diff of an
-    // earlier call suppresses the stream ticks, which made a second write
-    // unwatchable while the first diff stayed pinned.
-    if (document.body.classList.contains('code-panel-open') && _cpFiles[st.path]) {
-      if (_cpActive !== st.path || _cpFiles[st.path].view === 'diff') {
-        _cpFiles[st.path].view = 'file';
-        _cpShowFile(st.path, true);
-      }
-    }
     _cpAddOrUpdateFile(st.path, txt, op, doRender ? 'plain' : false);
   } else {
     // Diagnose (2026-09-18): path extraction failed on real fragment data
@@ -3577,6 +3621,23 @@ function _tgPanelStream(st) {
       var pn = _cpFiles[_TG_PENDING_KEY].tab.querySelector('.cp-name');
       if (pn) pn.textContent = 'streaming\u2026';
     }
+  }
+  // AUTO-FOLLOW (2026-09-20): a streaming write takes over the open panel —
+  // jump to the file and force File view. A pinned diff of an earlier call
+  // suppresses the stream ticks, which made a second write unwatchable.
+  // STICKY (2026-09-21): the FIRST tick of a new call takes over (that is
+  // the "second write" the user wants to watch); interleaved ticks of older
+  // cards only switch back when the followed stream went quiet for 2.5s.
+  if (document.body.classList.contains('code-panel-open') && _fkey && _cpFiles[_fkey]) {
+    if (_tgFollowKey !== _fkey && (st._ticks === 1 || !_tgFollowKey
+        || now - (_tgFollowTick[_tgFollowKey] || 0) > 2500)) {
+      _tgFollowKey = _fkey;
+    }
+    if (_tgFollowKey === _fkey && (_cpActive !== _fkey || _cpFiles[_fkey].view === 'diff')) {
+      _cpFiles[_fkey].view = 'file';
+      _cpShowFile(_fkey, true);
+    }
+    _tgLivePath = _tgFollowKey;
   }
   if (doRender) _tgPanelLastRender = now;
   // follow the stream while the user sits at the bottom
@@ -3613,8 +3674,13 @@ function _tgPanelFlush() {
   for (var k in _tgCards) {
     var st = _tgCards[k];
     if (!st) continue;
-    var field = (st.tool === 'edit_file') ? 'new_text' : 'content';
-    var txt = _tgExtractField(st.buf, field);
+    var txt;
+    if (st.tool === 'edit_file') {
+      var _otE = _tgFieldSpan(st.buf, 'old_text');
+      txt = _tgExtractField(st.buf, 'new_text', (_otE && _otE.end != null) ? _otE.end : 0);
+    } else {
+      txt = _tgExtractField(st.buf, 'content');
+    }
     if (txt == null) continue;
     var op = (st.tool === 'edit_file') ? 'edit' : (st.tool === 'write_file_append' ? 'append' : 'write');
     if (st.path) {
@@ -3714,6 +3780,9 @@ function _toolGenDone() {
     if (st && st.row && st.row.parentNode) st.row.parentNode.removeChild(st.row);
     delete _tgCards[k];
   }
+  _tgFollowKey = null;
+  _tgLivePath = null;
+  _tgFollowTick = {};
 }
 
 function _flushTokenQueueSync() {
@@ -10290,12 +10359,22 @@ async function saveVramBudget() {
 // ── Live Code Panel ──────────────────────────────────────────────────────────
 var _cpFiles = {};          // path → {content, op, tab, pre}
 var _cpActive = null;       // currently shown path
+var _cpLastShowAt = 0;      // ms timestamp of the last explicit _cpShowFile
 
 function toggleCodePanel(forceOpen) {
   var open = forceOpen !== undefined ? forceOpen : !document.body.classList.contains('code-panel-open');
+  var _wasOpen = document.body.classList.contains('code-panel-open');
   document.body.classList.toggle('code-panel-open', open);
   var btn = document.getElementById('h-code-btn');
   if (btn) btn.classList.toggle('active', open);
+  // LIVE-JUMP (2026-09-21): opening the panel while a write/edit streams
+  // jumps straight to the streaming file. Chip clicks are exempt — they
+  // call _cpShowFile right before opening (fresh timestamp).
+  if (open && !_wasOpen && _tgLivePath && _cpFiles[_tgLivePath]
+      && Date.now() - (_cpLastShowAt || 0) > 300) {
+    _cpFiles[_tgLivePath].view = 'file';
+    _cpShowFile(_tgLivePath, true);
+  }
 }
 
 function toggleSidebar() {
@@ -10342,6 +10421,7 @@ function _cpShowFile(path, plain) {
   var entry = _cpFiles[path];
   if (!entry) return;
   _cpActive = path;
+  _cpLastShowAt = Date.now();
   // Update tab highlights
   Object.keys(_cpFiles).forEach(function(p) {
     var t = _cpFiles[p].tab;
@@ -10519,6 +10599,9 @@ function _cpReset() {
   _cpActive = null;
   _cpViewToggle = null;
   _cpCallSeq = 0;
+  _tgFollowKey = null;
+  _tgLivePath = null;
+  _tgFollowTick = {};
   var hdr = document.getElementById('code-panel-hdr');
   if (hdr) hdr.innerHTML = '<div id="code-panel-empty" style="padding:10px 16px;flex-direction:row;height:auto;justify-content:flex-start;display:flex;gap:8px;color:var(--tx2);font-family:IBM Plex Mono,monospace;font-size:11px;opacity:.5"><span>⌨</span><span>Waiting for coder output…</span></div>'
     +'<button id="code-panel-close" onclick="toggleCodePanel()" title="Close panel" style="margin-left:auto;flex-shrink:0;background:none;border:none;color:var(--tx2);cursor:pointer;padding:7px 12px;font-size:14px">×</button>';
