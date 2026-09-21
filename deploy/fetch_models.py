@@ -14,6 +14,7 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   qwen3.5:2b              Q4_K_M        — Refiner
   qwen3.5:4b-ud           UD-Q4_K_XL    — Analyst/Critic/Synthesizer/Speed/Fallback
   qwen3.5:9b-ud           UD-Q4_K_XL    — Direct/Duo-Coder/Quality
+  gemma-4:…-hauhaucs-aggressive  Q4_K_P  — Uncensored all-rounder (2026-09-21)
 
 Usage:
   python deploy\\fetch_models.py --models-dir <path> [options]
@@ -142,6 +143,22 @@ SPECS: list[dict] = [
     # coding sampling in the "thinking" profile key (temp 0.6, top_p 0.95,
     # top_k 20, seed 42, repeat 1.05). Link updated from the V13 repo to
     # the author's Final re-release.
+    # ── Gemma-4 E4B "Uncensored HauhauCS Aggressive" (2026-09-21) ─────────
+    # Uncensored fine-tune of Gemma-4-E4B-IT (text-only repo, no mmproj).
+    # Card sampling temp 1.0 / top_p 0.95 / top_k 64 lives in the gemma-4
+    # family sampling profile; --jinja is enabled by the per-model config.
+    {
+        "key": "gemma-4:e4b-uncensored-hauhaucs-aggressive",
+        "tag": "gemma-4:e4b-uncensored-hauhaucs-aggressive",
+        "desc": "Gemma-4 E4B Uncensored HauhauCS Aggressive (uncensored all-rounder, ~5GB download)",
+        "repo": "HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive",
+        "file_regex": [
+            r"(?i)^gemma-4-e4b-uncensored-hauhaucs-aggressive-q4_k_p\.gguf$",
+        ],
+        "mmproj_regex": [
+            r"(?i)^mmproj-gemma-4-e4b-uncensored-hauhaucs-aggressive-f16\.gguf$",
+        ],
+    },
     {
         "key": "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact",
         "tag": "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact",
