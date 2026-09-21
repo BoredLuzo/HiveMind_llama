@@ -5,18 +5,14 @@
 Agentic coder pipeline repair: events, context, approvals, code panel.
 
 ### Coder core
-- Coder events (tokens, tool chips, results) never reached the browser.
-  The 2026-09-20 estimate calibration edit had cut `_coder_emit_fn` in
-  half, leaving the SSE queue insert as unreachable code: runs worked
-  server-side while the UI sat on an empty bubble with a running
-  "Loading" timer. Function restored.
-- The coder's exec context resolves from `duo_coder_ctx_agentic` again.
-  It previously read the planner target first, so a non-zero planner
-  target (8192) truncated every coder prompt to 8k while the server held
-  KV for the full agentic context: 7762-token prefills against a 20k
-  internal count, empty 32-token answers.
-- Hermes Final sampling back on the model card: seed 42 restored in all
-  profiles, top_p disabled (1.0) in the agent profile.
+- Coder events (tokens, tool chips, results) reach the browser reliably
+  again: the SSE queue insert of the event bridge was dead code, runs
+  worked server-side while the UI sat on an empty bubble.
+- The coder's exec context follows the agentic context setting again
+  instead of silently running truncated 8k prompts; empty instant-answer
+  rounds from that are gone.
+- Hermes Final sampling matches the model card again (seed 42, top_p
+  disabled in the agent profile).
 - Zero-activity guard: a text-only summary with zero reads and zero
   writes is no longer accepted as run completion. The model could echo
   the plan briefing for three rounds and finish as "completed" without
@@ -53,11 +49,9 @@ Agentic coder pipeline repair: events, context, approvals, code panel.
 - run_bash description warns off shell-written file contents on
   Windows: no heredocs, `>` redirects write UTF-16, backticks are
   PowerShell escapes. File content belongs to write_file/edit_file.
-- New model: minicpm5:2b (config, GGUF tag, card sampling temp 1.0,
-  top_p 0.95, min_p 0.0, automap caps). Related fix: a declared
-  min_p 0.0 now ships in coder and critic payloads. The old guards
-  dropped it, re-enabling the server's 0.05 default that model cards
-  explicitly warn against.
+- min_p fix: a declared min_p 0.0 now ships in coder and critic
+  payloads. The old guards dropped it, re-enabling the server's 0.05
+  default that model cards explicitly warn against.
 - The explore meter no longer logs a LOOP-DETECT warning on every
   healthy read round (it reported a streak of 0 at warning level).
 
