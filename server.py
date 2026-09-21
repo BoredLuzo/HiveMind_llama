@@ -1323,88 +1323,119 @@ async def stream(req: Request):
                     pass
 
     async def _safe_stream_gen_inner():
-        _sse_events = 0
-        _saw_done = False
-        _jr_id = ""
-        _jr_reg = None
-        _jr_pending: list = []
+        # DETACHED PRODUCER (2026-09-21): the run lives in its own task, the
+        # SSE generator only bridges frames from a queue. A client disconnect
+        # cancels the BRIDGE, not the run: an until_finished run keeps
+        # working detached, the journal keeps filling, and a page reload
+        # reattaches to a still-running run instead of finding it parked.
+        _q: asyncio.Queue = asyncio.Queue()
+        _state = {"events": 0, "saw_done": False, "jr_id": "", "jr_reg": None, "jr_pending": [], "aborted": False, "error": None}
+
+        def _jr_record(_chunk):
+            try:
+                if isinstance(_chunk, str) and _chunk:
+                    if _state["jr_reg"] is None and not _state["jr_id"] and '"type": "run_id"' in _chunk:
+                        try:
+                            _jd = json.loads(_chunk[6:])
+                            if isinstance(_jd, dict) and _jd.get("type") == "run_id":
+                                _state["jr_id"] = str(_jd.get("run_id") or "")
+                                if _state["jr_id"]:
+                                    _state["jr_reg"] = _run_journal_touch(_state["jr_id"])
+                                    _state["jr_reg"]["frames"].extend(_state["jr_pending"])
+                                    _state["jr_pending"] = []
+                        except Exception:
+                            pass
+                    if _state["jr_reg"] is not None:
+                        _state["jr_reg"]["frames"].append(_chunk)
+                        _state["jr_reg"]["ts"] = time.time()
+                        if len(_state["jr_reg"]["frames"]) > _RUN_JOURNAL_MAX_FRAMES:
+                            _state["jr_reg"]["frames"] = _state["jr_reg"]["frames"][-_RUN_JOURNAL_MAX_FRAMES:]
+                    elif not _state["jr_id"]:
+                        _state["jr_pending"].append(_chunk)
+            except Exception:
+                pass
+
+        async def _produce():
+            try:
+                async for _chunk in _stream_gen:
+                    _state["events"] += 1
+                    if not _state["saw_done"] and isinstance(_chunk, str) and '"type": "done"' in _chunk:
+                        _state["saw_done"] = True
+                        if _state["jr_reg"] is not None:
+                            _state["jr_reg"]["done"] = True
+                    _jr_record(_chunk)
+                    # backpressure cap for a detached run nobody watches
+                    if _q.qsize() < 5000:
+                        await _q.put(("chunk", _chunk))
+            except BaseException as _se:
+                if isinstance(_se, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+                    _state["aborted"] = True
+                    if _state["jr_reg"] is not None:
+                        _state["jr_reg"]["aborted"] = True
+                        _state["jr_reg"]["done"] = True
+                        _state["jr_reg"]["ts"] = time.time()
+                    await _q.put(("aborted", None))
+                else:
+                    _state["error"] = _se
+                    if _state["jr_reg"] is not None:
+                        _state["jr_reg"]["aborted"] = True
+                        _state["jr_reg"]["done"] = True
+                        _state["jr_reg"]["ts"] = time.time()
+                    await _q.put(("error", _se))
+            else:
+                await _q.put(("done", None))
+
+        _producer = asyncio.create_task(_produce())
         try:
-            async for _chunk in _stream_gen:
-                _sse_events += 1
-                if not _saw_done and isinstance(_chunk, str) and '"type": "done"' in _chunk:
-                    _saw_done = True
-                    if _jr_reg is not None:
-                        _jr_reg["done"] = True
-                # RUN-JOURNAL: record frames for UI reattach. run_id arrives
-                # as the first frame; anything before it is buffered.
-                try:
-                    if isinstance(_chunk, str) and _chunk:
-                        if _jr_reg is None and not _jr_id and '"type": "run_id"' in _chunk:
-                            try:
-                                _jd = json.loads(_chunk[6:])
-                                if isinstance(_jd, dict) and _jd.get("type") == "run_id":
-                                    _jr_id = str(_jd.get("run_id") or "")
-                                    if _jr_id:
-                                        _jr_reg = _run_journal_touch(_jr_id)
-                                        _jr_reg["frames"].extend(_jr_pending)
-                                        _jr_pending = []
-                            except Exception:
-                                pass
-                        if _jr_reg is not None:
-                            _jr_reg["frames"].append(_chunk)
-                            _jr_reg["ts"] = time.time()
-                            if len(_jr_reg["frames"]) > _RUN_JOURNAL_MAX_FRAMES:
-                                _jr_reg["frames"] = _jr_reg["frames"][-_RUN_JOURNAL_MAX_FRAMES:]
-                        elif not _jr_id:
-                            _jr_pending.append(_chunk)
-                except Exception:
-                    pass
-                yield _chunk
-        except BaseException as _se:
-            if isinstance(_se, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
-                logger.warning(
-                    "/stream aborted (client disconnect/cancel): type=%s mode=%s duo_agentic=%s pre_explore=%s chat_id=%s events=%d",
-                    type(_se).__name__, mode, duo_agentic_mode, duo_pre_explore, chat_id, _sse_events,
-                    exc_info=True,
-                )
-                try:
-                    from infra.notify import notify
-                    notify(
-                        "HiveMind — Browser closed during run",
-                        f"chat={chat_id or '?'} — stream aborted.",
-                        dedup_sig=f"disconnect:{chat_id or 'none'}",
+            while True:
+                _kind, _payload = await _q.get()
+                if _kind == "chunk":
+                    _sse_events = _state["events"]
+                    _saw_done = _state["saw_done"]
+                    yield _payload
+                elif _kind == "aborted":
+                    logger.warning(
+                        "/stream producer cancelled mid-run: mode=%s chat_id=%s events=%d",
+                        mode, chat_id, _state["events"],
                     )
-                except Exception:
-                    pass
-                logger.warning(
-                    "⚠ BROWSER CLOSED — run interrupted (chat=%s, events=%d). "
-                    "If a run was active it was parked — send a message to resume.",
-                    chat_id, _sse_events,
+                    break
+                elif _kind == "error":
+                    _se = _payload
+                    logger.exception("/stream unhandled error: mode=%s duo_agentic=%s pre_explore=%s", mode, duo_agentic_mode, duo_pre_explore)
+                    if _state["jr_reg"] is not None:
+                        _state["jr_reg"]["aborted"] = True
+                        _state["jr_reg"]["done"] = True
+                        _state["jr_reg"]["ts"] = time.time()
+                    _err = f"{type(_se).__name__}: {str(_se)[:160]}"
+                    yield f"data: {json.dumps({'type': 'status', 'content': '⚠️ Internal stream error — fallback answer sent.'}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'content': _err}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'elapsed': 0, 'stop_reason': 'error'}, ensure_ascii=False)}\n\n"
+                else:  # done
+                    break
+        finally:
+            # DETACH: never cancel the producer here. If the client is gone,
+            # the run drains to completion detached and the journal keeps
+            # recording; a reload reattaches to it via /run/journal.
+            if not _producer.done():
+                _pr = _producer
+                def _log_detach(_t):
+                    _exc = _t.exception()
+                    if _exc and not isinstance(_exc, (GeneratorExit, asyncio.CancelledError)):
+                        logger.warning("/stream detached producer ended with error: %s", _exc)
+                _pr.add_done_callback(_log_detach)
+                logger.info(
+                    "/stream client gone — run continues detached (journal replay available) chat=%s events=%d",
+                    chat_id, _state["events"],
                 )
-                if _jr_reg is not None:
-                    _jr_reg["aborted"] = True
-                    _jr_reg["done"] = True
-                    _jr_reg["ts"] = time.time()
-                raise
-            logger.exception("/stream unhandled error: mode=%s duo_agentic=%s pre_explore=%s", mode, duo_agentic_mode, duo_pre_explore)
-            if _jr_reg is not None:
-                _jr_reg["aborted"] = True
-                _jr_reg["done"] = True
-                _jr_reg["ts"] = time.time()
-            _err = f"{type(_se).__name__}: {str(_se)[:160]}"
-            yield f"data: {json.dumps({'type': 'status', 'content': '⚠️ Internal stream error — fallback answer sent.'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'error', 'content': _err}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'elapsed': 0, 'stop_reason': 'error'}, ensure_ascii=False)}\n\n"
-        else:
-            if _saw_done:
+            if _state["saw_done"]:
                 logger.info(
                     "[RUN-TRACE] /stream generator NORMAL end — %d events, done sent",
-                    _sse_events,
+                    _state["events"],
                 )
             else:
                 logger.warning(
-                    "[RUN-TRACE] /stream generator NORMAL end - %d events, NO done event (runner early exit?)",
-                    _sse_events,
+                    "[RUN-TRACE] /stream generator ended without done — %d events (runner early exit or detached)",
+                    _state["events"],
                 )
 
     return StreamingResponse(
