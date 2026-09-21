@@ -27,8 +27,15 @@ def _get_git_config() -> dict:
     return cfg
 
 
-def _validate_git_repo() -> tuple[bool, str, list[str]]:
-    ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+def _validate_git_repo(ws_override: str | None = None) -> tuple[bool, str, list[str]]:
+    # WORKSPACE-PARAM (2026-09-22): the panel validates the PROJECT the user
+    # selected, not the server env (HIVEMIND_WORKSPACE is run-scoped and
+    # usually unset outside runs — the test button then checked the wrong
+    # directory).
+    if ws_override:
+        ws = str(Path(ws_override).resolve())
+    else:
+        ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
     if not ws:
         return False, "", []
     try:
@@ -107,10 +114,18 @@ async def save_git_config_ep(request: Request):
 
 
 @router.post("/validate")
-async def validate_git_ep():
+async def validate_git_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE:
         return {"valid": False, "reason": "git_tools.py not loaded"}
-    valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
+    _ws = None
+    try:
+        _data = await request.json()
+        _cand = str((_data or {}).get("workspace") or "").strip()
+        if _cand and Path(_cand).is_dir():
+            _ws = _cand
+    except Exception:
+        pass
+    valid, branch, branches = await asyncio.to_thread(_validate_git_repo, _ws)
     has_credentials = bool(settings.get("git_username") or settings.get("git_token"))
     fully_valid = valid and has_credentials
     return {
@@ -131,13 +146,18 @@ async def git_branches_ep():
 
 @router.post("/init")
 async def git_init_ep(request: Request):
-    ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
-    if not ws:
-        return {"ok": False, "error": "No workspace configured"}
     try:
         data = await request.json()
     except Exception:
         data = {}
+    # WORKSPACE-PARAM (2026-09-22): init the user-selected project, not the env
+    _ws_cand = str((data or {}).get("workspace") or "").strip()
+    if _ws_cand and Path(_ws_cand).is_dir():
+        ws = str(Path(_ws_cand).resolve())
+    else:
+        ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+    if not ws:
+        return {"ok": False, "error": "No workspace configured"}
 
     check = await asyncio.to_thread(
         subprocess.run, ["git", "rev-parse", "--git-dir"],

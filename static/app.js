@@ -10676,7 +10676,11 @@ async function testGitConfig() {
   // GIT-TEST ROUTE FIX (2026-09-22): /git/test never existed (404 x3)
     // - validation lives at /git/validate.
     try {
-    var res = await fetch('/git/validate', {method:'POST'});
+    var res = await fetch('/git/validate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ workspace: S.workspace || '' })
+    });
     var data = await res.json();
     if (data.valid) {
       if (result) { result.textContent = '\u2713 ' + (data.branch ? ('OK - ' + data.branch) : 'Connection OK'); result.style.color = 'var(--green)'; }
@@ -10698,6 +10702,7 @@ async function initGitRepo() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
+        workspace: S.workspace || '',
         clone_url: S.gitRepoUrl || '',
         username: S.gitUsername || '',
         email: '',
