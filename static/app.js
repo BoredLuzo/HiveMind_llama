@@ -3741,8 +3741,23 @@ function _toolGenStream(d) {
         '<span class="tg-sep">\u00b7</span>' +
         '<span class="tc-label tg-path">\u2026</span>' +
         '<span class="tg-chars"></span>';
-      // click: open the right code panel — the code streams there
-      chip.addEventListener('click', function() { toggleCodePanel(true); });
+      // click: open the right code panel AND follow THIS card's stream.
+      // CARD-CLICK-FOLLOW (2026-09-21): the handler only toggled the panel
+      // open — with the panel already open nothing switched, and the click
+      // on a streaming card left the previous file's view up (live: new
+      // edit streamed under the pending tab while the panel showed the old
+      // EDITED view).
+      chip.addEventListener('click', function() {
+        var _k = (st && st.path) ? st.path
+               : ((_cpFiles[_TG_PENDING_KEY]) ? _TG_PENDING_KEY : '');
+        toggleCodePanel(true);
+        if (_k && _cpFiles[_k]) {
+          _cpFiles[_k].view = 'file';
+          _cpShowFile(_k, true);
+          _tgFollowKey = _k;                    // sticky: this card owns the panel
+          _tgFollowTick[_k] = Date.now();
+        }
+      });
       row.appendChild(chip);
       body.appendChild(row);
       scrollBtmIfNearBottom(60);
