@@ -6111,7 +6111,12 @@ async def run_code_duo(ctx):
                     _project_state_run_counted = True
                 _project_state.last_run_timestamp = datetime.now().isoformat()
                 if getattr(_project_state, 'last_run_success', None) is None:
-                    _project_state.last_run_success = False
+                    # SUCCESS-ORDER (2026-09-22): the normal completion path
+                    # sets last_run_success after this fallback ran — stamping
+                    # False here logged every completed run as failed first
+                    # (live: FireWork run ended 'completed' but the interim
+                    # save said success=False). Mirror the stop reason instead.
+                    _project_state.last_run_success = (getattr(ctx, "duo_stop_reason", "") == "completed")
                 ProjectStateManager().save(_project_state)
                 logger.info("[PROJECT] State gesichert in finally (Run #%d, success=%s)",
                             _project_state.total_runs, _project_state.last_run_success)

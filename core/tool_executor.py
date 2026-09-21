@@ -118,6 +118,8 @@ class ToolExecResult:
     loop_detected: bool = False
     duo_timed_out: bool = False
     file_changes: dict = field(default_factory=dict)
+    reads_seen: dict = field(default_factory=dict)     # norm. Pfad -> True (read_file dieser Run)
+    freshness_warned: dict = field(default_factory=dict)  # norm. Pfad -> True (Nudge schon gegeben)
     verify_mutation_serial: int = 0
     verify_last_ok_serial: int = 0
     last_run_bash_failure: dict | None = None
@@ -664,7 +666,7 @@ async def execute_tool_round(
                     if _gate == "allow_break":
                         break
                     if _gate == "allow":
-                        _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
+                        _logger.info("[TASK-COMPLETE] accepted without re-verification (verify nudge escalated, tool=%s)", _dname)
 
                 elif _last_bash_failed:
                     _gate = _task_complete_ladder(
@@ -676,10 +678,10 @@ async def execute_tool_round(
                     if _gate == "allow_break":
                         break
                     if _gate == "allow":
-                        _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
+                        _logger.info("[TASK-COMPLETE] accepted after verify-failed nudge escalated (tool=%s)", _dname)
 
                 else:
-                    _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
+                    _logger.info("[TASK-COMPLETE] accepted (tool=%s)", _dname)
                     if _chunk_incomplete_p():
                         pass  # blocked with message; loop continues
                     else:
@@ -724,6 +726,28 @@ async def execute_tool_round(
                 _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
                 result.loop_detected = True
                 break
+
+        # READ-BEFORE-EDIT (2026-09-22): register reads, and nudge ONCE per
+        # path when an existing file is edited blind (no read_file this run).
+        # Blind edits risk EDIT_FILE_OLD_TEXT_NOT_FOUND (live: FireWork, both
+        # chat runs read_file_calls=0). Light touch: info nudge, no blocking.
+        try:
+            if _dname == "read_file":
+                _rbp = str((_dargs or {}).get("path", "") or "")
+                if _rbp:
+                    trs.reads_seen[os.path.normcase(os.path.normpath(_rbp))] = True
+            elif _dname in ("edit_file", "patch_file", "replace_lines")                     and not _tool_call_failed(_dresult, _dname)                     and len(trs.freshness_warned) < 4:
+                _rbp = str((_dargs or {}).get("path", "") or "")
+                _rbn = os.path.normcase(os.path.normpath(_rbp)) if _rbp else ""
+                if _rbn and _rbn not in trs.reads_seen and _rbn not in trs.freshness_warned:
+                    trs.freshness_warned[_rbn] = True
+                    dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                        f"[FRESHNESS] You just edited {_rbp} without reading it "
+                        "this run. If more edits follow, read_file it first — "
+                        "your context may not match the file on disk."
+                    )})
+        except Exception:
+            pass
 
         # Parse errors: decrement on successful write/patch
         _note_successful_write(_dname, _dresult, result, round_state, _total_tool_errors)

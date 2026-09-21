@@ -10673,13 +10673,15 @@ async function testGitConfig() {
   var btn = document.getElementById('git-test-btn');
   var result = document.getElementById('git-test-result');
   if (btn) btn.textContent = 'Teste...';
-  try {
-    var res = await fetch('/git/test', {method:'POST'});
+  // GIT-TEST ROUTE FIX (2026-09-22): /git/test never existed (404 x3)
+    // - validation lives at /git/validate.
+    try {
+    var res = await fetch('/git/validate', {method:'POST'});
     var data = await res.json();
-    if (data.ok) {
-      if (result) { result.textContent = '\u2713 ' + (data.message || 'Connection OK'); result.style.color = 'var(--green)'; }
+    if (data.valid) {
+      if (result) { result.textContent = '\u2713 ' + (data.branch ? ('OK - ' + data.branch) : 'Connection OK'); result.style.color = 'var(--green)'; }
     } else {
-      if (result) { result.textContent = '\u2717 ' + (data.error || 'Error'); result.style.color = 'var(--red)'; }
+      if (result) { result.textContent = '\u2717 ' + (data.reason || 'Error'); result.style.color = 'var(--red)'; }
     }
   } catch(e) {
     if (result) { result.textContent = '\u2717 Server error'; result.style.color = 'var(--red)'; }
