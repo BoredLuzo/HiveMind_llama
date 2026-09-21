@@ -42,9 +42,12 @@ Agentic coder pipeline repair: events, context, approvals, code panel.
 - Code panel: `file_change` ships again for `replaced` edit results
   (the v1.2.1 result phrasing matched none of the tracker patterns, so
   the File view stayed empty for whole runs), the File view shows the
-  streamed text while an edit generates, a newly streaming write takes
-  over the open panel, and every finished chip carries its diff id so a
-  click pins that exact call instead of the first one.
+  streamed text while an edit generates, and every finished chip carries
+  its diff id so a click pins that exact call instead of the first one.
+- Code panel follows streams strictly on click: a newly streaming write
+  updates its tab silently and never switches the view on its own —
+  clicking the generating tool call (or its tab) follows the live text,
+  opening the panel mid-stream jumps to it.
 
 ### Tools and models
 - run_bash description warns off shell-written file contents on

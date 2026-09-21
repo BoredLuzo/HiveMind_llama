@@ -3496,12 +3496,7 @@ var _TG_PENDING_KEY = '\u0000pending-write';   // panel tab key until the path p
 // Stream-follow state (2026-09-21): which file the panel auto-follows, the
 // last tick time per streaming file (sticky switch, no two-file yoyo), and
 // the file a live stream currently feeds (for the panel-open jump).
-var _tgFollowKey = null;
-var _tgFollowTick = {};
-var _tgLivePath = null;
-// USER-HOLD (2026-09-21): an explicit view (older chip, tab click, view
-// toggle, pin) pauses auto-follow until a NEW call starts streaming.
-var _tgUserHold = false;
+var _tgLivePath = null;   // file a live stream currently feeds (panel-open jump)
 // Sticky follow (2026-09-18): while the user is at the panel bottom, the
 // stream scrolls along; scrolling up pauses it, returning to the bottom
 // resumes it. Tracked by a scroll listener, not per-render heuristics —
@@ -3619,8 +3614,6 @@ function _tgPanelStream(st) {
   // the pending tab until the path parses out of the buffer).
   var _fkey = st.path || ((_cpFiles[_TG_PENDING_KEY] || st.buf.length > 0) ? _TG_PENDING_KEY : '');
   if (st.path && _cpFiles[_TG_PENDING_KEY]) _tgPendingRekey(st.path);
-  if (_fkey) _tgFollowTick[_fkey] = now;
-  st._ticks = (st._ticks || 0) + 1;
   // ENTRY FIRST (2026-09-21): register the file before the follow switch —
   // a first tick must be able to create AND show the tab in one pass.
   if (st.path) {
@@ -3639,28 +3632,10 @@ function _tgPanelStream(st) {
       if (pn) pn.textContent = 'streaming\u2026';
     }
   }
-  // AUTO-FOLLOW (2026-09-20): a streaming write takes over the open panel —
-  // jump to the file and force File view. A pinned diff of an earlier call
-  // suppresses the stream ticks, which made a second write unwatchable.
-  // STICKY (2026-09-21): the FIRST tick of a new call takes over (that is
-  // the "second write" the user wants to watch); interleaved ticks of older
-  // cards only switch back when the followed stream went quiet for 2.5s.
-  if (document.body.classList.contains('code-panel-open') && _fkey && _cpFiles[_fkey]) {
-    // USER-HOLD: while set, ticks never yank the panel — EXCEPT a brand-new
-    // call (first tick), which releases the hold and takes over.
-    if (st._ticks === 1) _tgUserHold = false;
-    if (!_tgUserHold) {
-      if (_tgFollowKey !== _fkey && (st._ticks === 1 || !_tgFollowKey
-          || now - (_tgFollowTick[_tgFollowKey] || 0) > 2500)) {
-        _tgFollowKey = _fkey;
-      }
-      if (_tgFollowKey === _fkey && (_cpActive !== _fkey || _cpFiles[_fkey].view === 'diff')) {
-        _cpFiles[_fkey].view = 'file';
-        _cpShowFile(_fkey, true);
-      }
-      _tgLivePath = _tgFollowKey;
-    }
-  }
+  // NO AUTO-SWITCH (2026-09-21): ticks only ever update the entry — the
+  // view follows a stream exclusively via explicit clicks (streaming card,
+  // chip, tab). _tgLivePath marks the live stream for the panel-open jump.
+  if (_fkey) _tgLivePath = _fkey;
   if (doRender) _tgPanelLastRender = now;
   // follow the stream while the user sits at the bottom
   if (doRender && _cpFollowStream && body && document.body.classList.contains('code-panel-open')) {
@@ -3770,15 +3745,12 @@ function _toolGenStream(d) {
       // edit streamed under the pending tab while the panel showed the old
       // EDITED view).
       chip.addEventListener('click', function() {
-        _tgUserHold = false;   // watching THIS stream is what the user wants
         var _k = (st && st.path) ? st.path
                : ((_cpFiles[_TG_PENDING_KEY]) ? _TG_PENDING_KEY : '');
         toggleCodePanel(true);
         if (_k && _cpFiles[_k]) {
           _cpFiles[_k].view = 'file';
           _cpShowFile(_k, true);
-          _tgFollowKey = _k;                    // sticky: this card owns the panel
-          _tgFollowTick[_k] = Date.now();
         }
       });
       row.appendChild(chip);
@@ -3818,10 +3790,7 @@ function _toolGenDone() {
     if (st && st.row && st.row.parentNode) st.row.parentNode.removeChild(st.row);
     delete _tgCards[k];
   }
-  _tgFollowKey = null;
   _tgLivePath = null;
-  _tgFollowTick = {};
-  _tgUserHold = false;
 }
 
 function _flushTokenQueueSync() {
@@ -7005,7 +6974,6 @@ function handleEvent(d) {
     // Other chips keep showing the server-delivered extra details.
     _tcChip.addEventListener('click', function(e) {
       e.stopPropagation();
-      _tgUserHold = true;   // USER-HOLD: reviewing an older call beats auto-follow
       if (_tcRow.dataset.toolPath) {
         var _cpKey = _cpFindEntry(_tcRow.dataset.toolPath);
         if (_cpKey) {
@@ -7156,7 +7124,6 @@ function handleEvent(d) {
       var _cpPinEl = _trSumDs.querySelector('[data-cp-pin]');
       if (_cpPinEl) _cpPinEl.onclick = function(ev) {
         ev.preventDefault(); ev.stopPropagation();
-        _tgUserHold = true;
         var _ek = _cpFindEntry(_cpPinKey);
         if (!_ek || !_cpFiles[_ek]) return;
         _cpFiles[_ek].pinnedCallId = _cpPinId;
@@ -10520,7 +10487,6 @@ function _cpEnsureViewToggle() {
     b.setAttribute('data-cp-view', view);
     b.style.cssText = 'font-family:IBM Plex Mono,monospace;font-size:9px;padding:3px 8px;background:none;border:1px solid var(--b2);border-radius:3px;color:var(--tx2);cursor:pointer';
     b.onclick = function() {
-      _tgUserHold = true;   // USER-HOLD: manual view choice pauses auto-follow
       var entry = _cpFiles[_cpActive];
       if (!entry) return;
       if (view === 'diff' && !entry.diffText) return;
@@ -10583,7 +10549,7 @@ function _cpAddOrUpdateFile(path, content, op, render) {
     tab.className = 'cp-tab';
     tab.innerHTML = '<span class="cp-op '+opLabel+'">'+opLabel.toUpperCase()+'</span><span class="cp-name">'+esc(shortName)+'</span>';
     tab.title = path;
-    tab.onclick = (function(p){return function(){ _tgUserHold = true; _cpShowFile(p) }})(path);
+    tab.onclick = (function(p){return function(){_cpShowFile(p)}})(path);
     // Insert before the view toggle (which sits right before the close btn)
     var closeBtn = document.getElementById('code-panel-close');
     var _cpAnchor = (_cpViewToggle && _cpViewToggle.isConnected) ? _cpViewToggle : closeBtn;
@@ -10625,11 +10591,10 @@ function _cpAddOrUpdateFile(path, content, op, render) {
         if (_sBody) _cpRenderPre(_sBody, _e.streamText, true);
       }
     } else {
-      // USER-HOLD (2026-09-21): a write stream must not yank the view while
-      // the user is reading something else — the content updates silently.
-      if (_tgUserHold && _cpActive !== path && render === 'plain') {
-        // silent update only; the view shows it when the user returns
-      } else {
+      // NO AUTO-SWITCH (2026-09-21): the write stream updates its tab
+      // silently; only an explicit click shows it. While this file IS the
+      // active tab, render the stream in place.
+      if (_cpActive === path) {
         _cpShowFile(path, render === 'plain' ? true : undefined);
       }
     }
@@ -10647,10 +10612,7 @@ function _cpReset() {
   _cpActive = null;
   _cpViewToggle = null;
   _cpCallSeq = 0;
-  _tgFollowKey = null;
   _tgLivePath = null;
-  _tgFollowTick = {};
-  _tgUserHold = false;
   var hdr = document.getElementById('code-panel-hdr');
   if (hdr) hdr.innerHTML = '<div id="code-panel-empty" style="padding:10px 16px;flex-direction:row;height:auto;justify-content:flex-start;display:flex;gap:8px;color:var(--tx2);font-family:IBM Plex Mono,monospace;font-size:11px;opacity:.5"><span>⌨</span><span>Waiting for coder output…</span></div>'
     +'<button id="code-panel-close" onclick="toggleCodePanel()" title="Close panel" style="margin-left:auto;flex-shrink:0;background:none;border:none;color:var(--tx2);cursor:pointer;padding:7px 12px;font-size:14px">×</button>';
