@@ -167,28 +167,31 @@ async def git_init_ep(request: Request):
         valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
         return {"ok": True, "already_existed": True, "branch": branch, "branches": branches}
 
-    clone_url = data.get("clone_url") or settings.get("git_repo_url", "")
-    if clone_url and clone_url.strip():
-        clone_url = clone_url.strip()
-        parent = str(Path(ws).parent)
-        repo_name = clone_url.rstrip("/").split("/")[-1].replace(".git", "")
-        clone_result = await asyncio.to_thread(
-            subprocess.run, ["git", "clone", clone_url, repo_name],
-            cwd=parent, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60
-        )
-        if clone_result.returncode == 0:
-            valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
-            return {"ok": True, "cloned": True, "repo": repo_name, "branch": branch, "branches": branches}
-        return {"ok": False, "error": f"Clone fehlgeschlagen: {clone_result.stderr.strip()[:200]}"}
-
+    # INIT-IN-PLACE (2026-09-22): the old flow cloned the remote into the
+    # workspace's PARENT directory (live: Desktop/showCase_... created while
+    # FireWork itself stayed repo-less). Correct flow: init the workspace
+    # itself, attach the remote; clone only fills an EMPTY workspace.
     username = data.get("username") or settings.get("git_username", "")
     email = data.get("email") or settings.get("git_email", "")
-    init_result = await asyncio.to_thread(
-        subprocess.run, ["git", "init"],
-        cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
-    )
-    if init_result.returncode != 0:
-        return {"ok": False, "error": f"git init fehlgeschlagen: {init_result.stderr.strip()[:200]}"}
+    remote_url = (data.get("clone_url") or settings.get("git_repo_url", "") or "").strip()
+    default_branch = data.get("default_branch") or settings.get("git_default_branch", "main")
+
+    _ws_files = [f for f in os.listdir(ws) if f != ".git"]
+    if not _ws_files and remote_url:
+        # empty workspace + remote -> clone INTO the workspace
+        _clone = await asyncio.to_thread(
+            subprocess.run, ["git", "clone", remote_url, "."],
+            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
+        )
+        if _clone.returncode != 0:
+            return {"ok": False, "error": f"Clone fehlgeschlagen: {_clone.stderr.strip()[:200]}"}
+    else:
+        _init = await asyncio.to_thread(
+            subprocess.run, ["git", "init", "-b", default_branch],
+            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
+        )
+        if _init.returncode != 0:
+            return {"ok": False, "error": f"git init fehlgeschlagen: {_init.stderr.strip()[:200]}"}
 
     if username:
         await asyncio.to_thread(
@@ -200,15 +203,20 @@ async def git_init_ep(request: Request):
             subprocess.run, ["git", "config", "user.email", email],
             cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
         )
+    if remote_url:
+        await asyncio.to_thread(
+            subprocess.run, ["git", "remote", "remove", "origin"],
+            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
+        )
+        await asyncio.to_thread(
+            subprocess.run, ["git", "remote", "add", "origin", remote_url],
+            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
+        )
 
-    default_branch = data.get("default_branch") or settings.get("git_default_branch", "main")
-    await asyncio.to_thread(
-        subprocess.run, ["git", "checkout", "-b", default_branch],
-        cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
-    )
-
-    valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
-    return {"ok": True, "initialized": True, "branch": branch, "branches": branches}
+    valid, branch, branches = await asyncio.to_thread(
+        _validate_git_repo, ws)
+    return {"ok": True, "initialized": True, "branch": branch,
+            "branches": branches, "remote": remote_url}
 
 
 @router.post("/reset")
