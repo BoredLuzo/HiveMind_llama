@@ -10737,7 +10737,7 @@ async function gitStash(action) {
     var res = await fetch('/git/stash', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({action: action})
+      body: JSON.stringify({workspace: S.workspace || '', action: action})
     });
     var data = await res.json();
     if (statusEl) { statusEl.textContent = data.message || 'OK'; statusEl.style.color = data.ok ? 'var(--green)' : 'var(--red)'; }
@@ -10754,7 +10754,7 @@ async function gitReset(hard) {
     var res = await fetch('/git/reset', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({target: 'HEAD', hard: hard})
+      body: JSON.stringify({workspace: S.workspace || '', target: 'HEAD', hard: hard})
     });
     var data = await res.json();
     if (statusEl) { statusEl.textContent = data.message || 'OK'; statusEl.style.color = data.ok ? 'var(--green)' : 'var(--red)'; }
@@ -10802,7 +10802,7 @@ async function loadGitConfig(s) {
   updateGitIntegrationUI();
   // load the branch list from the server (for the dropdown in the duo panel)
   try {
-    var brRes = await (await fetch('/git/branches')).json();
+    var brRes = await (await fetch('/git/branches?workspace=' + encodeURIComponent(S.workspace || ''))).json();
     if (brRes.branches && brRes.branches.length && brSel) {
       brSel.innerHTML = '';
       brRes.branches.forEach(function(b) {

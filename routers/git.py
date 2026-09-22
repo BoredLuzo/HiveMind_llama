@@ -65,11 +65,37 @@ def _validate_git_repo(ws_override: str | None = None) -> tuple[bool, str, list[
         return False, "", []
 
 
+async def _ws_from_body(request: Request) -> str | None:
+    """Workspace override from a JSON body {workspace: ...} (POST routes)."""
+    try:
+        data = await request.json()
+    except Exception:
+        return None
+    cand = str((data or {}).get("workspace") or "").strip()
+    if cand and Path(cand).is_dir():
+        return cand
+    return None
+
+
+def _ws_from_query(request: Request) -> str | None:
+    """Workspace override from ?workspace=... (GET routes)."""
+    cand = str(request.query_params.get("workspace") or "").strip()
+    if cand and Path(cand).is_dir():
+        return cand
+    return None
+
+
+def _resolve_ws(ws_override: str | None) -> str:
+    if ws_override:
+        return str(Path(ws_override).resolve())
+    return str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+
+
 @router.get("/status")
-async def git_status_ep():
+async def git_status_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE:
         return {"valid": False, "reason": "git_tools.py not loaded", "config": {}}
-    valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
+    valid, branch, branches = await asyncio.to_thread(_validate_git_repo, _ws_from_query(request))
     cfg = _get_git_config()
     has_credentials = bool(settings.get("git_username") or settings.get("git_token"))
     return {
@@ -137,7 +163,7 @@ async def validate_git_ep(request: Request):
 
 
 @router.get("/branches")
-async def git_branches_ep():
+async def git_branches_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE:
         return {"branches": [], "current": "", "error": "git_tools.py not loaded"}
     valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
@@ -223,11 +249,11 @@ async def git_init_ep(request: Request):
 async def git_reset_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_reset is None:
         return {"ok": False, "error": "git_tools not loaded"}
-    ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
     try:
         data = await request.json()
     except Exception:
         data = {}
+    ws = _resolve_ws(await _ws_from_body(request))
     target = str(data.get("target", "HEAD"))[:72]
     hard = bool(data.get("hard", False))
     if hard:
@@ -240,11 +266,11 @@ async def git_reset_ep(request: Request):
 async def git_checkout_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_checkout is None:
         return {"ok": False, "error": "git_tools not loaded"}
-    ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
     try:
         data = await request.json()
     except Exception:
         data = {}
+    ws = _resolve_ws(await _ws_from_body(request))
     target = str(data.get("target", ""))[:120]
     if not target:
         return {"ok": False, "error": "target fehlt"}
@@ -256,11 +282,11 @@ async def git_checkout_ep(request: Request):
 async def git_stash_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_stash is None:
         return {"ok": False, "error": "git_tools not loaded"}
-    ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
     try:
         data = await request.json()
     except Exception:
         data = {}
+    ws = _resolve_ws(await _ws_from_body(request))
     action = str(data.get("action", "push"))
     message = str(data.get("message", ""))[:72]
     result = await _state.exec_git_stash(ws, action=action, message=message)
@@ -268,8 +294,8 @@ async def git_stash_ep(request: Request):
 
 
 @router.get("/detail")
-async def git_detail_ep():
+async def git_detail_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_status_detailed is None:
         return {"valid": False, "error": "git_tools not loaded"}
-    ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+    ws = _resolve_ws(_ws_from_query(request))
     return await _state.exec_git_status_detailed(ws)
