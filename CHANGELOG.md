@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.2.3] - 2026-09-26
+
+Hotfix: fresh installs crashed on startup before the server ever bound
+its port.
+
+### Startup
+- The v1.2.2 duo_coder settings preset ships `temperature: null` (the
+  coder temperature stays pipeline-controlled by design). On the first
+  start, `apply_settings_to_pipeline` hit that null with `float()` during
+  the server import: an uncaught `TypeError: float() argument must be a
+  string or a real number, not 'NoneType'` killed the process right after
+  the start banner printed its localhost link, and the console closed
+  before any error could be read. The server never bound its port.
+- Agent temperatures of `null` are now skipped instead of cast, keeping
+  the pipeline-controlled semantics. Every other agent field is applied
+  unchanged and no settings edit is needed: existing settings.json files
+  with the shipped null start cleanly.
+
 ## [1.2.2] - 2026-09-20
 
 Agentic coder pipeline repair: events, context, approvals, code panel.
