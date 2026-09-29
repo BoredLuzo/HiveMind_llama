@@ -17,6 +17,10 @@ _VRAM_TABLE: dict[str, float] = {
     "qwen3.5:0.8b-ud":   0.7,
     "qwen3.5:2b":        1.5,
     "qwen3.5:2b-ud":     1.7,
+    # Sharp-MiniCPM5-2B — dense llama arch, 42 full-attention layers.
+    # One tag for both tiers; value is the conservative Q6_K_XL estimate
+    # (~2.1GB weights + q8_0 KV@4096), Q4_K_XL sits under it.
+    "minicpm5:2b-sharp": 2.0,
     # LFM2.5 — 8B total, 1B active, Q4_K_M ~2.5GB weights + 0.2GB KV@4096
     "lfm2.5:8b-a1b":     2.7,
     # LFM2.5 dense 2.6B (Q4_K_M ~1.6GB weights + KV@4096) — Subagent-Ladder Default

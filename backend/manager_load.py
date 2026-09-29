@@ -12,6 +12,7 @@ from .llama_config import (
     BINARY_MIN_BUILD, MODELS_DIR,
     NO_MMAP_MIN_BUILD,
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS, _MOE_KV_CACHE_TYPES,
+    _DENSE_KV_CACHE_TYPES,
     MLOCK_MODEL, CACHE_REUSE, LLAMA_UBATCH,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
@@ -990,8 +991,13 @@ class LlamaLoadMixin:
         # ── KV cache quantization ────────────────────────────────────────────
         if KV_CACHE_TYPE and KV_CACHE_TYPE.lower() not in ("f16", "") and _moe_count <= 0:
             if type(self)._kv_flag_supported:
-                cmd += ["--cache-type-k", KV_CACHE_TYPE, "--cache-type-v", KV_CACHE_TYPE]
-                logger.info(f"KV cache quantization active: {KV_CACHE_TYPE}")
+                _kv_base = str(_moe_model_key or "").lower().split(":")[0]
+                _dense_kv = _DENSE_KV_CACHE_TYPES.get(
+                    str(_moe_model_key or "").lower(),
+                    _DENSE_KV_CACHE_TYPES.get(_kv_base, KV_CACHE_TYPE),
+                )
+                cmd += ["--cache-type-k", _dense_kv, "--cache-type-v", _dense_kv]
+                logger.info(f"KV cache quantization active: {_dense_kv}")
             else:
                 logger.warning(
                     f"--cache-type-k {KV_CACHE_TYPE} not supported by "

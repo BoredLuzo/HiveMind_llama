@@ -230,6 +230,14 @@ _MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 
 _MOE_KV_CACHE_TYPES: dict[str, str] = {}
 
+# Dense per-model KV-cache override (2026-09-26): MiniCPM5's 42 full-attention
+# layers hold a full-length cache and the Sharp-MiniCPM5 card's memory table
+# assumes -ctk/-ctv q8_0 — the global q4_0 default is too aggressive for this
+# family. Matched on full key first, then on the base before the colon.
+_DENSE_KV_CACHE_TYPES: dict[str, str] = {
+    "minicpm5": "q8_0",
+}
+
 
 # ── MTP (Multi-Token Prediction / Speculative Decoding) ─────────────────────
 # DRAFT-N-MAX 2 (2026-09-15): draft-mtp with n-max 3 has a documented

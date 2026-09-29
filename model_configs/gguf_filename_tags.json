@@ -10,5 +10,7 @@
   "lfm2.5-2.6b-q4_k_m.gguf": "lfm2.5:2.6b",
   "qwen3.5-9b-q4_k_m.gguf": "qwen3.5:9b-mtp",
   "minicpm5-2b-q4_k_m.gguf": "minicpm5:2b",
+  "sharp-minicpm5-2b-q6_k_xl.gguf": "minicpm5:2b-sharp",
+  "sharp-minicpm5-2b-q4_k_xl.gguf": "minicpm5:2b-sharp",
   "gemma-4-e4b-uncensored-hauhaucs-aggressive-q4_k_p.gguf": "gemma-4:e4b-uncensored-hauhaucs-aggressive"
 }

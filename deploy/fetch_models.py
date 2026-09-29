@@ -15,6 +15,8 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   qwen3.5:4b-ud           UD-Q4_K_XL    — Analyst/Critic/Synthesizer/Speed/Fallback
   qwen3.5:9b-ud           UD-Q4_K_XL    — Direct/Duo-Coder/Quality
   gemma-4:…-hauhaucs-aggressive  Q4_K_P  — Uncensored all-rounder (2026-09-21)
+  minicpm5:2b-sharp       Q6_K_XL (alt. Q4_K_XL) — Sharp-MiniCPM5-2B light
+                          all-rounder, tool calls via --jinja (2026-09-26)
 
 Usage:
   python deploy\\fetch_models.py --models-dir <path> [options]
@@ -157,6 +159,43 @@ SPECS: list[dict] = [
         ],
         "mmproj_regex": [
             r"(?i)^mmproj-gemma-4-e4b-uncensored-hauhaucs-aggressive-f16\.gguf$",
+        ],
+    },
+    # ── Sharp-MiniCPM5-2B (2026-09-26) ─────────────────────────────────────
+    # Light dense all-rounder (plain llama arch, text-only, embedded jinja
+    # template with OpenAI tool_calls). TWO download tiers, ONE identity:
+    # both specs pin the same tag "minicpm5:2b-sharp", so the single model
+    # config (minicpm5_2b-sharp.json) applies to whichever tier is installed
+    # — settings and template are identical by construction. Q6_K_XL is the
+    # recommended tier (99% KL 0.024 vs its own BF16, near-lossless);
+    # Q4_K_XL is the smaller alternative, noticeably weaker (KL 0.274).
+    {
+        "key": "minicpm5:2b-sharp",
+        "tag": "minicpm5:2b-sharp",
+        "desc": "Sharp-MiniCPM5-2B Q6_K_XL (light all-rounder, RECOMMENDED tier, near-lossless quant, ~2.1GB)",
+        "repo": "peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF",
+        "file_regex": [
+            r"(?i)^sharp-minicpm5-2b-q6_k_xl\.gguf$",
+        ],
+        "mmproj_regex": [],
+        # The Sharp chat template is a MUST for this model (its chat_template
+        # config field points at the shipped file) — fetched into
+        # model_configs/ alongside the GGUF.
+        "extra_files": [
+            {"path": "chat_template.jinja", "dest": "model_configs/sharp_minicpm5_chat_template.jinja"},
+        ],
+    },
+    {
+        "key": "minicpm5:2b-sharp-q4",
+        "tag": "minicpm5:2b-sharp",
+        "desc": "Sharp-MiniCPM5-2B Q4_K_XL (same model, smaller tier — noticeably weaker than Q6, ~1.5GB)",
+        "repo": "peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF",
+        "file_regex": [
+            r"(?i)^sharp-minicpm5-2b-q4_k_xl\.gguf$",
+        ],
+        "mmproj_regex": [],
+        "extra_files": [
+            {"path": "chat_template.jinja", "dest": "model_configs/sharp_minicpm5_chat_template.jinja"},
         ],
     },
     {
@@ -466,6 +505,29 @@ def main() -> int:
     for spec in specs:
         print()
         print(f"== {spec['key']} — {spec['desc']}")
+
+        # EXTRA FILES (2026-09-29): non-GGUF companions fetched alongside the
+        # model into repo-relative destinations — e.g. the Sharp-MiniCPM5 chat
+        # template landing in model_configs/. Checked BEFORE the GGUF
+        # --only-missing skip so a missing template self-heals even when the
+        # model itself is already on disk. Idempotent via existence check.
+        for _ef in (spec.get("extra_files") or []):
+            _ef_dest = ROOT / _ef["dest"]
+            if _ef_dest.exists():
+                print(f"    Extra file present: {_ef['dest']} — skipping")
+                continue
+            if args.list_only:
+                print(f"    Would download (extra): {_ef['path']} -> {_ef['dest']}")
+                continue
+            try:
+                _url = HF_RESOLVE.format(repo=spec["repo"], path=_ef["path"])
+                print(f"    Downloading extra file: {_ef['path']} -> {_ef['dest']}")
+                _ef_dest.parent.mkdir(parents=True, exist_ok=True)
+                with urllib.request.urlopen(_url, timeout=120) as _r, open(_ef_dest, "wb") as _fh:
+                    _fh.write(_r.read())
+                print(f"    [OK] extra file -> {_ef['dest']}")
+            except Exception as e:
+                print(f"    [WARNING] Extra file download failed ({e})")
 
         # Already present?
         have = [n for n in local_files if re.search(spec["file_regex"][0], n)]
