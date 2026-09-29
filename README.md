@@ -442,9 +442,24 @@ both keys in the settings.
 | `start_llama.bat` | alias for start_hivemind.bat |
 | `stop_llama.bat` | stop server + all llama-server.exe (frees VRAM) |
 | `update_llama.bat` | update llama.cpp to the latest nightly |
+| `update.bat` | update HiveMind itself from the latest GitHub release |
 | `setup_models.bat` | download / register / add custom models |
 | `start_mcp.bat` | MCP HTTP server for IDEs, port 8090 |
 | `searxng.bat` | SearXNG manager |
+
+### Updating
+
+Run `update.bat`. It checks GitHub for the latest release, backs up the
+current code to `update_backup_<version>\` and applies the new build over
+this folder. `settings.json`, `models.json`, `.venv\`, `llama\`, `logs\`
+and `sessions\` are never touched — new settings keys pick up their
+defaults automatically on the next start, and `start_hivemind.bat`
+installs any new Python packages on demand.
+
+Rollback: copy the *contents* of `update_backup_<version>\` back over the
+folder and start again. Once everything works, the backup folder can be
+deleted. Manual alternative: extract a release zip NEXT TO (not over) the
+installation, copy the files above across, run `install.bat`.
 
 ## Configuration
 
