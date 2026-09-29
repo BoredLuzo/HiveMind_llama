@@ -27,6 +27,121 @@ def _is_checkpoint_subject(subject: str) -> bool:
     return subject.strip().lower().startswith(_checkpoint_marker().lower())
 
 
+def _panel_git_identity() -> tuple[str, str]:
+    """Identity configured in the Git panel (settings git_username/git_email)."""
+    try:
+        _s = _load_settings() or {}
+        return (str(_s.get("git_username", "") or "").strip(),
+                str(_s.get("git_email", "") or "").strip())
+    except Exception:
+        return ("", "")
+
+
+def _hivemind_install_dir() -> str:
+    try:
+        return str(Path(__file__).resolve().parents[1])
+    except Exception:
+        return ""
+
+
+def auto_commit_block_reason(workspace: str) -> str:
+    """Non-empty = Hivemind-initiated commits (checkpoints, auto-commit) must
+    be skipped for this workspace, with this reason.
+
+    The 2026-09-26 incident: with no git identity configured anywhere,
+    checkpoint commits still ran — and with the workspace falling back to the
+    HiveMind install directory they even landed in HiveMind's own repo.
+    Auto-commits now require the panel identity and never touch the install
+    directory itself."""
+    _name, _email = _panel_git_identity()
+    if not _name or not _email:
+        return ("no git credentials configured in the Git panel "
+                "(Username + Email below)")
+    try:
+        if workspace and _os.path.normcase(_os.path.abspath(workspace)) == \
+                _os.path.normcase(_hivemind_install_dir()):
+            return "workspace resolves to the HiveMind install directory"
+    except Exception:
+        pass
+    return ""
+
+
+async def ensure_commit_identity(workspace: str) -> None:
+    """Set repo-local user.name/user.email from the panel config if the repo
+    has no identity yet — commits are attributed to the panel user instead of
+    whatever machine-global git config happens to exist."""
+    import asyncio as _asyncio
+    _name, _email = _panel_git_identity()
+    if not _name and not _email:
+        return
+
+    async def _get_local(key: str) -> str:
+        _r = await _asyncio.to_thread(
+            subprocess.run, ["git", "config", "--local", key],
+            cwd=workspace, capture_output=True,
+            text=True, encoding="utf-8", errors="replace")
+        return (_r.stdout or "").strip()
+
+    if _name and not await _get_local("user.name"):
+        await _asyncio.to_thread(
+            subprocess.run, ["git", "config", "--local", "user.name", _name],
+            cwd=workspace, capture_output=True,
+            text=True, encoding="utf-8", errors="replace")
+    if _email and not await _get_local("user.email"):
+        await _asyncio.to_thread(
+            subprocess.run, ["git", "config", "--local", "user.email", _email],
+            cwd=workspace, capture_output=True,
+            text=True, encoding="utf-8", errors="replace")
+
+
+def _git_auto_push_enabled() -> bool:
+    try:
+        return bool((_load_settings() or {}).get("git_auto_push", False))
+    except Exception:
+        return False
+
+
+def _push_url() -> str:
+    """Inline push URL for ONE git push invocation. Credentials are never
+    persisted — not in the remote config, not on disk, only passed to the
+    single subprocess. https only; ssh remotes carry their own auth."""
+    _s = _load_settings() or {}
+    _repo = str(_s.get("git_repo_url", "") or "").strip().rstrip("/")
+    _user = str(_s.get("git_username", "") or "").strip()
+    _token = str(_s.get("git_token", "") or "").strip()
+    if not (_repo and _user and _token) or not _repo.startswith("https://"):
+        return ""
+    return f"https://{_user}:{_token}@{_repo[len('https://'):]}"
+
+async def push_after_commit(workspace: str) -> str:
+    """Auto-push HEAD after a successful hivemind commit. Fires ONLY when the
+    Git panel Auto-Push toggle is on, the credential gate is clear, and
+    repository URL + username + token are configured. Returns a status line
+    ("" = push not enabled — silent by design, same as the commit toggles)."""
+    if not _git_auto_push_enabled():
+        return ""
+    _block = auto_commit_block_reason(workspace)
+    if _block:
+        return f"ℹ️ auto-push skipped: {_block}"
+    _url = _push_url()
+    if not _url:
+        return ("ℹ️ auto-push skipped: Repository URL / Username / Token "
+                "missing in the Git panel")
+    import asyncio as _asyncio
+    _r = await _asyncio.to_thread(
+        subprocess.run, ["git", "push", _url, "HEAD"],
+        cwd=workspace, capture_output=True,
+        text=True, encoding="utf-8", errors="replace", timeout=120)
+    _s = _load_settings() or {}
+    _token = str(_s.get("git_token", "") or "")
+    if _r.returncode == 0:
+        return "✅ auto-pushed HEAD to the configured repository"
+    _err = (_r.stderr or _r.stdout or "").strip()
+    if _token:
+        _err = _err.replace(_token, "***")
+    return f"❌ auto-push failed: {_err[:200]}"
+
+
 async def exec_git_commit(message: str, workspace: str, files: list[str] | None = None) -> str:
 
 
@@ -43,6 +158,8 @@ async def exec_git_commit(message: str, workspace: str, files: list[str] | None 
     check = await _git("git", "rev-parse", "--git-dir")
     if check.returncode != 0:
         return f"⚠️ git_commit: {workspace} is not a git repository. No commit."
+
+    await ensure_commit_identity(workspace)
 
     status = await _git("git", "status", "--porcelain")
     if not status.stdout.strip():
@@ -92,9 +209,14 @@ async def exec_git_checkpoint(label: str, workspace: str) -> str:
             text=True, encoding="utf-8", errors="replace"
         )
 
+    _block = auto_commit_block_reason(workspace)
+    if _block:
+        return f"ℹ️ checkpoint skipped: {_block}"
+
     check = await _git("git", "rev-parse", "--git-dir")
     if check.returncode != 0:
         return ""
+    await ensure_commit_identity(workspace)
     status = await _git("git", "status", "--porcelain")
     head = await _git("git", "rev-parse", "--verify", "HEAD")
     has_head = head.returncode == 0
@@ -183,6 +305,12 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
     check = await _git("git", "rev-parse", "--git-dir")
     if check.returncode != 0:
         return ""
+
+    if consolidate_only:
+        _block = auto_commit_block_reason(workspace)
+        if _block:
+            return f"ℹ️ checkpoint consolidation skipped: {_block}"
+    await ensure_commit_identity(workspace)
 
     cp_count = 0
     log = await _git("git", "log", "--pretty=%s", "-n", "200")
