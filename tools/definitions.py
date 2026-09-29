@@ -151,9 +151,9 @@ _INLINE_CODING_TOOLS = [
         "description": (
             "Create a NEW file with complete plain content (no SEARCH/REPLACE "
             "markers — that is edit_file). Existing files: use edit_file instead.\n"
-            "If too large for one call: write the FIRST part, then finish with "
-            "write_file_append(path, content='<AUTO_SPLIT_CONTINUE>') — bare token, "
-            "no quotes; the remainder is stored server-side. Never resend content."
+            "Stay within your WRITE RULES char target. If the call is cut off by "
+            "the output limit, the server keeps everything up to the last complete "
+            "line and tells you the line — continue with write_file_append."
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path"},
@@ -183,14 +183,13 @@ _INLINE_CODING_TOOLS = [
         "description": (
             "Append a continuation chunk VERBATIM to the end of a file — only as "
             "follow-up in the SAME write sequence (write_file part1 -> append "
-            "part2 -> append part3). Max ~20000 chars per call. After an "
-            "AUTO-SPLIT: send only content='<AUTO_SPLIT_CONTINUE>' (bare token, "
-            "no quotes) — the stored remainder appends automatically; never "
-            "resend the content."
+            "part2 -> append part3), or to continue a write that was cut off at "
+            "the output limit (start after the last complete line the server "
+            "reported). Stay within your WRITE RULES char target."
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path (must already exist)"},
-            "content": {"type": "string", "maxLength": 20000, "description": "Content chunk. AUTO-SPLIT continuation: bare token <AUTO_SPLIT_CONTINUE> (no quotes)."}
+            "content": {"type": "string", "maxLength": 20000, "description": "Content chunk, verbatim."}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {

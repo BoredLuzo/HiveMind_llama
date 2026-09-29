@@ -29,7 +29,6 @@ from .exec_tools import _inline_tool_run_tests
 from .exec_tools import _inline_tool_start_background
 from .exec_tools import _inline_tool_stop_background
 from .exec_tools import _ps_quote_path
-from .exec_tools import _stage_split
 from .exec_tools import _stream_proc
 from .exec_tools import _validate_install_packages
 from .git_tools import _inline_tool_git_commit
@@ -43,4 +42,4 @@ from .misc import _inline_tool_get_datetime
 from .misc import _inline_tool_subagent_research
 from .misc import _inline_tool_task_complete
 
-__all__ = ['_auto_lint_result', '_bash_blocklisted', '_first_dict_value', '_inline_tool_edit_ast', '_inline_tool_edit_file', '_inline_tool_find_files', '_inline_tool_find_references', '_inline_tool_get_background_output', '_inline_tool_get_datetime', '_inline_tool_get_signatures', '_inline_tool_git_commit', '_inline_tool_git_status', '_inline_tool_install_package', '_inline_tool_list_dir', '_inline_tool_patch_file', '_inline_tool_read_file', '_inline_tool_replace_lines', '_inline_tool_run_bash', '_inline_tool_run_python', '_inline_tool_run_tests', '_inline_tool_search_code', '_inline_tool_start_background', '_inline_tool_stop_background', '_inline_tool_subagent_research', '_inline_tool_task_complete', '_inline_tool_undo_last', '_inline_tool_web_fetch', '_inline_tool_web_search', '_inline_tool_write_file', '_inline_tool_write_file_append', '_looks_like_json_edit_args', '_old_str_snippet', '_ps_quote_path', '_pyright_lint_result', '_python_content_search', '_resolve_pyright_cmd', '_stage_split', '_stream_proc', '_try_convert_json_edits', '_validate_install_packages', 'init_runtime_deps']
+__all__ = ['_auto_lint_result', '_bash_blocklisted', '_first_dict_value', '_inline_tool_edit_ast', '_inline_tool_edit_file', '_inline_tool_find_files', '_inline_tool_find_references', '_inline_tool_get_background_output', '_inline_tool_get_datetime', '_inline_tool_get_signatures', '_inline_tool_git_commit', '_inline_tool_git_status', '_inline_tool_install_package', '_inline_tool_list_dir', '_inline_tool_patch_file', '_inline_tool_read_file', '_inline_tool_replace_lines', '_inline_tool_run_bash', '_inline_tool_run_python', '_inline_tool_run_tests', '_inline_tool_search_code', '_inline_tool_start_background', '_inline_tool_stop_background', '_inline_tool_subagent_research', '_inline_tool_task_complete', '_inline_tool_undo_last', '_inline_tool_web_fetch', '_inline_tool_web_search', '_inline_tool_write_file', '_inline_tool_write_file_append', '_looks_like_json_edit_args', '_old_str_snippet', '_ps_quote_path', '_pyright_lint_result', '_python_content_search', '_resolve_pyright_cmd', '_stream_proc', '_try_convert_json_edits', '_validate_install_packages', 'init_runtime_deps']

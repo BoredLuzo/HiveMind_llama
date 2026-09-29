@@ -710,16 +710,6 @@ def _validate_install_packages(packages: str) -> tuple[bool, str]:
     return True, p
 
 
-def _stage_split(content: str, limit: int) -> tuple[str, int]:
-
-    cut = content.rfind("\n", 0, limit)
-    if cut <= 0:
-        cut = min(limit, len(content))
-    else:
-        cut += 1
-    return content[:cut], cut
-
-
 def _ps_quote_path(cmd: str, raw_path: str) -> str:
 
 
