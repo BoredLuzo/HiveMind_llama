@@ -30,44 +30,42 @@ def parse_tool_args(raw) -> dict:
 # at the output token limit (duo_coder.max_tokens=8000) mid JSON/XML argument
 # truncated -> finish_reason=length -> DROPPED -> 3x retry -> loop stop.
 # calibration: [WRITE-CALIBRATION] logs (agentic_tool_loop) provide real
-# chars/token per request; factor via the duo_write_chars_per_token setting.
-# cap 3.3 (documented real value).
-_WRITE_LIMIT_TIERS = {
-    "big":   (20000, 16000),
-    "mid":   (18000, 14000),   # 7-9b
-    "small": (15000, 12000),   # 3-6b — 4b models emit 9-13k chars routinely
-    "tiny":  (5000, 3500),     # (live spark run); 7000 forced an auto-split on
-}                              # every big write and broke the append flow
-_WRITE_BUDGET_OVERHEAD_CHARS = 2000  # think + tool_call-Wrapper + path
+# ── WRITE-SIZE HINT (2026-09-29) ──────────────────────────────────────────────
+# No per-size tiers anymore. Core insight: a fully-arrived call (finish_reason
+# == stop, valid JSON) can never exceed max_tokens — max_tokens IS the hard
+# limit, so a complete write is always accepted, whatever its size. The only
+# failure mode is TRUNCATION (finish_reason == length), and the salvage path
+# recovers that at the last complete line. The number below is therefore just
+# a soft hint (chars per write_file / write_file_append call) that keeps
+# models clear of the truncation/salvage path:
+#   usable_tokens = max_tokens - reasoning_tokens   [thinking models burn it]
+#   write_hint    = usable_tokens * chars_per_token * 0.4
+#   append_hint   = usable_tokens * chars_per_token * 0.25
+# The 0.4 cold-start factor reserves room for reasoning/thinking output and
+# the tool-call wrapper. No name matching — new models need no entry here.
+_WRITE_HINT_WRITE_FACTOR = 0.4
+_WRITE_HINT_APPEND_FACTOR = 0.25
+_WRITE_HINT_MIN_CHARS = 500
 
 
 def resolve_write_char_limits(model: str = "", token_budget: int | None = None,
-                              chars_per_token: float | None = None) -> tuple[int, int]:
+                              chars_per_token: float | None = None,
+                              reasoning_tokens: int = 0) -> tuple[int, int]:
 
 
-    _tier = _WRITE_LIMIT_TIERS["tiny"]
-    if any(x in model for x in ("14b", "32b", "35b", "70b", "72b")):
-        _tier = _WRITE_LIMIT_TIERS["big"]
-    elif any(x in model for x in ("9b", "8b", "7b")):
-        _tier = _WRITE_LIMIT_TIERS["mid"]
-    elif any(x in model for x in ("3b", "4b", "5b", "6b")):
-        _tier = _WRITE_LIMIT_TIERS["small"]
-    _write, _append = _tier
-    try:
-        if token_budget and int(token_budget) > 0:
-            _cpt = float(chars_per_token or 2.5)
-            if _cpt > 0:
-                _budgeted = max(500, int(int(token_budget) * _cpt)
-                                - _WRITE_BUDGET_OVERHEAD_CHARS)
-                _write = min(_write, _budgeted)
-                _append = min(_append, _budgeted)
-    except (TypeError, ValueError):
-        pass
+    _cpt = float(chars_per_token or 2.5)
+    if _cpt <= 0:
+        _cpt = 2.5
+    _tok = max(0, int(token_budget or 0) - max(0, int(reasoning_tokens or 0)))
+    _write = max(_WRITE_HINT_MIN_CHARS, int(_tok * _cpt * _WRITE_HINT_WRITE_FACTOR))
+    _append = max(_WRITE_HINT_MIN_CHARS, int(_tok * _cpt * _WRITE_HINT_APPEND_FACTOR))
     return _write, _append
 
 
 # ── TRUNCATION-SALVAGE (2026-08-22) ────────────────────────────────────────
 _RE_SURROGATE = re.compile(r"[\ud800-\udfff]")
+# incomplete escape fragment at the very end of a truncated string
+_RE_TRAILING_PARTIAL_ESCAPE = re.compile(r"\\(?:u[0-9a-fA-F]{0,3}|\\)?$")
 
 
 def _decode_salvaged_string(body: str) -> str:
@@ -172,14 +170,24 @@ def salvage_truncated_write_args(raw: str, tool_name: str = "write_file") -> dic
     _content = _RE_SURROGATE.sub("\ufffd", _content)
     if not _content:
         return None
+    # TRUNCATION-EDGE (2026-09-29): a cut inside an escape sequence leaves a
+    # literal fragment at the end of the decoded content ("\u00e", a lone
+    # backslash). Only strip it when the JSON string was NOT closed — a real
+    # trailing backslash in a closed string is legitimate content.
+    if not _closed:
+        _content = _RE_TRAILING_PARTIAL_ESCAPE.sub("", _content)
+    if not _content:
+        return None
     if not _closed and "\n" in _content:
         _head, _, _tail = _content.rpartition("\n")
         if _tail:
             _content = _head + "\n"
+    _tail_lines = _content.splitlines()[-3:]
     return {"args": {"path": _path, "content": _content},
             "_salvage": True,
             "_salvaged_chars": len(_content),
-            "_salvaged_lines": _salvaged_line_count(_content)}
+            "_salvaged_lines": _salvaged_line_count(_content),
+            "_salvaged_tail": "\n".join(_tail_lines)}
 
 
 def run_bash_failed(result: str) -> bool:

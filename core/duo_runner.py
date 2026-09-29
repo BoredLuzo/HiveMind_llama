@@ -1757,13 +1757,14 @@ async def run_code_duo(ctx):
             # also lives in the write_file/write_file_append tool descriptions
             # — the system block now carries only the per-model numbers.
             _duo_coder_sys += (
-                f"\n\nWRITE RULES (hard limits): write_file accepts at most ~{_wb_limit} "
+                f"\n\nWRITE RULES (soft target): write_file accepts at most ~{_wb_limit} "
                 f"characters per call (chunks well below ~{_wb_hint_safe}) and writes the "
                 f"COMPLETE file (create or overwrite). To change parts of an existing "
                 f"file: edit_file with old_text copied VERBATIM from your last read_file "
-                f"(must be unique in the file) and new_text as the replacement. Oversized "
-                f"writes are auto-split: finish via write_file_append(path, "
-                f"content='<AUTO_SPLIT_CONTINUE>')."
+                f"(must be unique in the file) and new_text as the replacement. If a write "
+                f"call is cut off by the output limit, the server keeps everything up to "
+                f"the last complete line and tells you the line — continue from there with "
+                f"write_file_append, never by rewriting from the start."
             )
         except Exception:
             pass
@@ -4548,16 +4549,25 @@ async def run_code_duo(ctx):
                                             _salv["args"], ensure_ascii=False)
                                         _vtc["_salvage"] = _salv
                                         _salv_path = _salv["args"].get("path", "?")
+                                        try:
+                                            from tools.runner import _get_write_budget as _gwb_salv
+                                            _salv_budget, _salv_cpt = _gwb_salv() or (None, None)
+                                            from utils.tool import resolve_write_char_limits as _wcl_salv
+                                            _append_hint = int(
+                                                (_wcl_salv(_vname, _salv_budget, _salv_cpt) or (0, 4000))[1]
+                                            ) or 4000
+                                        except Exception:
+                                            _append_hint = 4000
+                                        _salv_tail = str(_salv.get("_salvaged_tail", "") or "")
                                         _salvage_notes.append(
                                             f"[WRITE-SALVAGE] {_vname} for '{_salv_path}' was cut off at the "
-                                            f"output limit — only {_salv['_salvaged_chars']} "
-                                            f"chars ({_salv['_salvaged_lines']} lines) were salvaged "
-                                            f"and written. The file is now INCOMPLETE. Do NOT rewrite "
-                                            f"the whole file (that duplicates content). Instead: "
-                                            f"1) read_file('{_salv_path}', start_line={max(1, _salv['_salvaged_lines'] - 15)}) "
-                                            f"to see exactly where the file ends, 2) write_file_append "
-                                            f"continuing from the LAST line you saw — no repetition. "
-                                            f"Split further appends into chunks of max ~15000 chars."
+                                            f"output limit — wrote {_salv['_salvaged_chars']} "
+                                            f"chars ({_salv['_salvaged_lines']} lines), cut at the "
+                                            f"last complete line. The file is now INCOMPLETE. Do NOT rewrite "
+                                            f"the whole file (that duplicates content). Continue exactly "
+                                            f"after the LAST line below with write_file_append "
+                                            f"(chunks of max ~{_append_hint} chars):\n"
+                                            f"{_salv_tail}"
                                         )
                                         logger.warning(
                                             "[WRITE-SALVAGE] %s '%s' salvaged: %d chars, %d lines",

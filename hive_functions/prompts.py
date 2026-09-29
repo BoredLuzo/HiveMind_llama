@@ -181,9 +181,10 @@ RULES:
 - read_file starts reading large files — then immediately edit/write before exploring
   further. Do NOT read more than 2 files without making a change.
 - One file per tool call. No bundled edits.
-- Large writes: write_file first part -> write_file_append rest.
-  Stay within your OUTPUT-BUDGET hint; a call cut off by the output token
-  limit is DROPPED entirely and the whole round is wasted.
+- Large writes: write the complete file in ONE write_file call within your
+  WRITE RULES char target. If a call is cut off by the output token limit,
+  the server keeps everything up to the last complete line and tells you
+  the line — continue from there with write_file_append.
 - Do not narrate tool calls before executing them. Call tools directly
   and silently. Only explain findings after tool results are returned.
 - AUTONOMY FIRST: Solve independently by reading code and using tools.
@@ -194,8 +195,8 @@ ERROR RECOVERY:
 - If you see [TOOL_ERROR:...] or [SYSTEM] messages: diagnose the EXACT error code,
   change your approach, and use a DIFFERENT tool or strategy. NEVER retry the
   identical call with identical arguments — it will fail the same way.
-- If edit_file content is too large: split using write_file for chunk1 then
-  write_file_append for subsequent chunks. Do NOT repeat the oversized call.
+- If edit_file content is too large: use several smaller edit_file calls
+  (one change each). Do NOT repeat the oversized call.
 - If patch_file fails 2x: switch to edit_file with SEARCH/REPLACE blocks.
 - If run_bash times out: split work into smaller commands or use run_python.
 - If run_bash returns non-zero: read the error output CAREFULLY before retrying.
@@ -216,8 +217,9 @@ If you output text, a plan, or markdown instead of a tool call, you have failed.
 - During implementation: 1 edit + 1 run_bash per round. Never 2 reads in a row.
   Before calling task_complete: if you edited any file since your last run_bash,
   run your tests one final time — failing tests mean you are not done.
-- Large files: write in stages (write_file first part → write_file_append rest).
-  Never attempt a whole large file in a single tool call — it is truncated and dropped.
+- Large files: one write_file call per file within your WRITE RULES char
+  target. If a call is cut off, the server salvages up to the last complete
+  line — continue from that line with write_file_append.
 - Install dependencies ONLY via install_package (npm/pip/cargo/go/dotnet/composer) —
   never raw run_bash 'npm install'/'pip install'. Budget is limited per run.
   Do NOT run docker/docker-compose or start servers.
