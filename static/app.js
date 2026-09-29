@@ -2605,6 +2605,113 @@ function showStatus(txt) {
   scrollBtmIfNearBottom(120);
 }
 
+// ── MID-RUN STEERING / FOLLOW-UP QUEUE (2026-09-29, ZCode-style) ───────────
+// While a run streams, sendMsg() queues typed messages instead of dropping
+// them. Queued items appear as a compact bar above the input (like ZCode):
+// ↑ Steer injects at the next tool-call boundary (POST /api/run/{id}/steer),
+// ✎ pushes the text back into the input for editing, ✕ discards. Steered
+// messages stay visible in the chat via the server's "🧭 steered:" status
+// frames. Unsteered items auto-send one-by-one when the run finishes.
+S.followUpQueue = S.followUpQueue || [];
+
+function queueFollowUp(text) {
+  S.followUpQueue.push({ text: text, steered: false });
+  renderFollowUpQueue();
+}
+
+function renderFollowUpQueue() {
+  const bar = document.getElementById('followup-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  bar.style.display = S.followUpQueue.length ? 'block' : 'none';
+  S.followUpQueue.forEach(function(item, idx) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:5px 8px;margin-bottom:4px;border:1px solid var(--b2);border-radius:8px;background:var(--bg);font-size:11px';
+    const badge = document.createElement('span');
+    badge.textContent = 'queued';
+    badge.style.cssText = 'flex:0 0 auto;font-size:8px;letter-spacing:.08em;text-transform:uppercase;color:#d0a020;border:1px solid currentColor;border-radius:4px;padding:2px 6px';
+    row.appendChild(badge);
+    const body = document.createElement('span');
+    body.style.cssText = 'flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx)';
+    body.textContent = item.text;
+    row.appendChild(body);
+    const mkBtn = function(label, title, fn, color) {
+      const b = document.createElement('button');
+      b.textContent = label; b.title = title;
+      b.style.cssText = 'flex:0 0 auto;font-size:9px;padding:2px 8px;border-radius:5px;border:1px solid ' + (color || 'var(--b2)') + ';background:none;color:' + (color || 'var(--tx2)') + ';cursor:pointer';
+      b.onclick = fn;
+      return b;
+    };
+    row.appendChild(mkBtn('\u2191 Steer', 'Inject at the next tool-call boundary', function(){ steerFollowUp(idx); }, '#4a9eff'));
+    row.appendChild(mkBtn('\u270E', 'Edit — back into the prompt input', function(){
+      const inp = document.getElementById('input');
+      if (inp) { inp.value = item.text; inp.focus(); }
+      S.followUpQueue.splice(idx, 1);
+      renderFollowUpQueue();
+    }));
+    row.appendChild(mkBtn('\u2715', 'Discard queued message', function(){
+      S.followUpQueue.splice(idx, 1);
+      renderFollowUpQueue();
+    }, '#c05050'));
+    bar.appendChild(row);
+  });
+  _updateQueuePlaceholder();
+}
+
+function _steerChatNote(text) {
+  const c = document.getElementById('chat');
+  if (!c) return;
+  const d = document.createElement('div');
+  d.className = 'msg divider';
+  d.style.cssText = 'color:#4a9eff;border-color:rgba(74,158,255,.25);font-size:9px';
+  d.textContent = '\u2191 steering: ' + text;
+  c.appendChild(d);
+  scrollBtmIfNearBottom(120);
+}
+
+function steerFollowUp(idx) {
+  const item = S.followUpQueue[idx];
+  if (!item || item.steered) return;
+  const rid = S.currentRunId;
+  if (!rid || !S.streaming) { showStatus('\u26A0 Run already finished \u2014 message stays queued.'); return; }
+  fetch('/api/run/' + encodeURIComponent(rid) + '/steer', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ text: item.text })
+  }).then(function(r){
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    S.followUpQueue.splice(idx, 1);
+    renderFollowUpQueue();
+    _steerChatNote(item.text);
+  }).catch(function(e){ showStatus('\u26A0 Steer failed: ' + e.message + ' \u2014 stays queued.'); });
+}
+
+function _drainFollowUpQueue() {
+  // deliver one unsteered message per finished run — chained via sendMsg()
+  S.followUpQueue = S.followUpQueue.filter(function(i){ return !i.steered; });
+  if (!S.followUpQueue.length) { renderFollowUpQueue(); return; }
+  const next = S.followUpQueue.shift();
+  renderFollowUpQueue();
+  const inp = document.getElementById('input');
+  if (inp) inp.value = next.text;
+  sendMsg();
+}
+
+function _updateQueuePlaceholder() {
+  const inp = document.getElementById('input');
+  if (!inp) return;
+  inp.placeholder = (S.streaming && S.currentRunId)
+    ? 'Keep typing to queue follow-up changes' : 'Message...';
+}
+
+function _updateSendState() {
+  // grey the send arrow while there is nothing to send or steer; amber as
+  // soon as the field has content (while streaming, content = queueable)
+  const inp = document.getElementById('input');
+  const btn = document.getElementById('send');
+  if (!inp || !btn) return;
+  btn.disabled = !(inp.value.trim() || S.pendingImgs.length);
+}
+
 function _addFlowConnector(color, bgAlpha, agent, label, round) {
   var c = document.getElementById('chat');
   if (!c) return;
@@ -4789,11 +4896,25 @@ async function sendMsg() {
   if (S.agentPaused) { resumeWithAnswer(); return; }
   const inp = document.getElementById('input');
   const txt = inp.value.trim();
-  if ((!txt && !S.pendingImgs.length) || S.streaming) return;
+  if (!txt && !S.pendingImgs.length) return;
+  // MID-RUN STEERING (2026-09-29): while a run streams, typed messages
+  // queue up (ZCode-style) instead of being dropped — "↑ Steer" injects
+  // them at the next tool-call boundary, unsteered ones auto-send when the
+  // run finishes. Works from the very first streaming moment (run_id is
+  // looked up at steer time; early-phase messages simply stay queued).
+  // Images mid-run keep the old drop behavior.
+  if (S.streaming && !S.pendingImgs.length) {
+    queueFollowUp(txt);
+    inp.value = ''; inp.style.height = 'auto';
+    _updateSendState();
+    return;
+  }
+  if (S.streaming) return;
 
   const imgs = S.pendingImgs.slice();
   S.pendingImgs = []; renderImgPreview();
   inp.value = ''; inp.style.height = 'auto';
+  _updateSendState();
   var _helReset = document.getElementById('h-elapsed'); if (_helReset) _helReset.style.display = 'none';
   var _phReset = document.getElementById('h-phases'); if (_phReset) { _phReset.style.display = 'none'; _phReset.innerHTML = ''; }
   // reset the agent-phase badge
@@ -4813,7 +4934,10 @@ async function sendMsg() {
   S._runAbortCtrl = new AbortController();
   _perfResetRuntimeState();
   _perfRender(false);
-  document.getElementById('send').disabled = true;
+  // send button stays clickable while streaming — clicking it queues the
+  // typed message (steering bar), same as pressing Enter
+  const inpStart = document.getElementById('input');
+  if (inpStart) inpStart.placeholder = 'Keep typing to queue follow-up changes';
   document.getElementById('h-dot').className = 'busy';
   const stopBtn = document.getElementById('stop-btn');
   if (stopBtn) stopBtn.classList.add('visible');
@@ -5009,6 +5133,7 @@ async function sendMsg() {
     _cleanupLoadTimers();
     S.currentRunId = null;
     document.getElementById('send').disabled = false;
+    _updateSendState();
     document.getElementById('h-dot').className = 'on';
     const stopBtnEnd = document.getElementById('stop-btn');
     if (stopBtnEnd) stopBtnEnd.classList.remove('visible');
@@ -5019,6 +5144,7 @@ async function sendMsg() {
     S.agentQuestion = null;
     const inpEnd = document.getElementById('input');
     if (inpEnd) inpEnd.placeholder = 'Message...';
+    _drainFollowUpQueue();
         const skipBtnEnd = document.getElementById('skip-btn');
   if (skipBtnEnd) skipBtnEnd.style.display = 'none';
     // refresh VRAM after pipeline/stream — only if the panel is open
@@ -7251,7 +7377,9 @@ document.getElementById('input').addEventListener('keydown', function(e) {
 document.getElementById('input').addEventListener('input', function() {
   this.style.height = 'auto';
   this.style.height = Math.min(this.scrollHeight, 140) + 'px';
+  _updateSendState();
 });
+_updateSendState();
 document.getElementById('input').addEventListener('paste', function(e) {
   Array.from(e.clipboardData.items).forEach(function(item) {
     if (!item.type.startsWith('image/')) return;
@@ -10774,6 +10902,8 @@ async function loadGitConfig(s) {
   if (duoToggle) duoToggle.checked = S.duoGitAutocommit;
   var cfgToggle = document.getElementById('git-autocommit-cfg-toggle');
   if (cfgToggle) cfgToggle.checked = S.duoGitAutocommit;
+  var cpToggle = document.getElementById('git-checkpoints-cfg-toggle');
+  if (cpToggle) cpToggle.checked = s.duo_git_checkpoints !== false;
   // Fill inputs
   var repoInp = document.getElementById('git-repo-url');
   if (repoInp) repoInp.value = S.gitRepoUrl;
