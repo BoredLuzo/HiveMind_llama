@@ -1032,8 +1032,10 @@ async function loadSettings() {
     S.duoPlannerUseCoderCtx = (s.duo_planner_use_coder_ctx !== false);
     var plUseCoderEl = document.getElementById('duo-planner-use-coder-ctx');
     if (plUseCoderEl) plUseCoderEl.checked = S.duoPlannerUseCoderCtx;
-    // sync the planner input status
-    if (S.duoPlannerUseCoderCtx && dctxPlEl) { dctxPlEl.disabled = true; dctxPlEl.value = S.duoCtxAgentic; }
+    // apply the FULL toggle state (disabled + value + opacity + ctx-scope
+    // hint) — the old inline copy only half-applied it, leaving the planner
+    // ctx select greyed until the checkbox was toggled once by hand.
+    togglePlannerUseCoderCtx(S.duoPlannerUseCoderCtx);
     // Planner / coder model
     S.duoPlannerModel = s.duo_planner_model || '';
     // PLANNER-MAX-TOKENS (0.99.2): visible output budget (0 = context as limit)
