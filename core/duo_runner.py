@@ -3311,6 +3311,10 @@ async def run_code_duo(ctx):
 
                     _partial_compression = bool(ctx.settings.get("duo_partial_compression", False))
                     _comp_llm_cfg = str(ctx.settings.get("duo_compress_model") or "").strip()
+                    if _comp_llm_cfg.lower() == "auto":
+                        # Auto (Coder): the executor model summarizes — no
+                        # separate light-model load (default path below).
+                        _comp_llm_cfg = ""
                     _comp_llm_timeout_s = int(ctx.settings.get("duo_compress_llm_timeout_s", 180) or 180)
                     _compress_local_only = bool(ctx.settings.get("duo_compress_local_only", False))
                     _max_tool_rounds_cfg = int(ctx.settings.get("duo_max_tool_rounds", 64))
