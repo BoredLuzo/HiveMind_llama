@@ -291,11 +291,17 @@ def _dispatch(args: dict, workspace) -> str:
         return _snapshot(page)
 
     if action == "screenshot":
-        path = str(args.get("path", "screenshot.png")).strip()
-        path = os.path.basename(path.replace("\\", "/")) or "screenshot.png"
+        path = str(args.get("path", "screenshot.png")).strip().replace("\\", "/")
+        path = path.lstrip("/") or "screenshot.png"
+        # SCREENSHOT-WORKSPACE (2026-09-29): screenshots belong to the project,
+        # not to the HiveMind install dir — the path used to be stripped to its
+        # basename before saving, so playwright wrote into the server CWD.
+        _ws = str(workspace or "").strip()
+        _out = (_pl.Path(_ws) / path) if _ws else _pl.Path(path)
+        _out.parent.mkdir(parents=True, exist_ok=True)
         full = bool(args.get("full_page", False))
-        page.screenshot(path=path, full_page=full)
-        return f"[browser] screenshot saved to {path}"
+        page.screenshot(path=str(_out), full_page=full)
+        return f"[browser] screenshot saved to {_out}"
 
     if action == "click":
         selector = str(args.get("selector", "")).strip()
