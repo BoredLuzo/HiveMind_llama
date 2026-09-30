@@ -2293,9 +2293,11 @@ async function loadPreset(name) {
     // PRESET-VISIBILITY (2026-09-08): show what the preset restored — a
     // "planner off + chunking off" snapshot used to disable the planner phase
     // without any feedback.
+    var _warnTxt = (d.warnings && d.warnings.length)
+      ? '\n\n⚠ ' + d.warnings.join('\n⚠ ') : '';
     alert('Preset "' + name + '" loaded.\n'
       + 'Planner: ' + (d.planner_enabled ? 'ON' : 'OFF') + (d.planner_model ? ' (' + d.planner_model + ')' : '') + '\n'
-      + 'Chunking: ' + (d.chunking ? 'ON' : 'OFF'));
+      + 'Chunking: ' + (d.chunking ? 'ON' : 'OFF') + _warnTxt);
   } else {
     alert('Preset "' + name + '" could not be loaded' + (d && d.error ? ': ' + d.error : ''));
   }
@@ -7107,7 +7109,8 @@ function handleEvent(d) {
         if (_cpKey) {
           var entry = _cpFiles[_cpKey];
           var d = (entry.diffs || []).filter(function(x) { return x.id === (_tcRow.dataset.cpDiffId || _tcRow.dataset.callId); })[0];
-          if (d) { entry.pinnedCallId = d.id; entry.view = 'diff'; }
+          if (d) entry.pinnedCallId = d.id;   // pin THIS call for the ±Diff view
+          entry.view = _cpLastView;           // open in the last used view mode
           _cpShowFile(_cpKey);
         }
         toggleCodePanel(true);
@@ -7256,6 +7259,7 @@ function handleEvent(d) {
         if (!_ek || !_cpFiles[_ek]) return;
         _cpFiles[_ek].pinnedCallId = _cpPinId;
         _cpFiles[_ek].view = 'diff';
+        _cpLastView = 'diff';  // an explicit pin is a diff-mode choice
         _cpShowFile(_ek);
         toggleCodePanel(true);
       };
@@ -10604,6 +10608,10 @@ function _cpRenderPre(body, text, plain) {
 // button (tabs never push it around). Applies to the ACTIVE tab.
 var _cpViewToggle = null;
 var _cpCallSeq = 0;
+// LAST-VIEW MODE (2026-09-30): File vs ±Diff is a remembered MODE, not a
+// per-file property — whichever view was used last is how the next tool
+// call / tab click opens (chip click still pins its own call's diff).
+var _cpLastView = 'file';
 function _cpEnsureViewToggle() {
   if (_cpViewToggle && _cpViewToggle.isConnected) return;
   var hdr = document.getElementById('code-panel-hdr');
@@ -10619,17 +10627,18 @@ function _cpEnsureViewToggle() {
     b.onclick = function() {
       var entry = _cpFiles[_cpActive];
       if (!entry) return;
-      if (view === 'diff' && !entry.diffText) return;
+      if (view === 'diff' && !(entry.diffText || (entry.diffs && entry.diffs.length))) return;
       // VIEW/PIN DECOUPLED (2026-09-19): File vs ±Diff only swaps the
       // rendering; the pinned call survives so ±Diff comes back to exactly
       // that call. Pin changes only via ⇱ / chip click.
       entry.view = view;
+      _cpLastView = view;  // remembered mode for the next open
       _cpShowFile(_cpActive);
     };
     return b;
   };
   wrap.appendChild(mkBtn('File', 'file', 'Full file state (as on disk)'));
-  wrap.appendChild(mkBtn('\u00b1Diff', 'diff', 'Last recorded change (unified diff)'));
+  wrap.appendChild(mkBtn('\u00b1Diff', 'diff', 'Diff of the selected tool call'));
   hdr.insertBefore(wrap, closeBtn);
   closeBtn.style.marginLeft = '0';
   _cpViewToggle = wrap;
@@ -10639,11 +10648,24 @@ function _cpUpdateViewToggle() {
   if (!_cpViewToggle || !_cpViewToggle.isConnected) return;
   var entry = _cpFiles[_cpActive];
   var view = entry ? (entry.view || 'file') : 'file';
-  var hasDiff = !!(entry && entry.diffText);
+  var hasDiff = !!(entry && (entry.diffText || (entry.diffs && entry.diffs.length)));
   _cpViewToggle.querySelectorAll('button').forEach(function(b) {
     var v = b.getAttribute('data-cp-view');
     var isView = v === view;
     var dim = (v === 'diff' && !hasDiff);
+    if (v === 'diff') {
+      // CALL-LABEL (2026-09-30): show WHICH call the diff view is bound to —
+      // the pinned call (chip click / ⇱) or the latest recorded one
+      var _lbl = '\u00b1Diff';
+      if (isView && entry && entry.diffs && entry.diffs.length) {
+        var _dc = entry.pinnedCallId
+          ? entry.diffs.filter(function(d){ return d.id === entry.pinnedCallId; })[0]
+          : null;
+        if (!_dc) _dc = entry.diffs[entry.diffs.length - 1];
+        if (_dc && _dc.name) _lbl += ' \u00b7 ' + _dc.name;
+      }
+      b.textContent = _lbl;
+    }
     b.style.borderColor = isView ? '#20b0a0' : 'var(--b2)';
     b.style.color = isView ? '#20b0a0' : 'var(--tx2)';
     b.style.opacity = dim ? .35 : 1;
@@ -10667,6 +10689,26 @@ function _cpRenderDiff(body, diffText) {
 function _cpAddOrUpdateFile(path, content, op, render) {
   var hdr = document.getElementById('code-panel-hdr');
   if (!hdr) return;
+  // TAB-KEY MERGE (2026-09-30): the streaming tab is created from the path
+  // AS THE MODEL WROTE IT ("tetris.html", "/C:/Users/...", backslashes),
+  // while file_change / tool results carry the backend's normalized
+  // absolute path. Direct map access created TWO tabs for one file (live:
+  // an "EDIT" fragment tab next to an "EDITED" full-file tab, diff view
+  // grayed out on both because diffText attached to the other key). Resolve
+  // through the suffix matcher and re-key to the incoming (canonical) path.
+  var _mk = _cpFindEntry(path);
+  if (_mk && _mk !== path && _cpFiles[_mk]) {
+    var _moved = _cpFiles[_mk];
+    delete _cpFiles[_mk];
+    _moved.tab.title = path;
+    _moved.tab.onclick = (function(p){return function(){
+      var _te = _cpFiles[p];
+      if (_te) _te.view = _cpLastView;  // tabs open in the last used view mode
+      _cpShowFile(p);
+    }})(path);
+    _cpFiles[path] = _moved;
+    if (_cpActive === _mk) _cpActive = path;
+  }
   // Clear placeholder text if first file
   var empty = hdr.querySelector('#code-panel-empty');
   if (empty) empty.remove();
@@ -10677,9 +10719,15 @@ function _cpAddOrUpdateFile(path, content, op, render) {
     // New tab
     var tab = document.createElement('button');
     tab.className = 'cp-tab';
-    tab.innerHTML = '<span class="cp-op '+opLabel+'">'+opLabel.toUpperCase()+'</span><span class="cp-name">'+esc(shortName)+'</span>';
+    // TAB-LABEL (2026-09-30): just the file name — the operation lives in
+    // the timeline chips and the view toggle, not in the tab row
+    tab.innerHTML = '<span class="cp-name">'+esc(shortName)+'</span>';
     tab.title = path;
-    tab.onclick = (function(p){return function(){_cpShowFile(p)}})(path);
+    tab.onclick = (function(p){return function(){
+      var _te = _cpFiles[p];
+      if (_te) _te.view = _cpLastView;  // tabs open in the last used view mode
+      _cpShowFile(p);
+    }})(path);
     // Insert before the view toggle (which sits right before the close btn)
     var closeBtn = document.getElementById('code-panel-close');
     var _cpAnchor = (_cpViewToggle && _cpViewToggle.isConnected) ? _cpViewToggle : closeBtn;
@@ -10687,9 +10735,7 @@ function _cpAddOrUpdateFile(path, content, op, render) {
     _cpFiles[path] = {content: '', op: opLabel, tab: tab, view: 'file', diffText: '', diffs: [], pinnedCallId: null, streamText: ''};
   } else {
     _cpFiles[path].op = opLabel;
-    // Update op badge
-    var opBadge = _cpFiles[path].tab.querySelector('.cp-op');
-    if (opBadge) { opBadge.className='cp-op '+opLabel; opBadge.textContent=opLabel.toUpperCase(); }
+    // op badge was removed from tabs (2026-09-30) — nothing to restamp
   }
   // STREAM/FILE SPLIT (2026-09-19): edit/append streams carry only a
   // FRAGMENT (the search/replace block, the appended tail) — never treat
