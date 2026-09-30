@@ -1742,7 +1742,7 @@ async def run_code_duo(ctx):
         # Writes were being truncated by the token limit or rejected as too large
         # AFTER full generation (7-minute total loss). Instruct proactively with
         # an exact per-call char cap (same source as the runtime tool check:
-        # resolve_write_char_limits) plus the server-side AUTO-SPLIT continuation.
+        # resolve_write_char_limits).
         try:
             _wb_hint_budget = max(1024, int(_duo_coder_tok))
             _wb_hint_cpt = float(ctx.settings.get("duo_write_chars_per_token", 2.5))
@@ -4507,80 +4507,46 @@ async def run_code_duo(ctx):
                             _dr_content = _RE_JSON_FENCE.sub(lambda m: m.group(1), _dr_content)
                             _dr_msg = {**_dr_msg, "content": _dr_content}
                         _dr_tcs = _dr_msg.get("tool_calls", [])
-                        # Validate assembled tool calls (SSE stream may have dropped)
-                        _validated_tcs = []
-                        _drop_notices = []
-                        _drop_names = []
-                        _salvage_notes = []
-                        _drop_len = ""
+                        _drop_len = (" — finish_reason=length (output token limit reached)"
+                                     if _result.get("dr_finish_reason") == "length" else "")
+                        # VALIDATE-EXTRACT (2026-09-30): the tool-call repair/
+                        # salvage block moved VERBATIM into utils.tool.validate_
+                        # tool_calls — a pure function (no ctx/emit/state) so
+                        # fix_agent, subagent_lite and the chat loop can reuse
+                        # the exact same behavior; the write-tools suite pins it.
+                        from utils.tool import validate_tool_calls as _vtc_val
+                        try:
+                            from tools.runner import _get_write_budget as _gwb_v
+                            _wb_tok, _wb_cpt = _gwb_v() or (None, None)
+                        except Exception:
+                            _wb_tok = _wb_cpt = None
+                        _vres = _vtc_val(
+                            _dr_tcs, finish_reason=_result.get("dr_finish_reason"),
+                            model=coder_mdl, token_budget=_wb_tok, chars_per_token=_wb_cpt)
+                        _validated_tcs = _vres["tool_calls"]
+                        _drop_notices = _vres["drop_notices"]
+                        _drop_names = _vres["dropped_names"]
+                        _salvage_notes = _vres["salvage_notes"]
                         if _result.get("dr_finish_reason") == "length":
-                            _drop_len = " — finish_reason=length (output token limit reached)"
-                        for _vtc in _dr_tcs:
-                            _vname = (_vtc.get("function", {}).get("name", "") or "").strip()
-                            _vargs = _vtc.get("function", {}).get("arguments", "")
-                            if not _vname:
-                                _drop_notices.append(
-                                    "[DROPPED: tool call with no name — stream interrupted]"
-                                )
-                                continue
-                            try:
-                                json.loads(_vargs) if _vargs else {}
-                            except (json.JSONDecodeError, TypeError):
-                                from utils.tool import _repair_json_backslashes as _repair_bs
-                                try:
-                                    _repaired_args = _repair_bs(_vargs)
-                                    json.loads(_repaired_args)
-                                    _vtc = dict(_vtc)
-                                    _vtc["function"] = dict(_vtc.get("function") or {})
-                                    _vtc["function"]["arguments"] = _repaired_args
-                                except (json.JSONDecodeError, TypeError):
-                                    # truncation at the output limit — salvageable prefix
-                                    _salv = None
-                                    if _vname in ("write_file", "write_file_append"):
-                                        try:
-                                            from utils.tool import salvage_truncated_write_args as _salvage_args
-                                            _salv = _salvage_args(_vargs, _vname)
-                                        except Exception:
-                                            _salv = None
-                                    if _salv:
-                                        _vtc = dict(_vtc)
-                                        _vtc["function"] = dict(_vtc.get("function") or {})
-                                        _vtc["function"]["arguments"] = json.dumps(
-                                            _salv["args"], ensure_ascii=False)
-                                        _vtc["_salvage"] = _salv
-                                        _salv_path = _salv["args"].get("path", "?")
-                                        try:
-                                            from tools.runner import _get_write_budget as _gwb_salv
-                                            _salv_budget, _salv_cpt = _gwb_salv() or (None, None)
-                                            from utils.tool import resolve_write_char_limits as _wcl_salv
-                                            _append_hint = int(
-                                                (_wcl_salv(_vname, _salv_budget, _salv_cpt) or (0, 4000))[1]
-                                            ) or 4000
-                                        except Exception:
-                                            _append_hint = 4000
-                                        _salv_tail = str(_salv.get("_salvaged_tail", "") or "")
-                                        _salvage_notes.append(
-                                            f"[WRITE-SALVAGE] {_vname} for '{_salv_path}' was cut off at the "
-                                            f"output limit — wrote {_salv['_salvaged_chars']} "
-                                            f"chars ({_salv['_salvaged_lines']} lines), cut at the "
-                                            f"last complete line. The file is now INCOMPLETE. Do NOT rewrite "
-                                            f"the whole file (that duplicates content). Continue exactly "
-                                            f"after the LAST line below with write_file_append "
-                                            f"(chunks of max ~{_append_hint} chars):\n"
-                                            f"{_salv_tail}"
-                                        )
-                                        logger.warning(
-                                            "[WRITE-SALVAGE] %s '%s' salvaged: %d chars, %d lines",
-                                            _vname, _salv_path,
-                                            _salv["_salvaged_chars"], _salv["_salvaged_lines"])
-                                    else:
-                                        _drop_names.append(_vname)
-                                        _drop_notices.append(
-                                            f"[DROPPED: tool call '{_vname}' had malformed JSON args "
-                                            f"— stream interrupted{_drop_len}]"
-                                        )
-                                        continue
-                            _validated_tcs.append(_vtc)
+                            # countable truncation event for the A/B benchmark,
+                            # with overrun-class discrimination: write-overrun
+                            # (has_tool_call) vs reasoning-overrun (no call).
+                            # reasoning_tokens is n/a when the server does not
+                            # report completion_tokens_details (llama.cpp b11191
+                            # likely doesn't) — 0 would read as "no reasoning"
+                            # although the value is unknown; think_chars (SSE
+                            # reasoning deltas) covers the reasoning size either way
+                            _ru = _result.get("dr_usage_final") or {}
+                            _rtd = (_ru.get("completion_tokens_details") or {}
+                                    if isinstance(_ru, dict) else {})
+                            _rt_raw = _rtd.get("reasoning_tokens") if isinstance(_rtd, dict) else None
+                            _think_chars = sum(len(p) for p in (_result.get("dr_thinking_parts") or []))
+                            logger.warning(
+                                "[WRITE-TRUNCATION] model=%s round=%s finish_reason=length "
+                                "has_tool_call=%s content_len=%d reasoning_tokens=%s think_chars=%d",
+                                coder_mdl, _dr, _vres["meta"]["has_tool_call"],
+                                len(_dr_msg.get("content") or ""),
+                                ("n/a" if _rt_raw is None else _rt_raw), _think_chars)
                         if _drop_notices:
                             _dtool_msgs.append({"role": "user",
                                                  "content": "\n".join(_drop_notices)})

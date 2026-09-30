@@ -396,6 +396,9 @@ class AgenticToolLoop(ToolLoop):
                     if _dr_usage_final:
                         await self._emit({"type": "usage_meta", "phase": "coder", **_dr_usage_final})
                     result["dr_finish_reason"] = _dr_finish_reason
+                    # TRUNCATION-DIAG (2026-09-30): callers log reasoning_tokens
+                    # from usage to separate write-overrun from reasoning-overrun
+                    result["dr_usage_final"] = _dr_usage_final
                     # duo_write_chars_per_token sammeln. Pro Request: completion_tokens
                     try:
                         _cal_chars = 0

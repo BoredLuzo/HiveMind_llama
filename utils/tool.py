@@ -132,6 +132,179 @@ def _salvaged_line_count(content: str) -> int:
     return content.count("\n") if content.endswith("\n") else content.count("\n") + 1
 
 
+def _trim_degenerate_tail(content: str) -> tuple[str, int]:
+    """Collapse a trailing run of identical non-trivial lines to one (2026-09-30).
+
+    A small model stuck in a repetition loop runs to the token limit; the
+    salvaged prefix then ends with the same line repeated many times — and the
+    recovery message asks the model to build ON TOP of that loop. >= 6
+    consecutive identical lines that are not whitespace/separator noise are
+    treated as a loop, trimmed to one occurrence, and flagged via
+    _salvage_trimmed. Threshold is 6, not 4: short runs of identical lines are
+    legitimate in generated HTML/boilerplate ("<td></td>" cell skeletons,
+    "<div class=...></div>" grids) and must survive verbatim — degenerate
+    loops observed live run far longer. Multi-line loop patterns (A,B,A,B,...)
+    are NOT caught here — that needs the stream-level n-gram detector.
+    """
+    if not content.endswith("\n"):
+        return content, 0
+    lines = content.split("\n")
+    if len(lines) < 7:
+        return content, 0
+    tail = lines[-2]  # lines[-1] is "" from the trailing newline
+    stripped = tail.strip()
+    if len(stripped) < 8 or len(set(stripped)) < 3:
+        return content, 0  # separator/brace noise ("----", "}}}") — never trim
+    run = 0
+    i = len(lines) - 2
+    while i >= 0 and lines[i] == tail:
+        run += 1
+        i -= 1
+    if run < 6:
+        return content, 0
+    return "\n".join(lines[:i + 1] + [tail, ""]), run - 1
+
+
+def record_truncation_fixture(tool: str, raw: str, *, model: str = "",
+                              finish_reason: str | None = None,
+                              cap: int = 20, path=None) -> bool:
+    """Persist malformed/truncated write-call args as REAL replay fixtures.
+
+    The first two-version replay ran on synthetic fixtures because raw args
+    are persisted nowhere (sessions keep only summaries, logs only counts).
+    This appends every malformed write-call argument string to
+    logs/write_truncations.jsonl (last `cap` incidents, first field wins in
+    later analysis — finish_reason separates true max_tokens cuts from other
+    JSON breakage). Best effort: never raises into the run loop.
+    """
+    import time as _time
+    try:
+        from pathlib import Path as _P
+        _path = _P(path) if path else (
+            _P(__file__).resolve().parents[1] / "logs" / "write_truncations.jsonl")
+        entry = {"ts": _time.strftime("%Y-%m-%dT%H:%M:%S"),
+                 "tool": str(tool), "model": str(model or ""),
+                 "finish_reason": finish_reason,
+                 "raw_len": len(raw or ""), "raw": str(raw or "")[:64000]}
+        old: list = []
+        if _path.exists():
+            import json as _json_tr
+            for _ln in _path.read_text(encoding="utf-8", errors="replace").splitlines():
+                try:
+                    old.append(_json_tr.loads(_ln))
+                except Exception:
+                    pass
+        old.append(entry)
+        _path.parent.mkdir(parents=True, exist_ok=True)
+        _path.write_text("\n".join(json.dumps(e, ensure_ascii=True)
+                                   for e in old[-cap:]) + "\n", encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+# ── TOOL-CALL VALIDATION (extracted from duo_runner 2026-09-30) ──────────────
+# PURE function: tool_calls + budget in, validated tool_calls / drop notices /
+# salvage notes / dropped names / meta out. No ctx, no emit, no loop state —
+# a verbatim move of the duo tool-round validation block so fix_agent,
+# subagent_lite and the chat loop can reuse the exact same repair+salvage
+# behavior. The write-tools test suite pins it; wiring errors of the
+# NameError class are caught by the F821 pre-commit hook.
+def validate_tool_calls(tool_calls, *, finish_reason: str | None = None,
+                        model: str = "", token_budget: int | None = None,
+                        chars_per_token: float | None = None) -> dict:
+
+    import logging as _logging
+    _log = _logging.getLogger("hivemind.tools")
+    validated: list = []
+    drop_notices: list = []
+    drop_names: list = []
+    salvage_notes: list = []
+    _drop_len = (" — finish_reason=length (output token limit reached)"
+                 if finish_reason == "length" else "")
+    for _vtc in (tool_calls or []):
+        if not isinstance(_vtc, dict):
+            continue
+        _vname = (str(((_vtc.get("function") or {}).get("name")) or "")).strip()
+        _vargs = (_vtc.get("function") or {}).get("arguments", "")
+        if not _vname:
+            drop_notices.append(
+                "[DROPPED: tool call with no name — stream interrupted]")
+            continue
+        try:
+            json.loads(_vargs) if _vargs else {}
+        except (json.JSONDecodeError, TypeError):
+            try:
+                _repaired_args = _repair_json_backslashes(_vargs)
+                json.loads(_repaired_args)
+                _vtc = dict(_vtc)
+                _vtc["function"] = dict(_vtc.get("function") or {})
+                _vtc["function"]["arguments"] = _repaired_args
+            except (json.JSONDecodeError, TypeError):
+                # truncation at the output limit — salvageable prefix.
+                # REAL-FIXTURE-DUMP: keep the raw args (last 20) so the next
+                # replay corpus is real model output, not synthetic fixtures
+                record_truncation_fixture(_vname, _vargs, model=model,
+                                          finish_reason=finish_reason)
+                _salv = None
+                if _vname in ("write_file", "write_file_append"):
+                    try:
+                        _salv = salvage_truncated_write_args(_vargs, _vname)
+                    except Exception:
+                        _salv = None
+                if _salv:
+                    _vtc = dict(_vtc)
+                    _vtc["function"] = dict(_vtc.get("function") or {})
+                    _vtc["function"]["arguments"] = json.dumps(
+                        _salv["args"], ensure_ascii=False)
+                    _vtc["_salvage"] = _salv
+                    _salv_path = _salv["args"].get("path", "?")
+                    _append_hint = 4000
+                    try:
+                        _append_hint = int(
+                            (resolve_write_char_limits(_vname, token_budget,
+                                                       chars_per_token) or (0, 4000))[1]
+                        ) or 4000
+                    except Exception:
+                        _append_hint = 4000
+                    _salv_tail = str(_salv.get("_salvaged_tail", "") or "")
+                    _salv_trimmed = int(_salv.get("_salvage_trimmed", 0) or 0)
+                    _trim_note = (
+                        f" A repetition loop was detected at the cut — "
+                        f"{_salv_trimmed} duplicated trailing line(s) were "
+                        f"removed; re-check that region before continuing."
+                        if _salv_trimmed else "")
+                    salvage_notes.append(
+                        f"[WRITE-SALVAGE] {_vname} for '{_salv_path}' was cut off at the "
+                        f"output limit — wrote {_salv['_salvaged_chars']} "
+                        f"chars ({_salv['_salvaged_lines']} lines), cut at the "
+                        f"last complete line.{_trim_note} The file is now INCOMPLETE. Do NOT rewrite "
+                        f"the whole file (that duplicates content). Continue exactly "
+                        f"after the LAST line below with write_file_append "
+                        f"(chunks of max ~{_append_hint} chars):\n"
+                        f"{_salv_tail}"
+                    )
+                    _log.warning(
+                        "[WRITE-SALVAGE] %s '%s' salvaged: %d chars, %d lines%s",
+                        _vname, _salv_path,
+                        _salv["_salvaged_chars"], _salv["_salvaged_lines"],
+                        f", repetition-trimmed {_salv_trimmed} line(s)" if _salv_trimmed else "")
+                else:
+                    drop_names.append(_vname)
+                    drop_notices.append(
+                        f"[DROPPED: tool call '{_vname}' had malformed JSON args "
+                        f"— stream interrupted{_drop_len}]"
+                    )
+                    continue
+        validated.append(_vtc)
+    return {"tool_calls": validated,
+            "drop_notices": drop_notices,
+            "salvage_notes": salvage_notes,
+            "dropped_names": drop_names,
+            "meta": {"finish_reason": finish_reason,
+                     "has_tool_call": bool(validated)}}
+
+
 def salvage_truncated_write_args(raw: str, tool_name: str = "write_file") -> dict | None:
 
 
@@ -182,11 +355,19 @@ def salvage_truncated_write_args(raw: str, tool_name: str = "write_file") -> dic
         _head, _, _tail = _content.rpartition("\n")
         if _tail:
             _content = _head + "\n"
+    _trimmed = 0
+    if not _closed:
+        # repetition-loop cut BEFORE the tail is sampled for the recovery
+        # message — the model must not continue on top of a degenerate loop
+        _content, _trimmed = _trim_degenerate_tail(_content)
+        if not _content:
+            return None
     _tail_lines = _content.splitlines()[-3:]
     return {"args": {"path": _path, "content": _content},
             "_salvage": True,
             "_salvaged_chars": len(_content),
             "_salvaged_lines": _salvaged_line_count(_content),
+            "_salvage_trimmed": _trimmed,
             "_salvaged_tail": "\n".join(_tail_lines)}
 
 
