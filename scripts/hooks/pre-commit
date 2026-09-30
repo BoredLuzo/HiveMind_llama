@@ -1,0 +1,32 @@
+#!/bin/sh
+# F821 (undefined names) + F811 (redefinition) + F841 (unused locals) —
+# introduced after e14f64f left a dangling _split_discard_note reference that
+# made every write_file_append report FAILED after the disk write had
+# succeeded (model retried → duplicated content). F841 catches the inverse:
+# a lost call site leaves the callee unused. ruff catches that class
+# statically at commit time.
+RUFF=""
+for _c in "./.venv/Scripts/ruff.exe" "./.venv/Scripts/ruff" "ruff"; do
+    if command -v "$_c" >/dev/null 2>&1; then RUFF="$_c"; break; fi
+done
+if [ -z "$RUFF" ]; then
+    echo "pre-commit: ruff not found (uv pip install ruff) — skipping F821 check"
+    exit 0
+fi
+
+FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$')
+[ -z "$FILES" ] && exit 0
+
+# shellcheck disable=SC2086
+"$RUFF" check --select F821,F811,F841 --no-cache $FILES || exit 1
+
+# fast write-tool suite (0.6s) — the success-path net; skipped when the
+# tooling deps are absent, but never skipped silently on FAILURE
+PY="./.venv/Scripts/python.exe"
+if [ -f "$PY" ] && [ -f "tests/test_write_tools.py" ]; then
+    "$PY" tests/test_write_tools.py >/dev/null 2>&1 || {
+        echo "pre-commit: tests/test_write_tools.py FAILED — run it for details"
+        exit 1
+    }
+fi
+exit 0
