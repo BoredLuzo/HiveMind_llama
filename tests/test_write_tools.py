@@ -72,6 +72,30 @@ class WriteFileSuccessPath(unittest.TestCase):
             {"path": "missing.txt", "content": "x\n"}, self.ws, None))
         self.assertIn("[TOOL_ERROR", res)
 
+    def test_msys_style_drive_slash_path_is_normalized(self):
+        # MSYS-STYLE DRIVE SLASH (2026-09-30): models emit "/C:/..." with a
+        # leading slash before the drive letter — live, two complete writes
+        # were lost to PATH_OUTSIDE_WORKSPACE. Must resolve INTO the workspace
+        # and PASS the containment check (workspace_lock set, not None).
+        if sys.platform != "win32":
+            self.skipTest("windows path form")
+        msys_path = "/" + str(self.ws / "t.txt").replace(chr(92), "/")
+        res = _run(_inline_tool_write_file(
+            {"path": msys_path, "content": "x = 1\n"}, self.ws, str(self.ws)))
+        self.assertNotIn("[TOOL_ERROR", res, res[:200])
+        self.assertEqual((self.ws / "t.txt").read_text(encoding="utf-8"), "x = 1\n")
+
+    def test_path_outside_workspace_still_rejected_after_normalization(self):
+        # the normalization must not open a hole: a real outside path stays out
+        # (sibling of the workspace, no system directories — keep the test fast)
+        probe = self.ws.parent / "hivemind_escape_probe.txt"
+        probe.unlink(missing_ok=True)
+        res = _run(_inline_tool_write_file(
+            {"path": str(probe), "content": "x\n"}, self.ws, str(self.ws)))
+        self.assertIn("PATH_OUTSIDE_WORKSPACE", res)
+        self.assertIn("RELATIVE", res)
+        self.assertFalse(probe.exists())
+
 
 class SalvageFixtures(unittest.TestCase):
     @staticmethod
@@ -211,6 +235,9 @@ class ToolCallValidation(unittest.TestCase):
         self.assertIn("finish_reason=length", r["drop_notices"][0])
         self.assertEqual(r["dropped_names"], ["run_bash"])
         self.assertFalse(r["meta"]["has_tool_call"])
+        # had/kept discrimination: the call EXISTED pre-validation — a
+        # dropped salvage must not read as reasoning-overrun in the log line
+        self.assertTrue(r["meta"]["had_tool_calls"])
 
     def test_truncated_write_salvaged_with_note_and_budget_hint(self):
         raw = json.dumps({"path": "t.py", "content": "a\n" * 400})[:-2]

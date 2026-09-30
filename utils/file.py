@@ -86,9 +86,18 @@ def quick_file_sha1(path: Path, sample_bytes: int = 8192) -> str:
 
 def _inline_resolve_path(workspace: Path, raw: str) -> Path:
     """Cross-platform path resolution for inline tools."""
-    if re.match(r'^[A-Za-z]:[/\\]', raw or ""):
-        return Path(raw)
-    p = Path(raw)
+    _raw = str(raw or "")
+    # MSYS-STYLE DRIVE SLASH (2026-09-30): small models emit "/C:/users/..."
+    # (leading slash before a drive letter). Path() keeps that as a
+    # filesystem-root path and the workspace containment check rejects it —
+    # live, two complete 6-7k writes were lost to PATH_OUTSIDE_WORKSPACE this
+    # way. Strip the leading slash so the drive path works; containment still
+    # runs afterwards, so this opens no hole.
+    if re.match(r'^/[A-Za-z]:[/\\]', _raw):
+        _raw = _raw[1:]
+    if re.match(r'^[A-Za-z]:[/\\]', _raw):
+        return Path(_raw)
+    p = Path(_raw)
     if p.is_absolute():
         return p
     return workspace / p
@@ -150,7 +159,9 @@ def _inline_check_workspace(p: Path, workspace_lock, tool_name=""):
         from tools.errors import tool_error_response as _tool_error_response
         return _tool_error_response(
             "PATH_OUTSIDE_WORKSPACE",
-            f"Path '{p}' is outside workspace '{workspace_lock}'.",
+            f"Path '{p}' is outside workspace '{workspace_lock}'. "
+            f"Write files with a RELATIVE path (e.g. 'index.html' or "
+            f"'src/main.py') — they are created inside the workspace root.",
             tool=tool_name,
             details={"path": str(p), "workspace": str(workspace_lock)},
         )
