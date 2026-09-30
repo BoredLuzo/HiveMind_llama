@@ -296,6 +296,7 @@ def _dispatch(args: dict, workspace) -> str:
         # SCREENSHOT-WORKSPACE (2026-09-29): screenshots belong to the project,
         # not to the HiveMind install dir — the path used to be stripped to its
         # basename before saving, so playwright wrote into the server CWD.
+        import pathlib as _pl  # F821 fix: _pl was only imported in _plan_file_navigation
         _ws = str(workspace or "").strip()
         _out = (_pl.Path(_ws) / path) if _ws else _pl.Path(path)
         _out.parent.mkdir(parents=True, exist_ok=True)

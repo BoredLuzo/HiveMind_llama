@@ -203,8 +203,13 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     # NEWLINE-BOUNDARY (2026-09-15): if the file does not end with a newline
     # and the chunk does not start with one, the first appended line GLUED
     # onto the last existing line (looked like "append added only one line").
+    # SEPARATE-WRITE-AND-REPORT (2026-09-30): the try below ends when the
+    # append is durable. Nothing after it may produce a FAILED response
+    # anymore — a post-write error made the model retry an append that HAD
+    # succeeded and duplicate the content (live: _split_discard_note NameError
+    # in e14f64f). _auto_lint_result is internally guarded and never raises.
+    _boundary = {"note": ""}
     try:
-        _boundary = {"note": ""}
         def _append_and_size() -> int:
             p.parent.mkdir(parents=True, exist_ok=True)
             _head = p.read_text(encoding="utf-8", errors="replace", newline="") if p.stat().st_size else ""
@@ -217,15 +222,15 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
             return p.stat().st_size
 
         total = await asyncio.to_thread(_append_and_size)
-        _appended = ("\n" + content) if _boundary["note"] else content
-        lines = _appended.count("\n")
-        _lint = await _auto_lint_result(p, workspace)
-        return f"[Appended: {p} (+{lines} lines, total {total} bytes)]{_boundary['note']}{_split_discard_note}{_lint}"
     except Exception as e:
         return _tool_error_response(
             "WRITE_FILE_APPEND_FAILED",
             f"write_file_append failed for '{p}': {e}",
             tool="write_file_append" )
+    _appended = ("\n" + content) if _boundary["note"] else content
+    lines = _appended.count("\n")
+    _lint = await _auto_lint_result(p, workspace)
+    return f"[Appended: {p} (+{lines} lines, total {total} bytes)]{_boundary['note']}{_lint}"
 
 
 async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
@@ -373,9 +378,9 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
     """Create or overwrite a file with the COMPLETE content.
 
     The primary write tool (2026-09-17 consolidation): the result on disk is
-    exactly what the model wrote — no matching, no drift. Oversized content is
-    auto-split (part 1 written, remainder stored server-side, finished via a
-    write_file_append marker call).
+    exactly what the model wrote — no matching, no drift, no server-side
+    splitting. Complete calls always land whole; truncated calls are salvaged
+    upstream (duo_runner) at the last complete line.
     """
     p = _inline_resolve_path(workspace, args.get("path", ""))
     if err := _inline_check_workspace(p, workspace_lock, "write_file"):
