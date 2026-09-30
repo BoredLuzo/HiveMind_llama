@@ -10,8 +10,8 @@ entscheidet, ob Phase 2 (adaptive Hints) überhaupt nötig ist.
 
 | Seite | Stand | Port | Ort |
 |---|---|---|---|
-| ALT  | `393d1ae` (v1.2.3-Tag, vor den 9 Feature-Commits) | 8003 | `..\HiveMind_ab_base` (Worktree) |
-| NEU  | aktueller Dev-Clone-Stand | 8002 | `..\HiveMind_hotfix` (Clone) |
+| ALT  | `393d1ae` (v1.2.3-Tag, vor den 9 Feature-Commits) | 8003 | `..\HiveMind_dev_ab_baseline` (Worktree) |
+| NEU  | aktueller Dev-Clone-Stand | 8002 | `..\HiveMind_dev` (Clone) |
 
 Beide Seiten: gleiche `models_dir` (<models_dir>), gleiches Coder-Modell
 (`minicpm5:2b-sharp`), gleiche Sampling-Settings. **Frischer Workspace pro
@@ -20,7 +20,7 @@ alte Workspaces verfälschen die Zählung.
 
 ### Setup ALT-Seite (Stand 2026-09-30: ERFLEDIGT)
 
-- Worktree `..\HiveMind_ab_base` auf `393d1ae` angelegt
+- Worktree `..\HiveMind_dev_ab_baseline` auf `393d1ae` angelegt
 - `settings.json` (Port 8003) + `models.json` hineinkopiert
 - Junction `llama` → Clone-`llama` (kein 2-GB-Copy; alternativ env
   `HIVEMIND_LLAMA_BIN`)
