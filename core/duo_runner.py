@@ -24,7 +24,6 @@ from infra.run_control import (
     is_graceful_stop_requested, clear_graceful_stop,
     is_pause_requested, clear_pause_request,
     get_resume_signal, get_abort_during_pause_signal,
-    drain_steer_messages,
     cleanup_pause_state as _cleanup_pause_state,
     _get_abort_event,
 )
@@ -574,14 +573,6 @@ async def _auto_commit_chunk(user_input: str, subtask: str, workspace: str,
     if not git_enabled or not workspace:
         return ""
     try:
-        from hive_functions.git_tools import auto_commit_block_reason as _acb_reason
-        _block = _acb_reason(workspace)
-    except Exception:
-        _block = ""
-    if _block:
-        logger.info("[AUTO-COMMIT] skipped: %s", _block)
-        return f"ℹ️ auto-commit skipped: {_block}"
-    try:
         from hive_functions.git_tools import (
             exec_git_commit, exec_git_squash_checkpoints,
         )
@@ -632,8 +623,7 @@ async def _git_checkpoint_at_chunk_start(ctx, _ws_str: str, _di: int,
                 return ""
             _label = "session start"
         _out = await _gck(_label, _ws_str)
-        if _out and not ctx.duo_config.git_autocommit \
-                and not _out.startswith("ℹ️"):
+        if _out and not ctx.duo_config.git_autocommit:
             ctx._git_session_cp_done = True
         return _out
     except Exception as _ck_err:
@@ -2489,17 +2479,6 @@ async def run_code_duo(ctx):
                     f"Fix ALL listed issues. Write the complete corrected code."
                 )
 
-            # ── MID-RUN STEER (chunk boundary, 2026-09-29): drain queued user
-            # messages once per round and append them to the coder input — the
-            # next model round sees them as user context (ZCode-style steering;
-            # the tool loop drains again at its own round boundaries below).
-            _steer_txts = drain_steer_messages(ctx.run_id)
-            if _steer_txts:
-                yield await ctx.emit({"type": "status", "content":
-                    "🧭 steered: " + " | ".join(t[:80] for t in _steer_txts)})
-                _coder_input += "\n\n" + "\n\n".join(
-                    f"[USER STEER] {t}" for t in _steer_txts)
-
             # RO-DETECT (2026-09-03): decide BEFORE building coder messages.
             # A read-only phrase (e.g. "DO NOT MODIFY") is often only a content
             # constraint inside a real implementation task — in that case the tool
@@ -3312,10 +3291,6 @@ async def run_code_duo(ctx):
 
                     _partial_compression = bool(ctx.settings.get("duo_partial_compression", False))
                     _comp_llm_cfg = str(ctx.settings.get("duo_compress_model") or "").strip()
-                    if _comp_llm_cfg.lower() == "auto":
-                        # Auto (Coder): the executor model summarizes — no
-                        # separate light-model load (default path below).
-                        _comp_llm_cfg = ""
                     _comp_llm_timeout_s = int(ctx.settings.get("duo_compress_llm_timeout_s", 180) or 180)
                     _compress_local_only = bool(ctx.settings.get("duo_compress_local_only", False))
                     _max_tool_rounds_cfg = int(ctx.settings.get("duo_max_tool_rounds", 64))
@@ -3561,17 +3536,6 @@ async def run_code_duo(ctx):
                                 "content": "⏱ Tool loop ended due to run timeout.",
                             })
                             break
-                        # MID-RUN STEER (tool-round boundary): messages queued
-                        # while THIS chunk runs land in the very next round as
-                        # user messages — same channel as the zero-activity
-                        # nudge below.
-                        _round_steer = drain_steer_messages(ctx.run_id)
-                        if _round_steer:
-                            yield await ctx.emit({"type": "status", "content":
-                                "🧭 steered: " + " | ".join(t[:80] for t in _round_steer)})
-                            for _st in _round_steer:
-                                _dtool_msgs.append(
-                                    {"role": "user", "content": f"[USER STEER] {_st}"})
                         from tools.runner import _ask_user_gate, _ask_user_throttled_count
                         if ctx.duo_config.until_finished:
                             if _cs.test_retries >= _cs.max_test_retries:
@@ -6366,14 +6330,6 @@ async def run_code_duo(ctx):
         _ac_final = await _auto_commit_chunk(ctx.user_input, "", _ws_str, True)
         if _ac_final:
             yield await ctx.emit({"type": "status", "content": _ac_final})
-        if _ac_final and _ac_final.startswith("✅"):
-            try:
-                from hive_functions.git_tools import push_after_commit as _pap
-                _push_out = await _pap(_ws_str)
-                if _push_out:
-                    yield await ctx.emit({"type": "status", "content": _push_out})
-            except Exception as _push_err:
-                logger.debug("[AUTO-PUSH] skipped: %s", _push_err)
     elif (_git_checkpoints_enabled(ctx)
           and not ctx.duo_config.git_autocommit
           and ctx.duo_stop_reason in ("completed", "graceful_stop")
@@ -6390,14 +6346,6 @@ async def run_code_duo(ctx):
                                 _ws_str, consolidate_only=True)
             if _sq_out:
                 yield await ctx.emit({"type": "status", "content": _sq_out})
-            if _sq_out and _sq_out.startswith("✅"):
-                try:
-                    from hive_functions.git_tools import push_after_commit as _pap
-                    _push_out = await _pap(_ws_str)
-                    if _push_out:
-                        yield await ctx.emit({"type": "status", "content": _push_out})
-                except Exception as _push_err:
-                    logger.debug("[AUTO-PUSH] skipped: %s", _push_err)
         except Exception as _sq_err:
             logger.debug("[GIT-CONSOLIDATE] skipped: %s", _sq_err)
     # AUDIT-FIX D2: resume safety net — on every non-complete stop

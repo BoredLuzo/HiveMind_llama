@@ -290,39 +290,3 @@ def cleanup_pause_state(run_id: str) -> None:
     _RESUME_SIGNALS.pop(run_id, None)
     _ABORT_DURING_PAUSE_SIGNALS.pop(run_id, None)
 
-
-# -- Mid-run steering queue (per run_id; 2026-09-29) --
-# The frontend queues typed messages while a run streams (ZCode-style);
-# "steer" injects them at the next chunk/tool-round boundary, unsteered
-# ones are delivered after the run ends. Registry mirrors the pause
-# machinery above: keyed by run_id, active-run check via the run-abort
-# registry (a run_id only exists there while its generator is live).
-
-_steer_queue: dict[str, list[str]] = {}
-
-
-def queue_steer(run_id: str, text: str) -> bool:
-    """Queue a user message for an ACTIVE run. False = run not registered."""
-    _rid = str(run_id or "").strip()
-    _txt = str(text or "").strip()
-    if not _rid or not _txt:
-        return False
-    if _rid not in _run_abort_registry:
-        return False
-    _steer_queue.setdefault(_rid, []).append(_txt)
-    return True
-
-
-def drain_steer_messages(run_id: str) -> list:
-    """Atomically take all queued steer messages (loop side, at a boundary)."""
-    return _steer_queue.pop(str(run_id or ""), [])
-
-
-def steer_queue_view(run_id: str) -> list:
-    """Copy of the queued messages (endpoint/UI side)."""
-    return list(_steer_queue.get(str(run_id or ""), []))
-
-
-def cleanup_steer(run_id: str) -> None:
-    _steer_queue.pop(str(run_id or ""), None)
-
