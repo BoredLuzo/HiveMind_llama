@@ -280,6 +280,14 @@ class AgenticToolLoop(ToolLoop):
                     _dr_denied_mid = False    # user denied the staged card mid-stream
                     _deny_tool = ""
                     _deny_note = ""
+                    # REPETITION-DRIFT (2026-09-30): raw tool-call arguments
+                    # accumulate here so a degenerate identical-line loop can
+                    # be cut EARLY — live, one write_file call repeated a line
+                    # 293x and burned the full 8000-token budget (~11 min at
+                    # 11.5 t/s) before finish_reason=length ever fired
+                    from utils.tool import arguments_repetition_drift as _arg_drift
+                    _drift_args_buf = ""
+                    _drift_cut = False
                     async for _sse_line in _resp.aiter_lines():
                         if not _sse_line.startswith("data:"): continue
                         _sse_data = _sse_line[5:].strip()
@@ -365,6 +373,7 @@ class AgenticToolLoop(ToolLoop):
                         for _tc_d in _wtc:
                             _tc_args = str(((_tc_d.get("function") or {}).get("arguments")) or "")
                             if _tc_args:
+                                _drift_args_buf += _tc_args
                                 _tc_idx = _tc_d.get("index", 0)
                                 _acc = result["dr_tool_calls_acc"].get(_tc_idx, {})
                                 _acc_fn = str((_acc.get("function") or {}).get("name", "") or "")
@@ -391,6 +400,14 @@ class AgenticToolLoop(ToolLoop):
                                     _appr_scope, _stage_fn, self._emit)
                                 if _appr_scope:
                                     _card_live = True
+                        # drift check at SSE-delta level (outer loop scope —
+                        # the break below ends the whole stream consumption)
+                        if not _drift_cut and _arg_drift(_drift_args_buf):
+                            _drift_cut = True
+                            _dr_finish_reason = "drift"
+                            await self._emit({"type": "status",
+                                "content": "⚠ repetition drift in tool-call arguments — cutting generation early"})
+                            break
 
                     # send usage EXACTLY ONCE after the stream ends
                     if _dr_usage_final:

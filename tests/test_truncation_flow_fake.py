@@ -40,7 +40,7 @@ def _sse(events: list[dict]) -> bytes:
 class _FakeLlama:
     """Two scripted responses: truncated write (length), then append (stop)."""
 
-    def __init__(self):
+    def __init__(self, extra_response: bytes | None = None):
         self.requests = 0
         self.responses: list[bytes] = []
         traw = json.dumps({"path": "index.html", "content": CONTENT})[:-2]
@@ -68,6 +68,10 @@ class _FakeLlama:
             {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
             {"usage": {"prompt_tokens": 9500, "completion_tokens": 60}},
         ]))
+        if extra_response is not None:
+            # FIRST response: single-request tests (the drift scenario) must
+            # get it — responses[] is indexed by request count
+            self.responses.insert(0, extra_response)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -112,6 +116,19 @@ class _FakeCtx:
 
 
 class TruncationFlowFakeBackend(unittest.TestCase):
+    def tearDown(self):
+        # validate_tool_calls records salvage events into the REAL fixture
+        # dump (logs/write_truncations.jsonl) — in the dev clone that file
+        # must hold real model output only (the committed 14:36 incident
+        # lives in tests/fixtures/). Remove test noise after every run.
+        import os
+        from pathlib import Path as _P
+        _dump = _P(__file__).resolve().parents[1] / "logs" / "write_truncations.jsonl"
+        try:
+            _dump.unlink()
+        except OSError:
+            pass
+
     def test_length_truncated_write_flows_through_salvage_and_append(self):
         fake = _FakeLlama()
         try:
@@ -162,6 +179,56 @@ class TruncationFlowFakeBackend(unittest.TestCase):
         self.assertFalse(v2["drop_notices"] or v2["salvage_notes"])
         # seam sanity: salvaged prefix + append reassemble without loss/duplication
         self.assertIn(CONTENT.strip()[-40:], saved["content"])
+
+
+class RepetitionDriftLiveFixture(unittest.TestCase):
+    """The REAL 30k dump (2026-09-30 14:36, minicpm5:2b-sharp): 293x the same
+    line inside a content-first write_file call, finish=length at 8000 tokens.
+    Streamed through the REAL post_with_retry — the drift detector must cut
+    the stream early instead of consuming the whole loop."""
+
+    def _load_raw(self) -> str:
+        fx = Path(__file__).parent / "fixtures" / "write_truncations_live.jsonl"
+        for line in fx.read_text(encoding="utf-8").splitlines():
+            e = json.loads(line)
+            if e["raw_len"] > 20000:
+                return e["raw"]
+        raise AssertionError("live loop fixture missing")
+
+    def test_drift_cuts_generation_early_on_real_loop(self):
+        raw = self._load_raw()
+        chunks = [raw[i:i + 512] for i in range(0, len(raw), 512)]
+        events = [{"choices": [{"delta": {"role": "assistant"}}]},
+                  {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c9",
+                    "type": "function", "function": {"name": "write_file",
+                                                     "arguments": chunks[0]}}]}}]}]
+        for c in chunks[1:]:
+            events.append({"choices": [{"delta": {"tool_calls": [{"index": 0,
+                          "function": {"arguments": c}}]}}]})
+        events.append({"choices": [{"delta": {}, "finish_reason": "length"}]})
+        fake = _FakeLlama(extra_response=_sse(events))
+        try:
+            async def run():
+                cfg = ToolLoopConfig(model="fake", stream=True, max_post_attempts=1)
+                rs = DuoRoundState(current_port=fake.port, exec_model="fake")
+                loop = AgenticToolLoop(cfg, httpx.AsyncClient(timeout=10.0), round_state=rs)
+                return await loop.post_with_retry(
+                    {"model": "fake", "stream": True, "max_tokens": 8000,
+                     "messages": [{"role": "user", "content": "x"}]},
+                    dtool_msgs=[{"role": "user", "content": "x"}],
+                    ctx=_FakeCtx(), _parts=[])
+
+            r = asyncio.run(run())
+        finally:
+            fake.close()
+
+        self.assertEqual(r.get("dr_finish_reason"), "drift")
+        tcs = r["dr_msg"].get("tool_calls") or []
+        # cut EARLY: the accumulated arguments must be far shorter than the
+        # full 30k loop (the detector fires after ~10 repeated lines)
+        acc = str((tcs[0].get("function") or {}).get("arguments")) if tcs else ""
+        self.assertLess(len(acc), 8000, f"drift cut too late: {len(acc)} chars")
+        self.assertGreater(len(acc), 1000, "cut too early —valid prefix lost")
 
 
 if __name__ == "__main__":

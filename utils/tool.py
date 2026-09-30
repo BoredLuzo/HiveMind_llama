@@ -203,6 +203,39 @@ def record_truncation_fixture(tool: str, raw: str, *, model: str = "",
         return False
 
 
+def arguments_repetition_drift(buf: str, *, min_chars: int = 1024,
+                               min_repeat: int = 30) -> bool:
+    """Detect a degenerate identical-line loop in RAW tool-call arguments (2026-09-30).
+
+    Live incident: a small model repeated one line 293x inside a write_file
+    call and burned the full 8000-token budget (~11 min at 11.5 t/s) before
+    finish_reason=length fired. This check runs on the ESCAPED arguments
+    buffer while it streams in — a literal backslash-n separates lines, so no
+    JSON decoding is needed. min_repeat is 30 (not 10): a VALID write may
+    legitimately contain runs of identical lines (data rows, grid literals),
+    and a false cut costs a full regeneration — observed loops run into the
+    hundreds, so 30 still fires within ~3k chars of loop start.
+    """
+    if not buf or len(buf) < min_chars:
+        return False
+    NL = chr(92) + "n"  # literal backslash-n in the JSON-escaped stream
+    lines = buf[-16384:].split(NL)
+    if len(lines) < min_repeat + 1:
+        return False
+    # the LAST element is always a PARTIAL line (the buffer cut is
+    # arbitrary mid-stream) — using it as the pattern never matches its
+    # complete predecessor. The last COMPLETE line (index -2) is the pattern.
+    ref = lines[-2]
+    if len(ref.strip()) < 8 or len(set(ref.strip())) < 3:
+        return False  # separator/brace noise ("----", "}}}")
+    run = 0
+    j = len(lines) - 2
+    while j >= 0 and lines[j] == ref:
+        run += 1
+        j -= 1
+    return run >= min_repeat
+
+
 # ── TOOL-CALL VALIDATION (extracted from duo_runner 2026-09-30) ──────────────
 # PURE function: tool_calls + budget in, validated tool_calls / drop notices /
 # salvage notes / dropped names / meta out. No ctx, no emit, no loop state —
@@ -297,11 +330,18 @@ def validate_tool_calls(tool_calls, *, finish_reason: str | None = None,
                     )
                     continue
         validated.append(_vtc)
+    # had_tool_calls counts calls BEFORE validation, has_tool_call AFTER —
+    # a truncation whose only call was dropped by salvage rules must not read
+    # as "reasoning-overrun without any call" in the diagnostics line
+    _had = [t for t in (tool_calls or [])
+            if isinstance(t, dict)
+            and str(((t.get("function") or {}).get("name")) or "").strip()]
     return {"tool_calls": validated,
             "drop_notices": drop_notices,
             "salvage_notes": salvage_notes,
             "dropped_names": drop_names,
             "meta": {"finish_reason": finish_reason,
+                     "had_tool_calls": bool(_had),
                      "has_tool_call": bool(validated)}}
 
 

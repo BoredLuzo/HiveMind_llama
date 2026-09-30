@@ -4527,10 +4527,12 @@ async def run_code_duo(ctx):
                         _drop_notices = _vres["drop_notices"]
                         _drop_names = _vres["dropped_names"]
                         _salvage_notes = _vres["salvage_notes"]
-                        if _result.get("dr_finish_reason") == "length":
+                        if _result.get("dr_finish_reason") in ("length", "drift"):
                             # countable truncation event for the A/B benchmark,
                             # with overrun-class discrimination: write-overrun
-                            # (has_tool_call) vs reasoning-overrun (no call).
+                            # (had_tool_calls) vs reasoning-overrun (no call).
+                            # had_ counts pre-validation, has_ post-validation —
+                            # a dropped salvage must not read as reasoning-only.
                             # reasoning_tokens is n/a when the server does not
                             # report completion_tokens_details (llama.cpp b11191
                             # likely doesn't) — 0 would read as "no reasoning"
@@ -4542,9 +4544,12 @@ async def run_code_duo(ctx):
                             _rt_raw = _rtd.get("reasoning_tokens") if isinstance(_rtd, dict) else None
                             _think_chars = sum(len(p) for p in (_result.get("dr_thinking_parts") or []))
                             logger.warning(
-                                "[WRITE-TRUNCATION] model=%s round=%s finish_reason=length "
-                                "has_tool_call=%s content_len=%d reasoning_tokens=%s think_chars=%d",
-                                coder_mdl, _dr, _vres["meta"]["has_tool_call"],
+                                "[WRITE-TRUNCATION] model=%s round=%s finish_reason=%s "
+                                "had_tool_call=%s has_tool_call=%s content_len=%d "
+                                "reasoning_tokens=%s think_chars=%d",
+                                coder_mdl, _dr, _result.get("dr_finish_reason"),
+                                _vres["meta"]["had_tool_calls"],
+                                _vres["meta"]["has_tool_call"],
                                 len(_dr_msg.get("content") or ""),
                                 ("n/a" if _rt_raw is None else _rt_raw), _think_chars)
                         if _drop_notices:
