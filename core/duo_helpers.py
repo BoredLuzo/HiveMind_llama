@@ -426,7 +426,27 @@ def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ct
         parts.append(PROMPTS.get("duo_coder_auto_test", ""))
     if ctx.duo_config.until_finished:
         parts.append(PROMPTS.get("duo_coder_until_finished", ""))
-    return "\n\n".join(p for p in parts if p)
+    sys_prompt = "\n\n".join(p for p in parts if p)
+    # RUNTIME-ENV LINE (2026-09-30): DUO_CODER_BASE promises an OS/runtime
+    # note "appended to this system prompt" and a workspace root "stated in
+    # your context" — neither existed, so small models guessed the
+    # environment Linux-container style (live: Sharp ran `ls /root` and
+    # `cd C:\workspace\tetris` before its first write, minutes at ~11 t/s).
+    # Built ONCE per run here, never mutated mid-run (prefix-cache safe).
+    try:
+        _ws_root = str(getattr(ctx, "workspace", "") or "").strip()
+        _env_line = ("RUNTIME: This machine is Windows — there is NO Linux "
+                     "container; never look in /workspace or /root. "
+                     + (f"Workspace root: {_ws_root.replace(chr(92), '/')} — "
+                        if _ws_root else "")
+                     + "use relative paths in tool calls.")
+        # core marker, not the whole line: a custom prompt may already carry
+        # the same info in a slightly different wording
+        if "RUNTIME: This machine is Windows" not in sys_prompt:
+            sys_prompt = sys_prompt.rstrip() + "\n\n" + _env_line
+    except Exception:
+        pass
+    return sys_prompt
 
 
 # ── Pre-Explore ────────────────────────────────────────────────────────
