@@ -311,8 +311,14 @@ _approval_once_paths: dict = {}
 # question overlaps generation instead of appearing after it.
 _approval_pre_decisions: dict = {}
 
-# one card per run until it is answered/consumed
+    # "one card per run until it is answered/consumed"
 _card_staged: dict = {}
+
+# APPROVAL-TIMEOUT (2026-09-30): set when an unanswered card auto-denied
+# (duo_action_approval_timeout_s > 0). A user decision arriving AFTER the
+# timeout is discarded once here — it would otherwise be stored as a
+# pre-decision and silently approve the NEXT gated call (no double-exec).
+_approval_expired: dict = {}
 
 def _approval_scope() -> str:
     """chat_id-or-run_id (the same value ask_user keys on)."""
@@ -608,13 +614,23 @@ async def _check_action_approval(name: str, args: dict, workspace):
     # loaded (live: approval toasts minutes after closing the UI). Deny on
     # abort; the run's own abort checks stop it right after this round.
     import asyncio as _appr_asyncio
+    # APPROVAL-TIMEOUT (2026-09-30): duo_action_approval_timeout_s > 0
+    # auto-denies an unanswered card after N s (unattended runs must not be
+    # wedged forever — live smoke run paused 9+ min on a run_bash card).
+    # Default 0 keeps today's behavior: wait up to 3600s.
+    try:
+        from core.state import settings as _appr_ws
+        _appr_to_s = int(_appr_ws.get("duo_action_approval_timeout_s", 0) or 0)
+    except Exception:
+        _appr_to_s = 0
+    _appr_wait_s = 3600 if _appr_to_s <= 0 else _appr_to_s
     _pause_ev = _rc._pause_events.get(run_id)
     _abort_ev = _rc._run_abort_registry.get(run_id)
     if _pause_ev is not None and _abort_ev is not None:
         _wait_t = _appr_asyncio.ensure_future(_pause_ev.wait())
         _abort_t = _appr_asyncio.ensure_future(_abort_ev.wait())
         _done, _still = await _appr_asyncio.wait(
-            {_wait_t, _abort_t}, timeout=3600, return_when=_appr_asyncio.FIRST_COMPLETED)
+            {_wait_t, _abort_t}, timeout=_appr_wait_s, return_when=_appr_asyncio.FIRST_COMPLETED)
         for _t in _still:
             _t.cancel()
         if _abort_t in _done and _wait_t not in _done:
@@ -630,9 +646,28 @@ async def _check_action_approval(name: str, args: dict, workspace):
         answer = _rc._user_answers.pop(run_id, "")
         _rc.cleanup_pause(run_id)
     else:
-        answer = await _rc.wait_for_resume(run_id, timeout_s=3600)
+        answer = await _rc.wait_for_resume(run_id, timeout_s=_appr_wait_s)
     _pending_approvals.pop(run_id, None)
     await _safe_emit({"type": "agent_resumed"})
+    # TIMEOUT AUTO-DENY (2026-09-30): an empty answer can only come from the
+    # timeout (the decide endpoint rejects empty answers); wait_for_resume
+    # signals its own timeout as "[ask_user TIMEOUT: ...]". Both deny with an
+    # explicit message and discard the NEXT late decision once, so a stale
+    # click can never approve the following gated call.
+    _appr_timed_out = (not str(answer or "").strip()
+                       or str(answer).startswith("[ask_user TIMEOUT"))
+    if _appr_timed_out and _appr_to_s > 0:
+        _approval_expired[str(run_id)] = True
+        _lg.warning("[APPROVAL] timeout after %ds run=%s tool=%s — auto-deny",
+                    _appr_to_s, run_id, name)
+        await _safe_emit({"type": "status",
+                          "content": f"Approval for {name} timed out after {_appr_to_s}s — denied."})
+        return ("DENY", _tool_error_response(
+            "ACTION_APPROVAL_TIMEOUT",
+            f"denied: no approval within {_appr_to_s}s (unattended run). "
+            "Pick a different approach that does not need " + name
+            + ", or re-ask via ask_user when the user is back.",
+            tool=name ))
     # "1|please use fetch instead" -> decision + user note for the model
     _note = ""
     if "|" in str(answer):

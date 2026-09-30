@@ -204,6 +204,11 @@ async def approval_decide(run_id: str, req: Request):
         set_user_answer(run_id, answer)
         return {"routed": "pause", "run_id": run_id}
     from tools import runner as _tr
+    # APPROVAL-TIMEOUT (2026-09-30): a decision arriving after the card was
+    # auto-denied (duo_action_approval_timeout_s) is discarded ONCE — storing
+    # it as a pre-decision would silently approve the NEXT gated call.
+    if _tr._approval_expired.pop(str(run_id), None):
+        return {"routed": "expired", "run_id": run_id}
     _ans, _, _note = answer.partition("|")
     _tr._approval_pre_decisions[str(run_id)] = {"answer": _ans.strip(), "note": _note.strip()}
     _tr._pending_approvals.pop(str(run_id), None)

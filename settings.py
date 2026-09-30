@@ -379,6 +379,12 @@ DEFAULT_SETTINGS = {
     # commands 1:1 per exact arguments — anything new or a new chat asks
     # again). The toggle applies mid-run.
     "duo_action_approval_enabled": False,
+    # Auto-deny an unanswered approval card after N seconds (0 = off,
+    # attended runs wait as before — live smoke runs wedged 9+ min on an
+    # unanswered run_bash card). After the timeout the model gets
+    # "denied: no approval within N s" and a late user decision is
+    # discarded once (it would otherwise answer the NEXT question).
+    "duo_action_approval_timeout_s": 0,
     # Tool-error hard-stop cap for agentic runs. Successful non-write calls
     # decay the counter by 1, successful writes reset it to 0 — only a
     # no-progress run (this many fails with nothing succeeded in between)
