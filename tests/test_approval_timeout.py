@@ -95,6 +95,29 @@ class ApprovalTimeout(unittest.TestCase):
         # the discard is once-only: the next question works normally again
         self.assertNotIn("r-appr-test", R._approval_expired)
 
+    def test_new_question_clears_expired_flag(self):
+        """The flag must NOT swallow the answer to the NEXT legitimate
+        question (Claude review 2026-10-01): a fresh staged card resets it."""
+        async def _emit(ev):
+            return None
+
+        R._approval_expired["r-appr-test"] = True
+        R._card_staged.pop("r-appr-test", None)
+        asyncio.run(R.stage_approval_card("r-appr-test", "run_bash", _emit))
+        self.assertNotIn("r-appr-test", R._approval_expired)  # reset by new card
+
+        class _Req:
+            def __init__(self, body):
+                self._b = body
+
+            async def json(self):
+                return self._b
+
+        from routers.core import approval_decide
+        res = asyncio.run(approval_decide("r-appr-test", _Req({"answer": "1"})))
+        self.assertEqual(res.get("routed"), "preview")  # normal decision path
+        self.assertIn("r-appr-test", R._approval_pre_decisions)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

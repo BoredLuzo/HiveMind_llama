@@ -438,6 +438,11 @@ async def stage_approval_card(run_id, name: str, emit) -> None:
     _appr_log.getLogger("hivemind.tools").info(
         "[APPROVAL] card staged run=%s tool=%s (decision during generation)", scope, name)
     _pending_approvals[scope] = {"tool": name, "preview": "(generating, content streams in the panel)"}
+    # NEW-QUESTION RESET (2026-10-01): the expired flag only guards the gap
+    # between a timeout-deny and the NEXT question — a fresh card must clear
+    # it, otherwise the user's answer to the new (legitimate) question is
+    # discarded by the decide endpoint's expired route.
+    _approval_expired.pop(scope, None)
     try:
         await emit({"type": "approval_request",
                     "run_id": scope, "tool": name,
@@ -595,6 +600,10 @@ async def _check_action_approval(name: str, args: dict, workspace):
     _decision_id = _rc.get_decision_id(run_id)
     _pending_approvals[run_id] = {"tool": name, "preview": _preview,
                                   "decision_id": _decision_id}
+    # NEW-QUESTION RESET (2026-10-01): same as in stage_approval_card — a
+    # fresh pause-owned card clears the expired flag so the user's answer to
+    # THIS question is not discarded as a late one.
+    _approval_expired.pop(str(run_id), None)
     _card_staged.pop(str(run_id), None)  # the pause re-owns the card lifecycle
     await _safe_emit({"type": "agent_asking", "question": question, "run_id": run_id})
     # Buttons card in the UI — posts the decision (+"|user note") to
