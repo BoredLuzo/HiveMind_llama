@@ -84,9 +84,14 @@ def _preset_snapshot(extra: dict | None = None) -> dict:
     return snap
 
 
-async def _apply_preset_internal(name: str, *, persist: bool = True) -> bool:
+async def _apply_preset_internal(name: str, *, persist: bool = True,
+                                 warnings: list | None = None) -> bool:
     """Explicit preset Load — replaces the whole user configuration (models,
-    context, options, mode, prompts). Never runs automatically at startup."""
+    context, options, mode, prompts). Never runs automatically at startup.
+    PRESET-WORKSPACE-GUARD (2026-09-30): a preset workspace path that does
+    not exist is NOT applied (the current workspace stays active) and the
+    caller receives a warning to surface in the UI — a silent switch to a
+    dead path used to cripple every following run (workspace chain)."""
     presets = load_presets()
     if name not in presets:
         return False
@@ -102,6 +107,14 @@ async def _apply_preset_internal(name: str, *, persist: bool = True) -> bool:
             continue
         if key in _PRESET_NEVER_KEYS:
             continue
+        if key == "workspace" and isinstance(value, str) and value.strip():
+            if not Path(value.strip()).exists():
+                _warn = (f"workspace '{value.strip()}' from preset '{name}' does not "
+                         f"exist — kept the current workspace")
+                logger.warning("[PRESET] %s", _warn)
+                if warnings is not None:
+                    warnings.append(_warn)
+                continue
         settings[key] = copy.deepcopy(value)
     apply_settings_to_pipeline(settings)
     settings["active_preset"] = name
@@ -357,6 +370,12 @@ async def post_settings(req: Request):
                     _existing[_dk] = _dv
             else:
                 settings[_dmk] = _incoming
+    # ACTIVE-PRESET GUARD (2026-09-30): active_preset is owned exclusively by
+    # preset load/delete and the startup auto-load — verified per grep that no
+    # legitimate writer POSTs it (frontend only reads it, app.js:901). A
+    # settings blob carrying the key must not clear or rename the active
+    # preset behind the user's back.
+    data.pop("active_preset", None)
     settings.update(data)
     _xa = settings.get("exploration_agent")
     if isinstance(_xa, dict) and _xa.get("enabled") and not (_xa.get("model") or "").strip():
@@ -498,7 +517,8 @@ async def save_preset_ep(name: str, req: Request):
 
 @router.post("/presets/{name}/load")
 async def load_preset_ep(name: str):
-    if not await _apply_preset_internal(name):
+    _warns: list = []
+    if not await _apply_preset_internal(name, warnings=_warns):
         return JSONResponse({"error": "Not found"}, status_code=404)
     try:
         if _state.pipeline:
@@ -516,6 +536,8 @@ async def load_preset_ep(name: str):
         "chunking": bool(settings.get("duo_chunking", False)),
         "planner_enabled": bool(settings.get("duo_planner_enabled", False)),
         "planner_model": settings.get("duo_planner_model") or "",
+        # PRESET-WORKSPACE-GUARD: surfaced in the load alert, not only in logs
+        "warnings": _warns,
     }
 
 
@@ -526,7 +548,32 @@ async def del_preset(name: str):
         del presets[name]
         delete_custom_prompts_for_preset(name)
         save_presets(presets)
+        # PRESET-HOUSEKEEPING (2026-09-30): deleting the ACTIVE preset must
+        # clear active_preset (and persist), otherwise the UI shows it as
+        # loaded and the next startup auto-loads a preset that no longer
+        # exists.
+        if str(settings.get("active_preset") or "") == name:
+            settings["active_preset"] = None
+            await asyncio.to_thread(save_settings, settings)
     return {"ok": True}
+
+
+# PRESET STARTUP AUTO-LOAD (2026-09-30, extracted from server.py so it is
+# testable): re-apply the last explicitly loaded preset; when it no longer
+# exists, CLEAR active_preset so the UI does not show a preset as active
+# that was not loaded.
+async def startup_preset_autoload() -> None:
+    _ap_name = str(settings.get("active_preset") or "").strip()
+    if not _ap_name:
+        return
+    if await _apply_preset_internal(_ap_name, persist=True):
+        logger.info("[PRESET] startup auto-load: applied preset '%s'", _ap_name)
+        return
+    logger.warning(
+        "[PRESET] startup auto-load: preset '%s' not found — clearing active_preset",
+        _ap_name)
+    settings["active_preset"] = None
+    await asyncio.to_thread(save_settings, settings)
 
 
 @router.get("/presets/{name}/prompts/{agent}")

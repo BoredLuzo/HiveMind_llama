@@ -20,11 +20,13 @@ FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$')
 # shellcheck disable=SC2086
 "$RUFF" check --select F821,F811,F841 --no-cache $FILES || exit 1
 
-# fast write-tool suites (<2s) — the success-path net; skipped when the
+# fast test suites (<3s) — the success-path net; skipped when the
 # tooling deps are absent, but never skipped silently on FAILURE
 PY="./.venv/Scripts/python.exe"
 if [ -f "$PY" ]; then
-    for T in tests/test_write_tools.py tests/test_truncation_flow_fake.py; do
+    for T in tests/test_write_tools.py tests/test_truncation_flow_fake.py \
+             tests/test_coder_env_line.py tests/test_approval_timeout.py \
+             tests/test_preset_housekeeping.py; do
         [ -f "$T" ] || continue
         "$PY" "$T" >/dev/null 2>&1 || {
             echo "pre-commit: $T FAILED — run it for details"
