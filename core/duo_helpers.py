@@ -697,3 +697,12 @@ def _build_duo_image_plan(planner_mdl, coder_mdl, settings, images,
                               SimpleNamespace(images=images,
                                               image_description=image_description,
                                               vision_cfg=vision_cfg or {}))
+
+
+def should_evict_vision_after_prepro(mode, vision_model, duo_models) -> bool:
+    """Pure guard for the chat_run prepro eviction (2026-10-02): the vision
+    model is evicted after preprocessing ONLY in code_duo runs and ONLY when
+    it is not one of the duo models (planner/coder). Normal chat NEVER evicts
+    the vision model per image."""
+    return str(mode) == "code_duo" and bool(vision_model) and \
+        str(vision_model) not in {str(m) for m in (duo_models or [])}

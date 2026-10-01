@@ -1100,6 +1100,12 @@ async def run_code_duo(ctx):
                     except Exception:
                         pass
                 _lsm_plan_pre._planner_critical_phase = True
+                # PIN RESET AT RUN START (2026-10-02): stale pins from a
+                # crashed previous run must not block eviction for this one.
+                try:
+                    _lsm_plan_pre.unpin_all()
+                except Exception:
+                    pass
                 # fallback to the lighter coder model to keep Planner responsive.
                 # P1-1 FIX: Capture port from first ensure_loaded — eliminates redundant
                 # second ensure_loaded call (was wasting ~300-500ms on /health re-check).

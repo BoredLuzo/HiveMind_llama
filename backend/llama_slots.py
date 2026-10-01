@@ -37,12 +37,21 @@ class ModelSlot:
         self._idle_timeout: Optional[float] = None
         self._ready_event  = asyncio.Event()
         self._loading      = False
+        self.pinned_at     = 0.0   # PIN EXPIRY: LRU ignores pins older than 30 min
+        self.pinned_at     = 0.0   # PIN EXPIRY (2026-10-02): set on pin, LRU ignores pins older than 30 min
         self._orphan_port: Optional[int] = None
         self._vision       = False
         self._num_ctx: int = 0
         self._n_parallel: int = 1
         self._jinja: bool = False
         self.swa_window: int = 0               # SWA sliding-window size (0 = no SWA)
+    def set_pinned(self, val: bool) -> None:
+        # PIN EXPIRY (2026-10-02): set/clear the pin and stamp the time so
+        # LRU eviction can reclaim pins older than 30 minutes.
+        import time as _t
+        self.pinned = bool(val)
+        self.pinned_at = _t.time() if val else 0.0
+
 
     @property
     def url(self) -> str:
@@ -152,6 +161,7 @@ class ModelSlot:
         self.process        = None
         self.model          = None
         self.pinned         = False
+        self.pinned_at      = 0.0
         self._idle_timeout  = None
         self._loading       = False
         self._orphan_port   = None

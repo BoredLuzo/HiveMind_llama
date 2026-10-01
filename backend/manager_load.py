@@ -204,7 +204,7 @@ class LlamaLoadMixin:
                 if not slot._loading:
                     slot.touch()
                     if pin:
-                        slot.pinned = True
+                        slot.set_pinned(True)
                     return slot
 
             if slot is None:
@@ -214,7 +214,7 @@ class LlamaLoadMixin:
                 slot._loading = True
                 slot.model    = model
                 slot._idle_timeout = None if pin else keep_alive_seconds
-                slot.pinned        = pin
+                slot.set_pinned(pin)
                 _need_start = True
 
         if _need_start and not slot._ready_event.is_set():
@@ -387,7 +387,7 @@ class LlamaLoadMixin:
                             else:
                                 slot.touch()
                                 if pin and not slot.pinned:
-                                    slot.pinned        = True
+                                    slot.set_pinned(True)
                                     slot._idle_timeout = None
                                 return slot.port
             if slot is None:
@@ -397,7 +397,7 @@ class LlamaLoadMixin:
                 slot._loading      = True
                 slot.model         = model
                 slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
-                slot.pinned        = pin
+                slot.set_pinned(pin)
                 _need_start = True
 
         async with self._lock:

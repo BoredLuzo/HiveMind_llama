@@ -56,6 +56,18 @@ class LlamaEvictMixin:
         for slot in self._slots:
             if slot.model == model and slot.pinned:
                 slot.pinned = False
+                slot.pinned_at = 0.0
+                _n += 1
+        return _n
+
+    def unpin_all(self) -> int:
+        """Run-start reset (2026-10-02): clear EVERY pin — a stale pin from
+        a crashed previous run must never block eviction for the new run."""
+        _n = 0
+        for slot in self._slots:
+            if slot.pinned:
+                slot.pinned = False
+                slot.pinned_at = 0.0
                 _n += 1
         return _n
 

@@ -29,7 +29,7 @@ from core.model_sampling import _model_profile
 from core.duo_helpers import (
     DEFAULT_VRAM_BUDGET_GB,
     _resolve_duo_runtime_profile, _resolve_duo_run_timeout_seconds,
-    _bucket_stop_reason,
+    _bucket_stop_reason, should_evict_vision_after_prepro,
 )
 from context.chat_util import (
     _make_messages, _extract_ws_query, _extract_memory, _auto_memory_from_input,
@@ -644,21 +644,20 @@ async def run_stream(
             # DUO IMAGE EVICT (2026-10-01): in agentic duo runs the planner
             # and coder load RIGHT AFTER this — the preprocessing model must
             # not squat VRAM. Evict it unless it IS one of the duo models.
-            if mode == "code_duo":
-                _duo_models = {
-                    ((settings.get("agents") or {}).get("duo_planner") or {}).get("model", ""),
-                    ((settings.get("agents") or {}).get("duo_coder") or {}).get("model", ""),
-                }
-                _vm_name = _vision_cfg.get("model", "")
-                if _vm_name and _vm_name not in _duo_models:
-                    try:
-                        from backend.llama_server_manager import manager as _vsm_e
-                        await _vsm_e.evict(_vm_name)
-                        yield await emit({"type": "status", "content":
-                            f"[Image] vision model ({_vm_name}) evicted after "
-                            f"{time.monotonic() - _vp_t0:.0f}s — VRAM free for planner/coder"})
-                    except Exception:
-                        pass
+            _duo_models = {
+                ((settings.get("agents") or {}).get("duo_planner") or {}).get("model", ""),
+                ((settings.get("agents") or {}).get("duo_coder") or {}).get("model", ""),
+            }
+            _vm_name = _vision_cfg.get("model", "")
+            if should_evict_vision_after_prepro(mode, _vm_name, _duo_models):
+                try:
+                    from backend.llama_server_manager import manager as _vsm_e
+                    await _vsm_e.evict(_vm_name)
+                    yield await emit({"type": "status", "content":
+                        f"[Image] vision model ({_vm_name}) evicted after "
+                        f"{time.monotonic() - _vp_t0:.0f}s — VRAM free for planner/coder"})
+                except Exception:
+                    pass
 
         try:
             from backend.llama_server_manager import manager as _vsm
