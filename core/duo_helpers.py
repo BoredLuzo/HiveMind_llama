@@ -699,3 +699,25 @@ def resolve_image_plan(planner_mdl, coder_mdl, settings, ctx) -> dict:
         warnings.append("no target selected, image will not be used")
     return {"planner": plan["planner"], "coder": plan["coder"],
             "warnings": warnings, "mode": mode}
+
+
+def duo_gate_status_text(plan: dict) -> str:
+    """Status line for the duo image plan (2026-10-01, chat_run gate).
+
+    Claims ONLY what resolve_image_plan decided — the attach-time projector
+    check (C4) has the final word and may still skip a raw role.
+    """
+    _w = plan.get("warnings") or []
+    return ("[Image] duo plan — planner: " + str(plan.get("planner", "none"))
+            + ", coder: " + str(plan.get("coder", "none"))
+            + ((" | " + " | ".join(_w)) if _w else ""))
+
+
+def _build_duo_image_plan(planner_mdl, coder_mdl, settings, images,
+                          image_description, vision_cfg) -> dict:
+    """chat_run gate wrapper: plain values -> resolve_image_plan ctx."""
+    from types import SimpleNamespace
+    return resolve_image_plan(planner_mdl, coder_mdl, settings,
+                              SimpleNamespace(images=images,
+                                              image_description=image_description,
+                                              vision_cfg=vision_cfg or {}))

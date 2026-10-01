@@ -705,7 +705,18 @@ async def run_stream(
                 and m.split(":")[0] in ("qwen3.5", "qwen3.6", "hermes3.6", "hermes", "gemma-4")
             ]
             _direct_is_vision2 = bool(_multimodal_avail2)
-        if _direct_is_vision2:
+        if mode == "code_duo":
+            # DUO IMAGE PLAN (2026-10-01): the gate must NOT judge by the
+            # direct model — in agentic duo runs resolve_image_plan decides
+            # per duo role (planner/coder). The attach-time projector check
+            # in the runner has the final word; this status never claims
+            # more than the plan says.
+            from core.duo_helpers import _build_duo_image_plan, duo_gate_status_text
+            _pm = ((settings.get("agents") or {}).get("duo_planner") or {}).get("model", "")
+            _cm = ((settings.get("agents") or {}).get("duo_coder") or {}).get("model", "")
+            _plan = _build_duo_image_plan(_pm, _cm, settings, images, image_description, _vision_cfg)
+            yield await emit({"type": "status", "content": duo_gate_status_text(_plan)})
+        elif _direct_is_vision2:
             effective_images = images
             _disp2 = (registry_get("direct") if registry_get("direct")
                       and bool((_model_profile(registry_get("direct")) or {}).get("vision", False))

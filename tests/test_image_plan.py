@@ -186,3 +186,27 @@ class _Req:
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class DuoGateStatus(unittest.TestCase):
+    """C2: the chat_run gate status claims only what resolve_image_plan
+    decided — the attach-time projector check has the final word."""
+
+    def test_status_text_formats_plan(self):
+        from core.duo_helpers import duo_gate_status_text as T
+        self.assertEqual(
+            T({"planner": "none", "coder": "raw", "warnings": []}),
+            "[Image] duo plan — planner: none, coder: raw")
+        self.assertIn("not multimodal", T({"planner": "none", "coder": "none",
+                                           "warnings": ["coder 'x' is not multimodal — image skipped for it"]}))
+
+    def test_gate_wrapper_uses_real_settings_and_vision_cfg(self):
+        from core.duo_helpers import _build_duo_image_plan as G
+        core_state.settings["duo_image_mode"] = None
+        core_state.settings["duo_image_to_coder"] = True
+        from unittest.mock import patch
+        with patch("core.model_sampling._model_profile", return_value={"vision": True}):
+            plan = G("p", "gemma-4:e4b", core_state.settings,
+                     [_B64], "desc", {"enabled": True, "model": "vl"})
+        self.assertEqual(plan["mode"], "preprocess")  # sentinel derives first
+        self.assertEqual((plan["planner"], plan["coder"]), ("description", "description"))
