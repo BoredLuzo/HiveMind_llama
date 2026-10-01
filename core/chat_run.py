@@ -623,6 +623,7 @@ async def run_stream(
                          _configured_direct, _multimodal_available[:3] if _multimodal_available else "configured")
         else:
             yield await emit({"type": "status", "content": "Vision model (" + _vision_model_name + ") describes images..."})
+            _vp_t0 = time.monotonic()
             _vp_total_timeout = float(settings.get("vision_preprocess_timeout_seconds", 30.0) or 30.0)
             try:
                 image_description = await asyncio.wait_for(
@@ -638,7 +639,26 @@ async def run_stream(
             if image_description and not image_description.startswith("[Vision-Preprocessing-Error"):
                 yield await emit({"type": "image_description", "content": image_description})
             elif image_description and image_description.startswith("[Vision-Preprocessing-Error"):
-                yield await emit({"type": "status", "content": image_description})
+                yield await emit({"type": "status", "content": image_description
+                                 + " (VRAM busy? stop other model loads and retry)"})
+            # DUO IMAGE EVICT (2026-10-01): in agentic duo runs the planner
+            # and coder load RIGHT AFTER this — the preprocessing model must
+            # not squat VRAM. Evict it unless it IS one of the duo models.
+            if mode == "code_duo":
+                _duo_models = {
+                    ((settings.get("agents") or {}).get("duo_planner") or {}).get("model", ""),
+                    ((settings.get("agents") or {}).get("duo_coder") or {}).get("model", ""),
+                }
+                _vm_name = _vision_cfg.get("model", "")
+                if _vm_name and _vm_name not in _duo_models:
+                    try:
+                        from backend.llama_server_manager import manager as _vsm_e
+                        await _vsm_e.evict(_vm_name)
+                        yield await emit({"type": "status", "content":
+                            f"[Image] vision model ({_vm_name}) evicted after "
+                            f"{time.monotonic() - _vp_t0:.0f}s — VRAM free for planner/coder"})
+                    except Exception:
+                        pass
 
         try:
             from backend.llama_server_manager import manager as _vsm

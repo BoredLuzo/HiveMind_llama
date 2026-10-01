@@ -46,6 +46,19 @@ class LlamaEvictMixin:
                     self._metric_inc("evictions_manual")
                     await _kill_slot_async(slot)
 
+    def unpin(self, model: str) -> int:
+        """Clear the pinned flag on every slot running `model` (2026-10-01).
+
+        Duo runs pin their planner/coder slots so the vision-preprocessing
+        load cannot LRU-evict them mid-run; callers unpin when the run ends
+        so normal eviction can reclaim VRAM again."""
+        _n = 0
+        for slot in self._slots:
+            if slot.model == model and slot.pinned:
+                slot.pinned = False
+                _n += 1
+        return _n
+
     async def _trigger_pending_prefetch(self):
         """Nach einem Evict: pending_prefetch FIFO-Queue abarbeiten solange VRAM+Slots reichen."""
         if any(getattr(s, 'pinned', False) for s in self._slots if s.is_running or s._loading):

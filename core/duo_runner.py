@@ -140,6 +140,7 @@ from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
     build_image_desc_block, attach_images_to_last_user, duo_coder_wants_images,
+    resolve_image_plan,
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
@@ -1104,6 +1105,7 @@ async def run_code_duo(ctx):
                     _plan_port = await _await_with_hb(
                         lambda: _lsm_plan_pre.ensure_loaded(
                             _planner_model, num_ctx=_plan_ctx_final, n_parallel=1,
+                            # DUO-PIN (2026-10-01): vision-prepro load must not LRU-evict duo slots
                             # GRACEFUL-PLANNER (2026-09-07): the planner may
                             # degrade to a smaller ctx (its prompts are small).
                             # This load used to be STRICT when planner==coder —
@@ -1186,6 +1188,7 @@ async def run_code_duo(ctx):
                     _plan_port = await asyncio.wait_for(
                         _lsm_port_res.ensure_loaded(
                             _planner_model, num_ctx=_plan_ctx_final, n_parallel=1,
+                            pin=True,
                             # GRACEFUL-PLANNER: see primary load above.
                             ctx_graceful=True,
                         ),
@@ -1193,6 +1196,12 @@ async def run_code_duo(ctx):
                     )
                 except Exception as _port_err:
                     logger.warning("[Planner] Port resolution failed: %s", _port_err)
+
+            # IMAGE PLAN (2026-10-01): pure decision over planner/coder roles
+            # (raw | description | none) — computed once per run, before the
+            # coder load so a needed projector reload is visible in the
+            # status stream.
+            _img_plan = resolve_image_plan(_planner_model, exec_mdl, ctx.settings, ctx)
 
             yield await ctx.emit({
                 "type": "status",
@@ -1955,6 +1964,26 @@ async def run_code_duo(ctx):
                             logger.debug("[SERIAL-SLOTS] planner evict failed: %s", _serial_err)
                     for _cl_attempt in range(3):
                         try:
+                            # VISION RELOAD HINT (2026-10-01): if the coder
+                            # needs the projector but its slot runs without
+                            # one, ensure_loaded will kill + restart with
+                            # mmproj — tell the user up front.
+                            if _img_plan.get("coder") == "raw":
+                                try:
+                                    _prev_slot = await _lsm2._find_loaded(exec_mdl)
+                                except Exception:
+                                    _prev_slot = None
+                                if _prev_slot is not None and not _prev_slot._vision:
+                                    _gguf_gb = 1.5
+                                    try:
+                                        from backend.llama_models import resolve_model_path as _rmp
+                                        _gp = _rmp(exec_mdl)
+                                        if _gp and Path(_gp).exists():
+                                            _gguf_gb = Path(_gp).stat().st_size / (1024 ** 3)
+                                    except Exception:
+                                        pass
+                                    yield await ctx.emit({"type": "status",
+                                        "content": f"loading with image support (mmproj), ~{max(15, int(_gguf_gb * 8))} s — one-time reload"})
                             yield await ctx.emit({"type": "status",
                                 "content": f"⏳ Loading coder ({exec_mdl.split(':')[0]}, ctx={_coder_ctx_try})…"})
                             _coder_port = await asyncio.wait_for(
@@ -1962,7 +1991,7 @@ async def run_code_duo(ctx):
                                 # full ctx OR a clear error — never a silently
                                 # degraded slot (manager: 768→256→error).
                                 _lsm2.ensure_loaded(exec_mdl, num_ctx=_coder_ctx_try,
-                                                    n_parallel=1, ctx_graceful=False),
+                                                    n_parallel=1, ctx_graceful=False, pin=True),
                                 timeout=_coder_load_timeout,
                             )
                             _coder_load_ok = True
@@ -2990,7 +3019,7 @@ async def run_code_duo(ctx):
                     _plan_port_inloop = None
                     try:
                         from backend.llama_server_manager import manager as _lsm3
-                        _plan_port_inloop = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_ctx, n_parallel=1, ctx_graceful=False)
+                        _plan_port_inloop = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_ctx, n_parallel=1, ctx_graceful=False, pin=True)
                     except Exception as _port_err:
                         logger.warning("Inloop planner: port not available (%s)", _port_err)
                     _inloop_plan_text = ""
@@ -3234,7 +3263,7 @@ async def run_code_duo(ctx):
                     if _dport is None:
                         for _connect_attempt in range(3):
                             try:
-                                _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False)
+                                _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
                                 break
                             except Exception as _ce:
                                 if _connect_attempt < 2:
@@ -3618,7 +3647,7 @@ async def run_code_duo(ctx):
                                 try:
                                     from backend.llama_server_manager import manager as _lsm_hc
                                     await _lsm_hc.evict(exec_mdl)
-                                    _dport = await _lsm_hc.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False)
+                                    _dport = await _lsm_hc.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
                                     _cached_coder_port = _dport
                                     _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)  # CTX-GUARD
                                     yield await ctx.emit({"type": "status",
@@ -5319,8 +5348,8 @@ async def run_code_duo(ctx):
                         try:
                             from backend.llama_server_manager import manager as _lsm_retry
                             await _lsm_retry.evict(exec_mdl)
-                            await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False)
-                            _dport = _cached_coder_port or await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False)
+                            await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
+                            _dport = _cached_coder_port or await _lsm_retry.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
                             ctx.exec_ctrl.sync_tool_rounds(_total_tool_rounds)
                             continue
                         except Exception as _retry_err:
@@ -6098,6 +6127,16 @@ async def run_code_duo(ctx):
         raise
 
     finally:
+        # DUO-SLOT UNPIN (2026-10-01): the run pinned its planner/coder slots
+        # so the vision-preprocessing load could not LRU-evict them; release
+        # the pin so normal eviction can reclaim VRAM after the run.
+        try:
+            from backend.llama_server_manager import manager as _lsm_unpin
+            for _m in (_planner_model, exec_mdl):
+                if _m:
+                    _lsm_unpin.unpin(_m)
+        except Exception:
+            pass
         # Cleanup Pause/Resume State
         try:
             _rid = _run_id_global

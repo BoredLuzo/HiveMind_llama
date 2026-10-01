@@ -23,7 +23,7 @@ from .llama_manager_utils import (
     CanFitResult, _WIN_CNF, VRAM_BUDGET_GB,
     LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
     _OLLAMA_ONLY_BASES, _MMPROJ_REQUIRED_BASES, _VISION_CAPABLE_BASES,
-    pick_mmproj_fallback,
+    needs_vision_reload, pick_mmproj_fallback,
     _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
     VRAM_PRE_FLIGHT_MARGIN_MIB, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
     CTX_DOWN_MIN, resolve_ctx_fit,
@@ -323,7 +323,11 @@ class LlamaLoadMixin:
             slot = await self._find_loaded(model)
             if slot:
                 if not slot._loading:
-                    if vision != slot._vision:
+                    # UPGRADE-ONLY RELOAD (2026-10-01): reload from WITHOUT to
+                    # WITH projector only. A plain load (no vision flag — chat,
+                    # compression, critic loads of the same model) must not
+                    # strip a vision slot's projector.
+                    if needs_vision_reload(slot._vision, vision):
                         self._metric_inc("evictions_total")
                         await _kill_slot_async(slot)
                         slot = None
@@ -1500,7 +1504,12 @@ class LlamaLoadMixin:
                 _log_file_closed = True
                 slot.model      = model
                 slot.loaded_at  = time.time()
-                slot._vision    = vision
+                # VISION-TRUTH (2026-10-01): True only when the projector is
+                # really attached — a missing mmproj file must NOT mark the
+                # slot vision-capable (the attach-time precheck relies on
+                # this flag).
+                slot._vision    = vision and (_mmproj_resolved is not None
+                                              or not _needs_mmproj(model, vision=vision))
                 slot._num_ctx   = num_ctx
                 slot._n_parallel = n_parallel
                 slot._jinja      = "--jinja" in cmd

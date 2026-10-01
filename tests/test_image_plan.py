@@ -210,3 +210,24 @@ class DuoGateStatus(unittest.TestCase):
                      [_B64], "desc", {"enabled": True, "model": "vl"})
         self.assertEqual(plan["mode"], "preprocess")  # sentinel derives first
         self.assertEqual((plan["planner"], plan["coder"]), ("description", "description"))
+
+
+class VisionReloadRule(unittest.TestCase):
+    """C3: upgrade-only reload — never strip a projector."""
+
+    def test_matrix(self):
+        from backend.llama_manager_utils import needs_vision_reload as N
+        self.assertFalse(N(True, False))   # plain load keeps vision slot
+        self.assertFalse(N(True, True))    # same
+        self.assertFalse(N(False, False))  # same
+        self.assertTrue(N(False, True))    # upgrade: without -> with projector
+
+    def test_unpin_clears_flag(self):
+        from backend.manager_evict import LlamaEvictMixin
+        m = LlamaEvictMixin()
+        m._slots = [SimpleNamespace(model="coder", pinned=True),
+                    SimpleNamespace(model="other", pinned=True)]
+        n = m.unpin("coder")
+        self.assertEqual(n, 1)
+        self.assertFalse(m._slots[0].pinned)
+        self.assertTrue(m._slots[1].pinned)  # other model untouched

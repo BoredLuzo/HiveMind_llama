@@ -48,6 +48,14 @@ _VISION_CAPABLE_BASES: set[str] = {
 }
 
 
+def needs_vision_reload(slot_vision: bool, want_vision: bool) -> bool:
+    """Upgrade-only reload rule (2026-10-01): kill+restart with projector ONLY
+    from without -> with. want_vision=False must NEVER strip a vision slot —
+    chat/compression/critic loads of the SAME model pass no vision flag and
+    would otherwise strip the projector the coder depends on."""
+    return bool(want_vision) and not bool(slot_vision)
+
+
 def pick_mmproj_fallback(gguf_dir, model: str):
     """Size-tag-strict mmproj fallback (2026-10-01, was inline in
     manager_load): returns the mmproj file matching the model's parameter
