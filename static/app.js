@@ -4194,6 +4194,78 @@ var _apprGenTool = '';
 var _apprClearedAt = 0;
 var _askClearedAt = 0;
 
+// APPROVAL-CARD AUTO TIMER (2026-10-01): checkbox + visible countdown on
+// every approval card. With duo_action_approval_timeout_s > 0 the SERVER
+// runs the countdown (auto-approves once after N s — robust even when the
+// browser is closed) and the card mirrors it; unchecking posts
+// auto_timeout_off which cancels the server countdown ("wait for me").
+// With the setting off the user can still check the box: the card then
+// counts down itself and posts an explicit approve-once at 0.
+function _apAutoBox(card, d) {
+  var _n = parseInt(d.auto_timeout_s, 10) || 0;
+  var _box = card.querySelector('[data-ap-auto]');
+  if (_box) {  // card already has the box (staged->pause update-in-place)
+    var _prev = card._apAutoServer || 0;
+    card._apAutoServer = _n;
+    if (_n > 0 && !_prev && card._apAutoStart) {
+      var _cb2 = _box.querySelector('input');
+      if (_cb2 && !_cb2.checked) { _cb2.checked = true; card._apAutoStart(_n); }
+    }
+    return;
+  }
+  var _row = document.createElement('label');
+  _row.setAttribute('data-ap-auto', '1');
+  _row.style.cssText = 'display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);margin-bottom:8px;cursor:pointer;user-select:none';
+  var _cb = document.createElement('input');
+  _cb.type = 'checkbox';
+  _cb.checked = _n > 0;
+  var _lbl = document.createElement('span');
+  _row.appendChild(_cb);
+  _row.appendChild(_lbl);
+  card._apAutoServer = _n;
+  var _setLbl = function(txt) { _lbl.textContent = txt; };
+  var _stop = function() {
+    if (card._apAutoInt) { clearInterval(card._apAutoInt); card._apAutoInt = null; }
+  };
+  card._apAutoStart = function(n2) {
+    var _left = n2 || 30;
+    _stop();
+    _setLbl('auto-approving once in ' + _left + 's (nobody answered)');
+    card._apAutoInt = setInterval(function() {
+      _left--;
+      if (_left <= 0) {
+        _stop();
+        _setLbl('auto-approved');
+        if ((card._apAutoServer || 0) > 0) return;  // the server approves itself
+        var _rid = card.dataset.runId || S.currentRunId || '';
+        card.dataset.apLocked = '1';
+        fetch('/approval/decide/' + encodeURIComponent(_rid), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answer: '1|auto-approved (card timer)' })
+        }).then(function() {
+          var _gone = document.getElementById('approval-request-card');
+          if (_gone) { _apprClearedAt = Date.now(); _gone.remove(); }
+        }).catch(function(e) { if (window._showErrorToast) window._showErrorToast('Approval failed: ' + e); });
+        return;
+      }
+      _setLbl('auto-approving once in ' + _left + 's (nobody answered)');
+    }, 1000);
+  };
+  _cb.onchange = function() {
+    if (_cb.checked) { card._apAutoStart(card._apAutoServer || 30); return; }
+    _stop();
+    _setLbl('waiting for your decision');
+    var _rid = card.dataset.runId || S.currentRunId || '';
+    fetch('/approval/decide/' + encodeURIComponent(_rid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto_timeout_off: true })
+    }).catch(function(e) { if (window._showErrorToast) window._showErrorToast('Auto-timer off failed: ' + e); });
+  };
+  if (_cb.checked) card._apAutoStart(_n); else _setLbl('waiting for your decision');
+  var _firstInput = card.querySelector('input');
+  if (_firstInput) card.insertBefore(_row, _firstInput); else card.appendChild(_row);
+}
+
 function _renderApprovalCard(d) {
   var _runId = d.run_id || S.currentRunId || '';
   var _apOld = document.getElementById('approval-request-card');
@@ -4211,6 +4283,7 @@ function _renderApprovalCard(d) {
       if (_lblUp) _lblUp.textContent = '\uD83D\uDEE1 ' + (d.tool || 'tool') + ' wants to run. Your approval is needed';
       if (_preUp && _preUp.textContent !== (d.preview || '')) _preUp.textContent = d.preview || '';
       _apOld.dataset.apStaged = '';  // real preview known — the arg feed stops
+      _apAutoBox(_apOld, d);  // pause emit carries auto_timeout_s — start countdown
       return;
     }
     _apOld.remove();
@@ -4278,6 +4351,7 @@ function _renderApprovalCard(d) {
   });
   _ap.appendChild(_apLbl);
   _ap.appendChild(_apPre);
+  _apAutoBox(_ap, d);
   _ap.appendChild(_apNote);
   _ap.appendChild(_apRow);
   document.getElementById('chat').appendChild(_ap);

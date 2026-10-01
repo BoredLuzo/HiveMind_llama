@@ -183,6 +183,15 @@ async def approval_decide(run_id: str, req: Request):
         body = await req.json()
     except ValueError:
         return JSONResponse({"error": "JSON body expected"}, status_code=400)
+    # CARD COUNTDOWN OFF (2026-10-01): the approval card's checkbox cancels
+    # the auto-approve countdown for this card — no answer involved, so this
+    # branch runs BEFORE the answer-required validation.
+    if isinstance(body, dict) and body.get("auto_timeout_off"):
+        from tools import runner as _tr_ao
+        _ev = _tr_ao._approval_auto_off_events.get(str(run_id))
+        if _ev:
+            _ev.set()
+        return {"routed": "auto_timeout_off", "run_id": run_id}
     answer = str(body.get("answer", "") or "").strip()
     if not answer:
         return JSONResponse({"error": "Field 'answer' is required"}, status_code=400)

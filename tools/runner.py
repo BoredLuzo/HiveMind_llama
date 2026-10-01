@@ -314,11 +314,17 @@ _approval_pre_decisions: dict = {}
     # "one card per run until it is answered/consumed"
 _card_staged: dict = {}
 
-# APPROVAL-TIMEOUT (2026-09-30): set when an unanswered card auto-denied
-# (duo_action_approval_timeout_s > 0). A user decision arriving AFTER the
+# APPROVAL-TIMEOUT (2026-09-30, auto-approve-once since 2026-10-01): set when
+# an unanswered card ran its countdown. A user decision arriving AFTER the
 # timeout is discarded once here — it would otherwise be stored as a
 # pre-decision and silently approve the NEXT gated call (no double-exec).
 _approval_expired: dict = {}
+
+# APPROVAL-CARD COUNTDOWN OFF (2026-10-01): the approval card's checkbox can
+# cancel the auto-approve countdown for THIS card ("wait for me instead").
+# The decide endpoint sets the event; the wait loop treats it as "wait
+# indefinitely (abort-aware) instead of auto-approving".
+_approval_auto_off_events: dict = {}
 
 def _approval_scope() -> str:
     """chat_id-or-run_id (the same value ask_user keys on)."""
@@ -597,9 +603,18 @@ async def _check_action_approval(name: str, args: dict, workspace):
             + (f" User message: {_note_l}" if _note_l else "")
             + " Pick a different approach that does not need " + name + ".",
             tool=name ))
+    # APPROVAL-TIMEOUT SETTING (2026-10-01): read once per gate call — the
+    # pause card and its SSE event both carry the countdown length
+    try:
+        from core.state import settings as _appr_ws
+        _appr_to_s = int(_appr_ws.get("duo_action_approval_timeout_s", 0) or 0)
+    except Exception:
+        _appr_to_s = 0
+    _appr_wait_s = 3600 if _appr_to_s <= 0 else _appr_to_s
     _decision_id = _rc.get_decision_id(run_id)
     _pending_approvals[run_id] = {"tool": name, "preview": _preview,
-                                  "decision_id": _decision_id}
+                                  "decision_id": _decision_id,
+                                  "auto_timeout_s": _appr_to_s}
     # NEW-QUESTION RESET (2026-10-01): same as in stage_approval_card — a
     # fresh pause-owned card clears the expired flag so the user's answer to
     # THIS question is not discarded as a late one.
@@ -610,7 +625,8 @@ async def _check_action_approval(name: str, args: dict, workspace):
     # /api/run/{id}/resume.
     await _safe_emit({"type": "approval_request",
                       "run_id": run_id, "tool": name, "preview": _preview,
-                      "decision_id": _decision_id})
+                      "decision_id": _decision_id,
+                      "auto_timeout_s": _appr_to_s})
     await _safe_emit({"type": "status", "content": "Approval needed. Waiting for your decision\u2026"})
     try:
         from infra.notify import notify_agent_needs_input
@@ -623,39 +639,56 @@ async def _check_action_approval(name: str, args: dict, workspace):
     # loaded (live: approval toasts minutes after closing the UI). Deny on
     # abort; the run's own abort checks stop it right after this round.
     import asyncio as _appr_asyncio
-    # APPROVAL-TIMEOUT (2026-09-30): duo_action_approval_timeout_s > 0
-    # auto-denies an unanswered card after N s (unattended runs must not be
-    # wedged forever — live smoke run paused 9+ min on a run_bash card).
-    # Default 0 keeps today's behavior: wait up to 3600s.
-    try:
-        from core.state import settings as _appr_ws
-        _appr_to_s = int(_appr_ws.get("duo_action_approval_timeout_s", 0) or 0)
-    except Exception:
-        _appr_to_s = 0
-    _appr_wait_s = 3600 if _appr_to_s <= 0 else _appr_to_s
+    # (setting already read above: _appr_to_s / _appr_wait_s)
+    _auto_off_ev = _approval_auto_off_events.pop(str(run_id), None) \
+        if _appr_to_s > 0 else None
+    if _auto_off_ev is not None:
+        _approval_auto_off_events[str(run_id)] = _auto_off_ev  # re-arm for this wait
     _pause_ev = _rc._pause_events.get(run_id)
     _abort_ev = _rc._run_abort_registry.get(run_id)
     if _pause_ev is not None and _abort_ev is not None:
-        _wait_t = _appr_asyncio.ensure_future(_pause_ev.wait())
-        _abort_t = _appr_asyncio.ensure_future(_abort_ev.wait())
-        _done, _still = await _appr_asyncio.wait(
-            {_wait_t, _abort_t}, timeout=_appr_wait_s, return_when=_appr_asyncio.FIRST_COMPLETED)
-        for _t in _still:
-            _t.cancel()
-        if _abort_t in _done and _wait_t not in _done:
-            _lg.warning("[APPROVAL] run aborted during pause (browser closed) — denying, run will stop")
-            _pending_approvals.pop(run_id, None)
+        _appr_manual = False
+        while True:
+            _wait_t = _appr_asyncio.ensure_future(_pause_ev.wait())
+            _abort_t = _appr_asyncio.ensure_future(_abort_ev.wait())
+            _waitset = {_wait_t, _abort_t}
+            _timer_t = _off_t = None
+            if _appr_to_s > 0 and not _appr_manual:
+                _timer_t = _appr_asyncio.ensure_future(_appr_asyncio.sleep(_appr_wait_s))
+                _off_t = _appr_asyncio.ensure_future(_auto_off_ev.wait())
+                _waitset.add(_timer_t)
+                _waitset.add(_off_t)
+            _done, _still = await _appr_asyncio.wait(
+                _waitset, return_when=_appr_asyncio.FIRST_COMPLETED)
+            for _t in _still:
+                _t.cancel()
+            if _off_t is not None and _off_t in _done:
+                # the card's checkbox cancelled the countdown for this card:
+                # keep waiting (abort-aware), no auto-approve
+                _appr_manual = True
+                _lg.warning("[APPROVAL] card disabled the auto-approve countdown run=%s tool=%s",
+                            run_id, name)
+                continue
+            if _timer_t is not None and _timer_t in _done:
+                answer = ""  # countdown expired -> auto-approve-once path below
+                _rc.cleanup_pause(run_id)
+                break
+            if _abort_t in _done and _wait_t not in _done:
+                _lg.warning("[APPROVAL] run aborted during pause (browser closed) — denying, run will stop")
+                _pending_approvals.pop(run_id, None)
+                _rc.cleanup_pause(run_id)
+                await _safe_emit({"type": "agent_resumed"})
+                return ("DENY", _tool_error_response(
+                    "ACTION_APPROVAL_DENIED",
+                    "The run was aborted while waiting for approval (UI closed). "
+                    "Do not continue this approach.",
+                    tool=name ))
+            answer = _rc._user_answers.pop(run_id, "")
             _rc.cleanup_pause(run_id)
-            await _safe_emit({"type": "agent_resumed"})
-            return ("DENY", _tool_error_response(
-                "ACTION_APPROVAL_DENIED",
-                "The run was aborted while waiting for approval (UI closed). "
-                "Do not continue this approach.",
-                tool=name ))
-        answer = _rc._user_answers.pop(run_id, "")
-        _rc.cleanup_pause(run_id)
+            break
     else:
         answer = await _rc.wait_for_resume(run_id, timeout_s=_appr_wait_s)
+    _approval_auto_off_events.pop(str(run_id), None)
     _pending_approvals.pop(run_id, None)
     await _safe_emit({"type": "agent_resumed"})
     # TIMEOUT AUTO-APPROVE-ONCE (2026-10-01): an empty answer can only come
