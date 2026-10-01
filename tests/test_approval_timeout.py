@@ -50,16 +50,19 @@ class ApprovalTimeout(unittest.TestCase):
         RC._pause_events.pop("r-appr-test", None)
         RC._user_answers.pop("r-appr-test", None)
 
-    def test_unanswered_card_auto_denies_after_timeout(self):
+    def test_unanswered_card_auto_approves_once_after_timeout(self):
         async def run():
             return await R._check_action_approval(
                 "run_bash", {"command": "ls"}, _WS)
 
         res = asyncio.run(run())
-        self.assertEqual(res[0], "DENY")
-        self.assertIn("no approval within 1", res[1])
-        self.assertIn("ACTION_APPROVAL_TIMEOUT", res[1])
+        # auto-approved once: the TOOL RUNS, the note rides along
+        self.assertEqual(res[0], "NOTE")
+        self.assertIn("auto-approved", res[1])
+        self.assertIn("no user response within 1", res[1])
         self.assertTrue(R._approval_expired.get("r-appr-test"))
+        # run_bash is NOT a write tool: no once-path registration
+        self.assertNotIn("r-appr-test", R._approval_once_paths)
 
     def test_answer_before_timeout_honors_user_decision(self):
         async def run():

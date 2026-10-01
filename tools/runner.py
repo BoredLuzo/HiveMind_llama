@@ -658,25 +658,28 @@ async def _check_action_approval(name: str, args: dict, workspace):
         answer = await _rc.wait_for_resume(run_id, timeout_s=_appr_wait_s)
     _pending_approvals.pop(run_id, None)
     await _safe_emit({"type": "agent_resumed"})
-    # TIMEOUT AUTO-DENY (2026-09-30): an empty answer can only come from the
-    # timeout (the decide endpoint rejects empty answers); wait_for_resume
-    # signals its own timeout as "[ask_user TIMEOUT: ...]". Both deny with an
-    # explicit message and discard the NEXT late decision once, so a stale
-    # click can never approve the following gated call.
+    # TIMEOUT AUTO-APPROVE-ONCE (2026-10-01): an empty answer can only come
+    # from the timeout (the decide endpoint rejects empty answers);
+    # wait_for_resume signals its own timeout as "[ask_user TIMEOUT: ...]".
+    # With duo_action_approval_timeout_s > 0 an unanswered card lets THIS
+    # call run once (unattended runs must not be wedged forever — live smoke
+    # run paused 9+ min on a run_bash card); the model sees an explicit
+    # note, the once-path rules apply (writes per file, no repo memory).
+    # The NEXT late decision is discarded once (_approval_expired), so a
+    # stale click can never approve the following gated call.
     _appr_timed_out = (not str(answer or "").strip()
                        or str(answer).startswith("[ask_user TIMEOUT"))
     if _appr_timed_out and _appr_to_s > 0:
         _approval_expired[str(run_id)] = True
-        _lg.warning("[APPROVAL] timeout after %ds run=%s tool=%s — auto-deny",
+        _lg.warning("[APPROVAL] timeout after %ds run=%s tool=%s — auto-approved once",
                     _appr_to_s, run_id, name)
         await _safe_emit({"type": "status",
-                          "content": f"Approval for {name} timed out after {_appr_to_s}s — denied."})
-        return ("DENY", _tool_error_response(
-            "ACTION_APPROVAL_TIMEOUT",
-            f"denied: no approval within {_appr_to_s}s (unattended run). "
-            "Pick a different approach that does not need " + name
-            + ", or re-ask via ask_user when the user is back.",
-            tool=name ))
+                          "content": f"No user response for {name} within {_appr_to_s}s — auto-approved once."})
+        if name in ("write_file", "edit_file", "write_file_append") and _wpath:
+            _approval_once_paths.setdefault(_scope, set()).add(_wpath)
+            _approval_free_pass[str(run_id)] = "write"
+        return ("NOTE", f"auto-approved: no user response within {_appr_to_s}s "
+                        f"— this call ran once without explicit approval.")
     # "1|please use fetch instead" -> decision + user note for the model
     _note = ""
     if "|" in str(answer):
