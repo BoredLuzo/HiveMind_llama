@@ -139,7 +139,7 @@ from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
-    build_image_desc_block,
+    build_image_desc_block, attach_images_to_last_user, duo_coder_wants_images,
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
@@ -2544,6 +2544,7 @@ async def run_code_duo(ctx):
                     f"\n\n[Plan Briefing — IMPLEMENT THIS]:\n{_plan_thinking}"
                 )
 
+            _coder_wants_images = duo_coder_wants_images(exec_mdl, ctx)
             if _di == 0:
                 # fixed 600/1200-char truncation.
                 _sess_budgeted = budget_session_msgs(
@@ -2564,6 +2565,13 @@ async def run_code_duo(ctx):
                     {"role": "system", "content": _duo_coder_sys},
                     {"role": "user",   "content": _coder_input},
                 ]
+            # RAW-IMAGES (2026-10-01): a vision-capable coder receives the
+            # attached images as OpenAI content parts on its first user
+            # message (mode=direct only — preprocess/pipeline already paid
+            # for a text description). The payload reaches llama-server
+            # untransformed, so parts survive the wire as-is.
+            if _coder_wants_images:
+                _coder_msgs = attach_images_to_last_user(_coder_msgs, ctx.images)
 
             _prompt_prev = (_coder_input or "")[:500].replace("\n", " ").strip()
             if len(_coder_input or "") > 500:
@@ -2935,10 +2943,22 @@ async def run_code_duo(ctx):
                 if _dtool_msgs and _goal_pin_msg:
                     if len(_dtool_msgs) > 1 and _dtool_msgs[1].get("role") == "user":
                         _existing_content = _dtool_msgs[1].get("content", "")
-                        _dtool_msgs[1] = {
-                            **_dtool_msgs[1],
-                            "content": _goal_pin_msg["content"] + "\n\n" + str(_existing_content)
-                        }
+                        # GOAL-PIN LIST GUARD (2026-10-01): message 1 can carry
+                        # OpenAI content parts (raw images) — never str() them
+                        # (would corrupt the parts into repr garbage); prepend
+                        # the pin as an extra text part instead.
+                        if isinstance(_existing_content, list):
+                            _dtool_msgs[1] = {
+                                **_dtool_msgs[1],
+                                "content": [{"type": "text",
+                                             "text": _goal_pin_msg["content"]}]
+                                           + _existing_content
+                            }
+                        else:
+                            _dtool_msgs[1] = {
+                                **_dtool_msgs[1],
+                                "content": _goal_pin_msg["content"] + "\n\n" + str(_existing_content)
+                            }
                     else:
                         _dtool_msgs = (
                             [_dtool_msgs[0], _goal_pin_msg]

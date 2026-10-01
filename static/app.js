@@ -2527,12 +2527,34 @@ function stopAskUserCountdown() {
 }
 
 // -- Images -----------------------------------------------------
+// DOWNSCALE (2026-10-01): longest edge cap keeps the base64 (and therefore
+// the prompt tokens) predictable — the raw screenshot/phone photo used to go
+// up unscaled. jpeg q0.9; images without a decodable size pass through.
+function _downscaleImage(dataUrl, cb) {
+  var _img = new Image();
+  _img.onload = function() {
+    var _edge = Math.max(_img.naturalWidth, _img.naturalHeight);
+    if (_edge <= 1024 || !_edge) { cb(dataUrl); return; }
+    var _k = 1024 / _edge;
+    var _cv = document.createElement('canvas');
+    _cv.width = Math.round(_img.naturalWidth * _k);
+    _cv.height = Math.round(_img.naturalHeight * _k);
+    _cv.getContext('2d').drawImage(_img, 0, 0, _cv.width, _cv.height);
+    try { cb(_cv.toDataURL('image/jpeg', 0.9)); }
+    catch (e) { cb(dataUrl); }
+  };
+  _img.onerror = function() { cb(dataUrl); };
+  _img.src = dataUrl;
+}
+
 function handleImgs(input) {
   Array.from(input.files).forEach(function(file) {
     const r = new FileReader();
     r.onload = function(e) {
-      S.pendingImgs.push({b64: e.target.result.split(',')[1], preview: e.target.result});
-      renderImgPreview();
+      _downscaleImage(e.target.result, function(_url) {
+        S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
+        renderImgPreview();
+      });
     };
     r.readAsDataURL(file);
   });
@@ -2560,6 +2582,12 @@ function renderImgPreview() {
     const dModel = (S.currentAssignments && S.currentAssignments.direct && S.currentAssignments.direct.model) || '';
     const dProf = S.modelProfiles && (S.modelProfiles[dModel] || S.modelProfiles[(dModel||'').split(':')[0]]);
     const dVision = !!(dProf && dProf.vision);
+    // DUO-CODER VISION (2026-10-01): in agentic duo runs the CODER decides
+    // whether raw images are used — not the direct model
+    const _isDuo = S.mode === 'code_duo' || S._runIsDuo;
+    const cModel = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
+    const cProf = S.modelProfiles && (S.modelProfiles[cModel] || S.modelProfiles[(cModel||'').split(':')[0]]);
+    const cVision = !!(cProf && cProf.vision);
     if (dVision) {
       hint.style.background = 'rgba(72,120,192,.12)'; hint.style.color = '#80b0e0';
       hint.style.border = '1px solid rgba(72,120,192,.3)';
@@ -2571,7 +2599,9 @@ function renderImgPreview() {
     } else {
       hint.style.background = 'rgba(176,64,64,.12)'; hint.style.color = '#d09090';
       hint.style.border = '1px solid rgba(176,64,64,.3)';
-      hint.textContent = '⚠ No multimodal direct model + no vision-agent — the image will be ignored.';
+      hint.textContent = _isDuo
+        ? '⚠ Duo-Coder (' + (cModel || '?') + (cVision ? '' : ' not multimodal') + ') + no vision-agent \u2014 the image will be ignored. Enable the Vision agent in image settings.'
+        : '⚠ No multimodal direct model + no vision-agent — the image will be ignored.';
     }
     c.appendChild(hint);
   }
@@ -7483,8 +7513,10 @@ chatCol.addEventListener('drop', function(e) {
     if (!file.type.startsWith('image/')) return;
     const r = new FileReader();
     r.onload = function(ev) {
-      S.pendingImgs.push({b64: ev.target.result.split(',')[1], preview: ev.target.result});
-      renderImgPreview();
+      _downscaleImage(ev.target.result, function(_url) {
+        S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
+        renderImgPreview();
+      });
     };
     r.readAsDataURL(file);
   });
@@ -9210,6 +9242,11 @@ function _updateVisionPreview() {
   var _dProf = _dModel && S.modelProfiles && (S.modelProfiles[_dModel] || S.modelProfiles[_dModel.split(':')[0]]);
   var _dVision = !!( _dProf && _dProf.vision );
   var _dDisp = _dModel ? _dModel.replace(':latest','').split('/').pop() : '—';
+  // DUO-CODER VISION (2026-10-01): in agentic duo runs the CODER decides
+  var _cModel = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
+  var _cProf = _cModel && S.modelProfiles && (S.modelProfiles[_cModel] || S.modelProfiles[_cModel.split(':')[0]]);
+  var _cVision = !!( _cProf && _cProf.vision );
+  var _cDisp = _cModel ? _cModel.replace(':latest','').split('/').pop() : '—';
   var mode = S.imageMode || 'direct';
   var _flow = '';
   if (flowCard) {
@@ -9247,6 +9284,10 @@ function _updateVisionPreview() {
         _flow = '<span style="color:#d09090">&#9654; Direct:</span> ' + _dDisp
               + ' is not multimodal.<br>'
               + '<span style="color:var(--tx3)">Images may be ignored &mdash; switch to Preprocessor/Pipeline or pick a multimodal direct model.</span>';
+        if (_cModel) {
+          _flow += '<br><span style="color:' + (_cVision ? '#80b0e0' : 'var(--tx3)') + '">&#9654; Duo-Coder:</span> ' + _cDisp
+                 + (_cVision ? ' is multimodal &mdash; in agentic runs the raw image goes to the coder.' : ' is not multimodal (description via vision model needed).');
+        }
       }
     }
     flowCard.innerHTML = _flow;

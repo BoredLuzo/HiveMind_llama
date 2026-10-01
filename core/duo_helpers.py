@@ -599,3 +599,54 @@ def build_image_desc_block(desc) -> str:
     if not _d:
         return ""
     return "\n\n[IMAGE DESCRIPTION]:\n" + _d
+
+
+def attach_images_to_last_user(msgs, images):
+    """Convert the LAST user message to OpenAI content parts carrying the
+    attached images (2026-10-01).
+
+    Wire format matches llama_client._convert_messages: image_url parts
+    first (raw base64 wrapped as a jpeg data URL — llama-server sniffs the
+    real mime), then the text part. No-op when images is empty or no user
+    message exists; callers pass this ONLY after duo_coder_wants_images().
+    """
+    _imgs = [str(b).strip() for b in (images or []) if str(b or "").strip()]
+    if not _imgs or not msgs:
+        return msgs
+    for _m in reversed(msgs):
+        if isinstance(_m, dict) and _m.get("role") == "user":
+            _txt = _m.get("content")
+            if not isinstance(_txt, str):
+                return msgs  # already parts / unexpected shape: leave untouched
+            _parts = [{"type": "image_url",
+                       "image_url": {"url": "data:image/jpeg;base64," + _b}}
+                      for _b in _imgs]
+            _parts.append({"type": "text", "text": _txt})
+            _m["content"] = _parts
+            return msgs
+    return msgs
+
+
+def duo_coder_wants_images(exec_mdl, ctx) -> bool:
+    """True when the duo coder should receive RAW images (2026-10-01).
+
+    Requires: setting duo_coder_raw_images (default on), the coder model
+    being vision-capable (model_configs registry / MODEL_PROFILES via
+    _model_profile), images attached to the run, and image_processing_mode
+    'direct' (preprocess/pipeline modes already produce a text description
+    — raw parts on top would pay twice). Deliberately model-agnostic: no
+    name matching, pure capability lookup.
+    """
+    try:
+        from core.state import settings as _ws
+        if not bool(_ws.get("duo_coder_raw_images", True)):
+            return False
+        _mode = str(_ws.get("image_processing_mode", "direct") or "direct")
+        if _mode != "direct":
+            return False
+        if not getattr(ctx, "images", None):
+            return False
+        from core.model_sampling import _model_profile
+        return bool((_model_profile(str(exec_mdl or "")) or {}).get("vision", False))
+    except Exception:
+        return False
