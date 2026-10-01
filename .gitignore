@@ -99,3 +99,7 @@ deploy/hivemind_windows.py
 
 # local smoke/bench artifacts (settings backups, SSE dumps) — never pushed
 bench_results/
+
+# local test suites (fat dev tooling — never shipped with releases;
+# the pre-commit hook still runs them when present locally)
+tests/
