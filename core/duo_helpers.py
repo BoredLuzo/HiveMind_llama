@@ -650,3 +650,52 @@ def duo_coder_wants_images(exec_mdl, ctx) -> bool:
         return bool((_model_profile(str(exec_mdl or "")) or {}).get("vision", False))
     except Exception:
         return False
+
+
+def resolve_image_plan(planner_mdl, coder_mdl, settings, ctx) -> dict:
+    """Pure decision: how the agentic duo run handles attached images
+    (2026-10-01, replaces duo_coder_wants_images / duo_coder_raw_images).
+
+    Returns {"planner": "raw"|"description"|"none",
+             "coder":   "raw"|"description"|"none",
+             "warnings": [str], "mode": "direct"|"preprocess"|None}.
+
+    duo_image_mode None (never set, or a preset carried None back) is
+    DERIVED: an active vision_model.json (ctx.vision_cfg enabled+model)
+    means "preprocess" (text description to both roles), otherwise
+    "direct". In direct mode raw parts go to whichever role is checked AND
+    vision-capable (registry lookup, no name matching); a checked
+    non-multimodal role gets a warning and no image. No images attached:
+    everything none, no warnings.
+    """
+    warnings: list = []
+    images = [str(b or "").strip() for b in (getattr(ctx, "images", None) or [])
+              if str(b or "").strip()]
+    if not images:
+        return {"planner": "none", "coder": "none", "warnings": [], "mode": None}
+    mode = settings.get("duo_image_mode")
+    if mode is None:
+        _vc = getattr(ctx, "vision_cfg", None) or {}
+        mode = "preprocess" if (_vc.get("enabled") and _vc.get("model")) else "direct"
+        warnings.append(f"duo_image_mode not set — derived '{mode}' from the vision config")
+    plan = {"planner": "none", "coder": "none"}
+    if mode == "preprocess":
+        if str(getattr(ctx, "image_description", "") or "").strip():
+            plan["planner"] = plan["coder"] = "description"
+        else:
+            warnings.append("preprocess mode but no image description available — "
+                            "enable the vision model in image settings")
+        return {"planner": plan["planner"], "coder": plan["coder"],
+                "warnings": warnings, "mode": mode}
+    for role, mdl, key in (("planner", planner_mdl, "duo_image_to_planner"),
+                           ("coder", coder_mdl, "duo_image_to_coder")):
+        if bool(settings.get(key, False)):
+            from core.model_sampling import _model_profile
+            if (_model_profile(str(mdl or "")) or {}).get("vision", False):
+                plan[role] = "raw"
+            else:
+                warnings.append(f"{role} '{mdl}' is not multimodal — image skipped for it")
+    if "raw" not in plan.values() and not any("not multimodal" in w for w in warnings):
+        warnings.append("no target selected, image will not be used")
+    return {"planner": plan["planner"], "coder": plan["coder"],
+            "warnings": warnings, "mode": mode}

@@ -387,13 +387,17 @@ DEFAULT_SETTINGS = {
     # late user decision is discarded once, so a stale click can never
     # approve the following gated call.
     "duo_action_approval_timeout_s": 0,
-    # Send attached images as raw OpenAI content parts to a VISION-CAPABLE
-    # duo coder (only in image_processing_mode 'direct'; preprocess/pipeline
-    # modes supply the text description instead). Pure capability lookup via
-    # the model registry — no model-name matching. The description block (if
-    # a vision model is configured) is still added to the coder prompt as a
-    # compression-fallback.
-    "duo_coder_raw_images": True,
+    # Duo image plan (2026-10-01, replaces duo_coder_raw_images): how the
+    # agentic duo run handles attached images. None = derived (active
+    # vision_model.json -> "preprocess", else "direct"); explicit
+    # "direct"/"preprocess" wins. duo_image_to_planner/_coder are the
+    # per-role switches for the raw path. resolve_image_plan() decides per
+    # role: raw | description | none. Presets may carry None back in — the
+    # derivation is deterministic, so a preset load resets an explicit mode
+    # to "derived" (documented, tested).
+    "duo_image_mode": None,
+    "duo_image_to_planner": False,
+    "duo_image_to_coder": False,
     # Tool-error hard-stop cap for agentic runs. Successful non-write calls
     # decay the counter by 1, successful writes reset it to 0 — only a
     # no-progress run (this many fails with nothing succeeded in between)
