@@ -27,7 +27,11 @@ echo  [INFO] HiveMind is already running on port %HM_PORT% (PID: %HM_PORT_PID%).
 echo  [INFO] Open: http://localhost:%HM_PORT%
 echo.
 choice /c YN /n /m "Kill the running instance and start fresh? [Y/N] "
-if errorlevel 2 exit /b 0
+if errorlevel 2 (
+    echo  [INFO] Kept the running instance. This window can be closed.
+    pause >nul
+    exit /b 0
+)
 
 REM SERIAL-RESTART (2026-09-10): kill the old instance with its process tree
 REM (llama-server children). Linear flow: labels must stay at top level, cmd
@@ -128,4 +132,6 @@ if errorlevel 1 (
     echo  Press any key to continue...
     pause >nul
 )
+echo  [INFO] Server stopped. This window can be closed.
+pause >nul
 

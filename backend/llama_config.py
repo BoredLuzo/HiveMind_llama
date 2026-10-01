@@ -109,7 +109,20 @@ MODELS_DIR = find_models_dir()
 
 # ── Server-Ports ──────────────────────────────────────────────────────────────
 
-BASE_PORT = 8101
+# Per-instance llama ports (2026-10-01): two HiveMind copies on one machine
+# used to fight over the hardcoded 8101-8103 — startup_cleanup KILLS foreign
+# llama-server processes on those ports. Cascade: env override ->
+# settings.server_port + 100 -> legacy default. server_port comes from each
+# instance's own settings.json (testing 8001 -> 8101-8103, dev 8011 -> 8111-8113).
+BASE_PORT = int(os.environ.get("HIVEMIND_LLAMA_BASE_PORT", "").strip() or 0)
+if not BASE_PORT:
+    try:
+        from settings import load_settings as _ls_port
+        BASE_PORT = int(_ls_port().get("server_port", 0) or 0) + 100
+    except Exception:
+        BASE_PORT = 0
+if not BASE_PORT or BASE_PORT < 1024:
+    BASE_PORT = 8101
 
 MAX_SLOTS = 3
 
