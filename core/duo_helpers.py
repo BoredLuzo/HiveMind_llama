@@ -608,7 +608,7 @@ def attach_images_to_last_user(msgs, images):
     Wire format matches llama_client._convert_messages: image_url parts
     first (raw base64 wrapped as a jpeg data URL — llama-server sniffs the
     real mime), then the text part. No-op when images is empty or no user
-    message exists; callers pass this ONLY after duo_coder_wants_images().
+    message exists; callers pass this ONLY after resolve_image_plan() said 'raw'.
     """
     _imgs = [str(b).strip() for b in (images or []) if str(b or "").strip()]
     if not _imgs or not msgs:
@@ -627,34 +627,10 @@ def attach_images_to_last_user(msgs, images):
     return msgs
 
 
-def duo_coder_wants_images(exec_mdl, ctx) -> bool:
-    """True when the duo coder should receive RAW images (2026-10-01).
-
-    Requires: setting duo_coder_raw_images (default on), the coder model
-    being vision-capable (model_configs registry / MODEL_PROFILES via
-    _model_profile), images attached to the run, and image_processing_mode
-    'direct' (preprocess/pipeline modes already produce a text description
-    — raw parts on top would pay twice). Deliberately model-agnostic: no
-    name matching, pure capability lookup.
-    """
-    try:
-        from core.state import settings as _ws
-        if not bool(_ws.get("duo_coder_raw_images", True)):
-            return False
-        _mode = str(_ws.get("image_processing_mode", "direct") or "direct")
-        if _mode != "direct":
-            return False
-        if not getattr(ctx, "images", None):
-            return False
-        from core.model_sampling import _model_profile
-        return bool((_model_profile(str(exec_mdl or "")) or {}).get("vision", False))
-    except Exception:
-        return False
-
 
 def resolve_image_plan(planner_mdl, coder_mdl, settings, ctx) -> dict:
     """Pure decision: how the agentic duo run handles attached images
-    (2026-10-01, replaces duo_coder_wants_images / duo_coder_raw_images).
+    (2026-10-01, replaces the duo_coder_raw_images one-switch approach).
 
     Returns {"planner": "raw"|"description"|"none",
              "coder":   "raw"|"description"|"none",

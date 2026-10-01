@@ -1133,6 +1133,7 @@ async def run_planner(
     aborted_fn:           Callable[[], bool] | None = None,
     emit_fn:              Callable[[dict], Awaitable[None]] | None = None,
     heartbeat_fn:         Callable[[], Awaitable[None]] | None = None,
+    images:               list | None = None,
 ) -> PlannerResult:
 
 
@@ -1192,6 +1193,11 @@ async def run_planner(
         {"role": "system", "content": _sys_prompt},
         {"role": "user",   "content": _planner_user},
     ]
+    if images:
+        # PLANNER RAW IMAGES (2026-10-01): a vision-capable planner gets the
+        # attached images as OpenAI content parts on its user message
+        from core.duo_helpers import attach_images_to_last_user
+        _messages = attach_images_to_last_user(_messages, images)
 
     _wall_timeout = float(settings.get("duo_planner_thinking_timeout_s", 600.0))
 

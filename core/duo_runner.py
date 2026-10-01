@@ -139,8 +139,7 @@ from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
-    build_image_desc_block, attach_images_to_last_user, duo_coder_wants_images,
-    resolve_image_plan,
+    build_image_desc_block, attach_images_to_last_user, resolve_image_plan,
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
@@ -1017,6 +1016,11 @@ async def run_code_duo(ctx):
             _planner_model_override = str(ctx.settings.get("duo_planner_model", "") or "").strip()
             if _planner_model_override:
                 _planner_model = _planner_model_override
+            # IMAGE PLAN (2026-10-01): pure decision over planner/coder roles
+            # (raw | description | none) — computed once per run, before the
+            # coder load so a needed projector reload is visible in the
+            # status stream. Planner-aus runs: _planner_model is set anyway.
+            _img_plan = resolve_image_plan(_planner_model, exec_mdl, ctx.settings, ctx)
             _rm_models = {"planner": _planner_model, "coder": exec_mdl}
             if critic_mdl:
                 _rm_models["critic"] = critic_mdl
@@ -1197,12 +1201,6 @@ async def run_code_duo(ctx):
                 except Exception as _port_err:
                     logger.warning("[Planner] Port resolution failed: %s", _port_err)
 
-            # IMAGE PLAN (2026-10-01): pure decision over planner/coder roles
-            # (raw | description | none) — computed once per run, before the
-            # coder load so a needed projector reload is visible in the
-            # status stream.
-            _img_plan = resolve_image_plan(_planner_model, exec_mdl, ctx.settings, ctx)
-
             yield await ctx.emit({
                 "type": "status",
                 "content": (
@@ -1371,6 +1369,7 @@ async def run_code_duo(ctx):
                 # ── Run planner as background task ──────────────────────────────
                 _plan_task = asyncio.create_task(run_planner(
                     task=_planner_task,
+                    images=ctx.images if _img_plan.get("planner") == "raw" else None,
                     explore_ctx=_planner_ctx,
                     planner_model=_planner_model,
                     planner_port=_plan_port,
@@ -1725,6 +1724,10 @@ async def run_code_duo(ctx):
             has_subtasks=bool(_subtasks),
             has_explore_ctx=_explore_has_contents,
         ) + _coder_dyn_hints + build_image_desc_block(getattr(ctx, "image_description", None))
+        if _img_plan.get("planner") == "raw" and _img_plan.get("coder") != "raw":
+            _duo_coder_sys += (
+                "\n\n[IMAGE NOTE]: you cannot see the attached image — the planner saw it. "
+                "Put all relevant details (layout, texts, colors, sizes) into the plan.")
         _follow_up_hint = state.get("_follow_up_hint", "") or ""
         if _follow_up_hint:
             _duo_coder_sys += "\n\n" + _follow_up_hint
@@ -2573,7 +2576,7 @@ async def run_code_duo(ctx):
                     f"\n\n[Plan Briefing — IMPLEMENT THIS]:\n{_plan_thinking}"
                 )
 
-            _coder_wants_images = duo_coder_wants_images(exec_mdl, ctx)
+            _coder_skipped_images = False
             if _di == 0:
                 # fixed 600/1200-char truncation.
                 _sess_budgeted = budget_session_msgs(
@@ -2599,8 +2602,21 @@ async def run_code_duo(ctx):
             # message (mode=direct only — preprocess/pipeline already paid
             # for a text description). The payload reaches llama-server
             # untransformed, so parts survive the wire as-is.
-            if _coder_wants_images:
-                _coder_msgs = attach_images_to_last_user(_coder_msgs, ctx.images)
+            if _img_plan.get("coder") == "raw":
+                # MMproj-Precheck (2026-10-01): NEVER send parts to a server
+                # without a projector — skip with a UI-visible status instead
+                # (a non-multimodal model would answer an image it never saw).
+                from backend.llama_manager_utils import resolve_mmproj_strict as _mms
+                _mm_ok = _mms(exec_mdl) is not None
+                if _mm_ok:
+                    _coder_msgs = attach_images_to_last_user(_coder_msgs, ctx.images)
+                else:
+                    _coder_skipped_images = True
+                    _img_plan["coder"] = "none"
+                    logger.warning("[DUO] coder '%s' has no mmproj/projector — raw image SKIPPED", exec_mdl)
+                    yield await ctx.emit({"type": "status",
+                        "content": "⚠ Image skipped for coder '" + exec_mdl
+                                   + "': no projector (mmproj) available — the coder answers text-only."})
 
             _prompt_prev = (_coder_input or "")[:500].replace("\n", " ").strip()
             if len(_coder_input or "") > 500:
