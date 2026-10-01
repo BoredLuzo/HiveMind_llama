@@ -80,9 +80,13 @@ def pick_mmproj_fallback(gguf_dir, model: str):
 
 
 def resolve_mmproj_strict(model: str, gguf_dir=None):
-    """resolve_mmproj_path (registry/models.json/glob) + strict fallback —
-    single source of truth for 'does this model have a projector file?'
-    Returns an existing Path or None."""
+    """resolve_mmproj_path (registry/models.json/glob) + strict size-tag
+    check — single source of truth for 'does this model have a projector
+    file?'. The plain resolver globs *mmproj* next to the GGUF and happily
+    returns a 2B projector for a 4B model; here the file must match the
+    model's parameter size (word-boundary checked). Returns an existing
+    Path or None."""
+    import re as _re
     from pathlib import Path as _P
     from backend.llama_models import resolve_mmproj_path as _resolve
     try:
@@ -91,7 +95,11 @@ def resolve_mmproj_strict(model: str, gguf_dir=None):
         _p = None
     if _p:
         _pp = _P(_p)
-        if _pp.exists():
+        _tag_part = model.split(":")[1] if ":" in model else ""
+        _m = _re.search(r"(\d+(?:\.\d+)?)b", _tag_part, _re.IGNORECASE)
+        _size = _m.group(1) if _m else ""
+        if _pp.exists() and (not _size or _re.search(
+                r"(?<![\d.])" + _re.escape(_size) + r"b", _pp.stem, _re.IGNORECASE)):
             return _pp
     if gguf_dir:
         return pick_mmproj_fallback(gguf_dir, model)

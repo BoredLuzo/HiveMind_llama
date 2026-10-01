@@ -1219,6 +1219,14 @@ async function loadSettings() {
       || (S.visionAgentEnabled ? 'pipeline'
           : (S.pipelineVisionDirect ? 'direct' : ''));
     if (S.imageMode) _applyImageModeUI(S.imageMode);
+    // DUO IMAGE PLAN (2026-10-01): sentinel None = derived client-side the
+    // same way the backend does it (active vision cfg -> preprocess)
+    S.duoImageMode = s.duo_image_mode !== undefined && s.duo_image_mode !== null
+      ? s.duo_image_mode
+      : ((S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct');
+    S.duoImageToPlanner = s.duo_image_to_planner === true;
+    S.duoImageToCoder = s.duo_image_to_coder === true;
+    updateDuoImageUI();
     populateVisionAgentModelSel();
     _updateVisionAgentModeUI(S.visionAgentMode);
     var ar = document.getElementById('preload-analyst-row');
@@ -2534,8 +2542,8 @@ function _downscaleImage(dataUrl, cb) {
   var _img = new Image();
   _img.onload = function() {
     var _edge = Math.max(_img.naturalWidth, _img.naturalHeight);
-    if (_edge <= 1024 || !_edge) { cb(dataUrl); return; }
-    var _k = 1024 / _edge;
+    if (_edge <= 1568 || !_edge) { cb(dataUrl); return; }
+    var _k = 1568 / _edge;
     var _cv = document.createElement('canvas');
     _cv.width = Math.round(_img.naturalWidth * _k);
     _cv.height = Math.round(_img.naturalHeight * _k);
@@ -11120,3 +11128,58 @@ async function loadGitConfig(s) {
 }
 
 
+
+// ── DUO IMAGE PLAN UI (2026-10-01) ─────────────────────────────────────────
+// Radio (preprocess | direct) + per-role checkboxes; sentinel null is
+// derived the same way the backend does (active vision cfg -> preprocess).
+// Role status uses the SAME check as the backend: modelProfiles vision AND
+// a resolvable projector file (GET /vision/mmproj).
+function setDuoImageMode(m) {
+  S.duoImageMode = m;
+  postSettings({duo_image_mode: m});
+  updateDuoImageUI();
+}
+function setDuoImageRole(role, checked) {
+  if (role === 'planner') { S.duoImageToPlanner = checked; postSettings({duo_image_to_planner: checked}); }
+  else { S.duoImageToCoder = checked; postSettings({duo_image_to_coder: checked}); }
+  updateDuoImageUI();
+}
+function updateDuoImageUI() {
+  var _sec = document.getElementById('duo-image-sec');
+  if (!_sec) return;
+  var _m = S.duoImageMode || 'direct';
+  document.querySelectorAll('input[name="duo-image-mode"]').forEach(function(r) {
+    r.checked = (r.getAttribute('onchange').indexOf("'" + _m + "'") >= 0);
+  });
+  var _roles = document.getElementById('duo-image-roles');
+  if (_roles) _roles.style.display = (_m === 'direct') ? 'block' : 'none';
+  var _pChk = document.getElementById('duo-img-planner');
+  var _cChk = document.getElementById('duo-img-coder');
+  if (_pChk) _pChk.checked = S.duoImageToPlanner === true;
+  if (_cChk) _cChk.checked = S.duoImageToCoder === true;
+  // FULL IMG-DESC is pipeline-only — hide it in duo mode
+  var _fid = document.getElementById('full-imgdesc-row');
+  if (_fid) _fid.style.display = (S.mode === 'code_duo') ? 'none' : '';
+  var _pm = (S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model) || '';
+  var _cm = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
+  _updateDuoRoleStatus('duo-img-planner-status', 'Planner', _pm);
+  _updateDuoRoleStatus('duo-img-coder-status', 'Coder', _cm);
+  var _note = document.getElementById('duo-image-note');
+  if (_note) _note.style.display = (_m === 'direct' && !S.duoImageToPlanner && !S.duoImageToCoder) ? 'block' : 'none';
+}
+function _updateDuoRoleStatus(elId, label, model) {
+  var _el = document.getElementById(elId);
+  if (!_el) return;
+  var _prof = S.modelProfiles && (S.modelProfiles[model] || S.modelProfiles[(model||'').split(':')[0]]);
+  var _vision = !!(model && _prof && _prof.vision);
+  if (!model) { _el.textContent = label; return; }
+  if (!_vision) { _el.textContent = label + ' (' + model + ') — can\'t see images'; return; }
+  _el.textContent = label + ' (' + model + ') \uD83D\uDC41 checking projector\u2026';
+  fetch('/vision/mmproj?model=' + encodeURIComponent(model))
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      if (d.projector) _el.textContent = label + ' (' + model + ') \uD83D\uDC41 sees images';
+      else _el.textContent = label + ' (' + model + ') — mmproj missing, image will be skipped';
+    })
+    .catch(function() { _el.textContent = label + ' (' + model + ')'; });
+}

@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261001-3">
+  <link rel="stylesheet" href="/static/style.css?v=20261001-4">
 </head>
 <body>
 <header>
@@ -870,80 +870,7 @@
     </div>
   </div>
   </div>
-    <!-- Complexity Force Override -->
-    <div class="force-section">
-      <div class="sec-row">
-        <div class="sec" style="margin:0">Complexity</div>
-        <span id="force-badge" class="force-active-badge">OVERRIDE ON</span>
-      </div>
-      <div class="complexity-force">
-        <div class="cforce-btn on-auto" id="cf-auto" onclick="setComplexityForce('auto',this)" title="judge decides (normal)">Auto</div>
-        <div class="cforce-btn" id="cf-simple" onclick="setComplexityForce('simple',this)" title="always direct answer, no pipeline">Simple</div>
-        <div class="cforce-btn" id="cf-complex" onclick="setComplexityForce('complex',this)" title="always force full pipeline">Complex</div>
-      </div>
-      <!-- Judge-Bias -->
-      <div class="judge-bias-row">
-        <label>Judge-Bias</label>
-        <input type="range" id="judge-bias" min="0" max="100" value="50"
-          oninput="setJudgeBias(this.value)"
-          title="0 = judge leans simple, 100 = leans complex">
-        <span class="judge-bias-val" id="judge-bias-val">50</span>
-      </div>
-      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:10px;line-height:1.5">
-        &lt;50 = simple-leaning &nbsp; 50 = neutral &nbsp; &gt;50 = complex-leaning
-      </div>
-    </div>
-
-    <!-- Pipeline agents -->
-    <div id="pipeline-agents-sec">
-      <div class="sec-row">
-        <div class="sec" style="margin:0">Pipeline agents</div>
-        <button onclick="resetAgentForce()" style="background:none;border:none;font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);cursor:pointer;text-transform:uppercase;letter-spacing:.06em" title="reset all agents">Reset</button>
-      </div>
-      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:6px;line-height:1.5">
-        Click = enable/disable for next run
-      </div>
-      <div class="force-agent-row" id="force-agent-btns">
-        <!-- Built by JS -->
-      </div>
-    </div>
-
-    <!-- Constraint Feedback Loop -->
-    <div class="cfl-row">
-      <span class="cfl-label">Constraint Feedback Loop</span>
-      <label class="cfl-sw">
-        <input type="checkbox" id="cfl-toggle" checked onchange="setConstraintMode(this.checked)">
-        <span class="sl"></span>
-      </label>
-          </div>
-      <div class="cfl-row" style="margin-top:6px">
-      <span class="cfl-label" title="Analyst searches before analyzing (SearXNG)">&#x1F50D; Websearch Pipeline</span>
-      <label class="cfl-sw">
-        <input type="checkbox" id="pipeline-websearch-toggle"
-          onchange="S.pipelineWebsearch=this.checked;postSettings({pipeline_websearch_enabled:S.pipelineWebsearch});updateWebsearchHint()">
-        <span class="sl"></span>
-      </label>
-    </div>
-    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:2px 4px 6px;line-height:1.5">
-      ON = analyst searches before analysis (first iteration only)<br>
-      OFF = no automatic websearch
-    </div>
-    <!-- Image description: full pipeline -->
-    <div class="cfl-row" style="margin-top:6px">
-      <span class="cfl-label">Full img-desc</span>
-      <label class="cfl-sw">
-        <input type="checkbox" id="img-pipeline-toggle"
-          onchange="postSettings({image_desc_full_pipeline:this.checked});">
-        <span class="sl"></span>
-      </label>
-    </div>
-    <div style="font-size:9px;color:var(--tx3);padding:0 4px 6px;line-height:1.5">ON = image description to all agents (refiner+critic)<br>OFF = only analyst gets the image description</div>
-    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:10px;line-height:1.6">
-      Critic provides tune-constraints &#8594; refiner gets hard constraints.<br>
-      <span style="color:var(--amber)">&#9889; Adversarial Loop</span> instead of stylistic refinement.
-    </div>
-    <!-- Image Processing -->
-    <div id="vision-accordion" style="background:#10131a;border:1px solid #222a38;border-radius:7px;margin-bottom:10px;overflow:hidden">
+      <div id="vision-accordion" style="background:#10131a;border:1px solid #222a38;border-radius:7px;margin-bottom:10px;overflow:hidden">
       <div onclick="toggleVisionAccordion()" style="display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;user-select:none" id="vision-accordion-hdr">
         <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:#c8d4e4">Image Processing</span>
         <span id="vision-active-badge" class="vision-model-badge" style="display:none">ON</span>
@@ -951,6 +878,29 @@
         <span id="vision-accordion-arrow" style="margin-left:auto;font-size:10px;color:#7a8fa8;transition:transform .2s">&#9660;</span>
       </div>
       <div id="vision-accordion-body" style="display:none;padding:0 12px 12px;border-top:1px solid #222a38">
+        <!-- DUO IMAGE PLAN (2026-10-01): agentic runs decide per role -->
+        <div id="duo-image-sec" style="padding:10px 0 6px;border-bottom:1px dashed #222a38;margin-bottom:10px">
+          <div style="font-size:10px;color:#c8d4e4;font-weight:600;margin-bottom:6px">AGENTIC DUO RUNS (planner + coder)</div>
+          <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-bottom:6px">
+            <input type="radio" name="duo-image-mode" onchange="setDuoImageMode('preprocess')">
+            <span style="font-size:10px;color:var(--tx2);line-height:1.5">Preprocessing: a vision model describes the image once &mdash; the text goes to Planner and Coder (no raw image to anyone).</span>
+          </label>
+          <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-bottom:4px">
+            <input type="radio" name="duo-image-mode" onchange="setDuoImageMode('direct')">
+            <span style="font-size:10px;color:var(--tx2);line-height:1.5">Send image to model: raw image to each checked role (multimodal only, projector required).</span>
+          </label>
+          <div id="duo-image-roles" style="display:none;margin:6px 0 0 24px">
+            <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:3px">
+              <input type="checkbox" id="duo-img-planner" onchange="setDuoImageRole('planner',this.checked)">
+              <span id="duo-img-planner-status">Planner</span>
+            </label>
+            <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:3px">
+              <input type="checkbox" id="duo-img-coder" onchange="setDuoImageRole('coder',this.checked)">
+              <span id="duo-img-coder-status">Coder</span>
+            </label>
+          </div>
+          <div id="duo-image-note" style="display:none;font-size:9px;color:var(--tx3);margin-left:24px;line-height:1.5">no target selected &mdash; the image will not be used</div>
+        </div>
         <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-top:10px;margin-bottom:8px;line-height:1.6">
           Choose how images are processed when you attach one:
         </div>
@@ -1048,6 +998,80 @@
       </div>
     </div>
 
+
+    <!-- Complexity Force Override -->
+    <div class="force-section">
+      <div class="sec-row">
+        <div class="sec" style="margin:0">Complexity</div>
+        <span id="force-badge" class="force-active-badge">OVERRIDE ON</span>
+      </div>
+      <div class="complexity-force">
+        <div class="cforce-btn on-auto" id="cf-auto" onclick="setComplexityForce('auto',this)" title="judge decides (normal)">Auto</div>
+        <div class="cforce-btn" id="cf-simple" onclick="setComplexityForce('simple',this)" title="always direct answer, no pipeline">Simple</div>
+        <div class="cforce-btn" id="cf-complex" onclick="setComplexityForce('complex',this)" title="always force full pipeline">Complex</div>
+      </div>
+      <!-- Judge-Bias -->
+      <div class="judge-bias-row">
+        <label>Judge-Bias</label>
+        <input type="range" id="judge-bias" min="0" max="100" value="50"
+          oninput="setJudgeBias(this.value)"
+          title="0 = judge leans simple, 100 = leans complex">
+        <span class="judge-bias-val" id="judge-bias-val">50</span>
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:10px;line-height:1.5">
+        &lt;50 = simple-leaning &nbsp; 50 = neutral &nbsp; &gt;50 = complex-leaning
+      </div>
+    </div>
+
+    <!-- Pipeline agents -->
+    <div id="pipeline-agents-sec">
+      <div class="sec-row">
+        <div class="sec" style="margin:0">Pipeline agents</div>
+        <button onclick="resetAgentForce()" style="background:none;border:none;font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);cursor:pointer;text-transform:uppercase;letter-spacing:.06em" title="reset all agents">Reset</button>
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:6px;line-height:1.5">
+        Click = enable/disable for next run
+      </div>
+      <div class="force-agent-row" id="force-agent-btns">
+        <!-- Built by JS -->
+      </div>
+    </div>
+
+    <!-- Constraint Feedback Loop -->
+    <div class="cfl-row">
+      <span class="cfl-label">Constraint Feedback Loop</span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="cfl-toggle" checked onchange="setConstraintMode(this.checked)">
+        <span class="sl"></span>
+      </label>
+          </div>
+      <div class="cfl-row" style="margin-top:6px">
+      <span class="cfl-label" title="Analyst searches before analyzing (SearXNG)">&#x1F50D; Websearch Pipeline</span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="pipeline-websearch-toggle"
+          onchange="S.pipelineWebsearch=this.checked;postSettings({pipeline_websearch_enabled:S.pipelineWebsearch});updateWebsearchHint()">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:2px 4px 6px;line-height:1.5">
+      ON = analyst searches before analysis (first iteration only)<br>
+      OFF = no automatic websearch
+    </div>
+    <!-- Image description: full pipeline -->
+    <div class="cfl-row" id="full-imgdesc-row" style="margin-top:6px">
+      <span class="cfl-label">Full img-desc</span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="img-pipeline-toggle"
+          onchange="postSettings({image_desc_full_pipeline:this.checked});">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div style="font-size:9px;color:var(--tx3);padding:0 4px 6px;line-height:1.5">ON = image description to all agents (refiner+critic)<br>OFF = only analyst gets the image description</div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:10px;line-height:1.6">
+      Critic provides tune-constraints &#8594; refiner gets hard constraints.<br>
+      <span style="color:var(--amber)">&#9889; Adversarial Loop</span> instead of stylistic refinement.
+    </div>
+    <!-- Image Processing -->
     <div class="sec">Iterations <span style="float:right;font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2)">(Pipeline)</span></div>
     <div class="iters-row">
       <label>Deliberation cycles</label>
@@ -1877,6 +1901,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-        <script src="/static/app.js?v=20261001-3"></script>
+        <script src="/static/app.js?v=20261001-4"></script>
 </body>
 </html>
