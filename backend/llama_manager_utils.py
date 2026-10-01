@@ -44,7 +44,50 @@ _VISION_CAPABLE_BASES: set[str] = {
     "qwen3.6",
     "hermes3.6",
     "hermes",
+    "gemma-4",  # gemma-3 arch: embedded vision tower, served with mmproj (2026-10-01)
 }
+
+
+def pick_mmproj_fallback(gguf_dir, model: str):
+    """Size-tag-strict mmproj fallback (2026-10-01, was inline in
+    manager_load): returns the mmproj file matching the model's parameter
+    size (e.g. '4b' for qwen3.5:4b-ud — word-boundary checked, so 14b files
+    never match a 4b model), else None — the old code took the FIRST mmproj
+    in the directory, which put a 2B projector on a 4B model (broken
+    vision, wrong dimensions)."""
+    import re as _re
+    from pathlib import Path as _P
+    _tag_part = model.split(":")[1] if ":" in model else ""
+    _m = _re.search(r"(\d+(?:\.\d+)?)b", _tag_part, _re.IGNORECASE)
+    _size = _m.group(1) if _m else ""
+    _d = _P(gguf_dir)
+    if not _d.is_dir() or not _size:
+        return None
+    _all = sorted(list(_d.glob("*mmproj*.gguf")) + list(_d.glob("*projector*.gguf")))
+    if not _all:
+        return None
+    _pat = _re.compile(r"(?<![\d.])" + _re.escape(_size) + r"b", _re.IGNORECASE)
+    _matches = [p for p in _all if _pat.search(p.stem)]
+    return _matches[0] if _matches else None
+
+
+def resolve_mmproj_strict(model: str, gguf_dir=None):
+    """resolve_mmproj_path (registry/models.json/glob) + strict fallback —
+    single source of truth for 'does this model have a projector file?'
+    Returns an existing Path or None."""
+    from pathlib import Path as _P
+    from backend.llama_models import resolve_mmproj_path as _resolve
+    try:
+        _p = _resolve(model)
+    except Exception:
+        _p = None
+    if _p:
+        _pp = _P(_p)
+        if _pp.exists():
+            return _pp
+    if gguf_dir:
+        return pick_mmproj_fallback(gguf_dir, model)
+    return None
 
 _VRAM_BASE_OVERHEAD_GB: float = 2.5
 

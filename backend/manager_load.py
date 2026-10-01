@@ -23,6 +23,7 @@ from .llama_manager_utils import (
     CanFitResult, _WIN_CNF, VRAM_BUDGET_GB,
     LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
     _OLLAMA_ONLY_BASES, _MMPROJ_REQUIRED_BASES, _VISION_CAPABLE_BASES,
+    pick_mmproj_fallback,
     _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
     VRAM_PRE_FLIGHT_MARGIN_MIB, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
     CTX_DOWN_MIN, resolve_ctx_fit,
@@ -1171,16 +1172,19 @@ class LlamaLoadMixin:
                 logger.warning(f"mmproj lookup failed for {model}: {e}")
 
             if _mmproj_resolved is None:
+                # MMFALLBACK-STRICT (2026-10-01): only a size-tag MATCHING file
+                # is used — the old "first mmproj in directory" put a 2B
+                # projector on a 4B model (broken vision, wrong dimensions)
                 _gguf_dir = Path(gguf_path).parent
-                _size_tag = (model.split(":")[1].lower() if ":" in model else "").replace("b", "").strip()
-                _all_mmproj = (list(_gguf_dir.glob("*mmproj*.gguf"))
-                               + list(_gguf_dir.glob("*projector*.gguf")))
-                if _all_mmproj:
-                    # Versuche exakten Size-Tag-Match (z.B. "4b" in Dateiname)
-                    _tag_matches = [p for p in _all_mmproj
-                                    if _size_tag and _size_tag in p.stem.lower()]
-                    _mmproj_resolved = _tag_matches[0] if _tag_matches else _all_mmproj[0]
+                _mmproj_resolved = pick_mmproj_fallback(_gguf_dir, model)
+                if _mmproj_resolved:
                     logger.info(f"mmproj fallback (GGUF directory): {_mmproj_resolved}")
+                else:
+                    logger.warning(
+                        f"mmproj fallback: no size-tag matching projector for '{model}' "
+                        f"in {_gguf_dir} — server starts WITHOUT mmproj; image requests "
+                        f"will return 0 tokens. Place a matching mmproj-*.gguf or set "
+                        f"mmproj_filename in the model registry.")
 
             if _mmproj_resolved:
                 cmd += ["--mmproj", str(_mmproj_resolved)]
