@@ -715,7 +715,9 @@ async def run_stream(
         elif _va_cfg_enabled:
             yield await emit({"type": "status", "content": "[Vision preprocessing off - vision-agent uses raw image]"})
         else:
-            yield await emit({"type": "status", "content": "[Image ignored - no vision model active]"})
+            yield await emit({"type": "status", "content": "[Image ignored - no vision model active. "
+                             "Enable the Vision agent in Settings (image preprocessing) or pick a multimodal model. "
+                             "Agentic runs receive the image description once a vision model is configured.]"})
 
     # P1-2 (2026-08-12): Restore the session per chat from .context.json,
     if chat_id and not _state.memory.get_session_messages():

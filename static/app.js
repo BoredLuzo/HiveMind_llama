@@ -5063,7 +5063,9 @@ async function sendMsg() {
     return; // the finally block takes care of S.streaming=false + UI cleanup
   }
 
-  const VISION_MODELS = ['qwen3-vl', 'llava', 'moondream', 'bakllava', 'minicpm', 'granite3.2', 'vision'];
+  // 'minicpm-v' (not 'minicpm'): minicpm5:2b-sharp is text-only and used to
+  // be falsely counted as a vision model
+  const VISION_MODELS = ['qwen3-vl', 'llava', 'moondream', 'bakllava', 'minicpm-v', 'granite3.2', 'vision'];
   if (imgs.length && S.mode !== 'automap') {
     // FIX: the vision warning checks BOTH agent assignments AND the image-preprocessing config.
     // Before: only direct/analyst checked → warning always when granite3.2-vision:2b was
@@ -5071,8 +5073,10 @@ async function sendMsg() {
     // and it is not an agent assignment but a separate vision_cfg).
     const directModel  = ((S.currentAssignments['direct']  || {}).model || '').toLowerCase();
     const analystModel = ((S.currentAssignments['analyst'] || {}).model || '').toLowerCase();
+    const duoCoderModel = ((S.currentAssignments['duo_coder'] || {}).model || '').toLowerCase();
     const hasVisionAgent = VISION_MODELS.some(function(vm) {
-      return directModel.indexOf(vm) >= 0 || analystModel.indexOf(vm) >= 0;
+      return directModel.indexOf(vm) >= 0 || analystModel.indexOf(vm) >= 0
+        || duoCoderModel.indexOf(vm) >= 0;
     });
     // preprocessing mode: image-preprocess toggle active + model set = vision active
     const hasVisionPrepro = S.visionEnabled && !!S.visionModel;

@@ -584,3 +584,18 @@ def _bucket_stop_reason(stop_reason: str) -> str:
     if sr in ("max_tool_rounds", "verification_required_after_write"):
         return "tool_error"
     return "unknown_error"
+
+
+def build_image_desc_block(desc) -> str:
+    """[IMAGE DESCRIPTION] block for the duo coder/planner context (2026-10-01).
+
+    The vision-agent/prepro pipeline turns attached images into a text
+    description; the agentic coder previously saw it ONLY in the
+    non-chunking round-0 user input (and the planner never did). This block
+    is meant for the coder SYSTEM prompt (constant per run, survives
+    compression) and the planner task. Empty desc -> empty block.
+    """
+    _d = str(desc or "").strip()
+    if not _d:
+        return ""
+    return "\n\n[IMAGE DESCRIPTION]:\n" + _d

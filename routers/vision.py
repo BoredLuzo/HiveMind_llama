@@ -36,6 +36,8 @@ async def test_vision_model(req: Request):
         models = list(S_models_cache) if S_models_cache else await _bk_tags()
         available = model in models
         return {"ok": True, "model": model, "available": available,
-                "vision_capable": any(v in model.lower() for v in ["vl", "llava", "vision", "moondream", "minicpm", "glm", "granite3.2"])}
+                # 'minicpm-v' (not 'minicpm'): minicpm5:2b-sharp is a text-only
+                # coder and used to be falsely flagged as vision-capable
+                "vision_capable": any(v in model.lower() for v in ["vl", "llava", "vision", "moondream", "minicpm-v", "glm", "granite3.2"])}
     except Exception as e:
         return {"ok": False, "reason": str(e)}

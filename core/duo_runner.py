@@ -139,6 +139,7 @@ from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
+    build_image_desc_block,
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
@@ -1286,7 +1287,7 @@ async def run_code_duo(ctx):
             # Planner gets structured architecture (NOT raw TOML)
             _planner_ctx = explore_to_planner_ctx(_explore_ctx, task=ctx.user_input, budget=_ctx_budget)
 
-            _planner_task = ctx.user_input
+            _planner_task = ctx.user_input + build_image_desc_block(getattr(ctx, "image_description", None))
             if _fup_task_ctx:
                 _planner_task = (
                     ctx.user_input
@@ -1714,7 +1715,7 @@ async def run_code_duo(ctx):
             has_plan=_has_plan,
             has_subtasks=bool(_subtasks),
             has_explore_ctx=_explore_has_contents,
-        ) + _coder_dyn_hints
+        ) + _coder_dyn_hints + build_image_desc_block(getattr(ctx, "image_description", None))
         _follow_up_hint = state.get("_follow_up_hint", "") or ""
         if _follow_up_hint:
             _duo_coder_sys += "\n\n" + _follow_up_hint
@@ -2443,8 +2444,9 @@ async def run_code_duo(ctx):
                     continue
             elif _di == 0:
                 _coder_input = ctx.user_input
-                if ctx.image_description:
-                    _coder_input += f"\n\n[Image description]:\n{ctx.image_description}"
+                # IMAGE DESC moved to the coder SYSTEM prompt (2026-10-01):
+                # the old round-0 attachment vanished on chunked runs and
+                # under compression; the system block covers both paths.
                 if _explore_ctx:
                     # EXPLORE-CONTENT-TRUTH (2026-09-06): rule text now keys off
                     # the same truth flag as the system template choice above.
