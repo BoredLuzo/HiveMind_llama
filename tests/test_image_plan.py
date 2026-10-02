@@ -231,3 +231,47 @@ class VisionReloadRule(unittest.TestCase):
         self.assertEqual(n, 1)
         self.assertFalse(m._slots[0].pinned)
         self.assertTrue(m._slots[1].pinned)  # other model untouched
+
+
+class PinExpiryAndUnpinAll(unittest.TestCase):
+    """C3-hardening (2026-10-02): pins expire after 30 min; run start
+    resets all pins (stale pins from a crashed run block nothing)."""
+
+    def _fake_manager(self, slots):
+        from backend.manager_evict import LlamaEvictMixin
+        m = LlamaEvictMixin()
+        m._slots = slots
+        m._metric_inc = lambda *a: None
+        return m
+
+    def test_evict_lru_ignores_expired_pins(self):
+        import time
+        from types import SimpleNamespace as NS
+        from backend.manager_process import LlamaManagerProcessMixin
+        m = LlamaManagerProcessMixin()
+        old_pin = NS(model="old-coder", slot_id=0, is_running=True, pinned=True,
+                     pinned_at=time.time() - 3600, last_used=1, kill=lambda: None)
+        fresh_pin = NS(model="fresh-coder", slot_id=1, is_running=True, pinned=True,
+                       pinned_at=time.time(), last_used=2, kill=lambda: None)
+        m._slots = [old_pin, fresh_pin]
+        victim = m._evict_lru()
+        self.assertEqual(victim.model, "old-coder")  # fresh pin protected
+
+    def test_unpin_all_resets_every_pin(self):
+        from backend.manager_evict import LlamaEvictMixin
+        m = LlamaEvictMixin()
+        m._slots = [SimpleNamespace(model="a", pinned=True, pinned_at=1),
+                    SimpleNamespace(model="b", pinned=True, pinned_at=2)]
+        n = m.unpin_all()
+        self.assertEqual(n, 2)
+        self.assertTrue(all(not s.pinned for s in m._slots))
+
+
+class EvictVisionGuard(unittest.TestCase):
+    def test_evicts_only_in_code_duo(self):
+        from core.duo_helpers import should_evict_vision_after_prepro as E
+        self.assertTrue(E("code_duo", "qwen3-vl-2b", {"gemma-4:e4b"}))
+        self.assertFalse(E("simple", "qwen-vl-2b", set()))      # normal chat: NEVER
+        self.assertFalse(E("pipeline", "qwen-vl-2b", set()))    # pipeline keeps it
+        self.assertFalse(E("code_duo", "gemma-4:e4b", {"gemma-4:e4b"}))  # it IS a duo model
+        self.assertFalse(E("code_duo", "", {"x"}))              # no vision model: nothing to evict

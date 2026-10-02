@@ -1,5 +1,5 @@
 {
-  "model": "gemma-4:e4b-it",
+  "model": "gemma-4:e2b-it-qat",
   "capabilities": {
     "thinking": false,
     "vision": true,
@@ -17,6 +17,6 @@
   "moe_cpu_experts": 0,
   "mtp": false,
   "gpu_layers": null,
-  "mmproj_filename": null,
-  "vram_gb_override": 3.0
+  "mmproj_filename": "mmproj-Gemma-4-E2B-BF16.gguf",
+  "vram_gb_override": 2.6
 }
