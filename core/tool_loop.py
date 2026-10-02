@@ -13,6 +13,7 @@ from typing import AsyncIterator, Callable, Awaitable
 
 import httpx
 
+from infra.run_control import drain_steer_messages
 from tools.errors import tool_call_failed, tool_error_has_code
 from tools.definitions import _get_inline_tools, _filter_tools_for_mode, get_tools_for_phase
 from tools.runner import _run_inline_tool, _current_run_id, _pause_timeout_s, _tool_loop_emit
@@ -440,6 +441,19 @@ class ToolLoop:
             # ── K2: abort round after unknown tool ──
             if _unknown_tool_abort:
                 continue
+
+            # ── MID-RUN STEER (tool-call boundary, 2026-09-29): messages the
+            # user typed while this round ran land here as user messages —
+            # directly after the last tool result, before the next POST.
+            # Chat/direct/agentic runs share this loop.
+            if self._run_id:
+                _steer_txts = drain_steer_messages(self._run_id)
+                if _steer_txts:
+                    yield await self._emit({"type": "status", "content":
+                        "🧭 steered: " + " | ".join(t[:80] for t in _steer_txts)})
+                    for _st in _steer_txts:
+                        _tool_messages.append(
+                            {"role": "user", "content": f"[USER STEER] {_st}"})
 
             # ── after_round callback ──
             if self._on_after_round:

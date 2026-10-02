@@ -34,6 +34,7 @@
   <div id="perf-bar" style="display:none"></div>
 <div id="chat"></div>
 <div id="perf-bar-bottom"></div>
+<div id="followup-bar" style="display:none"></div>
 <div id="input-wrap">
         <div id="img-preview"></div>
     <div id="input-row">
@@ -701,7 +702,7 @@
                 onchange="togglePlannerUseCoderCtx(this.checked)">
               <span class="sl"></span>
             </label>
-            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9a74dc;cursor:pointer" onclick="var cb=document.getElementById('duo-planner-use-coder-ctx');cb.checked=!cb.checked;togglePlannerUseCoderCtx(cb.checked)">Planner = coder (same context)</span>
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9a74dc;cursor:pointer" onclick="var cb=document.getElementById('duo-planner-use-coder-ctx');cb.checked=!cb.checked;togglePlannerUseCoderCtx(cb.checked)">Planner = Coder (same context)</span>
           </div>
         </div>
 
@@ -1577,6 +1578,14 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         </label>
       </div>
       <div class="fld-hint">Commits automatically after each chunk in duo/agentic mode.<br>Requires a valid git configuration below.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Git Checkpoints</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="git-checkpoints-cfg-toggle" onchange="S.duoGitCheckpoints=this.checked;postSettings({duo_git_checkpoints:S.duoGitCheckpoints})">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Session-start and consolidation checkpoints (the undo_last safety net). Separate from Auto-Commit; both only run with a git identity below.</div>
       <div class="cfg-grid" style="margin-top:6px">
         <div class="fld">
           <div class="fld-label">Repository URL <em id="git-repo-preview" style="color:var(--amber)"></em></div>

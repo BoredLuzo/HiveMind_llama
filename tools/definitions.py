@@ -300,7 +300,7 @@ _INLINE_CODING_TOOLS = [
             "url":      {"type": "string", "description": "URL to navigate to (for action='navigate')"},
             "selector": {"type": "string", "description": "CSS selector (for action='click'/'type')"},
             "text":     {"type": "string", "description": "Text to type (for action='type')"},
-            "path":     {"type": "string", "description": "Output PNG path (for action='screenshot')"},
+            "path":     {"type": "string", "description": "Output PNG path relative to the WORKSPACE (for action='screenshot', e.g. screenshots/ui.png)"},
             "js":       {"type": "string", "description": "JavaScript expression (for action='evaluate')"},
             "full_page": {"type": "boolean", "default": False,
                           "description": "Capture full scrollable page (screenshot)"}
