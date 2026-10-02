@@ -184,8 +184,6 @@ class _Req:
         return self._b
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
 
 
 class DuoGateStatus(unittest.TestCase):
@@ -247,13 +245,14 @@ class PinExpiryAndUnpinAll(unittest.TestCase):
     def test_evict_lru_ignores_expired_pins(self):
         import time
         from types import SimpleNamespace as NS
-        from backend.manager_process import LlamaManagerProcessMixin
-        m = LlamaManagerProcessMixin()
+        from backend.manager_process import LlamaProcessMixin
+        m = LlamaProcessMixin()
         old_pin = NS(model="old-coder", slot_id=0, is_running=True, pinned=True,
                      pinned_at=time.time() - 3600, last_used=1, kill=lambda: None)
         fresh_pin = NS(model="fresh-coder", slot_id=1, is_running=True, pinned=True,
                        pinned_at=time.time(), last_used=2, kill=lambda: None)
         m._slots = [old_pin, fresh_pin]
+        m._metric_inc = lambda *a: None
         victim = m._evict_lru()
         self.assertEqual(victim.model, "old-coder")  # fresh pin protected
 
@@ -275,3 +274,31 @@ class EvictVisionGuard(unittest.TestCase):
         self.assertFalse(E("pipeline", "qwen-vl-2b", set()))    # pipeline keeps it
         self.assertFalse(E("code_duo", "gemma-4:e4b", {"gemma-4:e4b"}))  # it IS a duo model
         self.assertFalse(E("code_duo", "", {"x"}))              # no vision model: nothing to evict
+
+
+class SameSlotVisionFlagOr(unittest.TestCase):
+    """Planner and coder on the SAME server slot: the slot's vision flag is
+    the OR of both roles' raw-decisions — a follow-up load without the flag
+    must never strip the projector (needs_vision_reload upgrade-only)."""
+
+    def test_or_semantics_end_to_end(self):
+        import core.state as cs
+        from backend.llama_manager_utils import needs_vision_reload
+        from unittest.mock import patch
+        cs.settings["duo_image_mode"] = "direct"
+        for planner_raw, coder_raw, want in (
+                (True, False, True), (False, True, True),
+                (True, True, True), (False, False, False)):
+            cs.settings["duo_image_to_planner"] = planner_raw
+            cs.settings["duo_image_to_coder"] = coder_raw
+            with patch("core.model_sampling._model_profile",
+                       return_value={"vision": True}):
+                plan = resolve_image_plan("m", "m", cs.settings,
+                                          _ctx([_B64], vision_cfg={}))
+            want_vision = plan["planner"] == "raw" or plan["coder"] == "raw"
+            self.assertEqual(want_vision, want, (planner_raw, coder_raw))
+            self.assertEqual(needs_vision_reload(False, want_vision), want)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
