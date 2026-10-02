@@ -138,7 +138,7 @@ DEFAULT_SETTINGS = {
     "duo_compress_auto_floor":   0.70,
     "duo_compress_overflow_reserve": 1024,
     "duo_max_compressions":      40,
-    "duo_compress_model":        "auto",
+    "duo_compress_model":        "lfm2.5:2.6b",
     "duo_compress_llm_timeout_s": 180,
     "duo_compress_local_only":   False,
     "session_compress_threshold": 20,

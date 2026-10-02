@@ -12,7 +12,7 @@ from infra.run_control import (
     request_graceful_stop, _run_abort_registry,
     request_pause_after_chunk, signal_resume, is_pause_requested,
     signal_abort_during_pause, _RESUME_SIGNALS, is_pause_pending,
-    is_pause_waiting, queue_steer, steer_queue_view,
+    is_pause_waiting,
 )
 from infra.ask_user_governor import (
     cancel_timeout as _gov_cancel_timeout,
@@ -97,27 +97,6 @@ async def pause_run(run_id: str):
                             status_code=404)
     await request_pause_after_chunk(run_id)
     return {"status": "pause_requested", "run_id": run_id}
-
-
-@router.post("/api/run/{run_id}/steer")
-async def steer_run(run_id: str, req: Request):
-    """Mid-run steering (2026-09-29): queue a typed message against a live
-    run. The loop drains the queue at the next chunk/tool-round boundary and
-    injects the text as user context; messages never steered are delivered
-    after the run ends (frontend-side queue)."""
-    try:
-        body = await req.json()
-    except Exception:
-        return JSONResponse({"error": "JSON-Body erwartet"}, status_code=400)
-    text = str(body.get("text", "") or "").strip()
-    if not text:
-        return JSONResponse({"error": "Field 'text' is required"}, status_code=400)
-    if not queue_steer(run_id, text):
-        return JSONResponse({"error": "run not active or not found"}, status_code=404)
-    logger.info("[steer] queued for run_id=%s (%d chars, queue=%d)",
-                run_id, len(text), len(steer_queue_view(run_id)))
-    return {"status": "queued", "run_id": run_id,
-            "queue_len": len(steer_queue_view(run_id))}
 
 
 @router.post("/resume/{run_id}")
