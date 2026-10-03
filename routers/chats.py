@@ -234,13 +234,16 @@ def _get_chat_save_lock(chat_id: str) -> threading.Lock:
         return _chat_save_locks[cid]
 
 
-def _merge_run_messages(incoming: list, stored: list) -> list:
+def _merge_run_messages(incoming: list, stored: list, base_rev: int | None) -> list:
     """Union the frontend's decorated messages with backend-appended ones
-    (S4a): a stored message with source="run" keeps the SERVER text (the
-    run streamed it), while the frontend version donates html/cp/images.
-    Backend messages the incoming list does not know yet are appended -
-    the frontend's DOM was simply behind. Incoming messages without ids
-    (old cached JS) pass through untouched."""
+    (S4a), with resurrect protection (2026-10-03 review): a run message
+    only survives when it was created AFTER the rev the caller's payload
+    is based on (created_rev > base_rev). A payload on an OLDER rev that
+    drops the message means a deliberate frontend deletion (regenerate,
+    edit mid-chat, message delete) - the server must not resurrect it.
+    For matching ids the SERVER text wins (the run streamed it), the
+    frontend version donates html/cp/images. Incoming payloads without
+    ids (old cached JS) pass through untouched."""
     _run_ids = {m["id"]: m for m in stored
                 if isinstance(m, dict) and m.get("id") and m.get("source") == "run"}
     if not _run_ids:
@@ -265,8 +268,15 @@ def _merge_run_messages(incoming: list, stored: list) -> list:
             _out.append(merged)
         else:
             _out.append(m)
+    # RESURRECT GUARD: only run messages CREATED after the caller's base
+    # rev are appended back. base_rev=None (beacon LWW, pre-rev callers)
+    # keeps the old append-everything behavior - an old beacon cannot be
+    # judged against a rev it never knew.
     for mid, prev in _run_ids.items():
-        if mid not in _seen:
+        if mid in _seen:
+            continue
+        _created = int(prev.get("created_rev") or 0)
+        if base_rev is None or _created > base_rev:
             _out.append(prev)
     return _out
 
@@ -284,7 +294,9 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None,
     rev or NOTHING is written and conflict=True comes back - the server
     state wins, the caller adopts it. Chats without a rev count as 0."""
     with _get_chat_save_lock(chat_id):
-        _cur_rev = int(chat.get("rev") or 0)
+        # CAS against the DISK rev, never the caller's dict - the caller
+        # may carry a stale or absent rev (dicts built inline start at 0)
+        _cur_rev = get_chat_rev(chat_id)
         if base_rev is not None and base_rev != _cur_rev:
             return {"id": chat_id, "rev": _cur_rev, "conflict": True,
                     "ts": chat.get("updated_at", "")}
@@ -297,7 +309,8 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None,
             _stored_prev = _read_chat_file(chat_id)
             if _stored_prev and _stored_prev.get("messages"):
                 chat["messages"] = _merge_run_messages(
-                    chat.get("messages", []), _stored_prev["messages"])
+                    chat.get("messages", []), _stored_prev["messages"],
+                    base_rev)
         except (OSError, ValueError):
             pass
         stored = copy.deepcopy(chat)
@@ -408,10 +421,15 @@ def upsert_run_message(chat_id: str, msg_id: str, user_msg_id: str,
             existing["content"] = content
             if interrupted is not None:
                 existing["interrupted"] = interrupted
+            if bump_rev:
+                # the finalize rev is the message's creation stamp: merges
+                # compare created_rev against the frontend's base_rev
+                existing["created_rev"] = _new_rev
         else:
             new_msg = {"id": msg_id, "role": "assistant", "agent": agent,
                        "content": content, "source": "run",
-                       "reply_to": user_msg_id or None}
+                       "reply_to": user_msg_id or None,
+                       "created_rev": _new_rev}
             if interrupted is not None:
                 new_msg["interrupted"] = interrupted
             pos = next((i + 1 for i, m in enumerate(_msgs)
@@ -626,6 +644,8 @@ async def get_chat(chat_id: str):
         return JSONResponse({"error": "Not found"}, status_code=404)
     _restore_messages(chat_id, chat.get("messages", []))
     result = {k: v for k, v in chat.items() if k.startswith("_") is False}
+    # S4a: the frontend tracks base_rev from this value (done-event + here)
+    result["rev"] = int((chat.get("rev") or 0))
     # INTERRUPTED (2026-08-21): last_run (stop_reason="disconnect") mitliefern,
     try:
         _ctx = _load_chat_context(chat_id)
@@ -644,42 +664,69 @@ async def get_chat(chat_id: str):
 async def update_chat(chat_id: str, req: Request):
     await asyncio.to_thread(_ensure_cache)
     data = await req.json()
-    chat = await asyncio.to_thread(_load_chat_full, chat_id)
-    if chat is None:
-        return JSONResponse({"error": "Not found"}, status_code=404)
     now = datetime.now().isoformat(timespec="seconds")
-    def _apply_update():
-        with _cache_lock:
+
+    # ATOMIC UPDATE (2026-10-03 review fix): load, mutate and save under
+    # the SAME per-chat lock the run checkpoints use. The old shape
+    # (load outside, mutate under _cache_lock, save later) let a
+    # checkpoint slip between load and save - the PUT then compared
+    # against a stale rev and could overwrite a fresh checkpoint.
+    def _atomic_update():
+        with _get_chat_save_lock(chat_id):
+            chat = _read_chat_file(chat_id)
+            if chat is None:
+                return None
+            stored = copy.deepcopy(chat)
+            _stored_rev = int(stored.get("rev") or 0)
+            _base = data.get("base_rev")
+            if _base is not None and _base != _stored_rev:
+                return {"conflict": True, "rev": _stored_rev}
+            # MERGE-ON-SAVE (S4a): same rule as _save_chat - the incoming
+            # payload is the caller's decorated view, the disk copy holds
+            # backend run messages; result REPLACES the payload.
+            _inc = data.get("messages")
+            if _inc is not None:
+                try:
+                    _inc = _merge_run_messages(
+                        _inc, stored.get("messages", []), data.get("base_rev"))
+                except (OSError, ValueError):
+                    pass
+                stored["messages"] = _inc
             if "title" in data:
-                chat["title"] = data["title"]
+                stored["title"] = data["title"]
             if "workspace" in data:
-                chat["workspace"] = str(data["workspace"] or "")
-            if "messages" in data:
-                chat["messages"] = data["messages"]
-                _msgs = data["messages"]
-                chat["_msg_count"] = _user_msg_count(_msgs)
-                chat["_tokens"] = _chat_tokens(_msgs)
-                _last = _msgs[-1].get("content", "") if _msgs else ""
-                chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-            elif "messages" in chat:
-                _msgs = chat.get("messages", [])
-                chat["_msg_count"] = _user_msg_count(_msgs)
-                chat["_tokens"] = _chat_tokens(_msgs)
-                _last = _msgs[-1].get("content", "") if _msgs else ""
-                chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-            chat["updated_at"] = now
-    await asyncio.to_thread(_apply_update)
-    _saved = await asyncio.to_thread(_save_chat, chat_id, chat,
-                                     data.get("base_rev"))
-    if _saved and _saved.get("conflict"):
-        _server = await asyncio.to_thread(_load_chat_full, chat_id)
+                stored["workspace"] = str(data["workspace"] or "")
+            _msgs = stored.get("messages", [])
+            stored["_msg_count"] = _user_msg_count(_msgs)
+            stored["_tokens"] = _chat_tokens(_msgs)
+            _last = _msgs[-1].get("content", "") if _msgs else ""
+            stored["_preview"] = _last[:80] if isinstance(_last, str) else ""
+            stored["updated_at"] = now
+            _file = str(stored.get("_file") or "")
+            if not _file and _state._SESSIONS_DIR:
+                _ts = str(stored.get("created_at") or now).replace(":", "-")[:19]
+                _title = stored.get("title", "Chat")
+                _slg = _re_slug_special.sub("", _title.split("\n")[0][:40])
+                _slg = _re_slug_space.sub("-", _slg.strip()) or "Chat"
+                _file = str(_state._SESSIONS_DIR / f"{_ts}_{_slg}_{chat_id}.json")
+                stored["_file"] = _file
+            _new_rev = _stored_rev + 1
+            stored["rev"] = _new_rev
+            _write_stored(chat_id, stored)
+            return {"conflict": False, "rev": _new_rev}
+
+    _saved = await asyncio.to_thread(_atomic_update)
+    if _saved is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    if _saved.get("conflict"):
+        _server = await asyncio.to_thread(_read_chat_file, chat_id)
         _server_msgs = copy.deepcopy((_server or {}).get("messages", []))
         await asyncio.to_thread(_restore_messages, chat_id, _server_msgs)
         return JSONResponse({"error": "stale_rev", "rev": _saved.get("rev"),
                              "messages": _server_msgs,
                              "hint": "server state wins - adopt these messages"},
                             status_code=409)
-    return {"ok": True, "rev": (_saved or {}).get("rev")}
+    return {"ok": True, "rev": _saved.get("rev")}
 
 
 @router.delete("/{chat_id}")

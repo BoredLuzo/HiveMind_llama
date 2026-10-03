@@ -162,6 +162,83 @@ def main():
         else:
             fail("behind adoption", f"{roles3} {[m['content'][:20] for m in a3]}")
 
+        # 4b. RESURRECT GUARD: regenerate/edit deletes the tail in the
+        # frontend - a save on the OLD rev must NOT resurrect it, but a
+        # save on a LATER rev (message created after) must adopt it.
+        # setup: u,a,u,a where both answers are run messages
+        uid3 = "ccc3ddd4"
+        cid3 = asyncio.run(C.create_chat(_FakeRequest({
+            "title": "regen", "messages": [
+                {"role": "user", "content": "q1", "id": uid3},
+            ]})))
+        cid3 = cid3["id"]
+        C.upsert_run_message(cid3, "runA1", uid3, "first answer",
+                             agent="Coder", interrupted=False, bump_rev=True)
+        rev_after_a1 = C.get_chat_rev(cid3)
+        C.upsert_run_message(cid3, "runA2", uid3, "second answer",
+                             agent="Coder", interrupted=False, bump_rev=True)
+        # REGENERATE: the frontend discards BOTH answers, re-runs, and its
+        # DOM tail is gone; its payload is based on the rev BEFORE a2
+        regen_msgs = [
+            {"role": "user", "content": "q1", "id": uid3},
+        ]
+        # the real UI flow: the tab holds the CURRENT rev (it saw every
+        # done event) and drops the tail in its DOM before saving
+        saved3 = asyncio.run(C.update_chat(cid3, _FakeRequest({
+            "messages": copy.deepcopy(regen_msgs),
+            "base_rev": C.get_chat_rev(cid3)})))
+        got3b = asyncio.run(C.get_chat(cid3))
+        a3b = [m for m in got3b["messages"] if m.get("role") == "assistant"]
+        if saved3.get("ok") and len(a3b) == 0:
+            ok("regenerate: older run messages are NOT resurrected")
+        else:
+            fail("resurrect guard", f"saved={saved3} assistants={[m['content'][:20] for m in a3b]}")
+        # now the NEW run appends (created AFTER the regen rev) and a
+        # frontend save on the CURRENT rev adopts it
+        C.upsert_run_message(cid3, "runA3", uid3, "regenerated answer",
+                             agent="Coder", interrupted=False, bump_rev=True)
+        asyncio.run(C.update_chat(cid3, _FakeRequest({
+            "messages": copy.deepcopy(regen_msgs),
+            "base_rev": C.get_chat_rev(cid3) - 1})))
+        got3c = asyncio.run(C.get_chat(cid3))
+        a3c = [m for m in got3c["messages"] if m.get("role") == "assistant"]
+        if len(a3c) == 1 and a3c[0]["content"] == "regenerated answer":
+            ok("run message created after base_rev IS adopted")
+        else:
+            fail("created_rev adoption", f"{[m['content'][:20] for m in a3c]}")
+
+        # 4c. checkpoint under concurrent metadata PUT: no lost update
+        # (both writers run under the same per-chat threading lock)
+        import threading as _th
+        _errors = []
+        def _checkpoint_loop():
+            for i in range(20):
+                try:
+                    C.upsert_run_message(cid, "midRUN01", uid,
+                                         f"checkpoint {i}", agent="Coder",
+                                         interrupted=False, bump_rev=False)
+                except Exception as e:
+                    _errors.append(f"ckpt: {e}")
+        def _meta_loop():
+            for i in range(20):
+                try:
+                    r = asyncio.run(C.update_chat(cid, _FakeRequest({
+                        "title": f"s4a r{i}",
+                        "base_rev": C.get_chat_rev(cid)})))
+                    if not r.get("ok"):
+                        _errors.append(f"meta rejected: {r}")
+                except Exception as e:
+                    _errors.append(f"meta: {e}")
+        t1 = _th.Thread(target=_checkpoint_loop)
+        t2 = _th.Thread(target=_meta_loop)
+        t1.start(); t2.start(); t1.join(); t2.join()
+        got_t = asyncio.run(C.get_chat(cid))
+        has_run = any(m.get("id") == "midRUN01" for m in got_t["messages"])
+        if not _errors and has_run and got_t["title"].startswith("s4a r"):
+            ok("checkpoint vs metadata PUT under lock: no lost update")
+        else:
+            fail("concurrent writers", f"errors={_errors[:2]} title={got_t['title'][:20]}")
+
         # 5. interrupted append keeps alternation and carries the flag
         C.upsert_run_message(cid, "midRUN03", uid, "partial before stop",
                              agent="Coder", interrupted=True, bump_rev=True)
@@ -183,10 +260,10 @@ def main():
             body = json.loads(resp.body)
             got5 = asyncio.run(C.get_chat(cid))
             if got5["messages"][0]["content"] != "STALE OVERWRITE" \
-                    and body.get("rev") == got5.get("rev"):
+                    and int(body.get("rev") or 0) == int(got5.get("rev") or 0):
                 ok("stale PUT -> 409, server state wins")
             else:
-                fail("409 state", json.dumps(got5["messages"])[:120])
+                fail("409 state", f"body_rev={body.get('rev')} got_rev={got5.get('rev')} first={got5['messages'][0]['content'][:30]}")
         else:
             fail("stale PUT status", repr(getattr(resp, "status_code", None)))
 
