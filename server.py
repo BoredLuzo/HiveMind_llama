@@ -66,6 +66,7 @@ from core.stream import run_stream_orchestrated
 # ─── Shadow-Def Imports from tools modules ───
 from tools.definitions import _get_inline_tools
 from tools.runner import _run_inline_tool as _run_inline_tool_runner
+from routers.chats import get_chat_rev
 from context.chat import (
     init_chat_context,
     _get_chat_ctx_lock, _load_chat_context_locked, _save_chat_context_locked,
@@ -1274,6 +1275,16 @@ async def stream(req: Request):
         except (OSError, ValueError) as _flush_import_exc:
             logger.warning("[STREAM] dom import failed (chat=%s): %s",
                            chat_id, _flush_import_exc)
+    # S4a: backend-owned assistant message for this run (checkpoints
+    # without rev bumps; the final flush bumps rev, shipped in done).
+    _tw = None
+    if chat_id:
+        try:
+            from routers.chats import RunTranscriptWriter
+            _tw = RunTranscriptWriter(str(chat_id),
+                                      str(body.get("user_message_id") or ""))
+        except (OSError, ValueError) as _tw_exc:
+            logger.warning("[STREAM] transcript writer unavailable: %s", _tw_exc)
     until_finished         = _as_bool(_body_or_settings("until_finished",          default=False))
     duo_runtime_profile    = body.get("duo_runtime_profile") or settings.get("duo_runtime_profile") or "balanced"
     duo_runtime_profile_lock_override = _as_bool(_body_or_settings(
@@ -1369,10 +1380,36 @@ async def stream(req: Request):
             try:
                 async for _chunk in _stream_gen:
                     _state["events"] += 1
+                    if _tw is not None and isinstance(_chunk, str) and '"type": "token"' in _chunk:
+                        try:
+                            _tk = json.loads(_chunk[6:])
+                            _tw.add_token(str((_tk or {}).get("content") or ""))
+                        except ValueError as _tk_err:
+                            logger.debug("[STREAM] token frame skipped: %s", _tk_err)
                     if not _state["saw_done"] and isinstance(_chunk, str) and '"type": "done"' in _chunk:
                         _state["saw_done"] = True
                         if _state["jr_reg"] is not None:
                             _state["jr_reg"]["done"] = True
+                        # S4a: final flush bumps rev; done carries it plus
+                        # the message id the frontend stamps on its bubble.
+                        _fin_rev = None
+                        if _tw is not None and not _tw.finalized:
+                            try:
+                                _jd0 = json.loads(_chunk[6:])
+                                _fin = _tw.finalize(interrupted=str(
+                                    _jd0.get("stop_reason") or "") not in ("", "completed", "graceful_stop"))
+                                _fin_rev = (_fin or {}).get("rev")
+                            except (ValueError, OSError):
+                                _fin_rev = None
+                        try:
+                            _jd = json.loads(_chunk[6:])
+                            if isinstance(_jd, dict) and _tw is not None:
+                                _jd["rev"] = _fin_rev if _fin_rev is not None else get_chat_rev(str(chat_id))
+                                _jd["msg_id"] = _tw.msg_id
+                                _jd["reply_to"] = _tw.user_msg_id or None
+                                _chunk = "data: " + json.dumps(_jd, ensure_ascii=False) + "\n\n"
+                        except (ValueError, OSError) as _enr_err:
+                            logger.debug("[STREAM] done enrich skipped: %s", _enr_err)
                     _jr_record(_chunk)
                     # backpressure cap for a detached run nobody watches
                     if _q.qsize() < 5000:
@@ -1380,6 +1417,8 @@ async def stream(req: Request):
             except BaseException as _se:
                 if isinstance(_se, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
                     _state["aborted"] = True
+                    if _tw is not None and not _tw.finalized:
+                        _tw.finalize(interrupted=True)
                     if _state["jr_reg"] is not None:
                         _state["jr_reg"]["aborted"] = True
                         _state["jr_reg"]["done"] = True
@@ -1387,6 +1426,8 @@ async def stream(req: Request):
                     await _q.put(("aborted", None))
                 else:
                     _state["error"] = _se
+                    if _tw is not None and not _tw.finalized:
+                        _tw.finalize(interrupted=True)
                     if _state["jr_reg"] is not None:
                         _state["jr_reg"]["aborted"] = True
                         _state["jr_reg"]["done"] = True

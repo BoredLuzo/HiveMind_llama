@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import threading
+import time as _time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -233,7 +234,45 @@ def _get_chat_save_lock(chat_id: str) -> threading.Lock:
         return _chat_save_locks[cid]
 
 
-def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | None:
+def _merge_run_messages(incoming: list, stored: list) -> list:
+    """Union the frontend's decorated messages with backend-appended ones
+    (S4a): a stored message with source="run" keeps the SERVER text (the
+    run streamed it), while the frontend version donates html/cp/images.
+    Backend messages the incoming list does not know yet are appended -
+    the frontend's DOM was simply behind. Incoming messages without ids
+    (old cached JS) pass through untouched."""
+    _run_ids = {m["id"]: m for m in stored
+                if isinstance(m, dict) and m.get("id") and m.get("source") == "run"}
+    if not _run_ids:
+        return incoming
+    _has_ids = any(isinstance(m, dict) and m.get("id") for m in incoming)
+    if not _has_ids:
+        return incoming
+    _out = []
+    _seen = set()
+    for m in incoming:
+        if not isinstance(m, dict):
+            _out.append(m)
+            continue
+        mid = m.get("id")
+        prev = _run_ids.get(mid)
+        if prev is not None:
+            _seen.add(mid)
+            merged = dict(m)
+            merged["content"] = prev.get("content", m.get("content", ""))
+            if "interrupted" in prev:
+                merged["interrupted"] = prev.get("interrupted")
+            _out.append(merged)
+        else:
+            _out.append(m)
+    for mid, prev in _run_ids.items():
+        if mid not in _seen:
+            _out.append(prev)
+    return _out
+
+
+def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None,
+               bump_rev: bool = True) -> dict | None:
     """Atomic save on an internal COPY (2026-10-03, review fix): the
     caller's chat dict keeps its inline payloads and is never mutated
     with blob refs - POST /chats used to hand the blobified payload back.
@@ -249,8 +288,20 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
         if base_rev is not None and base_rev != _cur_rev:
             return {"id": chat_id, "rev": _cur_rev, "conflict": True,
                     "ts": chat.get("updated_at", "")}
+        # MERGE-ON-SAVE (S4a): union the caller's decorated messages with
+        # backend-appended run messages before taking the copy. Runs on
+        # EVERY save (not only CAS callers) - the beacon path must adopt
+        # backend messages just the same. Legacy payloads without ids
+        # pass through untouched.
+        try:
+            _stored_prev = _read_chat_file(chat_id)
+            if _stored_prev and _stored_prev.get("messages"):
+                chat["messages"] = _merge_run_messages(
+                    chat.get("messages", []), _stored_prev["messages"])
+        except (OSError, ValueError):
+            pass
         stored = copy.deepcopy(chat)
-        _new_rev = _cur_rev + 1
+        _new_rev = _cur_rev + (1 if bump_rev else 0)
         stored["rev"] = _new_rev
 
         _file = str(stored.get("_file") or "")
@@ -266,34 +317,20 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
         if not _file:
             return None
 
-        _msgs = stored.get("messages", [])
-        _last = _msgs[-1].get("content", "") if _msgs else ""
-        with _cache_lock:
-            _chats_cache[chat_id] = {
-                "id": stored.get("id", chat_id),
-                "title": stored.get("title", "Untitled"),
-                "created_at": stored.get("created_at", ""),
-                "updated_at": stored.get("updated_at", ""),
-                "_msg_count": _user_msg_count(_msgs),
-                "_tokens": _chat_tokens(_msgs),
-                "_preview": _last[:80] if isinstance(_last, str) else "",
-                "_file": _file,
-            }
+        _file = str(stored.get("_file") or "")
+        if not _file and _state._SESSIONS_DIR:
+            _ts = str(stored.get("created_at") or
+                      datetime.now().isoformat(timespec="seconds"))
+            _ts = _ts.replace(":", "-")[:19]
+            _title = stored.get("title", "Chat")
+            _slg = _re_slug_special.sub("", _title.split("\n")[0][:40])
+            _slg = _re_slug_space.sub("-", _slg.strip()) or "Chat"
+            _file = str(_state._SESSIONS_DIR / f"{_ts}_{_slg}_{chat_id}.json")
+            stored["_file"] = _file
+        if not _file:
+            return None
 
-        # BLOB EXTRACTION (2026-10-03): after the meta block counted
-        # tokens/previews on the INLINE payloads, shrink the stored form.
-        try:
-            _blobify_messages(chat_id, stored.get("messages", []))
-        except OSError as _blob_err:
-            logger.warning("[CHATS] blob extraction failed, saving inline: %s",
-                           _blob_err)
-
-        _out = {k: v for k, v in stored.items() if not k.startswith("_")}
-        _txt = json.dumps(_out, indent=2, ensure_ascii=False)
-        _p = Path(_file)
-        _tmp = _p.with_suffix(".tmp")
-        _tmp.write_text(_txt, encoding="utf-8")
-        os.replace(_tmp, _p)
+        _write_stored(chat_id, stored)
         return {"id": chat_id, "rev": _new_rev, "ts": stored.get("updated_at", ""),
                 "conflict": False}
 
@@ -319,9 +356,147 @@ def import_dom_messages(chat_id: str, messages: list,
     return _save_chat(chat_id, chat)
 
 
+def _write_stored(chat_id: str, stored: dict) -> None:
+    """Cache meta + blob extraction + atomic json write for a prepared
+    stored dict (shared by _save_chat and upsert_run_message)."""
+    _msgs = stored.get("messages", [])
+    _last = _msgs[-1].get("content", "") if _msgs else ""
+    with _cache_lock:
+        _chats_cache[chat_id] = {
+            "id": stored.get("id", chat_id),
+            "title": stored.get("title", "Untitled"),
+            "created_at": stored.get("created_at", ""),
+            "updated_at": stored.get("updated_at", ""),
+            "_msg_count": _user_msg_count(_msgs),
+            "_tokens": _chat_tokens(_msgs),
+            "_preview": _last[:80] if isinstance(_last, str) else "",
+            "_file": str(stored.get("_file") or ""),
+        }
+    try:
+        _blobify_messages(chat_id, stored.get("messages", []))
+    except OSError as _blob_err:
+        logger.warning("[CHATS] blob extraction failed, saving inline: %s",
+                       _blob_err)
+    _out = {k: v for k, v in stored.items() if not k.startswith("_")}
+    _p = Path(str(stored.get("_file") or ""))
+    _tmp = _p.with_suffix(".tmp")
+    _tmp.write_text(json.dumps(_out, indent=2, ensure_ascii=False),
+                    encoding="utf-8")
+    os.replace(_tmp, _p)
+
+
+def upsert_run_message(chat_id: str, msg_id: str, user_msg_id: str,
+                       content: str, agent: str = "Assistant",
+                       interrupted: bool | None = None,
+                       bump_rev: bool = False) -> dict | None:
+    """S4a: the backend owns one assistant message per run. Checkpoints
+    refresh it IN PLACE without bumping rev (same writer - no concurrency
+    claim); the final flush bumps rev so the frontend's next save adopts
+    via base_rev. Inserts right after the user message it answers."""
+    with _get_chat_save_lock(chat_id):
+        chat = _read_chat_file(chat_id)
+        if chat is None:
+            return None
+        chat["_file"] = str(next(iter(_state._SESSIONS_DIR.glob(
+            f"*_{chat_id}.json")), ""))
+        stored = copy.deepcopy(chat)
+        _msgs = stored.get("messages", [])
+        existing = next((m for m in _msgs if m.get("id") == msg_id), None)
+        _new_rev = int(stored.get("rev") or 0) + (1 if bump_rev else 0)
+        stored["rev"] = _new_rev
+        if existing is not None:
+            existing["content"] = content
+            if interrupted is not None:
+                existing["interrupted"] = interrupted
+        else:
+            new_msg = {"id": msg_id, "role": "assistant", "agent": agent,
+                       "content": content, "source": "run",
+                       "reply_to": user_msg_id or None}
+            if interrupted is not None:
+                new_msg["interrupted"] = interrupted
+            pos = next((i + 1 for i, m in enumerate(_msgs)
+                        if m.get("id") == user_msg_id), len(_msgs))
+            _msgs.insert(pos, new_msg)
+        stored["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        _write_stored(chat_id, stored)
+        return {"id": chat_id, "rev": _new_rev, "msg_id": msg_id,
+                "conflict": False}
+
+
+class RunTranscriptWriter:
+    """S4a: accumulate a run's assistant text and write it into the chat
+    transcript under a stable message id. Checkpoints refresh the message
+    IN PLACE without bumping rev (same writer, no concurrency claim); the
+    final flush bumps rev once so the frontend's next save adopts via
+    base_rev. Not attached when the chat has no json (chat-less runs)."""
+    CHECKPOINT_S = 10.0
+
+    def __init__(self, chat_id: str, user_msg_id: str, agent: str = "Assistant"):
+        self.chat_id = str(chat_id)
+        self.user_msg_id = str(user_msg_id or "")
+        self.agent = agent or "Assistant"
+        self.msg_id = uuid.uuid4().hex[:12]
+        self._parts: list = []
+        self._last_ckpt = 0.0
+        self.finalized = False
+        self.ok = _read_chat_file(self.chat_id) is not None
+
+    def add_token(self, text: str) -> None:
+        if not self.ok or self.finalized or not text:
+            return
+        self._parts.append(text)
+        _now = _time.time()
+        if _now - self._last_ckpt >= self.CHECKPOINT_S:
+            self.checkpoint()
+
+    def checkpoint(self) -> None:
+        if not self.ok or self.finalized:
+            return
+        self._last_ckpt = _time.time()
+        try:
+            upsert_run_message(self.chat_id, self.msg_id, self.user_msg_id,
+                               "".join(self._parts), self.agent,
+                               interrupted=False, bump_rev=False)
+        except (OSError, ValueError) as _ck_err:
+            logger.warning("[CHATS] run checkpoint failed (chat=%s): %s",
+                           self.chat_id, _ck_err)
+
+    def finalize(self, interrupted: bool | None = None) -> dict | None:
+        if not self.ok or self.finalized:
+            return None
+        self.finalized = True
+        try:
+            return upsert_run_message(self.chat_id, self.msg_id,
+                                      self.user_msg_id, "".join(self._parts),
+                                      self.agent, interrupted=interrupted,
+                                      bump_rev=True)
+        except (OSError, ValueError) as _fin_err:
+            logger.warning("[CHATS] run finalize failed (chat=%s): %s",
+                           self.chat_id, _fin_err)
+            return None
+
+
+def _read_chat_file(chat_id: str) -> dict | None:
+    """Cache-independent read of the chat json (the run path may start
+    before any /chats endpoint warmed the meta cache)."""
+    try:
+        if not _state._SESSIONS_DIR:
+            return None
+        matches = sorted(_state._SESSIONS_DIR.glob(f"*_{chat_id}.json"))
+        if not matches:
+            return None
+        return json.loads(matches[-1].read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def get_chat_rev(chat_id: str) -> int:
+    return int((_read_chat_file(chat_id) or {}).get("rev") or 0)
+
+
 @router.get("")
 async def list_chats():
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     result = []
     def _get_items():
         with _cache_lock:
@@ -356,7 +531,7 @@ async def list_chats():
 
 @router.post("")
 async def create_chat(req: Request):
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     data = await req.json()
     cid = str(uuid.uuid4())[:8]
     now = datetime.now().isoformat(timespec="seconds")
@@ -376,7 +551,7 @@ async def create_chat(req: Request):
     chat["_msg_count"] = _user_msg_count(_msgs)
     chat["_tokens"] = _chat_tokens(_msgs)
     chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-    _saved = _save_chat(cid, chat)
+    _saved = await asyncio.to_thread(_save_chat, cid, chat)
     return {"ok": True, "id": cid, "rev": (_saved or {}).get("rev"),
             "chat": {k: v for k, v in chat.items() if k != "_file"}}
 
@@ -385,7 +560,7 @@ async def create_chat(req: Request):
 async def persist_chat(req: Request):
     """Create-or-update a chat in one call. Used by the auto-save feature
     (stream end, abort) and the browser-close beacon (POST-only)."""
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     data = await req.json()
     msgs = data.get("messages", []) or []
     if not msgs:
@@ -445,7 +620,7 @@ async def persist_chat(req: Request):
 
 @router.get("/{chat_id}")
 async def get_chat(chat_id: str):
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     chat = await asyncio.to_thread(_load_chat_full, chat_id)
     if chat is None:
         return JSONResponse({"error": "Not found"}, status_code=404)
@@ -467,7 +642,7 @@ async def get_chat(chat_id: str):
 
 @router.put("/{chat_id}")
 async def update_chat(chat_id: str, req: Request):
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     data = await req.json()
     chat = await asyncio.to_thread(_load_chat_full, chat_id)
     if chat is None:
@@ -509,7 +684,7 @@ async def update_chat(chat_id: str, req: Request):
 
 @router.delete("/{chat_id}")
 async def delete_chat(chat_id: str):
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     def _pop_chat():
         with _cache_lock:
             return _chats_cache.pop(chat_id, None)

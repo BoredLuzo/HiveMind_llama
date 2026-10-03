@@ -2740,10 +2740,11 @@ function renderImgPreview() {
 }
 
 // -- Chat Rendering ---------------------------------------------
-function addUserMsg(text, imgs) {
+function addUserMsg(text, imgs, mid) {
   const c = document.getElementById('chat');
   const d = document.createElement('div');
   d.className = 'msg msg-user';
+  if (mid) d.dataset.mid = mid;
   if (imgs.length) {
     const thumbs = document.createElement('div');
     thumbs.className = 'img-thumbs';
@@ -5173,7 +5174,11 @@ async function sendMsg() {
     el.id = '';
   });
   S.lastPrompt = txt;
-  addUserMsg(txt, imgs);
+  // S4a: stable message id - the backend appends the assistant answer
+  // with reply_to=this id, and the transcript seeds from the chat json.
+  var _uid = (crypto.randomUUID ? crypto.randomUUID().slice(0, 12)
+                                : 'u' + Date.now().toString(36));
+  addUserMsg(txt, imgs, _uid);
 
   S.streaming = true;
   S.currentRunId = null;
@@ -5295,6 +5300,8 @@ async function sendMsg() {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         q: txt,
+        user_message_id: _uid,
+        base_rev: S.currentRev || 0,
         flush_ok: _flushOk,
         dom_messages: _flushOk ? undefined : S.currentChatMessages,
         images: imgs.map(function(i) { return i.b64; }),
@@ -7155,6 +7162,14 @@ function handleEvent(d) {
   }
   else if (d.type === 'done') {
     S._sawDoneEvent = true;
+    // S4a: the backend appended/updated this run's assistant message and
+    // bumped rev - adopt both so the stream-end save cannot conflict.
+    if (d.rev) S.currentRev = d.rev;
+    if (d.msg_id) {
+      var _blocksDone = document.querySelectorAll('#chat .ablock');
+      var _lastBlock = _blocksDone[_blocksDone.length - 1];
+      if (_lastBlock) _lastBlock.dataset.mid = d.msg_id;
+    }
     _cleanupLoadTimers();
     _perfOnDone(d);
     setPauseBtnState('idle');
@@ -8817,6 +8832,7 @@ window.addEventListener('pagehide', function() {
   const payload = {
     chat_id: S.currentChatId || undefined,
     messages: S.currentChatMessages,
+    base_rev: S.currentRev || 0,
     workspace: S.workspace || '',
     title: S.currentChatId ? undefined : title   // don't overwrite existing titles
   };
@@ -9600,7 +9616,9 @@ function _autosaveChatMessage() {
           _uims.push({ preview: im.getAttribute('src') || '' });
         });
       }
-      if (bubble) msgs.push({role: 'user', content: bubble.textContent, ts: Date.now(), images: _uims});
+      var _um = {role: 'user', content: bubble.textContent, ts: Date.now(), images: _uims};
+      if (el.dataset.mid) _um.id = el.dataset.mid;
+      if (bubble) msgs.push(_um);
     } else if (el.classList.contains('ablock')) {
       const aname = el.querySelector('.aname');
       // abody can be directly or in a duo-coder/duo-critic wrapper
@@ -9611,8 +9629,10 @@ function _autosaveChatMessage() {
         // and the chat is shown as flat text on load.
         // CP SNAPSHOT (2026-10-03): persist the code-panel state (diffs per
         // path) so tool chips stay clickable in the LOADED chat too.
-        msgs.push({role: 'assistant', agent: aname.textContent, content: abody.textContent,
-                   html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()});
+        var _am = {role: 'assistant', agent: aname.textContent, content: abody.textContent,
+                   html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()};
+        if (el.dataset.mid) _am.id = el.dataset.mid;
+        msgs.push(_am);
       }
     }
   });
@@ -9768,7 +9788,7 @@ async function loadChat(chatId) {
     _cpReset();  // PANEL-SCOPE (2026-10-03): snapshots must not merge across chats
     (chat.messages || []).forEach(function(msg) {
       if (msg.role === 'user') {
-        addUserMsg(msg.content, (msg.images || []).map(function(i) { return { preview: i.preview }; }));
+        addUserMsg(msg.content, (msg.images || []).map(function(i) { return { preview: i.preview }; }), msg.id);
       } else if (msg.role === 'assistant') {
         // CHAT-STRUCTUR-FIX (2026-08-07): gespeicherte Live-Struktur wiederherstellen
         const c = document.getElementById('chat');
