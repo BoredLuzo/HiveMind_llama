@@ -334,9 +334,14 @@ def main():
             fail("interrupted", f"flag={m3.get('interrupted')} content={m3['content'][:40]}")
 
         # 6. stale PUT -> 409, server wins, nothing written
+        _rb5 = C.get_chat_rev(cid)
+        _has5 = any(m.get("id") == "midRUN03" for m in (C._read_chat_file(cid) or {}).get("messages", []))
+        print(f"    T5LOG after-test5: rev={_rb5} m3_on_disk={_has5}")
         resp = asyncio.run(C.update_chat(cid, _FakeRequest({
             "messages": [{"role": "user", "content": "STALE OVERWRITE"}],
             "base_rev": 1})))
+        _has5b = any(m.get("id") == "midRUN03" for m in (C._read_chat_file(cid) or {}).get("messages", []))
+        print(f"    T6LOG after-stale-PUT: m3_on_disk={_has5b} status={getattr(resp, 'status_code', 'dict-ok')}")
         if getattr(resp, "status_code", None) == 409:
             body = json.loads(resp.body)
             got5 = asyncio.run(C.get_chat(cid))
