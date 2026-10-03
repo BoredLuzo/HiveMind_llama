@@ -388,13 +388,13 @@ DEFAULT_SETTINGS = {
     # commands 1:1 per exact arguments — anything new or a new chat asks
     # again). The toggle applies mid-run.
     "duo_action_approval_enabled": False,
-    # Auto-approve ONCE an unanswered approval card after N seconds (0 = off,
-    # attended runs wait as before — live smoke runs wedged 9+ min on an
-    # unanswered run_bash card). With N > 0 and nobody at the desk the call
-    # runs once after N s ("approved once" rules: writes per file, no repo
-    # memory) and the model sees an explicit auto-approved note. The NEXT
-    # late user decision is discarded once, so a stale click can never
-    # approve the following gated call.
+    # Auto-DENY an unanswered approval card after N seconds (0 = off,
+    # attended runs wait as before). With N > 0 and nobody at the desk the
+    # gated call is DENIED once (fail closed, 2026-10-03 review: the old
+    # auto-approve-once behavior approved unseen actions) - the gate wait
+    # ends immediately, the model sees a timeout note and picks a
+    # different approach. The NEXT late user decision is discarded once,
+    # so a stale click can never approve the following gated call.
     "duo_action_approval_timeout_s": 0,
     # Duo image plan (2026-10-01, replaces duo_coder_raw_images): how the
     # agentic duo run handles attached images. None = derived (active

@@ -4359,8 +4359,8 @@ var _askClearedAt = 0;
 
 // APPROVAL-CARD AUTO TIMER (2026-10-01): checkbox + visible countdown on
 // every approval card. With duo_action_approval_timeout_s > 0 the SERVER
-// runs the countdown (auto-approves once after N s — robust even when the
-// browser is closed) and the card mirrors it; unchecking posts
+// runs the countdown (DENIES once after N s, fail-closed — robust even
+// when the browser is closed) and the card mirrors it; unchecking posts
 // auto_timeout_off which cancels the server countdown ("wait for me").
 // With the setting off the user can still check the box: the card then
 // counts down itself and posts an explicit approve-once at 0.
@@ -4390,16 +4390,21 @@ function _apAutoBox(card, d) {
   var _stop = function() {
     if (card._apAutoInt) { clearInterval(card._apAutoInt); card._apAutoInt = null; }
   };
+  var _tickLbl = function(left) {
+    _setLbl((card._apAutoServer || 0) > 0
+      ? 'denying in ' + left + 's (nobody answered)'
+      : 'auto-approving once in ' + left + 's (you enabled this)');
+  };
   card._apAutoStart = function(n2) {
     var _left = n2 || 30;
     _stop();
-    _setLbl('auto-approving once in ' + _left + 's (nobody answered)');
+    _tickLbl(_left);
     card._apAutoInt = setInterval(function() {
       _left--;
       if (_left <= 0) {
         _stop();
-        _setLbl('auto-approved');
-        if ((card._apAutoServer || 0) > 0) return;  // the server approves itself
+        _setLbl((card._apAutoServer || 0) > 0 ? 'denied (no answer)' : 'auto-approved');
+        if ((card._apAutoServer || 0) > 0) return;  // the server denies itself (fail closed)
         var _rid = card.dataset.runId || S.currentRunId || '';
         card.dataset.apLocked = '1';
         fetch('/approval/decide/' + encodeURIComponent(_rid), {
@@ -4411,7 +4416,7 @@ function _apAutoBox(card, d) {
         }).catch(function(e) { if (window._showErrorToast) window._showErrorToast('Approval failed: ' + e); });
         return;
       }
-      _setLbl('auto-approving once in ' + _left + 's (nobody answered)');
+      _tickLbl(_left);
     }, 1000);
   };
   _cb.onchange = function() {

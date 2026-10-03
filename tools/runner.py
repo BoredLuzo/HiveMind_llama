@@ -718,16 +718,22 @@ async def _check_action_approval(name: str, args: dict, workspace):
     _appr_timed_out = (not str(answer or "").strip()
                        or str(answer).startswith("[ask_user TIMEOUT"))
     if _appr_timed_out and _appr_to_s > 0:
+        # FAIL CLOSED (2026-10-03 review): an unanswered card DENIES the
+        # call once instead of approving it. The gate wait ends immediately
+        # (no wedge - the model picks a different approach, same as an
+        # abort), and the NEXT late decision is discarded once, so a stale
+        # click can never approve the following gated call.
         _approval_expired[str(run_id)] = True
-        _lg.warning("[APPROVAL] timeout after %ds run=%s tool=%s — auto-approved once",
+        _lg.warning("[APPROVAL] timeout after %ds run=%s tool=%s — denied once (fail closed)",
                     _appr_to_s, run_id, name)
         await _safe_emit({"type": "status",
-                          "content": f"No user response for {name} within {_appr_to_s}s — auto-approved once."})
-        if name in ("write_file", "edit_file", "write_file_append") and _wpath:
-            _approval_once_paths.setdefault(_scope, set()).add(_wpath)
-            _approval_free_pass[str(run_id)] = "write"
-        return ("NOTE", f"auto-approved: no user response within {_appr_to_s}s "
-                        f"— this call ran once without explicit approval.")
+                          "content": f"No user response for {name} within {_appr_to_s}s — call DENIED (fail closed)."})
+        return ("DENY", _tool_error_response(
+            "ACTION_APPROVAL_TIMEOUT",
+            f"The approval card was not answered within {_appr_to_s}s and was "
+            "denied automatically. Pick a different approach that does not "
+            "need " + name + ", or ask the user to approve explicitly.",
+            tool=name))
     # "1|please use fetch instead" -> decision + user note for the model
     _note = ""
     if "|" in str(answer):

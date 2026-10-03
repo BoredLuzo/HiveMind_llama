@@ -7,6 +7,7 @@ and delegates to run_stream_orchestrated (core/stream.py).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -642,13 +643,26 @@ async def run_stream(
                     continue
                 if "," in _raw[:32]:  # strip data-url prefix if present
                     _raw = _raw.split(",", 1)[1]
+                # MAGIC SNIFF (2026-10-03 review): detect the real format,
+                # not just JPEG - webp/gif/bmp used to land as .png. The
+                # content hash in the name also makes same-second uploads
+                # collision-free (two runs in one second used to lose the
+                # second image via the skip-if-exists guard).
                 _ext = "png"
                 try:
-                    if _b64mod.b64decode(_raw[:24] + "==")[:2] == bytes([0xFF, 0xD8]):
+                    _magic = _b64mod.b64decode(_raw[:24] + "==")
+                    if _magic[:2] == bytes([0xFF, 0xD8]):
                         _ext = "jpg"
+                    elif _magic[:4] == bytes([0x89, 0x50, 0x4E, 0x47]):
+                        _ext = "png"
+                    elif _magic[:4] == bytes([0x47, 0x49, 0x46, 0x38]):
+                        _ext = "gif"
+                    elif _magic[:4] == bytes([0x52, 0x49, 0x46, 0x46]) and _magic[8:12] == b"WEBP":
+                        _ext = "webp"
                 except Exception:
                     pass
-                _fp = _up_dir / f"img_{_stamp}_{_ii + 1}.{_ext}"
+                _h8 = hashlib.sha256(_raw.encode("utf-8")).hexdigest()[:8]
+                _fp = _up_dir / f"img_{_stamp}_{_ii + 1}_{_h8}.{_ext}"
                 if not _fp.exists() or _fp.stat().st_size == 0:
                     _fp.write_bytes(_b64mod.b64decode(_raw))
                 _saved_image_paths.append(str(_fp))

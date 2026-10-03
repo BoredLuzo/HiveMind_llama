@@ -1,0 +1,52 @@
+@echo off
+setlocal EnableExtensions
+cd /d "%~dp0.."
+
+echo.
+echo  +=============================================================+
+echo  ^|    HIVEMIND - PACKAGE RELEASE                               ^|
+echo  ^|    Builds the release zip from the GIT TREE (git archive)   ^|
+echo  +=============================================================+
+echo.
+echo  The zip contains exactly the tracked files - never a working
+echo  directory with settings.json, presets.json, models or sessions
+echo  (the git token lives in settings.json; a dirty zip leaks it).
+echo.
+
+set "VER="
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9.]+)').Matches[0].Groups[1].Value"`) do set "VER=%%V"
+if not defined VER (
+    echo  [ERROR] Could not read HIVEMIND_VERSION from server.py.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+set "ROOTNAME=HiveMind_v%VER%_release"
+set "OUT=%ROOTNAME%.zip"
+
+git rev-parse --is-inside-work-tree >nul 2>&1
+if errorlevel 1 (
+    echo  [ERROR] Not a git repository - releases are built from the tree.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+
+echo  Version  : %VER%
+echo  Output   : ..\%OUT%  ^(one run folder deep: %ROOTNAME%\ - what
+echo              update.bat^'s extract step expects^)
+echo.
+git archive --format=zip --output="..\%OUT%" --prefix="%ROOTNAME%/" HEAD
+if errorlevel 1 (
+    echo  [ERROR] git archive failed.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+
+REM SAFETY CHECK: the zip must not contain any user-state file.
+powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $bad = $z.Entries | Where-Object { $_.FullName -match '(^|/)(settings\.json|presets\.json|models\.json|vision_model\.json|routing_weights\.json|memory\.json)$' -or $_.FullName -match '(^|/)sessions/' }; if ($bad) { $bad | ForEach-Object { Write-Output ('LEAK: ' + $_.FullName) }; $z.Dispose(); exit 1 }; Write-Output ('entries: ' + $z.Entries.Count); $z.Dispose()"
+if errorlevel 1 (
+    echo  [ERROR] Zip contains user-state files - NOT usable as a release.
+    echo         Fix the tracked tree; nothing was published.
+    del "..\%OUT%"
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+echo  [OK] zip clean: no settings/presets/models/sessions inside.
+echo.
+echo  Done. Upload ..\%OUT% as the release asset (tag v%VER%).
+echo  Press any key to continue... & pause >nul & exit /b 0

@@ -172,7 +172,48 @@ def test_stale_file_hard_fails():
         fail("stale", f"r={r[:120]} body={body!r}")
 
 
+
+
+def test_edit_shrink_guard():
+    # SHRINK-GUARD (2026-10-03 review fix): the guard used to measure AFTER
+    # the replacement and never fired. It must block a collapse without
+    # confirm_shrink and ALLOW the deliberate one with it.
+    from tools.handlers.file_ops import _inline_tool_write_file, _inline_tool_edit_file
+    ws = Path(tempfile.mkdtemp(prefix="hvm_shrink_"))
+    try:
+        big = "\n".join(f"line {i} content here" for i in range(1, 41)) + "\n"
+        asyncio.run(_inline_tool_write_file(
+            {"path": "big.py", "content": big, "_tool_name": "write_file"}, ws, None))
+        old_text = "\n".join(f"line {i} content here" for i in range(2, 41))
+        r_block = asyncio.run(_inline_tool_edit_file(
+            {"path": "big.py", "old_text": old_text, "new_text": "# collapsed",
+             "_tool_name": "edit_file"}, ws, None))
+        disk = (ws / "big.py").read_text(encoding="utf-8")
+        if "SUSPICIOUS_SHRINK" in r_block and disk.count("line ") == 40:
+            ok("shrink guard BLOCKS 40->2 collapse, file intact")
+        else:
+            fail("shrink block", f"r={str(r_block)[:60]} disk={disk.count('line ')}")
+        r_ok = asyncio.run(_inline_tool_edit_file(
+            {"path": "big.py", "old_text": old_text, "new_text": "# collapsed",
+             "confirm_shrink": True, "_tool_name": "edit_file"}, ws, None))
+        disk2 = (ws / "big.py").read_text(encoding="utf-8")
+        if "SUSPICIOUS_SHRINK" not in r_ok and disk2.count("line ") == 1:
+            ok("confirm_shrink ALLOWS the deliberate collapse")
+        else:
+            fail("confirm path", f"r={str(r_ok)[:60]}")
+        r_small = asyncio.run(_inline_tool_edit_file(
+            {"path": "big.py", "old_text": "# collapsed", "new_text": "# v2",
+             "_tool_name": "edit_file"}, ws, None))
+        if "SUSPICIOUS_SHRINK" not in r_small:
+            ok("small file edits never trigger the guard")
+        else:
+            fail("small false positive")
+    finally:
+        import shutil as _sh
+        _sh.rmtree(str(ws), ignore_errors=True)
+
 if __name__ == "__main__":
+    test_edit_shrink_guard()
     test_write_file_guards()
     test_dispatch_consolidation_notice()
     test_advertising_consolidated()

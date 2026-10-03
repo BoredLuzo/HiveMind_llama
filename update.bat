@@ -108,7 +108,10 @@ if "%VCMP%"=="same" (
 if "%VCMP%"=="older" (
     echo.
     echo  [OK] Installed %CURRENT% is NEWER than release %TAGNUM% - nothing to do.
-    echo         (Not downgrading.)
+    REM the ^) escapes the closing paren: unescaped, it ends THIS if-block
+    REM at parse time and the pause/exit below runs unconditionally - which
+    REM silently aborted every real (newer) update after the version check.
+    echo         (Not downgrading.^)
     if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
     echo  Press any key to continue... & pause >nul & exit /b 0
 )
@@ -135,7 +138,9 @@ if exist "%TMPDIR%\warnings.txt" (
     echo  +-------------------------------------------------------------+
     type "%TMPDIR%\warnings.txt"
     echo  +-------------------------------------------------------------+
-    set "CONT="
+    REM default Y: with empty input set /p keeps the old value, and a
+    REM stale CONT from the environment must not decide the update
+    set "CONT=Y"
     set /p "CONT=Continue anyway? [Y/n]: "
 )
 REM the n-check must sit OUTSIDE the parenthesized block: %CONT% inside
@@ -185,24 +190,24 @@ if not defined EXROOT (
     echo  [ERROR] Zip contained no folder. Nothing was changed.
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
+REM SELF-UPDATE STAGING (2026-10-03 review): stage the incoming update.bat
+REM under a neutral name - the running script is never replaced mid-run.
+REM The FINAL line of this script swaps it in atomically.
+set "UPDNEW=%BASE%\.update_new.bat"
+if exist "%EXROOT%\update.bat" copy /y "%EXROOT%\update.bat" "%UPDNEW%" >nul
 
 REM ── 8. Apply over this installation ───────────────────────────────────────
 REM /XF update.bat: overwriting the RUNNING script mid-execution makes cmd
-REM resume at a stale byte offset - verify/prune/dep-refresh silently skip
-REM or garbage executes. The new update.bat is copied LAST (step 8b).
+REM resume at a stale byte offset (the staged copy swaps in at the end).
+REM The user-data excludes are belt-and-suspenders: a wrongly built zip
+REM must never clobber settings, presets, models or session state - the
+REM git token lives in settings.json (token leak via bad zip).
 echo  Applying update   : over this folder
-robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /XF update.bat /NFL /NDL /NJH /NP /NJS
+robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /XF update.bat settings.json presets.json models.json vision_model.json routing_weights.json memory.json /XD sessions .hive_uploads learning_logs logs .venv llama /NFL /NDL /NJH /NP /NJS
 if errorlevel 8 (
     echo  [ERROR] Applying the update failed. Restore by copying the
     echo         contents of %BK%\ back over this folder.
     echo  Press any key to continue... & pause >nul & exit /b 1
-)
-
-REM ── 8b. Copy the new update.bat LAST ───────────────────────────────────
-REM Excluded from the apply above so the running script is never replaced
-REM mid-execution. Land it now that every other step is done.
-if exist "%EXROOT%\update.bat" (
-    copy /y "%EXROOT%\update.bat" "%BASE%\update.bat" >nul
 )
 
 REM ── 9. Verify ─────────────────────────────────────────────────────────────
@@ -280,4 +285,8 @@ echo  What changed / further questions:
 echo    Release notes : https://github.com/%REPO%/releases/tag/v%NEWVER%
 echo    Changelog     : https://github.com/%REPO%/blob/main/CHANGELOG.md
 echo.
-echo  Press any key to continue... & pause >nul & exit /b 0
+echo  Press any key to continue... & pause >nul
+REM FINAL SELF-SWAP (2026-10-03 review): one physical line - cmd parses it
+REM whole before executing, so replacing update.bat here cannot make cmd
+REM resume at a stale offset. Nothing may follow this line.
+if exist "%UPDNEW%" (copy /y "%UPDNEW%" "%BASE%\update.bat" >nul & del "%UPDNEW%" >nul 2>&1 & exit /b 0) else exit /b 0

@@ -225,12 +225,33 @@ def _load_chat_full(chat_id: str) -> dict | None:
         return None
 
 
-def _get_chat_save_lock(chat_id: str) -> threading.Lock:
+def _get_chat_save_lock(chat_id: str) -> threading.RLock:
     cid = str(chat_id or "")
     with _chat_save_locks_guard:
         if cid not in _chat_save_locks:
-            _chat_save_locks[cid] = threading.Lock()
+            # RLock: update_chat wraps load+mutate+save in ONE lock
+            # section and calls _save_chat (same lock) inside it.
+            _chat_save_locks[cid] = threading.RLock()
         return _chat_save_locks[cid]
+
+
+def _read_chat_file(chat_id: str) -> dict | None:
+    """Cache-independent read (2026-10-03 review fix): CAS must compare
+    against the DISK rev - the caller's dict may carry a stale or absent
+    rev (dicts built inline start at 0)."""
+    try:
+        if not _state._SESSIONS_DIR:
+            return None
+        matches = sorted(_state._SESSIONS_DIR.glob(f"*_{chat_id}.json"))
+        if not matches:
+            return None
+        return json.loads(matches[-1].read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def get_chat_rev(chat_id: str) -> int:
+    return int((_read_chat_file(chat_id) or {}).get("rev") or 0)
 
 
 def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | None:
@@ -245,7 +266,7 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
     rev or NOTHING is written and conflict=True comes back - the server
     state wins, the caller adopts it. Chats without a rev count as 0."""
     with _get_chat_save_lock(chat_id):
-        _cur_rev = int(chat.get("rev") or 0)
+        _cur_rev = get_chat_rev(chat_id)
         if base_rev is not None and base_rev != _cur_rev:
             return {"id": chat_id, "rev": _cur_rev, "conflict": True,
                     "ts": chat.get("updated_at", "")}
@@ -469,33 +490,41 @@ async def get_chat(chat_id: str):
 async def update_chat(chat_id: str, req: Request):
     _ensure_cache()
     data = await req.json()
-    chat = await asyncio.to_thread(_load_chat_full, chat_id)
-    if chat is None:
-        return JSONResponse({"error": "Not found"}, status_code=404)
     now = datetime.now().isoformat(timespec="seconds")
-    def _apply_update():
-        with _cache_lock:
-            if "title" in data:
-                chat["title"] = data["title"]
-            if "workspace" in data:
-                chat["workspace"] = str(data["workspace"] or "")
-            if "messages" in data:
-                chat["messages"] = data["messages"]
-                _msgs = data["messages"]
-                chat["_msg_count"] = _user_msg_count(_msgs)
-                chat["_tokens"] = _chat_tokens(_msgs)
-                _last = _msgs[-1].get("content", "") if _msgs else ""
-                chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-            elif "messages" in chat:
-                _msgs = chat.get("messages", [])
-                chat["_msg_count"] = _user_msg_count(_msgs)
-                chat["_tokens"] = _chat_tokens(_msgs)
-                _last = _msgs[-1].get("content", "") if _msgs else ""
-                chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-            chat["updated_at"] = now
-    await asyncio.to_thread(_apply_update)
-    _saved = await asyncio.to_thread(_save_chat, chat_id, chat,
-                                     data.get("base_rev"))
+
+    # ATOMIC UPDATE (2026-10-03 review fix): load, mutate and save under
+    # the SAME per-chat lock (RLock, so _save_chat's lock nests). The old
+    # shape loaded the chat outside the lock - a concurrent writer between
+    # load and save made the PUT compare against a stale rev and clobber.
+    def _locked_update():
+        with _get_chat_save_lock(chat_id):
+            chat = _load_chat_full(chat_id)
+            if chat is None:
+                return None
+            with _cache_lock:
+                if "title" in data:
+                    chat["title"] = data["title"]
+                if "workspace" in data:
+                    chat["workspace"] = str(data["workspace"] or "")
+                if "messages" in data:
+                    chat["messages"] = data["messages"]
+                    _msgs = data["messages"]
+                    chat["_msg_count"] = _user_msg_count(_msgs)
+                    chat["_tokens"] = _chat_tokens(_msgs)
+                    _last = _msgs[-1].get("content", "") if _msgs else ""
+                    chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
+                elif "messages" in chat:
+                    _msgs = chat.get("messages", [])
+                    chat["_msg_count"] = _user_msg_count(_msgs)
+                    chat["_tokens"] = _chat_tokens(_msgs)
+                    _last = _msgs[-1].get("content", "") if _msgs else ""
+                    chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
+                chat["updated_at"] = now
+            return _save_chat(chat_id, chat, data.get("base_rev"))
+
+    _saved = await asyncio.to_thread(_locked_update)
+    if _saved is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
     if _saved and _saved.get("conflict"):
         _server = await asyncio.to_thread(_load_chat_full, chat_id)
         _server_msgs = copy.deepcopy((_server or {}).get("messages", []))
