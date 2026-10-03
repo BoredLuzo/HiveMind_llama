@@ -147,6 +147,18 @@ async def exec_git_commit(message: str, workspace: str, files: list[str] | None 
 
     import asyncio as _asyncio
 
+    # CREDENTIAL GATE (2026-10-03): this is the single funnel for ALL
+    # HiveMind-initiated commits - the per-chunk/final auto-commit AND the
+    # git_commit TOOLCALL (tools/handlers/git_tools.py). The toolcall path
+    # used to bypass auto_commit_block_reason: without panel credentials the
+    # commit still ran, attributed to whatever machine-global git config
+    # existed (the 2026-09-26 incident class, toolcall variant). The gate
+    # lives here so both paths share it; the auto-commit path checks it
+    # earlier as well, which is idempotent.
+    _block = auto_commit_block_reason(workspace)
+    if _block:
+        return f"ℹ️ git_commit skipped: {_block}"
+
     async def _git(*cmd: str) -> subprocess.CompletedProcess:
         """Non-blocking subprocess via Thread-Pool."""
         return await _asyncio.to_thread(

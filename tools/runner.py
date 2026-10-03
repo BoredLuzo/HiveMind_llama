@@ -564,13 +564,27 @@ async def _check_action_approval(name: str, args: dict, workspace):
     question = f"APPROVAL NEEDED: the agent wants to run {name}."
     _lg.warning("[APPROVAL] pausing run=%s tool=%s (waiting for user decision)", run_id, name)
     from infra import run_control as _rc
+    # PENDING-FIRST (recovery contract, 2026-10-03): the pending entry must
+    # be visible the moment the pause starts - a page reload during the
+    # pause recovers from the journal endpoint, not from the SSE event, so
+    # a late registration left that window cardless.
+    # APPROVAL-TIMEOUT SETTING (2026-10-01): read once per gate call - the
+    # pause card and its SSE event both carry the countdown length.
+    try:
+        from core.state import settings as _appr_ws
+        _appr_to_s = int(_appr_ws.get("duo_action_approval_timeout_s", 0) or 0)
+    except Exception:
+        _appr_to_s = 0
+    _appr_wait_s = 3600 if _appr_to_s <= 0 else _appr_to_s
+    _pending_approvals[run_id] = {"tool": name, "preview": _preview,
+                                  "decision_id": "", "auto_timeout_s": _appr_to_s}
     # PAUSE-SETUP RACE FIX (2026-09-19): register the pause BEFORE the card
-    # and _pending_approvals go out. The old order (publish -> initiate_pause)
-    # had a window where a decide POST took the preview route (pre-decision
-    # stored, pending popped) while the gate below waited on a pause event
-    # nobody would ever set: the card re-spawned from the late emit and the
-    # UI poll wiped it seconds later (spawn+fade), with the run stuck until
-    # the watchdog answered.
+    # goes out. The old order (publish -> initiate_pause) had a window where
+    # a decide POST took the preview route (pre-decision stored, pending
+    # popped) while the gate below waited on a pause event nobody would ever
+    # set: the card re-spawned from the late emit and the UI poll wiped it
+    # seconds later (spawn+fade), with the run stuck until the watchdog
+    # answered.
     await _rc.initiate_pause(run_id, question)
     # A decision that slipped in between the pre-decision check above and
     # the pause setup is consumed here instead of waiting forever.
@@ -603,14 +617,8 @@ async def _check_action_approval(name: str, args: dict, workspace):
             + (f" User message: {_note_l}" if _note_l else "")
             + " Pick a different approach that does not need " + name + ".",
             tool=name ))
-    # APPROVAL-TIMEOUT SETTING (2026-10-01): read once per gate call — the
-    # pause card and its SSE event both carry the countdown length
-    try:
-        from core.state import settings as _appr_ws
-        _appr_to_s = int(_appr_ws.get("duo_action_approval_timeout_s", 0) or 0)
-    except Exception:
-        _appr_to_s = 0
-    _appr_wait_s = 3600 if _appr_to_s <= 0 else _appr_to_s
+    # DECISION-NONCE into the pending entry: initiate_pause created it, the
+    # card and every decide POST validate against it from here on.
     _decision_id = _rc.get_decision_id(run_id)
     _pending_approvals[run_id] = {"tool": name, "preview": _preview,
                                   "decision_id": _decision_id,

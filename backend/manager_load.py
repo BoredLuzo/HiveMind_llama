@@ -29,8 +29,8 @@ from .llama_manager_utils import (
     CTX_DOWN_MIN, resolve_ctx_fit,
     VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
     _needs_mmproj, _gguf_path_to_model_name,
-    _probe_binary_build, _probe_kv_flag, _probe_moe_flag,
-    _probe_device_flag, _probe_backend_devices, _probe_backend_dlls,
+    _probe_binary_build,
+    _probe_backend_devices, _probe_backend_dlls,
     _prefetch_key, _tcp_alive, _kill_port_sync, _nm,
 )
 from .llama_slots import ModelSlot
@@ -745,7 +745,7 @@ class LlamaLoadMixin:
             or type(self)._load_mode_supported is None
         )
         if _all_flags_uncached:
-            def _probe_all(llama_bin: str, kv_type: str) -> tuple[int, bool, bool, bool, bool, bool]:
+            def _probe_all(llama_bin: str) -> tuple[int, bool, bool, bool, bool, bool]:
                 """Einmalige Probe: Build-Nummer + Flag-Tests aus einem --help-Aufruf."""
                 import re as _re3
                 build_num = 0
@@ -808,7 +808,7 @@ class LlamaLoadMixin:
                     dspark_ok = True
                 return build_num, device_ok, kv_ok, moe_ok, load_mode_ok, dspark_ok
 
-            _bn, _dev, _kv, _moe, _lm, _dspark = await asyncio.to_thread(_probe_all, str(LLAMA_BIN), KV_CACHE_TYPE)
+            _bn, _dev, _kv, _moe, _lm, _dspark = await asyncio.to_thread(_probe_all, str(LLAMA_BIN))
             if _bn > 0 and type(self)._binary_build_number in (None, 0):
                 type(self)._binary_build_number = _bn
                 logger.info(f"llama-server Binary Build: {_bn} (from --help/filename)")
@@ -1255,6 +1255,28 @@ class LlamaLoadMixin:
                 safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
                 progress_abort_s=12.0,
             )
+        if not _fit.ok:
+            # RECLAIM-WAIT (2026-10-03): a just-killed slot (planner evict,
+            # adopt-kill) releases its VRAM a few seconds LATE on Vulkan.
+            # The pre-flight then saw the dying slot's VRAM as "external"
+            # and hard-blocked a load that fit fine seconds earlier (live:
+            # coder with fresh mmproj blocked at external=2985 MiB right
+            # after the planner kill). Wait once for the reclaim, then
+            # re-check with the same grace rules as the evict path.
+            try:
+                _need_total = int(_fit.needed_mib + _fit.margin_mib)
+                if _fit.free_mib < _need_total:
+                    _reclaimed = await wait_for_vram_reclaim(
+                        _need_total, timeout_sec=20, stall_abort_s=8.0
+                    )
+                    if _reclaimed:
+                        logger.info(
+                            "[PRE-FLIGHT] VRAM reclaimed after wait - re-checking fit for %s @ctx=%d",
+                            model, num_ctx,
+                        )
+                        _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id)
+            except Exception as _rw_exc:
+                logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
         #      gepinnte Slots bleiben unantastbar).
         if not _fit.ok:
             _recovered = False
@@ -1410,38 +1432,60 @@ class LlamaLoadMixin:
                             break
                 except Exception:
                     _max_fit_ctx = 0
-                logger.warning(
-                    "[PRE-FLIGHT-BLOCK] %s @ctx=%d: external_usage_est=%d MiB "
-                    "fixed_cost_dominant=%s needed=%dMiB free=%dMiB (source: %s)",
-                    model, num_ctx, _ext_est, _fixed_dominant,
-                    int(_fit.needed_mib), int(_fit.free_mib), _fit.source,
-                )
-                raise VRAMPreFlightError(
-                    model=model, num_ctx=num_ctx,
-                    needed_mib=_fit.needed_mib, free_mib=_fit.free_mib, source=_fit.source,
-                    external_usage_est_mib=_ext_est, fixed_cost_dominant=_fixed_dominant,
-                    message=(
-                        f"VRAM pre-flight check failed for '{model}' @ ctx={num_ctx}:\n"
-                        f"  needed:   {_fit.needed_mib:.0f} MiB + {_fit.margin_mib} MiB safety margin "
-                        f"= {_fit.needed_mib + _fit.margin_mib:.0f} MiB\n"
-                        f"  free:     {_fit.free_mib:.0f} MiB (source: {_fit.source})\n"
-                        f"  external: ~{_ext_est} MiB external usage (estimated)\n"
-                        + (
-                            f"  → Model base load does not fit even at minimal context "
-                            f"with reduced margin ({VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB).\n"
-                            if _fixed_dominant else
-                            f"  → Even with reduced safety margin ({VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB)"
-                            f" and small context (≥ {CTX_DOWN_MIN} for coder runs) not loadable — "
-                            f"VRAM too low for a meaningful run.\n"
+                # RECLAIM-WAIT (2026-10-03): a just-killed slot (planner
+                # evict, adopt-kill) releases its VRAM a few seconds LATE on
+                # Vulkan - the pre-flight then counted the dying process as
+                # "external" and hard-blocked (live: coder mmproj load
+                # blocked 2s after the planner kill, run aborted). Wait once
+                # for the reclaim and re-check before blocking.
+                try:
+                    _need_total = int(_fit.needed_mib + _fit.margin_mib)
+                    if _ext_est > 0 and _fit.free_mib < _need_total:
+                        _rw = await wait_for_vram_reclaim(
+                            _need_total, timeout_sec=20, stall_abort_s=10.0
                         )
-                        + (f"  → At currently ~{_fit.free_mib:.0f} MiB free, ctx≈{_max_fit_ctx} fits at most "
-                           f"(with reduced margin {VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB) — "
-                           f"lower the coder ctx in the agent tab to ≤ {_max_fit_ctx}.\n"
-                           if _max_fit_ctx and not _fixed_dominant else "")
-                        + f"  → Suggestion: switch models in the agent tab — e.g. {_sugg_txt}.\n"
-                        + f"  → Or close other GPU users and try again."
-                    ),
-                )
+                        if _rw:
+                            _fit = self.can_fit(model, num_ctx,
+                                                exclude_slot_id=getattr(slot, "slot_id", None))
+                            logger.info(
+                                "[PRE-FLIGHT] VRAM reclaimed after wait - refit %s @ctx=%d: %s",
+                                model, num_ctx, "OK" if _fit.ok else "BLOCK",
+                            )
+                except Exception as _rw_exc:
+                    logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
+                if not _fit.ok:
+                    logger.warning(
+                        "[PRE-FLIGHT-BLOCK] %s @ctx=%d: external_usage_est=%d MiB "
+                        "fixed_cost_dominant=%s needed=%dMiB free=%dMiB (source: %s)",
+                        model, num_ctx, _ext_est, _fixed_dominant,
+                        int(_fit.needed_mib), int(_fit.free_mib), _fit.source,
+                    )
+                    raise VRAMPreFlightError(
+                        model=model, num_ctx=num_ctx,
+                        needed_mib=_fit.needed_mib, free_mib=_fit.free_mib, source=_fit.source,
+                        external_usage_est_mib=_ext_est, fixed_cost_dominant=_fixed_dominant,
+                        message=(
+                            f"VRAM pre-flight check failed for '{model}' @ ctx={num_ctx}:\n"
+                            f"  needed:   {_fit.needed_mib:.0f} MiB + {_fit.margin_mib} MiB safety margin "
+                            f"= {_fit.needed_mib + _fit.margin_mib:.0f} MiB\n"
+                            f"  free:     {_fit.free_mib:.0f} MiB (source: {_fit.source})\n"
+                            f"  external: ~{_ext_est} MiB external usage (estimated)\n"
+                            + (
+                                f"  → Model base load does not fit even at minimal context "
+                                f"with reduced margin ({VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB).\n"
+                                if _fixed_dominant else
+                                f"  → Even with reduced safety margin ({VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB)"
+                                f" and small context (≥ {CTX_DOWN_MIN} for coder runs) not loadable — "
+                                f"VRAM too low for a meaningful run.\n"
+                            )
+                            + (f"  → At currently ~{_fit.free_mib:.0f} MiB free, ctx≈{_max_fit_ctx} fits at most "
+                               f"(with reduced margin {VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB} MiB) — "
+                               f"lower the coder ctx in the agent tab to ≤ {_max_fit_ctx}.\n"
+                               if _max_fit_ctx and not _fixed_dominant else "")
+                            + f"  → Suggestion: switch models in the agent tab — e.g. {_sugg_txt}.\n"
+                            + f"  → Or close other GPU users and try again."
+                        ),
+                    )
 
         # ── Log-Datei ─────────────────────────────────────────────────────────
         _log_path = Path(__file__).parent.parent / "logs" / f"llama_server_{slot.port}.log"

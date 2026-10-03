@@ -70,6 +70,7 @@ from context.chat import (
     init_chat_context,
     _get_chat_ctx_lock, _load_chat_context_locked, _save_chat_context_locked,
     _mutate_chat_context, _ctx_path_for_chat, _load_chat_context,
+    get_chat_workspace, history_seed,
     _save_chat_context, _chat_context_valid,
 )
 from context.resume import (
@@ -82,7 +83,7 @@ from context.pause_state import init_pause_state
 from infra.run_control import (
     init_run_control,
     _get_abort_lock, _get_abort_event, _clear_abort_event,
-    _is_aborted, _cleanup_abort_registry, _abort_registry_cleanup_loop,
+    _is_aborted, _cleanup_abort_registry,
     _register_abort, _unregister_abort, _abort_event,
     _register_step_skip, _step_skip_event, _clear_step_skip, _unregister_step_skip,
 )
@@ -99,7 +100,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.2.3"
+HIVEMIND_VERSION = "1.2.4"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -138,7 +139,6 @@ from hive_functions.chunking import (
 )
 from infra.phase_timer import PhaseTimer
 from hive_functions.ctx_utils import (
-    run_context_pipeline,
     compute_content_budget,
     explore_to_planner_ctx,
     ContextBudget,
@@ -227,7 +227,7 @@ _install_uvicorn_noise_filter()
 from hive_functions.pipeline import Pipeline
 from hive_functions.tree_scout import (
     get_workspace_tree, partition_tree, partition_tree_async,
-    parse_contract_summary, build_contract_prompt,
+    parse_contract_summary,
 )
 from hive_functions.hivemind_feature.ast_tools import (
     get_signatures_report,
@@ -241,10 +241,8 @@ from hive_functions.prompts import (
     PEER_RATING_PROMPT,     # moved from server.py inline definition
     VISION_AGENT_PROMPT,    # moved from server.py inline definition
     VISION_PREPROCESS_PROMPT,
-    get_explore_analyst_prompt,
     build_partition_explore_prompt,
     EXPLORE_CODEBASE_PROMPT,
-    STUCK_READER_INJECT,
     UNTIL_FINISHED_BLOCK,
     DUO_CRITIC_TOOLS_SYSTEM,
 )
@@ -265,8 +263,8 @@ from model_configs import (
 )
 from routing.model_automap import (
     get_automap, get_model_display_map, detect_task_type,
-    record_run_outcome, get_routing_weights_summary, get_routing_suggestion,
-    is_valid_preprocessing_model, get_best_preprocessing_model,
+    get_routing_weights_summary, get_routing_suggestion,
+    is_valid_preprocessing_model,
     save_routing_weights,
     _VISION_PREPROCESSING_ALLOWLIST,
 )

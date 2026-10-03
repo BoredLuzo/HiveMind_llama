@@ -142,6 +142,11 @@ DEFAULT_SETTINGS = {
     "duo_compress_llm_timeout_s": 180,
     "duo_compress_local_only":   False,
     "session_compress_threshold": 20,
+    # Token budget for the conversation history a run sees (2026-10-03).
+    # Replaces blind message-count caps: newest turns verbatim, older
+    # turns dropped whole once the budget is full. 4096 fits an 8k ctx;
+    # raise it with the context you actually run.
+    "session_history_budget_tokens": 4096,
 
     # ════════════════════════════════════════════════════════════════════════
     # E) EXPLORE, REPO-MAP & MEMORY
@@ -307,7 +312,9 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     "vision_agent_enabled":    False,
     "vision_agent_model":      "",
-    "vision_agent_mode":       "sequential",
+    # vision_agent_mode removed (2026-10-03): no backend reader, the runner
+    # is sequential-only. It is also in _PRESET_NEVER_KEYS so stale values
+    # in old settings.json/presets can never load back.
     "vision_preprocess_timeout_seconds": 30,
     "vision_preprocess_load_timeout_seconds": 120,
     # PIPELINE-VISION (2026-08-19): feed images directly to multimodal pipeline agents?

@@ -44,7 +44,12 @@ _UI_REV_PROTECTED_KEYS = {
 # und nie aus einem geladen. models_dir ist ein absoluter Install-Pfad (vom
 # Installer gesetzt) - ein Preset-Snapshot/-Auto-Load darf ihn nicht auf ""
 # zuruecksetzen (live beobachtet: startup auto-load hat models_dir gekillt).
-_PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir"}
+# UI-STATE KEYS (2026-10-03): image_processing_mode/vision_agent_mode haben
+# keinen Backend-Leser - die eine Wahrheit fuer Preprocessing lebt in
+# vision_model.json (/vision/config), der Pipeline-Runner ist sequenziell.
+# Ein Preset darf diesen Zustand weder einfrieren noch zurueckspielen.
+_PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
+                      "image_processing_mode", "vision_agent_mode"}
 
 # PRESET-CTX-OVERLAY (2026-09-04): nur diese Keys darf der Client beim
 # Preset-Save explizit uebergeben (verhindert das Race zwischen debounced

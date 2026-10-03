@@ -80,8 +80,6 @@ backups/
 routing_weights.json
 
 # Dev-only: not needed to run HiveMind (kept locally, not pushed)
-# tests/ no longer ignored (2026-09-30): tracked success-path tests are the
-# net that would have caught the e14f64f write_file_append NameError.
 ruff.toml
 requirements-dev.txt
 docs/tools-audit.md

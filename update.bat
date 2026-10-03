@@ -17,6 +17,7 @@ echo    - Checks GitHub for the latest HiveMind release
 echo    - Backs up the current code to update_backup_(version)\
 echo    - Shows warnings from the release notes before applying
 echo    - Applies the new build over this folder
+echo    - Refreshes Python dependencies into the existing .venv (uv)
 echo  Your settings.json, models.json, .venv, llama\, logs\ and
 echo  sessions\ are NOT touched. New settings keys pick up their
 echo  defaults automatically on the next start.
@@ -36,8 +37,8 @@ if errorlevel 1 (
 
 REM ── 1. Is an instance running on the configured port? ─────────────────────
 REM Port resolution mirrors run.py: HIVEMIND_PORT env > settings.json > 8001.
-REM The check uses Get-NetTCPConnection (locale-proof: netstat prints
-REM netstat "LISTENING" check is localized (German netstat prints a different word).
+REM The check uses Get-NetTCPConnection, which is locale-proof (the old
+REM netstat "LISTENING" findstr broke on localized Windows output).
 set "HM_PORT=8001"
 if defined HIVEMIND_PORT set "HM_PORT=%HIVEMIND_PORT%"
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$j = Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue; $e = $env:HIVEMIND_PORT; if ($e) { $e } elseif ($j -and $j.server_port) { $j.server_port } else { '8001' }"`) do set "HM_PORT=%%P"
@@ -192,15 +193,62 @@ if errorlevel 8 (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
-REM ── 9. Verify + cleanup ───────────────────────────────────────────────────
+REM ── 9. Verify ─────────────────────────────────────────────────────────────
 set "NEWVER="
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9.]+)').Matches[0].Groups[1].Value"`) do set "NEWVER=%%V"
-if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
 if /I not "%NEWVER%"=="%TAGNUM%" (
     echo  [ERROR] Verification failed: server.py reports "%NEWVER%", expected "%TAGNUM%".
     echo         The update did not apply cleanly. Restore by copying the
     echo         contents of %BK%\ back over this folder.
     echo  Press any key to continue... & pause >nul & exit /b 1
+)
+
+REM ── 9a. Prune files the PREVIOUS release shipped but this one dropped ────
+REM robocopy /E only overlays: a module the new release deleted would live
+REM on forever as a stale shadow. /MIR is not an option (it would delete
+REM user data like settings.json). Instead: the previous update stored the
+REM exact file list it applied (update_manifest_installed.txt, generated
+REM from the extracted zip). Files on that list that are NOT in the new zip
+REM are release files by construction - they move to update_removed_<ver>\
+REM (trash, reversible). Belt-and-suspenders: a user-data exclude list
+REM keeps settings.json/models.json/etc. out of the prune even if some
+REM future release zip accidentally shipped them.
+set "PRUNED=0"
+if exist "%BASE%\update_manifest_installed.txt" (
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$base='%BASE%'; $ex='%EXROOT%'; $trash='%BASE%\update_removed_%TAGNUM%'; $protFiles = 'settings.json','models.json','vision_model.json','presets.json','memory.json','routing_weights.json'; $protDirs = 'sessions','context','logs','custom_prompts','.hive_uploads','learning','learning_logs','.venv','llama'; $old = Get-Content '%BASE%\update_manifest_installed.txt' -ErrorAction SilentlyContinue | Where-Object { $_ -and ($protFiles -notcontains $_) -and ($protDirs -notcontains $_.Split('\')[0]) -and ((Get-Item -LiteralPath (Join-Path $base $_) -ErrorAction SilentlyContinue) -is [System.IO.FileInfo]) }; $n = 0; foreach ($f in $old) { if (-not (Test-Path -LiteralPath (Join-Path $ex $f))) { $src = Join-Path $base $f; $dst = Join-Path $trash $f; $d = Split-Path $dst -Parent; if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }; Move-Item -Force -LiteralPath $src -Destination $dst; $n++ }; if (-not (Test-Path $trash)) { New-Item -ItemType Directory -Path $trash -Force | Out-Null }; Get-ChildItem -LiteralPath $ex -Recurse -File | ForEach-Object { $_.FullName.Substring($ex.Length + 1) } | Set-Content -LiteralPath '%BASE%\update_manifest_installed.txt' -Encoding UTF8; Write-Output $n"`) do set "PRUNED=%%P"
+    if not "%PRUNED%"=="0" (
+        echo  Pruned          : %PRUNED% removed release file^(s^) moved to update_removed_%TAGNUM%\
+    )
+) else (
+    echo  Manifest        : first manifest-managed update - nothing to prune.
+    powershell -NoProfile -Command "$ex='%EXROOT%'; Get-ChildItem -LiteralPath $ex -Recurse -File | ForEach-Object { $_.FullName.Substring($ex.Length + 1) } | Set-Content -LiteralPath '%BASE%\update_manifest_installed.txt' -Encoding UTF8"
+)
+if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
+
+REM ── 9b. Refresh Python dependencies (.venv) ───────────────────────────────
+REM The update may ship new/changed requirements; the .venv itself is NOT
+REM replaced, so missing imports would only surface on the next start.
+REM uv installs/updates whatever requirements.txt names and never removes
+REM packages, which keeps this non-destructive. Failure-tolerant on purpose:
+REM without uv on PATH the update still stands, the notice tells the user
+REM what to run.
+echo  Refreshing deps  : requirements.txt into .venv
+set "UV_EXE="
+for /f "usebackq delims=" %%U in (`where uv 2^>nul`) do (
+    if not defined UV_EXE set "UV_EXE=%%U"
+)
+if not defined UV_EXE if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_EXE=%USERPROFILE%\.local\bin\uv.exe"
+if defined UV_EXE (
+    "%UV_EXE%" pip install --python "%BASE%\.venv\Scripts\python.exe" -r "%BASE%\requirements.txt" --quiet
+    if errorlevel 1 (
+        echo  [WARN] Dependency refresh failed. HiveMind may miss new imports.
+        echo         Run: install.bat  ^(it repairs the venv^)
+    ) else (
+        echo  [OK] Dependencies current.
+    )
+) else (
+    echo  [WARN] uv not found - dependencies were NOT refreshed.
+    echo         If the new release needs new packages, run install.bat once.
 )
 
 echo.

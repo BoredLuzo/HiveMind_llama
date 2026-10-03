@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.2.4] - 2026-10-03
+
+One-click self-updates, a real image pipeline for the agentic duo, and a
+round of reliability work on writes, approvals and model loading.
+
+### Highlights
+- `update.bat` updates an installation in place from the latest GitHub
+  release: automatic backup, release notes with warning surfacing,
+  a dependency refresh for the existing .venv, and rollback
+  instructions. Downgrades are refused and the download is verified
+  against the release tag.
+- Images work end to end: an image plan decides per role whether the
+  planner/coder run with a vision projector or receive the raw image,
+  projectors resolve per model size, and uploads can optionally be kept
+  in the workspace. Previews and chat thumbnails open in a zoom
+  lightbox.
+- Runs survive a page reload or a dropped connection: the UI reattaches
+  and replays what it missed, and mid-run steering is wired in.
+- Writes: looping output is caught early, truncations are diagnosed and
+  salvaged instead of producing broken files.
+- Approvals: an unanswered card auto-approves once after a configurable
+  timeout instead of blocking the run forever.
+- VRAM: a slot that was just killed no longer tricks the pre-flight
+  gate into blocking the next load.
+- Git: auto-commits and auto-push only run when credentials are
+  configured in the Git panel, and the model installer ships a
+  projector for every vision-capable model it offers.
+
+### Also
+- Code panel tabs with a remembered view mode; reloading a chat
+  restores the panel state and tool-call chips.
+- Per-instance llama ports, so two HiveMinds can run on one machine.
+- New in the installer catalog: Sharp-MiniCPM5-2B. Duo compression
+  defaults to Auto (Coder).
+- Chat continuity: continuing a loaded chat feeds the model the saved
+  conversation (last 40 turns, up to 8k characters each) instead of a
+  small sidecar window; complex runs persist their history too; the
+  per-chat workspace is stored with the chat and survives reloads; and
+  conversation summaries reach the prompt instead of being filtered out.
+- Developers: a pre-commit hook ships under `scripts/hooks` (see
+  README for the one-time activation).
+
 ## [1.2.3] - 2026-09-26
 
 Hotfix: fresh installs crashed on startup before the server ever bound

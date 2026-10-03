@@ -1206,7 +1206,7 @@ async function loadSettings() {
     // Vision-Agent state
     S.visionAgentEnabled = s.vision_agent_enabled || false;
     S.visionAgentModel   = s.vision_agent_model   || '';
-    S.visionAgentMode    = s.vision_agent_mode     || 'sequential';
+    S.visionAgentMode    = 'sequential';  // runner is sequential-only; radio hidden
     // PIPELINE-VISION: pass images directly to multimodal pipeline agents?
     S.pipelineVisionDirect = s.pipeline_vision_direct !== false;
     // PIPELINE-VISION per role: which roles get raw images directly.
@@ -1216,13 +1216,11 @@ async function loadSettings() {
     S.ctxOverrides = (s.ctx_overrides && s.ctx_overrides.roles) ? s.ctx_overrides.roles : {};
     var vaEl = document.getElementById('va-enabled-toggle');
     if (vaEl) vaEl.checked = S.visionAgentEnabled;
-    // IMAGE-PROCESSING-MODE: central selector (direct | preprocess | pipeline).
-    // Persisted key wins; fall back to legacy toggles so existing setups map
-    // onto the new selector without reconfiguration.
-    S.imageMode = s.image_processing_mode
-      || (S.visionAgentEnabled ? 'pipeline'
-          : (S.pipelineVisionDirect ? 'direct' : ''));
-    if (S.imageMode) _applyImageModeUI(S.imageMode);
+    // IMAGE-PROCESSING-MODE (2026-10-03): DERIVED, never persisted. The
+    // persisted key had no backend reader and presets freezing UI state
+    // drifted it from vision_model.json (the actual truth, loaded by
+    // loadVisionConfig which derives the mode from it below).
+    S.imageMode = '';
     // DUO IMAGE PLAN (2026-10-01): sentinel None = derived client-side the
     // same way the backend does it (active vision cfg -> preprocess)
     S.duoImageMode = s.duo_image_mode !== undefined && s.duo_image_mode !== null
@@ -2465,6 +2463,7 @@ async function newChat() {
   document.getElementById('chat').innerHTML = '';
   S.pendingImgs = [];
   document.getElementById('img-preview').innerHTML = '';
+  _cpReset();  // PANEL-SCOPE (2026-10-03): a new chat starts with an empty code panel
   S.currentChatId = null;
   S.currentChatMessages = [];
   setPauseBtnState('idle');
@@ -2640,6 +2639,86 @@ function _updateImgVisionHint() {
   c.appendChild(hint);
 }
 
+function _openImgZoom(src) {
+  var _prev = document.getElementById('img-zoom-overlay');
+  if (_prev && typeof _prev._imgZoomClose === 'function') {
+    _prev._imgZoomClose();  // REOPEN-CLOSE (2026-10-03): plain remove() used to
+  }                         // strand the previous overlay's keydown listener
+  else if (_prev) _prev.remove();
+  var _ov = document.createElement('div');
+  _ov.id = 'img-zoom-overlay';
+  _ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+  var im = document.createElement('img');
+  im.src = src;
+  im.style.cssText = 'max-width:92vw;max-height:92vh;object-fit:contain;border-radius:6px';
+  _ov.appendChild(im);
+  // CLOSE (2026-10-03): one close for BOTH paths - the click-close used to
+  // leave the document keydown listener attached (one per open, piling up).
+  var _close = function() {
+    document.removeEventListener('keydown', _onKey);
+    _ov.remove();
+  };
+  var _onKey = function(ev){ if (ev.key === 'Escape') _close(); };
+  _ov._imgZoomClose = _close;
+  _ov.addEventListener('click', _close);
+  document.addEventListener('keydown', _onKey);
+  document.body.appendChild(_ov);
+}
+function _wireImgZoom(imgEl) {
+  if (!imgEl || imgEl.dataset.zoomWired) return;
+  imgEl.dataset.zoomWired = '1';
+  imgEl.style.cursor = 'zoom-in';
+  imgEl.addEventListener('click', function(ev) {
+    ev.preventDefault(); ev.stopPropagation();
+    _openImgZoom(imgEl.currentSrc || imgEl.src);
+  });
+}
+
+function _cpSnapshot() {
+  var out = {};
+  Object.keys(_cpFiles || {}).forEach(function(p) {
+    var e = _cpFiles[p];
+    out[p] = {
+      content: e.content || '',
+      op: e.op || 'edit',
+      diffText: e.diffText || '',
+      diffs: (e.diffs || []).map(function(d){ return { id: d.id, name: d.name || '', text: d.text || '' }; }),
+      view: e.view === 'diff' ? 'diff' : 'file'
+    };
+  });
+  return out;
+}
+function _cpRestoreSnapshot(snap) {
+  Object.keys(snap || {}).forEach(function(p) {
+    var e = snap[p];
+    _cpAddOrUpdateFile(p, e.content || '', e.op || 'edit', false);
+    var t = _cpFiles[p];
+    if (!t) return;
+    t.diffText = e.diffText || '';
+    t.diffs = (e.diffs || []).slice();
+    t.view = e.view || 'file';
+  });
+}
+function _wireSavedChips(scope) {
+  (scope || document).querySelectorAll('.tool-call-row').forEach(function(row) {
+    if (row.dataset.savedWired) return;
+    var pid = row.dataset.cpDiffId, tp = row.dataset.toolPath;
+    if (!pid || !tp) return;
+    var chip = row.querySelector('.tool-call-chip');
+    if (!chip) return;
+    row.dataset.savedWired = '1';
+    chip.addEventListener('click', function(ev) {
+      ev.preventDefault(); ev.stopPropagation();
+      var e = _cpFiles[tp];
+      if (!e) return;
+      var d = (e.diffs || []).filter(function(x){ return x.id === pid; })[0];
+      if (d) { e.pinnedCallId = d.id; e.view = 'diff'; }
+      _cpShowFile(tp);
+      toggleCodePanel(true);
+    });
+  });
+}
+
 function renderImgPreview() {
   const c = document.getElementById('img-preview');
   c.innerHTML = '';
@@ -2650,6 +2729,7 @@ function renderImgPreview() {
     rm.addEventListener('click', (function(idx) {
       return function() { S.pendingImgs.splice(idx, 1); renderImgPreview(); };
     })(i));
+    _wireImgZoom(im);
     wrap.appendChild(im); wrap.appendChild(rm);
     c.appendChild(wrap);
   });
@@ -2669,6 +2749,7 @@ function addUserMsg(text, imgs) {
     thumbs.className = 'img-thumbs';
     imgs.forEach(function(i) {
       const im = document.createElement('img'); im.src = i.preview; im.alt = '';
+      _wireImgZoom(im);
       thumbs.appendChild(im);
     });
     d.appendChild(thumbs);
@@ -5198,6 +5279,11 @@ async function sendMsg() {
       _settingsPostTimer = null;
       await _flushQueuedSettings();
     }
+
+    // HISTORY-SOURCE FLUSH (2026-10-03): the run seeds its history from
+    // the saved chat json - persist BEFORE the stream starts so the json
+    // holds this turn (and any post-edit state) exactly as the UI does.
+    if (S.chatAutosave) { try { await persistCurrentChat(true); } catch (e) {} }
 
     const res = await fetch('/stream', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -8723,6 +8809,7 @@ window.addEventListener('pagehide', function() {
   const payload = {
     chat_id: S.currentChatId || undefined,
     messages: S.currentChatMessages,
+    workspace: S.workspace || '',
     title: S.currentChatId ? undefined : title   // don't overwrite existing titles
   };
   try {
@@ -9189,7 +9276,9 @@ function _applyImageModeUI(mode) {
 function setImageMode(mode) {
   S.imageMode = mode;
   _applyImageModeUI(mode);
-  postSettings({image_processing_mode: mode});
+  // NOT persisted (2026-10-03): image_processing_mode has no backend
+  // reader - the one truth for preprocessing is vision_model.json, posted
+  // right below via /vision/config. Presets must not freeze UI state.
   if (mode === 'preprocess') {
     S.visionEnabled = true;
     fetch('/vision/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled: true})});
@@ -9243,8 +9332,9 @@ function setVisionAgentModel(model) {
 }
 
 function setVisionAgentMode(mode) {
+  // Client state only (2026-10-03): the pipeline runner is sequential;
+  // nothing backend-side reads vision_agent_mode, so it is not posted.
   S.visionAgentMode = mode;
-  postSettings({vision_agent_mode: mode});
   _updateVisionAgentModeUI(mode);
 }
 
@@ -9494,7 +9584,15 @@ function _autosaveChatMessage() {
   document.querySelectorAll('#chat .msg').forEach(function(el) {
     if (el.classList.contains('msg-user')) {
       const bubble = el.querySelector('.bubble');
-      if (bubble) msgs.push({role: 'user', content: bubble.textContent, ts: Date.now()});
+      // IMAGE RESTORE (2026-10-03): thumbnails persist only when the
+      // uploads toggle is ON (files live in workspace .hive_uploads then).
+      var _uims = [];
+      if (S.imagePersist) {
+        el.querySelectorAll('.img-thumbs img').forEach(function(im) {
+          _uims.push({ preview: im.getAttribute('src') || '' });
+        });
+      }
+      if (bubble) msgs.push({role: 'user', content: bubble.textContent, ts: Date.now(), images: _uims});
     } else if (el.classList.contains('ablock')) {
       const aname = el.querySelector('.aname');
       // abody can be directly or in a duo-coder/duo-critic wrapper
@@ -9503,8 +9601,10 @@ function _autosaveChatMessage() {
         // CHAT-STRUCTURE-FIX (2026-08-07): also save the rendered structure (markdown blocks,
         // code snippets, tool chips), otherwise the live structure is lost
         // and the chat is shown as flat text on load.
+        // CP SNAPSHOT (2026-10-03): persist the code-panel state (diffs per
+        // path) so tool chips stay clickable in the LOADED chat too.
         msgs.push({role: 'assistant', agent: aname.textContent, content: abody.textContent,
-                   html: abody.innerHTML, ts: Date.now()});
+                   html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()});
       }
     }
   });
@@ -9536,13 +9636,13 @@ async function persistCurrentChat(silent) {
       // Update existing — do not overwrite the title (preserve user-named titles)
       await fetch('/chats/' + S.currentChatId, {
         method: 'PUT', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({messages: S.currentChatMessages})
+        body: JSON.stringify({messages: S.currentChatMessages, workspace: S.workspace || ''})
       });
     } else {
       // Create new
       const r = await (await fetch('/chats', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({title: title, messages: S.currentChatMessages})
+        body: JSON.stringify({title: title, messages: S.currentChatMessages, workspace: S.workspace || ''})
       })).json();
       if (r && r.id) S.currentChatId = r.id;
     }
@@ -9643,9 +9743,10 @@ async function loadChat(chatId) {
     if (_wsField) _wsField.value = (chat.workspace || S.workspace || '');
 
     // Restore chat DOM from saved messages
+    _cpReset();  // PANEL-SCOPE (2026-10-03): snapshots must not merge across chats
     (chat.messages || []).forEach(function(msg) {
       if (msg.role === 'user') {
-        addUserMsg(msg.content, []);
+        addUserMsg(msg.content, (msg.images || []).map(function(i) { return { preview: i.preview }; }));
       } else if (msg.role === 'assistant') {
         // CHAT-STRUCTUR-FIX (2026-08-07): gespeicherte Live-Struktur wiederherstellen
         const c = document.getElementById('chat');
@@ -9665,6 +9766,11 @@ async function loadChat(chatId) {
           abody.style.whiteSpace = 'pre-wrap';
           abody.textContent = msg.content || '';
         }
+        // CHAT RESTORE (2026-10-03): replay the code-panel snapshot so the
+        // tool chips in the LOADED chat open their diffs like live ones,
+        // and wire the restored chips (saved HTML has no handlers).
+        if (msg.cp) _cpRestoreSnapshot(msg.cp);
+        _wireSavedChips(abody);
         wrap.appendChild(hdr);
         wrap.appendChild(abody);
         c.appendChild(wrap);
