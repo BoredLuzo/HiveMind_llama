@@ -1,10 +1,12 @@
 """Chats API-Router."""
 from __future__ import annotations
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +22,134 @@ from utils.token import estimate_ctx_tokens
 logger = logging.getLogger("hivemind.server")
 
 router = APIRouter(prefix="/chats", tags=["Chats"])
+
+# ── Content-addressed blob store (2026-10-03, chat growth fix) ───────────────
+# Long assistant chats used to carry the FULL code-panel snapshot inside
+# every message (quadratic growth), and image previews carried their whole
+# dataURL per message. Both now live in a per-chat blob directory
+# (sessions/<chat_id>.blobs/<sha256-16>) and the message holds only
+# {"_ref": <hash>}. Backend-side on purpose: the frontend API is unchanged,
+# old chat files (everything inline) load unchanged, and dedup within a
+# chat collapses repeated snapshots for free.
+#   Portability: a chat is no longer self-contained - copy the sessions/
+#   folder as a whole (blob dirs travel with it), as backup_data.py does.
+#   Missing blobs restore as visible placeholders, never as errors.
+_BLOB_MIN_CHARS = 400          # shorter strings stay inline
+_BLOB_PLACEHOLDER = "[missing: stored content not found]"
+_IMG_PLACEHOLDER = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+                    "CAYAAAAfFcSJAAAADUlEQVR42mNsyK+BAAABHAEB/9S1AwAAAABJRU5"
+                    "ErkJggg==")
+_REF_KEYS = {"content", "diffText", "text", "preview"}
+
+
+def _blob_dir(chat_id: str) -> Path:
+    return _state._SESSIONS_DIR / f"{chat_id}.blobs"
+
+
+def _blob_hash(data: str) -> str:
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
+
+
+def _store_blob(chat_id: str, data: str) -> str:
+    d = _blob_dir(chat_id)
+    d.mkdir(parents=True, exist_ok=True)
+    h = _blob_hash(data)
+    p = d / h
+    if not p.exists():
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(data, encoding="utf-8")
+        os.replace(tmp, p)
+    return h
+
+
+def _extract_refs(chat_id: str, node) -> None:
+    """Recursively replace big whitelisted strings with {"_ref": hash}."""
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if isinstance(v, dict):
+                if "_ref" not in v:
+                    _extract_refs(chat_id, v)
+            elif isinstance(v, list):
+                for item in v:
+                    _extract_refs(chat_id, item)
+            elif (k in _REF_KEYS and isinstance(v, str)
+                  and len(v) >= _BLOB_MIN_CHARS
+                  and not v.startswith(_BLOB_PLACEHOLDER)):
+                node[k] = {"_ref": _store_blob(chat_id, v)}
+
+
+def _restore_refs(chat_id: str, node) -> None:
+    """Inverse of _extract_refs; a missing blob becomes a placeholder."""
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if isinstance(v, dict) and isinstance(v.get("_ref"), str):
+                try:
+                    node[k] = (_blob_dir(chat_id) / v["_ref"]).read_text(encoding="utf-8")
+                except OSError:
+                    node[k] = _IMG_PLACEHOLDER if k == "preview" else _BLOB_PLACEHOLDER
+            elif isinstance(v, (dict, list)):
+                _restore_refs(chat_id, v)
+    elif isinstance(node, list):
+        for item in node:
+            _restore_refs(chat_id, item)
+
+
+def _blobify_messages(chat_id: str, messages) -> None:
+    """Save-side: extract big panel/image payloads into the blob store.
+    Runs BEFORE the chat json is written, so a crash can only leave blobs
+    without a json (cleaned by the startup sweep), never the reverse."""
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        if isinstance(m.get("cp"), dict):
+            _extract_refs(chat_id, m["cp"])
+        imgs = m.get("images")
+        if isinstance(imgs, list):
+            for im in imgs:
+                if (isinstance(im, dict) and isinstance(im.get("preview"), str)
+                        and len(im["preview"]) >= _BLOB_MIN_CHARS
+                        and "_ref" not in im):
+                    im["preview"] = {"_ref": _store_blob(chat_id, im["preview"])}
+
+
+def _restore_messages(chat_id: str, messages) -> None:
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        if isinstance(m.get("cp"), dict):
+            _restore_refs(chat_id, m["cp"])
+        imgs = m.get("images")
+        if isinstance(imgs, list):
+            for im in imgs:
+                if isinstance(im, dict) and isinstance(im.get("preview"), dict):
+                    ref = im["preview"]
+                    try:
+                        im["preview"] = (_blob_dir(chat_id) / ref["_ref"]).read_text(encoding="utf-8")
+                    except OSError:
+                        im["preview"] = _IMG_PLACEHOLDER
+
+
+def _sweep_orphan_blob_dirs() -> None:
+    """GC (startup): blob dirs whose chat json no longer exists ON DISK.
+
+    Filesystem check on purpose: deciding "orphan" from the in-memory
+    cache would delete the blobs of a chat whose json merely FAILED to
+    load (corrupt, half-written, locked) and is still recoverable. The
+    1h minimum age keeps a just-created chat safe even if its json write
+    is still in flight."""
+    try:
+        import time as _time
+        _now = _time.time()
+        for d in _state._SESSIONS_DIR.glob("*.blobs"):
+            cid = d.name[:-len(".blobs")]
+            if any(_state._SESSIONS_DIR.glob(f"*_{cid}.json")):
+                continue
+            if _now - d.stat().st_mtime < 3600:
+                continue
+            shutil.rmtree(d, ignore_errors=True)
+            logger.info("[CHATS] removed orphan blob dir %s", d.name)
+    except OSError as _sweep_err:
+        logger.debug("[CHATS] blob dir sweep failed: %s", _sweep_err)
 
 _RE_CHAT_ID_PATTERN = re.compile(r"_([a-f0-9\-]{4,36})\.json$")
 _re_slug_special = re.compile(r"[^\w\s-]")
@@ -72,6 +202,7 @@ def _ensure_cache():
         _chats_cache.clear()
         _chats_cache.update(result)
         _cache_loaded = True
+        _sweep_orphan_blob_dirs()
 
 
 def _load_chat_full(chat_id: str) -> dict | None:
@@ -114,6 +245,14 @@ def _save_chat(chat_id: str, chat: dict):
             "_preview": _last[:80] if isinstance(_last, str) else "",
             "_file": _file,
         }
+    # BLOB EXTRACTION (2026-10-03): after the meta block above counted
+    # tokens/previews on the INLINE payloads, shrink the stored form - blobs
+    # land on disk first, the json (also atomic) references them.
+    try:
+        _blobify_messages(chat_id, chat.get("messages", []))
+    except OSError as _blob_err:
+        logger.warning("[CHATS] blob extraction failed, saving inline: %s",
+                       _blob_err)
     _out = {k: v for k, v in chat.items() if not k.startswith("_")}
     _txt = json.dumps(_out, indent=2, ensure_ascii=False)
     _p = Path(_file)
@@ -172,6 +311,10 @@ async def create_chat(req: Request):
         "updated_at": now,
         "messages": data.get("messages", []),
     }
+    # WORKSPACE PER CHAT (2026-10-03): stored with the chat so a reload
+    # cannot silently fall back to the global workspace (audit finding).
+    if data.get("workspace"):
+        chat["workspace"] = str(data["workspace"])
     _msgs = chat["messages"]
     _last = _msgs[-1].get("content", "") if _msgs else ""
     chat["_msg_count"] = _user_msg_count(_msgs)
@@ -204,6 +347,8 @@ async def persist_chat(req: Request):
                     chat["messages"] = msgs
                     if data.get("title"):
                         chat["title"] = data["title"]
+                    if data.get("workspace"):
+                        chat["workspace"] = str(data["workspace"])
                     chat["updated_at"] = now
                     chat["_msg_count"] = _user_msg_count(msgs)
                     chat["_tokens"] = _chat_tokens(msgs)
@@ -224,6 +369,8 @@ async def persist_chat(req: Request):
         "updated_at": now,
         "messages": msgs,
     }
+    if data.get("workspace"):
+        chat["workspace"] = str(data["workspace"])
     _last = msgs[-1].get("content", "") if msgs else ""
     chat["_msg_count"] = _user_msg_count(msgs)
     chat["_tokens"] = _chat_tokens(msgs)
@@ -238,12 +385,14 @@ async def get_chat(chat_id: str):
     chat = await asyncio.to_thread(_load_chat_full, chat_id)
     if chat is None:
         return JSONResponse({"error": "Not found"}, status_code=404)
+    _restore_messages(chat_id, chat.get("messages", []))
     result = {k: v for k, v in chat.items() if k.startswith("_") is False}
     # INTERRUPTED (2026-08-21): last_run (stop_reason="disconnect") mitliefern,
     try:
         _ctx = _load_chat_context(chat_id)
         if isinstance(_ctx, dict):
-            if _ctx.get("workspace"):
+            # json workspace wins; the sidecar key only fills older chats
+            if not result.get("workspace") and _ctx.get("workspace"):
                 result["workspace"] = _ctx["workspace"]
             if isinstance(_ctx.get("last_run"), dict):
                 result["last_run"] = _ctx["last_run"]
@@ -264,6 +413,8 @@ async def update_chat(chat_id: str, req: Request):
         with _cache_lock:
             if "title" in data:
                 chat["title"] = data["title"]
+            if "workspace" in data:
+                chat["workspace"] = str(data["workspace"] or "")
             if "messages" in data:
                 chat["messages"] = data["messages"]
                 _msgs = data["messages"]
@@ -299,6 +450,7 @@ async def delete_chat(chat_id: str):
                 ctx_p = p.with_suffix(".context.json")
                 if ctx_p.exists():
                     ctx_p.unlink()
+            shutil.rmtree(_blob_dir(chat_id), ignore_errors=True)
         except Exception:
             pass
     return {"ok": True}

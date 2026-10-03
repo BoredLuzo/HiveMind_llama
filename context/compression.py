@@ -621,14 +621,25 @@ async def _compress_chat_session(sess_msgs: list) -> list:
             l[:120] for l in _history_lines[::2][:6]
         )
 
-    # Komprimierte Session: Summary als system-Message + frische Messages
+    # ROLE FIX (2026-10-03): the summary used to be role="system" and was
+    # silently filtered by _make_messages (chat_util drops system-role
+    # session messages) - the model paid the LLM call and never saw the
+    # summary. As a user-role block it reaches the prompt.
     _compressed_block = {
-        "role":    "system",
+        "role":    "user",
         "content": (
-            f"[CONVERSATION SUMMARY — {len(_old_msgs)} older messages compressed]\n"
+            f"[CONVERSATION SUMMARY - {len(_old_msgs)} older messages compressed]\n"
             f"{_summary}\n"
-            f"[END SUMMARY — current conversation continues below]"
+            f"[END SUMMARY - current conversation continues below]"
         )
     }
+    # ALTERNATION (2026-10-03): some chat templates (gemma/mistral
+    # families) require strict user/assistant alternation. When the first
+    # kept message is a user message, merge the summary into it instead of
+    # emitting two user messages back to back.
+    if _keep_msgs and _keep_msgs[0].get("role") == "user":
+        _keep_msgs[0] = dict(_keep_msgs[0])
+        _keep_msgs[0]["content"] = _compressed_block["content"] + "\n\n" + _keep_msgs[0]["content"]
+        return _keep_msgs
     return [_compressed_block] + _keep_msgs
 

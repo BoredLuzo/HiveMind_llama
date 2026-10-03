@@ -39,6 +39,7 @@ from infra.phase_timer import PhaseTimer
 from infra.token_stats import _estimate_tokens_from_content
 from utils.math import percentile_float as _percentile_float
 from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
+from utils.token import window_by_budget
 from tools.websearch import _safe_web_search
 from hive_functions.prompts import AGENT_ROLES, HIVEMIND_SOUL, VISION_AGENT_PROMPT
 from hive_functions.soul_engine import (
@@ -85,7 +86,7 @@ async def run_stream(
         _get_loaded_models_set,
         _increment_run_counter,
         _is_aborted,
-        _load_chat_context,
+        _load_chat_context, get_chat_workspace, history_seed,
         _load_resume_block,
         _maybe_trigger_soul_evolution,
         _pick_direct_model,
@@ -264,6 +265,16 @@ async def run_stream(
     )
     try:
         _chat_ctx_ws = _load_chat_context(chat_id) if chat_id else {}
+        # WORKSPACE PER CHAT (2026-10-03): the run resolver must see the
+        # same workspace GET /chats/{id} serves - the json value wins over
+        # the sidecar (silent cross-project switch, audit finding).
+        if chat_id and not (_chat_ctx_ws or {}).get("workspace"):
+            try:
+                _json_ws = get_chat_workspace(chat_id)
+                if _json_ws:
+                    _chat_ctx_ws = {**(_chat_ctx_ws or {}), "workspace": _json_ws}
+            except (OSError, ValueError):
+                pass
         _ws_str, _ws_src = _resolve_workspace(settings, _chat_ctx_ws, user_input)
     except _WsForceInvalid as _wfi:
         logger.error("[WS-RESOLVE] %s", _wfi)
@@ -797,17 +808,35 @@ async def run_stream(
                              "Enable the Vision agent in Settings (image preprocessing) or pick a multimodal model. "
                              "Agentic runs receive the image description once a vision model is configured.]"})
 
-    # P1-2 (2026-08-12): Restore the session per chat from .context.json,
+    # HISTORY SOURCE (2026-10-03): the chat json transcript is the ONE
+    # continuation source - UI and model now share the same story. The
+    # sidecar "session" key demotes to a fallback for chats without a json.
     if chat_id and not _state.memory.get_session_messages():
         try:
-            _sess_persist = (_load_chat_context(chat_id) or {}).get("session") or []
-            if _sess_persist:
-                _state.memory.seed_session(_sess_persist)
-        except Exception:
-            pass
+            _seed = history_seed(chat_id)
+        except (OSError, ValueError):
+            _seed = []
+        if not _seed:
+            try:
+                _seed = (_load_chat_context(chat_id) or {}).get("session") or []
+            except (OSError, ValueError):
+                _seed = []
+        if _seed:
+            _state.memory.seed_session(_seed)
 
     _pipeline_mem_ctx  = _state.pipeline.memory.as_context_string()
-    _pipeline_sess_msgs = _state.memory.get_session_messages()  # SESSION-CACHE: 8 DB-Calls - 1 pro Run
+    # Caps raised to sidecar parity (8000 chars): 600/1200 used to cut code
+    # answers mid-line. The window is message-count-capped via seed (40) and
+    # compression above the threshold handles older turns.
+    _pipeline_sess_msgs = _state.memory.get_session_messages(
+        limit=40, user_cap=8000, assistant_cap=8000,
+    )
+    # TOKEN BUDGET (2026-10-03): 40x8000 chars can dwarf a small ctx -
+    # the window keeps the newest turns and drops older ones whole.
+    _pipeline_sess_msgs = window_by_budget(
+        _pipeline_sess_msgs,
+        int(settings.get("session_history_budget_tokens", 4096) or 4096),
+    )  # SESSION-CACHE: 8 DB-Calls - 1 pro Run
     # Threshold: SESSION_COMPRESS_THRESHOLD messages (configurable via settings).
     _sess_compress_threshold = int(settings.get("session_compress_threshold", SESSION_COMPRESS_THRESHOLD))
     _skip_compress = (mode == "code_duo" or duo_config.agentic_mode)
@@ -995,7 +1024,12 @@ async def run_stream(
         _complexity_source = "judge"
         intent_agent = None
         if len(_state.memory.get_session_messages()) > _sess_compress_threshold:
-            _pipeline_sess_msgs = _state.memory.get_session_messages()  # fresh, uncompressed
+            _pipeline_sess_msgs = window_by_budget(
+                _state.memory.get_session_messages(
+                    limit=40, user_cap=8000, assistant_cap=8000,
+                ),
+                int(settings.get("session_history_budget_tokens", 4096) or 4096),
+            )  # fresh, uncompressed
 
     if _judge_verdict:
         _effective_task_type = _judge_tasktype  # Judge knows task_type from full analysis

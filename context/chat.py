@@ -24,6 +24,61 @@ def init_chat_context(sessions_dir, chats_cache=None, cache_lock=None,
     if build_file_signature: _build_file_signature = build_file_signature
 
 
+def _read_chat_json(chat_id: str) -> dict | None:
+    try:
+        if not _SESSIONS_DIR:
+            return None
+        matches = sorted(_SESSIONS_DIR.glob(f"*_{chat_id}.json"))
+        if not matches:
+            return None
+        return json.loads(matches[-1].read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def history_seed(chat_id: str, limit: int = 40) -> list:
+    """Seed for a NEW run (2026-10-03): the saved conversation, minus a
+    TRAILING user message - that message is the new prompt itself and
+    arrives via the run, so seeding it would duplicate it. Falls back to
+    the sidecar "session" for chats without a json."""
+    seed = load_chat_transcript(chat_id, limit=limit)
+    if not seed:
+        try:
+            seed = (_load_chat_context(chat_id) or {}).get("session") or []
+        except (OSError, ValueError):
+            seed = []
+    if seed and seed[-1].get("role") == "user":
+        seed = seed[:-1]
+    return seed
+
+
+def get_chat_workspace(chat_id: str) -> str:
+    """Top-level workspace stored in the chat json ("" when absent)."""
+    data = _read_chat_json(chat_id)
+    return str((data or {}).get("workspace") or "")
+
+
+def load_chat_transcript(chat_id: str, limit: int = 40) -> list:
+    """USER-VISIBLE transcript as THE model history source (2026-10-03).
+
+    Reads the newest `limit` user/assistant text messages straight from the
+    chat json in sessions/. Message-level content is never blobified, so no
+    ref restoration is needed here. The sidecar "session" key demotes to a
+    fallback for chats without a json (or run-state-only sidecars)."""
+    data = _read_chat_json(chat_id)
+    if not data:
+        return []
+    out = []
+    for m in data.get("messages", []):
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            out.append({"role": role, "content": content})
+    return out[-limit:]
+
+
 def _get_chat_ctx_lock(chat_id: str) -> threading.Lock:
     """Per-chat lock to serialize context file access."""
     _cid = str(chat_id or "")
