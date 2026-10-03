@@ -422,10 +422,27 @@ def write_models_json(models_dir: Path) -> int:
         if family is None and families:
             family = sorted(families)[0]
         if family:
+            # SIZE-KEYED (2026-10-03): families with per-size projectors
+            # (mmproj-Qwen3.5-{0.8B,2B,4B,9B}-F16) get a ":<size>b" key so
+            # each model resolves ITS size; the bare family key stays as
+            # fallback for single-projector families (gemma-4, hermes3.6).
+            # Size token comes from the ORIGINAL filename (dots/dashes are
+            # boundaries) - the dot-stripped `low` broke the boundary match.
             mapping[f"{family}_mmproj"] = str(g)
+            _sm = re.search(r"(?:^|[-_.])(\d+(?:\.\d+)?)b(?:[-_.]|$)", g.name.lower())
+            if _sm:
+                _size = _sm.group(1).replace(".", "") + "b"
+                mapping[f"{family}:{_size}_mmproj"] = str(g)
 
     out = ROOT / "models.json"
-    out.write_text(json.dumps(mapping, indent=2, ensure_ascii=False), encoding="utf-8")
+    # SORTED + STABLE (2026-10-03): scan order used to leak into the file
+    # (untracked pin/temp entries landed between runs). Sorted keys keep
+    # diffs comparable across updates, and a full rewrite here is also the
+    # normalizer that clears stale pin/temp entries left by older versions.
+    out.write_text(
+        json.dumps(mapping, indent=2, ensure_ascii=False, sort_keys=True),
+        encoding="utf-8",
+    )
     return len(mapping)
 
 

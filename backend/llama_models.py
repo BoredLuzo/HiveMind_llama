@@ -496,6 +496,10 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
     overrides = _load_overrides()
     _okeys = [f"{model}_mmproj"]
     if _tag:
+        _sm = re.match(r"(\d+(?:\.\d+)?)b", _tag.lower())
+        if _sm:
+            _okeys.insert(1, f"{_base}:{_sm.group(1).replace(".", "")}b_mmproj")
+    if _tag:
         _okeys.extend([f"{_base}:latest_mmproj", f"{_base}_mmproj"])
     for k in _okeys:
         raw = overrides.get(k, "")
