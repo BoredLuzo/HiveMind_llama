@@ -1260,6 +1260,20 @@ async def stream(req: Request):
     duo_coder_tool_thinking = _as_bool(_body_or_settings("duo_coder_tool_thinking", default=False))
     duo_coder_tool_thinking_auto_mode = str(_body_or_settings("duo_coder_tool_thinking_auto_mode", default="off")).strip().lower()
     chat_id                = body.get("chat_id") or None
+    # FLUSH-FAIL IMPORT (2026-10-03): when the frontend could not persist
+    # before this run, /stream carries the DOM messages; the server writes
+    # them as the chat truth (rev bumped) so the run seeds fresh state
+    # instead of the stale pre-edit json.
+    if chat_id and body.get("flush_ok") is False:
+        try:
+            from routers.chats import import_dom_messages
+            _dom = body.get("dom_messages")
+            if isinstance(_dom, list) and _dom:
+                import_dom_messages(str(chat_id), _dom,
+                                    str(body.get("workspace") or "") or None)
+        except (OSError, ValueError) as _flush_import_exc:
+            logger.warning("[STREAM] dom import failed (chat=%s): %s",
+                           chat_id, _flush_import_exc)
     until_finished         = _as_bool(_body_or_settings("until_finished",          default=False))
     duo_runtime_profile    = body.get("duo_runtime_profile") or settings.get("duo_runtime_profile") or "balanced"
     duo_runtime_profile_lock_override = _as_bool(_body_or_settings(

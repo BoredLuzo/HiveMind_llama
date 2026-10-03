@@ -50,9 +50,14 @@ def _history_budget_tokens(settings) -> int:
         return _ov
     try:
         _ref = registry_get("direct") or registry_get("analyst") or ""
-        _nctx = int(_get_num_ctx(_ref) or 8192) if _ref else 8192
+        _nctx = int(_get_num_ctx(_ref) or 0) if _ref else 0
     except Exception:
-        _nctx = 8192
+        _nctx = 0
+    # NOTE: with llama-server parallel slots the per-slot ctx is
+    # n_ctx / n_parallel - divide here if parallel slots ever get enabled
+    # (the current config runs one slot, default n_parallel=1).
+    if _nctx <= 0:
+        _nctx = 16384  # sane default when no ctx override is configured
     return max(1024, int((_nctx - 4096) * 0.35))
 from tools.websearch import _safe_web_search
 from hive_functions.prompts import AGENT_ROLES, HIVEMIND_SOUL, VISION_AGENT_PROMPT

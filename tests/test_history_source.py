@@ -152,10 +152,39 @@ def main():
             json.dumps(chat2), encoding="utf-8")
         seed2 = CC.history_seed(cid2)
         roles2 = [m["role"] for m in seed2]
-        if roles2 == ["user", "assistant", "user"] and seed2[-1]["content"] == "aborted attempt":
-            ok("aborted run: trailing retry dropped, alternation intact (u,a,u)")
+        if roles2 == ["user", "assistant"]:
+            ok("aborted run: ALL trailing user messages dropped (u,a)")
         else:
-            fail("aborted seed", str(roles2) + " / " + str(seed2[-1]["content"][:40]))
+            fail("aborted seed", str(roles2))
+
+        # rev / CAS: create -> update with base_rev ok -> stale base_rev 409
+        created2 = asyncio.run(C.create_chat(_FakeRequest({
+            "title": "rev test", "workspace": "C:/x",
+            "messages": [{"role": "user", "content": "v1"}],
+        })))
+        rid = created2["id"]
+        rev1 = created2.get("rev")
+        if rev1 == 1:
+            ok("create bumps rev to 1")
+        else:
+            fail("create rev", repr(created2.get("rev")))
+        upd = asyncio.run(C.update_chat(rid, _FakeRequest({
+            "messages": [{"role": "user", "content": "v2"}], "base_rev": 1})))
+        if upd.get("ok") and upd.get("rev") == 2:
+            ok("update with matching base_rev bumps rev to 2")
+        else:
+            fail("update rev", repr(upd))
+        stale = asyncio.run(C.update_chat(rid, _FakeRequest({
+            "messages": [{"role": "user", "content": "STALE"}], "base_rev": 1})))
+        if getattr(stale, "status_code", None) == 409:
+            body = json.loads(stale.body)
+            got = asyncio.run(C.get_chat(rid))
+            if (body.get("rev") == 2 and got["messages"][0]["content"] == "v2"):
+                ok("stale base_rev -> 409, server state wins, nothing written")
+            else:
+                fail("409 body/state", json.dumps(got["messages"])[:100])
+        else:
+            fail("stale update", repr(stale))
 
         # window_by_budget hard-filters tool roles / tool_calls (no half pairs)
         from utils.token import window_by_budget
@@ -172,6 +201,31 @@ def main():
             ok("budget window hard-filters tool roles and tool_calls")
         else:
             fail("window hard filter", json.dumps(win)[:120])
+
+        # model-facing list: _make_messages guarantees alternation and a
+        # single final [USER] even when the seed ends with user messages
+        from context.chat_util import _make_messages
+
+        class _FakeMem:
+            def as_context_string(self):
+                return ""
+            def get_session_messages(self):
+                return []
+
+        final = _make_messages(
+            _FakeMem(), "system prompt",
+            "the NEW user prompt", None, True, False,
+            cached_sess_msgs=[{"role": "user", "content": "aborted attempt"},
+                              {"role": "user", "content": "retry text"},
+                              {"role": "assistant", "content": "done"}],
+        )
+        final_roles = [m["role"] for m in final]
+        adj = [(a, b) for a, b in zip(final_roles, final_roles[1:]) if a == b]
+        if (not adj and final[-1]["role"] == "user"
+                and "the NEW user prompt" in final[-1]["content"]):
+            ok("model-facing list: strict alternation, final message is the new prompt")
+        else:
+            fail("make_messages alternation", str(final_roles))
 
         # ── 3. workspace per chat ────────────────────────────────────────
         created = asyncio.run(C.create_chat(_FakeRequest({

@@ -47,7 +47,12 @@ def history_seed(chat_id: str, limit: int = 40) -> list:
             seed = (_load_chat_context(chat_id) or {}).get("session") or []
         except (OSError, ValueError):
             seed = []
-    if seed and seed[-1].get("role") == "user":
+    # Drop ALL trailing user messages: the newest one is the new prompt
+    # itself, and an aborted run's unanswered attempt before it would
+    # leave two user roles in a row in the final prompt (strict
+    # alternation templates reject that). The user's latest intent is
+    # carried by the new prompt, not by the dead attempt.
+    while seed and seed[-1].get("role") == "user":
         seed = seed[:-1]
     # ALTERNATION (2026-10-03): an aborted run leaves its unanswered user
     # message in the transcript - with the new prompt that makes two user

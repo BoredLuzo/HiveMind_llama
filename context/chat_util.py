@@ -58,6 +58,23 @@ def _make_messages(pipeline, system, user, images, use_session, use_memory, cach
     sess_msgs = (cached_sess_msgs if cached_sess_msgs is not None else pipeline.memory.get_session_messages()) if use_session else []
     # Komprimierte System-Messages herausfiltern.
     sess_msgs = [m for m in sess_msgs if m.get("role") != "system"]
+    # ALTERNATION GUARD (2026-10-03): the history must end before the new
+    # [USER] message without another user message - strict-alternation
+    # templates (gemma/mistral) reject or mangle consecutive same roles.
+    # Merge duplicates and drop trailing users (the new prompt carries
+    # the user's latest intent).
+    _merged_sess = []
+    for _sm in sess_msgs:
+        if _merged_sess and _merged_sess[-1].get("role") == _sm.get("role"):
+            _merged_sess[-1] = dict(_merged_sess[-1])
+            _merged_sess[-1]["content"] = (
+                str(_merged_sess[-1].get("content", "")) + "\n"
+                + str(_sm.get("content", ""))).strip()
+        else:
+            _merged_sess.append(_sm)
+    while _merged_sess and _merged_sess[-1].get("role") == "user":
+        _merged_sess.pop()
+    sess_msgs = _merged_sess
 
     user_labeled = f"[USER]\n{user}"
 

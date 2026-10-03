@@ -5283,17 +5283,20 @@ async function sendMsg() {
     // HISTORY-SOURCE FLUSH (2026-10-03): the run seeds its history from
     // the saved chat json - persist BEFORE the stream starts so the json
     // holds this turn (and any post-edit state) exactly as the UI does.
+    var _flushOk = true;
     if (S.chatAutosave) {
       try {
-        var _flushed = await persistCurrentChat(true);
-        if (!_flushed) showStatus('⚠ Chat could not be saved before this run - history context may be stale.');
-      } catch (e) { showStatus('⚠ Chat could not be saved before this run - history context may be stale.'); }
+        _flushOk = await persistCurrentChat(true);
+        if (!_flushOk) showStatus('⚠ Chat could not be saved before this run - sending the current state with the request.');
+      } catch (e) { _flushOk = false; showStatus('⚠ Chat could not be saved before this run - sending the current state with the request.'); }
     }
 
     const res = await fetch('/stream', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         q: txt,
+        flush_ok: _flushOk,
+        dom_messages: _flushOk ? undefined : S.currentChatMessages,
         images: imgs.map(function(i) { return i.b64; }),
         mode: S.mode,
         iterations: S.iters,
@@ -9639,17 +9642,30 @@ async function persistCurrentChat(silent) {
   try {
     if (S.currentChatId) {
       // Update existing — do not overwrite the title (preserve user-named titles)
-      await fetch('/chats/' + S.currentChatId, {
+      var _putRes = await fetch('/chats/' + S.currentChatId, {
         method: 'PUT', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({messages: S.currentChatMessages, workspace: S.workspace || ''})
+        body: JSON.stringify({messages: S.currentChatMessages, workspace: S.workspace || '', base_rev: S.currentRev || 0})
       });
+      if (_putRes.status === 409) {
+        // SERVER WINS (2026-10-03): adopt the saved messages, keep only
+        // what this tab still holds unsent is the backend's call now.
+        var _srv = await _putRes.json().catch(function () { return null; });
+        if (_srv && _srv.messages) {
+          S.currentChatMessages = _srv.messages;
+          S.currentRev = _srv.rev || 0;
+          showStatus('Chat changed elsewhere - adopted the saved version.');
+        }
+      } else if (_putRes.ok) {
+        var _pj = await _putRes.json().catch(function () { return {}; });
+        if (_pj.rev) S.currentRev = _pj.rev;
+      }
     } else {
       // Create new
       const r = await (await fetch('/chats', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({title: title, messages: S.currentChatMessages, workspace: S.workspace || ''})
       })).json();
-      if (r && r.id) S.currentChatId = r.id;
+      if (r && r.id) { S.currentChatId = r.id; S.currentRev = r.rev || 0; }
     }
   } catch(e) {
     if (!silent) showStatus('Saving chat failed: ' + e.message);
@@ -9737,6 +9753,7 @@ async function loadChat(chatId) {
     document.getElementById('chat').innerHTML = '';
 
     S.currentChatId = chatId;
+    S.currentRev = chat.rev || 0;
     S.currentChatMessages = chat.messages || [];
     setPauseBtnState('idle');
     setStopBtnState('idle');

@@ -1,12 +1,14 @@
 """Chats API-Router."""
 from __future__ import annotations
 import asyncio
+import copy
 import hashlib
 import json
 import logging
 import os
 import re
 import shutil
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -152,6 +154,8 @@ def _sweep_orphan_blob_dirs() -> None:
         logger.debug("[CHATS] blob dir sweep failed: %s", _sweep_err)
 
 _RE_CHAT_ID_PATTERN = re.compile(r"_([a-f0-9\-]{4,36})\.json$")
+_chat_save_locks: dict = {}
+_chat_save_locks_guard = threading.Lock()
 _re_slug_special = re.compile(r"[^\w\s-]")
 _re_slug_space = re.compile(r"[\s_]+")
 
@@ -221,46 +225,98 @@ def _load_chat_full(chat_id: str) -> dict | None:
         return None
 
 
-def _save_chat(chat_id: str, chat: dict):
-    with _cache_lock:
-        _file = str(chat.get("_file") or "")
+def _get_chat_save_lock(chat_id: str) -> threading.Lock:
+    cid = str(chat_id or "")
+    with _chat_save_locks_guard:
+        if cid not in _chat_save_locks:
+            _chat_save_locks[cid] = threading.Lock()
+        return _chat_save_locks[cid]
+
+
+def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | None:
+    """Atomic save on an internal COPY (2026-10-03, review fix): the
+    caller's chat dict keeps its inline payloads and is never mutated
+    with blob refs - POST /chats used to hand the blobified payload back.
+
+    Returns {"id", "rev", "ts", "conflict"}.
+
+    base_rev enables compare-and-set: None = legacy last-writer-wins
+    (old cached JS, the pagehide beacon); a number must match the stored
+    rev or NOTHING is written and conflict=True comes back - the server
+    state wins, the caller adopts it. Chats without a rev count as 0."""
+    with _get_chat_save_lock(chat_id):
+        _cur_rev = int(chat.get("rev") or 0)
+        if base_rev is not None and base_rev != _cur_rev:
+            return {"id": chat_id, "rev": _cur_rev, "conflict": True,
+                    "ts": chat.get("updated_at", "")}
+        stored = copy.deepcopy(chat)
+        _new_rev = _cur_rev + 1
+        stored["rev"] = _new_rev
+
+        _file = str(stored.get("_file") or "")
         if not _file and _state._SESSIONS_DIR:
-            ts = chat.get("created_at", datetime.now().isoformat(timespec="seconds"))
-            ts = ts.replace(":", "-").replace("T", "T")[:19]
-            title = chat.get("title", "Chat")
-            slg = title.split("\n")[0][:40]
-            slg = _re_slug_special.sub("", slg)
-            slg = _re_slug_space.sub("-", slg.strip()) or "Chat"
-            _file = str(_state._SESSIONS_DIR / f"{ts}_{slg}_{chat_id}.json")
-            chat["_file"] = _file
-        _msgs = chat.get("messages", [])
+            _ts = str(stored.get("created_at") or
+                      datetime.now().isoformat(timespec="seconds"))
+            _ts = _ts.replace(":", "-")[:19]
+            _title = stored.get("title", "Chat")
+            _slg = _re_slug_special.sub("", _title.split("\n")[0][:40])
+            _slg = _re_slug_space.sub("-", _slg.strip()) or "Chat"
+            _file = str(_state._SESSIONS_DIR / f"{_ts}_{_slg}_{chat_id}.json")
+            stored["_file"] = _file
+        if not _file:
+            return None
+
+        _msgs = stored.get("messages", [])
         _last = _msgs[-1].get("content", "") if _msgs else ""
-        _chats_cache[chat_id] = {
-            "id": chat.get("id", chat_id),
-            "title": chat.get("title", "Untitled"),
-            "created_at": chat.get("created_at", ""),
-            "updated_at": chat.get("updated_at", ""),
-            "_msg_count": _user_msg_count(_msgs),
-            "_tokens": _chat_tokens(_msgs),
-            "_preview": _last[:80] if isinstance(_last, str) else "",
-            "_file": _file,
-        }
-    # BLOB EXTRACTION (2026-10-03): after the meta block above counted
-    # tokens/previews on the INLINE payloads, shrink the stored form - blobs
-    # land on disk first, the json (also atomic) references them.
-    try:
-        _blobify_messages(chat_id, chat.get("messages", []))
-    except OSError as _blob_err:
-        logger.warning("[CHATS] blob extraction failed, saving inline: %s",
-                       _blob_err)
-    _out = {k: v for k, v in chat.items() if not k.startswith("_")}
-    _txt = json.dumps(_out, indent=2, ensure_ascii=False)
-    _p = Path(_file)
-    if not _p.name:
-        return
-    _tmp = _p.with_suffix(".tmp")
-    _tmp.write_text(_txt, encoding="utf-8")
-    os.replace(_tmp, _p)
+        with _cache_lock:
+            _chats_cache[chat_id] = {
+                "id": stored.get("id", chat_id),
+                "title": stored.get("title", "Untitled"),
+                "created_at": stored.get("created_at", ""),
+                "updated_at": stored.get("updated_at", ""),
+                "_msg_count": _user_msg_count(_msgs),
+                "_tokens": _chat_tokens(_msgs),
+                "_preview": _last[:80] if isinstance(_last, str) else "",
+                "_file": _file,
+            }
+
+        # BLOB EXTRACTION (2026-10-03): after the meta block counted
+        # tokens/previews on the INLINE payloads, shrink the stored form.
+        try:
+            _blobify_messages(chat_id, stored.get("messages", []))
+        except OSError as _blob_err:
+            logger.warning("[CHATS] blob extraction failed, saving inline: %s",
+                           _blob_err)
+
+        _out = {k: v for k, v in stored.items() if not k.startswith("_")}
+        _txt = json.dumps(_out, indent=2, ensure_ascii=False)
+        _p = Path(_file)
+        _tmp = _p.with_suffix(".tmp")
+        _tmp.write_text(_txt, encoding="utf-8")
+        os.replace(_tmp, _p)
+        return {"id": chat_id, "rev": _new_rev, "ts": stored.get("updated_at", ""),
+                "conflict": False}
+
+
+def import_dom_messages(chat_id: str, messages: list,
+                        workspace: str | None = None) -> dict | None:
+    """Backend-side truth import (2026-10-03): when the frontend flush
+    failed, /stream carries the DOM messages; the server overwrites the
+    chat with them (rev bumped, blobs extracted) so the run seeds fresh
+    state instead of the stale pre-edit json."""
+    msgs = [m for m in (messages or []) if isinstance(m, dict)]
+    if not msgs:
+        return None
+    chat = _load_chat_full(chat_id) or {
+        "id": chat_id, "title": "Chat",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "updated_at": "", "messages": [],
+    }
+    chat["messages"] = msgs
+    if workspace:
+        chat["workspace"] = str(workspace)
+    chat["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    return _save_chat(chat_id, chat)
 
 
 @router.get("")
@@ -320,8 +376,9 @@ async def create_chat(req: Request):
     chat["_msg_count"] = _user_msg_count(_msgs)
     chat["_tokens"] = _chat_tokens(_msgs)
     chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-    _save_chat(cid, chat)
-    return {"ok": True, "id": cid, "chat": {k: v for k, v in chat.items() if k != "_file"}}
+    _saved = _save_chat(cid, chat)
+    return {"ok": True, "id": cid, "rev": (_saved or {}).get("rev"),
+            "chat": {k: v for k, v in chat.items() if k != "_file"}}
 
 
 @router.post("/persist")
@@ -355,8 +412,14 @@ async def persist_chat(req: Request):
                     _last = msgs[-1].get("content", "") if msgs else ""
                     chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
             await asyncio.to_thread(_apply_update)
-            await asyncio.to_thread(_save_chat, cid, chat)
-            return {"ok": True, "id": cid, "created": False, "updated": True}
+            _saved = await asyncio.to_thread(_save_chat, cid, chat,
+                                             data.get("base_rev"))
+            if _saved and _saved.get("conflict"):
+                return JSONResponse({"error": "stale_rev",
+                                     "rev": _saved.get("rev")},
+                                    status_code=409)
+            return {"ok": True, "id": cid, "rev": (_saved or {}).get("rev"),
+                    "created": False, "updated": True}
 
     # Create (reuse given chat_id so beacon retries keep a stable file).
     if not cid:
@@ -375,8 +438,9 @@ async def persist_chat(req: Request):
     chat["_msg_count"] = _user_msg_count(msgs)
     chat["_tokens"] = _chat_tokens(msgs)
     chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
-    await asyncio.to_thread(_save_chat, cid, chat)
-    return {"ok": True, "id": cid, "created": True, "updated": False}
+    _saved = await asyncio.to_thread(_save_chat, cid, chat)
+    return {"ok": True, "id": cid, "rev": (_saved or {}).get("rev"),
+            "created": True, "updated": False}
 
 
 @router.get("/{chat_id}")
@@ -430,8 +494,17 @@ async def update_chat(chat_id: str, req: Request):
                 chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
             chat["updated_at"] = now
     await asyncio.to_thread(_apply_update)
-    _save_chat(chat_id, chat)
-    return {"ok": True}
+    _saved = await asyncio.to_thread(_save_chat, chat_id, chat,
+                                     data.get("base_rev"))
+    if _saved and _saved.get("conflict"):
+        _server = await asyncio.to_thread(_load_chat_full, chat_id)
+        _server_msgs = copy.deepcopy((_server or {}).get("messages", []))
+        await asyncio.to_thread(_restore_messages, chat_id, _server_msgs)
+        return JSONResponse({"error": "stale_rev", "rev": _saved.get("rev"),
+                             "messages": _server_msgs,
+                             "hint": "server state wins - adopt these messages"},
+                            status_code=409)
+    return {"ok": True, "rev": (_saved or {}).get("rev")}
 
 
 @router.delete("/{chat_id}")
