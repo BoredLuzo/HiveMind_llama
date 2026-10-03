@@ -648,6 +648,13 @@ async def _check_action_approval(name: str, args: dict, workspace):
     # abort; the run's own abort checks stop it right after this round.
     import asyncio as _appr_asyncio
     # (setting already read above: _appr_to_s / _appr_wait_s)
+    # S4A-FIX (2026-10-03 audit): the card's "countdown off" checkbox sets
+    # this Event via the decide endpoint - but NOTHING ever created it, so
+    # the wait below crashed with AttributeError (None.wait) whenever the
+    # timeout was enabled, killing the whole gate wait. Create the Event
+    # here, when the timer is actually armed.
+    if _appr_to_s > 0:
+        _approval_auto_off_events[str(run_id)] = _appr_asyncio.Event()
     _auto_off_ev = _approval_auto_off_events.pop(str(run_id), None) \
         if _appr_to_s > 0 else None
     if _auto_off_ev is not None:

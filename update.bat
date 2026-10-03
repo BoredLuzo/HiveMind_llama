@@ -137,11 +137,13 @@ if exist "%TMPDIR%\warnings.txt" (
     echo  +-------------------------------------------------------------+
     set "CONT="
     set /p "CONT=Continue anyway? [Y/n]: "
-    if /I "%CONT%"=="n" (
-        echo  Update cancelled. Nothing was changed.
-        if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
-        echo  Press any key to continue... & pause >nul & exit /b 0
-    )
+)
+REM the n-check must sit OUTSIDE the parenthesized block: %CONT% inside
+REM ( ) expands at parse time, before set /p runs - "n" never cancelled.
+if /I "%CONT%"=="n" (
+    echo  Update cancelled. Nothing was changed.
+    if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
+    echo  Press any key to continue... & pause >nul & exit /b 0
 )
 
 REM ── 5. Backup the current code (user data is excluded) ────────────────────
@@ -185,12 +187,22 @@ if not defined EXROOT (
 )
 
 REM ── 8. Apply over this installation ───────────────────────────────────────
+REM /XF update.bat: overwriting the RUNNING script mid-execution makes cmd
+REM resume at a stale byte offset - verify/prune/dep-refresh silently skip
+REM or garbage executes. The new update.bat is copied LAST (step 8b).
 echo  Applying update   : over this folder
-robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /NFL /NDL /NJH /NP /NJS
+robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /XF update.bat /NFL /NDL /NJH /NP /NJS
 if errorlevel 8 (
     echo  [ERROR] Applying the update failed. Restore by copying the
     echo         contents of %BK%\ back over this folder.
     echo  Press any key to continue... & pause >nul & exit /b 1
+)
+
+REM ── 8b. Copy the new update.bat LAST ───────────────────────────────────
+REM Excluded from the apply above so the running script is never replaced
+REM mid-execution. Land it now that every other step is done.
+if exist "%EXROOT%\update.bat" (
+    copy /y "%EXROOT%\update.bat" "%BASE%\update.bat" >nul
 )
 
 REM ── 9. Verify ─────────────────────────────────────────────────────────────
