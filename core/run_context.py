@@ -41,6 +41,7 @@ class RunContext:
     # ── Vision / prepro ──
     prepro_success: bool = False
     image_description: str = ""
+    image_paths: list = field(default_factory=list)  # saved copies in workspace/.hive_uploads
     effective_images: list = field(default_factory=list)
     vision_cfg: dict = field(default_factory=dict)
     images_with_prepro_text: bool = False

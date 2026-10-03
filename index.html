@@ -880,16 +880,18 @@
       <div id="vision-accordion-body" style="display:none;padding:0 12px 12px;border-top:1px solid #222a38">
         <!-- DUO IMAGE PLAN (2026-10-01): agentic runs decide per role -->
         <div id="duo-image-sec" style="padding:10px 0 6px;border-bottom:1px dashed #222a38;margin-bottom:10px">
-          <div style="font-size:10px;color:#c8d4e4;font-weight:600;margin-bottom:6px">AGENTIC DUO RUNS (planner + coder)</div>
+          <div style="font-size:10px;color:#c8d4e4;font-weight:600;margin-bottom:6px">Agentic duo runs (planner + coder) &mdash; used in <span style="color:#20b0a0">coder/duo</span> mode only</div>
           <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-bottom:6px">
-            <input type="radio" name="duo-image-mode" onchange="setDuoImageMode('preprocess')">
-            <span style="font-size:10px;color:var(--tx2);line-height:1.5">Preprocessing: a vision model describes the image once &mdash; the text goes to Planner and Coder (no raw image to anyone).</span>
+            <input type="radio" name="duo-image-mode" id="duo-img-mode-preprocess" onchange="setDuoImageMode('preprocess')">
+            <span style="font-size:10px;color:var(--tx2);line-height:1.5"><b>Describe:</b> the vision model below describes the image once &mdash; Planner and Coder get the text (works with any model).</span>
           </label>
           <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer;margin-bottom:4px">
-            <input type="radio" name="duo-image-mode" onchange="setDuoImageMode('direct')">
-            <span style="font-size:10px;color:var(--tx2);line-height:1.5">Send image to model: raw image to each checked role (multimodal only, projector required).</span>
+            <input type="radio" name="duo-image-mode" id="duo-img-mode-direct" onchange="setDuoImageMode('direct')">
+            <span style="font-size:10px;color:var(--tx2);line-height:1.5"><b>Raw image:</b> the image goes to each checked role (must be multimodal, projector file required).</span>
           </label>
-          <div id="duo-image-roles" style="display:none;margin:6px 0 0 24px">
+          <div id="duo-image-prepro-warn" style="display:none;font-size:9px;color:#c88a00;margin:2px 0 4px 24px;line-height:1.5">⚠ "Describe" needs a vision model &mdash; pick one in the Preprocessor section below (switch the mode buttons there first)</div>
+          <div style="font-size:10px;color:var(--tx2);margin:6px 0 2px 24px">Where should the raw image go?</div>
+          <div id="duo-image-roles" style="display:none;margin:0 0 4px 24px">
             <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:3px">
               <input type="checkbox" id="duo-img-planner" onchange="setDuoImageRole('planner',this.checked)">
               <span id="duo-img-planner-status">Planner</span>
@@ -899,10 +901,10 @@
               <span id="duo-img-coder-status">Coder</span>
             </label>
           </div>
-          <div id="duo-image-note" style="display:none;font-size:9px;color:var(--tx3);margin-left:24px;line-height:1.5">no target selected &mdash; the image will not be used</div>
+          <div id="duo-image-note" style="display:none;font-size:9px;color:#20b0a0;margin-left:24px;line-height:1.5"></div>
         </div>
-        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-top:10px;margin-bottom:8px;line-height:1.6">
-          Choose how images are processed when you attach one:
+        <div id="image-mode-generic-hdr" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-top:10px;margin-bottom:8px;line-height:1.6">
+          Direct chat &amp; pipeline &mdash; how images are processed when you attach one:
         </div>
 
         <div id="image-mode-row" style="display:flex;gap:4px;margin-bottom:8px">
@@ -1066,7 +1068,7 @@
         <span class="sl"></span>
       </label>
     </div>
-    <div style="font-size:9px;color:var(--tx3);padding:0 4px 6px;line-height:1.5">ON = image description to all agents (refiner+critic)<br>OFF = only analyst gets the image description</div>
+    <div id="full-imgdesc-hint" style="font-size:9px;color:var(--tx3);padding:0 4px 6px;line-height:1.5">ON = image description to all agents (refiner+critic)<br>OFF = only analyst gets the image description</div>
     <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:10px;line-height:1.6">
       Critic provides tune-constraints &#8594; refiner gets hard constraints.<br>
       <span style="color:var(--amber)">&#9889; Adversarial Loop</span> instead of stylistic refinement.
@@ -1901,6 +1903,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-        <script src="/static/app.js?v=20261001-4"></script>
+        <script src="/static/app.js?v=20261003-3"></script>
 </body>
 </html>

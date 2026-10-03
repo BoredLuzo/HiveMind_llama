@@ -78,6 +78,9 @@ SPECS: list[dict] = [
             r"(?i)^mmproj[-_.]bf16\.gguf$",
             r"(?i)^mmproj[-_.]f16\.gguf$",
         ],
+        # unique dest: the e2b repo ships the same generic filename with a
+        # DIFFERENT (smaller) projector inside - 1:1 downloads collided.
+        "mmproj_dest": "mmproj-gemma-4-e4b-it-qat-f16.gguf",
         # MTP speculative-decoding drafter (~60MB, root of the repo)
         "sidecar": [
             {
@@ -99,6 +102,9 @@ SPECS: list[dict] = [
             r"(?i)^mmproj[-_.]bf16\.gguf$",
             r"(?i)^mmproj[-_.]f16\.gguf$",
         ],
+                # dest matches gemma-4_e2b-it-qat.json mmproj_filename (config wins
+        # in resolve_mmproj_path) - the generic repo name collided with e4b.
+        "mmproj_dest": "mmproj-Gemma-4-E2B-BF16.gguf",
         "sidecar": [
             {
                 "repo": "unsloth/gemma-4-E2B-it-qat-GGUF",
@@ -115,7 +121,11 @@ SPECS: list[dict] = [
         "file_regex": [
             r"(?i)^qwen3\.6-35b-a3b-ud-q4_k_xl\.gguf$",
         ],
-        "mmproj_regex": [r"(?i)^mmproj[-._]bf16\.gguf$", r"(?i)mmproj.*(f16|bf16)\.gguf$"],
+        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
+        # unique dest: the repo ships generic mmproj-BF16/F16/F32 names that
+        # collide with the gemma-4 projectors; the per-model name also fits
+        # the resolve_mmproj_path base match ("qwen36" in filename).
+        "mmproj_dest": "mmproj-qwen3.6-35b-a3b-f16.gguf",
     },
     {
         "key": "lfm2.5:2.6b",
@@ -585,11 +595,27 @@ def main() -> int:
 
         if spec["mmproj_regex"]:
             mm = pick_file(files, spec["mmproj_regex"], exclude_mmproj=False)
-            if mm and ("mmproj" not in " ".join(local_files) or not args.list_only):
+            # MMPROJ DEST (2026-10-03): several repos ship their projector
+            # under the SAME generic filename (mmproj-BF16.gguf in unsloth
+            # gemma-4 e4b/e2b AND qwen3.6 repos). Downloading 1:1 made the
+            # last download overwrite the others and every non-matching
+            # model resolved the WRONG projector. A spec may pin a unique
+            # destination name (mmproj_dest); the skip check runs on that
+            # name so --only-missing works per model.
+            _mm_dest = spec.get("mmproj_dest") or Path(mm["path"]).name if mm else None
+            if mm and _mm_dest and _mm_dest.lower() not in local_files:
                 if args.list_only:
-                    print(f"    Would download (Vision): {mm['path']}")
+                    print(f"    Would download (Vision): {mm['path']} -> {_mm_dest}")
                 else:
                     download_file(repo, mm, mdir, args.yes)
+                    _src = mdir / Path(mm["path"]).name
+                    _dstp = mdir / _mm_dest
+                    if _mm_dest != Path(mm["path"]).name and _src.exists():
+                        if _dstp.exists():
+                            _src.unlink()
+                        else:
+                            _src.rename(_dstp)
+                    local_files[_mm_dest.lower()] = _dstp
 
         for _sc in (spec.get("sidecar") or []):
             _sc_name = Path(_sc["path"]).name.lower()

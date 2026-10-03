@@ -590,6 +590,43 @@ async def run_stream(
         _unregister_step_skip(run_id)
         return
 
+    # -- IMAGE PERSISTENCE (2026-10-03, all modes) --
+    # Attached images used to live only as base64 inside the request: after
+    # the run they were gone. Save them once into the workspace so they
+    # survive, are referenceable by the coder, and the UI note is honest.
+    _saved_image_paths: list = []
+    if images and _ws_str:
+        try:
+            import base64 as _b64mod
+            from datetime import datetime as _dt
+            from pathlib import Path as _P
+            _up_dir = _P(_ws_str) / ".hive_uploads"
+            _up_dir.mkdir(parents=True, exist_ok=True)
+            _stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+            for _ii, _b64 in enumerate(images):
+                _raw = str(_b64 or "").strip()
+                if not _raw:
+                    continue
+                if "," in _raw[:32]:  # strip data-url prefix if present
+                    _raw = _raw.split(",", 1)[1]
+                _ext = "png"
+                try:
+                    if _b64mod.b64decode(_raw[:24] + "==")[:2] == bytes([0xFF, 0xD8]):
+                        _ext = "jpg"
+                except Exception:
+                    pass
+                _fp = _up_dir / f"img_{_stamp}_{_ii + 1}.{_ext}"
+                if not _fp.exists() or _fp.stat().st_size == 0:
+                    _fp.write_bytes(_b64mod.b64decode(_raw))
+                _saved_image_paths.append(str(_fp))
+            if _saved_image_paths:
+                yield await emit({"type": "status", "content":
+                    "[Image] saved to " + ", ".join(
+                        _P(x).name for x in _saved_image_paths)
+                    + " (workspace/.hive_uploads)"})
+        except Exception as _img_save_err:
+            logger.warning("[IMAGE-SAVE] failed (non-fatal): %s", _img_save_err)
+
     # -- Vision Preprocessing --
     _vdbg_has_images = bool(images)
     _vdbg_enabled    = bool(_vision_cfg.get("enabled"))
@@ -631,7 +668,15 @@ async def run_stream(
                     timeout=_vp_total_timeout,
                 )
             except asyncio.TimeoutError:
-                image_description = f"[Vision preprocessing error: timeout after {_vp_total_timeout:.1f}s]"
+                # TIMEOUT NOT A DESCRIPTION (2026-10-03): the old error string
+                # had a different format than the [Vision-Preprocessing-Error
+                # guard below, slipped through as a "description" and was
+                # injected into planner task + coder sysprompt. Empty now:
+                # resolve_image_plan warns about the missing description.
+                image_description = ""
+                yield await emit({"type": "status", "content":
+                    f"⚠ Vision preprocessing timed out after {_vp_total_timeout:.1f}s "
+                    "(VRAM busy? stop other model loads and retry). Images unusable this run"})
                 _logger.warning(
                     "[Vision-Prepro] Overall timeout after %.1fs (model=%s)",
                     _vp_total_timeout, _vision_model_name,
@@ -1106,6 +1151,7 @@ async def run_stream(
             effective_task_type=_effective_task_type,
             use_learned=use_learned,
             workspace=_ws_str,
+            image_paths=_saved_image_paths,
             prepro_success=_prepro_success,
             image_description=image_description,
             effective_images=effective_images,

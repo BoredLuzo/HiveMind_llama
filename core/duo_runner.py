@@ -1115,6 +1115,7 @@ async def run_code_duo(ctx):
                     _plan_port = await _await_with_hb(
                         lambda: _lsm_plan_pre.ensure_loaded(
                             _planner_model, num_ctx=_plan_ctx_final, n_parallel=1,
+                            vision=(_img_plan.get("planner") == "raw"),
                             # DUO-PIN (2026-10-01): vision-prepro load must not LRU-evict duo slots
                             # GRACEFUL-PLANNER (2026-09-07): the planner may
                             # degrade to a smaller ctx (its prompts are small).
@@ -1145,6 +1146,10 @@ async def run_code_duo(ctx):
                     })
                     _planner_model = coder_mdl
                     _planner_used_fallback = True
+                    # IMAGE-PLAN REPLAN (2026-10-03): the plan was computed with
+                    # the original planner model; a text-only fallback would
+                    # otherwise still receive raw parts (or lose its raw flag).
+                    _img_plan = resolve_image_plan(_planner_model, exec_mdl, ctx.settings, ctx)
                 except Exception as _pre_load_err:
                     logger.warning("Planner pre-load failed: %s", _pre_load_err, exc_info=True)
                     _err_short = str(_pre_load_err)[:120]
@@ -1734,6 +1739,14 @@ async def run_code_duo(ctx):
             _duo_coder_sys += (
                 "\n\n[IMAGE NOTE]: you cannot see the attached image — the planner saw it. "
                 "Put all relevant details (layout, texts, colors, sizes) into the plan.")
+        # SAVED-PATH NOTE (2026-10-03): the original upload lives in the
+        # workspace now - tell the coder once so it can reference/reuse it.
+        _img_paths = getattr(ctx, "image_paths", None) or []
+        if _img_paths:
+            _duo_coder_sys += (
+                "\n\n[IMAGE FILES]: the user's uploaded image(s) are saved at: "
+                + ", ".join(_img_paths)
+                + ". Reference them by path if needed (binary - do not cat it).")
         _follow_up_hint = state.get("_follow_up_hint", "") or ""
         if _follow_up_hint:
             _duo_coder_sys += "\n\n" + _follow_up_hint
@@ -2000,7 +2013,8 @@ async def run_code_duo(ctx):
                                 # full ctx OR a clear error — never a silently
                                 # degraded slot (manager: 768→256→error).
                                 _lsm2.ensure_loaded(exec_mdl, num_ctx=_coder_ctx_try,
-                                                    n_parallel=1, ctx_graceful=False, pin=True),
+                                                    n_parallel=1, ctx_graceful=False, pin=True,
+                                                    vision=(_img_plan.get("coder") == "raw")),
                                 timeout=_coder_load_timeout,
                             )
                             _coder_load_ok = True

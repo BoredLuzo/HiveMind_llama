@@ -43,7 +43,7 @@ async def test_vision_model(req: Request):
         return {"ok": False, "reason": str(e)}
 
 
-@router.get("/vision/mmproj")
+@router.get("/mmproj")
 async def vision_mmproj(model: str = Query(..., description="model tag to check")):
     """Projector check for the duo image-plan UI (2026-10-01): mirrors the
     backend's attach-time precheck (resolve_mmproj_strict) so the role

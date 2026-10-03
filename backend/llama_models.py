@@ -378,8 +378,16 @@ def _resolve_from_overrides(model_name: str, overrides: dict[str, str]) -> Path 
         if raw.strip().upper().startswith("TODO:"):
             continue
         p = Path(raw.strip())
-        if p.exists():
-            return p
+        # EXISTS != USABLE (2026-10-03): the old pin-to-temp mechanism left
+        # models.json entries pointing at 0-byte placeholder GGUFs long after
+        # the pin died - exists() passed, llama-server crashed with exit=1
+        # and the planner lost its port (live: qwen3.5:4b-mtp, gguf=0.0GB).
+        # A real GGUF is never smaller than a few MB.
+        try:
+            if p.exists() and p.is_file() and p.stat().st_size > 1024 * 1024:
+                return p
+        except OSError:
+            continue
     return None
 
 
@@ -444,31 +452,36 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
     if not model:
         return None
 
-    overrides = _load_overrides()
-    keys = [f"{model}_mmproj"]
-    if ":" in model:
-        base, _tag = model.split(":", 1)
-        keys.extend([f"{base}:latest_mmproj", f"{base}_mmproj"])
+    # normalisierte Namen: dots AND dashes stripped, so "qwen3.5" matches
+    # "qwen35" and "gemma-4" matches "gemma4" in filenames.
+    def _norm(x: str) -> str:
+        return str(x or "").lower().replace(".", "").replace("-", "")
 
-    for k in keys:
-        raw = overrides.get(k, "")
-        if not raw or raw.strip().upper().startswith("TODO:"):
-            continue
-        p = Path(raw.strip())
-        if p.exists():
-            return p
+    _base, _tag = (model.split(":", 1) + [""])[:2]
+    _nfam = _norm(_base)                       # e.g. "qwen35", "gemma4"
+    _nsize = ""
+    _sm = re.match(r"(\d+(?:\.\d+)?b)", _tag.lower())
+    if _sm:
+        _nsize = _sm.group(1).replace(".", "")  # e.g. "4b", "35b"
 
-    # User-config (model_configs/models/*.json): mmproj_filename hat Vorrang.
+    def _relates(path: Path) -> bool:
+        """filename actually belongs to this model family (NOT another)."""
+        n = _norm(path.name)
+        return bool(_nfam) and _nfam in n
+
+    # 1. User-config (model_configs/models/*.json) WINS: exact per-model
+    #    intent, immune to stale models.json family mappings (live:
+    #    gemma-4:e4b-it-qat resolved the E2B projector because the family
+    #    entry pointed at the only gemma mmproj that existed back then).
     try:
         from model_configs.models_registry import get_mmproj_filename as _reg_mmproj
         _reg_fn = _reg_mmproj(model)
         if _reg_fn:
             _reg_p = Path(_reg_fn)
             if not _reg_p.is_absolute():
-                for _base_dir in (MODELS_DIR,):
-                    _cand = _base_dir / _reg_fn
-                    if _cand.exists():
-                        return _cand
+                _cand = MODELS_DIR / _reg_fn
+                if _cand.exists():
+                    return _cand
                 for _cand in MODELS_DIR.rglob(_reg_fn):
                     if _cand.is_file():
                         return _cand
@@ -477,26 +490,42 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
     except Exception:
         pass
 
-    # mmproj im Models-Dir suchen
+    # 2. models.json overrides - only when the file relates to the family.
+    #    (Stale cross-family entries mapped e.g. minicpm5 to a gemma
+    #    projector; a wrong projector size corrupts image embeddings.)
+    overrides = _load_overrides()
+    _okeys = [f"{model}_mmproj"]
+    if _tag:
+        _okeys.extend([f"{_base}:latest_mmproj", f"{_base}_mmproj"])
+    for k in _okeys:
+        raw = overrides.get(k, "")
+        if not raw or raw.strip().upper().startswith("TODO:"):
+            continue
+        _p = Path(raw.strip())
+        if _p.exists() and _relates(_p):
+            return _p
+
+    # 3. Filename search in the models dir - family first, then family+size:
+    #    "qwen3.5:4b-mtp" must get the 4B projector, not the alphabetically
+    #    first family file (live: it resolved the 0.8B projector; mismatched
+    #    projector sizes produce garbage image embeddings). A bare size
+    #    match ("4b" in "e4b") is NOT enough - family and size must BOTH
+    #    appear in the filename.
     if MODELS_DIR.exists():
-        base = model.split(":")[0].lower().replace(".", "")
-        _MMPROJ_FILENAME_MATCH: dict[str, str] = {
-            "qwen3.6":   "mmprojbf16",
-            "qwen35":    "mmprojqwen35",
-            "hermes36":  "hermes36",
-            "hermes":    "hermes",
-        }
-        _wanted = _MMPROJ_FILENAME_MATCH.get(base, "")
-        for p in MODELS_DIR.rglob("*mmproj*.gguf"):
-            n = p.name.lower().replace(".", "")
-            if base in n:
-                return p
-            if _wanted and _wanted in n:
-                return p
-        if base in ("qwen3.6", "hermes3.6"):
-            for p in MODELS_DIR.rglob("*mmproj*.gguf"):
-                if "bf16" in p.name.lower().replace(".", ""):
-                    return p
+        _cands = sorted(MODELS_DIR.rglob("*mmproj*.gguf"))
+        if _nsize:
+            for _cp in _cands:
+                _n = _norm(_cp.name)
+                if _nfam in _n and _nsize in _n:
+                    return _cp
+        for _cp in _cands:
+            if _relates(_cp):
+                return _cp
+        # legacy generic-name fallbacks (repos shipping mmproj-BF16.gguf)
+        if _nfam in ("qwen36", "hermes36"):
+            for _cp in _cands:
+                if "bf16" in _norm(_cp.name):
+                    return _cp
     return None
 
 

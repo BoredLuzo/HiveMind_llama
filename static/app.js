@@ -1600,11 +1600,13 @@ function setMode(mode, el) {
   updateChatToolsSectionVisibility();
   updateModeDesc();
   updateComplexityVisibility();
+  updateDuoImageUI();
   postSettings({mode: mode});
 }
 
 function setModeUI(mode) {
   S.mode = mode;
+  updateDuoImageUI();
   // FIX: scope auf #mode-btns-row
   document.querySelectorAll('#mode-btns-row .mbtn').forEach(function(b) {
     b.classList.toggle('on', b.dataset.mode === mode);
@@ -2107,6 +2109,7 @@ async function saveAgentModelDirect(key, sel) {
     const data = await res.json();
     if (data.ok) {
       sel.dataset.cur = model;
+      if (key === 'duo_planner' || key === 'duo_coder') updateDuoImageUI();
       if (!S.currentAssignments[key]) S.currentAssignments[key] = {};
       S.currentAssignments[key].model = model;
       sel.style.borderColor = '#22c55e';
@@ -2569,6 +2572,70 @@ function handleImgs(input) {
   input.value = '';
 }
 
+function _updateImgVisionHint() {
+  var c = document.getElementById('img-preview');
+  if (!c) return;
+  var old = document.getElementById('img-vision-hint');
+  if (old) old.remove();
+  if (!S.pendingImgs.length) return;
+  var hint = document.createElement('div');
+  hint.id = 'img-vision-hint';
+  hint.style.cssText = 'font-family:IBM Plex Mono,monospace;font-size:10px;margin-top:4px;padding:3px 8px;border-radius:3px;line-height:1.5';
+  function _style(bg, col, brd) {
+    hint.style.background = bg; hint.style.color = col; hint.style.border = '1px solid ' + brd;
+  }
+  var _isDuo = S.mode === 'code_duo' || S._runIsDuo;
+  if (!_isDuo) {
+    var dModel = (S.currentAssignments && S.currentAssignments.direct && S.currentAssignments.direct.model) || '';
+    var dProf = S.modelProfiles && (S.modelProfiles[dModel] || S.modelProfiles[(dModel||'').split(':')[0]]);
+    if (dProf && dProf.vision) {
+      _style('rgba(72,120,192,.12)', '#80b0e0', 'rgba(72,120,192,.3)');
+      hint.textContent = '[Multimodal] (' + dModel + ') processes the image directly.';
+    } else if (S.visionAgentEnabled && S.visionAgentModel) {
+      _style('rgba(136,88,192,.12)', '#b090d0', 'rgba(136,88,192,.3)');
+      hint.textContent = '[Vision-agent] (' + S.visionAgentModel + ') describes the image as text.';
+    } else {
+      _style('rgba(176,64,64,.12)', '#d09090', 'rgba(176,64,64,.3)');
+      hint.textContent = 'WARNING: no multimodal direct model and no vision-agent - the image will be ignored.';
+    }
+    c.appendChild(hint);
+    return;
+  }
+  // DUO: mirror resolve_image_plan (describe / raw-per-role / none)
+  var _m = S.duoImageMode || ((S.visionEnabled && S.visionModel) ? 'preprocess' : 'direct');
+  function _regVis(mdl) {
+    var pr = S.modelProfiles && (S.modelProfiles[mdl] || S.modelProfiles[(mdl||'').split(':')[0]]);
+    return !!(pr && pr.vision);
+  }
+  var _cModel = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
+  var _pModel = (S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model) || '';
+  if (_m === 'preprocess') {
+    if (S.visionEnabled && S.visionModel) {
+      _style('rgba(136,88,192,.12)', '#b090d0', 'rgba(136,88,192,.3)');
+      hint.textContent = '[Vision model] (' + S.visionModel + ') describes the image - Planner and Coder get the text.';
+    } else {
+      _style('rgba(224,144,48,.12)', '#e0a040', 'rgba(224,144,48,.3)');
+      hint.textContent = 'Describe mode needs a vision model - pick one under Image Processing (Preprocessor).';
+    }
+  } else {
+    var _t = [];
+    if (S.duoImageToCoder) _t.push(_cModel ? ('Coder (' + _cModel + ')') : 'Coder');
+    if (S.duoImageToPlanner) _t.push(_pModel ? ('Planner (' + _pModel + ')') : 'Planner');
+    var _visOk = _t.length && (!_cModel || _regVis(_cModel));
+    if (!_t.length) {
+      _style('rgba(122,143,168,.1)', '#7a8fa8', 'rgba(122,143,168,.25)');
+      hint.textContent = 'No target selected: the image stays unused (pick Planner/Coder in Image Processing).';
+    } else if (_visOk) {
+      _style('rgba(32,176,160,.12)', '#20b0a0', 'rgba(32,176,160,.3)');
+      hint.textContent = 'Raw image goes to: ' + _t.join(' + ') + '. Click a streaming card to follow it live.';
+    } else {
+      _style('rgba(224,144,48,.12)', '#e0a040', 'rgba(224,144,48,.3)');
+      hint.textContent = 'WARNING: ' + _t.join(' + ') + ' is not multimodal - the image will be skipped for it.';
+    }
+  }
+  c.appendChild(hint);
+}
+
 function renderImgPreview() {
   const c = document.getElementById('img-preview');
   c.innerHTML = '';
@@ -2582,36 +2649,9 @@ function renderImgPreview() {
     wrap.appendChild(im); wrap.appendChild(rm);
     c.appendChild(wrap);
   });
-  // VISION-HINT (2026-08-19): Shows clearly which image path will be used.
   if (S.pendingImgs.length) {
-    const hint = document.createElement('div');
-    hint.id = 'img-vision-hint';
-    hint.style.cssText = 'font-family:IBM Plex Mono,monospace;font-size:10px;margin-top:4px;padding:3px 8px;border-radius:3px;line-height:1.5';
-    const dModel = (S.currentAssignments && S.currentAssignments.direct && S.currentAssignments.direct.model) || '';
-    const dProf = S.modelProfiles && (S.modelProfiles[dModel] || S.modelProfiles[(dModel||'').split(':')[0]]);
-    const dVision = !!(dProf && dProf.vision);
-    // DUO-CODER VISION (2026-10-01): in agentic duo runs the CODER decides
-    // whether raw images are used — not the direct model
-    const _isDuo = S.mode === 'code_duo' || S._runIsDuo;
-    const cModel = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
-    const cProf = S.modelProfiles && (S.modelProfiles[cModel] || S.modelProfiles[(cModel||'').split(':')[0]]);
-    const cVision = !!(cProf && cProf.vision);
-    if (dVision) {
-      hint.style.background = 'rgba(72,120,192,.12)'; hint.style.color = '#80b0e0';
-      hint.style.border = '1px solid rgba(72,120,192,.3)';
-      hint.textContent = '🖼 Multimodal (' + dModel + ') processes the image directly.';
-    } else if (S.visionAgentEnabled && S.visionAgentModel) {
-      hint.style.background = 'rgba(136,88,192,.12)'; hint.style.color = '#b090d0';
-      hint.style.border = '1px solid rgba(136,88,192,.3)';
-      hint.textContent = '👁 Direct model not multimodal — vision-agent (' + S.visionAgentModel + ') describes the image as text.';
-    } else {
-      hint.style.background = 'rgba(176,64,64,.12)'; hint.style.color = '#d09090';
-      hint.style.border = '1px solid rgba(176,64,64,.3)';
-      hint.textContent = _isDuo
-        ? '⚠ Duo-Coder (' + (cModel || '?') + (cVision ? '' : ' not multimodal') + ') + no vision-agent \u2014 the image will be ignored. Enable the Vision agent in image settings.'
-        : '⚠ No multimodal direct model + no vision-agent — the image will be ignored.';
-    }
-    c.appendChild(hint);
+    _updateImgVisionHint();
+    return;
   }
 }
 
@@ -5025,7 +5065,14 @@ async function sendMsg() {
     _updateSendState();
     return;
   }
-  if (S.streaming) return;
+  if (S.streaming) {
+    // MID-RUN IMAGE FEEDBACK (2026-10-03): images cannot queue into a
+    // running run, say so instead of dropping them silently.
+    if (S.pendingImgs.length) {
+      showStatus('Images cannot be added while a run is streaming. Wait for it to finish, or stop the run first.');
+    }
+    return;
+  }
 
   const imgs = S.pendingImgs.slice();
   S.pendingImgs = []; renderImgPreview();
@@ -5119,7 +5166,15 @@ async function sendMsg() {
     // preprocessing mode: image-preprocess toggle active + model set = vision active
     const hasVisionPrepro = S.visionEnabled && !!S.visionModel;
     const hasVisionDedicated = S.visionAgentEnabled && !!S.visionAgentModel;
-    const hasVision = hasVisionAgent || hasVisionPrepro || hasVisionDedicated;
+    // DUO REGISTRY (2026-10-03): in coder/duo mode the coder's registry
+    // vision flag counts - name matching missed hermes3.6/qwen3.5/gemma-4
+    // (the backend loads their projector via ensure_loaded(vision=true)).
+    var duoCoderRegistryVision = false;
+    if (S.mode === 'code_duo' && duoCoderModel) {
+      var _dProf = S.modelProfiles && (S.modelProfiles[duoCoderModel] || S.modelProfiles[duoCoderModel.split(':')[0]]);
+      duoCoderRegistryVision = !!(_dProf && _dProf.vision);
+    }
+    const hasVision = hasVisionAgent || hasVisionPrepro || hasVisionDedicated || duoCoderRegistryVision;
     if (!hasVision) {
       const hint = document.createElement('div');
       hint.className = 'msg divider';
@@ -7507,8 +7562,12 @@ document.getElementById('input').addEventListener('paste', function(e) {
     if (!item.type.startsWith('image/')) return;
     const r = new FileReader();
     r.onload = function(ev) {
-      S.pendingImgs.push({b64: ev.target.result.split(',')[1], preview: ev.target.result});
-      renderImgPreview();
+      // PASTE-DOWNSCALE (2026-10-03): same 1568px path as drag&drop:
+      // screenshots pasted full-res used to skip it entirely.
+      _downscaleImage(ev.target.result, function(_url) {
+        S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
+        renderImgPreview();
+      });
     };
     r.readAsDataURL(item.getAsFile());
   });
@@ -11147,25 +11206,58 @@ function setDuoImageRole(role, checked) {
 function updateDuoImageUI() {
   var _sec = document.getElementById('duo-image-sec');
   if (!_sec) return;
-  var _m = S.duoImageMode || 'direct';
-  document.querySelectorAll('input[name="duo-image-mode"]').forEach(function(r) {
-    r.checked = (r.getAttribute('onchange').indexOf("'" + _m + "'") >= 0);
+  // MODE SCOPING (2026-10-03): the duo block governs code_duo runs only;
+  // the generic Direct/Preprocessor/Pipeline block governs everything else.
+  // Showing both at once (with different semantics) was the main confusion.
+  var _isDuo = (S.mode === 'code_duo');
+  _sec.style.display = _isDuo ? '' : 'none';
+  var _genericIds = ['image-mode-generic-hdr', 'image-mode-row', 'vision-flow-card', 'im-direct-sec', 'im-preprocess-sec', 'im-pipeline-sec'];
+  _genericIds.forEach(function(id) {
+    var _el = document.getElementById(id);
+    if (_el) _el.style.display = _isDuo ? 'none' : '';
   });
+  // FULL IMG-DESC block (pipeline-only): the toggle row sits in the config
+  // tab, its hint div is a sibling without the row id - hide both.
+  var _fid = document.getElementById('full-imgdesc-row');
+  if (_fid) _fid.style.display = _isDuo ? 'none' : '';
+  var _fih = document.getElementById('full-imgdesc-hint');
+  if (_fih) _fih.style.display = _isDuo ? 'none' : '';
+  var _m = S.duoImageMode || 'direct';
+  var _rPre = document.getElementById('duo-img-mode-preprocess');
+  var _rDir = document.getElementById('duo-img-mode-direct');
+  if (_rPre) _rPre.checked = (_m === 'preprocess');
+  if (_rDir) _rDir.checked = (_m !== 'preprocess');
   var _roles = document.getElementById('duo-image-roles');
   if (_roles) _roles.style.display = (_m === 'direct') ? 'block' : 'none';
   var _pChk = document.getElementById('duo-img-planner');
   var _cChk = document.getElementById('duo-img-coder');
   if (_pChk) _pChk.checked = S.duoImageToPlanner === true;
   if (_cChk) _cChk.checked = S.duoImageToCoder === true;
-  // FULL IMG-DESC is pipeline-only — hide it in duo mode
-  var _fid = document.getElementById('full-imgdesc-row');
-  if (_fid) _fid.style.display = (S.mode === 'code_duo') ? 'none' : '';
   var _pm = (S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model) || '';
   var _cm = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
   _updateDuoRoleStatus('duo-img-planner-status', 'Planner', _pm);
   _updateDuoRoleStatus('duo-img-coder-status', 'Coder', _cm);
+  // TARGET SUMMARY (2026-10-03): say explicitly whether the raw image goes
+  // to both roles or just one of them (the two checkboxes are independent).
+  if (S.pendingImgs && S.pendingImgs.length) _updateImgVisionHint();
   var _note = document.getElementById('duo-image-note');
-  if (_note) _note.style.display = (_m === 'direct' && !S.duoImageToPlanner && !S.duoImageToCoder) ? 'block' : 'none';
+  if (_note) {
+    if (_m !== 'direct') { _note.style.display = 'none'; }
+    else {
+      var _t = [];
+      if (S.duoImageToPlanner) _t.push('Planner');
+      if (S.duoImageToCoder) _t.push('Coder');
+      _note.textContent = _t.length
+        ? ('→ Raw image goes to: ' + _t.join(' + '))
+        : '→ No target selected: the image will not be used';
+      _note.style.display = 'block';
+    }
+  }
+  // PREPROCESS TRAP (2026-10-03): the radio does NOT enable the vision
+  // config, without a configured vision model the description never
+  // exists and the image is unused. Say so inline.
+  var _trap = document.getElementById('duo-image-prepro-warn');
+  if (_trap) _trap.style.display = (_isDuo && _m === 'preprocess' && !(S.visionEnabled && S.visionModel)) ? 'block' : 'none';
 }
 function _updateDuoRoleStatus(elId, label, model) {
   var _el = document.getElementById(elId);
