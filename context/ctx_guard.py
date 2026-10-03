@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Optional
 
 from utils.token import CHARS_PER_TOKEN as _CPT
 
@@ -217,7 +216,6 @@ def plan_partial_cut_index(
     guard_tokens: int,
     target_post_fraction: float = DEFAULT_PARTIAL_POST_FRACTION,
     min_tail_msgs: int = DEFAULT_PARTIAL_MIN_TAIL_MSGS,
-    estimate_fn: Optional[Callable[[list], int]] = None,
     token_ratio: float = 1.0,
 ) -> int:
     """Cut-Index fuer partial-Kompression.
@@ -236,7 +234,7 @@ def plan_partial_cut_index(
     target = max(1, min(target, int(guard_tokens or 0)))
 
     # Gesamtlaenge ueber Char-Heuristik (CHARS_PER_TOKEN Zeichen/Tok), konsistent
-    # mit utils.token.estimate_ctx_tokens, wenn kein estimate_fn uebergeben wird.
+    # mit utils.token.estimate_ctx_tokens.
     total = int(guard_tokens or 0)
     if total <= 0:
         total = int(sum(_msg_chars(m) for m in msgs) / _CPT)

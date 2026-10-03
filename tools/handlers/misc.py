@@ -33,7 +33,6 @@ async def _inline_tool_get_datetime(args: dict, _workspace: Path, _workspace_loc
     _now = datetime.now()
     _tz = _now.astimezone().strftime("%z")
     try:
-        import zoneinfo as _zi
         _tzname = _now.astimezone().tzname() or ""
     except Exception:
         _tzname = ""

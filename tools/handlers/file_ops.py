@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from utils.patterns import _RE_SEARCH_REPLACE_BLOCK, _RE_SEARCH_REPLACE_BLOCK_LENIENT
 from utils.file import fuzzy_resolve_path as _fuzzy_resolve_path, _inline_resolve_path, _inline_check_workspace
 from tools.errors import tool_error_response as _tool_error_response
 import asyncio

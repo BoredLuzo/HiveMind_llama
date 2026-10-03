@@ -95,8 +95,8 @@ async def _phase_vram(ctx, state: dict):
         yield await ctx.emit({"type": "status",
                           "content": f"⚠ VRAM warning: {_vram_warn_names} = {_duo_total:.1f}GB > budget {_budget_eff:.1f}GB (CPU overflow possible)"})
     try:
-        from backend.llama_vram_table import vram_of_with_ctx as _vram_ctx_guard, VRAM_OVERFLOW_MODELS as _vram_overflow_models
-        from backend.llama_vram_table import vram_of_moe as _vram_moe_guard, _MOE_TABLE as _moe_table_guard
+        from backend.llama_vram_table import VRAM_OVERFLOW_MODELS as _vram_overflow_models
+        from backend.llama_vram_table import vram_of_moe as _vram_moe_guard
         _coder_base = coder_mdl.rsplit("#", 1)[0] if "#" in coder_mdl else coder_mdl
         _critic_base = critic_mdl.rsplit("#", 1)[0] if "#" in critic_mdl else critic_mdl
         _coder_need = float(_vram_moe_guard(_coder_base, int(_coder_ctx)))

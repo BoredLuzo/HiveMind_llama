@@ -17,7 +17,6 @@ from infra.run_control import (
 from infra.ask_user_governor import (
     cancel_timeout as _gov_cancel_timeout,
     is_timeout_answer_sent as _gov_timeout_sent,
-    clear_throttle_triggered as _gov_clear_throttle,
     clear_throttle_state as _gov_clear_throttle_state,
 )
 from core.state import settings

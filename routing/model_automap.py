@@ -457,16 +457,6 @@ def is_valid_preprocessing_model(model: str) -> bool:
     return base in _VISION_PREPROCESSING_ALLOWLIST
 
 
-def get_best_preprocessing_model(models: list[str] | None = None) -> str | None:
-    """Pick the best vision preprocessing model from available models."""
-    if not models:
-        return None
-    for m in models:
-        if is_valid_preprocessing_model(m):
-            return m
-    return None
-
-
 def auto_resolve_model(task_type: str = "", settings: dict = None) -> str:
     """Auto-resolve model name based on task type and settings."""
     if settings:

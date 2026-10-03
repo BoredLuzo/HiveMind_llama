@@ -10,8 +10,8 @@ from .llama_manager_utils import (
     VRAM_PRE_FLIGHT_MARGIN_MIB,
     VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
     _needs_mmproj, _gguf_path_to_model_name,
-    _probe_binary_build, _probe_kv_flag, _probe_moe_flag,
-    _probe_device_flag, _probe_backend_devices, _probe_backend_dlls,
+    _probe_binary_build,
+    _probe_backend_devices, _probe_backend_dlls,
     _prefetch_key, _tcp_alive, _kill_port_sync, _nm,
 )
 from .llama_slots import ModelSlot
