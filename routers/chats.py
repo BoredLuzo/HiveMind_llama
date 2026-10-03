@@ -326,7 +326,9 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None,
         # the canonical one holds the newer state
         for _leg in _legacy_chat_files(chat_id):
             try:
-                _leg.unlink()
+                _dest = _state._SESSIONS_DIR / ".legacy" / _leg.name
+                _dest.parent.mkdir(exist_ok=True)
+                os.replace(_leg, _dest)
             except OSError:
                 pass
         return {"id": chat_id, "rev": _new_rev, "ts": stored.get("updated_at", ""),
@@ -357,6 +359,29 @@ def import_dom_messages(chat_id: str, messages: list,
 def _write_stored(chat_id: str, stored: dict) -> None:
     """Cache meta + blob extraction + atomic json write for a prepared
     stored dict (shared by _save_chat and upsert_run_message)."""
+    # TRIPWIRE (2026-10-03 review): the single write funnel reports any
+    # rev sink or message disappearance WITH the culprit stacktrace,
+    # instead of the bug being reconstructed from the aftermath.
+    import traceback as _tb
+    _p_check = Path(str(stored.get("_file") or ""))
+    try:
+        if _p_check.exists():
+            _prev = json.loads(_p_check.read_text(encoding="utf-8"))
+            _prev_rev = int(_prev.get("rev") or 0)
+            _new_rev = int(stored.get("rev") or 0)
+            if _new_rev < _prev_rev:
+                logger.error("[CHATS-TRIPWIRE] rev SINK %d -> %d (chat=%s)\n%s",
+                             _prev_rev, _new_rev, chat_id, "".join(_tb.format_stack()))
+            _prev_ids = {m.get("id") for m in (_prev.get("messages") or [])
+                         if isinstance(m, dict) and m.get("id")}
+            _new_ids = {m.get("id") for m in (stored.get("messages") or [])
+                        if isinstance(m, dict) and m.get("id")}
+            _vanished = _prev_ids - _new_ids
+            if _vanished:
+                logger.error("[CHATS-TRIPWIRE] message ids vanished %s (chat=%s)\n%s",
+                             sorted(_vanished), chat_id, "".join(_tb.format_stack()))
+    except (OSError, ValueError):
+        pass
     _msgs = stored.get("messages", [])
     _last = _msgs[-1].get("content", "") if _msgs else ""
     with _cache_lock:
@@ -423,7 +448,9 @@ def upsert_run_message(chat_id: str, msg_id: str, user_msg_id: str,
         _write_stored(chat_id, stored)
         for _leg in _legacy_chat_files(chat_id):
             try:
-                _leg.unlink()
+                _dest = _state._SESSIONS_DIR / ".legacy" / _leg.name
+                _dest.parent.mkdir(exist_ok=True)
+                os.replace(_leg, _dest)
             except OSError:
                 pass
         return {"id": chat_id, "rev": _new_rev, "msg_id": msg_id,
@@ -511,14 +538,17 @@ def _resolve_chat_file(chat_id: str) -> Path | None:
 def _replace_with_retry(src: Path, dst: Path) -> None:
     """os.replace can hit PermissionError on Windows while a reader (GET
     /chats/{id}, a checkpoint, an antivirus scan) still holds the target
-    open. Short bounded retry instead of failing the save."""
+    open. 4 retries with backoff, then fail LOUDLY - a silently dropped
+    write would lose the user's chat."""
+    _last: Exception | None = None
     for delay in (0.02, 0.05, 0.1, 0.2):
         try:
             os.replace(src, dst)
             return
-        except PermissionError:
+        except PermissionError as e:
+            _last = e
             time.sleep(delay)
-    os.replace(src, dst)
+    raise _last if _last else OSError(f"replace failed: {src} -> {dst}")
 
 
 def _read_chat_file(chat_id: str) -> dict | None:
