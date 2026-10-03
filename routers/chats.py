@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import time as _time
 import uuid
 from datetime import datetime
@@ -317,33 +318,17 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None,
         _new_rev = _cur_rev + (1 if bump_rev else 0)
         stored["rev"] = _new_rev
 
-        _file = str(stored.get("_file") or "")
-        if not _file and _state._SESSIONS_DIR:
-            _ts = str(stored.get("created_at") or
-                      datetime.now().isoformat(timespec="seconds"))
-            _ts = _ts.replace(":", "-")[:19]
-            _title = stored.get("title", "Chat")
-            _slg = _re_slug_special.sub("", _title.split("\n")[0][:40])
-            _slg = _re_slug_space.sub("-", _slg.strip()) or "Chat"
-            _file = str(_state._SESSIONS_DIR / f"{_ts}_{_slg}_{chat_id}.json")
-            stored["_file"] = _file
-        if not _file:
+        if not _state._SESSIONS_DIR:
             return None
-
-        _file = str(stored.get("_file") or "")
-        if not _file and _state._SESSIONS_DIR:
-            _ts = str(stored.get("created_at") or
-                      datetime.now().isoformat(timespec="seconds"))
-            _ts = _ts.replace(":", "-")[:19]
-            _title = stored.get("title", "Chat")
-            _slg = _re_slug_special.sub("", _title.split("\n")[0][:40])
-            _slg = _re_slug_space.sub("-", _slg.strip()) or "Chat"
-            _file = str(_state._SESSIONS_DIR / f"{_ts}_{_slg}_{chat_id}.json")
-            stored["_file"] = _file
-        if not _file:
-            return None
-
+        stored["_file"] = str(_canonical_chat_file(chat_id))
         _write_stored(chat_id, stored)
+        # adopt-and-remove: a legacy-named file is superseded the moment
+        # the canonical one holds the newer state
+        for _leg in _legacy_chat_files(chat_id):
+            try:
+                _leg.unlink()
+            except OSError:
+                pass
         return {"id": chat_id, "rev": _new_rev, "ts": stored.get("updated_at", ""),
                 "conflict": False}
 
@@ -395,7 +380,7 @@ def _write_stored(chat_id: str, stored: dict) -> None:
     _tmp = _p.with_suffix(".tmp")
     _tmp.write_text(json.dumps(_out, indent=2, ensure_ascii=False),
                     encoding="utf-8")
-    os.replace(_tmp, _p)
+    _replace_with_retry(_tmp, _p)
 
 
 def upsert_run_message(chat_id: str, msg_id: str, user_msg_id: str,
@@ -410,8 +395,6 @@ def upsert_run_message(chat_id: str, msg_id: str, user_msg_id: str,
         chat = _read_chat_file(chat_id)
         if chat is None:
             return None
-        chat["_file"] = str(next(iter(_state._SESSIONS_DIR.glob(
-            f"*_{chat_id}.json")), ""))
         stored = copy.deepcopy(chat)
         _msgs = stored.get("messages", [])
         existing = next((m for m in _msgs if m.get("id") == msg_id), None)
@@ -436,7 +419,13 @@ def upsert_run_message(chat_id: str, msg_id: str, user_msg_id: str,
                         if m.get("id") == user_msg_id), len(_msgs))
             _msgs.insert(pos, new_msg)
         stored["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        stored["_file"] = str(_canonical_chat_file(chat_id))
         _write_stored(chat_id, stored)
+        for _leg in _legacy_chat_files(chat_id):
+            try:
+                _leg.unlink()
+            except OSError:
+                pass
         return {"id": chat_id, "rev": _new_rev, "msg_id": msg_id,
                 "conflict": False}
 
@@ -494,16 +483,54 @@ class RunTranscriptWriter:
             return None
 
 
+def _canonical_chat_file(chat_id: str) -> Path:
+    """ONE file per chat, derived from the id alone (2026-10-03 review
+    fix). The old generated names (timestamp + title + id) forked the
+    chat whenever a writer lost the _file path: title-changing PUTs each
+    created a new file and sorted[-1] readers and the cache's _file
+    disagreed about which one was current - two truths, again. The name
+    still matches _RE_CHAT_ID_PATTERN, so list_chats keeps working."""
+    return _state._SESSIONS_DIR / f"chat_{chat_id}.json"
+
+
+def _legacy_chat_files(chat_id: str) -> list:
+    return [p for p in _state._SESSIONS_DIR.glob(f"*_{chat_id}.json")
+            if p.name != f"chat_{chat_id}.json"]
+
+
+def _resolve_chat_file(chat_id: str) -> Path | None:
+    c = _canonical_chat_file(chat_id)
+    if c.exists():
+        return c
+    legs = _legacy_chat_files(chat_id)
+    if not legs:
+        return None
+    return max(legs, key=lambda p: p.stat().st_mtime)
+
+
+def _replace_with_retry(src: Path, dst: Path) -> None:
+    """os.replace can hit PermissionError on Windows while a reader (GET
+    /chats/{id}, a checkpoint, an antivirus scan) still holds the target
+    open. Short bounded retry instead of failing the save."""
+    for delay in (0.02, 0.05, 0.1, 0.2):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    os.replace(src, dst)
+
+
 def _read_chat_file(chat_id: str) -> dict | None:
     """Cache-independent read of the chat json (the run path may start
     before any /chats endpoint warmed the meta cache)."""
     try:
         if not _state._SESSIONS_DIR:
             return None
-        matches = sorted(_state._SESSIONS_DIR.glob(f"*_{chat_id}.json"))
-        if not matches:
+        f = _resolve_chat_file(chat_id)
+        if f is None:
             return None
-        return json.loads(matches[-1].read_text(encoding="utf-8"))
+        return json.loads(f.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
@@ -702,17 +729,15 @@ async def update_chat(chat_id: str, req: Request):
             _last = _msgs[-1].get("content", "") if _msgs else ""
             stored["_preview"] = _last[:80] if isinstance(_last, str) else ""
             stored["updated_at"] = now
-            _file = str(stored.get("_file") or "")
-            if not _file and _state._SESSIONS_DIR:
-                _ts = str(stored.get("created_at") or now).replace(":", "-")[:19]
-                _title = stored.get("title", "Chat")
-                _slg = _re_slug_special.sub("", _title.split("\n")[0][:40])
-                _slg = _re_slug_space.sub("-", _slg.strip()) or "Chat"
-                _file = str(_state._SESSIONS_DIR / f"{_ts}_{_slg}_{chat_id}.json")
-                stored["_file"] = _file
+            stored["_file"] = str(_canonical_chat_file(chat_id))
             _new_rev = _stored_rev + 1
             stored["rev"] = _new_rev
             _write_stored(chat_id, stored)
+            for _leg in _legacy_chat_files(chat_id):
+                try:
+                    _leg.unlink()
+                except OSError:
+                    pass
             return {"conflict": False, "rev": _new_rev}
 
     _saved = await asyncio.to_thread(_atomic_update)

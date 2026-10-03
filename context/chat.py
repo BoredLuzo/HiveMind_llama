@@ -54,6 +54,17 @@ def history_seed(chat_id: str, limit: int = 40) -> list:
     # carried by the new prompt, not by the dead attempt.
     while seed and seed[-1].get("role") == "user":
         seed = seed[:-1]
+    # INTERRUPTED MARKER (2026-10-03 review): an aborted run's partial
+    # answer must not be continued as if it were complete - tell the model
+    # explicitly what happened.
+    for _m in seed:
+        if _m.get("role") == "assistant" and _m.get("interrupted"):
+            _i = seed.index(_m)
+            _c = dict(_m)
+            _c["content"] = (str(_c.get("content", ""))
+                             + "\n[NOTE: this reply was cut off by the user "
+                               "or an error and may be INCOMPLETE]")
+            seed[_i] = _c
     # ALTERNATION (2026-10-03): an aborted run leaves its unanswered user
     # message in the transcript - with the new prompt that makes two user
     # messages in a row, which strict templates (gemma/mistral) reject.

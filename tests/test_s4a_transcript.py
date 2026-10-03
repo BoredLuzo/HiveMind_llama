@@ -49,6 +49,7 @@ class _FakeRequest:
 
 
 def main():
+    import context.chat as CC
     import core.state as _state
     from routers import chats as C
 
@@ -174,7 +175,6 @@ def main():
         cid3 = cid3["id"]
         C.upsert_run_message(cid3, "runA1", uid3, "first answer",
                              agent="Coder", interrupted=False, bump_rev=True)
-        rev_after_a1 = C.get_chat_rev(cid3)
         C.upsert_run_message(cid3, "runA2", uid3, "second answer",
                              agent="Coder", interrupted=False, bump_rev=True)
         # REGENERATE: the frontend discards BOTH answers, re-runs, and its
@@ -209,35 +209,116 @@ def main():
 
         # 4c. checkpoint under concurrent metadata PUT: no lost update
         # (both writers run under the same per-chat threading lock)
+        # ONE event loop shared by both writer threads (asyncio.run per
+        # call would create a fresh loop per iteration)
         import threading as _th
-        _errors = []
-        def _checkpoint_loop():
-            for i in range(20):
-                try:
-                    C.upsert_run_message(cid, "midRUN01", uid,
-                                         f"checkpoint {i}", agent="Coder",
-                                         interrupted=False, bump_rev=False)
-                except Exception as e:
-                    _errors.append(f"ckpt: {e}")
-        def _meta_loop():
-            for i in range(20):
-                try:
-                    r = asyncio.run(C.update_chat(cid, _FakeRequest({
-                        "title": f"s4a r{i}",
-                        "base_rev": C.get_chat_rev(cid)})))
-                    if not r.get("ok"):
-                        _errors.append(f"meta rejected: {r}")
-                except Exception as e:
-                    _errors.append(f"meta: {e}")
-        t1 = _th.Thread(target=_checkpoint_loop)
-        t2 = _th.Thread(target=_meta_loop)
-        t1.start(); t2.start(); t1.join(); t2.join()
-        got_t = asyncio.run(C.get_chat(cid))
-        has_run = any(m.get("id") == "midRUN01" for m in got_t["messages"])
-        if not _errors and has_run and got_t["title"].startswith("s4a r"):
-            ok("checkpoint vs metadata PUT under lock: no lost update")
+        _loop = asyncio.new_event_loop()
+        _ready = _th.Event()
+        def _run_loop():
+            asyncio.set_event_loop(_loop)
+            _ready.set()
+            _loop.run_forever()
+        _lt = _th.Thread(target=_run_loop, daemon=True)
+        _lt.start()
+        _ready.wait()
+
+        def _put(coro):
+            return asyncio.run_coroutine_threadsafe(coro, _loop).result(30)
+
+        _ROUNDS = 50
+        _oplog = []
+        _log_lock = _th.Lock()
+        for attempt in range(3):
+            _errors = []
+            _done = {"ckpt": 0, "meta": 0}
+            _barrier = _th.Barrier(2)
+            _oplog.clear()
+            def _checkpoint_loop():
+                _barrier.wait()
+                for i in range(_ROUNDS):
+                    try:
+                        _rb = C.get_chat_rev(cid)
+                        r = C.upsert_run_message(cid, "midRUN01", uid,
+                                             f"checkpoint {attempt}-{i}",
+                                             agent="Coder",
+                                             interrupted=False, bump_rev=False)
+                        _done["ckpt"] += 1
+                        with _log_lock:
+                            _oplog.append(f"ckpt i={i} rev_before={_rb} -> {r.get('rev') if r else None}")
+                    except Exception as e:
+                        _errors.append(f"ckpt: {e}")
+            def _meta_loop():
+                _barrier.wait()
+                for i in range(_ROUNDS):
+                    try:
+                        _rb = C.get_chat_rev(cid)
+                        r = _put(C.update_chat(cid, _FakeRequest({
+                            "title": f"s4a r{attempt}-{i}",
+                            "base_rev": _rb})))
+                        if not r.get("ok"):
+                            _errors.append(f"meta rejected: {r}")
+                        else:
+                            _done["meta"] += 1
+                            with _log_lock:
+                                _oplog.append(f"meta i={i} rev_before={_rb} -> {r.get('rev')}")
+                    except Exception as e:
+                        _errors.append(f"meta: {e}")
+            t1 = _th.Thread(target=_checkpoint_loop)
+            t2 = _th.Thread(target=_meta_loop)
+            t1.start(); t2.start(); t1.join(); t2.join()
+            _revs = [int(m.group(1)) for m in
+                     [__import__("re").match(r".*-> (\d+)$", entry) for entry in _oplog]
+                     if m]
+            _gaps = [(a, b) for a, b in zip(_revs, _revs[1:]) if b != a + (1 if True else 1)]
+            # every successful write must move the rev forward by exactly 1
+            _bad = [(a, b) for a, b in zip(_revs, _revs[1:]) if b <= a]
+            got_t = asyncio.run(C.get_chat(cid))
+            has_run = any(m.get("id") == "midRUN01" for m in got_t["messages"])
+            files = [f for f in ws.glob("*.json") if cid in f.name]
+            if not _errors and has_run and _done["ckpt"] == _ROUNDS                     and _done["meta"] == _ROUNDS and len(files) == 1:
+                break
+        if not _errors and _done["ckpt"] == _ROUNDS and _done["meta"] == _ROUNDS                 and has_run and len(files) == 1 and not _bad:
+            ok(f"3x{_ROUNDS} concurrent checkpoint/meta rounds: no lost update, ONE file")
         else:
-            fail("concurrent writers", f"errors={_errors[:2]} title={got_t['title'][:20]}")
+            fail("concurrent writers", f"errors={_errors[:2]} done={_done} files={[f.name for f in files]} "
+                                       f"bad_revs={_bad[:5]} last_ops={_oplog[-6:]}")
+            files = []
+
+        # alt-loader compatibility: a v1 chat file (no rev, legacy name,
+        # but carrying the new per-message fields) loads untouched
+        v1 = {"id": "c0ffee11", "title": "v1 chat", "created_at": "t",
+              "updated_at": "t",
+              "messages": [
+                  {"role": "user", "content": "legacy question"},
+                  {"role": "assistant", "agent": "Coder", "content": "legacy answer",
+                   "id": "whatever", "reply_to": None, "interrupted": False},
+              ]}
+        (ws / "2026-01-01T00-00-00_v1_c0ffee11.json").write_text(
+            json.dumps(v1), encoding="utf-8")
+        # production shape: the v1 file exists at boot, before the cache
+        C._cache_loaded = False
+        C._chats_cache.clear()
+        got_v1 = asyncio.run(C.get_chat("c0ffee11"))
+        if got_v1["messages"][1]["content"] == "legacy answer"                 and got_v1["messages"][1].get("interrupted") is False                 and int(got_v1.get("rev") or 0) == 0:
+            ok("v1 file (legacy name, no rev) loads, fields pass through")
+        else:
+            fail("v1 loader", json.dumps(got_v1)[:140])
+
+        # interrupted visibility seed-side: the transcript seed marks the
+        # partial answer so the model does not continue it as if complete
+        CC._SESSIONS_DIR = ws  # the transcript reader lives in context.chat
+        print("    SEED-DBG files:", [f.name for f in ws.glob("*.json") if cid in f.name])
+        _raw = json.loads((ws / f"chat_{cid}.json").read_text(encoding="utf-8"))
+        print("    SEED-DBG raw roles:", [(m.get("role"), m.get("id"), str(m.get("content"))[:20]) for m in _raw["messages"]])
+        seed_i = CC.history_seed(cid)
+        print("    SEED-DBG seed:", [(m.get("role"), str(m.get("content"))[:30]) for m in seed_i])
+        # the seed carries role+content only (ids are a disk concern),
+        # so the marker is matched by the partial text
+        m03 = [m for m in seed_i if "partial before stop" in str(m.get("content", ""))]
+        if m03 and "INCOMPLETE" in m03[0]["content"]:
+            ok("seed marks interrupted answers as INCOMPLETE")
+        else:
+            fail("seed interrupted marker", str(m03[:1]))
 
         # 5. interrupted append keeps alternation and carries the flag
         C.upsert_run_message(cid, "midRUN03", uid, "partial before stop",

@@ -9802,6 +9802,13 @@ async function loadChat(chatId) {
           '<span class="aname" style="color:' + color + '">' + esc(msg.agent || 'Assistant') + '</span>';
         const abody = document.createElement('div');
         abody.className = 'abody';
+        if (msg.interrupted) {
+          // S4a: a partial answer from an aborted run - visible, honest
+          const _warn = document.createElement('div');
+          _warn.style.cssText = 'font-size:10px;color:#e0a040;margin-bottom:4px';
+          _warn.textContent = '⚠ Reply was interrupted and may be incomplete.';
+          abody.appendChild(_warn);
+        }
         if (msg.html && msg.html.trim()) {
           abody.innerHTML = _sanitizeChatHtml(msg.html);
         } else {
