@@ -144,9 +144,11 @@ DEFAULT_SETTINGS = {
     "session_compress_threshold": 20,
     # Token budget for the conversation history a run sees (2026-10-03).
     # Replaces blind message-count caps: newest turns verbatim, older
-    # turns dropped whole once the budget is full. 4096 fits an 8k ctx;
-    # raise it with the context you actually run.
-    "session_history_budget_tokens": 4096,
+    # turns dropped whole once the budget is full. 0 (default) derives
+    # the budget from the direct model's context (35% of n_ctx minus a
+    # 4096 reserve for system prompt and output); set a number to force
+    # a fixed budget.
+    "session_history_budget_tokens": 0,
 
     # ════════════════════════════════════════════════════════════════════════
     # E) EXPLORE, REPO-MAP & MEMORY

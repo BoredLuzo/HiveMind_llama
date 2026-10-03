@@ -27,6 +27,15 @@ def window_by_budget(messages: list[dict], budget_tokens: int) -> list[dict]:
     whole - never mid-sentence."""
     if not messages:
         return []
+    # HARD FILTER (2026-10-03): this window is for seeded chat text only.
+    # A boundary landing inside an assistant(tool_calls)+tool pair would
+    # emit an orphaned half that servers reject - drop anything that is
+    # not a plain user/assistant turn, whatever the caller passes in.
+    messages = [m for m in messages
+                if m.get("role") in ("user", "assistant")
+                and not m.get("tool_calls")]
+    if not messages:
+        return []
     kept: list = []
     total = 0
     for m in reversed(messages):

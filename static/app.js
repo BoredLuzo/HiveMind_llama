@@ -5283,7 +5283,12 @@ async function sendMsg() {
     // HISTORY-SOURCE FLUSH (2026-10-03): the run seeds its history from
     // the saved chat json - persist BEFORE the stream starts so the json
     // holds this turn (and any post-edit state) exactly as the UI does.
-    if (S.chatAutosave) { try { await persistCurrentChat(true); } catch (e) {} }
+    if (S.chatAutosave) {
+      try {
+        var _flushed = await persistCurrentChat(true);
+        if (!_flushed) showStatus('⚠ Chat could not be saved before this run - history context may be stale.');
+      } catch (e) { showStatus('⚠ Chat could not be saved before this run - history context may be stale.'); }
+    }
 
     const res = await fetch('/stream', {
       method:'POST', headers:{'Content-Type':'application/json'},

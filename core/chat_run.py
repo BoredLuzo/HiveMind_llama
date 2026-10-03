@@ -40,6 +40,20 @@ from infra.token_stats import _estimate_tokens_from_content
 from utils.math import percentile_float as _percentile_float
 from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
 from utils.token import window_by_budget
+
+
+def _history_budget_tokens(settings) -> int:
+    """History budget: override wins; 0 derives from the direct model's
+    ctx (35% of n_ctx minus a 4096 reserve for system prompt + output)."""
+    _ov = int(settings.get("session_history_budget_tokens", 0) or 0)
+    if _ov > 0:
+        return _ov
+    try:
+        _ref = registry_get("direct") or registry_get("analyst") or ""
+        _nctx = int(_get_num_ctx(_ref) or 8192) if _ref else 8192
+    except Exception:
+        _nctx = 8192
+    return max(1024, int((_nctx - 4096) * 0.35))
 from tools.websearch import _safe_web_search
 from hive_functions.prompts import AGENT_ROLES, HIVEMIND_SOUL, VISION_AGENT_PROMPT
 from hive_functions.soul_engine import (
@@ -834,8 +848,7 @@ async def run_stream(
     # TOKEN BUDGET (2026-10-03): 40x8000 chars can dwarf a small ctx -
     # the window keeps the newest turns and drops older ones whole.
     _pipeline_sess_msgs = window_by_budget(
-        _pipeline_sess_msgs,
-        int(settings.get("session_history_budget_tokens", 4096) or 4096),
+        _pipeline_sess_msgs, _history_budget_tokens(settings),
     )  # SESSION-CACHE: 8 DB-Calls - 1 pro Run
     # Threshold: SESSION_COMPRESS_THRESHOLD messages (configurable via settings).
     _sess_compress_threshold = int(settings.get("session_compress_threshold", SESSION_COMPRESS_THRESHOLD))
@@ -1028,7 +1041,7 @@ async def run_stream(
                 _state.memory.get_session_messages(
                     limit=40, user_cap=8000, assistant_cap=8000,
                 ),
-                int(settings.get("session_history_budget_tokens", 4096) or 4096),
+                _history_budget_tokens(settings),
             )  # fresh, uncompressed
 
     if _judge_verdict:

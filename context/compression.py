@@ -354,6 +354,14 @@ async def _compress_tool_context(
         _older_msgs = _history_msgs
         _recent_tail_msgs = []
 
+    # PAIR-INTEGRITY (2026-10-03): the count-based tail boundary can land
+    # between an assistant tool_calls message and its tool result. A tail
+    # STARTING with an orphan role=="tool" message is rejected by the
+    # server ("tool message must follow tool_calls") - trim until the
+    # first tail message is not an orphaned tool result.
+    while _recent_tail_msgs and _recent_tail_msgs[0].get("role") == "tool":
+        _recent_tail_msgs.pop(0)
+
     _condensed_files: set = set()
     for _om in _older_msgs:
         if _om.get("role") != "tool" or _om.get("name") != "read_file":

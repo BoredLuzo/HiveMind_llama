@@ -49,7 +49,18 @@ def history_seed(chat_id: str, limit: int = 40) -> list:
             seed = []
     if seed and seed[-1].get("role") == "user":
         seed = seed[:-1]
-    return seed
+    # ALTERNATION (2026-10-03): an aborted run leaves its unanswered user
+    # message in the transcript - with the new prompt that makes two user
+    # messages in a row, which strict templates (gemma/mistral) reject.
+    # Merge consecutive same-role messages instead of emitting them raw.
+    merged: list = []
+    for m in seed:
+        if merged and merged[-1].get("role") == m.get("role"):
+            merged[-1] = dict(merged[-1])
+            merged[-1]["content"] = (merged[-1].get("content", "") + "\n" + m.get("content", "")).strip()
+        else:
+            merged.append(m)
+    return merged
 
 
 def get_chat_workspace(chat_id: str) -> str:
