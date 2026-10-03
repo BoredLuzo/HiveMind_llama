@@ -91,6 +91,7 @@ let S = {
   currentChatId: null,
   currentChatMessages: [],
   chatAutosave: true,
+  imagePersist: false,
    // Abort
    currentRunId: null,
    // Pause / Ask-User
@@ -911,6 +912,9 @@ async function loadSettings() {
     S.chatAutosave = s.chat_autosave_enabled !== false;
     var _chatAutosaveEl = document.getElementById('chat-autosave-toggle');
     if (_chatAutosaveEl) _chatAutosaveEl.checked = S.chatAutosave;
+    S.imagePersist = s.image_uploads_persistent === true;
+    var _imgPersistEl = document.getElementById('image-persist-toggle');
+    if (_imgPersistEl) _imgPersistEl.checked = S.imagePersist;
 
     // Image → pipeline toggle
     var imgPipeEl = document.getElementById('img-pipeline-toggle');
@@ -9511,6 +9515,14 @@ function chatAutosaveToggle(el) {
   S.chatAutosave = !!el.checked;
   postSettings({chat_autosave_enabled: S.chatAutosave});
   showStatus(S.chatAutosave ? 'Auto-save enabled.' : 'Auto-save disabled.');
+}
+
+function imagePersistToggle(el) {
+  S.imagePersist = !!el.checked;
+  postSettings({image_uploads_persistent: S.imagePersist});
+  showStatus(S.imagePersist
+    ? 'Uploaded images are kept in workspace .hive_uploads.'
+    : 'Uploaded images are temporary: available during the run, removed after.');
 }
 
 async function persistCurrentChat(silent) {

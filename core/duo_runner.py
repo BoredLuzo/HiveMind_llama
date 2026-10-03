@@ -844,7 +844,12 @@ async def run_code_duo(ctx):
         _duo_critic_sys = ctx.get_effective_prompt_with_override(_duo_critic_key, ctx.active_preset, ctx.use_learned)
         if not _duo_critic_sys:
             _duo_critic_sys = _DUO_CRITIC_CODE_DEFAULT if ctx.duo_config.coding_mode else _DUO_CRITIC_GEN_DEFAULT
-        _critic_thinking = False
+        # IMAGE DESCRIPTION FOR CRITIC (2026-10-03): the critic judges the
+        # coder's output against the image - without the description it
+        # cannot check visual requirements (live: "add a firework like in
+        # the image" plans failed silently in review).
+        if getattr(ctx, "image_description", "") and not _duo_critic_sys.startswith("[IMAGE DESCRIPTION]"):
+            _duo_critic_sys += "\n\n[IMAGE DESCRIPTION - judge visual requirements against this]:\n" + ctx.image_description
         _critic_profile = get_sampling_profile(critic_mdl, _critic_thinking, ctx.settings)
     else:
         _duo_critic_sys = ""

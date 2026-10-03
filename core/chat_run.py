@@ -595,7 +595,10 @@ async def run_stream(
     # the run they were gone. Save them once into the workspace so they
     # survive, are referenceable by the coder, and the UI note is honest.
     _saved_image_paths: list = []
-    if images and _ws_str:
+    # PERSIST TOGGLE (2026-10-03): OFF (default) = images live only as base64
+    # parts inside this run - no disk writes, nothing to clean up. ON = saved
+    # under <workspace>/.hive_uploads/ and referenced by path afterwards.
+    if images and _ws_str and bool(settings.get("image_uploads_persistent", False)):
         try:
             import base64 as _b64mod
             from datetime import datetime as _dt

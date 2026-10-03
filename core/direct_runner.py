@@ -86,7 +86,11 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         if not _tools:
             return
         _num_ctx = ctx.get_num_ctx(model, "direct") or 8192
-        _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx)
+        # IMAGES (2026-10-03): raw parts need the projector — load with
+        # vision when the run carries images (upgrade-only reload in the
+        # manager; no-op for text-only models).
+        _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx,
+                                         vision=bool(getattr(ctx, "effective_images", None)))
         _agent = ctx.pipeline.agents["direct"]
         _think = bool(getattr(_agent, "thinking", False))
         _budget = int(getattr(_agent, "thinking_budget", 0) or 0)

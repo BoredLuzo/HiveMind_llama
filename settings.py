@@ -398,6 +398,9 @@ DEFAULT_SETTINGS = {
     "duo_image_mode": None,
     "duo_image_to_planner": False,
     "duo_image_to_coder": False,
+    # False = uploads live only as base64 inside the run (nothing on disk);
+    # True = kept under <workspace>/.hive_uploads and referenced by path.
+    "image_uploads_persistent": False,
     # Tool-error hard-stop cap for agentic runs. Successful non-write calls
     # decay the counter by 1, successful writes reset it to 0 — only a
     # no-progress run (this many fails with nothing succeeded in between)

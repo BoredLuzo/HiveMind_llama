@@ -1895,6 +1895,10 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       <input type="checkbox" id="chat-autosave-toggle" checked onchange="chatAutosaveToggle(this)">
       Auto-save chats
     </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:8px;cursor:pointer" title="ON: uploads are kept in workspace .hive_uploads. OFF: available to the models during the run only, then removed.">
+      <input type="checkbox" id="image-persist-toggle" onchange="imagePersistToggle(this)">
+      Keep uploaded images
+    </label>
     <button onclick="saveCurrentChat()" class="amber-btn" style="width:100%;margin-bottom:10px">
       &#9660; Save current chat
     </button>
