@@ -81,40 +81,49 @@ def main():
             cid = data.get("id") or "realfake1"
             cid = cid if all(ch in "0123456789abcdef-" for ch in cid) else "realfake1"
 
-            # isolated copy of this one chat
+            # isolated copy of this one chat - blob dir travels with it
+            # (a chat is no longer self-contained, see routers/chats.py)
             ws = tmp / cid
             ws.mkdir()
+            src_blobs = f.parent / f"{cid}.blobs"
+            if src_blobs.is_dir():
+                shutil.copytree(src_blobs, ws / f"{cid}.blobs")
             _state._SESSIONS_DIR = ws
             C._cache_loaded = False
             C._chats_cache.clear()
 
-            msgs0 = data.get("messages", [])
-            m0 = copy.deepcopy(msgs0)
+            disk_msgs = data.get("messages", [])
 
-            # save-side extraction on the real payloads
-            chat = {"id": cid, "title": data.get("title", ""), "messages": msgs0,
+            # R1: what the loader hands the UI for the on-disk form
+            r1 = copy.deepcopy(disk_msgs)
+            C._restore_messages(cid, r1)
+            placeholders = sum(
+                1 for m in r1 if isinstance(m, dict)
+                for v in [json.dumps(m)] if "[missing: stored content" in v
+            )
+            if placeholders:
+                fail(f"{f.name}: {placeholders} placeholder(s) in a healthy chat")
+
+            # cycle stability: save(R1) -> load -> restore == R1
+            chat = {"id": cid, "title": data.get("title", ""), "messages": copy.deepcopy(r1),
                     "created_at": data.get("created_at", ""),
                     "updated_at": data.get("updated_at", "")}
             C._save_chat(cid, chat)
-
-            # on-disk json must differ (refs) when there was something big
-            disk = json.loads(next(
+            disk2 = json.loads(next(
                 p for p in ws.glob(f"*_{cid}.json")
             ).read_text(encoding="utf-8"))
+            r2 = copy.deepcopy(disk2["messages"])
+            C._restore_messages(cid, r2)
 
-            # load-side restore
-            restored = copy.deepcopy(disk["messages"])
-            C._restore_messages(cid, restored)
-
-            if restored == m0:
-                n_msgs = len(m0)
-                cp_n = sum(1 for m in m0 if isinstance(m, dict) and m.get("cp"))
-                img_n = sum(1 for m in m0 if isinstance(m, dict) and m.get("images"))
+            if r2 == r1:
+                n_msgs = len(r1)
+                cp_n = sum(1 for m in r1 if isinstance(m, dict) and m.get("cp"))
+                img_n = sum(1 for m in r1 if isinstance(m, dict) and m.get("images"))
                 ok(f"{f.name}: {n_msgs} msgs, {cp_n} snapshots, "
-                   f"{img_n} image msgs - lossless roundtrip")
+                   f"{img_n} image msgs - lossless roundtrip (cycle stable)")
             else:
                 fail(f"{f.name}: roundtrip differs")
-                for i, (a, b) in enumerate(zip(m0, restored)):
+                for i, (a, b) in enumerate(zip(r1, r2)):
                     if a != b:
                         print(f"    first diff in message {i}: "
                               f"{json.dumps(a)[:120]} vs {json.dumps(b)[:120]}")
