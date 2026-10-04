@@ -57,8 +57,12 @@ def main() -> int:
                          "expected windowed message count (window_by_budget, offline)")
     args = ap.parse_args()
 
-    secret_early = "KIVU-" + secrets.token_hex(3).upper()
-    secret_late = "ZORP-" + secrets.token_hex(3).upper()
+    # PROBE WORDS (2026-10-04, Sonnet): hex codes invite paraphrase - the
+    # model hallucinated live ("KIVU-E11DB9" vs E14D3B). Words are verbatim-
+    # checkable, so a wrong quote is PROOF of context loss, not sloppiness.
+    _WORDS = ["ANCHOR", "BANJO", "CANDLE", "DYNAMO", "EMBER", "FALCON"]
+    secret_early = "EARLY-" + _WORDS[0] + "-" + str(secrets.randbelow(90) + 10)
+    secret_late = "LATE-" + _WORDS[5] + "-" + str(secrets.randbelow(90) + 10)
     msgs = []
     for t in range(1, args.turns + 1):
         if t == 3:

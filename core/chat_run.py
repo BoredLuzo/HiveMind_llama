@@ -874,6 +874,18 @@ async def run_stream(
     # HISTORY SOURCE (2026-10-03): the chat json transcript is the ONE
     # continuation source - UI and model now share the same story. The
     # sidecar "session" key demotes to a fallback for chats without a json.
+    # CHAT-SWITCH INVALIDATION (2026-10-04, live A/B test): Memory._session
+    # is process-global - without this tag, loading chat B inherits chat
+    # A's history (seed_session skips a filled memory). Proven live: chat A
+    # seeded "blob live check", chat B answered from A's context instead of
+    # its own json.
+    _mem_cid = getattr(_state.memory, "_session_chat_id", None)
+    if _mem_cid != (chat_id or ""):
+        _state.memory.clear_session()
+        try:
+            _state.memory._session_chat_id = chat_id or ""
+        except AttributeError:
+            pass
     if chat_id and not _state.memory.get_session_messages():
         _seed = []
         _seed_source = "none"
@@ -906,11 +918,18 @@ async def run_stream(
     _pipeline_sess_msgs = _state.memory.get_session_messages(
         limit=40, user_cap=8000, assistant_cap=8000,
     )
+    _sess_before_window = len(_pipeline_sess_msgs)
     # TOKEN BUDGET (2026-10-03): 40x8000 chars can dwarf a small ctx -
     # the window keeps the newest turns and drops older ones whole.
     _pipeline_sess_msgs = window_by_budget(
         _pipeline_sess_msgs, _history_budget_tokens(settings),
     )  # SESSION-CACHE: 8 DB-Calls - 1 pro Run
+    # WINDOW TRACE (2026-10-04, Sonnet): the seed count alone does not prove
+    # the budget reached the window - log before/after so run C's expected N
+    # (window_by_budget offline) can be checked against the log.
+    _logger.info("[SESSION-WINDOW] before=%d after=%d budget=%d",
+                 _sess_before_window, len(_pipeline_sess_msgs),
+                 _history_budget_tokens(settings))
     # Threshold: SESSION_COMPRESS_THRESHOLD messages (configurable via settings).
     _sess_compress_threshold = int(settings.get("session_compress_threshold", SESSION_COMPRESS_THRESHOLD))
     _skip_compress = (mode == "code_duo" or duo_config.agentic_mode)

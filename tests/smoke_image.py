@@ -155,7 +155,9 @@ def post_stream(base: str, payload: dict, timeout: float):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://localhost:8001")
-    ap.add_argument("--code", default="XY42")
+    ap.add_argument("--code", default="",
+                    help="default: RANDOM per run (2026-10-04, Sonnet #1: a fixed "
+                         "pattern like the old XY42 default is hallucinatable)")
     ap.add_argument("--timeout", type=float, default=1200)
     ap.add_argument("--chat-id", default=None, help="continue this chat instead of a new one")
     ap.add_argument("--mode", default="code_duo", choices=("code_duo", "chat"),
@@ -164,6 +166,11 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true",
                     help="build the PNG + payload, write _smoke_preview.png, print the plan - no POST")
     args = ap.parse_args()
+
+    import secrets as _secrets
+    _CODE_ALPHABET = "0123456789ABCDEFQTXYZ"
+    _code = args.code or "".join(_secrets.choice(_CODE_ALPHABET) for _ in range(5)).upper()
+    args.code = _code
 
     # GLYPH VALIDATION (2026-10-04, eyeball dry-run finding): unknown chars
     # used to render as BLANK SPACES - "--code T7Q2" showed "7 2" and the

@@ -272,6 +272,35 @@ def test_direct_drop_unknown_props_trusts_plan():
     assert direct_vision_should_drop(None, "minicpm5:2b", "minicpm5:2b") is False
 
 
+# ── RUN-D FIX regression (2026-10-04): the ToolLoop builds its own POST
+#    payload - it MUST convert the raw "images" key to image_url parts, or
+#    llama-server silently ignores the image ("please attach the image"
+#    although it was in the payload). Source-level pin + unit pin. ─────────
+
+def test_toolloop_payload_converts_images():
+    import io
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "core", "tool_loop.py")
+    src = io.open(path, encoding="utf-8").read()
+    assert "_msgs_to_parts(_tool_messages)" in src, \
+        "ToolLoop payload must run messages through _convert_messages"
+
+
+def test_convert_messages_turns_images_key_into_parts():
+    from backend.llama_client import _convert_messages
+    msgs = [{"role": "user", "content": "[USER]\nhi",
+             "images": ["QUJD", "data:image/png;base64,WFla"]}]
+    out = _convert_messages(msgs)
+    c = out[0]["content"]
+    assert isinstance(c, list) and len(c) == 3
+    assert c[0]["type"] == "image_url" and "QUJD" in c[0]["image_url"]["url"]
+    assert c[1]["type"] == "image_url" and "WFla" in c[1]["image_url"]["url"]
+    assert c[2] == {"type": "text", "text": "[USER]\nhi"}
+    assert "images" not in out[0]  # raw key gone - llama-server cannot read it
+    # no images -> untouched passthrough
+    assert _convert_messages([{"role": "user", "content": "x"}]) == [{"role": "user", "content": "x"}]
+
+
 # ── the graded-down plan must never carry the [VISION] note
 #    (Sonnet round 7 #3): tests the REAL prompt-build branch, not the
 #    retraction string-replace. ────────────────────────────────────────────
