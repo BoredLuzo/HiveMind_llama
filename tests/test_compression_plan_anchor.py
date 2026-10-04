@@ -241,11 +241,11 @@ def test_source_structure():
         ok("C6: duo_runner passes the anchor to compression AND validation")
     else:
         fail("C6: duo_runner wiring missing")
-    if "def _build_plan_anchor_text(subtasks: list, plan_tracker) -> str:" in text_d:
+    if "def _build_plan_anchor_text(subtasks: list, plan_tracker" in text_d:
         ok("C7: anchor building as an importable pure module function in duo_runner")
     else:
         fail("C7: module function missing")
-    if "_plan_anchor_text = _build_plan_anchor_text(_subtasks, _plan_tracker)" in text_d:
+    if "_plan_anchor_text = _build_plan_anchor_text(" in text_d and "_subtasks, _plan_tracker" in text_d:
         ok("C8: compression call site uses the module function (no inline duplicate)")
     else:
         fail("C8: inline duplicate still present")

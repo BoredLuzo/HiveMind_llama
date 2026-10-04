@@ -519,20 +519,29 @@ def _inject_plan_into_coder_msgs(dtool_msgs, plan_result, *, chunking: bool, is_
     return False
 
 
-def _build_plan_anchor_text(subtasks: list, plan_tracker) -> str:
-
-
+def _build_plan_anchor_text(subtasks: list, plan_tracker, plan_content: str = "") -> str:
+    # BODY-EXCERPT (2026-10-04, compression verification): the anchor is the
+    # ONLY part of the plan that survives local-only compression (verified in
+    # tests/test_compression_plan_survival.py) - subtask titles alone can be
+    # too coarse for visual detail ("rebuild UI from image"). A compact
+    # excerpt of the plan body rides along; the anchor is re-injected
+    # verbatim, so details in the body now survive compression too.
+    _base = ""
     if subtasks:
-        return ", ".join(str(t) for t in subtasks)
-    if plan_tracker is not None and getattr(plan_tracker, "total", 0) > 0:
+        _base = ", ".join(str(t) for t in subtasks)
+    elif plan_tracker is not None and getattr(plan_tracker, "total", 0) > 0:
         _anchor_steps = []
         for _aps in getattr(plan_tracker, "_plan", None).steps:
             _aps_paths = ", ".join(getattr(_aps, "expected_paths", []) or []) or "?"
             _anchor_steps.append(
                 f"step {getattr(_aps, 'id', '?')}: {getattr(_aps, 'intent', '') or ''} → {_aps_paths}"
             )
-        return "; ".join(_anchor_steps)
-    return ""
+        _base = "; ".join(_anchor_steps)
+    _excerpt = str(plan_content or "").strip()
+    if _excerpt:
+        _excerpt = _excerpt[:600] + ("…" if len(_excerpt) > 600 else "")
+        _base = (_base + "\nPLAN EXCERPT: " + _excerpt) if _base else ("PLAN EXCERPT: " + _excerpt)
+    return _base
 
 
 def _strip_stale_ctx_notices(msgs: list) -> list:
@@ -4084,7 +4093,12 @@ async def run_code_duo(ctx):
                                 )
                             # PLAN-ANCHOR-FIX (2.2): anchor text via pure module function
                             # (testable, identical logic — see _build_plan_anchor_text).
-                            _plan_anchor_text = _build_plan_anchor_text(_subtasks, _plan_tracker)
+                            # BODY-EXCERPT: plan_content rides along so visual
+                            # details survive local-only compression.
+                            _plan_anchor_text = _build_plan_anchor_text(
+                                _subtasks, _plan_tracker,
+                                plan_content=(getattr(_plan_result, "plan_content", "") or "")
+                                if _plan_result is not None else "")
                             # CACHE-FRIENDLY partial vs full (2026-09-04):
                             # partial keeps a large raw tail byte-identical
                             # at the end -> llama.cpp --cache-reuse KV shift

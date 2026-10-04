@@ -9818,6 +9818,52 @@ async function loadChatHistory() {
   } catch(e) {}
 }
 
+// SEARCHBAR PHASE 1 (2026-10-04): debounced live search over chat titles +
+// message contents (GET /chats/search). Results replace the list while
+// typing; empty/short input restores the normal history.
+var _chatSearchTimer = null;
+function chatSearch(q) {
+  if (_chatSearchTimer) clearTimeout(_chatSearchTimer);
+  var box = document.getElementById('chat-search-results');
+  var list = document.getElementById('chat-history-list');
+  q = (q || '').trim();
+  if (q.length < 2) {
+    if (box) box.style.display = 'none';
+    if (list) list.style.display = '';
+    return;
+  }
+  _chatSearchTimer = setTimeout(async function() {
+    try {
+      const d = await (await fetch('/chats/search?q=' + encodeURIComponent(q))).json();
+      if (!box) return;
+      box.style.display = 'block';
+      if (list) list.style.display = 'none';
+      box.innerHTML = '';
+      var res = d.results || [];
+      if (!res.length) {
+        box.innerHTML = '<div class="empty" style="font-size:10px;padding:6px 2px">No matches.</div>';
+        return;
+      }
+      res.forEach(function(r) {
+        var item = document.createElement('div');
+        item.className = 'chat-hist-item';
+        item.title = 'Click to load';
+        var info = document.createElement('div'); info.className = 'chat-hist-info';
+        var title = document.createElement('div'); title.className = 'chat-hist-title';
+        title.textContent = r.title;
+        var snip = document.createElement('div'); snip.className = 'chat-hist-preview';
+        snip.textContent = (r.match_in === 'title' ? 'title match: ' : '…') + r.snippet;
+        info.appendChild(title); info.appendChild(snip);
+        item.appendChild(info);
+        (function(chatId) {
+          item.addEventListener('click', function() { loadChat(chatId); });
+        })(r.id);
+        box.appendChild(item);
+      });
+    } catch(e) { /* network hiccup: keep the normal list */ }
+  }, 220);
+}
+
 async function loadChat(chatId) {
   if (S.streaming) { showStatus('Please wait until the current stream has finished.'); return; }
   try {

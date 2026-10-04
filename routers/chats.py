@@ -507,6 +507,65 @@ async def persist_chat(req: Request):
             "created": True, "updated": False}
 
 
+@router.get("/search")
+async def search_chats(q: str = "", limit: int = 20):
+    """SEARCHBAR PHASE 1 (2026-10-04): case-insensitive substring search over
+    chat titles AND message contents. Reads the session jsons in a thread
+    (the meta cache has no message bodies); returns id/title/updated_at plus
+    a snippet around the first message match. Registered BEFORE /{chat_id}
+    so the path router does not swallow it."""
+    _q = (q or "").strip().lower()
+    if len(_q) < 2:
+        return {"ok": True, "query": q, "results": []}
+    _limit = max(1, min(int(limit or 20), 50))
+    _ensure_cache()
+
+    def _scan():
+        hits = []
+        if _state._SESSIONS_DIR is None:
+            return hits
+        for entry in sorted(_state._SESSIONS_DIR.iterdir(), reverse=True):
+            if not entry.name.endswith(".json") or entry.name.endswith(".context.json"):
+                continue
+            m = _RE_CHAT_ID_PATTERN.search(entry.name)
+            if not m:
+                continue
+            cid = m.group(1)
+            try:
+                data = json.loads(entry.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            title = str(data.get("title") or "")
+            if _q in title.lower():
+                hits.append({"id": cid, "title": title,
+                             "updated_at": data.get("updated_at", ""),
+                             "match_in": "title", "snippet": title[:120]})
+                if len(hits) >= _limit:
+                    return hits
+                continue
+            for msg in data.get("messages") or []:
+                c = msg.get("content")
+                if isinstance(c, list):
+                    c = " ".join(p.get("text", "") if isinstance(p, dict) else str(p)
+                                 for p in c)
+                c = str(c or "")
+                pos = c.lower().find(_q)
+                if pos >= 0:
+                    start = max(0, pos - 40)
+                    hits.append({"id": cid, "title": title or "Untitled",
+                                 "updated_at": data.get("updated_at", ""),
+                                 "match_in": "messages",
+                                 "snippet": ("…" if start > 0 else "")
+                                            + c[start:start + 120].replace("\n", " ")})
+                    break
+            if len(hits) >= _limit:
+                return hits
+        return hits
+
+    results = await asyncio.to_thread(_scan)
+    return {"ok": True, "query": q, "results": results[:_limit]}
+
+
 @router.get("/{chat_id}")
 async def get_chat(chat_id: str):
     _ensure_cache()
