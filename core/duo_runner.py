@@ -1660,6 +1660,7 @@ async def run_code_duo(ctx):
         _force_compress_next: bool = False
         _compress_fail_streak: int = 0      # CONSECUTIVE-FAIL-GUARD: limit 400->compress->fail->restore cycles
         _loop_detected = False   # guard against UnboundLocalError on early exit (abort/timeout)
+        _model_load_failed = False  # coder/planner GGUF never came up (VRAM/missing)
         _chunk_budget_exhausted = False  # chunk containment: budget spent (incl. grace)
         _explore_only_rounds: int = 0
                                         # late initialization (depends on tool-round setup)
@@ -3319,10 +3320,15 @@ async def run_code_duo(ctx):
                         _cached_coder_port = _dport
                         _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)
                     if _dport is None:
-                        _ld_setter(2497); _loop_detected = True
+                        # MODEL-LOAD-FAIL (2026-10-04, live log): a coder the
+                        # GPU cannot host is a resource error, not a loop -
+                        # loop_detected mislabeled it and the AUTO-STOP
+                        # diagnose printed misleading counters.
+                        _model_load_failed = True
                         yield await ctx.emit({"type": "status",
                             "content": f"⛔ Coder model {exec_mdl} could not be loaded "
-                                       f"(VRAM/ctx?) — run stopped."})
+                                       f"(VRAM/ctx). Lower the coder context in the agent "
+                                       f"tab, pick a smaller model, or free VRAM - run stopped."})
                         break
                     # CTX-ACTUAL (2026-09-06): the manager can downscale the slot
                     # (PRE-FLIGHT ctx-down when VRAM is tight), so the server runs a
@@ -6459,6 +6465,8 @@ async def run_code_duo(ctx):
         # WEDGE-HANDOFF: distinct stop reason — the run died on a wedged edit
         # whose repair handoff failed or exhausted its budget (human escalation).
         ctx.duo_stop_reason = "wedge_escalated"
+    elif _model_load_failed:
+        ctx.duo_stop_reason = "model_load_failed"
     elif _loop_detected:
         ctx.duo_stop_reason = "loop_detected"
     elif ctx.exec_ctrl.state == AgentState.HALTED:

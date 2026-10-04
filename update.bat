@@ -23,11 +23,11 @@ echo  sessions\ are NOT touched. New settings keys pick up their
 echo  defaults automatically on the next start.
 echo.
 
-REM ── Config ────────────────────────────────────────────────────────────────
+REM -- Config ----------------------------------------------------------------
 set "REPO=BoredLuzo/HiveMind_llama"
 set "TMPDIR=%~dp0_update_tmp"
 
-REM ── 0. curl present? (ships with Windows 10 1803+) ────────────────────────
+REM -- 0. curl present? (ships with Windows 10 1803+) ------------------------
 where curl >nul 2>&1
 if errorlevel 1 (
     echo  [ERROR] curl.exe not found. HiveMind updates need Windows 10 1803+
@@ -35,7 +35,7 @@ if errorlevel 1 (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
-REM ── 1. Is an instance running on the configured port? ─────────────────────
+REM -- 1. Is an instance running on the configured port? ---------------------
 REM Port resolution mirrors run.py: HIVEMIND_PORT env > settings.json > 8001.
 REM The check uses Get-NetTCPConnection, which is locale-proof (the old
 REM netstat "LISTENING" findstr broke on localized Windows output).
@@ -53,7 +53,7 @@ if errorlevel 1 (
 )
 echo  [OK] No running instance on port %HM_PORT%.
 
-REM ── 2. Current version (server.py) ────────────────────────────────────────
+REM -- 2. Current version (server.py) ----------------------------------------
 set "CURRENT="
 REM widened capture: "1.3.0-preview" must arrive WHOLE - the old [0-9.]+ only
 REM saw "1.3.0" and the compare could not tell preview from release.
@@ -65,7 +65,7 @@ if not defined CURRENT (
 )
 echo  Installed version : %CURRENT%
 
-REM ── 3. Latest release from GitHub ─────────────────────────────────────────
+REM -- 3. Latest release from GitHub -----------------------------------------
 if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
 mkdir "%TMPDIR%" 2>nul
 curl -sS -L "https://api.github.com/repos/%REPO%/releases/latest" -o "%TMPDIR%\release.json"
@@ -89,7 +89,7 @@ echo         https://github.com/%REPO%/releases/latest
 echo  Press any key to continue... & pause >nul & exit /b 1
 :tag_ok
 
-REM ── 4. Compare versions ───────────────────────────────────────────────────
+REM -- 4. Compare versions ---------------------------------------------------
 if not "%TAG:~0,1%"=="v" (
     echo  [ERROR] Unexpected release tag "%TAG%" - aborting. Download the
     echo         zip manually from https://github.com/%REPO%/releases/latest
@@ -121,7 +121,7 @@ if "%VCMP%"=="older" (
     echo  Press any key to continue... & pause >nul & exit /b 0
 )
 
-REM ── 4a. Render the release notes (markdown-light -> plain console text) ──
+REM -- 4a. Render the release notes (markdown-light -> plain console text) --
 powershell -NoProfile -Command "$r = Get-Content '%TMPDIR%\release.json' -Raw | ConvertFrom-Json; $o = foreach ($l in ($r.body -split ([char]10))) { $t = $l.TrimEnd() -replace '\*\*','' -replace '`','' -replace '^#{1,6}\s*','== '; $t }; $o | Set-Content '%TMPDIR%\notes.txt'"
 echo.
 echo  +-------------------------------------------------------------+
@@ -131,7 +131,7 @@ type "%TMPDIR%\notes.txt"
 echo  +-------------------------------------------------------------+
 echo.
 
-REM ── 4b. Warnings from the release notes ───────────────────────────────────
+REM -- 4b. Warnings from the release notes -----------------------------------
 REM Anything the release author flags (warning / breaking / known issue /
 REM migration / attention / caution) is shown BEFORE anything is changed.
 del "%TMPDIR%\warnings.txt" 2>nul
@@ -156,7 +156,7 @@ if /I "%CONT%"=="n" (
     echo  Press any key to continue... & pause >nul & exit /b 0
 )
 
-REM ── 5. Backup the current code (user data is excluded) ────────────────────
+REM -- 5. Backup the current code (user data is excluded) --------------------
 set "BK=update_backup_%TAGNUM%"
 echo  Backing up code   : %BK%\
 REM /R:1 /W:1: a single locked file must not hang the update for hours
@@ -169,7 +169,7 @@ if errorlevel 8 (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
-REM ── 6. Download the release zip ───────────────────────────────────────────
+REM -- 6. Download the release zip -------------------------------------------
 echo  Downloading       : %ASSET_URL%
 curl -sS -L -o "%TMPDIR%\release.zip" "%ASSET_URL%"
 if errorlevel 1 (
@@ -182,7 +182,7 @@ if not exist "%TMPDIR%\release.zip" (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
-REM ── 7. Extract (zip carries a version root folder) ────────────────────────
+REM -- 7. Extract (zip carries a version root folder) ------------------------
 powershell -NoProfile -Command "Expand-Archive -Path '%TMPDIR%\release.zip' -DestinationPath '%TMPDIR%\extracted' -Force"
 if errorlevel 1 (
     echo  [ERROR] Could not extract the zip. Nothing was changed
@@ -201,7 +201,7 @@ REM The FINAL line of this script swaps it in atomically.
 set "UPDNEW=%BASE%\.update_new.bat"
 if exist "%EXROOT%\update.bat" copy /y "%EXROOT%\update.bat" "%UPDNEW%" >nul
 
-REM ── 8. Apply over this installation ───────────────────────────────────────
+REM -- 8. Apply over this installation ---------------------------------------
 REM /XF update.bat: overwriting the RUNNING script mid-execution makes cmd
 REM resume at a stale byte offset (the staged copy swaps in at the end).
 REM The user-data excludes are belt-and-suspenders: a wrongly built zip
@@ -215,7 +215,7 @@ if errorlevel 8 (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
-REM ── 9. Verify ─────────────────────────────────────────────────────────────
+REM -- 9. Verify -------------------------------------------------------------
 set "NEWVER="
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "NEWVER=%%V"
 if /I not "%NEWVER%"=="%TAGNUM%" (
@@ -225,7 +225,7 @@ if /I not "%NEWVER%"=="%TAGNUM%" (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
-REM ── 9a. Prune files the PREVIOUS release shipped but this one dropped ────
+REM -- 9a. Prune files the PREVIOUS release shipped but this one dropped ----
 REM robocopy /E only overlays: a module the new release deleted would live
 REM on forever as a stale shadow. /MIR is not an option (it would delete
 REM user data like settings.json). Instead: the previous update stored the
@@ -247,7 +247,7 @@ if exist "%BASE%\update_manifest_installed.txt" (
 )
 if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
 
-REM ── 9b. Refresh Python dependencies (.venv) ───────────────────────────────
+REM -- 9b. Refresh Python dependencies (.venv) -------------------------------
 REM The update may ship new/changed requirements; the .venv itself is NOT
 REM replaced, so missing imports would only surface on the next start.
 REM uv installs/updates whatever requirements.txt names and never removes
