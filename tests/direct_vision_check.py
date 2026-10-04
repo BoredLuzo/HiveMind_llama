@@ -37,6 +37,7 @@ import glob
 import json
 import os
 import secrets
+import socket
 import subprocess
 import sys
 import time
@@ -104,11 +105,25 @@ def _wait_health(port: int, deadline_s: float = 180.0) -> bool:
 
 
 def _port_free(port: int) -> bool:
+    # TCP-connect check, NOT HTTP (2026-10-04, harness test finding): a
+    # listening-but-deaf socket answers at kernel level without HTTP -
+    # urlopen timed out and misreported the port as free.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(1.0)
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+
+def _stop_tree(proc: subprocess.Popen) -> None:
+    """Kill the llama-server AND its children (2026-10-04, Sonnet #2): an
+    orphaned child keeps holding the VRAM. taskkill /T walks the tree;
+    pinned by tests/test_smoke_harness.py against a dummy process tree."""
+    if proc.poll() is None:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       capture_output=True, timeout=15)
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2):
-            return False  # something answered - port is taken
-    except OSError:
-        return True
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def main() -> int:
@@ -200,14 +215,7 @@ def main() -> int:
             print("  pipeline verdict: the MODEL/GLYPHS are the problem")
         return 0 if (reads and not hallucinated) else 1
     finally:
-        if proc.poll() is None:
-            # tree kill: llama-server may spawn children that hold the VRAM
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           capture_output=True, timeout=15)
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _stop_tree(proc)
         print(f"[direct] llama-server on port {args.port} stopped (tree).")
 
 

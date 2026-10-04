@@ -2224,7 +2224,14 @@ async def run_code_duo(ctx):
                                 _img_plan, _vg_warns2 = effective_image_plan(
                                     _img_plan, coder_slot_vision=_cv2,
                                     has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
+                                # RETRACT EVIDENCE (2026-10-04, Sonnet): the
+                                # negative test grades THIS line - it proves
+                                # the note left the actually-sent system
+                                # prompt (note present=True beforehand).
+                                _had_note = CODER_VISION_NOTE in _duo_coder_sys
                                 _duo_coder_sys = _duo_coder_sys.replace(CODER_VISION_NOTE, "")
+                                logger.warning("[DUO][VISION-GATE] [VISION] note retracted "
+                                               "from coder system prompt (was present=%s)", _had_note)
                                 for _w in _vg_warns2:
                                     logger.warning("[DUO][VISION-GATE] %s", _w)
                                     yield await ctx.emit({"type": "status", "content": "⚠ " + _w})

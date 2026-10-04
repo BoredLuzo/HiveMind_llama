@@ -30,8 +30,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
+import sys
 import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+from utils.token import window_by_budget  # noqa: E402
 
 
 def _req(base: str, method: str, path: str, payload: dict | None = None) -> dict:
@@ -46,6 +52,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://localhost:8001")
     ap.add_argument("--turns", type=int, default=15, help="user turns (x2 = messages)")
+    ap.add_argument("--budget", type=int, default=0,
+                    help="if set: POST session_history_budget_tokens and print the "
+                         "expected windowed message count (window_by_budget, offline)")
     args = ap.parse_args()
 
     secret_early = "KIVU-" + secrets.token_hex(3).upper()
@@ -70,6 +79,15 @@ def main() -> int:
     })
     cid = created["id"]
     _req(args.base, "PUT", f"/chats/{cid}", {"messages": msgs})
+
+    if args.budget:
+        _req(args.base, "POST", "/settings", {"session_history_budget_tokens": args.budget})
+        kept = window_by_budget([dict(m) for m in msgs], args.budget)
+        print(f"[longchat] budget set : session_history_budget_tokens={args.budget}")
+        print(f"[longchat] expected   : [HISTORY-SEED] chat={cid} source=json seeded "
+              f"{len(kept)} message(s)")
+        print(f"[longchat] regime     : {'WINDOW (compression threshold not reached - by design,' if len(kept) <= 20 else 'COMPRESSION (window kept >20, summary block expected,'} "
+              f"window first, then compression on the windowed list)")
     print(f"[longchat] chat id   : {cid}")
     print(f"[longchat] messages  : {len(msgs)} ({args.turns} turns)")
     print(f"[longchat] SECRET-EARLY (turn 3) : {secret_early}")

@@ -797,7 +797,33 @@ async def run_stream(
                     pass
             asyncio.create_task(_prefetch_direct_post())
         if _direct_is_vision:
-            effective_images = images
+            # VISIBLE TRUTH CHECK (2026-10-04, Sonnet #5): the direct mode
+            # used to strip silently inside chat_stream - the user saw
+            # nothing and the model answered as if no image existed (the
+            # same complaint as the duo downgrade). Check the loaded slot
+            # HERE and say it out loud; chat_stream stays as the backstop.
+            if effective_images:
+                try:
+                    from backend.llama_server_manager import manager as _lsm_dvis
+                    _dvis_model = registry_get("direct") if "direct" in _state.pipeline.agents else ""
+                    _dvis_port = None
+                    if _dvis_model:
+                        _dvis_slot = await _lsm_dvis._find_loaded(_dvis_model)
+                        _dvis_port = getattr(_dvis_slot, "port", None) if _dvis_slot is not None else None
+                    if _dvis_port:
+                        _dvis_slot2 = _lsm_dvis.get_slot_by_port(int(_dvis_port))
+                        _dvis_state = getattr(_dvis_slot2, "vision_active", None) if _dvis_slot2 is not None else None
+                        if _dvis_state is False:
+                            effective_images = []
+                            _logger.warning("[VISION-GATE] direct model '%s' runs WITHOUT a "
+                                            "projector (vision_active=False) - image dropped "
+                                            "visibly", _dvis_model)
+                            yield await emit({"type": "status",
+                                "content": "⚠ The direct model runs without a vision projector "
+                                           "- the image was dropped. Pick a multimodal model or "
+                                           "enable the vision preprocessor."})
+                except (ImportError, AttributeError, TypeError, ValueError) as _dge:
+                    _logger.debug("[VISION-GATE] direct pre-check skipped: %s", _dge)
             _logger.debug("[Vision-Trigger] Multimodal Direct model - raw images stay in effective_images (%d)", len(images))
         else:
             effective_images = []

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -29,6 +30,23 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke_image import build_png, post_stream  # noqa: E402
+
+# VISUAL-CLAIM PATTERNS (2026-10-04, Sonnet #2): patterns that ASSERT the
+# model sees the image. A bare "in the image" is deliberately NOT here -
+# it also matches negations like "there is nothing in the image" and the
+# echoed question. Pinned by tests/test_smoke_harness.py.
+_VISUAL_CLAIM_RE = re.compile(
+    r"\bi (?:can|could) see\b"
+    r"|\bi see (?:a|an|the|it)\b"
+    r"|\bas shown\b"
+    r"|\bthe image shows\b"
+    r"|\blooking at the (?:image|picture|photo)\b"
+    r"|\bthe attached (?:image|picture)\b", re.I)
+
+
+def find_visual_claims(text: str) -> list:
+    """Substring-safe visual-claim hits in a model answer (pure)."""
+    return sorted({m.group(0).lower() for m in _VISUAL_CLAIM_RE.finditer(text or "")})
 
 
 def _health(base: str, timeout: float = 3.0) -> bool:
@@ -121,24 +139,41 @@ def main() -> int:
         # vision_active=None (trusts the plan). Only the POST-LOAD gate can
         # know vision_active:false - its log line is the actual evidence.
         _log = os.path.join(args.install, "logs", "hivemind.log")
-        gate_lines, test_lines = [], []
+        gate_lines, test_lines, toolloop_lines, retract_lines = [], [], [], []
         try:
             with open(_log, encoding="utf-8", errors="replace") as fh:
-                for ln in fh.readlines()[-2000:]:
+                for ln in fh.readlines()[-4000:]:
                     if "[DUO][VISION-GATE]" in ln:
                         gate_lines.append(ln.strip()[:160])
+                        if "note retracted" in ln:
+                            retract_lines.append(ln.strip()[:160])
                     elif "[TEST] HIVEMIND_TEST_OMIT_MMPROJ" in ln:
                         test_lines.append(ln.strip()[:160])
+                    elif "[TOOL-LOOP]" in ln and "images_in_request=" in ln \
+                            and args.omit.lower() in ln.lower():
+                        toolloop_lines.append(ln.strip()[:160])
         except OSError as _le:
             print(f"[neg] WARNING: cannot read install log: {_le}")
+
+        # /props AT THE CODER PORT (2026-10-04, Sonnet #3): the server must
+        # really run without modalities.vision while the plan said raw -
+        # found by scanning the fixed llama port range for the coder model.
+        coder_props = None
+        for _p in (8101, 8102, 8103, 8104):
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{_p}/props", timeout=3) as r:
+                    _pp = json.loads(r.read().decode("utf-8", "replace"))
+                if args.omit.lower() in str(_pp.get("model_path", "")).lower():
+                    coder_props = (_p, (_pp.get("modalities") or {}).get("vision"))
+                    break
+            except (OSError, ValueError):
+                continue
         # VISUAL-CLAIM CHECK (2026-10-04, Sonnet #3): without image and
         # without a description the coder must not CLAIM to see anything.
         # (The code itself MAY legitimately appear via the planner text -
         # the planner keeps its projector by design - so it is reported,
         # not failed.)
-        _low = round1_text.lower()
-        claims = [w for w in ("i can see", "in the image", "as shown", "the image shows")
-                  if w in _low]
+        claims = find_visual_claims(round1_text)
         code_in_round1 = args.code.upper() in round1_text.upper()
 
         print("\n== STATUSES ==")
@@ -151,11 +186,24 @@ def main() -> int:
             print("  ", t)
         for g in gate_lines[:4]:
             print("  ", g)
+        for rl in retract_lines[:2]:
+            print("  ", rl)
+        print("== TOOL-LOOP ROUNDS (outgoing payload counts) ==")
+        for tl in toolloop_lines[:8]:
+            print("  ", tl)
+        print("== CODER /props ==")
+        print("  ", coder_props)
         print("== DONE ==", done and done.get("stop_reason"))
+        _toolloop_all_zero = bool(toolloop_lines) and all(
+            "images_in_request=0" in tl for tl in toolloop_lines)
         checks = {
             "run completed (text-only fallback)": bool(done) and done.get("stop_reason") == "completed",
             "post-load gate fired ([DUO][VISION-GATE] in log)": bool(gate_lines),
+            "[VISION] note retracted (log line, was present=True)": bool(retract_lines),
             "[TEST] omit line in log (server ran without projector)": bool(test_lines),
+            "TOOL-LOOP rounds all images_in_request=0": _toolloop_all_zero,
+            "coder /props vision is False during run": coder_props is not None
+                                                          and coder_props[1] is False,
             "image downgraded/skipped for coder": skipped,
             "round-1 makes NO visual claim": not claims,
         }

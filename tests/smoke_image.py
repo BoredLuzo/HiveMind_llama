@@ -158,6 +158,9 @@ def main() -> int:
     ap.add_argument("--code", default="XY42")
     ap.add_argument("--timeout", type=float, default=1200)
     ap.add_argument("--chat-id", default=None, help="continue this chat instead of a new one")
+    ap.add_argument("--mode", default="code_duo", choices=("code_duo", "chat"),
+                    help="code_duo = runs A; chat = run D, the DIRECT image path "
+                         "(single model, no tools - the answer itself is the vision proof)")
     ap.add_argument("--dry-run", action="store_true",
                     help="build the PNG + payload, write _smoke_preview.png, print the plan - no POST")
     args = ap.parse_args()
@@ -172,11 +175,15 @@ def main() -> int:
         return 2
 
     png = build_png(args.code)
-    q = ("The attached image has a code written on it. TRANSCRIBE that code "
-         "character by character in plain text FIRST, before you use any tool. "
-         "Then write ONE file repro.html that reproduces the image "
-         "(colored divs + CSS) and put the code in the <title>.")
-    payload = {"q": q, "images": [base64.b64encode(png).decode()], "mode": "code_duo"}
+    if args.mode == "chat":
+        q = ("Which exact code/letters are written in the attached image? "
+             "Answer with the code only.")
+    else:
+        q = ("The attached image has a code written on it. TRANSCRIBE that code "
+             "character by character in plain text FIRST, before you use any tool. "
+             "Then write ONE file repro.html that reproduces the image "
+             "(colored divs + CSS) and put the code in the <title>.")
+    payload = {"q": q, "images": [base64.b64encode(png).decode()], "mode": args.mode}
     if args.chat_id:
         payload["chat_id"] = args.chat_id
 
@@ -228,6 +235,15 @@ def main() -> int:
         "round-1 names the code": args.code.upper() in round1.upper(),
         "code anywhere (model+tools)": args.code.upper() in everything.upper(),
     }
+    if args.mode == "chat":
+        # RUN D (2026-10-04, Sonnet #5): the direct image path has NO tools
+        # and NO planner - the answer naming the code IS the vision proof.
+        checks = {
+            "run completed": bool(done) and done.get("stop_reason") == "completed",
+            "answer names the code (no tools to inherit from)":
+                args.code.upper() in round1.upper(),
+        }
+        print("\n== RUN-D MODE: chat (direct path, single model, no tools) ==")
     print("\n== VERDICT ==")
     for k, v in checks.items():
         print(f"  [{'PASS' if v else 'FAIL'}] {k}")

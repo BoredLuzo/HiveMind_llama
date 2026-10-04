@@ -222,3 +222,18 @@ def test_coder_reload_keeps_same_vision_arg():
                             '_img_plan.get("coder") == "raw"'), \
                 f"ensure_loaded near line {i+1}: vision arg not from the image plan: {expr!r}"
     assert _checked >= 3, f"expected at least the 3 known vision loads, found {_checked}"
+
+
+def test_direct_load_path_has_truth_gate():
+    # RUN D / SONNET #5: the direct mode is the path fresh installs use
+    # first. chat_stream must (a) request the projector from the wire shape
+    # and (b) check the /props truth and strip images when it says false.
+    import io
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "backend", "llama_client.py")
+    src = io.open(path, encoding="utf-8").read()
+    assert "_vision = self._has_images(messages)" in src \
+        and "ensure_loaded(model, num_ctx=ctx, vision=_vision)" in src, \
+        "chat_stream must request the projector from the message shape"
+    assert "vision_active" in src and "images dropped" in src, \
+        "chat_stream must check /props truth and strip images visibly in the log"
