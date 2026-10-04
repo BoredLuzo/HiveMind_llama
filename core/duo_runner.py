@@ -1747,6 +1747,14 @@ async def run_code_duo(ctx):
             _duo_coder_sys += (
                 "\n\n[IMAGE NOTE]: you cannot see the attached image — the planner saw it. "
                 "Put all relevant details (layout, texts, colors, sizes) into the plan.")
+        elif _img_plan.get("coder") == "raw":
+            # VISION NOTE (2026-10-04): the coder receives the image itself
+            # as a content part - acknowledge that so the model knows it can
+            # reference what it sees instead of guessing from the plan text
+            _duo_coder_sys += (
+                "\n\n[VISION]: the user's attached image is included in this "
+                "conversation - you can see it. Reference concrete visual "
+                "details (layout, texts, colors, shapes) in your work.")
         # SAVED-PATH NOTE (2026-10-03): the original upload lives in the
         # workspace now - tell the coder once so it can reference/reuse it.
         _img_paths = getattr(ctx, "image_paths", None) or []
