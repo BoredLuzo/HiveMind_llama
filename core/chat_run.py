@@ -881,41 +881,43 @@ async def run_stream(
     # every turn), so whenever a chat json exists it is re-seeded; the memory
     # stays a fallback for chats without json, tagged per chat, and a new
     # chat without id never inherits anything.
+    # LABEL-LIE FIX (2026-10-05, TG-PROBE experiment): history_seed() falls
+    # back to the sidecar INTERNALLY while this probe labelled the result
+    # 'source=json' - a live run on an empty-main-json chat logged
+    # 'source=json seeded 2' that was actually sidecar history. The
+    # provenance probe decides the label; history_seed only normalises.
     _json_seed: list = []
+    _seed_source = "none"
     if chat_id:
         try:
-            _json_seed = history_seed(chat_id)
+            from context.chat import history_seed_provenance as _seed_prov
+            _raw_seed, _raw_src = _seed_prov(chat_id)
         except (OSError, ValueError):
-            _json_seed = []
+            _raw_seed, _raw_src = [], "none"
+        if _raw_seed:
+            _json_seed = history_seed(chat_id)
+            _seed_source = _raw_src
     _mem_cid = getattr(_state.memory, "_session_chat_id", None)
     if _json_seed:
-        if _state.memory.get_session_messages() or _mem_cid != (chat_id or ""):
-            _state.memory.clear_session()
+        # ALWAYS-RESEED: the json is fresher than the memory - every run.
+        _state.memory.clear_session()
         _state.memory.seed_session(_json_seed)
         try:
             _state.memory._session_chat_id = chat_id or ""
         except AttributeError:
             pass
-        _logger.info("[HISTORY-SEED] chat=%s source=json seeded %d message(s)",
-                     chat_id, len(_json_seed))
+        _logger.info("[HISTORY-SEED] chat=%s source=%s seeded %d message(s)",
+                     chat_id, _seed_source, len(_json_seed))
     else:
-        # no json (new chat, or flush failed): never inherit another chat's
-        # history - clear unless the memory is already tagged for THIS chat.
+        # no turns anywhere (new chat, or only a trailing user that IS the q):
+        # never inherit another chat's history - clear unless the memory is
+        # already tagged for THIS chat.
         if _mem_cid != (chat_id or ""):
             _state.memory.clear_session()
             try:
                 _state.memory._session_chat_id = chat_id or ""
             except AttributeError:
                 pass
-            if chat_id:
-                try:
-                    _sidecar = (_load_chat_context(chat_id) or {}).get("session") or []
-                except (OSError, ValueError):
-                    _sidecar = []
-                if _sidecar:
-                    _state.memory.seed_session(_sidecar)
-                    _logger.info("[HISTORY-SEED] chat=%s source=sidecar seeded %d message(s)",
-                                 chat_id, len(_sidecar))
         elif not chat_id and _state.memory.get_session_messages():
             _state.memory.clear_session()
             try:

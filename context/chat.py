@@ -45,28 +45,13 @@ def _read_chat_json(chat_id: str) -> dict | None:
         return None
 
 
-def history_seed(chat_id: str, limit: int = 40) -> list:
-    """Seed for a NEW run (2026-10-03): the saved conversation, minus a
-    TRAILING user message - that message is the new prompt itself and
-    arrives via the run, so seeding it would duplicate it. Falls back to
-    the sidecar "session" for chats without a json."""
-    seed = load_chat_transcript(chat_id, limit=limit)
-    if not seed:
-        try:
-            seed = (_load_chat_context(chat_id) or {}).get("session") or []
-        except (OSError, ValueError):
-            seed = []
-    # Drop ALL trailing user messages: the newest one is the new prompt
-    # itself, and an aborted run's unanswered attempt before it would
-    # leave two user roles in a row in the final prompt (strict
-    # alternation templates reject that). The user's latest intent is
-    # carried by the new prompt, not by the dead attempt.
+def _normalize_seed(seed: list) -> list:
+    """Drop ALL trailing user messages (the newest is the new prompt itself,
+    an aborted run's unanswered attempt before it would break alternation)
+    and merge consecutive same-role messages (strict gemma/mistral
+    templates reject two user roles in a row)."""
     while seed and seed[-1].get("role") == "user":
         seed = seed[:-1]
-    # ALTERNATION (2026-10-03): an aborted run leaves its unanswered user
-    # message in the transcript - with the new prompt that makes two user
-    # messages in a row, which strict templates (gemma/mistral) reject.
-    # Merge consecutive same-role messages instead of emitting them raw.
     merged: list = []
     for m in seed:
         if merged and merged[-1].get("role") == m.get("role"):
@@ -75,6 +60,46 @@ def history_seed(chat_id: str, limit: int = 40) -> list:
         else:
             merged.append(m)
     return merged
+
+
+def history_seed_provenance(chat_id: str, limit: int = 40) -> tuple:
+    """(seed, source) with HONEST provenance (2026-10-05, label-lie fix).
+
+    The previous history_seed() fell back to the sidecar INTERNALLY while
+    chat_run labelled whatever it returned as source=json - the label lied
+    whenever the main json transcript was empty (live TG-PROBE experiment:
+    'source=json seeded 2' was sidecar history). Callers that need the
+    source use this probe; history_seed() stays for compatibility.
+    source is 'json' ONLY when the MAIN chat json carried the transcript,
+    'sidecar' when the fallback fired, 'none' when neither had turns.
+    The seed is NORMALIZED identically to history_seed (trailing-user drop
+    + merge), so the logged N is the post-normalization count."""
+    seed = load_chat_transcript(chat_id, limit=limit)  # MAIN json only
+    if seed:
+        return _normalize_seed(seed), "json"
+    try:
+        side = (_load_chat_context(chat_id) or {}).get("session") or []
+    except (OSError, ValueError):
+        side = []
+    if side:
+        return _normalize_seed(side[-limit:]), "sidecar"
+    return [], "none"
+
+
+def history_seed(chat_id: str, limit: int = 40) -> list:
+    """Seed for a NEW run (2026-10-03): the saved conversation, minus a
+    TRAILING user message - that message is the new prompt itself and
+    arrives via the run, so seeding it would duplicate it. Falls back to
+    the sidecar "session" for chats without a json.
+    NOTE (2026-10-05): the fallback is INVISIBLE here - callers that report
+    a source must use history_seed_provenance()."""
+    seed = load_chat_transcript(chat_id, limit=limit)
+    if not seed:
+        try:
+            seed = (_load_chat_context(chat_id) or {}).get("session") or []
+        except (OSError, ValueError):
+            seed = []
+    return _normalize_seed(seed)
 
 
 def get_chat_workspace(chat_id: str) -> str:
