@@ -97,18 +97,17 @@ def test_plan_body_does_not_survive_local_only():
         "plan BODY survived local-only compression (would contradict the design)"
 
 
-def test_anchor_carries_plan_body_excerpt():
-    # BODY-EXCERPT FIX (2026-10-04): the anchor is the only survivor, so it
-    # now carries a compact plan-body excerpt - visual details written in
-    # the plan BODY (not only in subtask titles) survive compression.
+def test_anchor_carries_full_plan_body():
+    # USER DECISION (2026-10-04): "600 zu wenig, der fertige Plan soll als
+    # Ganzes durchgegeben werden" - the anchor carries the COMPLETE plan
+    # body, no truncation. Every visual detail survives compression.
     from core.duo_runner import _build_plan_anchor_text
-    anchor = _build_plan_anchor_text(
-        SUBTASK_TITLES, None, plan_content="Full plan: " + PLAN_DETAILS)
+    long_plan = "Full plan:\n" + PLAN_DETAILS + "\n" + ("more detail line\n" * 120)
+    anchor = _build_plan_anchor_text(SUBTASK_TITLES, None, plan_content=long_plan)
+    assert "PLAN:\nFull plan:" in anchor
     assert "red top half" in anchor and "XY42" in anchor
-    assert "PLAN EXCERPT: Full plan:" in anchor
-    # truncation keeps the anchor compact
-    long_plan = "x" * 2000
-    assert len(_build_plan_anchor_text([], None, plan_content=long_plan)) < 700
+    assert anchor.endswith("more detail line")  # nothing cut
+    assert "more detail line" in anchor
     # empty plan -> unchanged legacy behavior
     assert _build_plan_anchor_text(SUBTASK_TITLES, None) == ", ".join(SUBTASK_TITLES)
 

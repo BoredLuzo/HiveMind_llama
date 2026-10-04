@@ -520,12 +520,14 @@ def _inject_plan_into_coder_msgs(dtool_msgs, plan_result, *, chunking: bool, is_
 
 
 def _build_plan_anchor_text(subtasks: list, plan_tracker, plan_content: str = "") -> str:
-    # BODY-EXCERPT (2026-10-04, compression verification): the anchor is the
-    # ONLY part of the plan that survives local-only compression (verified in
-    # tests/test_compression_plan_survival.py) - subtask titles alone can be
-    # too coarse for visual detail ("rebuild UI from image"). A compact
-    # excerpt of the plan body rides along; the anchor is re-injected
-    # verbatim, so details in the body now survive compression too.
+    # FULL PLAN (2026-10-04, user decision: "600 zu wenig, der fertige Plan
+    # soll als Ganzes durchgegeben werden"): the anchor is the ONLY part of
+    # the plan that survives compression (verified in
+    # tests/test_compression_plan_survival.py), so the COMPLETE plan body
+    # rides along - no truncation. The anchor is re-injected verbatim, so
+    # every visual detail the planner wrote stays with the coder.
+    # Trade-off, accepted: a large plan keeps the compressed context large
+    # (planner max_tokens=8000 -> worst case ~30KB plan text).
     _base = ""
     if subtasks:
         _base = ", ".join(str(t) for t in subtasks)
@@ -537,10 +539,9 @@ def _build_plan_anchor_text(subtasks: list, plan_tracker, plan_content: str = ""
                 f"step {getattr(_aps, 'id', '?')}: {getattr(_aps, 'intent', '') or ''} → {_aps_paths}"
             )
         _base = "; ".join(_anchor_steps)
-    _excerpt = str(plan_content or "").strip()
-    if _excerpt:
-        _excerpt = _excerpt[:600] + ("…" if len(_excerpt) > 600 else "")
-        _base = (_base + "\nPLAN EXCERPT: " + _excerpt) if _base else ("PLAN EXCERPT: " + _excerpt)
+    _plan = str(plan_content or "").strip()
+    if _plan:
+        _base = (_base + "\nPLAN:\n" + _plan) if _base else ("PLAN:\n" + _plan)
     return _base
 
 
