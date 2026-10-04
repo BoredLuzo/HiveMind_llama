@@ -61,13 +61,21 @@ NOT built (deliberate, for a later release):
 - no live warning at the ctx slider when the set ctx cannot fit the
   VRAM budget (the guard only fires when a run starts; the observed
   failure class - 35B @ ctx 71680 with a pinned planner, 9B @ 40960 -
-  is only caught there)
+  is only caught there); /vram/estimate ignores pinned slots too
 - an orphaned run (browser/tab died) keeps its VRAM until it finishes
   or /abort arrives; server-side continuation is proven, but UI
   completeness after reconnect (planner parts, thinking foldout) is
   still a manual browser test
 - the per-round image trace is observe-only: when an image falls out
-  of the compressed window, nothing re-attaches it
+  of the compressed window (measured live: round 1 carries it, later
+  rounds do not), nothing re-attaches it - the coder now gets an
+  explicit "[VISION UPDATE]: image no longer in context, do not invent
+  details" replacement note plus one visible status line instead
+- session compression never runs in agentic chat (skipped by design)
+  - the summary path is therefore live-untested; testable only with
+  agentic_mode off
+- whether the planner's visual details survive the compression summary
+  is unverified (the "rebuild UI from image" use case depends on it)
 
 PARTIAL (known, accepted):
 - blob versions are add-only until a chat is deleted (no per-chat GC)
@@ -78,7 +86,18 @@ PARTIAL (known, accepted):
   the panel key
 - the judge-duo uncompressed re-read gate is dead code (unreachable
   threshold) - judge-routed duo runs keep the compressed window
-- /tokenize calibration of the history estimator is still open
+- the history budget estimator under-counts short messages by ~1.5x
+  (measured with the real /tokenize endpoint: 340 chars filler = 131
+  real tokens vs 85 estimated); calibration open
+- killing llama-server mid-run aborts cleanly (hard_stop /
+  runtime_load_error, no loop_detected); what a SUCCESSFUL reload does
+  to partial results is untested
+- chat continuity: the chat json is re-seeded on every run (edits and
+  regenerations included); sidecars written before that fix may contain
+  foreign history and still serve as fallback for chats without json
+- a future Telegram gateway sharing one server with an open UI would
+  multiplex the (global) in-process session memory - needs a per-chat
+  session store before that lands
 
 Vision honesty (2026-10-04 review round):
 - the server's real vision capability is read back from /props after
