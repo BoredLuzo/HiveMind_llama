@@ -101,6 +101,89 @@ def test_provenance_none_when_neither_has_turns(monkeypatch):
         assert seed == [] and source == "none"
 
 
+def test_provenance_origin_survives_empty_normalization(monkeypatch):
+    # SONNET EDGE CASE (2026-10-05): main json holds ONLY the edited
+    # trailing user message -> normalization empties the seed. The ORIGIN
+    # must stay 'json' (not fall through to 'none'), so chat_run clears the
+    # stale memory instead of resurrecting the old history.
+    with tempfile.TemporaryDirectory() as tmp:
+        _setup(monkeypatch, tmp)
+        _write(tmp, REAL_MAIN, {"id": "16420a06", "title": "TG-PROBE", "messages": [
+            {"role": "user", "content": "NEW-EDITED-TURN"}]})
+        seed, source = history_seed_provenance("16420a06")
+        assert seed == [] and source == "json"
+
+
+def test_edge_case_no_sidecar_resurrection(monkeypatch):
+    # THE FULL DEMANDED CASE: main json [u] only, sidecar [u,a,u,a].
+    # Expected: source=json, N=0, NOTHING from the sidecar.
+    with tempfile.TemporaryDirectory() as tmp:
+        cc._SESSIONS_DIR = Path(tmp)
+        _write(tmp, REAL_MAIN, {"id": "16420a06", "title": "TG-PROBE", "messages": [
+            {"role": "user", "content": "NEW-EDITED-TURN"}]})
+        _write(tmp, REAL_SIDECAR, {"id": "16420a06", "title": "TG-PROBE", "session": [
+            {"role": "user", "content": "OLD-U"},
+            {"role": "assistant", "content": "OLD-A"},
+            {"role": "user", "content": "OLD-U2"},
+            {"role": "assistant", "content": "OLD-A2"}]})
+        seed, source = history_seed_provenance("16420a06")
+        assert source == "json"
+        assert seed == []
+        blob = json.dumps(seed, default=str)
+        assert "OLD-" not in blob
+
+
+# ── chat_run lazy-import tripwire (2026-10-05, ImportError live): chat_run
+#    pulls names from the server namespace - a name added to that list but
+#    not defined in server.py only explodes at runtime. AST-pin: every name
+#    chat_run requests from server must exist as a top-level binding there. ──
+
+def test_chat_run_server_import_names_all_resolve():
+    import ast
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cr = ast.parse(open(os.path.join(root, "core", "chat_run.py"), encoding="utf-8").read())
+    sv = ast.parse(open(os.path.join(root, "server.py"), encoding="utf-8").read())
+    # names chat_run pulls from server
+    requested = set()
+    for node in ast.walk(cr):
+        if isinstance(node, ast.ImportFrom) and node.module == "server":
+            for a in node.names:
+                requested.add(a.asname or a.name)
+    assert requested, "chat_run's server import list vanished - test is blind"
+    # top-level bindings in server.py: defs, assigns, imports, and
+    # from-imports (incl. aliases). Try-blocks at module level count too -
+    # server binds _WEBSEARCH_AVAILABLE/_VRAM_LOOKUP_GB inside try/except
+    # (optional deps).
+    bound = set()
+
+    def _collect(stmts):
+        for node in stmts:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.add(node.name)
+            elif isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        bound.add(t.id)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                bound.add(node.target.id)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for a in node.names:
+                    bound.add(a.asname or a.name.split(".")[0])
+            elif isinstance(node, ast.Try):
+                _collect(node.body)
+                _collect(node.orelse)
+                _collect(node.finalbody)
+                for h in node.handlers:
+                    _collect(h.body)
+            elif isinstance(node, ast.If):
+                _collect(node.body)
+                _collect(node.orelse)
+
+    _collect(sv.body)
+    missing = sorted(n for n in requested if n not in bound)
+    assert not missing, f"chat_run imports names server.py never binds: {missing}"
+
+
 def test_history_seed_compat_matches_provenance(monkeypatch):
     # the compat wrapper and the provenance probe must never disagree on
     # WHICH turns are seeded (only the label differs)

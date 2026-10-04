@@ -894,14 +894,20 @@ async def run_stream(
             _raw_seed, _raw_src = _seed_prov(chat_id)
         except (OSError, ValueError):
             _raw_seed, _raw_src = [], "none"
-        if _raw_seed:
-            _json_seed = history_seed(chat_id)
+        # BRANCH ON ORIGIN, NOT ON SEED EMPTINESS (2026-10-05, Sonnet edge
+        # case): a main json holding ONLY the edited trailing user message
+        # normalizes to an empty seed - falling back on emptiness would
+        # resurrect the discarded sidecar/memory history. json/sidecar own
+        # the history: clear ALWAYS, seed whatever normalized (even empty).
+        if _raw_src in ("json", "sidecar"):
+            _json_seed = _raw_seed
             _seed_source = _raw_src
     _mem_cid = getattr(_state.memory, "_session_chat_id", None)
-    if _json_seed:
-        # ALWAYS-RESEED: the json is fresher than the memory - every run.
+    if _seed_source in ("json", "sidecar"):
+        # ALWAYS-RESEED: the chat files are fresher than the memory - every run.
         _state.memory.clear_session()
-        _state.memory.seed_session(_json_seed)
+        if _json_seed:
+            _state.memory.seed_session(_json_seed)
         try:
             _state.memory._session_chat_id = chat_id or ""
         except AttributeError:
