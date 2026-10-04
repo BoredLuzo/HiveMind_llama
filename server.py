@@ -581,9 +581,11 @@ async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: in
         effective_ctx = num_ctx if num_ctx else 8192
     # IMAGES-IN-REQUEST (2026-10-04, Sonnet): per-model-call trace - how many
     # image parts actually went on the wire. Makes "did the model SEE the
-    # image" checkable in the log instead of arguable.
+    # image" checkable in the log instead of arguable. Duo roles log ALWAYS
+    # (also 0 - "the image stopped being sent" after a compression must be
+    # visible, not look like a missing line); every other role logs on >0.
     _n_imgs = count_image_parts(msgs)
-    if _n_imgs:
+    if _n_imgs or (agent_role or "").startswith("duo"):
         _logger.info("[LLM-CALL] model=%s role=%s images_in_request=%d ctx=%d",
                      model, agent_role or "-", _n_imgs, effective_ctx)
     async for tok in pipeline.ollama.chat_stream(model, msgs, temp, max_tok, ctx=effective_ctx,

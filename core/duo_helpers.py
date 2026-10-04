@@ -627,6 +627,25 @@ def attach_images_to_last_user(msgs, images):
     return msgs
 
 
+def resolve_duo_role_models(settings) -> tuple:
+    """The duo role models from ONE place (2026-10-04, Sonnet #5).
+
+    Two live resolution paths exist: the AGENTS panel writes
+    agents.duo_planner.model, the CODE panel's planner dropdown writes
+    duo_planner_model. Readers that checked only one of them produced the
+    live bug: the image status line claimed "planner '' is not multimodal"
+    while the runner used the configured model. Order: agent card first
+    (most specific), then the flat settings key.
+    Returns (planner_model, coder_model) - either may be "" when unset.
+    """
+    _agents = settings.get("agents") or {}
+    _planner = str((((_agents.get("duo_planner") or {}).get("model")))
+                   or settings.get("duo_planner_model") or "").strip()
+    _coder = str((((_agents.get("duo_coder") or {}).get("model")))
+                 or settings.get("duo_coder_model") or "").strip()
+    return _planner, _coder
+
+
 def count_image_parts(messages) -> int:
     """Number of image_url content parts actually carried by the messages
     (2026-10-04, Sonnet: make 'did the model get the image' measurable

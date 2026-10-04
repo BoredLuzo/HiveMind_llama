@@ -18,7 +18,9 @@ from tools.errors import tool_call_failed, tool_error_has_code
 from tools.definitions import _get_inline_tools, _filter_tools_for_mode, get_tools_for_phase
 from tools.runner import _run_inline_tool, _current_run_id, _pause_timeout_s, _tool_loop_emit
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
-from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta
+from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts
+
+_log = logging.getLogger("hivemind.tool_loop")
 from core.model_sampling import get_sampling_profile
 from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
 
@@ -174,6 +176,9 @@ class ToolLoopConfig:
     retry_on_grammar_crash: bool = False
     retry_on_parse_error: bool = False
     retry_on_context_overflow: bool = False
+    # IMAGES-IN-REQUEST trace in ToolLoop.run (2026-10-04, Sonnet). The duo
+    # tool loop (AgenticToolLoop) always traces - it bypasses ToolLoop.run.
+    log_images_trace: bool = False
 
 
 @dataclass
@@ -304,6 +309,14 @@ class ToolLoop:
             if self.cfg.compress_enabled and self._on_compress:
                 _tool_messages = await self._on_compress(_tool_messages, _round)
                 _payload["messages"] = _tool_messages
+
+            # IMAGES-IN-REQUEST (2026-10-04, Sonnet): the tool loop is the
+            # coder's real per-round caller and used to bypass the pipeline
+            # trace entirely. Log every round - also at 0, so "the image
+            # fell out of the window after compression" is measurable.
+            if self.cfg.log_images_trace:
+                _log.info("[TOOL-LOOP] model=%s round=%d images_in_request=%d",
+                          self.cfg.model, _round, _count_image_parts(_tool_messages))
 
             # ── POST + parse with retry ──
             _msg = _content_text = None

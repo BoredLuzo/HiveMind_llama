@@ -6,7 +6,7 @@ import httpx
 
 from core.tool_loop import ToolLoop, ToolLoopConfig, _build_tool_call_grammar, _grammar_compatible, _USE_GBNF_GRAMMAR
 from core.agentic_duo_state import DuoRoundState
-from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, _inject_no_think_directive, parse_sse_delta as _parse_sse_delta
+from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, _inject_no_think_directive, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts
 
 logger = logging.getLogger("hivemind.agentic_tool_loop")
 
@@ -101,6 +101,14 @@ class AgenticToolLoop(ToolLoop):
             payload = {**payload, "messages": dtool_msgs}
         else:
             self._tail_guard_fires = 0
+
+        # IMAGES-IN-REQUEST (2026-10-04, Sonnet): the duo tool loop is the
+        # coder's real per-round caller and bypassed the pipeline trace
+        # entirely. Log every round - also at 0 - so "the image fell out of
+        # the window after compression" is measurable instead of arguable.
+        logging.getLogger("hivemind.tool_loop").info(
+            "[TOOL-LOOP] model=%s port=%s images_in_request=%d",
+            self.cfg.model, result.get("dport"), _count_image_parts(dtool_msgs))
 
         for _post_attempt in range(self.cfg.max_post_attempts):
             try:

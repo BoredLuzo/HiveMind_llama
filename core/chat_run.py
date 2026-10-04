@@ -822,16 +822,11 @@ async def run_stream(
             # per duo role (planner/coder). The attach-time projector check
             # in the runner has the final word; this status never claims
             # more than the plan says.
-            from core.duo_helpers import _build_duo_image_plan, duo_gate_status_text
-            # FALLBACK-CHAIN (2026-10-04, live test): the agent-card entry
-            # can be missing (planner lives in duo_planner_model when the
-            # UI's planner dropdown wrote it) - resolve like the runner
-            # does, or the status line claims "planner '' is not
-            # multimodal" while the run itself uses the right model.
-            _pm = (((settings.get("agents") or {}).get("duo_planner") or {}).get("model", "")
-                   or str(settings.get("duo_planner_model", "") or ""))
-            _cm = (((settings.get("agents") or {}).get("duo_coder") or {}).get("model", "")
-                   or str(settings.get("duo_coder_model", "") or ""))
+            from core.duo_helpers import _build_duo_image_plan, duo_gate_status_text, resolve_duo_role_models
+            # ONE RESOLVER (2026-10-04, Sonnet #5): agent card + flat settings
+            # key are both live paths - the ad-hoc fallback chain lived here
+            # once and lied whenever only one side was set.
+            _pm, _cm = resolve_duo_role_models(settings)
             _plan = _build_duo_image_plan(_pm, _cm, settings, images, image_description, _vision_cfg)
             yield await emit({"type": "status", "content": duo_gate_status_text(_plan)})
         elif _direct_is_vision2:
@@ -863,6 +858,11 @@ async def run_stream(
                 _seed = []
         if _seed:
             _state.memory.seed_session(_seed)
+            # SEED-TRACE (2026-10-04, Sonnet): the context-continuation test
+            # needs the seeded message count in the log to verify the model
+            # really got the earlier turns.
+            _logger.info("[HISTORY-SEED] chat=%s seeded %d message(s) from the json transcript",
+                         chat_id, len(_seed))
 
     _pipeline_mem_ctx  = _state.pipeline.memory.as_context_string()
     # Caps raised to sidecar parity (8000 chars): 600/1200 used to cut code
