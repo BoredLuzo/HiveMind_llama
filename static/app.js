@@ -5291,15 +5291,20 @@ async function sendMsg() {
     // preprocessing mode: image-preprocess toggle active + model set = vision active
     const hasVisionPrepro = S.visionEnabled && !!S.visionModel;
     const hasVisionDedicated = S.visionAgentEnabled && !!S.visionAgentModel;
-    // DUO REGISTRY (2026-10-03): in coder/duo mode the coder's registry
-    // vision flag counts - name matching missed hermes3.6/qwen3.5/gemma-4
-    // (the backend loads their projector via ensure_loaded(vision=true)).
-    var duoCoderRegistryVision = false;
-    if (S.mode === 'code_duo' && duoCoderModel) {
-      var _dProf = S.modelProfiles && (S.modelProfiles[duoCoderModel] || S.modelProfiles[duoCoderModel.split(':')[0]]);
-      duoCoderRegistryVision = !!(_dProf && _dProf.vision);
+    // REGISTRY VISION (2026-10-04, live UI test): the legacy name list below
+    // misses every vision model HiveMind actually ships (qwen3.5, gemma-4,
+    // hermes3.6) - the direct-chat gate therefore DROPPED images for
+    // registry-vision models ("No vision model active") while the backend
+    // could see them fine. The modelProfiles registry flag is the truth for
+    // direct/analyst/duo alike (same source as the per-role 👁 badges).
+    function _regVis(m) {
+      if (!m) return false;
+      var pr = S.modelProfiles && (S.modelProfiles[m] || S.modelProfiles[m.split(':')[0]]);
+      return !!(pr && pr.vision);
     }
-    const hasVision = hasVisionAgent || hasVisionPrepro || hasVisionDedicated || duoCoderRegistryVision;
+    var duoCoderRegistryVision = _regVis(duoCoderModel);
+    const hasVision = hasVisionAgent || _regVis(directModel) || _regVis(analystModel)
+                    || hasVisionPrepro || hasVisionDedicated || duoCoderRegistryVision;
     if (!hasVision) {
       const hint = document.createElement('div');
       hint.className = 'msg divider';

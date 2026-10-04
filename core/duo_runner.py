@@ -1004,6 +1004,11 @@ async def run_code_duo(ctx):
         # warning; evict/coder-load cleanup was skipped). Default to the
         # coder model: the evict logic then simply excludes the coder itself.
         _planner_model = coder_mdl
+        # RESUME-DEFAULT (2026-10-04, live UI test): the plan is computed in
+        # the planner block below, which RESUME runs skip entirely - every
+        # later read (vision gates, traces, attach) crashed the whole run
+        # with UnboundLocalError. Same class as the _coder_port init.
+        _img_plan = {"planner": "none", "coder": "none", "warnings": [], "mode": None}
         if (ctx.duo_config.chunking or ctx.duo_config.planner) and not ctx.aborted() and not _resume_data and not _planner_skipped:
             _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
             _planner_is_distilled = False
