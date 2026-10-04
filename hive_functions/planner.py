@@ -1134,6 +1134,7 @@ async def run_planner(
     emit_fn:              Callable[[dict], Awaitable[None]] | None = None,
     heartbeat_fn:         Callable[[], Awaitable[None]] | None = None,
     images:               list | None = None,
+    sees_images:          bool = False,
 ) -> PlannerResult:
 
 
@@ -1157,6 +1158,15 @@ async def run_planner(
         _planner_sys = make_thinking_planner_sys(step_cap, model_name=planner_model)
     else:
         _planner_sys = make_planner_sys(step_cap)
+    if sees_images:
+        # VISION NOTE (2026-10-04): the planner receives the raw image(s)
+        # with this task - tell it to actually use what it sees in the plan
+        _planner_sys += (
+            "\n\n[VISION] The user attached image(s) to this task. They are "
+            "visible to you in this conversation. Base the plan on what the "
+            "images actually show (layout, texts, colors, shapes) - the coder "
+            "CANNOT see them, so the plan must describe every visual detail "
+            "the implementation needs.")
 
     _planner_user = build_planner_user_prompt(
         task,

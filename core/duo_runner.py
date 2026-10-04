@@ -1386,6 +1386,7 @@ async def run_code_duo(ctx):
                 # ── Run planner as background task ──────────────────────────────
                 _plan_task = asyncio.create_task(run_planner(
                     task=_planner_task,
+                    sees_images=_img_plan.get("planner") == "raw",
                     images=ctx.images if _img_plan.get("planner") == "raw" else None,
                     explore_ctx=_planner_ctx,
                     planner_model=_planner_model,
