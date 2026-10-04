@@ -1164,7 +1164,22 @@ class LlamaLoadMixin:
             cmd += ["--reasoning", "off"]
 
         # ── mmproj (Vision-Projektor) ─────────────────────────────────────────
-        if _needs_mmproj(model, vision=vision):
+        # TEST SWITCH (2026-10-04, Sonnet #2): the negative test for the
+        # /props vision gate needs a server that RUNS without the projector
+        # while the plan, the profile and the file on disk all say vision.
+        # Renaming the file fires the OLDER attach-time file check instead -
+        # this env var (default off) omits --mmproj at start so ONLY the
+        # post-load /props gate can catch the drop. Value = model substring
+        # (e.g. "9b-ud" scopes it to one role; "*" = all models).
+        import os as _os_mmp
+        _omit_mmp = _os_mmp.environ.get("HIVEMIND_TEST_OMIT_MMPROJ", "").strip()
+        if _omit_mmp and _needs_mmproj(model, vision=vision) \
+                and (_omit_mmp == "*" or _omit_mmp.lower() in model.lower()):
+            _mmproj_resolved = None
+            logger.warning("[TEST] HIVEMIND_TEST_OMIT_MMPROJ=%r matches '%s' - intentionally "
+                           "starting WITHOUT the projector (vision gate negative test)",
+                           _omit_mmp, model)
+        elif _needs_mmproj(model, vision=vision):
             _mmproj_resolved = None
             try:
                 _mmproj = resolve_mmproj_path(model)

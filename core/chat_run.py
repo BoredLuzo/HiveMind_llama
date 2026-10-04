@@ -847,22 +847,29 @@ async def run_stream(
     # continuation source - UI and model now share the same story. The
     # sidecar "session" key demotes to a fallback for chats without a json.
     if chat_id and not _state.memory.get_session_messages():
+        _seed = []
+        _seed_source = "none"
         try:
             _seed = history_seed(chat_id)
+            if _seed:
+                _seed_source = "json"
         except (OSError, ValueError):
             _seed = []
         if not _seed:
             try:
                 _seed = (_load_chat_context(chat_id) or {}).get("session") or []
+                if _seed:
+                    _seed_source = "sidecar"
             except (OSError, ValueError):
                 _seed = []
         if _seed:
             _state.memory.seed_session(_seed)
             # SEED-TRACE (2026-10-04, Sonnet): the context-continuation test
-            # needs the seeded message count in the log to verify the model
-            # really got the earlier turns.
-            _logger.info("[HISTORY-SEED] chat=%s seeded %d message(s) from the json transcript",
-                         chat_id, len(_seed))
+            # needs the count AND the source in the log - the API-only path
+            # has no chat json (the frontend writes it via PUT /chats), so a
+            # sidecar fallback would silently measure the WEAKER history.
+            _logger.info("[HISTORY-SEED] chat=%s source=%s seeded %d message(s)",
+                         chat_id, _seed_source, len(_seed))
 
     _pipeline_mem_ctx  = _state.pipeline.memory.as_context_string()
     # Caps raised to sidecar parity (8000 chars): 600/1200 used to cut code

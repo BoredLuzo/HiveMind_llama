@@ -102,13 +102,15 @@ class AgenticToolLoop(ToolLoop):
         else:
             self._tail_guard_fires = 0
 
-        # IMAGES-IN-REQUEST (2026-10-04, Sonnet): the duo tool loop is the
+        # IMAGES-IN-REQUEST (2026-10-04, Sonnet #4): the duo tool loop is the
         # coder's real per-round caller and bypassed the pipeline trace
-        # entirely. Log every round - also at 0 - so "the image fell out of
-        # the window after compression" is measurable instead of arguable.
+        # entirely. Count the OUTGOING list (payload["messages"] - the same
+        # list the POST below sends, post-compression), also at 0, so "the
+        # image fell out of the window" is measurable instead of arguable.
         logging.getLogger("hivemind.tool_loop").info(
             "[TOOL-LOOP] model=%s port=%s images_in_request=%d",
-            self.cfg.model, result.get("dport"), _count_image_parts(dtool_msgs))
+            self.cfg.model, result.get("dport"),
+            _count_image_parts(payload.get("messages") or dtool_msgs))
 
         for _post_attempt in range(self.cfg.max_post_attempts):
             try:

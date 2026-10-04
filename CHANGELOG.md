@@ -58,6 +58,16 @@ NOT built (deliberate, for a later release):
 - steering notes, status lines and approval/ask cards are not persisted
   (approval cards recover server-side only while the run lives)
 - chat size display / cleanup UI (sizes stay whatever they grow to)
+- no live warning at the ctx slider when the set ctx cannot fit the
+  VRAM budget (the guard only fires when a run starts; the observed
+  failure class - 35B @ ctx 71680 with a pinned planner, 9B @ 40960 -
+  is only caught there)
+- an orphaned run (browser/tab died) keeps its VRAM until it finishes
+  or /abort arrives; server-side continuation is proven, but UI
+  completeness after reconnect (planner parts, thinking foldout) is
+  still a manual browser test
+- the per-round image trace is observe-only: when an image falls out
+  of the compressed window, nothing re-attaches it
 
 PARTIAL (known, accepted):
 - blob versions are add-only until a chat is deleted (no per-chat GC)

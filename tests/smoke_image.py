@@ -145,8 +145,8 @@ def main() -> int:
     args = ap.parse_args()
 
     png = build_png(args.code)
-    q = ("What EXACT code/letters are written in the attached image? "
-         "Answer in plain text FIRST, before you use any tool. "
+    q = ("The attached image has a code written on it. TRANSCRIBE that code "
+         "character by character in plain text FIRST, before you use any tool. "
          "Then write ONE file repro.html that reproduces the image "
          "(colored divs + CSS) and put the code in the <title>.")
     payload = {"q": q, "images": [base64.b64encode(png).decode()], "mode": "code_duo"}
