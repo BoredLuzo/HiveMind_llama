@@ -644,6 +644,24 @@ def direct_vision_should_drop(slot_vision_active, slot_model: str = "",
     return slot_vision_active is False
 
 
+def build_steer_user_message(text: str, images=None) -> dict:
+    """Mid-run steer message builder (2026-10-04, user decision: steering
+    with screenshots). Pure: images (list of base64/data-URL strings) become
+    image_url parts FIRST, the text follows as a text part - exactly the
+    wire shape llama-server expects. No images -> plain string content.
+    Used by all steering insertion sites so the wire format is identical.
+    """
+    _txt = f"[USER STEER] {text}"
+    _imgs = [str(b or "").strip() for b in (images or []) if str(b or "").strip()]
+    if not _imgs:
+        return {"role": "user", "content": _txt}
+    parts = [{"type": "image_url", "image_url": {"url":
+              b if b.startswith("data:") else "data:image/jpeg;base64," + b}}
+             for b in _imgs]
+    parts.append({"type": "text", "text": _txt})
+    return {"role": "user", "content": parts}
+
+
 def resolve_duo_role_models(settings) -> tuple:
     """The duo role models from ONE place (2026-10-04, Sonnet #5).
 

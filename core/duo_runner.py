@@ -140,7 +140,7 @@ from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
     build_image_desc_block, attach_images_to_last_user, resolve_image_plan,
-    count_image_parts, effective_image_plan, CODER_VISION_NOTE,
+    count_image_parts, effective_image_plan, CODER_VISION_NOTE, build_steer_user_message as _build_steer_user_message,
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
@@ -2660,12 +2660,21 @@ async def run_code_duo(ctx):
             # messages once per round and append them to the coder input — the
             # next model round sees them as user context (ZCode-style steering;
             # the tool loop drains again at its own round boundaries below).
-            _steer_txts = drain_steer_messages(ctx.run_id)
-            if _steer_txts:
+            # SINCE 2026-10-04 steers can carry IMAGES: text-only items go
+            # into the coder input as before, image items are appended as
+            # their own content-parts user message after _coder_msgs is built.
+            _steer_items = drain_steer_messages(ctx.run_id)
+            _steer_img_items = []
+            if _steer_items:
                 yield await ctx.emit({"type": "status", "content":
-                    "🧭 steered: " + " | ".join(t[:80] for t in _steer_txts)})
-                _coder_input += "\n\n" + "\n\n".join(
-                    f"[USER STEER] {t}" for t in _steer_txts)
+                    "🧭 steered: " + " | ".join(
+                        (it["text"][:60] or "(image)") + ("/+img" * (1 if it["images"] else 0))
+                        for it in _steer_items)})
+                for _st in _steer_items:
+                    if _st["images"]:
+                        _steer_img_items.append(_st)
+                    else:
+                        _coder_input += "\n\n" + f"[USER STEER] {_st['text']}"
 
             # RO-DETECT (2026-09-03): decide BEFORE building coder messages.
             # A read-only phrase (e.g. "DO NOT MODIFY") is often only a content
@@ -2762,6 +2771,16 @@ async def run_code_duo(ctx):
                     yield await ctx.emit({"type": "status",
                         "content": "⚠ Image skipped for coder '" + exec_mdl
                                    + "': no projector (mmproj) available — the coder answers text-only."})
+
+            # STEER-IMAGES (2026-10-04): image-carrying steers become their
+            # own content-parts user message AFTER the base build - they must
+            # not be merged into the first user message (that already holds
+            # the round-1 image when the plan says raw).
+            for _st in _steer_img_items:
+                _coder_msgs.append(_build_steer_user_message(_st["text"], _st["images"]))
+                logger.info("[DUO] steer with %d image(s) appended as user parts message",
+                            len(_st["images"]))
+                _steer_img_items = []
 
             _prompt_prev = (_coder_input or "")[:500].replace("\n", " ").strip()
             if len(_coder_input or "") > 500:
@@ -3797,10 +3816,12 @@ async def run_code_duo(ctx):
                         _round_steer = drain_steer_messages(ctx.run_id)
                         if _round_steer:
                             yield await ctx.emit({"type": "status", "content":
-                                "🧭 steered: " + " | ".join(t[:80] for t in _round_steer)})
+                                "🧭 steered: " + " | ".join(
+                                    (it["text"][:60] or "(image)") + ("/+img" * (1 if it["images"] else 0))
+                                    for it in _round_steer)})
                             for _st in _round_steer:
                                 _dtool_msgs.append(
-                                    {"role": "user", "content": f"[USER STEER] {_st}"})
+                                    _build_steer_user_message(_st["text"], _st["images"]))
                         from tools.runner import _ask_user_gate, _ask_user_throttled_count
                         if ctx.duo_config.until_finished:
                             if _cs.test_retries >= _cs.max_test_retries:
