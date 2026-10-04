@@ -108,3 +108,4 @@ BUILD_INFO.txt
 # the verification for every future schema change; runtime artifacts inside
 # tests/ stay ignored via the global rules above.
 
+_runc*/, previews

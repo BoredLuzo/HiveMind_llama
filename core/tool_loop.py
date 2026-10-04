@@ -286,9 +286,17 @@ class ToolLoop:
                     _tools_payload = _phase_tools
             # N1: Model-aware sampling profile
             _smp = get_sampling_profile(self.cfg.model, thinking=bool(self.cfg.thinking))
+            # IMAGES→PARTS (2026-10-04, live run D finding): the direct-chat
+            # tool loop receives messages with the raw "images" key and
+            # POSTs HERE directly - without llama_client._convert_messages
+            # that key stays in the JSON, llama-server ignores it, and the
+            # model answers "please attach the image" even though the image
+            # was in the payload. The duo path already sends content parts
+            # (attach_images_to_last_user); convert here for every ToolLoop.
+            from backend.llama_client import _convert_messages as _msgs_to_parts
             _payload = {
                 "model": self.cfg.model,
-                "messages": _tool_messages,
+                "messages": _msgs_to_parts(_tool_messages),
                 "tools": _tools_payload,
                 "stream": self.cfg.stream,
                 "temperature":       _smp.get("temperature", self.cfg.temperature),

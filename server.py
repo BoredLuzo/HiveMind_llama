@@ -584,7 +584,8 @@ async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: in
     # image" checkable in the log instead of arguable. Duo roles log ALWAYS
     # (also 0 - "the image stopped being sent" after a compression must be
     # visible, not look like a missing line); every other role logs on >0.
-    _n_imgs = count_image_parts(msgs)
+    _n_imgs = count_image_parts(msgs) + sum(
+        1 for _m in msgs if isinstance(_m, dict) and _m.get("images"))
     if _n_imgs or (agent_role or "").startswith("duo"):
         _logger.info("[LLM-CALL] model=%s role=%s images_in_request=%d ctx=%d",
                      model, agent_role or "-", _n_imgs, effective_ctx)
