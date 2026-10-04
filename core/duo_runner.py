@@ -3306,7 +3306,11 @@ async def run_code_duo(ctx):
                     if _dport is None:
                         for _connect_attempt in range(3):
                             try:
-                                _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
+                                # VISION RELOAD (2026-10-04): keep the mmproj
+                                # when the image plan routes raw images to the
+                                # coder - the cached slot may predate the plan
+                                _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True,
+                                                                    vision=(_img_plan.get("coder") == "raw"))
                                 break
                             except Exception as _ce:
                                 if _connect_attempt < 2:
