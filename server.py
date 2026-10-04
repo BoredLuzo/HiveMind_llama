@@ -167,6 +167,7 @@ from core.duo_helpers import (
     _resolve_duo_runtime_profile,
     _resolve_duo_run_timeout_seconds,
     _bucket_stop_reason,
+    count_image_parts,
 )
 
 
@@ -578,6 +579,13 @@ async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: in
     else:
         num_ctx = _get_num_ctx(model, agent_role)
         effective_ctx = num_ctx if num_ctx else 8192
+    # IMAGES-IN-REQUEST (2026-10-04, Sonnet): per-model-call trace - how many
+    # image parts actually went on the wire. Makes "did the model SEE the
+    # image" checkable in the log instead of arguable.
+    _n_imgs = count_image_parts(msgs)
+    if _n_imgs:
+        _logger.info("[LLM-CALL] model=%s role=%s images_in_request=%d ctx=%d",
+                     model, agent_role or "-", _n_imgs, effective_ctx)
     async for tok in pipeline.ollama.chat_stream(model, msgs, temp, max_tok, ctx=effective_ctx,
                                                   think=think, thinking_budget=thinking_budget,
                                                   split_thinking=split_thinking,

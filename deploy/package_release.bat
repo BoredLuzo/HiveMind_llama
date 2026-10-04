@@ -48,5 +48,20 @@ if errorlevel 1 (
 )
 echo  [OK] zip clean: no settings/presets/models/sessions inside.
 echo.
+REM BUILD INFO (2026-10-04): embed the exact git build into the zip so a
+REM released install can tell what it runs (start_hivemind.bat prints it;
+REM live is NOT a git repo, so 'git describe' there is impossible).
+set "BUILD_DESC="
+for /f "usebackq delims=" %%D in (`git describe --tags --always`) do set "BUILD_DESC=%%D"
+if not defined BUILD_DESC set "BUILD_DESC=%VER%"
+set "BUILD_DATE="
+for /f "usebackq delims=" %%D in (`git log -1 --format^=%%ci`) do set "BUILD_DATE=%%D"
+powershell -NoProfile -Command "$zipPath = (Resolve-Path ('..\' + $env:OUT)).ToString(); Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [System.IO.Compression.ZipFile]::Open($zipPath, 'Update'); $entry = $zip.CreateEntry($env:ROOTNAME + '/BUILD_INFO.txt'); $sw = New-Object System.IO.StreamWriter($entry.Open()); $sw.WriteLine('version: ' + $env:VER); $sw.WriteLine('build: ' + $env:BUILD_DESC); $sw.WriteLine('commit_date: ' + $env:BUILD_DATE); $sw.Dispose(); $zip.Dispose()"
+if errorlevel 1 (
+    echo  [WARN] Could not embed BUILD_INFO.txt - banner will show no build line.
+) else (
+    echo  [OK] BUILD_INFO.txt embedded: %BUILD_DESC%
+)
+echo.
 echo  Done. Upload ..\%OUT% as the release asset (tag v%VER%).
 echo  Press any key to continue... & pause >nul & exit /b 0

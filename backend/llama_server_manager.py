@@ -131,6 +131,18 @@ class LlamaServerManager(LlamaLoadMixin, LlamaEvictMixin, LlamaProcessMixin,
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    def get_slot_by_port(self, port: int):
+        """Slot for a running server port, or None.
+
+        VISION TRUTH (2026-10-04): callers (duo image gate) need the slot's
+        /props-derived state (vision_active), which ensure_loaded's int port
+        return value cannot carry.
+        """
+        for _s in self._slots:
+            if _s.port == port and _s.is_running:
+                return _s
+        return None
+
 
 
 

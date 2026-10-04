@@ -2544,20 +2544,28 @@ function stopAskUserCountdown() {
 // DOWNSCALE (2026-10-01): longest edge cap keeps the base64 (and therefore
 // the prompt tokens) predictable — the raw screenshot/phone photo used to go
 // up unscaled. jpeg q0.9; images without a decodable size pass through.
+// MIME GUARD (2026-10-04): gif/webp pass the image/* type check but are the
+// formats the server-side decoder chokes on (animated frames, exotic webp
+// profiles). They are ALWAYS re-encoded to jpeg via the canvas (first
+// frame) even when small; if that fails, cb(null) and the caller drops the
+// image with a visible notice instead of shipping dead bytes.
 function _downscaleImage(dataUrl, cb) {
+  var _mime = ((dataUrl || '').slice(0, 64).match(/^data:(image\/[a-z0-9.+-]+)[;,]/i) || [])[1] || '';
+  var _risky = (_mime === 'image/gif' || _mime === 'image/webp');
   var _img = new Image();
   _img.onload = function() {
     var _edge = Math.max(_img.naturalWidth, _img.naturalHeight);
-    if (_edge <= 1568 || !_edge) { cb(dataUrl); return; }
+    if (!_edge) { cb(_risky ? null : dataUrl); return; }
+    if (!_risky && _edge <= 1568) { cb(dataUrl); return; }
     var _k = 1568 / _edge;
     var _cv = document.createElement('canvas');
     _cv.width = Math.round(_img.naturalWidth * _k);
     _cv.height = Math.round(_img.naturalHeight * _k);
     _cv.getContext('2d').drawImage(_img, 0, 0, _cv.width, _cv.height);
     try { cb(_cv.toDataURL('image/jpeg', 0.9)); }
-    catch (e) { cb(dataUrl); }
+    catch (e) { cb(_risky ? null : dataUrl); }
   };
-  _img.onerror = function() { cb(dataUrl); };
+  _img.onerror = function() { cb(_risky ? null : dataUrl); };
   _img.src = dataUrl;
 }
 
@@ -2566,6 +2574,7 @@ function handleImgs(input) {
     const r = new FileReader();
     r.onload = function(e) {
       _downscaleImage(e.target.result, function(_url) {
+        if (!_url) { showStatus('⚠ ' + file.name + ': this GIF/WebP could not be converted to JPEG — image dropped.'); return; }
         S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
         renderImgPreview();
       });
@@ -7668,6 +7677,7 @@ document.getElementById('input').addEventListener('paste', function(e) {
       // PASTE-DOWNSCALE (2026-10-03): same 1568px path as drag&drop:
       // screenshots pasted full-res used to skip it entirely.
       _downscaleImage(ev.target.result, function(_url) {
+        if (!_url) { showStatus('⚠ Pasted GIF/WebP could not be converted to JPEG — image dropped.'); return; }
         S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
         renderImgPreview();
       });
@@ -7684,6 +7694,7 @@ chatCol.addEventListener('drop', function(e) {
     const r = new FileReader();
     r.onload = function(ev) {
       _downscaleImage(ev.target.result, function(_url) {
+        if (!_url) { showStatus('⚠ ' + file.name + ': this GIF/WebP could not be converted to JPEG — image dropped.'); return; }
         S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
         renderImgPreview();
       });

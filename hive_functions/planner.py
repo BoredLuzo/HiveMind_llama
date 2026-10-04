@@ -19,6 +19,7 @@ settings = _load_settings()  # Runtime settings dict
 import httpx
 
 from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP
+from core.duo_helpers import count_image_parts as _count_image_parts
 from core.duo_helpers import _apply_thinking_fields
 from hive_functions.ctx_utils import compute_char_caps, extract_known_files
 
@@ -781,8 +782,10 @@ async def _llm_stream(
     _apply_thinking_fields(payload, use_thinking, thinking_budget)
 
     # DEBUG-THINKING: Log actual payload sent to llama.cpp
-    logger.info("[PLANNER-LLM] POST port=%d model=%s thinking_budget=%d payload.thinking=%s payload.thinking_budget=%s max_tokens=%d",
-                port, model, thinking_budget,
+    # IMAGES-IN-REQUEST (2026-10-04, Sonnet): count parts actually on the
+    # wire - "did the model get the image" becomes measurable per call.
+    logger.info("[PLANNER-LLM] POST port=%d model=%s images_in_request=%d thinking_budget=%d payload.thinking=%s payload.thinking_budget=%s max_tokens=%d",
+                port, model, _count_image_parts(messages), thinking_budget,
                 payload.get("thinking"), payload.get("thinking_budget"), payload.get("max_tokens"))
 
     thinking_chunks: list[str] = []

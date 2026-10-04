@@ -627,6 +627,61 @@ def attach_images_to_last_user(msgs, images):
     return msgs
 
 
+def count_image_parts(messages) -> int:
+    """Number of image_url content parts actually carried by the messages
+    (2026-10-04, Sonnet: make 'did the model get the image' measurable
+    instead of arguable). Pure; returns 0 for plain-string contents."""
+    _n = 0
+    for _m in messages or []:
+        if not isinstance(_m, dict):
+            continue
+        _c = _m.get("content")
+        if isinstance(_c, list):
+            _n += sum(1 for _p in _c
+                      if isinstance(_p, dict) and _p.get("type") == "image_url")
+    return _n
+
+
+# VISION TRUTH (2026-10-04): the coder's raw-image note as ONE constant so
+# the vision gate can retract exactly this text from an already-built
+# system prompt when the post-load /props check says the projector dropped.
+CODER_VISION_NOTE = (
+    "\n\n[VISION]: the user's attached image is included in this "
+    "conversation - you can see it. Reference concrete visual "
+    "details (layout, texts, colors, shapes) in your work.")
+
+
+def effective_image_plan(plan, *, planner_slot_vision=None, coder_slot_vision=None,
+                         has_description: bool = False):
+    """Downgrade image-plan entries the LOADED server cannot honor (2026-10-04).
+
+    resolve_image_plan() decides from settings + the model registry BEFORE the
+    load; this runs AFTER ensure_loaded and checks the slot's /props-derived
+    vision truth. slot vision values: True (server runs with projector),
+    False (server runs WITHOUT one), None (/props unavailable - trust the
+    plan, no false fallback). 'raw' + vision False falls back to the image
+    description when one exists, else to 'none'.
+    Returns (new_plan, warnings) - warnings are UI-ready strings.
+    """
+    plan = dict(plan)
+    warnings: list = []
+    for role, actual in (("planner", planner_slot_vision),
+                         ("coder", coder_slot_vision)):
+        if plan.get(role) != "raw" or actual is not False:
+            continue
+        if has_description:
+            plan[role] = "description"
+            warnings.append(
+                f"{role} runs without a vision projector (server reports vision:false) "
+                f"- falling back to the image description.")
+        else:
+            plan[role] = "none"
+            warnings.append(
+                f"{role} runs without a vision projector (server reports vision:false) "
+                f"and no image description exists - image skipped for it.")
+    return plan, warnings
+
+
 
 def resolve_image_plan(planner_mdl, coder_mdl, settings, ctx) -> dict:
     """Pure decision: how the agentic duo run handles attached images

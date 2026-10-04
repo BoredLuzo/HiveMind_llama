@@ -140,6 +140,7 @@ from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
     build_image_desc_block, attach_images_to_last_user, resolve_image_plan,
+    count_image_parts, effective_image_plan, CODER_VISION_NOTE,
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
@@ -1218,6 +1219,27 @@ async def run_code_duo(ctx):
                 except Exception as _port_err:
                     logger.warning("[Planner] Port resolution failed: %s", _port_err)
 
+            # VISION-TRUTH GATE (2026-10-04, Sonnet review): the requested
+            # vision flag can silently drop on load (mmproj resolution failed,
+            # VRAM restart without projector). If the loaded planner slot
+            # really runs without a projector, downgrade the plan instead of
+            # letting the planner claim it sees the image. vision_active None
+            # (/props unreachable) trusts the plan - no false fallback.
+            if _img_plan.get("planner") == "raw" and _plan_port is not None:
+                try:
+                    from backend.llama_server_manager import manager as _lsm_vgate
+                    _pslot = _lsm_vgate.get_slot_by_port(int(_plan_port))
+                    _pv = getattr(_pslot, "vision_active", None) if _pslot is not None else None
+                    if _pv is False:
+                        _img_plan, _vg_warns = effective_image_plan(
+                            _img_plan, planner_slot_vision=_pv,
+                            has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
+                        for _w in _vg_warns:
+                            logger.warning("[DUO][VISION-GATE] %s", _w)
+                            yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
+                except (ImportError, AttributeError, TypeError, ValueError) as _vg_err:
+                    logger.debug("[DUO][VISION-GATE] planner check skipped: %s", _vg_err)
+
             yield await ctx.emit({
                 "type": "status",
                 "content": (
@@ -1744,6 +1766,25 @@ async def run_code_duo(ctx):
             has_subtasks=bool(_subtasks),
             has_explore_ctx=_explore_has_contents,
         ) + _coder_dyn_hints + build_image_desc_block(getattr(ctx, "image_description", None))
+        # VISION-TRUTH GATE pre-prompt (2026-10-04, Sonnet review): if the
+        # coder slot is ALREADY loaded and really runs without a projector,
+        # downgrade the plan BEFORE the notes/parts decide from it. No slot
+        # loaded (fresh load below) trusts the plan - the post-load gate
+        # re-checks against /props truth.
+        if _img_plan.get("coder") == "raw":
+            try:
+                from backend.llama_server_manager import manager as _lsm_vgate
+                _cslot_pre = await _lsm_vgate._find_loaded(exec_mdl)
+                _cv = getattr(_cslot_pre, "vision_active", None) if _cslot_pre is not None else None
+                if _cv is False:
+                    _img_plan, _vg_warns = effective_image_plan(
+                        _img_plan, coder_slot_vision=_cv,
+                        has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
+                    for _w in _vg_warns:
+                        logger.warning("[DUO][VISION-GATE] %s", _w)
+                        yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
+            except (ImportError, AttributeError, TypeError, ValueError) as _vg_err:
+                logger.debug("[DUO][VISION-GATE] coder pre-check skipped: %s", _vg_err)
         if _img_plan.get("planner") == "raw" and _img_plan.get("coder") != "raw":
             _duo_coder_sys += (
                 "\n\n[IMAGE NOTE]: you cannot see the attached image — the planner saw it. "
@@ -1751,11 +1792,9 @@ async def run_code_duo(ctx):
         elif _img_plan.get("coder") == "raw":
             # VISION NOTE (2026-10-04): the coder receives the image itself
             # as a content part - acknowledge that so the model knows it can
-            # reference what it sees instead of guessing from the plan text
-            _duo_coder_sys += (
-                "\n\n[VISION]: the user's attached image is included in this "
-                "conversation - you can see it. Reference concrete visual "
-                "details (layout, texts, colors, shapes) in your work.")
+            # reference what it sees instead of guessing from the plan text.
+            # Kept as ONE constant so the post-load gate can retract it.
+            _duo_coder_sys += CODER_VISION_NOTE
         # SAVED-PATH NOTE (2026-10-03): the original upload lives in the
         # workspace now - tell the coder once so it can reference/reuse it.
         _img_paths = getattr(ctx, "image_paths", None) or []
@@ -2159,6 +2198,26 @@ async def run_code_duo(ctx):
                         return
                     yield await ctx.emit({"type": "status",
                         "content": f"✅ Coder ready ({exec_mdl.split(':')[0]})"})
+                    # VISION-TRUTH GATE post-load (2026-10-04, Sonnet review):
+                    # /props.modalities.vision is read AFTER every load (also
+                    # the in-loop reload). A dropped projector must not leave
+                    # the raw-image plan + [VISION] note claiming the coder
+                    # sees the image. None (/props unreachable) trusts the plan.
+                    if _img_plan.get("coder") == "raw" and _coder_port is not None:
+                        try:
+                            from backend.llama_server_manager import manager as _lsm_vgate2
+                            _cslot2 = _lsm_vgate2.get_slot_by_port(int(_coder_port))
+                            _cv2 = getattr(_cslot2, "vision_active", None) if _cslot2 is not None else None
+                            if _cv2 is False:
+                                _img_plan, _vg_warns2 = effective_image_plan(
+                                    _img_plan, coder_slot_vision=_cv2,
+                                    has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
+                                _duo_coder_sys = _duo_coder_sys.replace(CODER_VISION_NOTE, "")
+                                for _w in _vg_warns2:
+                                    logger.warning("[DUO][VISION-GATE] %s", _w)
+                                    yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
+                        except (ImportError, AttributeError, TypeError, ValueError) as _vg_err2:
+                            logger.debug("[DUO][VISION-GATE] coder post-load check skipped: %s", _vg_err2)
                     if _subtasks:
                         yield await ctx.emit({"type": "status",
                             "content": f"🖊️ Coder active — {len(_subtasks)} subtask(s), starting with chunk 1"})
@@ -2645,6 +2704,18 @@ async def run_code_duo(ctx):
                 # (a non-multimodal model would answer an image it never saw).
                 from backend.llama_manager_utils import resolve_mmproj_strict as _mms
                 _mm_ok = _mms(exec_mdl) is not None
+                # VISION-TRUTH (2026-10-04): even with a resolved mmproj FILE,
+                # a mid-run reload can leave the server running without the
+                # projector loaded - check the slot's /props state when known.
+                if _mm_ok:
+                    try:
+                        from backend.llama_server_manager import manager as _lsm_vgate3
+                        _ap = int(_cached_coder_port or _coder_port or 0)
+                        _cslot3 = _lsm_vgate3.get_slot_by_port(_ap) if _ap else None
+                        if _cslot3 is not None and getattr(_cslot3, "vision_active", None) is False:
+                            _mm_ok = False
+                    except (ImportError, AttributeError, TypeError, ValueError) as _vg_err3:
+                        logger.debug("[DUO][VISION-GATE] attach check skipped: %s", _vg_err3)
                 if _mm_ok:
                     _coder_msgs = attach_images_to_last_user(_coder_msgs, ctx.images)
                 else:

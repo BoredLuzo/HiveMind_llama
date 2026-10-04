@@ -45,6 +45,11 @@ class ModelSlot:
         self._n_parallel: int = 1
         self._jinja: bool = False
         self.swa_window: int = 0               # SWA sliding-window size (0 = no SWA)
+        # VISION TRUTH (2026-10-04): what /props.modalities.vision actually
+        # reported for the running server. True/False = server truth,
+        # None = unknown (/props never fetched). Distinct from the REQUESTED
+        # self._vision so the duo gate can catch a silently dropped projector.
+        self.vision_active: Optional[bool] = None
     def set_pinned(self, val: bool) -> None:
         # PIN EXPIRY (2026-10-02): set/clear the pin and stamp the time so
         # LRU eviction can reclaim pins older than 30 minutes.
@@ -170,6 +175,7 @@ class ModelSlot:
         self._n_parallel    = 1
         self._jinja         = False
         self.swa_window     = 0
+        self.vision_active  = None
         # A.2 FIX: Object-swap wake — set() on old Event instance wakes all
         # already-registered waiters; new Event instance prevents new callers
         # from ever hitting a stale event. model=None (line above) ensures

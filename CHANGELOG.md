@@ -70,6 +70,27 @@ PARTIAL (known, accepted):
   threshold) - judge-routed duo runs keep the compressed window
 - /tokenize calibration of the history estimator is still open
 
+Vision honesty (2026-10-04 review round):
+- the server's real vision capability is read back from /props after
+  every load and stored on the slot; when an image plan says "raw" but
+  the loaded model runs without a projector, the run downgrades that
+  role to the image description (or skips the image) with a visible
+  warning instead of prompting a blind model to describe what it
+  cannot see
+- the coder's [VISION] prompt note is only added when the plan really
+  routes the image to it, and is retracted when the post-load check
+  says the projector dropped; the planner note distinguishes whether
+  the coder will see the image too
+- every model call that carries images logs images_in_request=N (and
+  the planner POST logs it too), so "did the model see the image" is
+  checkable in the log
+- GIF/WebP uploads are re-encoded to JPEG in the browser (first frame)
+  before upload - the formats the server-side decoder chokes on no
+  longer reach the pipeline; a failed conversion is dropped with a
+  visible notice
+- release zips embed BUILD_INFO.txt (git describe + commit date) and
+  the start banner prints the exact build a zip-installed copy runs
+
 ## [1.2.3] - 2026-09-26
 
 Hotfix: fresh installs crashed on startup before the server ever bound

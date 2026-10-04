@@ -86,6 +86,7 @@ class LlamaLoadMixin:
                 _attn = props_full.get("attention", {})
                 _swa_window = _attn.get("sliding_window") or _attn.get("rope_sliding_window") or 0
                 slot.swa_window = int(_swa_window) if _swa_window else 0
+                slot.vision_active = bool((props_full.get("modalities") or {}).get("vision"))
             except Exception:
                 pass
             self._metric_inc("startup_orphan_rehabilitations")
@@ -165,6 +166,7 @@ class LlamaLoadMixin:
                     _attn = props_full.get("attention", {})
                     _swa_window = _attn.get("sliding_window") or _attn.get("rope_sliding_window") or 0
                     slot.swa_window = int(_swa_window) if _swa_window else 0
+                    slot.vision_active = bool((props_full.get("modalities") or {}).get("vision"))
                 except Exception:
                     pass
                 rehabilitated.append(f"{model_name}@{slot.port}")
@@ -1687,6 +1689,12 @@ class LlamaLoadMixin:
                         _attn.get("sliding_window") or
                         _attn.get("rope_sliding_window") or 0
                     )
+                    # VISION TRUTH (2026-10-04 review): /props.modalities.vision
+                    # reports what the server ACTUALLY runs with - the requested
+                    # vision flag can silently drop (e.g. mmproj missing on
+                    # reload). Stored separately from the requested slot._vision
+                    # so the duo gate can compare plan vs reality.
+                    slot.vision_active = bool((_p.get("modalities") or {}).get("vision"))
             except Exception:
                 slot.swa_window = 0
         finally:
