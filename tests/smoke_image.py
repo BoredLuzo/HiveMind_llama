@@ -24,9 +24,9 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import struct
 import sys
-import time
 import urllib.request
 import zlib
 
@@ -51,6 +51,8 @@ _GLYPHS = {
     "D": ("1110", "1001", "1001", "1001", "1001", "1110"),
     "E": ("1111", "1000", "1110", "1000", "1000", "1111"),
     "F": ("1111", "1000", "1110", "1000", "1000", "1000"),
+    "T": ("1111", "0010", "0010", "0010", "0010", "0010"),
+    "Q": ("0111", "1001", "1001", "1011", "1101", "0111"),
     "X": ("1001", "1001", "0110", "0110", "1001", "1001"),
     "Y": ("1001", "1001", "0111", "0010", "0100", "0100"),
     "Z": ("1111", "0001", "0010", "0100", "1000", "1111"),
@@ -60,7 +62,10 @@ _GLYPHS = {
 
 def build_png(code: str) -> bytes:
     """1280x720: red top half, blue bottom half, yellow diagonal stripe,
-    white center square, and the code in black glyphs on the upper left."""
+    white center square, and the code in black glyphs on a WHITE PLATE
+    (2026-10-04, eyeball finding: the stripe used to cut through the
+    glyphs and made characters ambiguous - the plate sits above stripe
+    and regions, glyphs stay readable)."""
     W, H = 1280, 720
     scale = 10
     glyph_w = 4 * scale + scale
@@ -76,12 +81,23 @@ def build_png(code: str) -> bytes:
                         for sx in range(scale):
                             text_pixels.add((x0 + gi * glyph_w + gx * scale + sx,
                                              y0 + gy * scale + sy))
+    xs = [p[0] for p in text_pixels]
+    ys = [p[1] for p in text_pixels]
+    plate = set()
+    if text_pixels:
+        px0, px1 = min(xs) - 3 * scale, max(xs) + 3 * scale
+        py0, py1 = min(ys) - 2 * scale, max(ys) + 2 * scale
+        for py in range(py0, py1 + 1):
+            for px in range(px0, px1 + 1):
+                plate.add((px, py))
     rows = []
     for y in range(H):
         row = bytearray()
         for x in range(W):
             if (x, y) in text_pixels:
                 c = (0, 0, 0)
+            elif (x, y) in plate:
+                c = COLORS["white"]
             elif abs(x - int(y * W / H)) < 35:
                 c = COLORS["yellow"]
             elif (W // 2 - 100) <= x < (W // 2 + 100) and (H // 2 - 100) <= y < (H // 2 + 100):
@@ -142,7 +158,18 @@ def main() -> int:
     ap.add_argument("--code", default="XY42")
     ap.add_argument("--timeout", type=float, default=1200)
     ap.add_argument("--chat-id", default=None, help="continue this chat instead of a new one")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="build the PNG + payload, write _smoke_preview.png, print the plan - no POST")
     args = ap.parse_args()
+
+    # GLYPH VALIDATION (2026-10-04, eyeball dry-run finding): unknown chars
+    # used to render as BLANK SPACES - "--code T7Q2" showed "7 2" and the
+    # run then failed for a reason that had nothing to do with vision.
+    _unknown = sorted(set(args.code.upper()) - set(_GLYPHS) - {" "})
+    if _unknown:
+        print(f"[smoke] ERROR: code contains glyphs without a bitmap: {_unknown} "
+              f"(allowed: {''.join(sorted(k for k in _GLYPHS if k != ' '))})")
+        return 2
 
     png = build_png(args.code)
     q = ("The attached image has a code written on it. TRANSCRIBE that code "
@@ -152,6 +179,16 @@ def main() -> int:
     payload = {"q": q, "images": [base64.b64encode(png).decode()], "mode": "code_duo"}
     if args.chat_id:
         payload["chat_id"] = args.chat_id
+
+    preview = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_smoke_preview.png")
+    with open(preview, "wb") as fh:
+        fh.write(png)
+    if args.dry_run:
+        print(f"[smoke] DRY RUN - nothing sent.")
+        print(f"[smoke] PNG preview ({len(png)}B): {preview}  <- EYEBALL: code readable?")
+        print(f"[smoke] payload: mode={payload['mode']} q={len(q)} chars, "
+              f"1 image, code={args.code!r}")
+        return 0
 
     print(f"[smoke] code={args.code!r} image={len(png)}B -> {args.base}/stream")
     events = post_stream(args.base, payload, args.timeout)

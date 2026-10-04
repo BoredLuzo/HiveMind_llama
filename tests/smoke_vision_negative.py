@@ -61,7 +61,23 @@ def main() -> int:
     ap.add_argument("--code", default="ZZ77")
     ap.add_argument("--omit", default="9b-ud", help="model substring to strip the projector from")
     ap.add_argument("--timeout", type=float, default=1200)
+    ap.add_argument("--dry-run", action="store_true",
+                    help="validate install paths, write the PNG preview, print the plan - no restart")
     args = ap.parse_args()
+
+    if args.dry_run:
+        _log = os.path.join(args.install, "logs", "hivemind.log")
+        print("[neg] DRY RUN - nothing restarted.")
+        print(f"[neg] install exists      : {os.path.isdir(args.install)}")
+        print(f"[neg] start_hivemind.bat  : {os.path.isfile(os.path.join(args.install, 'start_hivemind.bat'))}")
+        print(f"[neg] log file exists     : {os.path.isfile(_log)}")
+        print(f"[neg] env to set          : HIVEMIND_TEST_OMIT_MMPROJ={args.omit!r} (scoped: planner keeps its projector)")
+        print("[neg] sequence            : stop -> env set -> start -> image run -> env cleared -> start -> /health flag check")
+        print("[neg] graded after the run: [DUO][VISION-GATE] log line (post-load gate - the")
+        print("                              attach check runs before the coder load in lazy mode and")
+        print("                              only sees vision_active=None), [TEST] CMD line, coder")
+        print("                              round-1 text without a visual claim")
+        return 0
 
     if _health(args.base):
         print("[neg] STOP HiveMind first - the env switch must be set before start.")
@@ -88,30 +104,66 @@ def main() -> int:
 
         events = post_stream(args.base, payload, args.timeout)
         statuses = [str(d.get("content", "")) for d in events if d.get("type") == "status"]
+        round1 = []
+        saw_tool = False
+        for d in events:
+            if d.get("type") in ("token", "duo_coder_token") and not saw_tool:
+                round1.append(str(d.get("content", "")))
+            elif d.get("type") == "tool_call":
+                saw_tool = True
+        round1_text = "".join(round1)
         done = next((d for d in reversed(events) if d.get("type") == "done"), None)
-        warn = [s for s in statuses if "VISION-GATE" in s or "projector" in s.lower()]
         skipped = any("image skipped" in s or "falling back to the image description" in s
                       for s in statuses)
+
+        # WHICH GATE FIRED (2026-10-04, Sonnet #3): in lazy mode the
+        # attach-time check runs BEFORE the coder load and only sees
+        # vision_active=None (trusts the plan). Only the POST-LOAD gate can
+        # know vision_active:false - its log line is the actual evidence.
+        _log = os.path.join(args.install, "logs", "hivemind.log")
+        gate_lines, test_lines = [], []
+        try:
+            with open(_log, encoding="utf-8", errors="replace") as fh:
+                for ln in fh.readlines()[-2000:]:
+                    if "[DUO][VISION-GATE]" in ln:
+                        gate_lines.append(ln.strip()[:160])
+                    elif "[TEST] HIVEMIND_TEST_OMIT_MMPROJ" in ln:
+                        test_lines.append(ln.strip()[:160])
+        except OSError as _le:
+            print(f"[neg] WARNING: cannot read install log: {_le}")
+        # VISUAL-CLAIM CHECK (2026-10-04, Sonnet #3): without image and
+        # without a description the coder must not CLAIM to see anything.
+        # (The code itself MAY legitimately appear via the planner text -
+        # the planner keeps its projector by design - so it is reported,
+        # not failed.)
+        _low = round1_text.lower()
+        claims = [w for w in ("i can see", "in the image", "as shown", "the image shows")
+                  if w in _low]
+        code_in_round1 = args.code.upper() in round1_text.upper()
 
         print("\n== STATUSES ==")
         for s in statuses[:12]:
             print("  ", s)
-        print("\n== GATE WARNINGS ==")
-        for w in warn:
-            print("  ", w)
+        print("\n== ROUND-1 CODER TEXT (before first tool_call) ==")
+        print("  " + (round1_text.strip()[:400] or "(none before tools)"))
+        print("\n== GATE LOG EVIDENCE ==")
+        for t in test_lines[:2]:
+            print("  ", t)
+        for g in gate_lines[:4]:
+            print("  ", g)
         print("== DONE ==", done and done.get("stop_reason"))
         checks = {
             "run completed (text-only fallback)": bool(done) and done.get("stop_reason") == "completed",
-            "gate warning emitted": bool(warn),
+            "post-load gate fired ([DUO][VISION-GATE] in log)": bool(gate_lines),
+            "[TEST] omit line in log (server ran without projector)": bool(test_lines),
             "image downgraded/skipped for coder": skipped,
+            "round-1 makes NO visual claim": not claims,
         }
         print("\n== VERDICT ==")
         for k, v in checks.items():
             print(f"  [{'PASS' if v else 'FAIL'}] {k}")
-        print("\n[neg] now verify in the install log:")
-        print("   grep 'TOOL-LOOP\\|VISION-GATE\\|mmproj' logs/hivemind.log | tail -10")
-        print("   expected: CMD without --mmproj, /props vision:false,")
-        print("   [DUO][VISION-GATE] warning, TOOL-LOOP ... images_in_request=0")
+        print(f"  [INFO] code in round-1 text: {code_in_round1} "
+              f"(plan-inheritance is legitimate - the planner keeps its projector)")
         return 0 if all(checks.values()) else 1
     finally:
         os.environ.pop("HIVEMIND_TEST_OMIT_MMPROJ", None)
