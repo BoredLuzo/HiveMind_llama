@@ -95,7 +95,9 @@ if not "%TAG:~0,1%"=="v" (
     echo         zip manually from https://github.com/%REPO%/releases/latest
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
-set "TAGNUM=%TAG:v=%"
+REM %TAG:v=% would strip EVERY v ("1.3.0-preview" -> "1.3.0-preiew");
+REM the tag is validated to start with v, so cut the prefix instead.
+set "TAGNUM=%TAG:~1%"
 echo  Latest release    : %TAGNUM%
 REM Numeric triple compare: string equality would apply a DOWNGRADE when the
 REM installed version is newer (dev checkouts, hotfix builds).

@@ -14,7 +14,7 @@ echo  (the git token lives in settings.json; a dirty zip leaks it).
 echo.
 
 set "VER="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9.]+)').Matches[0].Groups[1].Value"`) do set "VER=%%V"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "VER=%%V"
 if not defined VER (
     echo  [ERROR] Could not read HIVEMIND_VERSION from server.py.
     echo  Press any key to continue... & pause >nul & exit /b 1
