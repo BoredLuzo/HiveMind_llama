@@ -874,42 +874,54 @@ async def run_stream(
     # HISTORY SOURCE (2026-10-03): the chat json transcript is the ONE
     # continuation source - UI and model now share the same story. The
     # sidecar "session" key demotes to a fallback for chats without a json.
-    # CHAT-SWITCH INVALIDATION (2026-10-04, live A/B test): Memory._session
-    # is process-global - without this tag, loading chat B inherits chat
-    # A's history (seed_session skips a filled memory). Proven live: chat A
-    # seeded "blob live check", chat B answered from A's context instead of
-    # its own json.
+    # RE-SEED EVERY RUN (2026-10-04, Sonnet round 9 #1): the chat-switch tag
+    # alone only fixed A->B. Same-chat EDIT/REGENERATE kept the discarded
+    # history in memory (same chat_id -> no clear -> seed skips a filled
+    # memory). The json is ALWAYS fresher than the memory (the frontend PUTs
+    # every turn), so whenever a chat json exists it is re-seeded; the memory
+    # stays a fallback for chats without json, tagged per chat, and a new
+    # chat without id never inherits anything.
+    _json_seed: list = []
+    if chat_id:
+        try:
+            _json_seed = history_seed(chat_id)
+        except (OSError, ValueError):
+            _json_seed = []
     _mem_cid = getattr(_state.memory, "_session_chat_id", None)
-    if _mem_cid != (chat_id or ""):
-        _state.memory.clear_session()
+    if _json_seed:
+        if _state.memory.get_session_messages() or _mem_cid != (chat_id or ""):
+            _state.memory.clear_session()
+        _state.memory.seed_session(_json_seed)
         try:
             _state.memory._session_chat_id = chat_id or ""
         except AttributeError:
             pass
-    if chat_id and not _state.memory.get_session_messages():
-        _seed = []
-        _seed_source = "none"
-        try:
-            _seed = history_seed(chat_id)
-            if _seed:
-                _seed_source = "json"
-        except (OSError, ValueError):
-            _seed = []
-        if not _seed:
+        _logger.info("[HISTORY-SEED] chat=%s source=json seeded %d message(s)",
+                     chat_id, len(_json_seed))
+    else:
+        # no json (new chat, or flush failed): never inherit another chat's
+        # history - clear unless the memory is already tagged for THIS chat.
+        if _mem_cid != (chat_id or ""):
+            _state.memory.clear_session()
             try:
-                _seed = (_load_chat_context(chat_id) or {}).get("session") or []
-                if _seed:
-                    _seed_source = "sidecar"
-            except (OSError, ValueError):
-                _seed = []
-        if _seed:
-            _state.memory.seed_session(_seed)
-            # SEED-TRACE (2026-10-04, Sonnet): the context-continuation test
-            # needs the count AND the source in the log - the API-only path
-            # has no chat json (the frontend writes it via PUT /chats), so a
-            # sidecar fallback would silently measure the WEAKER history.
-            _logger.info("[HISTORY-SEED] chat=%s source=%s seeded %d message(s)",
-                         chat_id, _seed_source, len(_seed))
+                _state.memory._session_chat_id = chat_id or ""
+            except AttributeError:
+                pass
+            if chat_id:
+                try:
+                    _sidecar = (_load_chat_context(chat_id) or {}).get("session") or []
+                except (OSError, ValueError):
+                    _sidecar = []
+                if _sidecar:
+                    _state.memory.seed_session(_sidecar)
+                    _logger.info("[HISTORY-SEED] chat=%s source=sidecar seeded %d message(s)",
+                                 chat_id, len(_sidecar))
+        elif not chat_id and _state.memory.get_session_messages():
+            _state.memory.clear_session()
+            try:
+                _state.memory._session_chat_id = ""
+            except AttributeError:
+                pass
 
     _pipeline_mem_ctx  = _state.pipeline.memory.as_context_string()
     # Caps raised to sidecar parity (8000 chars): 600/1200 used to cut code

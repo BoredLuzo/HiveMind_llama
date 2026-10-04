@@ -301,6 +301,100 @@ def test_convert_messages_turns_images_key_into_parts():
     assert _convert_messages([{"role": "user", "content": "x"}]) == [{"role": "user", "content": "x"}]
 
 
+# ── NOTE-RETRACT ON LOSS (round 9 #4, blocker): when the outgoing window
+#    no longer carries image parts, the [VISION] note must leave the
+#    system prompt. Exercised through the REAL detection code path. ───────
+
+def test_vision_note_retracted_when_outgoing_count_zero():
+    from core.duo_helpers import CODER_VISION_NOTE
+    from core import agentic_tool_loop as atl
+    msgs = [
+        {"role": "system", "content": "base prompt" + CODER_VISION_NOTE},
+        {"role": "user", "content": "plan text"},
+    ]
+    assert atl._count_image_parts(msgs) == 0
+    # the same branch the tool loop runs (kept in a helper for testing):
+    msgs = atl._retract_vision_note_if_lost(msgs)
+    assert CODER_VISION_NOTE not in msgs[0]["content"]
+    assert "plan text" == msgs[1]["content"]  # untouched
+
+
+def test_vision_note_kept_while_parts_flow():
+    from core.duo_helpers import CODER_VISION_NOTE
+    from core import agentic_tool_loop as atl
+    msgs = [
+        {"role": "system", "content": "base" + CODER_VISION_NOTE},
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,x"}},
+            {"type": "text", "text": "q"},
+        ]},
+    ]
+    assert atl._count_image_parts(msgs) == 1
+    out = atl._retract_vision_note_if_lost(msgs)
+    assert CODER_VISION_NOTE in out[0]["content"]
+
+
+def test_retract_helper_tolerates_non_string_system():
+    from core import agentic_tool_loop as atl
+    msgs = [{"role": "system", "content": [{"type": "text", "text": "parts"}]}]
+    assert atl._retract_vision_note_if_lost(msgs) == msgs
+
+
+# ── ToolLoop payload BEHAVIOR test: a fake llama-server records the body -
+#    the request the loop actually sends must carry image_url parts and no
+#    raw "images" key (Sonnet round 9 #5). ────────────────────────────────
+
+def test_toolloop_fake_server_sees_parts(tmp_path=None):
+    import asyncio
+    import http.server
+    import json as _json
+    import threading
+
+    captured = {}
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            captured["body"] = _json.loads(body)
+            resp = (b'data: {"choices": [{"delta": {"content": "ok"}}]}\n\n'
+                    b'data: [DONE]\n\n')
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(resp)))
+            self.end_headers()
+            self.wfile.write(resp)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        import httpx as _httpx
+        from core.tool_loop import ToolLoop, ToolLoopConfig
+        loop = ToolLoop(
+            config=ToolLoopConfig(stream=True, max_rounds=1, model="fake:1b",
+                                  tools=[], tool_mode="", require_tool_call=False),
+            http_client=_httpx.AsyncClient(), port=port, workspace="",
+        )
+        msgs = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "[USER]\nfix", "images": ["QUJD"]},
+        ]
+        async def _drive():
+            async for _ev in loop.run(msgs):
+                pass
+        asyncio.run(_drive())
+        sent = captured.get("body", {}).get("messages", [])
+        user = next(m for m in sent if m.get("role") == "user")
+        assert isinstance(user["content"], list) and user["content"][0]["type"] == "image_url", \
+            f"fake server saw non-part content: {type(user['content'])}"
+        assert "images" not in user, "raw images key must not reach the wire"
+    finally:
+        srv.shutdown()
+
+
 # ── the graded-down plan must never carry the [VISION] note
 #    (Sonnet round 7 #3): tests the REAL prompt-build branch, not the
 #    retraction string-replace. ────────────────────────────────────────────
