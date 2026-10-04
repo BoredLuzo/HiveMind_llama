@@ -9630,8 +9630,13 @@ function _autosaveChatMessage() {
       // existing restore path renders them as normal bubbles.
       var _pTxt = (el.textContent || '').trim();
       if (_pTxt) {
+        // strip live ids from the saved html: restored blocks must not
+        // carry planner-think-block & friends twice - the next planner run
+        // does getElementById and would hit the restored ghost first
+        var _clone = el.cloneNode(true);
+        _clone.querySelectorAll('[id]').forEach(function(x) { x.removeAttribute('id'); });
         msgs.push({role: 'assistant', agent: 'Planner', part: true,
-                   content: _pTxt.slice(0, 4000), html: el.innerHTML,
+                   content: _pTxt, html: _clone.innerHTML,
                    ts: Date.now()});
       }
     }

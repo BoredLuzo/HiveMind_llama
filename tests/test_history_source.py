@@ -99,6 +99,22 @@ def main():
         else:
             fail("part filter", json.dumps(trp)[:120])
 
+        # FILTER BEFORE LIMIT: parts must not consume window slots - a duo
+        # round with 3 parts + 1 answer still leaves the full window of
+        # real turns (here: limit=2 keeps the LAST 2 real turns)
+        msgs_many = [{"role": "user", "content": f"q{i}"} for i in range(6)]
+        cid_l = "e5f6a7b8"
+        parts = [{"role": "assistant", "agent": "Planner", "part": True,
+                  "content": f"PART {i}", "html": "<p>p</p>"} for i in range(3)]
+        (ws / "2026-01-04T00-00-00_many_e5f6a7b8.json").write_text(json.dumps({
+            "id": cid_l, "title": "many", "created_at": "t", "updated_at": "t",
+            "messages": msgs_many[:1] + parts + msgs_many[1:]}), encoding="utf-8")
+        trl = CC.load_chat_transcript(cid_l, limit=2)
+        if [m["content"] for m in trl] == ["q4", "q5"]:
+            ok("filter runs BEFORE the limit: parts never shrink the window")
+        else:
+            fail("filter-before-limit", json.dumps(trl)[:120])
+
         tr2 = CC.load_chat_transcript(cid, limit=2)
         if [m["content"] for m in tr2] == ["follow-up", "final answer"]:
             ok("transcript: limit keeps the NEWEST messages")

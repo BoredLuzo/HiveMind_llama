@@ -42,6 +42,34 @@ round of reliability work on writes, approvals and model loading.
 - Developers: a pre-commit hook ships under `scripts/hooks` (see
   README for the one-time activation).
 
+## [1.3.0-preview] - 2026-10-04
+
+Test build for the live installation. Everything below is IN:
+image upload paths (collision-free, real formats), chat continuity
+(transcript seeding, token-budget window, summary fix), the hardened
+self-updater (verified end-to-end with a real release zip, including
+preview-aware version ordering), rev compare-and-set with server-wins
+409, fail-closed approval timeout, the edit shrink guard, planner/
+thinking/checklist persistence (small variant, out of the model seed),
+one-file-per-chat fork guard with rev-based adoption, a 200 MB save
+brake, concurrent-writer coverage.
+
+NOT built (deliberate, for a later release):
+- steering notes, status lines and approval/ask cards are not persisted
+  (approval cards recover server-side only while the run lives)
+- chat size display / cleanup UI (sizes stay whatever they grow to)
+
+PARTIAL (known, accepted):
+- blob versions are add-only until a chat is deleted (no per-chat GC)
+- message html/content stay inline in the chat json (the bulk of large
+  chats); images double-store (chat + .hive_uploads) when persistence
+  is on
+- restored tool chips stay silent when their path spelling differs from
+  the panel key
+- the judge-duo uncompressed re-read gate is dead code (unreachable
+  threshold) - judge-routed duo runs keep the compressed window
+- /tokenize calibration of the history estimator is still open
+
 ## [1.2.3] - 2026-09-26
 
 Hotfix: fresh installs crashed on startup before the server ever bound

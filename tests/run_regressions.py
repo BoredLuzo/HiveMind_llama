@@ -62,6 +62,7 @@ SUITES = [
     ("history_source",         "tests/test_history_source.py",                  60),
     ("image_plan",             "tests/test_image_plan.py",                      60),
     ("approval_timeout",       "tests/test_approval_timeout.py",                 60),
+    ("chat_concurrency",       "tests/test_chat_concurrency.py",                 90),
     ("native_lib_check",       "tests/test_native_lib_check.py",               60),
     ("websearch_budget_stop",  "tests/test_websearch_budget_stop.py",          60),
     ("toolgen_stream_card",    "tests/test_toolgen_stream_card.py",            60),

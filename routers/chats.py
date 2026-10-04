@@ -155,6 +155,7 @@ def _sweep_orphan_blob_dirs() -> None:
         logger.debug("[CHATS] blob dir sweep failed: %s", _sweep_err)
 
 _RE_CHAT_ID_PATTERN = re.compile(r"_([a-f0-9\-]{4,36})\.json$")
+_CHAT_JSON_LIMIT = 200 * 1024 * 1024  # 200 MB emergency brake per save
 _chat_save_locks: dict = {}
 _chat_save_locks_guard = threading.Lock()
 _re_slug_special = re.compile(r"[^\w\s-]")
@@ -299,7 +300,18 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
             # this chat id first; only a genuinely new chat generates a name.
             _existing = sorted(_state._SESSIONS_DIR.glob(f"*_{chat_id}.json"))
             if _existing:
-                _file = str(_existing[-1])
+                # ADOPTION RULE (2026-10-04): duplicates resolve by HIGHEST
+                # rev, never by name - adoption must not overwrite newer
+                # state with an older fork leftover.
+                _best, _best_rev = _existing[0], -1
+                for _cand in _existing:
+                    try:
+                        _rv = int(json.loads(_cand.read_text(encoding="utf-8")).get("rev") or 0)
+                    except (OSError, ValueError):
+                        _rv = -1
+                    if _rv > _best_rev:
+                        _best, _best_rev = _cand, _rv
+                _file = str(_best)
             else:
                 _ts = str(stored.get("created_at") or
                           datetime.now().isoformat(timespec="seconds"))
@@ -336,6 +348,12 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
 
         _out = {k: v for k, v in stored.items() if not k.startswith("_")}
         _txt = json.dumps(_out, indent=2, ensure_ascii=False)
+        if len(_txt) > _CHAT_JSON_LIMIT:
+            logger.error("[CHATS] save refused: chat %s serialized to %.1f MB "
+                         "(limit %d MB) - a runaway run? Nothing was written.",
+                         chat_id, len(_txt) / 1e6, _CHAT_JSON_LIMIT // (1024 * 1024))
+            return {"id": chat_id, "rev": _cur_rev, "ts": "",
+                    "conflict": False, "oversize": True}
         _p = Path(_file)
         _tmp = _p.with_suffix(".tmp")
         _tmp.write_text(_txt, encoding="utf-8")

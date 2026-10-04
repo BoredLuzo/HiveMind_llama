@@ -95,14 +95,15 @@ if not "%TAG:~0,1%"=="v" (
     echo         zip manually from https://github.com/%REPO%/releases/latest
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
-REM %TAG:v=% would strip EVERY v ("1.3.0-preview" -> "1.3.0-preiew");
-REM the tag is validated to start with v, so cut the prefix instead.
-set "TAGNUM=%TAG:~1%"
+REM strip a LEADING v only - %TAG:v=% removed every v ("preview" ->
+REM "preiew"), and a blind ~1 would eat the first digit of a v-less tag.
+set "TAGNUM=%TAG%"
+if "%TAGNUM:~0,1%"=="v" set "TAGNUM=%TAGNUM:~1%"
 echo  Latest release    : %TAGNUM%
 REM Numeric triple compare: string equality would apply a DOWNGRADE when the
 REM installed version is newer (dev checkouts, hotfix builds).
 set "VCMP="
-for /f "usebackq delims=" %%C in (`powershell -NoProfile -Command "function V([string]$v) { @(($v -split '-')[0] -split '\.') + 0,0,0 | Select-Object -First 3 | ForEach-Object { [int]$_ } }; function P([string]$v) { [int]($v -match 'preview|alpha|beta|rc|dev') }; $a = V '%CURRENT%'; $b = V '%TAGNUM%'; $ap = P '%CURRENT%'; $bp = P '%TAGNUM%'; if ($b[0] -gt $a[0] -or ($b[0] -eq $a[0] -and $b[1] -gt $a[1]) -or ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -gt $a[2])) { 'newer' } elseif ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -eq $a[2]) { if ($ap -and -not $bp) { 'newer' } elseif ($bp -and -not $ap) { 'older' } else { 'same' } } else { 'older' }"`) do set "VCMP=%%C"
+for /f "usebackq delims=" %%C in (`powershell -NoProfile -Command "function V([string]$v) { @(($v -split '-')[0] -split '\.') + 0,0,0 | Select-Object -First 3 | ForEach-Object { [int]$_ } }; function P([string]$v) { if ($v -match '(?:preview|alpha|beta|rc|dev)(?:\.(\d+))?$') { [int]('0' + $Matches[1]) + 1 } else { 999 } }; $a = V '%CURRENT%'; $b = V '%TAGNUM%'; $ap = P '%CURRENT%'; $bp = P '%TAGNUM%'; if ($b[0] -gt $a[0] -or ($b[0] -eq $a[0] -and $b[1] -gt $a[1]) -or ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -gt $a[2])) { 'newer' } elseif ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -eq $a[2]) { if ($bp -gt $ap) { 'newer' } elseif ($bp -lt $ap) { 'older' } else { 'same' } } else { 'older' }"`) do set "VCMP=%%C"
 if "%VCMP%"=="same" (
     echo.
     echo  [OK] Already up to date: %CURRENT%
