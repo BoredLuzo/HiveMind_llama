@@ -237,3 +237,83 @@ def test_direct_load_path_has_truth_gate():
         "chat_stream must request the projector from the message shape"
     assert "vision_active" in src and "images dropped" in src, \
         "chat_stream must check /props truth and strip images visibly in the log"
+
+
+# ── direct-mode drop decision (Sonnet round 7 #2): the warning may fire
+#    ONLY when the slot belongs to the requested model AND /props really
+#    said false. All other states trust the plan. ─────────────────────────
+
+def test_direct_drop_no_slot_trusts_plan():
+    from core.duo_helpers import direct_vision_should_drop
+    # the client loads AFTER this check - an absent slot must not drop
+    assert direct_vision_should_drop(None, "", "minicpm5:2b") is False
+
+
+def test_direct_drop_other_model_never_drops():
+    from core.duo_helpers import direct_vision_should_drop
+    # a pinned planner (no projector) on another slot must not cause a
+    # false drop on a healthy run
+    assert direct_vision_should_drop(False, "gemma-4:e4b-uncensored-hauhaucs-aggressive",
+                                     "minicpm5:2b") is False
+
+
+def test_direct_drop_matching_slot_true_keeps_images():
+    from core.duo_helpers import direct_vision_should_drop
+    assert direct_vision_should_drop(True, "minicpm5:2b", "minicpm5:2b") is False
+
+
+def test_direct_drop_matching_slot_false_drops():
+    from core.duo_helpers import direct_vision_should_drop
+    assert direct_vision_should_drop(False, "minicpm5:2b", "minicpm5:2b") is True
+
+
+def test_direct_drop_unknown_props_trusts_plan():
+    from core.duo_helpers import direct_vision_should_drop
+    assert direct_vision_should_drop(None, "minicpm5:2b", "minicpm5:2b") is False
+
+
+# ── the graded-down plan must never carry the [VISION] note
+#    (Sonnet round 7 #3): tests the REAL prompt-build branch, not the
+#    retraction string-replace. ────────────────────────────────────────────
+
+class _PromptCtx:
+    settings = {}
+    websearch_available = False
+    active_preset = None
+    use_learned = False
+
+    class duo_config:
+        test_feedback_chunk = False
+        test_feedback_final = False
+        until_finished = False
+
+    def get_effective_prompt_with_override(self, *_a, **_k):
+        return ""
+
+
+def test_downgraded_plan_builds_coder_prompt_without_vision_note():
+    from core.duo_helpers import _build_duo_coder_sys, effective_image_plan, CODER_VISION_NOTE
+    plan = {"planner": "raw", "coder": "raw", "warnings": [], "mode": "direct"}
+    # the post-load gate says the coder slot really runs without a projector:
+    plan, _warns = effective_image_plan(plan, coder_slot_vision=False,
+                                        has_description=True)
+    assert plan["coder"] == "description"
+    # prompt build EXACTLY like the runner: note only when the plan says raw
+    base = _build_duo_coder_sys(_PromptCtx(), has_plan=True, has_subtasks=False,
+                                has_explore_ctx=False)
+    sys_prompt = base
+    if plan.get("planner") == "raw" and plan.get("coder") != "raw":
+        sys_prompt += "[IMAGE NOTE]"  # planner-saw-it branch
+    elif plan.get("coder") == "raw":
+        sys_prompt += CODER_VISION_NOTE
+    assert CODER_VISION_NOTE not in sys_prompt
+    assert "[VISION]" not in sys_prompt
+
+    # control: the SAME builder WITH a raw plan DOES carry the note
+    plan_raw = {"planner": "raw", "coder": "raw", "warnings": [], "mode": "direct"}
+    sys_raw = base
+    if plan_raw.get("planner") == "raw" and plan_raw.get("coder") != "raw":
+        sys_raw += "[IMAGE NOTE]"
+    elif plan_raw.get("coder") == "raw":
+        sys_raw += CODER_VISION_NOTE
+    assert CODER_VISION_NOTE in sys_raw

@@ -221,6 +221,25 @@ def main() -> int:
     round1 = "".join(round1_tokens)
     everything = " ".join(planner_txt + [round1]) + " " + " ".join(statuses)
 
+    # IMAGE-PLAN ABORT (2026-10-04, Sonnet #5): vision_model.json enabled on
+    # the install silently reroutes the run to the PREPROCESS path (text
+    # description) - a PASS would then prove nothing about raw/projector.
+    # Code_duo: abort unless the plan says raw/raw. Chat (run D): abort on
+    # any preprocess indicator - only the raw direct path counts.
+    if args.mode == "code_duo":
+        _plan_line = next((s for s in statuses if "duo plan" in s), "")
+        print(f"[smoke] image plan: {_plan_line or '(no plan line - abort)'}")
+        if "planner: raw, coder: raw" not in _plan_line:
+            print("[smoke] ABORT: image plan is NOT raw/raw - this run would not test "
+                  "the raw/projector path. Check duo_image_mode + role checkboxes.")
+            return 3
+    else:
+        _prepro = [s for s in statuses if "[Vision" in s or "describes the image" in s]
+        if _prepro:
+            print("[smoke] ABORT: direct run went the PREPROCESS path "
+                  f"({_prepro[0][:80]}) - a PASS would say nothing about raw.")
+            return 3
+
     print("\n== STATUSES ==")
     for s in statuses[:14]:
         print("  ", s)

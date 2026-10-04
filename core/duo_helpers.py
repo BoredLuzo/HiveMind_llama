@@ -627,6 +627,23 @@ def attach_images_to_last_user(msgs, images):
     return msgs
 
 
+def direct_vision_should_drop(slot_vision_active, slot_model: str = "",
+                              requested_model: str = "") -> bool:
+    """Direct-mode image drop decision (2026-10-04, Sonnet #2) - pure.
+
+    Warn/drop ONLY when the loaded slot actually belongs to the requested
+    model AND /props really reported vision:false. Every other state trusts
+    the plan: no slot yet (the client loads after this check - chat_stream's
+    backstop reads the truth post-load), another model still loaded (a
+    pinned planner without a projector must NOT cause a false drop on a
+    healthy run), /props unknown (None).
+    Pinned by tests/test_vision_gate.py (4 cases).
+    """
+    if slot_model and requested_model and slot_model != requested_model:
+        return False
+    return slot_vision_active is False
+
+
 def resolve_duo_role_models(settings) -> tuple:
     """The duo role models from ONE place (2026-10-04, Sonnet #5).
 

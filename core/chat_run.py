@@ -804,24 +804,26 @@ async def run_stream(
             # HERE and say it out loud; chat_stream stays as the backstop.
             if effective_images:
                 try:
+                    from core.duo_helpers import direct_vision_should_drop
                     from backend.llama_server_manager import manager as _lsm_dvis
                     _dvis_model = registry_get("direct") if "direct" in _state.pipeline.agents else ""
-                    _dvis_port = None
+                    _dvis_slot = None
                     if _dvis_model:
+                        # _find_loaded matches BY MODEL NAME - a pinned planner
+                        # on another slot can never be mistaken for the direct
+                        # model (Sonnet #2's false-warning case).
                         _dvis_slot = await _lsm_dvis._find_loaded(_dvis_model)
-                        _dvis_port = getattr(_dvis_slot, "port", None) if _dvis_slot is not None else None
-                    if _dvis_port:
-                        _dvis_slot2 = _lsm_dvis.get_slot_by_port(int(_dvis_port))
-                        _dvis_state = getattr(_dvis_slot2, "vision_active", None) if _dvis_slot2 is not None else None
-                        if _dvis_state is False:
-                            effective_images = []
-                            _logger.warning("[VISION-GATE] direct model '%s' runs WITHOUT a "
-                                            "projector (vision_active=False) - image dropped "
-                                            "visibly", _dvis_model)
-                            yield await emit({"type": "status",
-                                "content": "⚠ The direct model runs without a vision projector "
-                                           "- the image was dropped. Pick a multimodal model or "
-                                           "enable the vision preprocessor."})
+                    _slot_vision = getattr(_dvis_slot, "vision_active", None) if _dvis_slot is not None else None
+                    _slot_model = getattr(_dvis_slot, "model", "") or ""
+                    if direct_vision_should_drop(_slot_vision, _slot_model, _dvis_model):
+                        effective_images = []
+                        _logger.warning("[VISION-GATE] direct model '%s' runs WITHOUT a "
+                                        "projector (vision_active=False) - image dropped "
+                                        "visibly", _dvis_model)
+                        yield await emit({"type": "status",
+                            "content": "⚠ The direct model runs without a vision projector "
+                                       "- the image was dropped. Pick a multimodal model or "
+                                       "enable the vision preprocessor."})
                 except (ImportError, AttributeError, TypeError, ValueError) as _dge:
                     _logger.debug("[VISION-GATE] direct pre-check skipped: %s", _dge)
             _logger.debug("[Vision-Trigger] Multimodal Direct model - raw images stay in effective_images (%d)", len(images))
