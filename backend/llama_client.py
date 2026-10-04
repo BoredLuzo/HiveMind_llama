@@ -202,11 +202,36 @@ class LlamaClient:
 
         req_id = self._req_id("stream")
         t0 = time.perf_counter()
+        _vision = self._has_images(messages)
+        port = await manager.ensure_loaded(model, num_ctx=ctx, vision=_vision)
+        # VISION TRUTH (2026-10-04, Sonnet #4): direct mode used to trust the
+        # profile flag + the requested load flag only. If the loaded server
+        # really runs WITHOUT a projector (/props vision:false), sending the
+        # image would 400 the whole request - degrade to text-only with a
+        # loud log line instead (the images_in_request trace then shows 0).
+        if _vision:
+            try:
+                _slot = manager.get_slot_by_port(port)
+                _va = getattr(_slot, "vision_active", None) if _slot is not None else None
+                if _va is False:
+                    messages = [dict(_m) if isinstance(_m, dict) else _m for _m in messages]
+                    for _m in messages:
+                        if isinstance(_m, dict):
+                            _m.pop("images", None)
+                            if isinstance(_m.get("content"), list):
+                                _m["content"] = [
+                                    _p for _p in _m["content"]
+                                    if not (isinstance(_p, dict) and _p.get("type") == "image_url")
+                                ]
+                    self._log.warning(
+                        "req=%s model='%s': server runs WITHOUT vision projector "
+                        "(vision_active=False) - images dropped, request goes text-only",
+                        req_id, model)
+            except (ImportError, AttributeError, TypeError, ValueError) as _vt_err:
+                self._log.debug("req=%s vision-truth check skipped: %s", req_id, _vt_err)
         payload = _build_payload(messages, temperature, max_tokens, stream=True,
                                  cache_prompt=not no_cache, thinking=think,
                                  thinking_budget=thinking_budget)
-        _vision = self._has_images(messages)
-        port = await manager.ensure_loaded(model, num_ctx=ctx, vision=_vision)
         max_attempts = 45
         _yielded_any = False
         for attempt in range(max_attempts):

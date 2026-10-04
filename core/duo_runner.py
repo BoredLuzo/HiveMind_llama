@@ -1237,6 +1237,12 @@ async def run_code_duo(ctx):
                         for _w in _vg_warns:
                             logger.warning("[DUO][VISION-GATE] %s", _w)
                             yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
+                    elif _pv is None:
+                        # UNKNOWN (2026-10-04, Sonnet): a server build without
+                        # /props modalities would make the gate a silent
+                        # no-op - say so once instead.
+                        logger.info("[DUO][VISION-GATE] planner vision state UNKNOWN "
+                                    "(/props reports no modalities?) - trusting the plan")
                 except (ImportError, AttributeError, TypeError, ValueError) as _vg_err:
                     logger.debug("[DUO][VISION-GATE] planner check skipped: %s", _vg_err)
 
@@ -2216,6 +2222,9 @@ async def run_code_duo(ctx):
                                 for _w in _vg_warns2:
                                     logger.warning("[DUO][VISION-GATE] %s", _w)
                                     yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
+                            elif _cv2 is None:
+                                logger.info("[DUO][VISION-GATE] coder vision state UNKNOWN "
+                                            "(/props reports no modalities?) - trusting the plan")
                         except (ImportError, AttributeError, TypeError, ValueError) as _vg_err2:
                             logger.debug("[DUO][VISION-GATE] coder post-load check skipped: %s", _vg_err2)
                     if _subtasks:
@@ -2736,6 +2745,14 @@ async def run_code_duo(ctx):
                     + _touched_block_persisted
                     + "\n\n" + _coder_input
                 )
+            # IMAGES-IN-REQUEST (2026-10-04, Sonnet): per-round trace - ALSO
+            # at 0 once images are attached to the task, so "the image
+            # stopped being sent" is measurable instead of looking like a
+            # missing log line.
+            if getattr(ctx, "images", None):
+                logger.info("[DUO] coder round %d/%d: images_in_request=%d plan=planner:%s/coder:%s",
+                            _di + 1, _n_items, count_image_parts(_coder_msgs),
+                            _img_plan.get("planner"), _img_plan.get("coder"))
             yield await ctx.emit({"type": "duo_coder", "model": coder_mdl, "round": _di + 1,
                               "subtask": _subtask or None, "n_total": _n_items,
                               "prompt_preview": _prompt_prev})

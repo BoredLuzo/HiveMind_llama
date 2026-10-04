@@ -90,6 +90,18 @@ Vision honesty (2026-10-04 review round):
   visible notice
 - release zips embed BUILD_INFO.txt (git describe + commit date) and
   the start banner prints the exact build a zip-installed copy runs
+- repo syncs write the same BUILD_INFO.txt into the install, so a
+  synced live/test copy can also say which commit it runs
+- direct chat mode strips images (with a loud log line) when the
+  loaded server reports vision:false instead of sending a request the
+  server would reject
+- image panel: the duo block carries its own multimodal info line (the
+  generic one used to vanish permanently in duo mode); the chat hint
+  names the planner first and follows planner/coder model changes live
+  without re-attaching the image
+- qwen3.5 MTP specs are vision-capable now (projector pinned per
+  model); if a projector fails to load, the /props gate downgrades the
+  run with a warning instead of pretending
 
 ## [1.2.3] - 2026-09-26
 

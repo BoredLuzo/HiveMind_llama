@@ -1516,7 +1516,12 @@ function populateDuoModelGroup() {
 function onDuoPlannerModelChange(model) {
   S.duoPlannerModel = model || '';
   postSettings({duo_planner_model: S.duoPlannerModel});
+  // HINT LIVENESS (2026-10-04, user): the chat image hint reads
+  // currentAssignments - keep it in sync here too, or the hint shows the
+  // previous planner until the image is re-attached.
+  if (S.currentAssignments.duo_planner) S.currentAssignments.duo_planner.model = S.duoPlannerModel;
   updateDuoPairHint();
+  updateDuoImageUI();
 }
 
 function onDuoCoderModelChange(model) {
@@ -1525,6 +1530,7 @@ function onDuoCoderModelChange(model) {
   postSettings({duo_pair: 'free', agents: {duo_coder: {model: S.duoCoderModel}}, duo_coder_model: S.duoCoderModel});
   if (S.currentAssignments.duo_coder) S.currentAssignments.duo_coder.model = model;
   updateDuoPairHint();
+  updateDuoImageUI();
   updateMoeVisibility();
 }
 
@@ -2111,9 +2117,12 @@ async function saveAgentModelDirect(key, sel) {
     const data = await res.json();
     if (data.ok) {
       sel.dataset.cur = model;
-      if (key === 'duo_planner' || key === 'duo_coder') updateDuoImageUI();
       if (!S.currentAssignments[key]) S.currentAssignments[key] = {};
       S.currentAssignments[key].model = model;
+      // ORDER FIX (2026-10-04, user): the UI refresh used to run BEFORE the
+      // assignment was updated - the image hint kept showing the OLD model
+      // until the image was removed and re-attached.
+      if (key === 'duo_planner' || key === 'duo_coder') updateDuoImageUI();
       sel.style.borderColor = '#22c55e';
       setTimeout(function() { sel.style.borderColor = ''; }, 1200);
       // VISION-HINT: Bild-Pfad nach Modellwechsel aktualisieren
@@ -2549,6 +2558,10 @@ function stopAskUserCountdown() {
 // profiles). They are ALWAYS re-encoded to jpeg via the canvas (first
 // frame) even when small; if that fails, cb(null) and the caller drops the
 // image with a visible notice instead of shipping dead bytes.
+// WHITE FILL (2026-10-04, Sonnet): the canvas starts transparent and jpeg
+// has no alpha - without the fill every transparent pixel turned BLACK.
+// cb(url, meta) where meta = {reencoded, mime} so callers can surface the
+// "first frame only" note for animations.
 function _downscaleImage(dataUrl, cb) {
   var _mime = ((dataUrl || '').slice(0, 64).match(/^data:(image\/[a-z0-9.+-]+)[;,]/i) || [])[1] || '';
   var _risky = (_mime === 'image/gif' || _mime === 'image/webp');
@@ -2561,20 +2574,31 @@ function _downscaleImage(dataUrl, cb) {
     var _cv = document.createElement('canvas');
     _cv.width = Math.round(_img.naturalWidth * _k);
     _cv.height = Math.round(_img.naturalHeight * _k);
-    _cv.getContext('2d').drawImage(_img, 0, 0, _cv.width, _cv.height);
-    try { cb(_cv.toDataURL('image/jpeg', 0.9)); }
+    var _cx = _cv.getContext('2d');
+    _cx.fillStyle = '#ffffff';
+    _cx.fillRect(0, 0, _cv.width, _cv.height);
+    _cx.drawImage(_img, 0, 0, _cv.width, _cv.height);
+    try { cb(_cv.toDataURL('image/jpeg', 0.9), {reencoded: true, mime: _mime}); }
     catch (e) { cb(_risky ? null : dataUrl); }
   };
   _img.onerror = function() { cb(_risky ? null : dataUrl); };
   _img.src = dataUrl;
 }
 
+function _imgConvertNotice(meta, name) {
+  if (meta && meta.reencoded && (meta.mime === 'image/gif' || meta.mime === 'image/webp')) {
+    showStatus('ℹ ' + (name ? name + ': ' : '') + meta.mime.replace('image/', '').toUpperCase()
+      + ' converted to JPEG (first frame only for animations).');
+  }
+}
+
 function handleImgs(input) {
   Array.from(input.files).forEach(function(file) {
     const r = new FileReader();
     r.onload = function(e) {
-      _downscaleImage(e.target.result, function(_url) {
+      _downscaleImage(e.target.result, function(_url, _meta) {
         if (!_url) { showStatus('⚠ ' + file.name + ': this GIF/WebP could not be converted to JPEG — image dropped.'); return; }
+        _imgConvertNotice(_meta, file.name);
         S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
         renderImgPreview();
       });
@@ -2630,9 +2654,11 @@ function _updateImgVisionHint() {
       hint.textContent = 'Describe mode needs a vision model - pick one under Image Processing (Preprocessor).';
     }
   } else {
+    // ROLE ORDER (2026-10-04, user): the planner is the head of the duo -
+    // name it first in every summary line.
     var _t = [];
-    if (S.duoImageToCoder) _t.push(_cModel ? ('Coder (' + _cModel + ')') : 'Coder');
     if (S.duoImageToPlanner) _t.push(_pModel ? ('Planner (' + _pModel + ')') : 'Planner');
+    if (S.duoImageToCoder) _t.push(_cModel ? ('Coder (' + _cModel + ')') : 'Coder');
     var _visOk = _t.length && (!_cModel || _regVis(_cModel));
     if (!_t.length) {
       _style('rgba(122,143,168,.1)', '#7a8fa8', 'rgba(122,143,168,.25)');
@@ -7676,8 +7702,9 @@ document.getElementById('input').addEventListener('paste', function(e) {
     r.onload = function(ev) {
       // PASTE-DOWNSCALE (2026-10-03): same 1568px path as drag&drop:
       // screenshots pasted full-res used to skip it entirely.
-      _downscaleImage(ev.target.result, function(_url) {
+      _downscaleImage(ev.target.result, function(_url, _meta) {
         if (!_url) { showStatus('⚠ Pasted GIF/WebP could not be converted to JPEG — image dropped.'); return; }
+        _imgConvertNotice(_meta, '');
         S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
         renderImgPreview();
       });
@@ -7693,8 +7720,9 @@ chatCol.addEventListener('drop', function(e) {
     if (!file.type.startsWith('image/')) return;
     const r = new FileReader();
     r.onload = function(ev) {
-      _downscaleImage(ev.target.result, function(_url) {
+      _downscaleImage(ev.target.result, function(_url, _meta) {
         if (!_url) { showStatus('⚠ ' + file.name + ': this GIF/WebP could not be converted to JPEG — image dropped.'); return; }
+        _imgConvertNotice(_meta, file.name);
         S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
         renderImgPreview();
       });
@@ -9295,6 +9323,11 @@ function _applyImageModeUI(mode) {
   if (ds) ds.style.display = (mode === 'direct') ? 'block' : 'none';
   if (ps) ps.style.display = (mode === 'preprocess') ? 'block' : 'none';
   if (ls) ls.style.display = (mode === 'pipeline') ? 'block' : 'none';
+  // SCOPING FIX (2026-10-04, user): this function used to un-hide the
+  // generic sections without checking the duo scoping - in code_duo the
+  // generic info line appeared (or vanished for good after the next
+  // updateDuoImageUI). Re-apply the scoping so the last writer wins RIGHT.
+  if (typeof updateDuoImageUI === 'function') { try { updateDuoImageUI(); } catch (e) {} }
 }
 
 function setImageMode(mode) {
@@ -11429,6 +11462,11 @@ function updateDuoImageUI() {
       _note.style.display = 'block';
     }
   }
+  // DUO INFO LINE (2026-10-04, user): the generic "Multimodal models
+  // receive the raw image directly" explanation used to vanish in duo
+  // mode - the duo block carries its own copy now.
+  var _dinfo = document.getElementById('duo-image-info');
+  if (_dinfo) _dinfo.style.display = (_isDuo && _m === 'direct') ? 'block' : 'none';
   // PREPROCESS TRAP (2026-10-03): the radio does NOT enable the vision
   // config, without a configured vision model the description never
   // exists and the image is unused. Say so inline.

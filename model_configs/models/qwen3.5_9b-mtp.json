@@ -2,7 +2,7 @@
   "model": "qwen3.5:9b-mtp",
   "capabilities": {
     "thinking": true,
-    "vision": false,
+    "vision": true,
     "tool_call": true
   },
   "vision_preprocessing": false,
@@ -17,7 +17,7 @@
   "moe_cpu_experts": 0,
   "mtp": true,
   "gpu_layers": null,
-  "mmproj_filename": null,
+  "mmproj_filename": "mmproj-Qwen3.5-9B-F16.gguf",
   "vram_gb_override": null,
   "sampling": {
     "thinking": {
