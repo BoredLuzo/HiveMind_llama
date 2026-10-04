@@ -112,3 +112,6 @@ _runc*/, previews
 _edit*.txt
 _steer_*.txt
 _steer_img.b64
+_tg*.txt
+_tgprobe_cid.txt
+_tgstart.txt

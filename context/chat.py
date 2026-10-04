@@ -28,7 +28,16 @@ def _read_chat_json(chat_id: str) -> dict | None:
     try:
         if not _SESSIONS_DIR:
             return None
-        matches = sorted(_SESSIONS_DIR.glob(f"*_{chat_id}.json"))
+        matches = sorted(
+            m for m in _SESSIONS_DIR.glob(f"*_{chat_id}.json")
+            # SIDECAR EXCLUSION (2026-10-05, transcript experiment): the
+            # sidecar `<...>.context.json` ALSO matches the glob (it ends in
+            # `_<id>.json`) and sorts LAST alphabetically - so matches[-1]
+            # read the weak sidecar instead of the main chat json whenever
+            # both existed (every UI-PUT chat). The transcript (history
+            # seed) must come from the MAIN json only.
+            if not m.name.endswith(".context.json")
+        )
         if not matches:
             return None
         return json.loads(matches[-1].read_text(encoding="utf-8"))
