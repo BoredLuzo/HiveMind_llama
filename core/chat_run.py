@@ -823,8 +823,15 @@ async def run_stream(
             # in the runner has the final word; this status never claims
             # more than the plan says.
             from core.duo_helpers import _build_duo_image_plan, duo_gate_status_text
-            _pm = ((settings.get("agents") or {}).get("duo_planner") or {}).get("model", "")
-            _cm = ((settings.get("agents") or {}).get("duo_coder") or {}).get("model", "")
+            # FALLBACK-CHAIN (2026-10-04, live test): the agent-card entry
+            # can be missing (planner lives in duo_planner_model when the
+            # UI's planner dropdown wrote it) - resolve like the runner
+            # does, or the status line claims "planner '' is not
+            # multimodal" while the run itself uses the right model.
+            _pm = (((settings.get("agents") or {}).get("duo_planner") or {}).get("model", "")
+                   or str(settings.get("duo_planner_model", "") or ""))
+            _cm = (((settings.get("agents") or {}).get("duo_coder") or {}).get("model", "")
+                   or str(settings.get("duo_coder_model", "") or ""))
             _plan = _build_duo_image_plan(_pm, _cm, settings, images, image_description, _vision_cfg)
             yield await emit({"type": "status", "content": duo_gate_status_text(_plan)})
         elif _direct_is_vision2:

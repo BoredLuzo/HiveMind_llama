@@ -1701,6 +1701,12 @@ async def run_code_duo(ctx):
         # so ensure_loaded is a no-op after first call but costs ~200-300ms each time.
         _cached_coder_port: int | None = None
         _cached_coder_port_ctx: int | None = None
+        # LAZY-AGENTIC (2026-10-04, live gate test): in lazy mode the coder
+        # load (and with it _coder_port's first assignment) happens inside
+        # the tool loop - the attach-time vision check read it one round
+        # earlier and crashed the run (UnboundLocalError). Initialize here so
+        # every later read is defined; None means "no coder port yet".
+        _coder_port: int | None = None
         _auto_tool_promote_streak = 0
         _auto_tool_promote_notified = False
         _last_run_bash_failure: dict | None = None
