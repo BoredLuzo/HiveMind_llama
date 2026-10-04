@@ -9818,52 +9818,6 @@ async function loadChatHistory() {
   } catch(e) {}
 }
 
-// SEARCHBAR PHASE 1 (2026-10-04): debounced live search over chat titles +
-// message contents (GET /chats/search). Results replace the list while
-// typing; empty/short input restores the normal history.
-var _chatSearchTimer = null;
-function chatSearch(q) {
-  if (_chatSearchTimer) clearTimeout(_chatSearchTimer);
-  var box = document.getElementById('chat-search-results');
-  var list = document.getElementById('chat-history-list');
-  q = (q || '').trim();
-  if (q.length < 2) {
-    if (box) box.style.display = 'none';
-    if (list) list.style.display = '';
-    return;
-  }
-  _chatSearchTimer = setTimeout(async function() {
-    try {
-      const d = await (await fetch('/chats/search?q=' + encodeURIComponent(q))).json();
-      if (!box) return;
-      box.style.display = 'block';
-      if (list) list.style.display = 'none';
-      box.innerHTML = '';
-      var res = d.results || [];
-      if (!res.length) {
-        box.innerHTML = '<div class="empty" style="font-size:10px;padding:6px 2px">No matches.</div>';
-        return;
-      }
-      res.forEach(function(r) {
-        var item = document.createElement('div');
-        item.className = 'chat-hist-item';
-        item.title = 'Click to load';
-        var info = document.createElement('div'); info.className = 'chat-hist-info';
-        var title = document.createElement('div'); title.className = 'chat-hist-title';
-        title.textContent = r.title;
-        var snip = document.createElement('div'); snip.className = 'chat-hist-preview';
-        snip.textContent = (r.match_in === 'title' ? 'title match: ' : '…') + r.snippet;
-        info.appendChild(title); info.appendChild(snip);
-        item.appendChild(info);
-        (function(chatId) {
-          item.addEventListener('click', function() { loadChat(chatId); });
-        })(r.id);
-        box.appendChild(item);
-      });
-    } catch(e) { /* network hiccup: keep the normal list */ }
-  }, 220);
-}
-
 async function loadChat(chatId) {
   if (S.streaming) { showStatus('Please wait until the current stream has finished.'); return; }
   try {
@@ -11540,3 +11494,184 @@ function _updateDuoRoleStatus(elId, label, model) {
     })
     .catch(function() { _el.textContent = label + ' (' + model + ')'; });
 }
+
+// ── FEATURE SEARCH (2026-10-04, phase 1 in 1.3.0): search the UI itself,
+// not chats. A command-palette style overlay (Ctrl+K / the Search button in
+// the header) indexes every panel's sections, toggle rows and labeled
+// controls; a click switches to the panel, scrolls to the element and
+// flashes it. Static DOM index (built on first open) + agent cards.
+(function() {
+  var _fsOverlay = null, _fsIndex = null, _fsList = null, _fsInput = null;
+
+  var PANEL_LABELS = { agents: 'AGENTS', presets: 'PRESETS', configs: 'CONFIGS',
+                       memory: 'MEMORY', soul: 'SOUL', models: 'MODELS', chats: 'CHATS' };
+
+  function _selText(el) {
+    var row = el.closest('.tgl-row, .cfl-row, label, .agent-card, .set-row, div');
+    if (!row) return (el.title || '').trim();
+    var t = row.querySelector('.tgl-text, .cfl-label, .sec, .agent-name, .set-label');
+    if (t) return t.textContent.trim();
+    var own = row.cloneNode(true);
+    own.querySelectorAll('input,select,button,span.sl').forEach(function(e) { e.remove(); });
+    return (own.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+  }
+
+  function _buildIndex() {
+    var idx = [];
+    document.querySelectorAll('.panel').forEach(function(panel) {
+      var pid = (panel.id || '').replace(/^p-/, '');
+      if (!PANEL_LABELS[pid]) return;
+      panel.querySelectorAll('.sec').forEach(function(s) {
+        var t = (s.textContent || '').trim();
+        if (t.length >= 3) idx.push({ panel: pid, label: t, el: s, kind: 'Section' });
+      });
+      panel.querySelectorAll('.tgl-row .tgl-text, .cfl-label').forEach(function(t) {
+        var txt = (t.textContent || '').trim();
+        if (txt.length >= 3) idx.push({ panel: pid, label: txt, el: t, kind: 'Toggle' });
+      });
+      panel.querySelectorAll('label input[type="checkbox"]').forEach(function(inp) {
+        var row = inp.closest('label');
+        if (!row) return;
+        var txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
+        if (txt.length >= 3 && !idx.some(function(i) { return i.el === row; }))
+          idx.push({ panel: pid, label: txt.slice(0, 80), el: row, kind: 'Checkbox' });
+      });
+      panel.querySelectorAll('.agent-card, [class*="agent-card"]').forEach(function(card) {
+        var nameEl = card.querySelector('.agent-name, .sec, [class*="name"]');
+        var n = nameEl ? nameEl.textContent.trim() : '';
+        if (n.length >= 3 && !idx.some(function(i) { return i.el === card; }))
+          idx.push({ panel: pid, label: 'Agent: ' + n, el: card, kind: 'Agent card' });
+      });
+      panel.querySelectorAll('button[title]').forEach(function(b) {
+        var t = (b.title || '').trim();
+        if (t.length >= 3 && !idx.some(function(i) { return i.el === b; }))
+          idx.push({ panel: pid, label: t.slice(0, 80), el: b, kind: 'Button' });
+      });
+    });
+    idx.push({ panel: null, label: 'New Chat', el: null, kind: 'Action',
+               act: function() { var b = Array.from(document.querySelectorAll('button'))
+                 .find(function(x) { return /new chat/i.test(x.textContent); }); if (b) b.click(); } });
+    idx.push({ panel: null, label: 'Open chats list', el: null, kind: 'Action',
+               act: function() { var b = Array.from(document.querySelectorAll('button'))
+                 .find(function(x) { return x.textContent.trim() === 'Chats'; }); if (b) b.click(); } });
+    return idx;
+  }
+
+  function _switchPanel(pid) {
+    if (!pid) return;
+    var btn = Array.from(document.querySelectorAll('.tab'))
+      .find(function(b) { return (b.dataset && b.dataset.p === pid) || b.textContent.trim() === PANEL_LABELS[pid]; });
+    if (btn) btn.click();
+  }
+
+  function _flash(el) {
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    var old = el.style.boxShadow;
+    el.style.transition = 'box-shadow .3s';
+    el.style.boxShadow = '0 0 0 2px #f0b040, 0 0 12px rgba(240,176,64,.5)';
+    setTimeout(function() { el.style.boxShadow = old || ''; }, 1400);
+  }
+
+  function _open() {
+    if (!_fsOverlay) _buildOverlay();
+    if (!_fsIndex) _fsIndex = _buildIndex();
+    _fsOverlay.style.display = 'flex';
+    _fsInput.value = '';
+    _render('');
+    setTimeout(function() { _fsInput.focus(); }, 30);
+  }
+
+  function _close() { if (_fsOverlay) _fsOverlay.style.display = 'none'; }
+
+  function _render(q) {
+    q = (q || '').toLowerCase().trim();
+    _fsList.innerHTML = '';
+    var hits = (_fsIndex || []).filter(function(i) {
+      return !q || i.label.toLowerCase().indexOf(q) >= 0 || i.kind.toLowerCase().indexOf(q) >= 0;
+    });
+    if (!hits.length) {
+      _fsList.innerHTML = '<div class="fs-empty">No matching feature.</div>';
+      return;
+    }
+    hits.slice(0, 40).forEach(function(h) {
+      var row = document.createElement('div');
+      row.className = 'fs-row';
+      row.style.cssText = 'display:flex;gap:10px;align-items:center;padding:8px 14px;cursor:pointer;border-bottom:1px solid #1a2330';
+      var kind = document.createElement('span');
+      kind.className = 'fs-kind';
+      kind.style.cssText = 'font-size:9px;color:#6b7f94;min-width:70px';
+      kind.textContent = h.kind;
+      var label = document.createElement('span');
+      label.className = 'fs-label';
+      label.style.cssText = 'flex:1;font-size:12px;color:#d8dee9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      label.textContent = h.label;
+      var panel = document.createElement('span');
+      panel.className = 'fs-panel';
+      panel.style.cssText = 'font-size:9px;color:#f0b040';
+      panel.textContent = h.panel ? (PANEL_LABELS[h.panel] || h.panel) : '';
+      row.appendChild(kind); row.appendChild(label); row.appendChild(panel);
+      row.addEventListener('mouseenter', function() { row.style.background = '#1c2530'; });
+      row.addEventListener('mouseleave', function() { row.style.background = ''; });
+      row.addEventListener('click', function() {
+        _close();
+        if (h.act) { h.act(); return; }
+        _switchPanel(h.panel);
+        setTimeout(function() { _flash(h.el); }, 120);
+      });
+      _fsList.appendChild(row);
+    });
+  }
+
+  function _buildOverlay() {
+    _fsOverlay = document.createElement('div');
+    _fsOverlay.id = 'fs-overlay';
+    _fsOverlay.style.cssText = 'display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);' +
+      'align-items:flex-start;justify-content:center;padding-top:12vh';
+    _fsOverlay.addEventListener('click', function(e) { if (e.target === _fsOverlay) _close(); });
+    var box = document.createElement('div');
+    box.style.cssText = 'width:min(560px,92vw);background:#141a22;border:1px solid #2a3644;' +
+      'border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.6);overflow:hidden;' +
+      "font-family:'IBM Plex Mono',monospace";
+    _fsInput = document.createElement('input');
+    _fsInput.placeholder = 'Search features, settings, agents…  (Esc closes)';
+    _fsInput.style.cssText = 'width:100%;box-sizing:border-box;padding:12px 14px;font-size:13px;' +
+      'background:#0d1117;color:#d8dee9;border:none;outline:none;border-bottom:1px solid #2a3644';
+    _fsInput.addEventListener('input', function() { _render(_fsInput.value); });
+    _fsInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') _close();
+      if (e.key === 'Enter') {
+        var first = _fsList.querySelector('.fs-row');
+        if (first) first.click();
+      }
+    });
+    _fsList = document.createElement('div');
+    _fsList.style.cssText = 'max-height:52vh;overflow-y:auto';
+    box.appendChild(_fsInput);
+    box.appendChild(_fsList);
+    _fsOverlay.appendChild(box);
+    document.body.appendChild(_fsOverlay);
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      _open();
+    }
+  });
+
+  window.addEventListener('load', function() {
+    var host = document.getElementById('h-sidebar-btn');
+    if (host && !document.getElementById('fs-open-btn')) {
+      var b = document.createElement('button');
+      b.id = 'fs-open-btn';
+      b.className = 'hbtn';
+      b.title = 'Search the UI (Ctrl+K)';
+      b.textContent = 'Search';
+      b.addEventListener('click', _open);
+      host.parentElement.insertBefore(b, host.nextSibling);
+    }
+  });
+
+  window.hivemindFeatureSearch = { open: _open, rebuild: function() { _fsIndex = _buildIndex(); } };
+})();
