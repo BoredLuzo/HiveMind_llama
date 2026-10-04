@@ -313,9 +313,12 @@ def test_vision_note_retracted_when_outgoing_count_zero():
         {"role": "user", "content": "plan text"},
     ]
     assert atl._count_image_parts(msgs) == 0
-    # the same branch the tool loop runs (kept in a helper for testing):
+    # the replacement must BOTH stop the false claim AND tell the model
+    # the image is gone (round 10 #3: remove-only left it improvising)
     msgs = atl._retract_vision_note_if_lost(msgs)
     assert CODER_VISION_NOTE not in msgs[0]["content"]
+    assert "NO LONGER in your context" in msgs[0]["content"]
+    assert "do NOT invent" in msgs[0]["content"]
     assert "plan text" == msgs[1]["content"]  # untouched
 
 

@@ -109,3 +109,4 @@ BUILD_INFO.txt
 # tests/ stay ignored via the global rules above.
 
 _runc*/, previews
+_edit*.txt
