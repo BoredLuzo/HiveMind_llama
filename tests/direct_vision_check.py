@@ -145,8 +145,8 @@ def main() -> int:
         return 2
     code = (args.code or "".join(secrets.choice(_ALPHABET) for _ in range(5))).upper()
     png = build_png(code)
-    preview = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "_direct_vision_preview.png")
+    import tempfile
+    preview = os.path.join(tempfile.gettempdir(), "_direct_vision_preview.png")
     with open(preview, "wb") as fh:
         fh.write(png)
 

@@ -194,7 +194,8 @@ def main() -> int:
     if args.chat_id:
         payload["chat_id"] = args.chat_id
 
-    preview = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_smoke_preview.png")
+    import tempfile
+    preview = os.path.join(tempfile.gettempdir(), "_smoke_preview.png")
     with open(preview, "wb") as fh:
         fh.write(png)
     if args.dry_run:
