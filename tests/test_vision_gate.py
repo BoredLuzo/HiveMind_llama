@@ -168,3 +168,57 @@ def test_manager_get_slot_by_port():
     s.process = None
     s._orphan_port = None
     assert manager.get_slot_by_port(s.port) is None
+
+
+# ── TEST SWITCH: HIVEMIND_TEST_OMIT_MMPROJ does nothing by default ─────────
+
+def test_omit_mmproj_default_is_inert(monkeypatch):
+    from backend.manager_load import _omit_mmproj_for
+    monkeypatch.delenv("HIVEMIND_TEST_OMIT_MMPROJ", raising=False)
+    assert _omit_mmproj_for("qwen3.5:9b-ud", vision=True) is False
+    assert _omit_mmproj_for("gemma-4:e4b", vision=True) is False
+
+
+def test_omit_mmproj_substring_and_star(monkeypatch):
+    from backend.manager_load import _omit_mmproj_for
+    monkeypatch.setenv("HIVEMIND_TEST_OMIT_MMPROJ", "9b-ud")
+    assert _omit_mmproj_for("qwen3.5:9b-ud", vision=True) is True
+    assert _omit_mmproj_for("gemma-4:e4b", vision=True) is False
+    monkeypatch.setenv("HIVEMIND_TEST_OMIT_MMPROJ", "*")
+    assert _omit_mmproj_for("gemma-4:e4b", vision=True) is True
+
+
+def test_omit_mmproj_needs_vision_request(monkeypatch):
+    # a plain text load (vision=False) never needs a projector - the switch
+    # must not touch it either
+    from backend.manager_load import _omit_mmproj_for
+    monkeypatch.setenv("HIVEMIND_TEST_OMIT_MMPROJ", "*")
+    assert _omit_mmproj_for("qwen3.5:9b-ud", vision=False) is False
+
+
+def test_coder_reload_keeps_same_vision_arg():
+    # ORIGINAL BUG (2026-10-04): the in-loop tool reload lost --mmproj while
+    # the fresh load had it. Cheap tripwire: every ensure_loaded call that
+    # passes a vision flag must derive it from the image plan (planner or
+    # coder role) - never a literal or an unrelated expression.
+    import io
+    import re
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "core", "duo_runner.py")
+    lines = io.open(path, encoding="utf-8").read().splitlines()
+    _allowed = re.compile(r'^\(?_img_plan\.get\("(planner|coder)"\) == "raw"\)?$')
+    _checked = 0
+    for i, line in enumerate(lines):
+        if "ensure_loaded(" not in line:
+            continue
+        window = lines[i:i + 10]
+        for wline in window:
+            if "vision=" not in wline:
+                continue
+            expr = wline.split("vision=", 1)[1].strip().rstrip(",").strip()
+            expr = expr.rstrip(")").strip().lstrip("(").strip()
+            _checked += 1
+            assert expr in ('_img_plan.get("planner") == "raw"',
+                            '_img_plan.get("coder") == "raw"'), \
+                f"ensure_loaded near line {i+1}: vision arg not from the image plan: {expr!r}"
+    assert _checked >= 3, f"expected at least the 3 known vision loads, found {_checked}"

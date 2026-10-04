@@ -45,6 +45,25 @@ import subprocess
 import time
 logger = logging.getLogger("llama_manager")
 
+def _omit_mmproj_for(model: str, vision: bool = False) -> bool:
+    """TEST SWITCH (2026-10-04, Sonnet #2): HIVEMIND_TEST_OMIT_MMPROJ omits
+    --mmproj at server start so ONLY the post-load /props vision gate can
+    catch a dropped projector (renaming the file would fire the older
+    attach-time file check instead - the wrong layer). Value = model
+    substring ("9b-ud") or "*" for all; unset/empty does NOTHING. Pure and
+    pinned by tests/test_vision_gate.py."""
+    import os as _os_mmp
+    _omit_mmp = _os_mmp.environ.get("HIVEMIND_TEST_OMIT_MMPROJ", "").strip()
+    if not _omit_mmp or not _needs_mmproj(model, vision=vision):
+        return False
+    _hit = _omit_mmp == "*" or _omit_mmp.lower() in str(model or "").lower()
+    if _hit:
+        logger.warning("[TEST] HIVEMIND_TEST_OMIT_MMPROJ=%r matches '%s' - intentionally "
+                       "starting WITHOUT the projector (vision gate negative test)",
+                       _omit_mmp, model)
+    return _hit
+
+
 class LlamaLoadMixin:
 
     async def _adopt_or_kill_port(self, slot) -> str:
@@ -1171,14 +1190,8 @@ class LlamaLoadMixin:
         # this env var (default off) omits --mmproj at start so ONLY the
         # post-load /props gate can catch the drop. Value = model substring
         # (e.g. "9b-ud" scopes it to one role; "*" = all models).
-        import os as _os_mmp
-        _omit_mmp = _os_mmp.environ.get("HIVEMIND_TEST_OMIT_MMPROJ", "").strip()
-        if _omit_mmp and _needs_mmproj(model, vision=vision) \
-                and (_omit_mmp == "*" or _omit_mmp.lower() in model.lower()):
+        if _omit_mmproj_for(model, vision=vision):
             _mmproj_resolved = None
-            logger.warning("[TEST] HIVEMIND_TEST_OMIT_MMPROJ=%r matches '%s' - intentionally "
-                           "starting WITHOUT the projector (vision gate negative test)",
-                           _omit_mmp, model)
         elif _needs_mmproj(model, vision=vision):
             _mmproj_resolved = None
             try:

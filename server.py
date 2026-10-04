@@ -1771,6 +1771,10 @@ async def health():
         "version": HIVEMIND_VERSION,
         "llama_ok": bool(_hm_running),
         "model_count": len(_hm_models),
+        # TEST-MODE VISIBILITY (2026-10-04, Sonnet #2): a negative-test env
+        # must never hide - an install silently running with omitted
+        # projectors would poison every following vision test.
+        "test_omit_mmproj": os.environ.get("HIVEMIND_TEST_OMIT_MMPROJ", "") or None,
     }
 
 # -- Router Registration --

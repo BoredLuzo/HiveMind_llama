@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -118,13 +119,34 @@ def main() -> int:
         _stop(int(args.base.rsplit(":", 1)[-1]))
         time.sleep(3)
         _start(args.install)
+        _clean_ok = False
         for _ in range(40):
             if _health(args.base):
-                print("[neg] clean install back up.")
+                _clean_ok = True
                 break
             time.sleep(3)
+        # NO returns here (finally) - failures are reported loudly instead,
+        # so they cannot silently override the test's own exit code.
+        if not _clean_ok:
+            print("[neg] FAIL-CLEANUP: clean install did not come back up - check manually!")
         else:
-            print("[neg] WARNING: clean install did not come back up - check manually.")
+            # POST-CLEANUP PROOF (2026-10-04, Sonnet #2): the restarted
+            # process must carry NO test env - /health exposes it. A failed
+            # cleanup would otherwise leave HiveMind silently running
+            # without projectors.
+            try:
+                with urllib.request.urlopen(args.base.rstrip("/") + "/health", timeout=5) as r:
+                    _h = json.loads(r.read().decode())
+                _flag = _h.get("test_omit_mmproj")
+                print(f"[neg] /health test_omit_mmproj after cleanup: {_flag!r}")
+                if _flag:
+                    print("[neg] FAIL-CLEANUP: test env still active in the restarted install!")
+                else:
+                    print("[neg] PASS: clean install runs without the test switch.")
+            except (OSError, ValueError) as _he:
+                print(f"[neg] WARN: could not read /health for the flag check: {_he}")
+            print("[neg] next real load must show --mmproj again "
+                  "(grep 'CMD:' logs/llama_server_*.log | tail).")
 
 
 if __name__ == "__main__":
