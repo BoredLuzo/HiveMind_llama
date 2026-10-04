@@ -490,7 +490,7 @@ except (ImportError, ValueError) as e:
     _VRAM_LOOKUP_GB: dict[str, float] = {
         # qwen3.5 ─ echte Messungen (Vulkan, 99 GPU-Layers)
         "qwen3.5:0.8b": 0.6, "qwen3.5:2b": 1.5, "qwen3.5:4b": 2.8,
-        "qwen3.5:4b-ud": 3.0, "qwen3.5:4b-d": 3.2, "qwen3.5:9b": 5.5,
+        "qwen3.5:4b-mtp": 3.0, "qwen3.5:4b-d": 3.2, "qwen3.5:9b": 5.5,
         "qwen3.5:9b-ud": 5.8,
         # Granite / Gemma
         "granite-4.1:3b": 2.1, "granite4:1b": 1.0,

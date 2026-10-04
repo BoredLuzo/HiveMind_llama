@@ -87,7 +87,7 @@ DEFAULT_SETTINGS = {
     "duo_pre_explore":         False,
     "until_finished":          False,
     "duo_runtime_profile":     "balanced",
-    "duo_profile_speed_model": "qwen3.5:4b-ud",
+    "duo_profile_speed_model": "qwen3.5:4b-mtp",
     "duo_profile_quality_model": "lfm2.5:2.6b",
     "duo_agentic_mode":        False,
     "duo_agentic_thinking":    False,
@@ -220,7 +220,7 @@ DEFAULT_SETTINGS = {
     # Token-Budget gekoppelt: max_chars ≈ budget_tokens * Faktor - Overhead.
     # Sprung; Deckel 3.3 (dokumentierter Realwert).
     "duo_write_chars_per_token": 2.5,
-    "duo_coder_fallback_model": "qwen3.5:4b-ud",
+    "duo_coder_fallback_model": "qwen3.5:4b-mtp",
     "duo_critic_ctx":          None,
 
     # ════════════════════════════════════════════════════════════════════════
@@ -437,10 +437,10 @@ DEFAULT_SETTINGS = {
     },
     "exploration_agent": {
         "enabled": True,
-        "model":   "qwen3.5:4b-ud",
+        "model":   "qwen3.5:4b-mtp",
         "workers": [
-            {"model": "qwen3.5:4b-ud", "ctx": 8192},
-            {"model": "qwen3.5:4b-ud", "ctx": 8192},
+            {"model": "qwen3.5:4b-mtp", "ctx": 8192},
+            {"model": "qwen3.5:4b-mtp", "ctx": 8192},
         ],
     },
     "ctx_overrides": {

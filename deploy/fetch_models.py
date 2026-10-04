@@ -12,7 +12,7 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   lfm2.5:2.6b             Q4_K_M        — Subagent/Worker + Judge
   qwen3.5:0.8b-ud         UD-Q4_K_XL    — Subagent ladder (smallest tier)
   qwen3.5:2b              Q4_K_M        — Refiner
-  qwen3.5:4b-ud           UD-Q4_K_XL    — Analyst/Critic/Synthesizer/Speed/Fallback
+  qwen3.5:4b-mtp          Q4_K_M        — Analyst/Critic/Synthesizer/Speed/Fallback
   qwen3.5:9b-ud           UD-Q4_K_XL    — Direct/Duo-Coder/Quality
   gemma-4:…-hauhaucs-aggressive  Q4_K_P  — Uncensored all-rounder (2026-09-21)
   minicpm5:2b-sharp       Q6_K_XL (alt. Q4_K_XL) — Sharp-MiniCPM5-2B light
