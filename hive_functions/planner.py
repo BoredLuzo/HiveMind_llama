@@ -1135,6 +1135,7 @@ async def run_planner(
     heartbeat_fn:         Callable[[], Awaitable[None]] | None = None,
     images:               list | None = None,
     sees_images:          bool = False,
+    coder_sees_images:    bool = False,
 ) -> PlannerResult:
 
 
@@ -1159,14 +1160,18 @@ async def run_planner(
     else:
         _planner_sys = make_planner_sys(step_cap)
     if sees_images:
-        # VISION NOTE (2026-10-04): the planner receives the raw image(s)
-        # with this task - tell it to actually use what it sees in the plan
-        _planner_sys += (
-            "\n\n[VISION] The user attached image(s) to this task. They are "
-            "visible to you in this conversation. Base the plan on what the "
-            "images actually show (layout, texts, colors, shapes) - the coder "
-            "CANNOT see them, so the plan must describe every visual detail "
-            "the implementation needs.")
+        # VISION NOTE (2026-10-04, review fix): the text depends on what the
+        # CODER gets - the old version always claimed "the coder CANNOT see
+        # them", wrong when the plan routes raw images to the coder too.
+        if coder_sees_images:
+            _planner_sys += (
+                "\n\n[VISION] The user attached image(s) to this task and they are "
+                "visible to you. Base the plan on what the images actually show.")
+        else:
+            _planner_sys += (
+                "\n\n[VISION] The user attached image(s) to this task and they are "
+                "visible to you - but the coder CANNOT see them, so the plan must "
+                "describe every visual detail the implementation needs.")
 
     _planner_user = build_planner_user_prompt(
         task,

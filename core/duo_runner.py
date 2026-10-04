@@ -1387,6 +1387,7 @@ async def run_code_duo(ctx):
                 _plan_task = asyncio.create_task(run_planner(
                     task=_planner_task,
                     sees_images=_img_plan.get("planner") == "raw",
+                    coder_sees_images=_img_plan.get("coder") == "raw",
                     images=ctx.images if _img_plan.get("planner") == "raw" else None,
                     explore_ctx=_planner_ctx,
                     planner_model=_planner_model,

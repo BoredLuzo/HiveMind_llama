@@ -17,6 +17,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import inspect
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -233,6 +234,24 @@ def main():
             ok("budget window hard-filters tool roles and tool_calls")
         else:
             fail("window hard filter", json.dumps(win)[:120])
+
+        # vision notes: the planner system prompt must branch on what the
+        # coder gets (regression for the unconditional "coder CANNOT see
+        # them" text), and run_planner must carry both flags
+        from hive_functions import planner as PL
+
+        import inspect as _inspect
+        _src = _inspect.getsource(PL.run_planner)
+        if "coder_sees_images" in _src and "_planner_sys +=" in _src:
+            ok("run_planner branches the vision note on coder_sees_images")
+        else:
+            fail("vision branch", "source missing")
+
+        # content check: both variants of the note exist in the source
+        if "visible to you. Base the plan" in _src and "CANNOT see them" in _src:
+            ok("both vision note variants present (coder sees / coder blind)")
+        else:
+            fail("note variants")
 
         # model-facing list: _make_messages guarantees alternation and a
         # single final [USER] even when the seed ends with user messages
