@@ -9619,6 +9619,21 @@ function _autosaveChatMessage() {
         msgs.push({role: 'assistant', agent: aname.textContent, content: abody.textContent,
                    html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()});
       }
+    } else if (el.classList.contains('planner-bubble') ||
+               el.classList.contains('planner-think-block') ||
+               el.classList.contains('planner-plan-block') ||
+               el.classList.contains('plan-chk')) {
+      // PLANNER PERSISTENCE, small variant (2026-10-04): planner bubble,
+      // thinking block, plan text and the subtask checklist used to be
+      // DOM-only and died with the page. They save as plain assistant
+      // parts (content + html of the whole block) - no new format, the
+      // existing restore path renders them as normal bubbles.
+      var _pTxt = (el.textContent || '').trim();
+      if (_pTxt) {
+        msgs.push({role: 'assistant', agent: 'Planner', part: true,
+                   content: _pTxt.slice(0, 4000), html: el.innerHTML,
+                   ts: Date.now()});
+      }
     }
   });
   S.currentChatMessages = msgs;

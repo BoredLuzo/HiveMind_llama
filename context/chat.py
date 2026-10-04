@@ -90,6 +90,11 @@ def load_chat_transcript(chat_id: str, limit: int = 40) -> list:
             continue
         role = m.get("role")
         content = m.get("content")
+        # part=true marks UI-only parts (planner bubble, thinking block,
+        # checklist) - they persist for the RELOAD but stay out of the
+        # model history so raw thinking does not crowd the token budget.
+        if m.get("part"):
+            continue
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
             out.append({"role": role, "content": content})
     return out[-limit:]

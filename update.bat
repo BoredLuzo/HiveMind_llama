@@ -55,7 +55,9 @@ echo  [OK] No running instance on port %HM_PORT%.
 
 REM ── 2. Current version (server.py) ────────────────────────────────────────
 set "CURRENT="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9.]+)').Matches[0].Groups[1].Value"`) do set "CURRENT=%%V"
+REM widened capture: "1.3.0-preview" must arrive WHOLE - the old [0-9.]+ only
+REM saw "1.3.0" and the compare could not tell preview from release.
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "CURRENT=%%V"
 if not defined CURRENT (
     echo  [ERROR] Could not read HIVEMIND_VERSION from server.py.
     echo         Is this a HiveMind installation folder?
@@ -98,7 +100,7 @@ echo  Latest release    : %TAGNUM%
 REM Numeric triple compare: string equality would apply a DOWNGRADE when the
 REM installed version is newer (dev checkouts, hotfix builds).
 set "VCMP="
-for /f "usebackq delims=" %%C in (`powershell -NoProfile -Command "function V([string]$v) { @($v -split '\.') + 0,0,0 | Select-Object -First 3 | ForEach-Object { [int]$_ } }; $a = V '%CURRENT%'; $b = V '%TAGNUM%'; if ($b[0] -gt $a[0] -or ($b[0] -eq $a[0] -and $b[1] -gt $a[1]) -or ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -gt $a[2])) { 'newer' } elseif ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -eq $a[2]) { 'same' } else { 'older' }"`) do set "VCMP=%%C"
+for /f "usebackq delims=" %%C in (`powershell -NoProfile -Command "function V([string]$v) { @(($v -split '-')[0] -split '\.') + 0,0,0 | Select-Object -First 3 | ForEach-Object { [int]$_ } }; function P([string]$v) { [int]($v -match 'preview|alpha|beta|rc|dev') }; $a = V '%CURRENT%'; $b = V '%TAGNUM%'; $ap = P '%CURRENT%'; $bp = P '%TAGNUM%'; if ($b[0] -gt $a[0] -or ($b[0] -eq $a[0] -and $b[1] -gt $a[1]) -or ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -gt $a[2])) { 'newer' } elseif ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -eq $a[2]) { if ($ap -and -not $bp) { 'newer' } elseif ($bp -and -not $ap) { 'older' } else { 'same' } } else { 'older' }"`) do set "VCMP=%%C"
 if "%VCMP%"=="same" (
     echo.
     echo  [OK] Already up to date: %CURRENT%
@@ -212,7 +214,7 @@ if errorlevel 8 (
 
 REM ── 9. Verify ─────────────────────────────────────────────────────────────
 set "NEWVER="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9.]+)').Matches[0].Groups[1].Value"`) do set "NEWVER=%%V"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "NEWVER=%%V"
 if /I not "%NEWVER%"=="%TAGNUM%" (
     echo  [ERROR] Verification failed: server.py reports "%NEWVER%", expected "%TAGNUM%".
     echo         The update did not apply cleanly. Restore by copying the

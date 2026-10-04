@@ -83,6 +83,22 @@ def main():
             ok("transcript: pure text, cp/html/images excluded")
         else:
             fail("transcript purity", json.dumps(tr)[:160])
+        # part messages (planner/thinking UI parts) stay OUT of the seed
+        cid_p = "d4e5f6a7"
+        (ws / "2026-01-03T00-00-00_parts_d4e5f6a7.json").write_text(json.dumps({
+            "id": cid_p, "title": "parts", "created_at": "t", "updated_at": "t",
+            "messages": [
+                {"role": "user", "content": "do it"},
+                {"role": "assistant", "agent": "Planner", "part": True,
+                 "content": "THINKING NOISE " * 50, "html": "<p>x</p>"},
+                {"role": "assistant", "agent": "Coder", "content": "done"},
+            ]}), encoding="utf-8")
+        trp = CC.load_chat_transcript(cid_p)
+        if [m["content"] for m in trp] == ["do it", "done"]:
+            ok("planner part messages persist on disk but stay out of the seed")
+        else:
+            fail("part filter", json.dumps(trp)[:120])
+
         tr2 = CC.load_chat_transcript(cid, limit=2)
         if [m["content"] for m in tr2] == ["follow-up", "final answer"]:
             ok("transcript: limit keeps the NEWEST messages")

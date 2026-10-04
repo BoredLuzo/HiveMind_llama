@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -235,6 +236,21 @@ def _get_chat_save_lock(chat_id: str) -> threading.RLock:
         return _chat_save_locks[cid]
 
 
+def _replace_with_retry(src: Path, dst: Path) -> None:
+    """os.replace can hit PermissionError on Windows while a reader (GET
+    /chats/{id}, a checkpoint, an antivirus scan) still holds the target
+    open - a real failure observed in the concurrency tests. 4 retries
+    with backoff, then fail LOUDLY: a silently dropped write would lose
+    the chat."""
+    for _delay in (0.02, 0.05, 0.1, 0.2):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            time.sleep(_delay)
+    os.replace(src, dst)
+
+
 def _read_chat_file(chat_id: str) -> dict | None:
     """Cache-independent read (2026-10-03 review fix): CAS must compare
     against the DISK rev - the caller's dict may carry a stale or absent
@@ -276,13 +292,22 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
 
         _file = str(stored.get("_file") or "")
         if not _file and _state._SESSIONS_DIR:
-            _ts = str(stored.get("created_at") or
-                      datetime.now().isoformat(timespec="seconds"))
-            _ts = _ts.replace(":", "-")[:19]
-            _title = stored.get("title", "Chat")
-            _slg = _re_slug_special.sub("", _title.split("\n")[0][:40])
-            _slg = _re_slug_space.sub("-", _slg.strip()) or "Chat"
-            _file = str(_state._SESSIONS_DIR / f"{_ts}_{_slg}_{chat_id}.json")
+            # FORK GUARD (2026-10-04 review): a caller without the cache's
+            # _file (cold cache, direct writer) used to GENERATE a name from
+            # created_at + TITLE - a title change then created a second json
+            # and readers split between the two. Adopt the EXISTING file for
+            # this chat id first; only a genuinely new chat generates a name.
+            _existing = sorted(_state._SESSIONS_DIR.glob(f"*_{chat_id}.json"))
+            if _existing:
+                _file = str(_existing[-1])
+            else:
+                _ts = str(stored.get("created_at") or
+                          datetime.now().isoformat(timespec="seconds"))
+                _ts = _ts.replace(":", "-")[:19]
+                _title = stored.get("title", "Chat")
+                _slg = _re_slug_special.sub("", _title.split("\n")[0][:40])
+                _slg = _re_slug_space.sub("-", _slg.strip()) or "Chat"
+                _file = str(_state._SESSIONS_DIR / f"{_ts}_{_slg}_{chat_id}.json")
             stored["_file"] = _file
         if not _file:
             return None
@@ -314,7 +339,7 @@ def _save_chat(chat_id: str, chat: dict, base_rev: int | None = None) -> dict | 
         _p = Path(_file)
         _tmp = _p.with_suffix(".tmp")
         _tmp.write_text(_txt, encoding="utf-8")
-        os.replace(_tmp, _p)
+        _replace_with_retry(_tmp, _p)
         return {"id": chat_id, "rev": _new_rev, "ts": stored.get("updated_at", ""),
                 "conflict": False}
 
