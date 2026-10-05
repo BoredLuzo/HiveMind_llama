@@ -11403,6 +11403,9 @@ async function loadGitConfig(s) {
   // Telegram gateway master switch (hivemind_gateway veto, 2026-10-05)
   var tgTog = document.getElementById('tg-enabled-toggle');
   if (tgTog) tgTog.checked = s.telegram_gateway_enabled || false;
+  // P10: mirror engine runs to the paired phone
+  var tgMirrorTog = document.getElementById('tg-mirror-toggle');
+  if (tgMirrorTog) tgMirrorTog.checked = s.telegram_mirror_enabled || false;
   var emailInp = document.getElementById('git-email');
   if (emailInp) emailInp.value = s.git_email || '';
   var prefixInp = document.getElementById('git-commit-prefix');
