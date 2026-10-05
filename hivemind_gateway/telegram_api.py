@@ -68,7 +68,12 @@ class TelegramApi:
         result = data.get("result")
         return result if isinstance(result, dict) else {"result": result}
 
-    # -- the six allowed methods -----------------------------------------
+    # -- the allowed methods ---------------------------------------------
+
+    async def get_me(self) -> dict:
+        """getMe — used by the setup-token CLI ONLY (validate a token
+        before storing it). Never called by the poll loop."""
+        return await self._call("getMe")
 
     async def get_updates(self, offset: int, timeout_s: int,
                           allowed_updates: list[str] | None = None) -> list:

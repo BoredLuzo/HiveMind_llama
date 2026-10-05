@@ -102,6 +102,8 @@ SUITES = [
     ("gateway_commands2",      "tests/test_gateway_commands2.py",               60),
     ("gateway_transport",      "tests/test_gateway_transport.py",               60),
     ("gateway_confinement",    "tests/test_gateway_confinement.py",             90),
+    ("webfetch_guard",         "tests/test_webfetch_guard.py",                  60),
+    ("csrf_host_guard",        "tests/test_csrf_host_guard.py",                 60),
 ]
 
 

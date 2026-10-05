@@ -14,7 +14,13 @@ import re
 # <bot_id>:<35-ish chars> in a URL — matches even when the literal token
 # string was not configured (e.g. a token that was rotated out of the
 # filter list). Over-matching here is harmless: it only redacts logs.
-_BOT_TOKEN_URL = re.compile(r"bot(\d+):([A-Za-z0-9_-]{20,})")
+# 2026-10-05: a MANGLED stored token (double paste into the hidden setup
+# prompt) produced multi-segment strings like bot<id>:<seg1>:<seg2>... —
+# the old regex redacted only the FIRST segment and left the rest of the
+# secret in clear in the log. The continuation group swallows every
+# further colon-separated segment of the same bot URL.
+_BOT_TOKEN_URL = re.compile(
+    r"bot(\d+):([A-Za-z0-9_-]{20,}(?::[A-Za-z0-9_-]+)*)")
 
 
 def scrub_text(text: str, secrets: list[str] | tuple[str, ...]) -> str:

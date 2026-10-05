@@ -328,6 +328,23 @@ _approval_expired: dict = {}
 # indefinitely (abort-aware) instead of auto-approving".
 _approval_auto_off_events: dict = {}
 
+# G1 (full audit 2026-10-05): per-run gate FORCE. The Telegram gateway sends
+# duo_action_approval_enabled=true in the /stream body for its own runs;
+# chat_run.run_stream lifts the merged run setting into this ContextVar so
+# the documented "gated tools are auto-denied from the phone" invariant
+# holds even when the global toggle (settings.py default False) is off.
+# The body can only force the gate ON, never below the global setting.
+# Propagates into asyncio.create_task children like _current_run_id.
+_approval_gate_run_override: _contextvars.ContextVar[bool] = \
+    _contextvars.ContextVar("approval_gate_run_override", default=False)
+
+# G2 (full audit 2026-10-05): decision_ids that ALREADY resolved a waiting
+# pause. A second decision carrying one of these (UI click, then a phone tap
+# within the mirror tick) is a duplicate of an answered card and must not be
+# stored as a pre-decision — that would silently approve the NEXT gated
+# call. Keyed by run_id, bounded, entries popped when checked.
+_approval_resolved_ids: dict = {}
+
 def _approval_scope() -> str:
     """chat_id-or-run_id (the same value ask_user keys on)."""
     return str(_current_run_id.get() or "")
@@ -413,14 +430,21 @@ async def wait_approval_decision(run_id, name: str, preview: str, emit) -> tuple
     return (decision, _note)
 
 
-def _approval_active_for(name: str) -> bool:
-    """Settings + tool-set gate shared by staging and the pause path."""
+def _approval_gate_on() -> bool:
+    """Gate state for THIS run: a per-run force (Telegram phone runs, G1)
+    wins; otherwise the global toggle decides."""
+    if _approval_gate_run_override.get():
+        return True
     try:
         from core.state import settings as _ws_settings
-        _enabled = bool(_ws_settings.get("duo_action_approval_enabled", False))
+        return bool(_ws_settings.get("duo_action_approval_enabled", False))
     except (ImportError, AttributeError, TypeError, ValueError):
         return False
-    return _enabled and name in _APPROVAL_TOOLS
+
+
+def _approval_active_for(name: str) -> bool:
+    """Settings + tool-set gate shared by staging and the pause path."""
+    return _approval_gate_on() and name in _APPROVAL_TOOLS
 
 
 # One-shot free pass (2026-09-18): after an approved WRITE the next gated
@@ -489,12 +513,7 @@ async def _check_action_approval(name: str, args: dict, workspace):
     message appended to the result, or ("DENY", tool_error) when denied."""
     import logging as _appr_log
     _lg = _appr_log.getLogger("hivemind.tools")
-    try:
-        from core.state import settings as _ws_settings
-        _enabled = bool(_ws_settings.get("duo_action_approval_enabled", False))
-    except (ImportError, AttributeError, TypeError, ValueError):
-        return None
-    if not _enabled or name not in _APPROVAL_TOOLS:
+    if not _approval_gate_on() or name not in _APPROVAL_TOOLS:
         return None
     # NO gate-mode bypass (2026-09-18, live bug): until_finished duo runs set
     # the ask_user gate to "throttled_autonomous" — approvals must still fire
@@ -508,8 +527,13 @@ async def _check_action_approval(name: str, args: dict, workspace):
 
     # PRE-DECISION (2026-09-18): the card was staged during generation and
     # the user already decided — consume that answer without pausing.
+    # G2 (full audit 2026-10-05): the decide endpoint now stores the tool
+    # the decision was made FOR; a stored decision for a DIFFERENT tool
+    # (late duplicate answering a new card) is dropped and asked fresh.
+    # Empty/absent tool = unknown (legacy UI payloads) → compatible.
     _pre = _approval_pre_decisions.get(str(run_id))
-    if _pre is not None and _pre.get("tool") not in (None, name):
+    _pre_tool = _pre.get("tool") if isinstance(_pre, dict) else None
+    if _pre is not None and _pre_tool and _pre_tool != name:
         # stale decision for a DIFFERENT tool (model changed course in the
         # re-POST) — drop it and ask fresh
         _approval_pre_decisions.pop(str(run_id), None)

@@ -120,6 +120,30 @@ finally:
     S.state_home = orig_home  # type: ignore[assignment]
     os.environ.pop("HIVEMIND_GATEWAY_DISABLED", None)
 
+
+# 2026-10-05 (live finding): runtime settings written by the bridge
+# (tg_chat, mode, tools, run_overrides, ...) must SURVIVE a reload - the
+# old schema-only merge wiped them on every gateway restart.
+st_r = GatewayState(tmp / "gwstate_runtime.json")
+st_r.data["tg_chat"] = {"hive_chat_id": "c42", "created_at": "x"}
+st_r.data["mode"] = "simple"
+st_r.data["tools"] = False
+st_r.data["run_overrides"] = {"model": "m-1", "planner_ctx": 8192}
+st_r.data["verbose"] = True
+st_r.data["pending_setup"] = {"model": "m-1", "ts": 1.0}
+st_r.set_offset(123)
+st_r.save()
+st_r2 = GatewayState(tmp / "gwstate_runtime.json")
+check("runtime settings survive reload",
+      st_r2.data.get("tg_chat", {}).get("hive_chat_id") == "c42"
+      and st_r2.data.get("mode") == "simple"
+      and st_r2.data.get("tools") is False
+      and st_r2.data.get("run_overrides", {}).get("model") == "m-1"
+      and st_r2.data.get("verbose") is True
+      and "pending_setup" in st_r2.data)
+check("schema keys still survive reload", st_r2.offset == 123
+      and st_r2.owner_telegram_id is None)
+
 print()
 print(f"passed={passed} failed={failed}")
 sys.exit(0 if failed == 0 else 1)

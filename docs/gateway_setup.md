@@ -37,6 +37,25 @@ $env:HIVEMIND_TG_TOKEN = [System.Net.NetworkCredential]::new('', $s).Password
 The token now lives in the memory of this one shell window. Not in the
 history, not in a file, not in any log.
 
+**Recommended: store it ONCE instead (Windows Credential Manager).**
+The shell variable above dies with the window — for everyday use you
+would repeat this before every start. The gateway can instead read the
+token from the Windows Credential Manager, which survives restarts and
+updates. One-time setup (token stays invisible, nothing is written to
+disk or history):
+
+```powershell
+pip install keyring
+python -c "import keyring, getpass; keyring.set_password('hivemind_gateway', 'bot_token', getpass.getpass('Bot token: '))"
+```
+
+After that, no env var is needed: `start_gateway.bat` (or
+`python -m hivemind_gateway.main`) picks the token up by itself. The
+gateway never prints the token and never accepts one from a file.
+Rotating it: BotFather `/revoke`, then repeat the one-liner. Deleting
+it: remove the `hivemind_gateway` entry in the Windows Credential
+Manager (Systemsteuerung → Anmeldeinformationsverwaltung).
+
 ## 3. Start the gateway (same shell)
 
 The gateway is **off by default** — a master switch must be on before it
@@ -130,7 +149,15 @@ exists.
 **Where the token lives.** In the RAM of the shell you started it from,
 optionally the Windows Credential Manager. It is scrubbed from every
 log line (including the URLs, which contain it), and the release
-packaging refuses zips that carry it.
+packaging refuses zips that carry it. **Honest limit of the Credential
+Manager:** it keeps the token out of files, logs and backups — it is
+NOT a protection against software running on your PC. Anything under
+your Windows user (including this project's own `run_bash`, whose
+service name is documented here) can read it without a prompt. That is
+the same trust class as every local secret; what keeps the agent
+honest is that every shell command it wants to run appears in full in
+the approval card or the transcript. If the token ever leaks, rotate
+it: `/revoke` in BotFather kills the old one instantly.
 
 **Open ports.** None. The gateway polls Telegram outbound; there is no
 webhook and nothing listens. To HiveMind it talks over 127.0.0.1 only.
@@ -140,9 +167,12 @@ fighting.
 **What the agent can reach from the phone.** File access stays inside
 the chat's workspace — paths outside, including `../` tricks, are
 rejected by the engine (verified against the real handler). Tools that
-need an approval (shell commands, file writes, git commits) are denied
-automatically for now; tappable approvals come with a future update.
-Until then, point the bot at a workspace without real data.
+change anything (shell commands, file writes, git commits) run behind
+the engine's approval gate, and the gateway forces that gate ON for its
+own runs and answers every approval request with an automatic deny —
+such tools cannot execute from the phone, no matter how the engine's
+own approval toggle is set (`/status` states this). Tappable approvals
+("1" once / "3" deny from the phone) exist for mirrored PC runs.
 
 **Manipulated content.** The agent reads repos and web pages, and those
 can contain text that tries to steer it. Pairing doesn't protect

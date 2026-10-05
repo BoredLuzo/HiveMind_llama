@@ -62,6 +62,10 @@ class FakeHive:
         self.denies = []        # run_ids denied
         self.aborts = []
         self.journal_body = {"active": False}
+        self.journal_calls = []  # run_id scoping args (audit G7)
+        self.settings_body = {}
+        self.pending_body = {"active": False}
+        self.steered = []
         self.fail_first_put_409 = fail_first_put_409
         self.offline = offline
         self._put_count = 0
@@ -96,7 +100,8 @@ class FakeHive:
         for ev in self.events:
             yield ev
 
-    async def decide_approval(self, run_id, answer):
+    async def decide_approval(self, run_id, answer, decision_id="",
+                              tool=""):
         self.denies.append((run_id, answer))
         return FakeResponse(200, {"routed": "pause", "run_id": run_id})
 
@@ -108,10 +113,21 @@ class FakeHive:
         self.aborts.append(("chat", chat_id))
         return FakeResponse(200, {"ok": True})
 
-    async def journal(self):
+    async def journal(self, run_id=""):
+        self.journal_calls.append(run_id)
         if self.offline:
             raise HiveUnreachable("connection refused")
         return dict(self.journal_body)
+
+    async def settings(self):
+        return dict(self.settings_body)
+
+    async def pending_approval(self, run_id):
+        return FakeResponse(200, dict(self.pending_body))
+
+    async def steer(self, run_id, text):
+        self.steered.append((run_id, text))
+        return FakeResponse(200, {"status": "queued"})
 
 
 class FakeMessenger:
@@ -174,7 +190,7 @@ async def t_happy():
           and "Hallo Welt." in last_put[0][-1]["content"])
     check("approval auto-denied with 3",
           hive.denies == [("1791-abc", "3")])
-    check("deny note shown", any("abgelehnt" in t for _, t in ms.edits))
+    check("deny note shown", any("denied" in t for _, t in ms.edits))
     check("status finished edit", ms.edits[-1][1] == "✅ fertig.")
 
 # ── 2. 409 adopt-and-retry ─────────────────────────────────────────────
@@ -195,14 +211,14 @@ async def t_busy():
     br, st, ms = _mk("gwbr_busy_", hive)
     st.data["active_run"] = {"run_id": "old-1", "chat_id": "chat01"}
     note = await br.start_text_run("zweite frage")
-    check("own-run busy rejected", "bereits ein Lauf" in note)
+    check("own-run busy rejected", "already active" in note)
     check("no stream consumed", hive.puts == [])
     st.data["active_run"] = None
     hive.journal_body = {"active": True, "run_id": "ui-77", "done": False,
                          "aborted": False, "ts": time.time()}
     note2 = await br.start_text_run("dritte frage")
     check("UI-run busy rejected (journal)", "ui-77" in note2
-          and "Browser" in note2)
+          and "browser" in note2)
     hive.journal_body = {"active": True, "run_id": "old", "done": True}
     await br.start_text_run("vierte frage")
     check("done journal not busy", "Hallo Welt." in "".join(m for m in ms.messages))
@@ -220,12 +236,12 @@ async def t_errors():
            {"type": "done", "elapsed": 0, "stop_reason": "error"}]
     br2, st2, ms2 = _mk("gwbr_err2_", FakeHive(ev2))
     note2 = await br2.start_text_run("q")
-    check("run error readable", "Lauf-Fehler" in note2 and "boom" in note2)
+    check("run error readable", "Run error" in note2 and "boom" in note2)
 
     br3, st3, ms3 = _mk("gwbr_err3_", FakeHive(offline=True))
     st3.data["tg_chat"] = {"hive_chat_id": "chat01", "created_at": "x"}
     note3 = await br3.start_text_run("q")
-    check("offline readable", "nicht erreichbar" in note3)
+    check("offline readable", "unreachable" in note3)
     check("offline cleared run", st3.data["active_run"] is None)
 
     # realrun bug #4: RAW httpx errors (not wrapped by the client) must
@@ -238,7 +254,7 @@ async def t_errors():
     st4.data.pop("tg_chat")  # fresh install: first run must CREATE the chat
     note4 = await br4.start_text_run("q")
     check("raw ConnectError -> readable offline note",
-          "nicht erreichbar" in note4)
+          "unreachable" in note4)
     check("raw ConnectError cleared run", st4.data["active_run"] is None)
 
     class MidStreamBreakHive(FakeHive):
@@ -250,7 +266,7 @@ async def t_errors():
     br5, st5, ms5 = _mk("gwbr_err5_", MidStreamBreakHive())
     st5.data["tg_chat"] = {"hive_chat_id": "chat01", "created_at": "x"}
     note5 = await br5.start_text_run("q")
-    check("mid-stream break readable", "nicht erreichbar" in note5)
+    check("mid-stream break readable", "unreachable" in note5)
     check("mid-stream break cleared run", st5.data["active_run"] is None)
     check("mid-stream break answered phone", len(ms5.messages) >= 1)
 
@@ -329,22 +345,22 @@ async def t_models_flow():
     check("setmodel lists presets numbered",
           "1=code" in out and "2=write" in out)
     check("setmodel warns global", "GLOBAL" in out or "global" in out)
-    check("setmodel no-thinking hint", "kein Thinking" in out)
+    check("setmodel no-thinking hint", "cannot think" in out)
 
     # a non-numeric message is consumed as format reminder (no run!)
     runs_before = len(hive.stream_bodies)
     note = await br.consume_setup("hallo welt")
-    check("non-numeric -> reminder", "Erwartet 3 Zahlen" in note)
+    check("non-numeric -> reminder", "Expected 3 numbers" in note)
     check("reminder did not start a run",
           len(hive.stream_bodies) == runs_before)
 
     # wrong count
     note = await br.consume_setup("1, 2")
-    check("wrong count -> reminder", "Erwartet 3 Zahlen" in note)
+    check("wrong count -> reminder", "Expected 3 numbers" in note)
 
     # the real answer: preset 1=code, no thinking, ctx 16384
     note = await br.consume_setup("1, 0, 16384")
-    check("answer confirms model", "m-b" in note and "Gespeichert" in note)
+    check("answer confirms model", "m-b" in note and "Saved" in note)
     check("preset loaded globally", hive.loaded_presets == ["code"])
     check("overrides stored", st.data["run_overrides"]["model"] == "m-b"
           and st.data["run_overrides"]["coder_ctx"] == 16384
@@ -388,12 +404,12 @@ async def t_models_flow():
 
     # /cancel clears a pending flow
     await br.set_model("1")
-    check("cancel clears pending", "abgebrochen" in br.cancel_setup()
+    check("cancel clears pending", "aborted" in br.cancel_setup()
           and st.data["pending_setup"] is None)
 
     # reset overrides
     check("reset clears overrides",
-          "gelöscht" in br.reset_overrides()
+          "cleared" in br.reset_overrides()
           and st.data["run_overrides"] == {})
 
 
@@ -424,27 +440,38 @@ async def t_mode():
     check("status shows mode", "simple" in br.status_text())
     # invalid rejected, mode unchanged
     out = br.mode_text("nuclear")
-    check("invalid mode rejected", "Unbekannter Modus" in out
+    check("invalid mode rejected", "Unknown mode" in out
           and st.data["mode"] == "simple")
+    # agentic: phone-side composite (engine mode auto + body flag)
+    out = br.mode_text("agentic")
+    check("agentic mode set", "agentic" in out)
+    await br.start_text_run("q4")
+    check("agentic rides body as auto+flag",
+          br.hive.stream_bodies[-1]["mode"] == "auto"
+          and br.hive.stream_bodies[-1]["overrides"].get(
+              "duo_agentic_mode") is True)
+    check("bare /mode lists explanations",
+          "agentic" in br.mode_text("") and "NO file tools" in br.mode_text(""))
+
     # off -> follow settings again
     out = br.mode_text("off")
     await br.start_text_run("q3")
-    check("off clears mode", "folgt wieder" in out
+    check("off clears mode", "follow the engine settings again" in out
           and br.hive.stream_bodies[-1]["mode"] == "")
     # bare /mode = status only
     out = br.mode_text("")
-    check("bare /mode shows status", "Modus (Telegram)" in out)
+    check("bare /mode shows status", "Mode (Telegram)" in out)
 
 # ── 7. /stop behavior ───────────────────────────────────────────────────
 async def t_stop():
     hive = FakeHive()
     br, st, ms = _mk("gwbr_stop_", hive)
     note = await br.stop()
-    check("stop without run", "Kein Lauf aktiv" in note)
+    check("stop without run", "No run active" in note)
     st.data["active_run"] = {"run_id": "r9", "chat_id": "chat01"}
     note2 = await br.stop()
     check("stop sends abort", ("run", "r9") in hive.aborts
-          and "Abbruch" in note2)
+          and "Abort" in note2)
 
     class _BoomHive(FakeHive):
         async def abort_run(self, run_id):
@@ -453,7 +480,25 @@ async def t_stop():
     br2, st2, ms2 = _mk("gwbr_stop2_", _BoomHive())
     st2.data["active_run"] = {"run_id": "r10", "chat_id": "chat01"}
     note3 = await br2.stop()
-    check("stop fails VISIBLY", "fehlgeschlagen" in note3 and "r10" in note3)
+    check("stop fails VISIBLY", "failed" in note3 and "r10" in note3)
+
+    # 2026-10-05 (live): engine answers 404 -> run is already gone; the
+    # latch MUST clear (fallback abort rides the run's own chat_id),
+    # otherwise every further text gets the busy note until restart.
+    class Gone404Hive(FakeHive):
+        async def abort_run(self, run_id):
+            return FakeResponse(404, {"ok": False})
+
+    hive404 = Gone404Hive()
+    br3, st3, ms3 = _mk("gwbr_stop3_", hive404)
+    st3.data["tg_chat"] = {}
+    st3.data["active_run"] = {"run_id": "r11", "chat_id": "chat01"}
+    note4 = await br3.stop()
+    check("stop 404: run cleared (no busy latch)",
+          st3.data.get("active_run") is None)
+    check("stop 404: fallback abort rides run chat_id",
+          ("chat", "chat01") in hive404.aborts)
+    check("stop 404: honest note", "cleared" in note4 and "r11" in note4)
 
 
 # ── 7. P10 run takeover: mirror, approval relay, steer, workspace ──────
@@ -471,14 +516,16 @@ async def t_takeover():
         async def settings(self):
             return dict(self.settings_body)
 
-        async def journal(self):
+        async def journal(self, run_id=""):
+            self.journal_calls.append(run_id)
             return dict(self.journal_body)
 
         async def pending_approval(self, run_id):
             return FakeResponse(200, dict(self.pending_body))
 
-        async def decide_approval(self, run_id, answer):
-            self.decided.append((run_id, answer))
+        async def decide_approval(self, run_id, answer, decision_id="",
+                                  tool=""):
+            self.decided.append((run_id, answer, decision_id, tool))
             return FakeResponse(200, {"routed": "pause"})
 
         async def steer(self, run_id, text):
@@ -504,7 +551,7 @@ async def t_takeover():
                          "ts": time.time(), "n": 3, "frames": []}
     await br.mirror_tick()
     check("mirror takeover announced",
-          any("übernommen" in m and "ui-run-1" in m for m in ms.messages))
+          any("taken over" in m and "ui-run-1" in m for m in ms.messages))
     check("mirror intercept active",
           br.mirror_intercept("weiter so") is True)
 
@@ -512,7 +559,7 @@ async def t_takeover():
     st.data["active_run"] = {"run_id": "ui-run-1", "chat_id": "chat01"}
     await br.mirror_tick()
     check("own run not double-mirrored",
-          sum(1 for m in ms.messages if "übernommen" in m) == 1)
+          sum(1 for m in ms.messages if "taken over" in m) == 1)
     st.data["active_run"] = None
 
     # approval card relayed, phone answers
@@ -522,12 +569,14 @@ async def t_takeover():
     check("approval card relayed",
           any("run_bash" in m for m in ms.messages))
     note = await br.mirror_send("2")
-    check("phone '2' (always) rejected", "bewusst nicht" in note)
+    check("phone '2' (always) rejected", "deliberately does not" in note)
     check("rejected '2' did not reach engine", hive.decided == [])
     note = await br.mirror_send("3")
     check("phone '3' denied via engine",
-          hive.decided == [("ui-run-1", "3")])
-    check("deny confirmed", "abgelehnt" in note)
+          hive.decided == [("ui-run-1", "3", "d1", "run_bash")])
+    check("deny confirmed", "denied" in note)
+    check("G7: journal scoped to the mirrored run",
+          hive.journal_calls[-1] == "ui-run-1")
 
     # steering: plain text goes to /steer, not a new gateway run
     runs_before = len(hive.stream_bodies)
@@ -536,7 +585,7 @@ async def t_takeover():
           hive.steered == [("ui-run-1", "mach weiter mit version b")])
     check("steer started no gateway run",
           len(hive.stream_bodies) == runs_before)
-    check("steer receipt honest", "Eingereiht" in note)
+    check("steer receipt honest", "Queued" in note)
 
     # deep audit N2: relay shows the FULL command from journal frames,
     # not the 300-char truncated server preview
@@ -555,7 +604,7 @@ async def t_takeover():
     check("N2: full command relayed (beyond 300 chars)",
           long_cmd in relayed)
     check("N2: no blind-approval note when full cmd present",
-          "gekürzt" not in relayed)
+          "truncated" not in relayed)
 
     # deep audit N5: weird answers cannot crash consume_setup
     hive.journal_body = {"active": False}
@@ -568,7 +617,7 @@ async def t_takeover():
                                  "ts": _t.time()}
     for bad in ("--5, 8192, 16384", "², 8192, 16384", "1; 2; 3"):
         out = await br3.consume_setup(bad)
-    check("N5: weird answers contained", "Erwartet 3 Zahlen" in out)
+    check("N5: weird answers contained", "Expected 3 numbers" in out)
     # clamp: absurd ctx values are capped in the stream body
     st3.data["run_overrides"] = {"model": "m-c", "planner_ctx": 999999,
                                  "coder_ctx": 999999}
@@ -584,7 +633,7 @@ async def t_takeover():
                                     '"stop_reason": "completed"}']}
     await br.mirror_tick()
     check("done ends mirror session",
-          any("Mirror-Lauf" in m or "abgeschlossen" in m
+          any("Mirror run" in m or "completed" in m
               for m in ms.messages)
           and br.mirror_intercept("x") is False)
 
@@ -614,17 +663,19 @@ async def t_takeover():
         return FakeResponse(200, {"ok": True,
                                   "rev": hive2.chat["rev"]})
     hive2.put_chat_meta = put_chat_meta
-    note = await br2.workspace_text("D:/projekte/neu")
-    check("workspace confirmed", "D:/projekte/neu" in note)
+    # G11: the path must EXIST (gateway-side check) — use a real temp dir
+    ws_dir = Path(tempfile.mkdtemp(prefix="gwbr_wsp_dir_"))
+    note = await br2.workspace_text(str(ws_dir))
+    check("workspace confirmed", str(ws_dir) in note)
     check("workspace 409 adopted and retried",
           len(hive2.meta_puts) == 2
           and hive2.meta_puts[1]["base_rev"] == 7)
     check("workspace persisted in state+chat",
-          st2.data["tg_chat"]["workspace"] == "D:/projekte/neu"
-          and hive2.chat.get("workspace") == "D:/projekte/neu")
+          st2.data["tg_chat"]["workspace"] == str(ws_dir)
+          and hive2.chat.get("workspace") == str(ws_dir))
 
     # /tools: state -> run body
-    check("tools default = engine", "Engine-Standard" in br2.tools_text(""))
+    check("tools default = engine", "engine default" in br2.tools_text(""))
     br2.tools_text("off")
     await br2.start_text_run("q")
     check("tools off rides the run body",
@@ -643,6 +694,100 @@ async def _main():
     await t_models_flow()
     await t_stop()
     await t_takeover()
+    await t_audit_fixes()
+
+
+# ── 8. full-audit fixes (G1/G2/G5/G7/N7/G8/G11) ────────────────────────
+async def t_audit_fixes():
+    # G1: phone runs FORCE the engine approval gate via the stream body
+    br, st, ms = _mk("gwbr_g1_", FakeHive(_run_events()))
+    await br.start_text_run("q")
+    check("G1: gate forced in stream overrides",
+          br.hive.stream_bodies[-1]["overrides"].get(
+              "duo_action_approval_enabled") is True)
+    check("G1: /status states the forced gate",
+          "gate enforced" in br.status_text())
+    # version-skew detection: an engine WITHOUT the gateway_overrides
+    # marker must downgrade /status instead of promising the invariant
+    br.ms.engine_gate_support = False
+    check("G1: /status WARNS against old engines",
+          "INACTIVE" in br.status_text()
+          and "duo_action_approval_enabled" in br.status_text())
+    br.ms.engine_gate_support = True
+
+    # G2: the phone decision echoes decision_id + tool of the relayed
+    # card; a duplicate route is answered honestly
+    class G2Hive(FakeHive):
+        def __init__(self):
+            super().__init__()
+            self.settings_body = {"telegram_mirror_enabled": True}
+            self.journal_body = {"active": True, "run_id": "ui-g2",
+                                 "done": False, "aborted": False,
+                                 "ts": time.time(), "n": 1, "frames": []}
+            self.pending_body = {"active": True, "tool": "run_bash",
+                                 "preview": "cmd", "decision_id": "d-g2"}
+            self.decided = []
+
+        async def decide_approval(self, run_id, answer, decision_id="",
+                                  tool=""):
+            self.decided.append((run_id, answer, decision_id, tool))
+            return FakeResponse(200, {"routed": "pause"})
+
+    hive_g2 = G2Hive()
+    br_g2, st_g2, ms_g2 = _mk("gwbr_g2_", hive_g2)
+    await br_g2.mirror_tick()   # tick 1: takeover announced
+    await br_g2.mirror_tick()   # tick 2: approval card relayed
+    check("G2: card relayed", any("run_bash" in m for m in ms_g2.messages))
+    note = await br_g2.mirror_send("1")
+    check("G2: decision carries card decision_id+tool",
+          hive_g2.decided == [("ui-g2", "1", "d-g2", "run_bash")])
+    check("G2: confirmed", "delivered" in note)
+
+    async def _dup_decide(run_id, answer, decision_id="", tool=""):
+        hive_g2.decided.append((run_id, answer, decision_id, tool))
+        return FakeResponse(200, {"routed": "duplicate"})
+    m2 = br_g2._mirror()
+    m2["approval_sig"] = "d-g2|cmd"
+    m2["approval_decision_id"] = "d-g2"
+    m2["approval_tool"] = "run_bash"
+    hive_g2.decide_approval = _dup_decide
+    note = await br_g2.mirror_send("1")
+    check("G2: duplicate answered honestly", "already answered" in note)
+
+    # G8: steering cannot bypass the max_text_chars cap
+    await br_g2.mirror_send("x" * 5000)
+    check("G8: steering capped at max_text_chars",
+          hive_g2.steered and len(hive_g2.steered[-1][1]) == 4000)
+
+    # G5: a Telegram failure during _finish must not latch active_run
+    br_g5, st_g5, ms_g5 = _mk("gwbr_g5_", FakeHive(_run_events()))
+
+    async def _boom_finish(*a, **k):
+        raise TelegramApiError("tg down")
+    br_g5._finish = _boom_finish
+    await br_g5.start_text_run("q")
+    check("G5: run cleared despite finish failure",
+          st_g5.data.get("active_run") is None)
+
+    # N7/G7: no takeover while our own run is between POST and run_id
+    hive_n7 = FakeHive()
+    hive_n7.settings_body = {"telegram_mirror_enabled": True}
+    hive_n7.journal_body = {"active": True, "run_id": "foreign-1",
+                            "done": False, "aborted": False,
+                            "ts": time.time(), "n": 0, "frames": []}
+    br_n7, st_n7, ms_n7 = _mk("gwbr_n7_", hive_n7)
+    st_n7.data["active_run"] = {"run_id": None, "chat_id": "chat01"}
+    await br_n7.mirror_tick()
+    check("N7: own unconfirmed run is not taken over",
+          ms_n7.messages == [] and br_n7.mirror_intercept("x") is False)
+
+    # G11: /workspace refuses non-existent paths and drive roots
+    br_g11, st_g11, ms_g11 = _mk("gwbr_g11_", FakeHive())
+    out = await br_g11.workspace_text("Z:/definitiv/nicht/da_xyz")
+    check("G11: missing path refused", "does not exist" in out)
+    root = Path(tempfile.mkdtemp(prefix="gwbr_g11_ws_")).anchor
+    out2 = await br_g11.workspace_text(root)
+    check("G11: drive root refused", "not allowed" in out2)
 
 asyncio.run(_main())
 print()

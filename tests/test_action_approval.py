@@ -358,12 +358,58 @@ def test_gate_scope():
           not T & {"read_file", "search_code", "list_dir", "find_files", "web_search"}, str(T))
 
 
+def test_decide_stores_tool_and_drops_duplicates():
+    """G2 (full audit 2026-10-05): POST /approval/decide stores WHICH tool
+    a decision was made for (the gate's tool-match guard was dead without
+    it) and drops a decision that duplicates an already-resolved card
+    instead of storing it as a pre-decision for the NEXT gated call."""
+    from routers import core as core_router
+    from tools import runner as tr
+
+    class FakeReq:
+        def __init__(self, body):
+            self._body = body
+
+        async def json(self):
+            return self._body
+
+    # duplicate: decision_id matches the stored resolved id
+    tr._approval_resolved_ids["dec-run"] = "d-1"
+    try:
+        out = asyncio.run(core_router.approval_decide(
+            "dec-run", FakeReq({"answer": "1", "decision_id": "d-1",
+                                "tool": "run_bash"})))
+        check("G2: duplicate of resolved card dropped",
+              out == {"routed": "duplicate", "run_id": "dec-run"})
+        check("G2: duplicate not stored as pre-decision",
+              tr._approval_pre_decisions.get("dec-run") is None)
+        check("G2: resolved id consumed",
+              tr._approval_resolved_ids.get("dec-run") is None)
+
+        # store path: tool travels into the pre-decision
+        out2 = asyncio.run(core_router.approval_decide(
+            "dec-run-2", FakeReq({"answer": "3|zu riskant",
+                                  "decision_id": "d-2",
+                                  "tool": "write_file"})))
+        pre = tr._approval_pre_decisions.get("dec-run-2")
+        check("G2: pre-decision stored with tool",
+              out2.get("routed") == "preview" and pre is not None
+              and pre.get("tool") == "write_file"
+              and pre.get("answer") == "3"
+              and pre.get("note") == "zu riskant")
+    finally:
+        tr._approval_resolved_ids.pop("dec-run", None)
+        tr._approval_pre_decisions.pop("dec-run-2", None)
+        tr._pending_approvals.pop("dec-run-2", None)
+
+
 if __name__ == "__main__":
     test_answer_parsing()
     test_memory_scope()
     test_pre_generation_wait_and_pre_decision()
     test_gate_scope()
     test_gate_flow()
+    test_decide_stores_tool_and_drops_duplicates()
     print("\n" + "=" * 60)
     print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
     print("=" * 60)

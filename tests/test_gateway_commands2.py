@@ -96,6 +96,12 @@ class FakeBridge(RunBridge):
         self.runs.append(q)
         return None
 
+    async def mirror_send(self, text):
+        if not hasattr(self, "mirrored"):
+            self.mirrored = []
+        self.mirrored.append(text)
+        return "🧭 test"
+
 
 def _gw(tmp_name):
     tmp = Path(tempfile.mkdtemp(prefix=tmp_name))
@@ -136,14 +142,14 @@ async def t_new():
           and gw.hive.created[0].startswith("[TG]"))
     check("/new persists mapping",
           st.data["tg_chat"]["hive_chat_id"] == "chat1")
-    check("/new replies", any("Neuer HiveMind-Chat" in t
+    check("/new replies", any("New HiveMind chat" in t
                               for _, t in api.sent))
 
 # ── /status + /verbose ──────────────────────────────────────────────────
 async def t_status_verbose():
     gw, st, api = _gw("gwcmd_sv_")
     await gw.handle_owner_update(_p("/status", 2))
-    check("/status shows chat", any("HiveMind-Chat" in t
+    check("/status shows chat", any("workspace:" in t
                                     for _, t in api.sent))
     st.data["tg_chat"] = {"hive_chat_id": "c9", "created_at": ""}
     api.sent.clear()
@@ -175,7 +181,7 @@ async def t_rate_limit():
         gw.limiter.allow(str(OWNER))
     await process_update(gw, _msg("Hallo", 8))
     check("rate-limited message dropped with note",
-          any("Rate-Limit" in t for _, t in api.sent))
+          any("Rate limit" in t for _, t in api.sent))
     check("rate-limited text did not run", gw.bridge.runs == [])
     st.data["active_run"] = {"run_id": "r1", "chat_id": "c1"}
     await process_update(gw, _msg("/stop", 9))
@@ -349,6 +355,82 @@ async def t_ui_veto():
     await hc.close()
 
 
+# ── audit G8: mirror intercept beats a pending /setModel flow ──────────
+async def t_g8_order():
+    import time as _t
+    gw, st, api = _gw("gwcmd_g8_")
+    st.data["pending_setup"] = {"model": "m", "agentic": False,
+                                "ts": _t.time()}
+    gw.bridge._mirror()["run_id"] = "ui-x"
+    await process_update(gw, _msg("1", 30))
+    check("G8: open approval card beats pending setup",
+          getattr(gw.bridge, "mirrored", []) == ["1"]
+          and st.data.get("pending_setup") is not None)
+
+
+# ── audit G9: an edited message never re-runs ──────────────────────────
+async def t_g9_edits():
+    gw, st, api = _gw("gwcmd_g9_")
+
+    def _edit(text, uid):
+        m = _msg(text, uid)
+        m["edited_message"] = m.pop("message")
+        return m
+
+    await process_update(gw, _edit("zweiter Lauf", 40))
+    check("G9: edited text starts no second run", gw.bridge.runs == [])
+    await process_update(gw, _msg("echter Lauf", 41))
+    check("G9: normal text still starts a run",
+          gw.bridge.runs == ["echter Lauf"])
+
+
+# /help: a real instruction list (owner request), not a whitelist dump
+async def t_help():
+    gw, st, api = _gw("gwcmd_help_")
+    await gw.handle_owner_update(_p("/help", 50))
+    text = next((t for _, t in api.sent if "quick guide" in t), "")
+    check("/help: instruction list title", bool(text))
+    for needle in ("/stop", "/mode auto", "/setModel", "/workspace",
+                   "auto-denied", "1 (allow once)"):
+        check(f"/help: mentions {needle[:24]!r}", needle in text)
+
+
+# setup-token: validate via getMe, store via injectable store
+async def t_setup_token():
+    import hivemind_gateway.main as M
+
+    class FakeSetupApi:
+        def __init__(self, token):
+            self.token = token
+            self.closed = False
+
+        async def get_me(self):
+            if not self.token.strip():
+                raise M.TelegramApiError("getMe", "Unauthorized")
+            return {"username": "fritz_hivemind_bot", "id": 42}
+
+        async def close(self):
+            self.closed = True
+
+    stored = []
+    orig_api = M.TelegramApi
+    M.TelegramApi = FakeSetupApi
+    try:
+        user = await M.perform_token_setup(
+            "  tok123  ", store=lambda *a: stored.append(a))
+        check("setup: bot username returned",
+              user == "fritz_hivemind_bot")
+        check("setup: token stored under service/key",
+              stored == [("hivemind_gateway", "bot_token", "tok123")])
+        try:
+            await M.perform_token_setup("   ", store=lambda *a: None)
+            check("setup: empty token refused", False)
+        except M.StartupError:
+            check("setup: empty token refused", True)
+    finally:
+        M.TelegramApi = orig_api
+
+
 async def _main():
     await t_new()
     await t_status_verbose()
@@ -358,6 +440,10 @@ async def _main():
     await t_pair_flow()
     await t_lock()
     await t_ui_veto()
+    await t_g8_order()
+    await t_g9_edits()
+    await t_help()
+    await t_setup_token()
 
 asyncio.run(_main())
 print()

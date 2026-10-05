@@ -129,6 +129,16 @@ class GatewayState:
             return
         merged = self._empty()
         merged.update({k: v for k, v in data.items() if k in merged})
+        # 2026-10-05 (live finding): the bridge persists runtime settings
+        # beyond the base schema (tg_chat, mode, tools, verbose,
+        # run_overrides, pending_setup). Filtering to schema keys here
+        # SILENTLY WIPED all phone settings on every gateway restart —
+        # /mode, /setModel overrides and the [TG] chat mapping vanished,
+        # and stop()'s chat-abort fallback fired with an empty chat_id.
+        for _k in ("tg_chat", "mode", "tools", "verbose",
+                   "run_overrides", "pending_setup"):
+            if _k in data:
+                merged[_k] = data[_k]
         if not isinstance(merged["seen_update_ids"], list):
             merged["seen_update_ids"] = []
         self.data = merged

@@ -333,6 +333,8 @@ echo   Installation finished!
 echo.
 echo   Start:        start_hivemind.bat
 echo   UI:           http://localhost:%HM_PORT%
+echo   Optional:     Telegram gateway - start_gateway.bat setup
+echo                 (docs\gateway_setup.md, off by default)
 echo.
 echo   IMPORTANT: Before the first run, set a workspace
 echo   in the UI (field "Workspace") - there is no default.

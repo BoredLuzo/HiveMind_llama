@@ -225,6 +225,16 @@ async def approval_decide(run_id: str, req: Request):
         _d_cur = get_decision_id(run_id)
         if _d_cur and _d_sent and _d_sent != _d_cur:
             return JSONResponse({"routed": "stale", "run_id": run_id})
+        # G2 (full audit 2026-10-05): remember WHICH decision resolved this
+        # pause. The gateway relays cards with decision_id+tool, so a second
+        # surface (UI click, then phone tap within the mirror tick) arriving
+        # with the same id is detected as a duplicate below instead of being
+        # stored as a pre-decision that would silently approve the NEXT
+        # gated call.
+        from tools import runner as _tr_mem
+        if len(_tr_mem._approval_resolved_ids) > 128:
+            _tr_mem._approval_resolved_ids.clear()
+        _tr_mem._approval_resolved_ids[str(run_id)] = _d_sent
         set_user_answer(run_id, answer)
         return {"routed": "pause", "run_id": run_id}
     from tools import runner as _tr
@@ -233,8 +243,18 @@ async def approval_decide(run_id: str, req: Request):
     # it as a pre-decision would silently approve the NEXT gated call.
     if _tr._approval_expired.pop(str(run_id), None):
         return {"routed": "expired", "run_id": run_id}
+    # G2 (full audit 2026-10-05): duplicate of an already-resolved card —
+    # the pause route above stored this decision_id when it resolved. Drop
+    # instead of pre-storing (same reasoning as the expired route).
+    _prev_resolved = _tr._approval_resolved_ids.pop(str(run_id), None)
+    if _d_sent and _prev_resolved and _d_sent == _prev_resolved:
+        return {"routed": "duplicate", "run_id": run_id}
     _ans, _, _note = answer.partition("|")
-    _tr._approval_pre_decisions[str(run_id)] = {"answer": _ans.strip(), "note": _note.strip()}
+    # G2: store WHICH tool this decision was made for, so the gate's
+    # tool-match guard can drop a late decision that answers a DIFFERENT
+    # (newer) card. Empty = unknown (legacy payloads) → compatible.
+    _tool = str(body.get("tool", "") or "")
+    _tr._approval_pre_decisions[str(run_id)] = {"answer": _ans.strip(), "note": _note.strip(), "tool": _tool}
     _tr._pending_approvals.pop(str(run_id), None)
     return {"routed": "preview", "run_id": run_id}
 

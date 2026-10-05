@@ -250,6 +250,15 @@ class Gateway:
             TOKEN_ENV_VAR, "")])
         self.hive = HiveClient(cfg.hive_base_url)
         self.bridge = RunBridge(self.hive, state, cfg, self)
+        # Set by the startup health probe: True only when the engine's
+        # /health carries gateway_overrides=True, i.e. the engine lifts
+        # duo_action_approval_enabled (and the other /stream overrides)
+        # from the run body. False means VERSION SKEW (new gateway, old
+        # engine): the body key would be silently ignored there and the
+        # forced approval gate would be dead — /status says so, the owner
+        # must update the engine or switch the global toggle on.
+        self.engine_gate_support = True
+        self.engine_version = "?"
 
     # -- outbound (always via send()) ------------------------------------
 
@@ -281,8 +290,8 @@ class Gateway:
                 # non-text update (photo/document/voice/sticker): rejected
                 # with a note until WP5 (brief: SECURITY/Inputs)
                 await self.reply(p.chat_id,
-                                 "Nur Text in diesem Build (Fotos/Steering "
-                                 "kommen mit WP5).",
+                                 "Text only in this build (photos and "
+                                 "steering arrive with WP5).",
                                  reply_to_message_id=p.message_id)
             return
         name, arg = cmd
@@ -290,13 +299,11 @@ class Gateway:
             await self.cmd_pair(p, arg)
         elif name == "start":
             await self.reply(p.chat_id,
-                             "HiveMind-Gateway aktiv. Einfach Text senden "
-                             "= Lauf starten. /help für Befehle.",
+                             "HiveMind gateway active. Send any text "
+                             "to start a run. /help for commands.",
                              reply_to_message_id=p.message_id)
         elif name == "help":
-            lines = [f"/{n} — {d}" for n, d in
-                     gw_commands.COMMAND_WHITELIST.items()]
-            await self.reply(p.chat_id, "Befehle:\n" + "\n".join(lines),
+            await self.reply(p.chat_id, gw_commands.HELP_TEXT,
                              reply_to_message_id=p.message_id)
         elif name == "new":
             await self._owner_bridge_call(p, self.bridge.new_chat())
@@ -342,20 +349,17 @@ class Gateway:
         try:
             note = await coro
         except (HiveUnreachable, HTTPError, OSError) as exc:
-            note = f"🔌 HiveMind nicht erreichbar: {exc}"
+            note = f"🔌 HiveMind unreachable: {exc}"
         await self.reply(p.chat_id, note,
                          reply_to_message_id=p.message_id)
 
     async def start_owner_run(self, p: gw_auth.ParsedUpdate) -> None:
-        """A plain owner text message = a run — unless a /setModel flow
-        is pending, in which case the message is the numeric answer."""
+        """A plain owner text message = a run — unless a mirrored engine
+        run consumes it (approval answer / steering, checked FIRST: audit
+        G8 — an open approval card must never be eaten by a pending
+        /setModel flow) or a /setModel flow is pending (numeric answer)."""
         q = p.text.strip()
         if not q:
-            return
-        setup_note = await self.bridge.consume_setup(q)
-        if setup_note is not None:
-            await self.reply(p.chat_id, setup_note,
-                             reply_to_message_id=p.message_id)
             return
         # P10 takeover: while a mirrored engine run is active, phone
         # texts belong to that run (approval answers / steering), they
@@ -363,6 +367,11 @@ class Gateway:
         if self.bridge.mirror_intercept(q):
             note = await self.bridge.mirror_send(q)
             await self.reply(p.chat_id, note,
+                             reply_to_message_id=p.message_id)
+            return
+        setup_note = await self.bridge.consume_setup(q)
+        if setup_note is not None:
+            await self.reply(p.chat_id, setup_note,
                              reply_to_message_id=p.message_id)
             return
         if len(q) > self.cfg.max_text_chars:
@@ -453,8 +462,8 @@ async def recover_orphan_run(gw: Gateway) -> None:
         try:
             await gw.reply(
                 gw.owner_id,
-                f"⚠️ Beim Neustart lief noch Run {rid}. /stop bricht ihn "
-                "ab — sonst läuft er detached weiter und hält VRAM.")
+                f"⚠️ Run {rid} was still active when the gateway "
+                "restarted. /stop aborts it — otherwise it keeps running detached and holds VRAM.")
         except TelegramApiError as exc:
             log.error("[RECOVER] notice failed: %s", exc)
 
@@ -476,13 +485,21 @@ async def process_update(gw: Gateway, raw: dict) -> None:
         if not gw.limiter.allow(str(p.from_id)):
             log.warning("[RATE] owner hit the rate limit (drop)")
             await gw.reply(p.chat_id,
-                           "⏳ Rate-Limit erreicht — kurz warten.",
+                           "⏳ Rate limit reached — wait a moment.",
                            reply_to_message_id=p.message_id)
             return
         if cmd:
             await gw.handle_owner_update(p)
         elif p.kind == "callback_query":
             log.info("[DROP] owner callback (approvals arrive with WP4)")
+        elif p.kind == "edited_message":
+            # audit G9: an edit of a recent text arrives as a NEW update
+            # (fresh update_id — dedupe passes) with the ORIGINAL date, so
+            # an edit inside the 60 s window would start a second run for
+            # text that already ran. Edits never re-run; commands in edits
+            # still work (handled above).
+            log.info("[DROP] edited_message %s (edits never re-run)",
+                     p.update_id)
         else:
             await gw.start_owner_run(p)
         return
@@ -567,6 +584,33 @@ async def run() -> int:
     state = GatewayState()
     api = TelegramApi(token)
     gw = Gateway(api, cfg, state)
+    # 2026-10-05: the startup filter only carries the ENV token — a token
+    # from the Credential Manager would never be in the literal scrub
+    # list. Feed the RESOLVED token to the same filter (its docstring
+    # promised exactly this).
+    gw._redaction.add_secret(token)
+
+    # audit F3 + version-skew detection: probe the engine once. Not fatal
+    # (runs report engine problems readably), but the console should say
+    # upfront when nothing is listening — and WHEN THE ENGINE IS TOO OLD
+    # to honor the gateway's forced approval gate (gateway_overrides
+    # marker missing): in that state the body key would be ignored and
+    # phone runs would only be gated by the engine-global toggle.
+    try:
+        h = await gw.hive.health()
+        gw.engine_gate_support = bool(h.get("gateway_overrides"))
+        gw.engine_version = str(h.get("version") or "?")
+        log.info("[HIVE] engine reachable at %s (gateway_overrides=%s)",
+                 cfg.hive_base_url, gw.engine_gate_support)
+        if not gw.engine_gate_support:
+            log.warning(
+                "[HIVE] ENGINE TOO OLD for the forced approval gate — "
+                "duo_action_approval_enabled from the run body will be "
+                "IGNORED. Update the engine, or switch the toggle on "
+                "globally in the UI (/status shows this too).")
+    except (HiveUnreachable, OSError, ValueError) as exc:
+        log.warning("[HIVE] engine NOT reachable at startup (%s) — runs "
+                    "will report offline until it is up", exc)
 
     if kill_switch_active():
         log.warning("kill switch active (gateway.disabled or env) — exiting")
@@ -643,10 +687,14 @@ async def run() -> int:
                     try:
                         await process_update(gw, raw)
                     except (TelegramApiError, HiveUnreachable, HTTPError,
-                            OSError, ValueError, PolicyViolation) as exc:
+                            OSError, ValueError, PolicyViolation,
+                            TypeError, KeyError, AttributeError) as exc:
                         # ONE broken update must never kill the poll loop
                         # (realrun bug #4: a raw ConnectError did exactly
                         # that). Log loudly, keep polling.
+                        # audit G6: same containment breadth as the mirror
+                        # loop (N3) — N1 was exactly this crash class with
+                        # phone-controlled payload shapes.
                         log.error("update %s handling failed: %s: %s",
                                   uid, type(exc).__name__, exc)
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -658,7 +706,59 @@ async def run() -> int:
     return 0
 
 
+async def perform_token_setup(token: str, store=None) -> str:
+    """WP6 setup path: validate the token against Telegram (getMe) and
+    store it in the Windows Credential Manager. Returns the bot username
+    for the confirmation line. The token is never printed and never
+    written to a file. Injectable `store` for tests."""
+    token = (token or "").strip()
+    if not token:
+        raise StartupError("no token entered")
+    api = TelegramApi(token)
+    try:
+        me = await api.get_me()
+    finally:
+        await api.close()
+    username = str(me.get("username") or "?")
+    if store is None:
+        try:
+            import keyring
+        except ImportError:
+            raise StartupError(
+                "keyring not installed — install it into the SAME "
+                "interpreter that runs the gateway:  python -m pip "
+                "install keyring   (project-venv installs, which ship "
+                "without pip:  uv pip install --python "
+                ".venv\\Scripts\\python.exe keyring)") from None
+        store = keyring.set_password
+    store("hivemind_gateway", "bot_token", token)
+    return username
+
+
+def _setup_token_cli() -> int:
+    import getpass
+    print("Telegram bot token setup — validates the token and stores it "
+          "in the Windows Credential Manager (hivemind_gateway / "
+          "bot_token). Nothing is written to disk, history or logs.")
+    tok = getpass.getpass("Bot token (input hidden): ")
+    try:
+        username = asyncio.run(perform_token_setup(tok))
+    except TelegramApiError as exc:
+        print(f"setup failed: the token was rejected by Telegram ({exc})",
+              file=sys.stderr)
+        return 2
+    except StartupError as exc:
+        print(f"setup failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"OK — token validated and stored. Bot: @{username}")
+    print("Start the gateway with start_gateway.bat (double-click) or:")
+    print("  python -m hivemind_gateway.main")
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "setup-token":
+        return _setup_token_cli()
     try:
         return asyncio.run(run())
     except StartupError as exc:

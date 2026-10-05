@@ -1,6 +1,10 @@
 # gateway.toml.example — copy to gateway.toml (live dir) and edit.
 # gateway.toml itself must NEVER enter the repo, a release zip or a backup
 # (leak check + update.bat protect list cover it).
+# Alternate home (audit G10): the gateway also finds this file in
+#   %LOCALAPPDATA%\HiveMindGateway\gateway.toml
+# — outside every workspace, update tree and backup; a config next to the
+# gateway keeps precedence.
 #
 # SECRETS: the bot token comes from the environment variable
 #   HIVEMIND_TG_TOKEN

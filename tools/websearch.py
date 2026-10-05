@@ -267,13 +267,31 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
     return result
 
 
+def _guard_ip_literal(ip_str: str) -> str | None:
+    """IP-literal half of the fetch guard, reusable for RESOLVED addresses
+    (audit G3, 2026-10-05). None = allowed, str = block reason."""
+    import ipaddress as _ipaddr
+    try:
+        _ipo = _ipaddr.ip_address(ip_str)
+    except ValueError:
+        return None  # not an IP literal; nothing to judge here
+    if isinstance(_ipo, _ipaddr.IPv6Address) and _ipo.ipv4_mapped:
+        _ipo = _ipo.ipv4_mapped
+    _cgn = _ipaddr.ip_network("100.64.0.0/10")
+    if _ipo.version == 4 and _ipo in _cgn:
+        return "private/loopback IPs are not fetchable"
+    if (_ipo.is_private or _ipo.is_loopback or _ipo.is_link_local
+            or _ipo.is_reserved or _ipo.is_multicast):
+        return "private/loopback IPs are not fetchable"
+    return None
+
+
 def _guard_fetch_url(url: str) -> str | None:
 
 
     if not url.startswith(("http://", "https://")):
         return f"invalid URL — must start with http:// or https://: {url}"
     from urllib.parse import urlparse as _urlparse
-    import ipaddress as _ipaddr
     try:
         _host = (_urlparse(url).hostname or "").lower()
     except Exception:
@@ -282,18 +300,62 @@ def _guard_fetch_url(url: str) -> str | None:
         return f"invalid URL — no hostname: {url}"
     if _host == "localhost" or _host.endswith(".local") or _host.endswith(".internal"):
         return "loopback/local hostnames are not fetchable"
-    try:
-        _ipo = _ipaddr.ip_address(_host)
-        if isinstance(_ipo, _ipaddr.IPv6Address) and _ipo.ipv4_mapped:
-            _ipo = _ipo.ipv4_mapped
-        _cgn = _ipaddr.ip_network("100.64.0.0/10")
-        if _ipo.version == 4 and _ipo in _cgn:
-            return "private/loopback IPs are not fetchable"
-        if (_ipo.is_private or _ipo.is_loopback or _ipo.is_link_local
-                or _ipo.is_reserved or _ipo.is_multicast):
-            return "private/loopback IPs are not fetchable"
-    except ValueError:
-        pass  # normaler DNS-Hostname
+    return _guard_ip_literal(_host)
+
+
+def _guard_fetch_port(url: str) -> str | None:
+    """G3 (audit 2026-10-05): only standard web ports. Without this, a
+    fetched URL can probe loopback services (the engine on :8001, SearXNG
+    on :8888, anything else local) by hostname."""
+    from urllib.parse import urlparse as _urlparse
+    _port = _urlparse(url).port
+    if _port is not None and _port not in (80, 443):
+        return (f"non-standard port {_port} is not fetchable "
+                "(web policy: 80/443 only)")
+    return None
+
+
+async def _guard_fetch_resolved(host: str) -> str | None:
+    """G3 (audit 2026-10-05): resolve `host` and judge EVERY resolved
+    address with the same rules as IP literals. A public name that answers
+    with loopback/LAN IPs (wildcard DNS, rebinding) must not become a
+    fetch target — the pre-resolution URL guard cannot see this."""
+    import socket as _socket
+
+    def _resolve():
+        try:
+            return _socket.getaddrinfo(host, None)
+        except OSError:
+            return []  # unresolvable: the request fails on its own
+
+    if hasattr(asyncio, "to_thread"):
+        infos = await asyncio.to_thread(_resolve)
+    else:  # pragma: no cover - pre-3.9 fallback
+        infos = _resolve()
+    for _info in infos:
+        _addr = str(_info[4][0])
+        # strip IPv6 zone index ("fe80::1%eth0") and brackets before parsing
+        _err = _guard_ip_literal(_addr.split("%", 1)[0].strip("[]"))
+        if _err:
+            return _err
+    return None
+
+
+async def _guard_fetch_target(url: str) -> str | None:
+    """Full guard for a fetch TARGET: URL checks + port allowlist +
+    resolved-IP checks. Used for the initial web_fetch URL and for every
+    redirect hop (the hop loop re-runs this, so a redirect to a rebinding
+    name is judged on its resolved address too)."""
+    _err = _guard_fetch_url(url)
+    if _err:
+        return _err
+    _err = _guard_fetch_port(url)
+    if _err:
+        return _err
+    from urllib.parse import urlparse as _urlparse
+    _host = (_urlparse(url).hostname or "").lower()
+    if _host:
+        return await _guard_fetch_resolved(_host)
     return None
 
 
@@ -301,7 +363,7 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
     if not _HAS_HTTPX:
         return "[web_fetch: httpx not installed]"
 
-    _gerr0 = _guard_fetch_url(url)
+    _gerr0 = await _guard_fetch_target(url)
     if _gerr0:
         return f"[web_fetch blocked] {_gerr0}"
 
@@ -312,7 +374,7 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
             _hop_url = url
             resp = None
             for _hop in range(6):
-                _gerr = _guard_fetch_url(_hop_url)
+                _gerr = await _guard_fetch_target(_hop_url)
                 if _gerr:
                     return (f"[web_fetch blocked at redirect hop {_hop + 1} - "
                             f"{_hop_url}] {_gerr}")

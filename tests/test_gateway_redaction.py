@@ -96,6 +96,17 @@ gh.flush()
 grep_hits = [ln for ln in big.getvalue().splitlines() if TOKEN in ln]
 check("grep over all captured log lines is empty", grep_hits == [])
 
+
+# 2026-10-05: a MANGLED token (double paste into the hidden setup prompt)
+# yields multi-segment bot URLs - EVERY segment must be redacted, not
+# just the first (live leak reproduced from restart_gateway.log).
+_mangled = TOKEN + ":" + TOKEN  # bot<id>:<sec>:<id>:<sec>
+_url = f"https://api.telegram.org/bot{_mangled}/getUpdates"
+_s3 = scrub_text(_url, [])
+check("mangled multi-segment token fully redacted",
+      TOKEN.split(':', 1)[1] not in _s3 and _mangled not in _s3
+      and "***REDACTED***" in _s3, _s3[:80])
+
 print()
 print(f"passed={passed} failed={failed}")
 sys.exit(0 if failed == 0 else 1)

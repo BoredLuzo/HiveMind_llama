@@ -85,7 +85,14 @@ def load_gateway_config(path: str | Path) -> GatewayConfig:
 
 
 def resolve_config_path(start: str | Path | None = None) -> Path | None:
-    """Env var wins, then gateway.toml next to `start` (the live dir)."""
+    """Env var wins, then gateway.toml next to `start` (the live dir),
+    then gateway.toml in the state home.
+
+    audit G10: the state home (%LOCALAPPDATA%\\HiveMindGateway) is the one
+    directory that is outside every workspace, update tree and prune
+    manifest — an alternate home for the config for installs that do not
+    want a token-adjacent file inside the code tree. Existing installs
+    (config next to the gateway) keep precedence."""
     import os
     env = os.environ.get(CONFIG_ENV_VAR, "").strip()
     if env:
@@ -93,5 +100,8 @@ def resolve_config_path(start: str | Path | None = None) -> Path | None:
         return p if p.is_file() else None
     if start is not None:
         p = Path(start) / DEFAULT_CONFIG_NAME
-        return p if p.is_file() else None
-    return None
+        if p.is_file():
+            return p
+    from .state import state_home
+    p = state_home() / DEFAULT_CONFIG_NAME
+    return p if p.is_file() else None

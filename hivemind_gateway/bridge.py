@@ -30,30 +30,39 @@ from .telegram_api import TelegramApiError
 
 STOP_REASON_TEXT = {
     "model_load_failed":
-        "❌ Modell konnte nicht geladen werden (VRAM blockiert? "
-        "Am PC andere Modell-Läufe stoppen und erneut senden).",
+        "❌ Model could not be loaded (VRAM blocked? "
+        "Stop other model runs on the PC and send again).",
     "vram_preflight_block":
-        "❌ VRAM-Block: Es läuft gerade ein anderer Modell-Lauf am PC. "
-        "Diesen beenden und erneut senden.",
-    "timeout": "⏱ Lauf wurde wegen Timeout beendet.",
-    "hard_stop": "⏹ Lauf wurde hart abgebrochen.",
-    "graceful_stop": "⏹ Lauf wurde ordentlich beendet.",
-    "aborted": "⏹ Lauf wurde abgebrochen.",
-    "loop_detected": "⏹ Lauf abgebrochen (Wiederholungs-Schleife erkannt).",
-    "wedge_escalated": "⏹ Lauf abgebrochen (feststeckender Edit, "
-                       "Reparatur fehlgeschlagen).",
-    "halted": "⏹ Lauf angehalten.",
-    "max_tool_rounds": "⏹ Lauf am Rundenlimit angehalten (Teil-Ergebnis "
-                       "unten, falls vorhanden).",
+        "❌ VRAM block: another model run is active on the PC. "
+        "End it and send again.",
+    "timeout": "⏱ Run ended due to timeout.",
+    "hard_stop": "⏹ Run was hard-aborted.",
+    "graceful_stop": "⏹ Run was stopped gracefully.",
+    "aborted": "⏹ Run was aborted.",
+    "loop_detected": "⏹ Run aborted (repetition loop detected).",
+    "wedge_escalated": "⏹ Run aborted (wedged edit, "
+                       "repair failed).",
+    "halted": "⏹ Run halted.",
+    "max_tool_rounds": "⏹ Run stopped at the round limit (partial "
+                       "result below, if any).",
 }
 FINAL_CHUNK_LIMIT = 3
 STALE_JOURNAL_S = 180.0
 
 # Run modes accepted via /mode (the /stream BODY field — the browser
 # UI's own mode in settings stays untouched). Friendly aliases map to
-# the engine's names (index.html mode buttons).
-MODE_CHOICES = ("auto", "simple", "pipeline", "automap")
+# the engine's names (index.html mode buttons). "agentic" is a phone-side
+# COMPOSITE: engine mode "auto" + duo_agentic_mode body flag (the engine
+# reads that key straight from the /stream body).
+MODE_CHOICES = ("auto", "agentic", "simple", "pipeline", "automap")
 MODE_ALIASES = {"chat": "simple", "direct": "simple"}
+_MODE_DESCRIPTIONS = {
+    "auto": "duo agent with full tools (files/shell/git) — use for tasks",
+    "agentic": "duo + agentic loop (thorough, slower)",
+    "simple": "quick chat: talking + web only, NO file tools",
+    "pipeline": "pipeline run",
+    "automap": "auto-mapping run",
+}
 
 
 def _now() -> float:
@@ -116,8 +125,8 @@ class RunBridge:
     def _busy_note(self) -> str:
         run = self.state.data.get("active_run") or {}
         rid = run.get("run_id") or "?"
-        return (f"⏳ Es läuft bereits ein Lauf ({rid}). /stop bricht ihn "
-                "ab; Warteschlange gibt es bewusst keine.")
+        return (f"⏳ A run is already active ({rid}). /stop aborts "
+                "it; there is deliberately no queue.")
 
     # -- status line -------------------------------------------------------
 
@@ -143,8 +152,8 @@ class RunBridge:
             return await self._start_text_run_inner(q)
         except (HiveUnreachable, HTTPError, OSError) as exc:
             self._clear_run()
-            return await self._fail(f"🔌 HiveMind nicht erreichbar "
-                                    f"(Offline?): {exc}")
+            return await self._fail(f"🔌 HiveMind unreachable "
+                                    f"(offline?): {exc}")
 
     async def _fail(self, text: str) -> str:
         await self.ms.send_message(text)
@@ -177,7 +186,21 @@ class RunBridge:
         }
         self.state.save()
 
-        status = await self.ms.send_message("⏳ Lauf gestartet …")
+        # info-rich start note (2026-10-05 UX round): mode/model/workspace
+        # up front, so the owner sees WHAT will run before tokens arrive
+        _ws = (self._tg_chat() or {}).get("workspace") or "engine default"
+        _ws_short = (_ws.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                     if _ws != "engine default" else _ws)
+        _sel_label = (f"{self.state.data.get('mode')} (phone override)"
+                      if self.state.data.get("mode")
+                      else "engine default")
+        status = await self.ms.send_message(
+            "⏳ Run started\n\n"
+            f"mode: {_sel_label}\n"
+            "model: "
+            + ((self.state.data.get("run_overrides") or {}).get("model")
+               or "engine default") + "\n"
+            f"workspace: {_ws_short}")
         status_id = status.get("message_id")
 
         parts: list[str] = []
@@ -190,9 +213,14 @@ class RunBridge:
 
         try:
             ov = self._stream_overrides()
+            sel_mode = self.state.data.get("mode") or ""
+            stream_mode = sel_mode
+            if sel_mode == "agentic":
+                # composite: engine mode "auto" + the agentic body flag
+                stream_mode = "auto"
+                ov["duo_agentic_mode"] = True
             async for ev in self.hive.stream(q, chat_id,
-                                             mode=self.state.data.get("mode")
-                                             or "",
+                                             mode=stream_mode,
                                              overrides=ov):
                 etype = ev.get("type")
                 if etype == "run_id" and ev.get("run_id"):
@@ -202,17 +230,20 @@ class RunBridge:
                 elif etype == "token":
                     parts.append(str(ev.get("content") or ""))
                 elif etype == "error":
-                    error_text = str(ev.get("content") or "unbekannt")
+                    error_text = str(ev.get("content") or "unknown")
                 elif etype == "approval_request":
                     run_id = str(ev.get("run_id") or "")
                     if run_id:
-                        resp = await self.hive.decide_approval(run_id, "3")
+                        resp = await self.hive.decide_approval(
+                            run_id, "3",
+                            decision_id=str(ev.get("decision_id") or ""),
+                            tool=str(ev.get("tool") or ""))
                         if getattr(resp, "status_code", 200) < 300:
                             denied += 1
                             await self._edit_status(
                                 status_id,
-                                "🔒 Freigabe-Anfrage automatisch abgelehnt "
-                                "(WP2: Freigaben vom Handy kommen mit WP4).")
+                                "🔒 Approval request auto-denied "
+                                "(WP2: approvals from the phone arrive with WP4).")
                 elif etype == "status":
                     last_status = str(ev.get("content") or "")[:120]
                 elif etype == "done":
@@ -224,9 +255,27 @@ class RunBridge:
                         last_edited_text = last_status
                         last_edit = _now()
         finally:
-            final_note = await self._finish(
-                chat_id, q, parts, stop_reason, error_text, denied,
-                status_id)
+            # audit G5: _finish talks to Telegram AND the engine — a failure
+            # there (TelegramApiError from delivery, HTTPStatusError from
+            # the transcript write) must never skip the run cleanup,
+            # otherwise active_run stays latched and every further phone
+            # text gets the busy note until the gateway restarts.
+            try:
+                final_note = await self._finish(
+                    chat_id, q, parts, stop_reason, error_text, denied,
+                    status_id)
+            except (TelegramApiError, HTTPError, HiveUnreachable, OSError,
+                    ValueError, TypeError, KeyError, AttributeError) as exc:
+                self._log_note(
+                    f"finish failed ({type(exc).__name__}: {exc}) — run "
+                    "cleared anyway")
+                try:
+                    await self._fail("❌ Result could not be delivered — "
+                                     "run was cleaned up.")
+                except (TelegramApiError, HTTPError, HiveUnreachable,
+                        OSError) as exc2:
+                    self._log_note(f"failure note also failed: {exc2}")
+                final_note = "❌ finish failed (run cleared)"
             self._clear_run()
         return final_note
 
@@ -236,17 +285,17 @@ class RunBridge:
         answer = render.filter_secrets(answer)
         notes = []
         if denied:
-            notes.append(f"🔒 {denied} Freigabe(n) automatisch abgelehnt.")
+            notes.append(f"🔒 {denied} approval(s) auto-denied.")
         if stop_reason == "error":
-            text = f"❌ Lauf-Fehler: {error_text or 'unbekannt'}"
+            text = f"❌ Run error: {error_text or 'unknown'}"
         elif stop_reason and stop_reason != "completed":
             base = STOP_REASON_TEXT.get(
-                stop_reason, f"⏹ Lauf beendet ({stop_reason}).")
+                stop_reason, f"⏹ Run finished ({stop_reason}).")
             text = base + (f"\n\n{answer}" if answer else "")
         elif answer:
             text = answer
         else:
-            text = "⏹ Lauf fertig, aber ohne Textausgabe."
+            text = "⏹ Run finished without any text output."
         for n in notes:
             text += "\n" + n
 
@@ -281,9 +330,9 @@ class RunBridge:
         if age > STALE_JOURNAL_S:
             return None
         rid = str(j.get("run_id") or "?")
-        return (f"⏳ Es läuft bereits ein Lauf ({rid}) — vermutlich vom "
-                "Browser/UI gestartet. Warteschlange gibt es bewusst "
-                "keine.")
+        return (f"⏳ A run is already active ({rid}) — probably started "
+                "from the browser/UI. There is deliberately no "
+                "queue.")
 
     # -- commands -----------------------------------------------------------
 
@@ -291,25 +340,36 @@ class RunBridge:
         run = self.state.data.get("active_run") or {}
         rid = run.get("run_id")
         if not rid:
-            return "Kein Lauf aktiv."
+            return "No run active."
         try:
             resp = await self.hive.abort_run(rid)
             code = getattr(resp, "status_code", 500)
             if code == 404:
-                mapping = self._tg_chat() or {}
-                await self.hive.abort_chat(mapping.get("hive_chat_id", ""))
-                return (f"⏹ Run {rid} war dem Server unbekannt — "
-                        "Chat-Abort als Fallback gesendet.")
-            return f"⏹ Abbruch gesendet für {rid}."
+                # 2026-10-05 (live): 404 = the engine no longer knows this
+                # run (it already ended). Clear the latch EITHER WAY — a
+                # failed fallback must not leave active_run latched, or
+                # every further text gets the busy note until restart.
+                # The run's own chat_id is the reliable fallback target
+                # (tg_chat can be absent after a state wipe).
+                self._clear_run()
+                chat_id = ((self._tg_chat() or {}).get("hive_chat_id")
+                           or run.get("chat_id") or "")
+                if chat_id:
+                    await self.hive.abort_chat(chat_id)
+                    return (f"⏹ Run {rid} was unknown to the server — "
+                            "chat abort sent as fallback; run cleared.")
+                return (f"⏹ Run {rid} was unknown to the server — it "
+                        "had already ended; run cleared.")
+            return f"⏹ Abort sent for {rid}."
         except HTTPError as exc:
             # deep audit N6: raise_for_status in the fallback must not
             # break the visible-failure invariant of /stop
-            return (f"❌ /stop fehlgeschlagen ({exc}) — Lauf {rid} läuft "
-                    "evtl. weiter, bitte am PC prüfen!")
+            return (f"❌ /stop failed ({exc}) — run {rid} may still "
+                    "be running, please check the PC!")
         except (HiveUnreachable, OSError) as exc:
             # /stop must fail VISIBLY: an orphaned run holds VRAM
-            return f"❌ /stop fehlgeschlagen ({exc}) — Lauf {rid} läuft " \
-                   "evtl. weiter, bitte am PC prüfen!"
+            return f"❌ /stop failed ({exc}) — run {rid} may still " \
+                   "be running, please check the PC!"
 
     async def new_chat(self) -> str:
         if self.state.data.get("active_run"):
@@ -322,55 +382,85 @@ class RunBridge:
                    "created_at": created.get("chat", {}).get("created_at", "")}
         self.state.data["tg_chat"] = mapping
         self.state.save()
-        return f"🆕 Neuer HiveMind-Chat: {title} ({mapping['hive_chat_id']})."
+        return f"🆕 New HiveMind chat: {title} ({mapping['hive_chat_id']})."
 
     def status_text(self) -> str:
         run = self.state.data.get("active_run") or {}
         mapping = self._tg_chat() or {}
-        mode = self.state.data.get("mode") or "folgt Engine-Einstellungen"
-        lines = [
-            "📡 Gateway-Status",
-            f"HiveMind-Chat: {mapping.get('hive_chat_id', '— (noch keiner)')}",
-            f"Aktiver Lauf: {run.get('run_id') or 'keiner'}",
-            f"Modus (Telegram): {mode}",
-            f"Verbose: {'an' if self.verbose else 'aus'}",
-        ]
-        return "\n".join(lines)
+        mode = self.state.data.get("mode") or "engine default"
+        ov = self.state.data.get("run_overrides") or {}
+        tools = self.state.data.get("tools")
+        tools_txt = ("on" if tools is True else "off" if tools is False
+                     else "engine default")
+        # audit G1 + version-skew detection: state the invariant plainly —
+        # the gateway forces the approval gate for every phone run, but
+        # ONLY if the engine lifts the body key (gateway_overrides marker).
+        if getattr(self.ms, "engine_gate_support", True):
+            gate_line = ("approvals: shell/write/git auto-denied on phone "
+                         "runs (gate enforced)")
+        else:
+            gate_line = ("⚠️ gate enforcement INACTIVE — engine too old; "
+                         "switch on duo_action_approval_enabled in the UI")
+        return (
+            "📡 Gateway status\n"
+            "\n"
+            f"chat: {mapping.get('hive_chat_id', '— none yet')}\n"
+            f"workspace: {mapping.get('workspace') or 'engine default'}\n"
+            f"mode: {mode}  (phone runs only)\n"
+            f"model: {ov.get('model') or 'engine default'}\n"
+            f"ctx: planner {ov.get('planner_ctx') or '—'} · coder "
+            f"{ov.get('coder_ctx') or '—'}\n"
+            f"tools (simple runs): {tools_txt}\n"
+            f"verbose: {'on' if self.verbose else 'off'}\n"
+            "\n"
+            f"{gate_line}\n"
+            f"engine: {getattr(self.ms, 'engine_version', '?')}\n"
+            "\n"
+            f"active run: {run.get('run_id') or 'none'}")
 
     def toggle_verbose(self) -> str:
         self.verbose = not self.verbose
         self.state.data["verbose"] = self.verbose
         self.state.save()
-        return f"Verbose: {'an' if self.verbose else 'aus'}"
+        return f"Verbose: {'on' if self.verbose else 'off'}"
 
     # -- /mode: telegram-side run mode (stream BODY field, never settings)
 
     def mode_text(self, arg: str) -> str:
-        """/mode            -> current mode
+        """/mode            -> current mode + per-mode explanations
         /mode <name>      -> set for TELEGRAM runs only
         /mode off         -> follow the engine settings again
         Aliases: chat|direct -> simple."""
         arg = (arg or "").strip().lower()
+        listing = "\n".join(
+            f"  • {name} — {_MODE_DESCRIPTIONS[name]}"
+            for name in MODE_CHOICES)
         if not arg:
             current = self.state.data.get("mode") or ""
-            if current:
-                return (f"Modus (Telegram): {current} — der Modus der "
-                        "Browser-UI bleibt unberührt.")
-            return ("Modus (Telegram): folgt den Engine-Einstellungen. "
-                    "Setzen mit /mode auto|chat|pipeline|automap, "
-                    "zurück mit /mode off.")
+            head = (f"Mode (Telegram): {current}" if current
+                    else "Mode (Telegram): engine default")
+            return (head + "\n\n" + listing +
+                    "\n\nSet with /mode <name>; /mode off follows the "
+                    "engine settings again. Phone-only — the browser UI "
+                    "keeps its own mode.")
         if arg in ("off", "aus", "default"):
             self.state.data["mode"] = ""
             self.state.save()
-            return "Modus (Telegram): folgt wieder den Engine-Einstellungen."
+            return ("Mode (Telegram): engine default\n\n"
+                    "Runs now follow the engine settings again.")
         name = MODE_ALIASES.get(arg, arg)
         if name not in MODE_CHOICES:
-            return ("❌ Unbekannter Modus. Erlaubt: auto, chat (direct), "
-                    "pipeline, automap — oder /mode off.")
+            return ("❌ Unknown mode.\n\n" + listing +
+                    "\n\nSet with /mode <name> or /mode off.")
         self.state.data["mode"] = name
         self.state.save()
-        return (f"Modus (Telegram): {name}. Gilt nur für Handy-Läufe — "
-                "die Browser-UI läuft weiter in ihrem eigenen Modus.")
+        why = ("File-capable — use this for tasks."
+               if name != "simple" else
+               "NO file tools here — talk + web only!")
+        return (f"Mode (Telegram): {name}\n\n"
+                f"  • {_MODE_DESCRIPTIONS[name]}\n"
+                f"{why}\n\n"
+                "Phone-only — the browser UI keeps its own mode.")
 
     # -- /models, /setModel, /cancel: model + ctx/preset selection -------
 
@@ -400,6 +490,12 @@ class RunBridge:
         tools = self.state.data.get("tools")
         if tools is not None:
             out["direct_tools_enabled"] = bool(tools)
+        # audit G1: FORCE the engine's approval gate for every phone run —
+        # this restores the documented "gated tools are auto-denied from
+        # the phone" invariant even when the engine-global toggle
+        # (duo_action_approval_enabled, default false) is off. The body
+        # can only raise the gate to ON, never lower it.
+        out["duo_action_approval_enabled"] = True
         return out
 
     def _pending(self) -> dict | None:
@@ -416,12 +512,12 @@ class RunBridge:
         try:
             data = await self.hive.get_models()
         except (HiveUnreachable, OSError) as exc:
-            return f"🔌 HiveMind nicht erreichbar: {exc}"
+            return f"🔌 HiveMind unreachable: {exc}"
         models = data.get("models") or []
         profs = {p.get("name"): p for p in (data.get("profiles") or [])}
         if not models:
-            return "Keine Modelle gefunden (Engine-Antwort leer)."
-        lines = ["Verfügbare Modelle:"]
+            return "No models found (empty engine response)."
+        lines = ["Available models:"]
         for i, m in enumerate(models, 1):
             p = profs.get(m, {})
             flags = [f for f, on in (("thinking", p.get("thinking")),
@@ -429,23 +525,23 @@ class RunBridge:
                                      ("tools", p.get("tool_call"))) if on]
             lines.append(f"{i}. {m}"
                          + (f" [{'+'.join(flags)}]" if flags else ""))
-        lines.append("Wählen mit /setModel <Nr>")
+        lines.append("Choose with /setModel <number>")
         return "\n".join(lines)
 
     async def set_model(self, arg: str) -> str:
         try:
             idx = int((arg or "").strip())
         except ValueError:
-            return ("Benutzung: /setModel <Nr> — die Nummern liefert "
-                    "/models.")
+            return ("Usage: /setModel <number> — /models lists the "
+                    "numbers.")
         try:
             data = await self.hive.get_models()
         except (HiveUnreachable, OSError) as exc:
-            return f"🔌 HiveMind nicht erreichbar: {exc}"
+            return f"🔌 HiveMind unreachable: {exc}"
         models = data.get("models") or []
         if not (1 <= idx <= len(models)):
-            return (f"❌ Nr {idx} außerhalb 1–{len(models)}. Liste: "
-                    "/models")
+            return (f"❌ {idx} out of range 1–{len(models)}. "
+                    "List: /models")
         name = models[idx - 1]
         prof = next((p for p in (data.get("profiles") or [])
                      if p.get("name") == name), {})
@@ -475,29 +571,29 @@ class RunBridge:
             "model": name, "agentic": agentic, "ts": time.time()}
         self.state.save()
 
-        head = f"Modell {idx}: {name}"
+        head = f"Model {idx}: {name}"
         if not can_think:
-            head += " (kann kein Thinking — ctx_thinking auf 0)"
+            head += " (cannot think — ctx_thinking will be 0)"
         if agentic:
-            fmt = ("Antworte mit EINER Zeile, getrennt mit ', ':\n"
+            fmt = ("Reply with ONE line, separated by ', ':\n"
                    "preset, planner_ctx_thinking, planner_ctx_model, "
                    "coder_ctx_thinking, coder_ctx_model\n"
-                   "(agentic erkannt — Planner und Coder je beide Werte)")
+                   "(agentic detected — planner and coder, both values)")
         else:
-            fmt = ("Antworte mit EINER Zeile, getrennt mit ', ':\n"
+            fmt = ("Reply with ONE line, separated by ', ':\n"
                    "preset, ctx_thinking, ctx_model")
         lines = [
             head,
             fmt,
-            "preset: 0 = keiner,"
+            "preset: 0 = none,"
             + (f" 1..{len(preset_names)} = " + ", ".join(
                 f"{i+1}={n}" for i, n in enumerate(preset_names[:8]))
                if preset_names else " keine Presets vorhanden"),
-            "Achtung: ein Preset gilt GLOBAL (auch für die Browser-UI).",
-            "ctx_thinking 0 = kein Thinking/Planner.",
-            "Beispiel: 0, 8192, 16384",
-            "Gilt für Duo/Agentic-Läufe; Direct-Overrides kommen mit WP3 "
-            "(P9). /cancel bricht ab.",
+            "Note: a preset applies GLOBALLY (also to the browser UI).",
+            "ctx_thinking 0 = no thinking/planner.",
+            "Example: 0, 8192, 16384",
+            "Applies to duo/agentic runs; direct overrides arrive with "
+            "WP3 (P9). /cancel aborts.",
         ]
         return "\n".join(lines)
 
@@ -512,29 +608,29 @@ class RunBridge:
         # deep audit N5: "--5"/"²" passed the old check but crashed int()
         if not all(x.isascii() and x.isdigit() for x in parts) \
                 or len(parts) != expected:
-            return (f"Erwartet {expected} Zahlen, getrennt mit ', ' — "
-                    "z. B. 0, 8192, 16384. /cancel bricht ab.")
+            return (f"Expected {expected} numbers separated by ', ' — "
+                    "e.g. 0, 8192, 16384. /cancel aborts.")
         vals = [int(x) for x in parts]
 
         # preset (position 0) — global, warned in the question already
-        preset_note = "kein Preset"
+        preset_note = "no preset"
         if vals[0] > 0:
             try:
                 raw = await self.hive.get_presets()
             except (HiveUnreachable, OSError) as exc:
-                return f"🔌 Presets nicht abrufbar: {exc}"
+                return f"🔌 Presets unavailable: {exc}"
             names = sorted(raw.keys()) if isinstance(raw, dict) else \
                 [x if isinstance(x, str) else str(x.get("name", "?"))
                  for x in (raw or [])]
             if vals[0] > len(names):
-                return (f"❌ Preset {vals[0]} außerhalb 1–{len(names)}. "
-                        "Erneut senden.")
+                return (f"❌ Preset {vals[0]} out of range 1–{len(names)}. "
+                        "Send again.")
             resp = await self.hive.load_preset(names[vals[0] - 1])
             if getattr(resp, "status_code", 500) >= 300:
-                return (f"❌ Preset '{names[vals[0] - 1]}' konnte nicht "
-                        "geladen werden — nichts geändert, erneut "
-                        "senden.")
-            preset_note = f"Preset '{names[vals[0] - 1]}' geladen (global)"
+                return (f"❌ Preset '{names[vals[0] - 1]}' could not be "
+                        "loaded — nothing changed, "
+                        "send again.")
+            preset_note = f"Preset '{names[vals[0] - 1]}' loaded (global)"
 
         ov = self.state.data.setdefault("run_overrides", {})
         ov["model"] = p["model"]
@@ -545,38 +641,38 @@ class RunBridge:
             ov["planner_ctx"] = p_ctx if (p_think or p_ctx) else 0
             ov["coder_ctx"] = c_ctx
             detail = (f"planner: thinking_ctx={p_think or 0}, "
-                      f"ctx={p_ctx or 'Standard'}; coder: "
-                      f"thinking_ctx={c_think or 0} (Anmerkung), "
-                      f"ctx={c_ctx or 'Standard'}")
+                      f"ctx={p_ctx or 'standard'}; coder: "
+                      f"thinking_ctx={c_think or 0} (note), "
+                      f"ctx={c_ctx or 'standard'}")
             if not p_think and not p_ctx:
                 ov["planner_ctx"] = 0
-                detail = (f"planner aus (0/0); coder: ctx="
+                detail = (f"planner off (0/0); coder: ctx="
                           f"{c_ctx or 'Standard'}")
         else:
             think, ctx = vals[1:]
             ov["planner_ctx"] = ctx if think else 0
             ov["coder_ctx"] = ctx
             detail = (f"ctx_thinking={think or 0}, "
-                      f"ctx_model={ctx or 'Standard'}")
+                      f"ctx_model={ctx or 'standard'}")
         self.state.data["pending_setup"] = None
         self.state.save()
-        return (f"✅ Gespeichert. Modell: {p['model']} — {preset_note}; "
-                f"{detail}. Gilt für kommende Handy-Läufe (Duo/Agentic; "
-                "Direct-Overrides: P9). /setModel erneut = ändern.")
+        return (f"✅ Saved. Model: {p['model']} — {preset_note}; "
+                f"{detail}. Applies to upcoming phone runs (duo/agentic; "
+                "direct overrides: P9). Send /setModel again to change.")
 
     def cancel_setup(self) -> str:
         if self.state.data.get("pending_setup"):
             self.state.data["pending_setup"] = None
             self.state.save()
-            return "Setup abgebrochen."
-        return "Nichts abzubrechen."
+            return "Setup aborted."
+        return "Nothing to abort."
 
     def reset_overrides(self) -> str:
         self.state.data["run_overrides"] = {}
         self.state.data["pending_setup"] = None
         self.state.save()
-        return ("Modell/CTX-Overrides gelöscht — nächste Läufe nutzen "
-                "wieder die Engine-Einstellungen.")
+        return ("Model/CTX overrides cleared — upcoming runs use "
+                "the engine settings again.")
 
     # -- P10: run takeover — mirror a UI/engine run to the phone ---------
 
@@ -585,8 +681,17 @@ class RunBridge:
             self._mirror_state = {"run_id": None, "after": 0,
                                   "status_msg_id": None,
                                   "last_status": "", "approval_sig": None,
+                                  "approval_decision_id": "",
+                                  "approval_tool": "",
                                   "last_tick": 0.0}
         return self._mirror_state
+
+    def _mirror_reset(self, m: dict) -> None:
+        """End a mirror session — every reset site must clear the approval
+        card metadata too (G2: decision_id/tool of the relayed card)."""
+        m.update({"run_id": None, "after": 0, "status_msg_id": None,
+                  "last_status": "", "approval_sig": None,
+                  "approval_decision_id": "", "approval_tool": ""})
 
     def _own_run_id(self) -> str | None:
         run = self.state.data.get("active_run") or {}
@@ -631,38 +736,48 @@ class RunBridge:
             return  # engine unreachable: nothing to mirror, keep quiet
         if not self._mirror_enabled(s):
             if m["run_id"]:
-                m.update({"run_id": None, "after": 0,
-                          "status_msg_id": None, "last_status": "",
-                          "approval_sig": None})
+                self._mirror_reset(m)
                 await self.ms.send_message(
-                    "📴 Mirror beendet (Einstellung im UI aus).")
+                    "📴 Mirror ended (setting off in the UI).")
             return
-        j = await self.hive.journal()
+        # audit G7: once a session is active, fetch THAT run's journal —
+        # the unscoped endpoint answers with the most recently ACTIVE run,
+        # which can be the wrong one when a second run starts.
+        j = await self.hive.journal(m["run_id"]) if m["run_id"] \
+            else await self.hive.journal()
         if not isinstance(j, dict) or not j.get("active") \
                 or j.get("done") or j.get("aborted"):
             # nothing active: end a session, report how it ended
             if m["run_id"]:
                 rid, frames = m["run_id"], j.get("frames") \
                     if isinstance(j, dict) else None
-                reason = self._parse_done(frames) or "beendet"
-                m.update({"run_id": None, "after": 0,
-                          "status_msg_id": None, "last_status": "",
-                          "approval_sig": None})
+                reason = self._parse_done(frames) or "finished"
+                self._mirror_reset(m)
                 await self.ms.send_message(
-                    f"🏁 Mirror-Lauf {rid} beendet ({reason}).")
+                    f"🏁 Mirror run {rid} finished ({reason}).")
             return
         rid = str(j.get("run_id") or "")
+        # deep audit N7 (confirmed as G7): while OUR run sits between
+        # POST /stream and its run_id frame, active_run exists with
+        # run_id None — the unscoped journal is then necessarily our own
+        # run. Skip the takeover decision this tick instead of announcing
+        # the gateway's own run as a takeover.
+        _own = self.state.data.get("active_run")
+        if not m["run_id"] and isinstance(_own, dict) \
+                and not _own.get("run_id"):
+            return
         if rid == str(self._own_run_id() or ""):
             return  # our own run reports natively; do not double-mirror
         fresh = m["run_id"] != rid
         if fresh:
             m.update({"run_id": rid, "after": int(j.get("n") or 0),
                       "status_msg_id": None, "last_status": "",
-                      "approval_sig": None})
+                      "approval_sig": None, "approval_decision_id": "",
+                      "approval_tool": ""})
             await self.ms.send_message(
-                f"📢 Engine-Lauf übernommen (Mirror): {rid}\n"
-                "Texte von dir werden eingereiht (Steering), Freigaben "
-                "kommst du hier. /stop bricht ihn ab.")
+                f"📢 Engine run taken over (mirror): {rid}\n"
+                "Your texts are queued (steering), approvals come "
+                "to you here. /stop aborts it.")
             m["after"] = int(j.get("n") or 0)
             return  # next tick streams the delta
 
@@ -694,12 +809,11 @@ class RunBridge:
             m["last_tick"] = _now()
         if done_reason:
             text = STOP_REASON_TEXT.get(
-                done_reason, f"🏁 Mirror-Lauf beendet ({done_reason}).")
+                done_reason, f"🏁 Mirror run finished ({done_reason}).")
             if done_reason == "completed":
-                text = "🏁 Mirror-Lauf abgeschlossen."
+                text = "🏁 Mirror run completed."
             await self.ms.send_message(text)
-            m.update({"run_id": None, "after": 0, "status_msg_id": None,
-                      "last_status": "", "approval_sig": None})
+            self._mirror_reset(m)
             return
 
         # approval relay (the point of the takeover)
@@ -709,6 +823,11 @@ class RunBridge:
             sig = f"{body.get('decision_id') or ''}|{body.get('preview') or ''}"
             if sig != m["approval_sig"]:
                 m["approval_sig"] = sig
+                # G2: remember which card is on the phone, so the phone
+                # decision echoes decision_id + tool and the engine can
+                # drop duplicates / tool mismatches.
+                m["approval_decision_id"] = str(body.get("decision_id") or "")
+                m["approval_tool"] = str(body.get("tool") or "")
                 # deep audit N2: the pending preview is truncated to 300
                 # chars by the engine; the full command lives in the
                 # journal's tool_call frames — dig it out so the owner
@@ -716,15 +835,16 @@ class RunBridge:
                 full = self._full_command_from_frames(
                     j.get("frames"), str(body.get("tool") or ""))
                 preview = full or (str(body.get("preview") or "") + "\n"
-                                   "(Vorschau vom Server gekürzt — voller "
-                                   "Befehl im UI)")
+                                   "(server preview truncated — full "
+                                   "command in the UI)")
                 if len(preview) > 2500:
                     preview = preview[:2500] + " …"
                 await self.ms.send_message(
-                    f"🛡 Freigabe nötig (UI-Lauf {rid}):\n"
-                    f"Tool: {body.get('tool')}\n{preview}\n"
-                    "Antworte 1 = einmal erlauben, 3 = ablehnen. "
-                    "('2'/immer gibt es vom Handy nicht.)")
+                    f"🛡 Approval needed (UI run {rid})\n\n"
+                    f"tool: {body.get('tool')}\n\n"
+                    f"{preview}\n\n"
+                    "Reply 1 = allow once, 3 = deny.\n"
+                    "('2'/always does not exist from the phone.)")
         elif m["approval_sig"] and not body.get("active"):
             m["approval_sig"] = None  # card resolved elsewhere (UI)
 
@@ -767,25 +887,40 @@ class RunBridge:
         if m.get("approval_sig"):
             t = (text or "").strip()
             if t == "2":
-                return ("❌ '2' (immer erlauben) gibt es vom Handy "
-                        "bewusst nicht — 1 oder 3.")
+                return ("❌ '2' (always allow) deliberately does not "
+                        "exist from the phone — 1 or 3.")
             if t in ("1", "3"):
-                resp = await self.hive.decide_approval(rid, t)
+                resp = await self.hive.decide_approval(
+                    rid, t,
+                    decision_id=m.get("approval_decision_id") or "",
+                    tool=m.get("approval_tool") or "")
                 code = getattr(resp, "status_code", 500)
                 m["approval_sig"] = None
                 if code >= 300:
-                    return (f"❌ Entscheidung nicht angenommen "
-                            f"(HTTP {code}) — ggf. im UI beantwortet.")
-                return ("✅ erlaubt (einmalig) — übermittelt."
-                        if t == "1" else "🛡 abgelehnt — übermittelt.")
-            return ("🛡 Es wartet eine Freigabe — antworte 1 oder 3 "
-                    "(oder beantworte sie im UI).")
+                    return (f"❌ Decision not accepted "
+                            f"(HTTP {code}) — maybe answered in the UI.")
+                try:
+                    routed = str((resp.json() or {}).get("routed") or "")
+                except (ValueError, TypeError, AttributeError):
+                    routed = ""
+                if routed == "duplicate":
+                    # G2: the UI already answered this card — be honest
+                    # instead of confirming a decision that was dropped.
+                    return ("ℹ️ This card was already answered (UI) — "
+                            "nothing changed.")
+                return ("✅ allowed (once) — delivered."
+                        if t == "1" else "🛡 denied — delivered.")
+            return ("🛡 An approval is waiting — reply 1 or 3 "
+                    "(or answer it in the UI).")
+        # audit G8: steering bypassed the max_text_chars cap (the intercept
+        # runs before the run-start length check) — cap at the same limit.
+        text = (text or "").strip()[: self.cfg.max_text_chars]
         resp = await self.hive.steer(rid, text)
         if getattr(resp, "status_code", 500) == 404:
-            return (f"❌ Lauf {rid} ist nicht mehr aktiv — Mirror "
-                    "endet beim nächsten Tick.")
-        return ("🧭 Eingereiht — läuft an der nächsten Grenze ein "
-                "(je nach Modus; Pipeline nimmt kein Steering an).")
+            return (f"❌ Run {rid} is no longer active — the mirror "
+                    "ends on the next tick.")
+        return ("🧭 Queued — injected at the next boundary "
+                "(mode dependent; pipeline accepts no steering).")
 
     async def workspace_text(self, arg: str) -> str:
         """/workspace <path> — set the workspace of the [TG] chat so
@@ -793,9 +928,24 @@ class RunBridge:
         path = (arg or "").strip().strip('"').strip("'")
         if not path:
             current = (self._tg_chat() or {}).get("workspace", "")
-            label = current or "— nicht gesetzt (Engine-Standard)"
+            label = current or "— not set (engine default)"
             return (f"Workspace (Telegram): {label}.\n"
-                    "Setzen mit /workspace <pfad>.")
+                    "Set with /workspace <path>.")
+        # audit G11 / deep-audit N9: the chat workspace IS the tool
+        # confinement root for phone runs — a typo must not silently
+        # re-point the agent. The gateway runs on the same machine, so a
+        # local existence check is authoritative here (POST /settings does
+        # the same for its workspace key). Drive roots are refused: with
+        # G1's gate force they would be safe-ish, but "agent rooted at C:\"
+        # is never what a typo meant.
+        from pathlib import Path as _Path
+        _p = _Path(path)
+        if not _p.exists():
+            return (f"❌ Path does not exist: {path}\n"
+                    "/workspace needs an existing folder.")
+        if _p.parent == _p:
+            return (f"❌ Drive root ({path}) is deliberately not "
+                    "allowed — please name a concrete folder.")
         mapping = await self._ensure_chat()
         chat_id = mapping["hive_chat_id"]
         r = await self.hive.get_chat(chat_id)
@@ -813,10 +963,10 @@ class RunBridge:
             mapping["workspace"] = path
             self.state.data["tg_chat"] = mapping
             self.state.save()
-            return (f"📁 Workspace (Telegram) gesetzt: {path}\n"
-                    "Handy-Läufe arbeiten jetzt dort — der Agent kann "
-                    "aus diesem Ordner lesen. /workspace ohne Argument "
-                    "zeigt den aktuellen Pfad.")
+            return (f"📁 Workspace (Telegram) set: {path}\n"
+                    "Phone runs now work there — the agent can read "
+                    "from this folder. /workspace without an argument "
+                    "shows the current path.")
         raise HiveUnreachable("workspace write conflict (409 twice)")
 
     def tools_text(self, arg: str) -> str:
@@ -824,11 +974,11 @@ class RunBridge:
         run body; needs the engine lift to take effect)."""
         a = (arg or "").strip().lower()
         cur = self.state.data.get("tools")
-        cur_txt = ("an" if cur is True else "aus" if cur is False
-                   else "Engine-Standard")
+        cur_txt = ("on" if cur is True else "off" if cur is False
+                   else "engine default")
         if not a:
-            return (f"Zugriffsstufe (Direct, Telegram): {cur_txt}.\n"
-                    "Setzen mit /tools on oder /tools off.")
+            return (f"Access level (direct, Telegram): {cur_txt}.\n"
+                    "Set with /tools on or /tools off.")
         if a in ("on", "an", "1"):
             self.state.data["tools"] = True
         elif a in ("off", "aus", "0"):
@@ -837,9 +987,9 @@ class RunBridge:
             return "❌ /tools on oder /tools off."
         self.state.save()
         new = self.state.data["tools"]
-        return (f"Zugriffsstufe (Direct, Telegram): "
-                f"{'an' if new else 'aus'} — gilt pro Lauf "
-                "(Engine-Lift erforderlich, siehe P10/T).")
+        return (f"Access level (direct, Telegram): "
+                f"{'on' if new else 'off'} — per run "
+                "(engine lift required, see P10/T).")
 
     async def stop_mirror(self) -> str | None:
         """Abort the mirrored engine run, if any. Returns the note or
@@ -852,11 +1002,10 @@ class RunBridge:
             resp = await self.hive.abort_run(rid)
             code = getattr(resp, "status_code", 500)
         except (HiveUnreachable, OSError) as exc:
-            return (f"❌ /stop für Mirror-Lauf {rid} fehlgeschlagen "
-                    f"({exc}) — läuft evtl. weiter, am PC prüfen!")
-        m.update({"run_id": None, "after": 0, "status_msg_id": None,
-                  "last_status": "", "approval_sig": None})
+            return (f"❌ /stop for mirror run {rid} failed "
+                    f"({exc}) — may still be running, check the PC!")
+        self._mirror_reset(m)
         if code == 404:
-            return (f"⏹ Mirror-Lauf {rid} war dem Server unbekannt — "
-                    "Mirror beendet.")
-        return f"⏹ Abbruch gesendet für Mirror-Lauf {rid}."
+            return (f"⏹ Mirror run {rid} was unknown to the server — "
+                    "mirror ended.")
+        return f"⏹ Abort sent for mirror run {rid}."

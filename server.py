@@ -1241,6 +1241,12 @@ async def stream(req: Request):
             except (TypeError, ValueError):
                 _ci = 0
             if _ci > 0:
+                # G13 (full audit 2026-10-05): intake sanity cap — coder ctx
+                # has no engine-side clamp downstream (num_ctx_config honors
+                # overrides verbatim), so a fat-fingered body value could
+                # wedge shared VRAM. 262144 covers every current model;
+                # the planner cap (131072, duo_runner) still applies on top.
+                _ci = min(_ci, 262144)
                 _model_overrides[_ctx_key] = _ci
 
     # TG-GATEWAY (P10/T, 2026-10-05): per-run direct tools access level —
@@ -1249,6 +1255,15 @@ async def stream(req: Request):
     if "direct_tools_enabled" in body:
         _model_overrides["direct_tools_enabled"] = _as_bool(
             body.get("direct_tools_enabled"))
+
+    # G1 (full audit 2026-10-05): the Telegram gateway sends
+    # duo_action_approval_enabled=true with its runs so the documented
+    # "gated tools are auto-denied from the phone" invariant holds even
+    # when the global toggle is off. Body can only force the gate ON —
+    # a falsy/absent value never lowers it below the global setting.
+    if "duo_action_approval_enabled" in body and _as_bool(
+            body.get("duo_action_approval_enabled")):
+        _model_overrides["duo_action_approval_enabled"] = True
 
     _duo_tool_rounds_raw = body.get("duo_tool_rounds", None)
     if _duo_tool_rounds_raw is None:
@@ -1783,6 +1798,13 @@ async def health():
         # must never hide - an install silently running with omitted
         # projectors would poison every following vision test.
         "test_omit_mmproj": os.environ.get("HIVEMIND_TEST_OMIT_MMPROJ", "") or None,
+        # Gateway capability marker (2026-10-05): True = this engine lifts
+        # duo_action_approval_enabled (plus the model/ctx/direct_tools
+        # overrides) from the /stream body into the run settings. The
+        # Telegram gateway probes this at startup — a missing field means
+        # an OLD engine that would silently ignore those keys, so the
+        # gateway warns and /status downgrades the gate guarantee.
+        "gateway_overrides": True,
     }
 
 # -- Router Registration --

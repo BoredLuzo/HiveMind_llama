@@ -154,6 +154,13 @@ async def run_stream(
     if model_overrides:
         _run_settings.update(model_overrides)
     logger.warning("[RUN-TRACE] settings-kopie ok (overrides=%s)", sorted(model_overrides or {}))
+    # G1 (full audit 2026-10-05): a per-run approval-gate force rides the
+    # merged run settings (gateway phone runs). Publish it to the tool gate
+    # via its ContextVar — propagates into the tool loop and create_task
+    # children like _current_run_id does.
+    if _run_settings.get("duo_action_approval_enabled"):
+        from tools.runner import _approval_gate_run_override as _gate_cv
+        _gate_cv.set(True)
 
     # Per-run token estimate accumulator - incremented by emit() on content events
     _run_token_estimate: int = 0

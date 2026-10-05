@@ -194,8 +194,8 @@ yourself. Setup guide with a security walkthrough:
 
 Not included in 1.3 (deliberate): photos and mid-run steering from the
 phone, voice messages, group chats, queues, token streaming, skills,
-cron. The bot's phone-side texts are currently German; a language
-switch is planned.
+cron. The bot's phone-side texts are English (2026-10-05 owner
+decision; they were German during the first builds).
 
 ## [1.2.3] - 2026-09-26
 

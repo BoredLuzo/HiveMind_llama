@@ -38,9 +38,9 @@ class HiveClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _get(self, path: str) -> httpx.Response:
+    async def _get(self, path: str, params: dict | None = None) -> httpx.Response:
         try:
-            return await self._client.get(path)
+            return await self._client.get(path, params=params)
         except httpx.HTTPError as exc:
             raise HiveUnreachable(str(exc)) from None
 
@@ -62,10 +62,14 @@ class HiveClient:
             raise HiveUnreachable(f"/health HTTP {r.status_code}")
         return r.json()
 
-    async def journal(self) -> dict:
+    async def journal(self, run_id: str = "") -> dict:
         """GET /run/journal — {active, run_id, done, aborted, ts, frames}.
-        Busiest heuristic the server offers until the WP3 409 guard."""
-        r = await self._get("/run/journal")
+        Busiest heuristic the server offers until the WP3 409 guard.
+        With run_id: THAT run's journal (audit G7: always scope when the
+        id is known — the unscoped endpoint answers with the most recently
+        ACTIVE run, which can be the wrong one when two runs are alive)."""
+        params = {"run_id": run_id} if run_id else None
+        r = await self._get("/run/journal", params=params)
         if r.status_code != 200:
             raise HiveUnreachable(f"/run/journal HTTP {r.status_code}")
         return r.json()
@@ -116,10 +120,19 @@ class HiveClient:
     async def abort_run(self, run_id: str) -> httpx.Response:
         return await self._post_json(f"/abort/{run_id}", {})
 
-    async def decide_approval(self, run_id: str, answer: str) -> httpx.Response:
-        """answer "1"=once, "3"=deny. The gateway NEVER sends "2"."""
-        return await self._post_json(
-            f"/approval/decide/{run_id}", {"answer": answer})
+    async def decide_approval(self, run_id: str, answer: str,
+                              decision_id: str = "",
+                              tool: str = "") -> httpx.Response:
+        """answer "1"=once, "3"=deny. The gateway NEVER sends "2".
+        decision_id + tool echo the relayed card (audit G2): the engine
+        uses them to drop a duplicate decision for an already-resolved
+        card and to refuse a stale decision aimed at a DIFFERENT tool."""
+        body: dict = {"answer": answer}
+        if decision_id:
+            body["decision_id"] = decision_id
+        if tool:
+            body["tool"] = tool
+        return await self._post_json(f"/approval/decide/{run_id}", body)
 
     async def pending_approval(self, run_id: str) -> httpx.Response:
         return await self._get(f"/approval/pending/{run_id}")
