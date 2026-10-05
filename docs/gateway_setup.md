@@ -92,7 +92,9 @@ token; stop that other instance and start again.
 - You get status updates while it works, then the result. Anything
   longer than three messages arrives as a `.txt` file.
 - Commands: `/new` (fresh chat) · `/stop` (abort) · `/status` ·
-  `/verbose` (show more detail) · `/help`.
+  `/verbose` (show more detail) · `/mode` (run mode for phone runs
+  only — auto/chat/pipeline/automap, `/mode off` follows the engine
+  settings again) · `/help`.
 - One run at a time. If something is already running — including from
   the browser — the bot tells you so instead of queueing.
 - Bot conversations land as their own `[TG]` chats inside HiveMind and

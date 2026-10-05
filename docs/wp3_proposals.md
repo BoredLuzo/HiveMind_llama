@@ -109,6 +109,30 @@ message.
 Acceptance test: fake engine streams heartbeats past the limit →
 abort called, cleanup done, phone informed.
 
+## P7 — Per-source mode (PARTIALLY SHIPPED)
+
+Phone-side run mode is live: `/mode auto|chat|pipeline|automap` sends
+the mode in the /stream BODY only — the browser UI's own mode in
+settings stays untouched, respecting the "gateway never touches
+POST /settings" taboo. `/mode off` follows the engine settings again.
+What could still be added later: a `mode` default in gateway.toml and
+per-run confirmation of the mode in the status line.
+
+## P8 — Start/stop the gateway from the UI (supervisor)
+
+Status: the UI can already KILL the link (settings veto, implemented
+and tested). STARTING from the UI is different: the engine would have
+to spawn the gateway process, and the token must then come from the
+Windows Credential Manager (the gateway already reads it) instead of a
+hand-started shell. Proposal: a small supervisor in the engine —
+toggle ON spawns `python -m hivemind_gateway.main` as a child (token
+from Credential Manager), toggle OFF vetoes as today plus terminates
+the child; the UI shows the real state (running / stopped / vetoed).
+Still opt-in: the toggle defaults to OFF, so nothing starts without a
+deliberate click. Onboarding gains one step: store the token in the
+Credential Manager (installer or documented PowerShell snippet).
+Needs owner go — engine-side change.
+
 ## P6 — Smaller hardenings
 
 - `run_tests` into `_APPROVAL_TOOLS` now, before anyone wires a real

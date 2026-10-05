@@ -119,12 +119,19 @@ class HiveClient:
     async def pending_approval(self, run_id: str) -> httpx.Response:
         return await self._get(f"/approval/pending/{run_id}")
 
-    async def stream(self, q: str, chat_id: str, images: list | None = None):
+    async def stream(self, q: str, chat_id: str, images: list | None = None,
+                     mode: str = ""):
         """Yield parsed SSE data payloads of a run. No token streaming is
         rendered — the caller decides what becomes a status update.
-        Transport breaks (including mid-stream read errors) raise
-        HiveUnreachable instead of raw httpx exceptions."""
-        body = {"q": q, "images": images or [], "chat_id": chat_id}
+        `mode` travels in the REQUEST BODY only (never via POST /settings,
+        which is taboo for the gateway): a Telegram-side mode therefore
+        never touches what the browser UI runs. Transport breaks
+        (including mid-stream read errors) raise HiveUnreachable instead
+        of raw httpx exceptions."""
+        body: dict[str, Any] = {"q": q, "images": images or [],
+                                "chat_id": chat_id}
+        if mode:
+            body["mode"] = mode
         try:
             async with self._client.stream("POST", "/stream", json=body) as r:
                 r.raise_for_status()

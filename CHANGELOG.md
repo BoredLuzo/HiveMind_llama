@@ -174,7 +174,8 @@ yourself. Setup guide with a security walkthrough:
   status edits update one message instead of streaming, long results
   arrive as a .txt document.
 - Commands from the phone: /new, /stop (abort a running job), /status,
-  /verbose, /help. One run at a time — if the browser already runs
+  /verbose, /mode (phone-side run mode via the /stream body — the
+  browser UI keeps its own mode), /help. One run at a time — if the browser already runs
   something, the phone gets a busy note instead of a queue.
 - Failure is readable: model load blocked by VRAM, engine offline or a
   run error all produce a plain-language message instead of silence.

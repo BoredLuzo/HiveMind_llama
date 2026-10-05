@@ -15,6 +15,7 @@ COMMAND_WHITELIST = {
     "stop": "abort the running run",
     "status": "current run/status",
     "verbose": "toggle verbose output",
+    "mode": "show/set the phone-side run mode (auto|chat|pipeline|automap|off)",
     "lock": "lock the gateway until the PC unlocks it (WP6)",
     "help": "list commands",
 }

@@ -311,6 +311,9 @@ class Gateway:
         elif name == "verbose":
             await self.reply(p.chat_id, self.bridge.toggle_verbose(),
                              reply_to_message_id=p.message_id)
+        elif name == "mode":
+            await self.reply(p.chat_id, self.bridge.mode_text(arg),
+                             reply_to_message_id=p.message_id)
         elif name == "lock":
             await self.reply(p.chat_id,
                              "/lock kommt mit WP6 (Kill-Switch).",

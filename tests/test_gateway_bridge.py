@@ -57,6 +57,7 @@ class FakeHive:
                  offline=False):
         self.events = events or []
         self.chat = {"id": "chat01", "rev": 1, "messages": []}
+        self.stream_bodies = []
         self.puts = []          # (messages, base_rev)
         self.denies = []        # run_ids denied
         self.aborts = []
@@ -88,7 +89,9 @@ class FakeHive:
         self.chat["rev"] = base_rev + 1
         return FakeResponse(200, {"ok": True, "rev": self.chat["rev"]})
 
-    async def stream(self, q, chat_id, images=None):
+    async def stream(self, q, chat_id, images=None, mode=""):
+        self.stream_bodies.append({"q": q, "chat_id": chat_id,
+                                   "mode": mode})
         for ev in self.events:
             yield ev
 
@@ -238,7 +241,7 @@ async def t_errors():
     check("raw ConnectError cleared run", st4.data["active_run"] is None)
 
     class MidStreamBreakHive(FakeHive):
-        async def stream(self, q, chat_id, images=None):
+        async def stream(self, q, chat_id, images=None, mode=""):
             yield {"type": "run_id", "run_id": "r5"}
             raise httpx.ReadError("connection reset mid-stream")
 
@@ -292,6 +295,34 @@ async def t_secrets():
     check("secret filtered from output", "sk-abcdefghijklmnopqrstuvwx" not in note
           and all("sk-abcdefghijklmnopqrstuvwx" not in m for m in ms.messages))
 
+# ── 6c. /mode — telegram-side run mode (stream body, never settings) ───
+async def t_mode():
+    br, st, ms = _mk("gwbr_mode_", FakeHive(_run_events()))
+    # default: follow engine settings (no mode in the stream body)
+    await br.start_text_run("q1")
+    check("default sends NO mode field",
+          br.hive.stream_bodies[-1]["mode"] == "")
+    # set via alias
+    out = br.mode_text("chat")
+    check("alias chat -> simple", "simple" in out)
+    await br.start_text_run("q2")
+    check("set mode travels in stream BODY",
+          br.hive.stream_bodies[-1]["mode"] == "simple")
+    check("mode persisted", st.data["mode"] == "simple")
+    check("status shows mode", "simple" in br.status_text())
+    # invalid rejected, mode unchanged
+    out = br.mode_text("nuclear")
+    check("invalid mode rejected", "Unbekannter Modus" in out
+          and st.data["mode"] == "simple")
+    # off -> follow settings again
+    out = br.mode_text("off")
+    await br.start_text_run("q3")
+    check("off clears mode", "folgt wieder" in out
+          and br.hive.stream_bodies[-1]["mode"] == "")
+    # bare /mode = status only
+    out = br.mode_text("")
+    check("bare /mode shows status", "Modus (Telegram)" in out)
+
 # ── 7. /stop behavior ───────────────────────────────────────────────────
 async def t_stop():
     hive = FakeHive()
@@ -321,6 +352,7 @@ async def _main():
     await t_split_doc()
     await t_secrets()
     await t_secrets_doc_path()
+    await t_mode()
     await t_stop()
 
 asyncio.run(_main())

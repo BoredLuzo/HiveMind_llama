@@ -48,6 +48,12 @@ STOP_REASON_TEXT = {
 FINAL_CHUNK_LIMIT = 3
 STALE_JOURNAL_S = 180.0
 
+# Run modes accepted via /mode (the /stream BODY field — the browser
+# UI's own mode in settings stays untouched). Friendly aliases map to
+# the engine's names (index.html mode buttons).
+MODE_CHOICES = ("auto", "simple", "pipeline", "automap")
+MODE_ALIASES = {"chat": "simple", "direct": "simple"}
+
 
 def _now() -> float:
     return time.monotonic()
@@ -182,7 +188,9 @@ class RunBridge:
         denied = 0
 
         try:
-            async for ev in self.hive.stream(q, chat_id):
+            async for ev in self.hive.stream(q, chat_id,
+                                             mode=self.state.data.get("mode")
+                                             or ""):
                 etype = ev.get("type")
                 if etype == "run_id" and ev.get("run_id"):
                     self.state.data["active_run"]["run_id"] = \
@@ -311,10 +319,12 @@ class RunBridge:
     def status_text(self) -> str:
         run = self.state.data.get("active_run") or {}
         mapping = self._tg_chat() or {}
+        mode = self.state.data.get("mode") or "folgt Engine-Einstellungen"
         lines = [
             "📡 Gateway-Status",
             f"HiveMind-Chat: {mapping.get('hive_chat_id', '— (noch keiner)')}",
             f"Aktiver Lauf: {run.get('run_id') or 'keiner'}",
+            f"Modus (Telegram): {mode}",
             f"Verbose: {'an' if self.verbose else 'aus'}",
         ]
         return "\n".join(lines)
@@ -324,3 +334,32 @@ class RunBridge:
         self.state.data["verbose"] = self.verbose
         self.state.save()
         return f"Verbose: {'an' if self.verbose else 'aus'}"
+
+    # -- /mode: telegram-side run mode (stream BODY field, never settings)
+
+    def mode_text(self, arg: str) -> str:
+        """/mode            -> current mode
+        /mode <name>      -> set for TELEGRAM runs only
+        /mode off         -> follow the engine settings again
+        Aliases: chat|direct -> simple."""
+        arg = (arg or "").strip().lower()
+        if not arg:
+            current = self.state.data.get("mode") or ""
+            if current:
+                return (f"Modus (Telegram): {current} — der Modus der "
+                        "Browser-UI bleibt unberührt.")
+            return ("Modus (Telegram): folgt den Engine-Einstellungen. "
+                    "Setzen mit /mode auto|chat|pipeline|automap, "
+                    "zurück mit /mode off.")
+        if arg in ("off", "aus", "default"):
+            self.state.data["mode"] = ""
+            self.state.save()
+            return "Modus (Telegram): folgt wieder den Engine-Einstellungen."
+        name = MODE_ALIASES.get(arg, arg)
+        if name not in MODE_CHOICES:
+            return ("❌ Unbekannter Modus. Erlaubt: auto, chat (direct), "
+                    "pipeline, automap — oder /mode off.")
+        self.state.data["mode"] = name
+        self.state.save()
+        return (f"Modus (Telegram): {name}. Gilt nur für Handy-Läufe — "
+                "die Browser-UI läuft weiter in ihrem eigenen Modus.")
