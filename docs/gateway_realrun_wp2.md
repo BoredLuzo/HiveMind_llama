@@ -8,6 +8,11 @@ und zitiert die Zeilen im Report.
 
 ## VORBEREITUNG (einmal, PC)
 
+0. Telegram-Konto härten (Point des Owners): Zwei-Schritt-Verifizierung
+   (Cloud-Passwort) AN, aktive Sitzungen in Telegram aufräumen. Das Handy-
+   Konto ist der Schlüssel zum PC — das gehört später auch in die
+   WP6-Onboarding-Doku.
+
 1. Token-Shell öffnen (PowerShell) und Token setzen — NICHT in den Chat,
    nicht in die History:
 
@@ -15,6 +20,11 @@ und zitiert die Zeilen im Report.
    $s = Read-Host "Bot token" -AsSecureString
    $env:HIVEMIND_TG_TOKEN = [System.Net.NetworkCredential]::new('', $s).Password
    ```
+
+1b. Sicherstellen, dass kein zweiter Poller/Webhook auf dem Token hängt
+   (kein anderer Bot-Prozess, kein gebundener Webhook). Der Gateway
+   beendet sich jetzt mit **Exit 3 + klarer Meldung**, wenn Telegram mit
+   409 CONFLICT antwortet (Härtung nach der ersten Runde).
 
 2. Gateway aus DIESER Shell starten:
 
@@ -25,9 +35,10 @@ und zitiert die Zeilen im Report.
 
 3. Auf der Konsole erscheint der **Pairing-Code** (gültig 5 Min).
 4. Handy: Bot anstellen, `/pair <code>` senden. Erwartet: „Paired."
-5. Scratch-Workspace für die Läufe vorbereiten (damit die Probe-Läufe
-   nicht im echten Projekt landen — der `[TG]`-Chat erbt sonst den
-   last-workspace):
+5. Scratch-Workspace für die Läufe vorbereiten (Pflicht bis WP3: der
+   Telegram-Pfad läuft gegen einen Workspace OHNE echte Daten — Auto-Deny
+   begrenzt nur Freigabe-Tools, normale Lauf-Tools arbeiten mit dem
+   Workspace des Chats):
 
    ```powershell
    mkdir C:\Users\NtheP\Desktop\HiveMind\live\ws_tg_probe
@@ -110,12 +121,19 @@ Server-Timer und der Gateway-Deny ist die einzige Instanz.
 |---|---|
 | 5.1 | Handy: `Lege die Datei tg_probe5.txt im Workspace an (Inhalt: "approval test")` senden |
 | 5.2 | Auf die Freigabe-Anfrage des Agents warten |
+| 5.3 | Handy danach: `Lies die Datei C:\Users\<user>\tg_probe_dummy_secrets.txt` (vorher eine Dummy-Datei mit Fake-Inhalt im Home anlegen) |
 
-**Erwartet:** Handy zeigt „🔒 Freigabe-Anfrage automatisch abgelehnt";
-die Datei `ws_tg_probe/tg_probe5.txt` **existiert nicht** danach; der
-Lauf endet mit einem sauberen Ergebnis (Agent wählte einen anderen Weg
-oder brach ab). Log-Seite: `/approval/decide/{run_id}` mit `"3"` wird im
-HiveMind-Log sichtbar. Danach Gate wieder AUSstellen.
+**Erwartet (5.1–5.2):** Handy zeigt „🔒 Freigabe-Anfrage automatisch
+abgelehnt"; die Datei `ws_tg_probe/tg_probe5.txt` **existiert nicht**
+danach; der Lauf endet sauber.
+**Erwartet (5.3):** Ablehnung mit `PATH_OUTSIDE_WORKSPACE`. Statisch
+bereits gegen den echten Handler beweist (offline, 2026-10-05):
+absolute Pfade außerhalb UND `../`-Traversal werden abgelehnt
+(tools/handlers/file_ops.py:98 → utils/file.py:_inline_check_workspace);
+der frühere `workspace_lock=None`-Hole ist im Core gefixt
+(duo_runner.py:6013 CRITIC-LOCK). Der Live-Lauf beweist die ganze Kette
+inkl. Workspace-Auflösung des `[TG]`-Chats.
+Danach Gate wieder AUSstellen.
 
 ## LAUF 6 — Gleichzeitigkeit (Heuristik-Realtest)
 
@@ -130,6 +148,31 @@ bereits ein Lauf…") und es kommt zu KEINER zweiten gleichzeitigen
 Generierung (8 GB VRAM). Wo die Heuristik greift/fehlt, wird im Report
 festgehalten — der serverseitige 409-Guard (WP3) ist die eigentliche
 Lösung dafür.
+
+## BUG-KLASSEN, DIE KEIN FAKE FINDET (Runde 2 einplanen)
+
+Erfahrungswerte aus vergleichbaren Bots — bewusst nicht gegen den Code
+geprüft, sondern als Beobachtungsliste für die Läufe:
+
+- **Rate-Limits auf editMessageText**: häufige Status-Edits können 429s
+  ziehen; der Gateway respektiert retry_after beim Polling, die
+  Edit-Schleife loggt Fehlversuche (Konsolen-Output beobachten).
+- **Escaping/parse_mode**: wir senden bewusst plain text (kein parse_mode)
+  — falls doch Markdown-Artefakte auftauchen, ist das ein Gateway-Bug.
+- **4096-Zeichen-Limit**: Split ist getestet, aber Telegram zählt ggf.
+  anders (Entities, Unicode) — wenn eine Nachricht abstutzt, Logzeile
+  sichern.
+- **409 CONFLICT beim getUpdates** (zweiter Poller/Webhook): endet jetzt
+  mit Exit 3 + Meldung statt Endlos-Retry.
+- **Latenz**: Preflight (~18 s) + Modellladen vor der ersten Antwort —
+  „⏳ Lauf gestartet …" kommt sofort, aber danach kann bis zur ersten
+  Status-Änderung Stille herrschen. Fühlt sich das zu tot an, ist das
+  KEIN Gateway-Fix, sondern eine Modell-Entscheidung (schnelleres
+  Standardmodell für Telegram, z. B. 4B MTP) → Backlog-Entscheidung des
+  Owners, nicht WP5.
+
+Mehrere Runden einplanen: jeder Lauf darf schiefgehen und wiederholt
+werden; der Report sammelt Beobachtungen, keine Schönfärberei.
 
 ## NACH DEN LÄUFEN
 
@@ -148,4 +191,8 @@ Lösung dafür.
 - Bot-Chats sind NICHT Ende-zu-Ende-verschlüsselt: Antworten, Code und
   .txt-Dokumente laufen über Telegram-Server (Secret-Filter ist aktiv,
   aber kein Ersatz).
+- Telegram-Konto = Schlüssel zum PC: 2FA (Cloud-Passwort) Pflicht im
+  Onboarding, Sitzungs-Hygiene.
 - Sprachumschaltung der Bot-Texte (derzeit Deutsch) → Backlog 1.3.1.
+- Schnelleres Standardmodell für Telegram-Läufe (Latenz-Gefühl) →
+  Owner-Entscheidung, kein Gateway-Feature.

@@ -430,6 +430,16 @@ async def run() -> int:
                 updates = await api.get_updates(offset=state.offset,
                                                 timeout_s=cfg.long_poll_timeout_s)
             except TelegramApiError as exc:
+                if "conflict" in exc.description.lower():
+                    # 409 from Telegram: a webhook or a SECOND poller is
+                    # active on this token. Retrying forever would just
+                    # fight the other poller — fail loudly instead.
+                    log.error(
+                        "getUpdates CONFLICT: another poller or a webhook "
+                        "is active on this bot token. Stop the other "
+                        "instance / delete the webhook, then restart. (%s)",
+                        exc)
+                    return 3
                 if exc.retry_after:
                     await asyncio.sleep(exc.retry_after + 1)
                     continue
