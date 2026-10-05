@@ -11517,14 +11517,26 @@ function _updateDuoRoleStatus(elId, label, model) {
   }
 
   function _buildIndex() {
+    var idx = [];
+    var seen = {};
+    // DUO CTX SLIDERS (2026-10-05, user: 'ctx settings schwer zu finden'):
+    // the VRAM-block lever lives in wrappers hidden by submode - indexed
+    // explicitly (once, panel=agents), visible or not.
+    [['wrapper-ctx-agentic', 'Context Coder (Agentic)', 'duo coder agentic'],
+     ['wrapper-ctx-planner', 'Context Planner', 'duo planner'],
+     ['wrapper-ctx-normal', 'Context (Coder + Critic Dual)', 'duo dual'],
+     ['wrapper-ctx-critic', 'Context Critic', 'duo critic']].forEach(function(d) {
+      var w = document.getElementById(d[0]);
+      if (!w) return;
+      var lbl = w.querySelector('span');
+      _push('agents', d[1], lbl || w, 'Duo ctx', null, d[2] + ' ctx context vram');
+    });
     // NAMING ROUND (2026-10-05, user): generic row texts ("Active") get the
     // enclosing card/section title as prefix; duplicate labels are deduped;
     // dynamic agent cards (acard) are indexed WITH their setting fields so
     // "ctx" finds every agent's Context slider. Index is rebuilt on every
     // open - agent cards are rendered dynamically.
-    var idx = [];
-    var seen = {};
-    function push(panel, label, el, kind, act, kw) {
+    function _push(panel, label, el, kind, act, kw) {
       label = String(label || '').replace(/\s+/g, ' ').trim().slice(0, 90);
       if (label.length < 3) return;
       var key = (panel || '') + '|' + label.toLowerCase();
@@ -11543,50 +11555,64 @@ function _updateDuoRoleStatus(elId, label, model) {
     document.querySelectorAll('.panel').forEach(function(panel) {
       var pid = (panel.id || '').replace(/^p-/, '');
       if (!PANEL_LABELS[pid]) return;
+      var _vis = function(el) {
+        // generic scan: skip controls hidden by mode/submode UNLESS they are
+        // the allowlisted duo-ctx wrappers above. Hidden demo blocks (e.g.
+        // sequential/parallel without backend) must not surface.
+        var n = el;
+        while (n && n !== panel && n !== document.body) {
+          if (n.style && n.style.display === 'none') return false;
+          n = n.parentElement;
+        }
+        return !!(el.offsetParent || el.getClientRects().length) || true;
+      };
       panel.querySelectorAll('.sec').forEach(function(s) {
-        push(pid, (s.textContent || '').trim(), s, 'Section');
+        if (!_vis(s)) return;
+        _push(pid, (s.textContent || '').trim(), s, 'Section');
       });
       panel.querySelectorAll('.cfg-card').forEach(function(card) {
         var titleEl = card.querySelector('.cfg-card-title');
         var title = titleEl ? titleEl.textContent.replace(/\s*(BETA|BOOT|EXP)\s*$/, '').trim() : '';
-        if (title.length >= 3) push(pid, title, titleEl, 'Card');
+        if (title.length >= 3) _push(pid, title, titleEl, 'Card');
         card.querySelectorAll('.tgl-row .tgl-text').forEach(function(tx) {
           var txt = (tx.textContent || '').trim();
-          if (txt.length >= 3) push(pid, title ? title + ' — ' + txt : txt, tx, 'Toggle');
+          if (txt.length >= 3) _push(pid, title ? title + ' — ' + txt : txt, tx, 'Toggle');
         });
       });
       panel.querySelectorAll('.tgl-row .tgl-text, .cfl-label').forEach(function(tx) {
         if (tx.closest('.cfg-card')) return; // handled above with title prefix
+        if (!_vis(tx)) return;
         var txt = (tx.textContent || '').trim();
-        if (txt.length >= 3) push(pid, txt, tx, 'Toggle');
+        if (txt.length >= 3) _push(pid, txt, tx, 'Toggle');
       });
       panel.querySelectorAll('label input[type="checkbox"]').forEach(function(inp) {
         var row = inp.closest('label');
-        if (!row) return;
+        if (!row || !_vis(row)) return;
         var txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
-        if (txt.length >= 3) push(pid, txt.slice(0, 80), row, 'Checkbox');
+        if (txt.length >= 3) _push(pid, txt.slice(0, 80), row, 'Checkbox');
       });
       // dynamic agent cards with their setting fields (ctx/temp/tokens)
       panel.querySelectorAll('#agent-cards .acard').forEach(function(card) {
         var nameEl = card.querySelector('.acard-name');
         var nm = nameEl ? nameEl.textContent.trim() : '';
         if (!nm) return;
-        push(pid, 'Agent: ' + nm, card, 'Agent card', null, 'agent modell model');
+        _push(pid, 'Agent: ' + nm, card, 'Agent card', null, 'agent modell model');
         card.querySelectorAll('.fl').forEach(function(fl) {
           var lbl = (fl.textContent || '').trim().split('\n')[0].slice(0, 30);
           if (/context|temperature|output-budget|thinking|model/i.test(lbl))
-            push(pid, nm + ' — ' + lbl, fl, 'Agent setting', null,
+            _push(pid, nm + ' — ' + lbl, fl, 'Agent setting', null,
                  'agent ' + nm + ' ' + (lbl.toLowerCase().indexOf('context') >= 0 ? 'ctx kontext' : lbl.toLowerCase()));
         });
       });
       panel.querySelectorAll('button[title]').forEach(function(b) {
-        push(pid, (b.title || '').trim(), b, 'Button');
+        if (!_vis(b)) return;
+        _push(pid, (b.title || '').trim(), b, 'Button');
       });
     });
-    push(null, 'New Chat', null, 'Action',
+    _push(null, 'New Chat', null, 'Action',
          function() { var b = Array.from(document.querySelectorAll('button'))
            .find(function(x) { return /new chat/i.test(x.textContent); }); if (b) b.click(); });
-    push(null, 'Open chats list', null, 'Action',
+    _push(null, 'Open chats list', null, 'Action',
          function() { var b = Array.from(document.querySelectorAll('button'))
            .find(function(x) { return x.textContent.trim() === 'Chats'; }); if (b) b.click(); });
     return idx;
@@ -11621,19 +11647,12 @@ function _updateDuoRoleStatus(elId, label, model) {
 
   function _close() { if (_fsOverlay) _fsOverlay.style.display = 'none'; }
 
-  // ALIAS MATCHING (2026-10-05, user): "ctx" must find "Context" - the
-  // abbreviations people type are not substrings of the label text.
-  var _FS_ALIASES = { ctx: 'context', kontext: 'context', temp: 'temperature',
-                      bild: 'image', foto: 'image', foto: 'image' };
-
+  // ALIAS MATCHING (2026-10-05): expanded by the tested pure helper in
+  // feature_search_core.js (ctx->context, temp->temperature, ...).
   function _render(q) {
     q = (q || '').toLowerCase().trim();
     _fsList.innerHTML = '';
-    var terms = q ? [q] : [];
-    Object.keys(_FS_ALIASES).forEach(function(a) {
-      if (q && (a === q || q.indexOf(a) >= 0) && terms.indexOf(_FS_ALIASES[a]) < 0)
-        terms.push(_FS_ALIASES[a]);
-    });
+    var terms = window.FSCore ? window.FSCore.expandTerms(q) : [q];
     var hits = (_fsIndex || []).filter(function(i) {
       if (!q) return true;
       var hay = i.kw || ((i.label + ' ' + i.kind).toLowerCase());
