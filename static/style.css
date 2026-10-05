@@ -98,7 +98,7 @@ header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid #222a38;
 #h-dot.err{background:var(--red);box-shadow:0 0 6px var(--red)}
 #h-dot.busy{background:var(--amber);box-shadow:0 0 6px var(--amber);animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-#h-mode{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 7px;border-radius:3px;
+#h-mode{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 7px;border-radius:3px;margin-left:-2px;
   background:var(--bg3);border:1px solid var(--b2);color:var(--tx2)}
 #h-tools{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 8px;border-radius:3px;
   background:var(--bg3);border:1px solid rgba(58,153,96,.35);color:var(--green);display:none}
@@ -473,7 +473,7 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 .log-evt{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--txh)}
 .log-detail{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-top:2px}
 /* -- Agent Map (Header) -- */
-#h-agentmap{display:flex;align-items:center;gap:5px;overflow:hidden;flex:1;min-width:0}
+#h-agentmap{display:flex;align-items:center;gap:5px;overflow:hidden;flex:1;min-width:0;margin-left:-2px}
 .amap-chip{display:flex;align-items:center;gap:3px;background:var(--bg3);border:1px solid var(--b);
   border-radius:4px;padding:2px 6px;white-space:nowrap;transition:border-color .2s,background .2s;flex-shrink:0;cursor:default}
 .amap-chip:hover{border-color:var(--b2);background:var(--bg4)}

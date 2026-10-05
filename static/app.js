@@ -11559,6 +11559,16 @@ function _updateDuoRoleStatus(elId, label, model) {
   function _buildIndex() {
     var idx = [];
     var seen = {};
+    // DEAD-BLOCK EXCLUDE (2026-10-05): the sequential/parallel demo has no
+    // backend reader - never surface it, visible or not.
+    function _dead(el) {
+      // precise: only elements INSIDE the hidden demo container are dead.
+      // An ancestor walk with querySelector marked the whole AGENTS panel
+      // as dead (the panel contains the demo button deep in its tree).
+      var demo = document.getElementById('va-mode-seq');
+      if (!demo || !demo.parentElement) return false;
+      return demo.parentElement.contains(el);
+    }
     // DUO CTX SLIDERS (2026-10-05, user: 'ctx settings schwer zu finden'):
     // the VRAM-block lever lives in wrappers hidden by submode - indexed
     // explicitly (once, panel=agents), visible or not.
@@ -11621,13 +11631,13 @@ function _updateDuoRoleStatus(elId, label, model) {
       });
       panel.querySelectorAll('.tgl-row .tgl-text, .cfl-label').forEach(function(tx) {
         if (tx.closest('.cfg-card')) return; // handled above with title prefix
-        if (!_vis(tx)) return;
+        if (_dead(tx)) return;
         var txt = (tx.textContent || '').trim();
         if (txt.length >= 3) _push(pid, txt, tx, 'Toggle');
       });
       panel.querySelectorAll('label input[type="checkbox"]').forEach(function(inp) {
         var row = inp.closest('label');
-        if (!row || !_vis(row)) return;
+        if (!row || _dead(row)) return;
         var txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
         if (txt.length >= 3) _push(pid, txt.slice(0, 80), row, 'Checkbox');
       });
