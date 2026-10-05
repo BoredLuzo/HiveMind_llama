@@ -386,6 +386,18 @@ class Gateway:
             await self.reply(p.chat_id,
                              await self.bridge.gate_text(arg),
                              reply_to_message_id=p.message_id)
+        elif name == "ctx":
+            await self.reply(p.chat_id,
+                             await self.bridge.ctx_text(arg),
+                             reply_to_message_id=p.message_id)
+        elif name == "preset":
+            await self.reply(p.chat_id,
+                             await self.bridge.preset_text(arg),
+                             reply_to_message_id=p.message_id)
+        elif name == "planner":
+            await self.reply(p.chat_id,
+                             await self.bridge.planner_text(arg),
+                             reply_to_message_id=p.message_id)
         elif name == "status":
             await self.reply(p.chat_id, self.bridge.status_text(),
                              reply_to_message_id=p.message_id)
@@ -400,7 +412,7 @@ class Gateway:
         elif name == "setmodel":
             await self._owner_bridge_call(p, self.bridge.set_model(arg))
         elif name == "cancel":
-            await self.reply(p.chat_id, self.bridge.cancel_setup(),
+            await self.reply(p.chat_id, self.bridge.reset_overrides(),
                              reply_to_message_id=p.message_id)
         elif name == "lock":
             await self.reply(p.chat_id,
@@ -441,11 +453,6 @@ class Gateway:
         if self.bridge.own_approval_pending():
             note = await self.bridge.own_answer(q)
             await self.reply(p.chat_id, note,
-                             reply_to_message_id=p.message_id)
-            return
-        setup_note = await self.bridge.consume_setup(q)
-        if setup_note is not None:
-            await self.reply(p.chat_id, setup_note,
                              reply_to_message_id=p.message_id)
             return
         if len(q) > self.cfg.max_text_chars:

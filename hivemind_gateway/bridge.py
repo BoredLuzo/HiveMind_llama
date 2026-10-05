@@ -667,6 +667,10 @@ class RunBridge:
         if model:
             out["duo_planner_model"] = model
             out["duo_coder_model"] = model
+        # /planner override: a SEPARATE planner model (duo runs)
+        planner_model = ov.get("planner_model")
+        if planner_model:
+            out["duo_planner_model"] = planner_model
         # deep audit N5: clamp — the engine clamps the planner ctx at
         # 131072 but NOT the coder ctx; a fat-fingered phone value must
         # not wedge the shared VRAM
@@ -724,143 +728,122 @@ class RunBridge:
         return "\n".join(lines)
 
     async def set_model(self, arg: str) -> str:
+        """Pick a model by /models number — applies IMMEDIATELY to
+        upcoming runs (no quiz). ctx via /ctx, preset via /preset."""
         try:
             idx = int((arg or "").strip())
         except ValueError:
             return ("Usage: /setModel <number> — /models lists the "
-                    "numbers.")
+                    "numbers. ctx via /ctx <number>, preset via /preset.")
         try:
             data = await self.hive.get_models()
         except (HiveUnreachable, OSError) as exc:
             return f"🔌 HiveMind unreachable: {exc}"
         models = data.get("models") or []
         if not (1 <= idx <= len(models)):
-            return (f"❌ {idx} out of range 1–{len(models)}. "
-                    "List: /models")
+            return (f"❌ {idx} out of range 1–{len(models)}. List: /models")
         name = models[idx - 1]
         prof = next((p for p in (data.get("profiles") or [])
                      if p.get("name") == name), {})
         can_think = bool(prof.get("thinking"))
-
-        # presets: numbered for the follow-up question
-        try:
-            raw = await self.hive.get_presets()
-        except (HiveUnreachable, OSError):
-            raw = {}
-        if isinstance(raw, dict):
-            preset_names = sorted(raw.keys())
-        elif isinstance(raw, list):
-            preset_names = [x if isinstance(x, str) else
-                            str(x.get("name", "?")) for x in raw]
-        else:
-            preset_names = []
-
-        agentic = False
-        try:
-            s = await self.hive.settings()
-            agentic = bool(s.get("duo_agentic_mode"))
-        except (HiveUnreachable, OSError, ValueError):
-            pass
-
-        self.state.data["pending_setup"] = {
-            "model": name, "agentic": agentic, "ts": time.time()}
-        self.state.save()
-
-        head = f"Model {idx}: {name}"
-        if not can_think:
-            head += " (cannot think — ctx_thinking will be 0)"
-        if agentic:
-            fmt = ("Reply with ONE line, separated by ', ':\n"
-                   "preset, planner_ctx_thinking, planner_ctx_model, "
-                   "coder_ctx_thinking, coder_ctx_model\n"
-                   "(agentic detected — planner and coder, both values)")
-        else:
-            fmt = ("Reply with ONE line, separated by ', ':\n"
-                   "preset, ctx_thinking, ctx_model")
-        lines = [
-            head,
-            fmt,
-            "preset: 0 = none,"
-            + (f" 1..{len(preset_names)} = " + ", ".join(
-                f"{i+1}={n}" for i, n in enumerate(preset_names[:8]))
-               if preset_names else " keine Presets vorhanden"),
-            "Note: a preset applies GLOBALLY (also to the browser UI).",
-            "ctx_thinking 0 = no thinking/planner.",
-            "Example: 0, 8192, 16384",
-            "Applies to duo/agentic runs; direct overrides arrive with "
-            "WP3 (P9). /cancel aborts.",
-        ]
-        return "\n".join(lines)
-
-    async def consume_setup(self, text: str) -> str | None:
-        """While a /setModel flow is pending, a numeric comma answer is
-        consumed here. Returns None when nothing is pending (normal run)."""
-        p = self._pending()
-        if p is None:
-            return None
-        parts = [x.strip() for x in (text or "").split(",") if x.strip()]
-        expected = 5 if p.get("agentic") else 3
-        # deep audit N5: "--5"/"²" passed the old check but crashed int()
-        if not all(x.isascii() and x.isdigit() for x in parts) \
-                or len(parts) != expected:
-            return (f"Expected {expected} numbers separated by ', ' — "
-                    "e.g. 0, 8192, 16384. /cancel aborts.")
-        vals = [int(x) for x in parts]
-
-        # preset (position 0) — global, warned in the question already
-        preset_note = "no preset"
-        if vals[0] > 0:
-            try:
-                raw = await self.hive.get_presets()
-            except (HiveUnreachable, OSError) as exc:
-                return f"🔌 Presets unavailable: {exc}"
-            names = sorted(raw.keys()) if isinstance(raw, dict) else \
-                [x if isinstance(x, str) else str(x.get("name", "?"))
-                 for x in (raw or [])]
-            if vals[0] > len(names):
-                return (f"❌ Preset {vals[0]} out of range 1–{len(names)}. "
-                        "Send again.")
-            resp = await self.hive.load_preset(names[vals[0] - 1])
-            if getattr(resp, "status_code", 500) >= 300:
-                return (f"❌ Preset '{names[vals[0] - 1]}' could not be "
-                        "loaded — nothing changed, "
-                        "send again.")
-            preset_note = f"Preset '{names[vals[0] - 1]}' loaded (global)"
-
         ov = self.state.data.setdefault("run_overrides", {})
-        ov["model"] = p["model"]
-        if p.get("agentic"):
-            p_think, p_ctx, c_think, c_ctx = vals[1:]
-            # agentic pairs: (thinking, model) per role; ctx_thinking 0
-            # means "no planner/thinking" for that role
-            ov["planner_ctx"] = p_ctx if (p_think or p_ctx) else 0
-            ov["coder_ctx"] = c_ctx
-            detail = (f"planner: thinking_ctx={p_think or 0}, "
-                      f"ctx={p_ctx or 'standard'}; coder: "
-                      f"thinking_ctx={c_think or 0} (note), "
-                      f"ctx={c_ctx or 'standard'}")
-            if not p_think and not p_ctx:
-                ov["planner_ctx"] = 0
-                detail = (f"planner off (0/0); coder: ctx="
-                          f"{c_ctx or 'Standard'}")
-        else:
-            think, ctx = vals[1:]
-            ov["planner_ctx"] = ctx if think else 0
-            ov["coder_ctx"] = ctx
-            detail = (f"ctx_thinking={think or 0}, "
-                      f"ctx_model={ctx or 'standard'}")
+        ov["model"] = name
         self.state.data["pending_setup"] = None
         self.state.save()
-        return (f"✅ Saved. Model: {p['model']} — {preset_note}; "
-                f"{detail}. Applies to upcoming phone runs (duo/agentic; "
-                "direct overrides: P9). Send /setModel again to change.")
+        out = f"✅ Model set: {name}"
+        if not can_think:
+            out += " (cannot think)"
+        out += ("\nctx via /ctx <number> (0 = engine default), "
+                "preset via /preset <number>.\nApplies to upcoming "
+                "phone runs.")
+        return out
+
+    async def ctx_text(self, arg: str) -> str:
+        """/ctx <number|off> — context override for coder + planner."""
+        a = (arg or "").strip().lower()
+        ov = self.state.data.setdefault("run_overrides", {})
+        if a in ("", "status"):
+            cur = ov.get("coder_ctx") or ov.get("planner_ctx")
+            return ("ctx override: "
+                    + (f"{cur} tokens" if cur else "off (engine default)")
+                    + ".\nSet with /ctx <number> (0 = off). Applies to "
+                    "upcoming duo/agentic phone runs.")
+        if a in ("0", "off", "aus"):
+            ov.pop("coder_ctx", None)
+            ov.pop("planner_ctx", None)
+            self.state.save()
+            return "ctx override cleared — engine defaults apply."
+        if not a.isdigit():
+            return "❌ /ctx <number> (tokens) or /ctx off."
+        ov["coder_ctx"] = int(a)
+        ov["planner_ctx"] = int(a)
+        self.state.save()
+        return (f"✅ ctx: {a} tokens (coder + planner target) — applies "
+                "to upcoming duo/agentic phone runs.")
+
+    async def planner_text(self, arg: str) -> str:
+        """/planner <no|off> — separate planner model for duo runs."""
+        a = (arg or "").strip()
+        ov = self.state.data.setdefault("run_overrides", {})
+        if a in ("", "status"):
+            cur = ov.get("planner_model")
+            return ("planner model: " + (cur or "inherits the coder model")
+                    + ".\n/planner <number from /models> | /planner off")
+        if a in ("off", "aus"):
+            ov.pop("planner_model", None)
+            self.state.save()
+            return "planner model cleared — inherits the coder model."
+        try:
+            idx = int(a)
+        except ValueError:
+            return "❌ /planner <number from /models> | /planner off"
+        try:
+            data = await self.hive.get_models()
+        except (HiveUnreachable, OSError) as exc:
+            return f"🔌 HiveMind unreachable: {exc}"
+        models = data.get("models") or []
+        if not (1 <= idx <= len(models)):
+            return f"❌ {idx} out of range 1–{len(models)}. List: /models"
+        ov["planner_model"] = models[idx - 1]
+        self.state.save()
+        return f"✅ planner model: {models[idx - 1]} (duo runs)."
+
+    async def preset_text(self, arg: str) -> str:
+        """/preset <no> — load a preset globally (phone + UI)."""
+        a = (arg or "").strip()
+        if not a.isdigit() or int(a) < 1:
+            return "Usage: /preset <number>."
+        try:
+            raw = await self.hive.get_presets()
+        except (HiveUnreachable, OSError) as exc:
+            return f"🔌 Presets unavailable: {exc}"
+        names = sorted(raw.keys()) if isinstance(raw, dict) else \
+            [x if isinstance(x, str) else str(x.get("name", "?"))
+             for x in (raw or [])]
+        pick = int(a)
+        if pick > len(names):
+            return f"❌ Preset {pick} out of range 1–{len(names)}."
+        resp = await self.hive.load_preset(names[pick - 1])
+        if getattr(resp, "status_code", 500) >= 300:
+            return (f"❌ Preset '{names[pick - 1]}' could not be loaded — "
+                    "nothing changed.")
+        return (f"✅ Preset '{names[pick - 1]}' loaded (global — phone + "
+                "UI).")
 
     def cancel_setup(self) -> str:
-        if self.state.data.get("pending_setup"):
-            self.state.data["pending_setup"] = None
-            self.state.save()
-            return "Setup aborted."
-        return "Nothing to abort."
+        """/cancel: clear the model/ctx overrides for phone runs (the
+        pending /setModel quiz no longer exists — commands apply live)."""
+        ov = self.state.data.setdefault("run_overrides", {})
+        had = any(ov.get(k) for k in ("model", "planner_model",
+                                      "coder_ctx", "planner_ctx"))
+        ov.pop("model", None)
+        ov.pop("planner_model", None)
+        ov.pop("coder_ctx", None)
+        ov.pop("planner_ctx", None)
+        self.state.save()
+        return ("Overrides cleared — upcoming phone runs use the engine "
+                "settings again." if had else
+                "No overrides set — nothing to clear.")
 
     def reset_overrides(self) -> str:
         self.state.data["run_overrides"] = {}

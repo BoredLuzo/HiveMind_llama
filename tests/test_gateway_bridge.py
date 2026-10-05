@@ -313,6 +313,7 @@ async def t_models_flow():
         def __init__(self):
             super().__init__(_run_events())
             self.loaded_presets = []
+            self.settings_sets = []
 
         async def get_models(self):
             return {"models": ["m-a", "m-b", "m-c"],
@@ -331,6 +332,10 @@ async def t_models_flow():
         async def settings(self):
             return {"duo_agentic_mode": False}
 
+        async def set_setting(self, key, value):
+            self.settings_sets.append((key, value))
+            return FakeResponse(200, {"ok": True})
+
     hive = ModelsHive()
     br, st, ms = _mk("gwbr_models_", hive)
 
@@ -341,80 +346,55 @@ async def t_models_flow():
           and "[thinking+vision]" in out)
     check("models hint", "/setModel" in out)
 
-    # /setModel with the follow-up question in ONE message
+    # /setModel: applies IMMEDIATELY (no quiz)
     out = await br.set_model("2")
-    check("setmodel echoes model", "m-b" in out)
-    check("setmodel asks one-line format",
-          "preset, ctx_thinking, ctx_model" in out)
-    check("setmodel lists presets numbered",
-          "1=code" in out and "2=write" in out)
-    check("setmodel warns global", "GLOBAL" in out or "global" in out)
-    check("setmodel no-thinking hint", "cannot think" in out)
+    check("setmodel applies model", "m-b" in out
+          and st.data["run_overrides"].get("model") == "m-b")
+    check("setmodel points at /ctx and /preset",
+          "/ctx" in out and "/preset" in out)
+    out = await br.set_model("99")
+    check("setmodel range error", "out of range" in out)
+    out = await br.set_model("abc")
+    check("setmodel non-numeric usage", "Usage" in out)
 
-    # a non-numeric message is consumed as format reminder (no run!)
-    runs_before = len(hive.stream_bodies)
-    note = await br.consume_setup("hallo welt")
-    check("non-numeric -> reminder", "Expected 3 numbers" in note)
-    check("reminder did not start a run",
-          len(hive.stream_bodies) == runs_before)
+    # /ctx: coder + planner ctx override, rides the run body
+    out = await br.ctx_text("16384")
+    check("ctx set", "16384" in out
+          and st.data["run_overrides"].get("coder_ctx") == 16384
+          and st.data["run_overrides"].get("planner_ctx") == 16384)
+    await br.start_text_run("q")
+    ov = hive.stream_bodies[-1]["overrides"]
+    check("ctx rides the body", ov.get("duo_coder_ctx_agentic") == 16384
+          and ov.get("duo_planner_ctx_target") == 16384)
+    out = await br.ctx_text("0")
+    check("ctx off clears", "cleared" in out
+          and "coder_ctx" not in st.data["run_overrides"])
 
-    # wrong count
-    note = await br.consume_setup("1, 2")
-    check("wrong count -> reminder", "Expected 3 numbers" in note)
+    # /planner: separate planner model (duo), off = inherit coder
+    out = await br.planner_text("3")
+    check("planner override set", "m-c" in out
+          and st.data["run_overrides"].get("planner_model") == "m-c")
+    await br.start_text_run("q2")
+    ov = hive.stream_bodies[-1]["overrides"]
+    check("planner model rides the body",
+          ov.get("duo_planner_model") == "m-c")
+    out = await br.planner_text("off")
+    check("planner off clears", "cleared" in out
+          and "planner_model" not in st.data["run_overrides"])
 
-    # the real answer: preset 1=code, no thinking, ctx 16384
-    note = await br.consume_setup("1, 0, 16384")
-    check("answer confirms model", "m-b" in note and "Saved" in note)
-    check("preset loaded globally", hive.loaded_presets == ["code"])
-    check("overrides stored", st.data["run_overrides"]["model"] == "m-b"
-          and st.data["run_overrides"]["coder_ctx"] == 16384
-          and st.data["run_overrides"]["planner_ctx"] == 0)
-    check("pending cleared", st.data["pending_setup"] is None)
+    # /preset: global load
+    out = await br.preset_text("1")
+    check("preset 1 loads globally", hive.loaded_presets == ["code"]
+          and "code" in out)
+    out = await br.preset_text("9")
+    check("preset range error", "out of range" in out)
 
-    # next run carries the overrides in the stream body
-    await br.start_text_run("q with overrides")
-    body = hive.stream_bodies[-1]
-    check("stream body has model override",
-          body["q"] == "q with overrides"
-          and hive.puts  # transcript write happened as usual
-          or True)
-    # overrides reach the request via hive.stream kwargs — assert via a
-    # recording subclass:
-    class RecHive(ModelsHive):
-        def __init__(self):
-            super().__init__()
-            self.last_kwargs = {}
-
-        async def stream(self, q, chat_id, images=None, mode="",
-                         overrides=None):
-            self.last_kwargs = {"mode": mode, "overrides": overrides or {}}
-            async for ev in super().stream(q, chat_id, images, mode,
-                                           overrides):
-                yield ev
-
-    hive2 = RecHive()
-    br2, st2, ms2 = _mk("gwbr_models2_", hive2)
-    st2.data["run_overrides"] = {"model": "m-c", "planner_ctx": 8192,
-                                 "coder_ctx": 16384}
-    await br2.start_text_run("q")
-    check("overrides in stream request",
-          hive2.last_kwargs["overrides"].get("duo_planner_model") == "m-c"
-          and hive2.last_kwargs["overrides"].get("duo_coder_model") == "m-c"
-          and hive2.last_kwargs["overrides"].get("duo_planner_ctx_target")
-          == 8192
-          and hive2.last_kwargs["overrides"].get("duo_coder_ctx_agentic")
-          == 16384
-          and hive2.last_kwargs["overrides"].get("duo_planner") is True)
-
-    # /cancel clears a pending flow
-    await br.set_model("1")
-    check("cancel clears pending", "aborted" in br.cancel_setup()
-          and st.data["pending_setup"] is None)
-
-    # reset overrides
-    check("reset clears overrides",
-          "cleared" in br.reset_overrides()
-          and st.data["run_overrides"] == {})
+    # /gate: approval policy via single-key settings post
+    out = await br.gate_text("ask")
+    check("gate ask sets", hive.settings_sets[-1] ==
+          ("telegram_approval_mode", "ask") and "ask" in out)
+    out = await br.gate_text("nuclear")
+    check("gate invalid rejected", "ask|deny|off" in out)
 
 
 async def t_secrets():
@@ -610,22 +590,12 @@ async def t_takeover():
     check("N2: no blind-approval note when full cmd present",
           "truncated" not in relayed)
 
-    # deep audit N5: weird answers cannot crash consume_setup
-    hive.journal_body = {"active": False}
-    await br.mirror_tick()
-    br3, st3, ms3 = _mk("gwbr_n5_", FakeHive())
-    st3.data["tg_chat"] = {"hive_chat_id": "chat01", "created_at": "x"}
-    # pending flow seeded directly — consume_setup is the unit under test
-    import time as _t
-    st3.data["pending_setup"] = {"model": "m-c", "agentic": False,
-                                 "ts": _t.time()}
-    for bad in ("--5, 8192, 16384", "², 8192, 16384", "1; 2; 3"):
-        out = await br3.consume_setup(bad)
-    check("N5: weird answers contained", "Expected 3 numbers" in out)
-    # clamp: absurd ctx values are capped in the stream body
-    st3.data["run_overrides"] = {"model": "m-c", "planner_ctx": 999999,
+    # ctx clamp (deep audit N5): absurd ctx values are capped in the
+    # stream body — fixture rebuilt for the command-based flow
+    br5, st5, ms5 = _mk("gwbr_n5c_", FakeHive(_run_events()))
+    st5.data["run_overrides"] = {"model": "m-c", "planner_ctx": 999999,
                                  "coder_ctx": 999999}
-    ov = br3._stream_overrides()
+    ov = br5._stream_overrides()
     check("N5: ctx clamped to 131072",
           ov["duo_planner_ctx_target"] == 131072
           and ov["duo_coder_ctx_agentic"] == 131072)
