@@ -15,7 +15,9 @@ echo    [3/7] llama.cpp backend - downloaded for the chosen backend
 echo    [4/7] Desktop shortcut  - optional, with the HiveMind icon
 echo    [5/7] Models            - downloaded into your chosen folder
 echo    [6/7] SearXNG           - optional web search (requires Docker)
-echo    [7/7] Telegram         - optional: control HiveMind from your phone
+echo    [7/7] Telegram gateway  - optional: message HiveMind from
+echo                              your phone via your own bot
+echo                              (needs a @BotFather token, 2FA on)
 echo.
 
 choice /c YN /n /m "Install HiveMind now? [Y/N] "
