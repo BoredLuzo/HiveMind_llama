@@ -1,3 +1,6 @@
 # Batch files need CRLF endings - LF breaks label jumps, and the
 # updater runs them in the OEM codepage (ascii-only guard in tests)
 *.bat text eol=crlf
+
+# Shell scripts need LF endings - CRLF breaks shebangs on Linux
+*.sh text eol=lf
