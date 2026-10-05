@@ -236,6 +236,59 @@ async def t_pair_flow():
     check("still unpaired", gw2.owner_id is None)
 
 
+# ── instance lock: dead pid, recycled pid (realrun bug #3), live pid ───
+async def t_lock():
+    import os
+    import hivemind_gateway.state as S
+    import hivemind_gateway.main as M
+    tmp = Path(tempfile.mkdtemp(prefix="gwcmd_lock_"))
+    lock = tmp / "gateway.lock"
+    orig_home = S.state_home
+    S.state_home = lambda: tmp  # type: ignore[assignment]
+    try:
+        M.acquire_instance_lock()
+        try:
+            M.acquire_instance_lock()
+            check("double start refused", False)
+        except M.StartupError:
+            check("double start refused", True)
+
+        # dead pid -> stale -> silently replaced
+        lock.write_text('{"pid": 999999999, "birth": 1}', encoding="utf-8")
+        M.acquire_instance_lock()
+        check("dead-pid lock replaced", True)
+
+        # THE realrun bug: pid belongs to a LIVE but DIFFERENT process
+        # (recycled pid) -> must NOT count as "gateway still running"
+        live_pid = os.getpid()
+        real_birth = M._process_birth(live_pid)
+        assert real_birth is not None
+        lock.write_text(
+            f'{{"pid": {live_pid}, "birth": {real_birth - 1000}}}',
+            encoding="utf-8")
+        M.acquire_instance_lock()
+        check("recycled-pid lock replaced", True)
+
+        # same pid AND same birth -> a real other gateway -> refused
+        lock.write_text(
+            f'{{"pid": {live_pid}, "birth": {real_birth}}}',
+            encoding="utf-8")
+        try:
+            M.acquire_instance_lock()
+            check("matching live lock refused", False)
+        except M.StartupError:
+            check("matching live lock refused", True)
+
+        # legacy plain-text lock (old format) -> stale -> replaced
+        lock.write_text("12345", encoding="utf-8")
+        M.acquire_instance_lock()
+        check("legacy lock format replaced", True)
+    finally:
+        S.state_home = orig_home  # type: ignore[assignment]
+        if lock.exists():
+            lock.unlink()
+
+
 async def _main():
     await t_new()
     await t_status_verbose()
@@ -243,6 +296,7 @@ async def _main():
     await t_rate_limit()
     await t_recover()
     await t_pair_flow()
+    await t_lock()
 
 asyncio.run(_main())
 print()

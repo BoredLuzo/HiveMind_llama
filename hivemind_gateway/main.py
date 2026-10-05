@@ -25,6 +25,7 @@ import os
 import sys
 import time
 from collections import defaultdict, deque
+from pathlib import Path
 
 from . import auth as gw_auth
 from . import commands as gw_commands
@@ -95,28 +96,96 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _process_birth(pid: int) -> int | None:
+    """Creation timestamp of the process (Windows FILETIME, 100 ns since
+    1601 / posix boot-time ticks), or None if it cannot be read.
+
+    Why: PIDs are recycled. A lock that only stores the pid claims the
+    gateway is 'still running' when the pid now belongs to some random
+    other process — the second gateway then refuses to start forever
+    (realrun bug #3, 2026-10-05). Comparing the birth stamp makes
+    pid-reuse detectable."""
+    if pid <= 0:
+        return None
+    if sys.platform == "win32":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False,
+                                 pid)
+        if not handle:
+            return None
+        try:
+            created, exited, kernel, user = (ctypes.c_ulonglong(),
+                                             ctypes.c_ulonglong(),
+                                             ctypes.c_ulonglong(),
+                                             ctypes.c_ulonglong())
+            if not k32.GetProcessTimes(handle,
+                                       ctypes.byref(created),
+                                       ctypes.byref(exited),
+                                       ctypes.byref(kernel),
+                                       ctypes.byref(user)):
+                return None
+            return created.value
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        # field 22 (1-based) = starttime, sits after the ')' of the comm
+        return int(stat.rsplit(")", 1)[1].split()[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _lock_holder_is_live(record: dict) -> bool:
+    """True only when the recorded pid is alive AND was born before the
+    lock was written — i.e. it is really the process that took the lock,
+    not a recycled pid."""
+    pid = record.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if not _pid_alive(pid):
+        return False
+    birth = _process_birth(pid)
+    if birth is None:
+        # cannot verify identity; refuse to steal a live pid's lock
+        return True
+    stored = record.get("birth")
+    if not isinstance(stored, int):
+        return True  # unknown identity — conservative, keep refusing
+    return stored == birth
+
+
 def acquire_instance_lock() -> None:
-    """One gateway process per bot token. A stale lock (dead PID) is
-    replaced, a live one is fatal."""
+    """One gateway process per bot token. A stale lock (dead pid, or a
+    recycled pid belonging to someone else) is replaced, a live one is
+    fatal."""
+    import json
     p = gw_state.lock_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
         try:
-            old_pid = int(p.read_text(encoding="utf-8").strip())
+            record = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(record, dict):
+                raise ValueError
         except (OSError, ValueError):
-            old_pid = -1
-        if _pid_alive(old_pid):
+            record = {}
+        if _lock_holder_is_live(record):
             raise StartupError(
-                f"another gateway instance seems to run (pid {old_pid}, "
-                f"lock {p}). Close it first.")
+                f"another gateway instance seems to run (pid "
+                f"{record.get('pid')}, lock {p}). Close it first.")
+        log.info("[LOCK] stale gateway lock replaced (pid %s)",
+                 record.get("pid"))
         try:
             p.unlink()
         except OSError:
             pass
+    birth = _process_birth(os.getpid())
+    payload = json.dumps({"pid": os.getpid(), "birth": birth})
     try:
         fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(str(os.getpid()))
+            f.write(payload)
     except FileExistsError:
         raise StartupError("gateway lock taken concurrently") from None
 
