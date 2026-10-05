@@ -902,6 +902,10 @@
             </label>
           </div>
           <div id="duo-image-note" style="display:none;font-size:9px;color:#20b0a0;margin-left:24px;line-height:1.5"></div>
+          <div id="duo-image-info" style="display:none;font-size:9px;color:#7a8fa8;margin-left:24px;line-height:1.5">
+            Multimodal models (qwen3.5/3.6, hermes, gemma-4) receive the raw image directly.<br>
+            Text-only roles skip the image &mdash; the per-role status line tells you which.
+          </div>
         </div>
         <div id="image-mode-generic-hdr" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-top:10px;margin-bottom:8px;line-height:1.6">
           Direct chat &amp; pipeline &mdash; how images are processed when you attach one:
@@ -955,12 +959,18 @@
               <option value="">&#8212; choose model &#8212;</option>
             </select>
           </div>
-          <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:4px">Mode</div>
-          <div style="display:flex;gap:4px;margin-bottom:6px">
-            <button id="va-mode-seq" class="ghost" style="flex:1;font-size:10px" onclick="setVisionAgentMode('sequential')">&#9654; Sequential</button>
-            <button id="va-mode-par" class="ghost" style="flex:1;font-size:10px" onclick="setVisionAgentMode('parallel')">&#9654;&#9654; Parallel</button>
+          <!-- VISIBILITY (2026-10-03): sequential/parallel has no backend
+               reader yet (pipeline_runner is sequential-only). Hidden until
+               the runner actually implements it; setVisionAgentMode stays
+               wired for that day. -->
+          <div style="display:none">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:4px">Mode</div>
+            <div style="display:flex;gap:4px;margin-bottom:6px">
+              <button id="va-mode-seq" class="ghost" style="flex:1;font-size:10px" onclick="setVisionAgentMode('sequential')">&#9654; Sequential</button>
+              <button id="va-mode-par" class="ghost" style="flex:1;font-size:10px" onclick="setVisionAgentMode('parallel')">&#9654;&#9654; Parallel</button>
+            </div>
+            <div id="va-mode-desc" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx3);line-height:1.4"></div>
           </div>
-          <div id="va-mode-desc" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx3);line-height:1.4"></div>
           <div style="margin-top:8px;border-top:1px solid #1e2a38;padding-top:8px">
             <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:6px">Raw image to roles (multimodal only)</div>
             <div class="vision-row" style="margin-bottom:4px">
@@ -1907,6 +1917,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-        <script src="/static/app.js?v=20261003-3"></script>
+        <script src="/static/feature_search_core.js?v=20261005-2"></script>
+        <script src="/static/app.js?v=20261005-2"></script>
 </body>
 </html>

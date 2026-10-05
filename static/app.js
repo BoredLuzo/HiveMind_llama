@@ -1206,7 +1206,7 @@ async function loadSettings() {
     // Vision-Agent state
     S.visionAgentEnabled = s.vision_agent_enabled || false;
     S.visionAgentModel   = s.vision_agent_model   || '';
-    S.visionAgentMode    = s.vision_agent_mode     || 'sequential';
+    S.visionAgentMode    = 'sequential';  // runner is sequential-only; radio hidden
     // PIPELINE-VISION: pass images directly to multimodal pipeline agents?
     S.pipelineVisionDirect = s.pipeline_vision_direct !== false;
     // PIPELINE-VISION per role: which roles get raw images directly.
@@ -1216,13 +1216,11 @@ async function loadSettings() {
     S.ctxOverrides = (s.ctx_overrides && s.ctx_overrides.roles) ? s.ctx_overrides.roles : {};
     var vaEl = document.getElementById('va-enabled-toggle');
     if (vaEl) vaEl.checked = S.visionAgentEnabled;
-    // IMAGE-PROCESSING-MODE: central selector (direct | preprocess | pipeline).
-    // Persisted key wins; fall back to legacy toggles so existing setups map
-    // onto the new selector without reconfiguration.
-    S.imageMode = s.image_processing_mode
-      || (S.visionAgentEnabled ? 'pipeline'
-          : (S.pipelineVisionDirect ? 'direct' : ''));
-    if (S.imageMode) _applyImageModeUI(S.imageMode);
+    // IMAGE-PROCESSING-MODE (2026-10-03): DERIVED, never persisted. The
+    // persisted key had no backend reader and presets freezing UI state
+    // drifted it from vision_model.json (the actual truth, loaded by
+    // loadVisionConfig which derives the mode from it below).
+    S.imageMode = '';
     // DUO IMAGE PLAN (2026-10-01): sentinel None = derived client-side the
     // same way the backend does it (active vision cfg -> preprocess)
     S.duoImageMode = s.duo_image_mode !== undefined && s.duo_image_mode !== null
@@ -1518,7 +1516,12 @@ function populateDuoModelGroup() {
 function onDuoPlannerModelChange(model) {
   S.duoPlannerModel = model || '';
   postSettings({duo_planner_model: S.duoPlannerModel});
+  // HINT LIVENESS (2026-10-04, user): the chat image hint reads
+  // currentAssignments - keep it in sync here too, or the hint shows the
+  // previous planner until the image is re-attached.
+  if (S.currentAssignments.duo_planner) S.currentAssignments.duo_planner.model = S.duoPlannerModel;
   updateDuoPairHint();
+  updateDuoImageUI();
 }
 
 function onDuoCoderModelChange(model) {
@@ -1527,6 +1530,7 @@ function onDuoCoderModelChange(model) {
   postSettings({duo_pair: 'free', agents: {duo_coder: {model: S.duoCoderModel}}, duo_coder_model: S.duoCoderModel});
   if (S.currentAssignments.duo_coder) S.currentAssignments.duo_coder.model = model;
   updateDuoPairHint();
+  updateDuoImageUI();
   updateMoeVisibility();
 }
 
@@ -2113,9 +2117,12 @@ async function saveAgentModelDirect(key, sel) {
     const data = await res.json();
     if (data.ok) {
       sel.dataset.cur = model;
-      if (key === 'duo_planner' || key === 'duo_coder') updateDuoImageUI();
       if (!S.currentAssignments[key]) S.currentAssignments[key] = {};
       S.currentAssignments[key].model = model;
+      // ORDER FIX (2026-10-04, user): the UI refresh used to run BEFORE the
+      // assignment was updated - the image hint kept showing the OLD model
+      // until the image was removed and re-attached.
+      if (key === 'duo_planner' || key === 'duo_coder') updateDuoImageUI();
       sel.style.borderColor = '#22c55e';
       setTimeout(function() { sel.style.borderColor = ''; }, 1200);
       // VISION-HINT: Bild-Pfad nach Modellwechsel aktualisieren
@@ -2465,6 +2472,7 @@ async function newChat() {
   document.getElementById('chat').innerHTML = '';
   S.pendingImgs = [];
   document.getElementById('img-preview').innerHTML = '';
+  _cpReset();  // PANEL-SCOPE (2026-10-03): a new chat starts with an empty code panel
   S.currentChatId = null;
   S.currentChatMessages = [];
   setPauseBtnState('idle');
@@ -2545,28 +2553,52 @@ function stopAskUserCountdown() {
 // DOWNSCALE (2026-10-01): longest edge cap keeps the base64 (and therefore
 // the prompt tokens) predictable — the raw screenshot/phone photo used to go
 // up unscaled. jpeg q0.9; images without a decodable size pass through.
+// MIME GUARD (2026-10-04): gif/webp pass the image/* type check but are the
+// formats the server-side decoder chokes on (animated frames, exotic webp
+// profiles). They are ALWAYS re-encoded to jpeg via the canvas (first
+// frame) even when small; if that fails, cb(null) and the caller drops the
+// image with a visible notice instead of shipping dead bytes.
+// WHITE FILL (2026-10-04, Sonnet): the canvas starts transparent and jpeg
+// has no alpha - without the fill every transparent pixel turned BLACK.
+// cb(url, meta) where meta = {reencoded, mime} so callers can surface the
+// "first frame only" note for animations.
 function _downscaleImage(dataUrl, cb) {
+  var _mime = ((dataUrl || '').slice(0, 64).match(/^data:(image\/[a-z0-9.+-]+)[;,]/i) || [])[1] || '';
+  var _risky = (_mime === 'image/gif' || _mime === 'image/webp');
   var _img = new Image();
   _img.onload = function() {
     var _edge = Math.max(_img.naturalWidth, _img.naturalHeight);
-    if (_edge <= 1568 || !_edge) { cb(dataUrl); return; }
+    if (!_edge) { cb(_risky ? null : dataUrl); return; }
+    if (!_risky && _edge <= 1568) { cb(dataUrl); return; }
     var _k = 1568 / _edge;
     var _cv = document.createElement('canvas');
     _cv.width = Math.round(_img.naturalWidth * _k);
     _cv.height = Math.round(_img.naturalHeight * _k);
-    _cv.getContext('2d').drawImage(_img, 0, 0, _cv.width, _cv.height);
-    try { cb(_cv.toDataURL('image/jpeg', 0.9)); }
-    catch (e) { cb(dataUrl); }
+    var _cx = _cv.getContext('2d');
+    _cx.fillStyle = '#ffffff';
+    _cx.fillRect(0, 0, _cv.width, _cv.height);
+    _cx.drawImage(_img, 0, 0, _cv.width, _cv.height);
+    try { cb(_cv.toDataURL('image/jpeg', 0.9), {reencoded: true, mime: _mime}); }
+    catch (e) { cb(_risky ? null : dataUrl); }
   };
-  _img.onerror = function() { cb(dataUrl); };
+  _img.onerror = function() { cb(_risky ? null : dataUrl); };
   _img.src = dataUrl;
+}
+
+function _imgConvertNotice(meta, name) {
+  if (meta && meta.reencoded && (meta.mime === 'image/gif' || meta.mime === 'image/webp')) {
+    showStatus('ℹ ' + (name ? name + ': ' : '') + meta.mime.replace('image/', '').toUpperCase()
+      + ' converted to JPEG (first frame only for animations).');
+  }
 }
 
 function handleImgs(input) {
   Array.from(input.files).forEach(function(file) {
     const r = new FileReader();
     r.onload = function(e) {
-      _downscaleImage(e.target.result, function(_url) {
+      _downscaleImage(e.target.result, function(_url, _meta) {
+        if (!_url) { showStatus('⚠ ' + file.name + ': this GIF/WebP could not be converted to JPEG — image dropped.'); return; }
+        _imgConvertNotice(_meta, file.name);
         S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
         renderImgPreview();
       });
@@ -2622,9 +2654,11 @@ function _updateImgVisionHint() {
       hint.textContent = 'Describe mode needs a vision model - pick one under Image Processing (Preprocessor).';
     }
   } else {
+    // ROLE ORDER (2026-10-04, user): the planner is the head of the duo -
+    // name it first in every summary line.
     var _t = [];
-    if (S.duoImageToCoder) _t.push(_cModel ? ('Coder (' + _cModel + ')') : 'Coder');
     if (S.duoImageToPlanner) _t.push(_pModel ? ('Planner (' + _pModel + ')') : 'Planner');
+    if (S.duoImageToCoder) _t.push(_cModel ? ('Coder (' + _cModel + ')') : 'Coder');
     var _visOk = _t.length && (!_cModel || _regVis(_cModel));
     if (!_t.length) {
       _style('rgba(122,143,168,.1)', '#7a8fa8', 'rgba(122,143,168,.25)');
@@ -2640,6 +2674,86 @@ function _updateImgVisionHint() {
   c.appendChild(hint);
 }
 
+function _openImgZoom(src) {
+  var _prev = document.getElementById('img-zoom-overlay');
+  if (_prev && typeof _prev._imgZoomClose === 'function') {
+    _prev._imgZoomClose();  // REOPEN-CLOSE (2026-10-03): plain remove() used to
+  }                         // strand the previous overlay's keydown listener
+  else if (_prev) _prev.remove();
+  var _ov = document.createElement('div');
+  _ov.id = 'img-zoom-overlay';
+  _ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+  var im = document.createElement('img');
+  im.src = src;
+  im.style.cssText = 'max-width:92vw;max-height:92vh;object-fit:contain;border-radius:6px';
+  _ov.appendChild(im);
+  // CLOSE (2026-10-03): one close for BOTH paths - the click-close used to
+  // leave the document keydown listener attached (one per open, piling up).
+  var _close = function() {
+    document.removeEventListener('keydown', _onKey);
+    _ov.remove();
+  };
+  var _onKey = function(ev){ if (ev.key === 'Escape') _close(); };
+  _ov._imgZoomClose = _close;
+  _ov.addEventListener('click', _close);
+  document.addEventListener('keydown', _onKey);
+  document.body.appendChild(_ov);
+}
+function _wireImgZoom(imgEl) {
+  if (!imgEl || imgEl.dataset.zoomWired) return;
+  imgEl.dataset.zoomWired = '1';
+  imgEl.style.cursor = 'zoom-in';
+  imgEl.addEventListener('click', function(ev) {
+    ev.preventDefault(); ev.stopPropagation();
+    _openImgZoom(imgEl.currentSrc || imgEl.src);
+  });
+}
+
+function _cpSnapshot() {
+  var out = {};
+  Object.keys(_cpFiles || {}).forEach(function(p) {
+    var e = _cpFiles[p];
+    out[p] = {
+      content: e.content || '',
+      op: e.op || 'edit',
+      diffText: e.diffText || '',
+      diffs: (e.diffs || []).map(function(d){ return { id: d.id, name: d.name || '', text: d.text || '' }; }),
+      view: e.view === 'diff' ? 'diff' : 'file'
+    };
+  });
+  return out;
+}
+function _cpRestoreSnapshot(snap) {
+  Object.keys(snap || {}).forEach(function(p) {
+    var e = snap[p];
+    _cpAddOrUpdateFile(p, e.content || '', e.op || 'edit', false);
+    var t = _cpFiles[p];
+    if (!t) return;
+    t.diffText = e.diffText || '';
+    t.diffs = (e.diffs || []).slice();
+    t.view = e.view || 'file';
+  });
+}
+function _wireSavedChips(scope) {
+  (scope || document).querySelectorAll('.tool-call-row').forEach(function(row) {
+    if (row.dataset.savedWired) return;
+    var pid = row.dataset.cpDiffId, tp = row.dataset.toolPath;
+    if (!pid || !tp) return;
+    var chip = row.querySelector('.tool-call-chip');
+    if (!chip) return;
+    row.dataset.savedWired = '1';
+    chip.addEventListener('click', function(ev) {
+      ev.preventDefault(); ev.stopPropagation();
+      var e = _cpFiles[tp];
+      if (!e) return;
+      var d = (e.diffs || []).filter(function(x){ return x.id === pid; })[0];
+      if (d) { e.pinnedCallId = d.id; e.view = 'diff'; }
+      _cpShowFile(tp);
+      toggleCodePanel(true);
+    });
+  });
+}
+
 function renderImgPreview() {
   const c = document.getElementById('img-preview');
   c.innerHTML = '';
@@ -2650,6 +2764,7 @@ function renderImgPreview() {
     rm.addEventListener('click', (function(idx) {
       return function() { S.pendingImgs.splice(idx, 1); renderImgPreview(); };
     })(i));
+    _wireImgZoom(im);
     wrap.appendChild(im); wrap.appendChild(rm);
     c.appendChild(wrap);
   });
@@ -2669,6 +2784,7 @@ function addUserMsg(text, imgs) {
     thumbs.className = 'img-thumbs';
     imgs.forEach(function(i) {
       const im = document.createElement('img'); im.src = i.preview; im.alt = '';
+      _wireImgZoom(im);
       thumbs.appendChild(im);
     });
     d.appendChild(thumbs);
@@ -4278,8 +4394,8 @@ var _askClearedAt = 0;
 
 // APPROVAL-CARD AUTO TIMER (2026-10-01): checkbox + visible countdown on
 // every approval card. With duo_action_approval_timeout_s > 0 the SERVER
-// runs the countdown (auto-approves once after N s — robust even when the
-// browser is closed) and the card mirrors it; unchecking posts
+// runs the countdown (DENIES once after N s, fail-closed — robust even
+// when the browser is closed) and the card mirrors it; unchecking posts
 // auto_timeout_off which cancels the server countdown ("wait for me").
 // With the setting off the user can still check the box: the card then
 // counts down itself and posts an explicit approve-once at 0.
@@ -4309,16 +4425,21 @@ function _apAutoBox(card, d) {
   var _stop = function() {
     if (card._apAutoInt) { clearInterval(card._apAutoInt); card._apAutoInt = null; }
   };
+  var _tickLbl = function(left) {
+    _setLbl((card._apAutoServer || 0) > 0
+      ? 'denying in ' + left + 's (nobody answered)'
+      : 'auto-approving once in ' + left + 's (you enabled this)');
+  };
   card._apAutoStart = function(n2) {
     var _left = n2 || 30;
     _stop();
-    _setLbl('auto-approving once in ' + _left + 's (nobody answered)');
+    _tickLbl(_left);
     card._apAutoInt = setInterval(function() {
       _left--;
       if (_left <= 0) {
         _stop();
-        _setLbl('auto-approved');
-        if ((card._apAutoServer || 0) > 0) return;  // the server approves itself
+        _setLbl((card._apAutoServer || 0) > 0 ? 'denied (no answer)' : 'auto-approved');
+        if ((card._apAutoServer || 0) > 0) return;  // the server denies itself (fail closed)
         var _rid = card.dataset.runId || S.currentRunId || '';
         card.dataset.apLocked = '1';
         fetch('/approval/decide/' + encodeURIComponent(_rid), {
@@ -4330,7 +4451,7 @@ function _apAutoBox(card, d) {
         }).catch(function(e) { if (window._showErrorToast) window._showErrorToast('Approval failed: ' + e); });
         return;
       }
-      _setLbl('auto-approving once in ' + _left + 's (nobody answered)');
+      _tickLbl(_left);
     }, 1000);
   };
   _cb.onchange = function() {
@@ -5170,15 +5291,20 @@ async function sendMsg() {
     // preprocessing mode: image-preprocess toggle active + model set = vision active
     const hasVisionPrepro = S.visionEnabled && !!S.visionModel;
     const hasVisionDedicated = S.visionAgentEnabled && !!S.visionAgentModel;
-    // DUO REGISTRY (2026-10-03): in coder/duo mode the coder's registry
-    // vision flag counts - name matching missed hermes3.6/qwen3.5/gemma-4
-    // (the backend loads their projector via ensure_loaded(vision=true)).
-    var duoCoderRegistryVision = false;
-    if (S.mode === 'code_duo' && duoCoderModel) {
-      var _dProf = S.modelProfiles && (S.modelProfiles[duoCoderModel] || S.modelProfiles[duoCoderModel.split(':')[0]]);
-      duoCoderRegistryVision = !!(_dProf && _dProf.vision);
+    // REGISTRY VISION (2026-10-04, live UI test): the legacy name list below
+    // misses every vision model HiveMind actually ships (qwen3.5, gemma-4,
+    // hermes3.6) - the direct-chat gate therefore DROPPED images for
+    // registry-vision models ("No vision model active") while the backend
+    // could see them fine. The modelProfiles registry flag is the truth for
+    // direct/analyst/duo alike (same source as the per-role 👁 badges).
+    function _regVis(m) {
+      if (!m) return false;
+      var pr = S.modelProfiles && (S.modelProfiles[m] || S.modelProfiles[m.split(':')[0]]);
+      return !!(pr && pr.vision);
     }
-    const hasVision = hasVisionAgent || hasVisionPrepro || hasVisionDedicated || duoCoderRegistryVision;
+    var duoCoderRegistryVision = _regVis(duoCoderModel);
+    const hasVision = hasVisionAgent || _regVis(directModel) || _regVis(analystModel)
+                    || hasVisionPrepro || hasVisionDedicated || duoCoderRegistryVision;
     if (!hasVision) {
       const hint = document.createElement('div');
       hint.className = 'msg divider';
@@ -5199,10 +5325,23 @@ async function sendMsg() {
       await _flushQueuedSettings();
     }
 
+    // HISTORY-SOURCE FLUSH (2026-10-03): the run seeds its history from
+    // the saved chat json - persist BEFORE the stream starts so the json
+    // holds this turn (and any post-edit state) exactly as the UI does.
+    var _flushOk = true;
+    if (S.chatAutosave) {
+      try {
+        _flushOk = await persistCurrentChat(true);
+        if (!_flushOk) showStatus('⚠ Chat could not be saved before this run - sending the current state with the request.');
+      } catch (e) { _flushOk = false; showStatus('⚠ Chat could not be saved before this run - sending the current state with the request.'); }
+    }
+
     const res = await fetch('/stream', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         q: txt,
+        flush_ok: _flushOk,
+        dom_messages: _flushOk ? undefined : S.currentChatMessages,
         images: imgs.map(function(i) { return i.b64; }),
         mode: S.mode,
         iterations: S.iters,
@@ -7568,7 +7707,9 @@ document.getElementById('input').addEventListener('paste', function(e) {
     r.onload = function(ev) {
       // PASTE-DOWNSCALE (2026-10-03): same 1568px path as drag&drop:
       // screenshots pasted full-res used to skip it entirely.
-      _downscaleImage(ev.target.result, function(_url) {
+      _downscaleImage(ev.target.result, function(_url, _meta) {
+        if (!_url) { showStatus('⚠ Pasted GIF/WebP could not be converted to JPEG — image dropped.'); return; }
+        _imgConvertNotice(_meta, '');
         S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
         renderImgPreview();
       });
@@ -7584,7 +7725,9 @@ chatCol.addEventListener('drop', function(e) {
     if (!file.type.startsWith('image/')) return;
     const r = new FileReader();
     r.onload = function(ev) {
-      _downscaleImage(ev.target.result, function(_url) {
+      _downscaleImage(ev.target.result, function(_url, _meta) {
+        if (!_url) { showStatus('⚠ ' + file.name + ': this GIF/WebP could not be converted to JPEG — image dropped.'); return; }
+        _imgConvertNotice(_meta, file.name);
         S.pendingImgs.push({b64: _url.split(',')[1], preview: _url});
         renderImgPreview();
       });
@@ -8723,6 +8866,7 @@ window.addEventListener('pagehide', function() {
   const payload = {
     chat_id: S.currentChatId || undefined,
     messages: S.currentChatMessages,
+    workspace: S.workspace || '',
     title: S.currentChatId ? undefined : title   // don't overwrite existing titles
   };
   try {
@@ -9184,12 +9328,19 @@ function _applyImageModeUI(mode) {
   if (ds) ds.style.display = (mode === 'direct') ? 'block' : 'none';
   if (ps) ps.style.display = (mode === 'preprocess') ? 'block' : 'none';
   if (ls) ls.style.display = (mode === 'pipeline') ? 'block' : 'none';
+  // SCOPING FIX (2026-10-04, user): this function used to un-hide the
+  // generic sections without checking the duo scoping - in code_duo the
+  // generic info line appeared (or vanished for good after the next
+  // updateDuoImageUI). Re-apply the scoping so the last writer wins RIGHT.
+  if (typeof updateDuoImageUI === 'function') { try { updateDuoImageUI(); } catch (e) {} }
 }
 
 function setImageMode(mode) {
   S.imageMode = mode;
   _applyImageModeUI(mode);
-  postSettings({image_processing_mode: mode});
+  // NOT persisted (2026-10-03): image_processing_mode has no backend
+  // reader - the one truth for preprocessing is vision_model.json, posted
+  // right below via /vision/config. Presets must not freeze UI state.
   if (mode === 'preprocess') {
     S.visionEnabled = true;
     fetch('/vision/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled: true})});
@@ -9243,8 +9394,9 @@ function setVisionAgentModel(model) {
 }
 
 function setVisionAgentMode(mode) {
+  // Client state only (2026-10-03): the pipeline runner is sequential;
+  // nothing backend-side reads vision_agent_mode, so it is not posted.
   S.visionAgentMode = mode;
-  postSettings({vision_agent_mode: mode});
   _updateVisionAgentModeUI(mode);
 }
 
@@ -9494,7 +9646,15 @@ function _autosaveChatMessage() {
   document.querySelectorAll('#chat .msg').forEach(function(el) {
     if (el.classList.contains('msg-user')) {
       const bubble = el.querySelector('.bubble');
-      if (bubble) msgs.push({role: 'user', content: bubble.textContent, ts: Date.now()});
+      // IMAGE RESTORE (2026-10-03): thumbnails persist only when the
+      // uploads toggle is ON (files live in workspace .hive_uploads then).
+      var _uims = [];
+      if (S.imagePersist) {
+        el.querySelectorAll('.img-thumbs img').forEach(function(im) {
+          _uims.push({ preview: im.getAttribute('src') || '' });
+        });
+      }
+      if (bubble) msgs.push({role: 'user', content: bubble.textContent, ts: Date.now(), images: _uims});
     } else if (el.classList.contains('ablock')) {
       const aname = el.querySelector('.aname');
       // abody can be directly or in a duo-coder/duo-critic wrapper
@@ -9503,8 +9663,30 @@ function _autosaveChatMessage() {
         // CHAT-STRUCTURE-FIX (2026-08-07): also save the rendered structure (markdown blocks,
         // code snippets, tool chips), otherwise the live structure is lost
         // and the chat is shown as flat text on load.
+        // CP SNAPSHOT (2026-10-03): persist the code-panel state (diffs per
+        // path) so tool chips stay clickable in the LOADED chat too.
         msgs.push({role: 'assistant', agent: aname.textContent, content: abody.textContent,
-                   html: abody.innerHTML, ts: Date.now()});
+                   html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()});
+      }
+    } else if (el.classList.contains('planner-bubble') ||
+               el.classList.contains('planner-think-block') ||
+               el.classList.contains('planner-plan-block') ||
+               el.classList.contains('plan-chk')) {
+      // PLANNER PERSISTENCE, small variant (2026-10-04): planner bubble,
+      // thinking block, plan text and the subtask checklist used to be
+      // DOM-only and died with the page. They save as plain assistant
+      // parts (content + html of the whole block) - no new format, the
+      // existing restore path renders them as normal bubbles.
+      var _pTxt = (el.textContent || '').trim();
+      if (_pTxt) {
+        // strip live ids from the saved html: restored blocks must not
+        // carry planner-think-block & friends twice - the next planner run
+        // does getElementById and would hit the restored ghost first
+        var _clone = el.cloneNode(true);
+        _clone.querySelectorAll('[id]').forEach(function(x) { x.removeAttribute('id'); });
+        msgs.push({role: 'assistant', agent: 'Planner', part: true,
+                   content: _pTxt, html: _clone.innerHTML,
+                   ts: Date.now()});
       }
     }
   });
@@ -9534,17 +9716,30 @@ async function persistCurrentChat(silent) {
   try {
     if (S.currentChatId) {
       // Update existing — do not overwrite the title (preserve user-named titles)
-      await fetch('/chats/' + S.currentChatId, {
+      var _putRes = await fetch('/chats/' + S.currentChatId, {
         method: 'PUT', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({messages: S.currentChatMessages})
+        body: JSON.stringify({messages: S.currentChatMessages, workspace: S.workspace || '', base_rev: S.currentRev || 0})
       });
+      if (_putRes.status === 409) {
+        // SERVER WINS (2026-10-03): adopt the saved messages, keep only
+        // what this tab still holds unsent is the backend's call now.
+        var _srv = await _putRes.json().catch(function () { return null; });
+        if (_srv && _srv.messages) {
+          S.currentChatMessages = _srv.messages;
+          S.currentRev = _srv.rev || 0;
+          showStatus('Chat changed elsewhere - adopted the saved version.');
+        }
+      } else if (_putRes.ok) {
+        var _pj = await _putRes.json().catch(function () { return {}; });
+        if (_pj.rev) S.currentRev = _pj.rev;
+      }
     } else {
       // Create new
       const r = await (await fetch('/chats', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({title: title, messages: S.currentChatMessages})
+        body: JSON.stringify({title: title, messages: S.currentChatMessages, workspace: S.workspace || ''})
       })).json();
-      if (r && r.id) S.currentChatId = r.id;
+      if (r && r.id) { S.currentChatId = r.id; S.currentRev = r.rev || 0; }
     }
   } catch(e) {
     if (!silent) showStatus('Saving chat failed: ' + e.message);
@@ -9632,6 +9827,7 @@ async function loadChat(chatId) {
     document.getElementById('chat').innerHTML = '';
 
     S.currentChatId = chatId;
+    S.currentRev = chat.rev || 0;
     S.currentChatMessages = chat.messages || [];
     setPauseBtnState('idle');
     setStopBtnState('idle');
@@ -9643,9 +9839,10 @@ async function loadChat(chatId) {
     if (_wsField) _wsField.value = (chat.workspace || S.workspace || '');
 
     // Restore chat DOM from saved messages
+    _cpReset();  // PANEL-SCOPE (2026-10-03): snapshots must not merge across chats
     (chat.messages || []).forEach(function(msg) {
       if (msg.role === 'user') {
-        addUserMsg(msg.content, []);
+        addUserMsg(msg.content, (msg.images || []).map(function(i) { return { preview: i.preview }; }));
       } else if (msg.role === 'assistant') {
         // CHAT-STRUCTUR-FIX (2026-08-07): gespeicherte Live-Struktur wiederherstellen
         const c = document.getElementById('chat');
@@ -9665,6 +9862,11 @@ async function loadChat(chatId) {
           abody.style.whiteSpace = 'pre-wrap';
           abody.textContent = msg.content || '';
         }
+        // CHAT RESTORE (2026-10-03): replay the code-panel snapshot so the
+        // tool chips in the LOADED chat open their diffs like live ones,
+        // and wire the restored chips (saved HTML has no handlers).
+        if (msg.cp) _cpRestoreSnapshot(msg.cp);
+        _wireSavedChips(abody);
         wrap.appendChild(hdr);
         wrap.appendChild(abody);
         c.appendChild(wrap);
@@ -11265,6 +11467,11 @@ function updateDuoImageUI() {
       _note.style.display = 'block';
     }
   }
+  // DUO INFO LINE (2026-10-04, user): the generic "Multimodal models
+  // receive the raw image directly" explanation used to vanish in duo
+  // mode - the duo block carries its own copy now.
+  var _dinfo = document.getElementById('duo-image-info');
+  if (_dinfo) _dinfo.style.display = (_isDuo && _m === 'direct') ? 'block' : 'none';
   // PREPROCESS TRAP (2026-10-03): the radio does NOT enable the vision
   // config, without a configured vision model the description never
   // exists and the image is unused. Say so inline.
@@ -11287,3 +11494,252 @@ function _updateDuoRoleStatus(elId, label, model) {
     })
     .catch(function() { _el.textContent = label + ' (' + model + ')'; });
 }
+
+// ── FEATURE SEARCH (2026-10-04, phase 1 in 1.3.0): search the UI itself,
+// not chats. A command-palette style overlay (Ctrl+K / the Search button in
+// the header) indexes every panel's sections, toggle rows and labeled
+// controls; a click switches to the panel, scrolls to the element and
+// flashes it. Static DOM index (built on first open) + agent cards.
+(function() {
+  var _fsOverlay = null, _fsIndex = null, _fsList = null, _fsInput = null;
+
+  var PANEL_LABELS = { agents: 'AGENTS', presets: 'PRESETS', configs: 'CONFIGS',
+                       memory: 'MEMORY', soul: 'SOUL', models: 'MODELS', chats: 'CHATS' };
+
+  function _selText(el) {
+    var row = el.closest('.tgl-row, .cfl-row, label, .agent-card, .set-row, div');
+    if (!row) return (el.title || '').trim();
+    var t = row.querySelector('.tgl-text, .cfl-label, .sec, .agent-name, .set-label');
+    if (t) return t.textContent.trim();
+    var own = row.cloneNode(true);
+    own.querySelectorAll('input,select,button,span.sl').forEach(function(e) { e.remove(); });
+    return (own.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+  }
+
+  function _buildIndex() {
+    var idx = [];
+    var seen = {};
+    // DUO CTX SLIDERS (2026-10-05, user: 'ctx settings schwer zu finden'):
+    // the VRAM-block lever lives in wrappers hidden by submode - indexed
+    // explicitly (once, panel=agents), visible or not.
+    [['wrapper-ctx-agentic', 'Context Coder (Agentic)', 'duo coder agentic'],
+     ['wrapper-ctx-planner', 'Context Planner', 'duo planner'],
+     ['wrapper-ctx-normal', 'Context (Coder + Critic Dual)', 'duo dual'],
+     ['wrapper-ctx-critic', 'Context Critic', 'duo critic']].forEach(function(d) {
+      var w = document.getElementById(d[0]);
+      if (!w) return;
+      var lbl = w.querySelector('span');
+      _push('agents', d[1], lbl || w, 'Duo ctx', null, d[2] + ' ctx context vram');
+    });
+    // NAMING ROUND (2026-10-05, user): generic row texts ("Active") get the
+    // enclosing card/section title as prefix; duplicate labels are deduped;
+    // dynamic agent cards (acard) are indexed WITH their setting fields so
+    // "ctx" finds every agent's Context slider. Index is rebuilt on every
+    // open - agent cards are rendered dynamically.
+    function _push(panel, label, el, kind, act, kw) {
+      label = String(label || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+      if (label.length < 3) return;
+      var key = (panel || '') + '|' + label.toLowerCase();
+      if (seen[key]) return;
+      seen[key] = 1;
+      idx.push({ panel: panel, label: label, el: el, kind: kind, act: act,
+                 kw: ((kw || '') + ' ' + label + ' ' + kind).toLowerCase() });
+    }
+    function _cardTitle(el) {
+      var card = el.closest('.cfg-card');
+      if (!card) return '';
+      var t = card.querySelector('.cfg-card-title');
+      if (!t) return '';
+      return (t.textContent || '').replace(/\s*(BETA|BOOT|EXP|AMBER)\s*$/, '').trim();
+    }
+    document.querySelectorAll('.panel').forEach(function(panel) {
+      var pid = (panel.id || '').replace(/^p-/, '');
+      if (!PANEL_LABELS[pid]) return;
+      var _vis = function(el) {
+        // generic scan: skip controls hidden by mode/submode UNLESS they are
+        // the allowlisted duo-ctx wrappers above. Hidden demo blocks (e.g.
+        // sequential/parallel without backend) must not surface.
+        var n = el;
+        while (n && n !== panel && n !== document.body) {
+          if (n.style && n.style.display === 'none') return false;
+          n = n.parentElement;
+        }
+        return !!(el.offsetParent || el.getClientRects().length) || true;
+      };
+      panel.querySelectorAll('.sec').forEach(function(s) {
+        if (!_vis(s)) return;
+        _push(pid, (s.textContent || '').trim(), s, 'Section');
+      });
+      panel.querySelectorAll('.cfg-card').forEach(function(card) {
+        var titleEl = card.querySelector('.cfg-card-title');
+        var title = titleEl ? titleEl.textContent.replace(/\s*(BETA|BOOT|EXP)\s*$/, '').trim() : '';
+        if (title.length >= 3) _push(pid, title, titleEl, 'Card');
+        card.querySelectorAll('.tgl-row .tgl-text').forEach(function(tx) {
+          var txt = (tx.textContent || '').trim();
+          if (txt.length >= 3) _push(pid, title ? title + ' — ' + txt : txt, tx, 'Toggle');
+        });
+      });
+      panel.querySelectorAll('.tgl-row .tgl-text, .cfl-label').forEach(function(tx) {
+        if (tx.closest('.cfg-card')) return; // handled above with title prefix
+        if (!_vis(tx)) return;
+        var txt = (tx.textContent || '').trim();
+        if (txt.length >= 3) _push(pid, txt, tx, 'Toggle');
+      });
+      panel.querySelectorAll('label input[type="checkbox"]').forEach(function(inp) {
+        var row = inp.closest('label');
+        if (!row || !_vis(row)) return;
+        var txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
+        if (txt.length >= 3) _push(pid, txt.slice(0, 80), row, 'Checkbox');
+      });
+      // dynamic agent cards with their setting fields (ctx/temp/tokens)
+      panel.querySelectorAll('#agent-cards .acard').forEach(function(card) {
+        var nameEl = card.querySelector('.acard-name');
+        var nm = nameEl ? nameEl.textContent.trim() : '';
+        if (!nm) return;
+        _push(pid, 'Agent: ' + nm, card, 'Agent card', null, 'agent modell model');
+        card.querySelectorAll('.fl').forEach(function(fl) {
+          var lbl = (fl.textContent || '').trim().split('\n')[0].slice(0, 30);
+          if (/context|temperature|output-budget|thinking|model/i.test(lbl))
+            _push(pid, nm + ' — ' + lbl, fl, 'Agent setting', null,
+                 'agent ' + nm + ' ' + (lbl.toLowerCase().indexOf('context') >= 0 ? 'ctx kontext' : lbl.toLowerCase()));
+        });
+      });
+      panel.querySelectorAll('button[title]').forEach(function(b) {
+        if (!_vis(b)) return;
+        _push(pid, (b.title || '').trim(), b, 'Button');
+      });
+    });
+    _push(null, 'New Chat', null, 'Action',
+         function() { var b = Array.from(document.querySelectorAll('button'))
+           .find(function(x) { return /new chat/i.test(x.textContent); }); if (b) b.click(); });
+    _push(null, 'Open chats list', null, 'Action',
+         function() { var b = Array.from(document.querySelectorAll('button'))
+           .find(function(x) { return x.textContent.trim() === 'Chats'; }); if (b) b.click(); });
+    return idx;
+  }
+
+  function _switchPanel(pid) {
+    if (!pid) return;
+    var btn = Array.from(document.querySelectorAll('.tab'))
+      .find(function(b) { return (b.dataset && b.dataset.p === pid) || b.textContent.trim() === PANEL_LABELS[pid]; });
+    if (btn) btn.click();
+  }
+
+  function _flash(el) {
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    var old = el.style.boxShadow;
+    el.style.transition = 'box-shadow .3s';
+    el.style.boxShadow = '0 0 0 2px #f0b040, 0 0 12px rgba(240,176,64,.5)';
+    setTimeout(function() { el.style.boxShadow = old || ''; }, 1400);
+  }
+
+  function _open() {
+    if (!_fsOverlay) _buildOverlay();
+    // REBUILD EVERY OPEN (2026-10-05): agent cards are rendered dynamically -
+    // a cached index goes stale the moment a model changes.
+    _fsIndex = _buildIndex();
+    _fsOverlay.style.display = 'flex';
+    _fsInput.value = '';
+    _render('');
+    setTimeout(function() { _fsInput.focus(); }, 30);
+  }
+
+  function _close() { if (_fsOverlay) _fsOverlay.style.display = 'none'; }
+
+  // ALIAS MATCHING (2026-10-05): expanded by the tested pure helper in
+  // feature_search_core.js (ctx->context, temp->temperature, ...).
+  function _render(q) {
+    q = (q || '').toLowerCase().trim();
+    _fsList.innerHTML = '';
+    var terms = window.FSCore ? window.FSCore.expandTerms(q) : [q];
+    var hits = (_fsIndex || []).filter(function(i) {
+      if (!q) return true;
+      var hay = i.kw || ((i.label + ' ' + i.kind).toLowerCase());
+      return terms.some(function(t) { return hay.indexOf(t) >= 0; });
+    });
+    if (!hits.length) {
+      _fsList.innerHTML = '<div class="fs-empty">No matching feature.</div>';
+      return;
+    }
+    hits.slice(0, 40).forEach(function(h) {
+      var row = document.createElement('div');
+      row.className = 'fs-row';
+      row.style.cssText = 'display:flex;gap:10px;align-items:center;padding:8px 14px;cursor:pointer;border-bottom:1px solid #1a2330';
+      var kind = document.createElement('span');
+      kind.className = 'fs-kind';
+      kind.style.cssText = 'font-size:9px;color:#6b7f94;min-width:70px';
+      kind.textContent = h.kind;
+      var label = document.createElement('span');
+      label.className = 'fs-label';
+      label.style.cssText = 'flex:1;font-size:12px;color:#d8dee9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      label.textContent = h.label;
+      var panel = document.createElement('span');
+      panel.className = 'fs-panel';
+      panel.style.cssText = 'font-size:9px;color:#f0b040';
+      panel.textContent = h.panel ? (PANEL_LABELS[h.panel] || h.panel) : '';
+      row.appendChild(kind); row.appendChild(label); row.appendChild(panel);
+      row.addEventListener('mouseenter', function() { row.style.background = '#1c2530'; });
+      row.addEventListener('mouseleave', function() { row.style.background = ''; });
+      row.addEventListener('click', function() {
+        _close();
+        if (h.act) { h.act(); return; }
+        _switchPanel(h.panel);
+        setTimeout(function() { _flash(h.el); }, 120);
+      });
+      _fsList.appendChild(row);
+    });
+  }
+
+  function _buildOverlay() {
+    _fsOverlay = document.createElement('div');
+    _fsOverlay.id = 'fs-overlay';
+    _fsOverlay.style.cssText = 'display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);' +
+      'align-items:flex-start;justify-content:center;padding-top:12vh';
+    _fsOverlay.addEventListener('click', function(e) { if (e.target === _fsOverlay) _close(); });
+    var box = document.createElement('div');
+    box.style.cssText = 'width:min(560px,92vw);background:#141a22;border:1px solid #2a3644;' +
+      'border-radius:8px;box-shadow:0 12px 40px rgba(0,0,0,.6);overflow:hidden;' +
+      "font-family:'IBM Plex Mono',monospace";
+    _fsInput = document.createElement('input');
+    _fsInput.placeholder = 'Search features, settings, agents…  (Esc closes)';
+    _fsInput.style.cssText = 'width:100%;box-sizing:border-box;padding:12px 14px;font-size:13px;' +
+      'background:#0d1117;color:#d8dee9;border:none;outline:none;border-bottom:1px solid #2a3644';
+    _fsInput.addEventListener('input', function() { _render(_fsInput.value); });
+    _fsInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') _close();
+      if (e.key === 'Enter') {
+        var first = _fsList.querySelector('.fs-row');
+        if (first) first.click();
+      }
+    });
+    _fsList = document.createElement('div');
+    _fsList.style.cssText = 'max-height:52vh;overflow-y:auto';
+    box.appendChild(_fsInput);
+    box.appendChild(_fsList);
+    _fsOverlay.appendChild(box);
+    document.body.appendChild(_fsOverlay);
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      _open();
+    }
+  });
+
+  window.addEventListener('load', function() {
+    var host = document.getElementById('h-sidebar-btn');
+    if (host && !document.getElementById('fs-open-btn')) {
+      var b = document.createElement('button');
+      b.id = 'fs-open-btn';
+      b.className = 'hbtn';
+      b.title = 'Search the UI (Ctrl+K)';
+      b.textContent = 'Search';
+      b.addEventListener('click', _open);
+      host.parentElement.insertBefore(b, host.nextSibling);
+    }
+  });
+
+  window.hivemindFeatureSearch = { open: _open, rebuild: function() { _fsIndex = _buildIndex(); } };
+})();
