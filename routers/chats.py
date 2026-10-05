@@ -391,6 +391,24 @@ async def list_chats():
         with _cache_lock:
             return list(_chats_cache.items())
     items = await asyncio.to_thread(_get_items)
+    def _disk_bytes(cid: str, meta_file: str) -> int:
+        """CHAT SIZE (2026-10-05, user): main json + this chat's blob dir."""
+        total = 0
+        try:
+            if meta_file and os.path.isfile(meta_file):
+                total += os.path.getsize(meta_file)
+            bdir = os.path.join(os.path.dirname(meta_file or ""), f"*_{cid}.blobs")
+            import glob as _glob
+            for bf in _glob.glob(bdir):
+                for root, _dirs, files in os.walk(bf):
+                    for f in files:
+                        try:
+                            total += os.path.getsize(os.path.join(root, f))
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+        return total
     for cid, c in items:
         result.append({
             "id": cid,
@@ -400,6 +418,7 @@ async def list_chats():
             "msg_count": c.get("_msg_count", 0),
             "tokens": c.get("_tokens", 0),
             "preview": c.get("_preview", ""),
+            "bytes": _disk_bytes(cid, c.get("_file", "")),
         })
     # INTERRUPTED-FLAG (2026-08-21): letzter Run via Browser-Close parkiert?
     def _is_interrupted(cid: str) -> bool:

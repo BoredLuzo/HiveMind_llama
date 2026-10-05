@@ -9472,6 +9472,22 @@ function _updateVisionPreview() {
   var _cDisp = _cModel ? _cModel.replace(':latest','').split('/').pop() : '—';
   var mode = S.imageMode || 'direct';
   var _flow = '';
+  // AUTOMAP (2026-10-05, user): in automap the judge routes image tasks to
+  // a multimodal model - show THAT, not the direct-chat flow.
+  if (S.mode === 'automap') {
+    if (flowCard) {
+      flowCard.style.borderColor = 'rgba(240,176,64,.45)';
+      flowCard.style.background = 'rgba(240,176,64,.07)';
+      _flow = '<span style="color:#f0b040">&#9654; AutoMap:</span> image tasks are routed to a '
+            + 'multimodal model automatically (see the VISION badge in the agent list).<br>'
+            + '<span style="color:var(--tx3)">Chat answers stay text-only unless a multimodal direct model is set.</span>';
+    }
+    flowCard.innerHTML = _flow;
+    preview.textContent = '';
+    if (badge) badge.style.display = 'none';
+    if (inputEl) inputEl.style.borderColor = '';
+    return;
+  }
   if (flowCard) {
     if (mode === 'preprocess') {
       flowCard.style.borderColor = 'rgba(224,144,48,.45)';
@@ -9507,7 +9523,9 @@ function _updateVisionPreview() {
         _flow = '<span style="color:#d09090">&#9654; Direct:</span> ' + _dDisp
               + ' is not multimodal.<br>'
               + '<span style="color:var(--tx3)">Images may be ignored &mdash; switch to Preprocessor/Pipeline or pick a multimodal direct model.</span>';
-        if (_cModel) {
+        // DUO-CODER LINE (2026-10-05, user: 'weird konfiguriert' in chat
+        // mode): only relevant when a duo run actually consumes it.
+        if (_cModel && (S.mode === 'code_duo' || S._runIsDuo)) {
           _flow += '<br><span style="color:' + (_cVision ? '#80b0e0' : 'var(--tx3)') + '">&#9654; Duo-Coder:</span> ' + _cDisp
                  + (_cVision ? ' is multimodal &mdash; in agentic runs the raw image goes to the coder.' : ' is not multimodal (description via vision model needed).');
         }
@@ -9763,6 +9781,13 @@ function _fmtTokCount(n) {
   return (n / 1000000).toFixed(1) + 'M';
 }
 
+function _fmtSize(bytes) {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
 async function loadChatHistory() {
   try {
     const d  = await (await fetch('/chats')).json();
@@ -9788,7 +9813,9 @@ async function loadChatHistory() {
       var _tokN = ch.tokens || 0;
       var _metaParts = [_msgN + ' message' + (_msgN === 1 ? '' : 's')];
       if (_tokN > 0) _metaParts.push('~' + _fmtTokCount(_tokN) + ' tok');
-      _metaParts.push((ch.updated_at || '').slice(0,16));
+      // CHAT SIZE (2026-10-05, user): json + blobs, right after the date
+      if (ch.bytes > 0) _metaParts.push(_fmtSize(ch.bytes));
+      _metaParts.push((ch.updated_at || '').slice(0, 16));
       meta.textContent = _metaParts.join(' \u00B7 ');
       if (ch.interrupted) {
         const bad = document.createElement('span');
@@ -11477,6 +11504,10 @@ function updateDuoImageUI() {
   // exists and the image is unused. Say so inline.
   var _trap = document.getElementById('duo-image-prepro-warn');
   if (_trap) _trap.style.display = (_isDuo && _m === 'preprocess' && !(S.visionEnabled && S.visionModel)) ? 'block' : 'none';
+  // FLOW CARD REFRESH (2026-10-05, user: stale duo info in chat mode):
+  // setMode only calls updateDuoImageUI - without this the flow card kept
+  // the previous mode's render (duo line visible in direct chat).
+  if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch (e) {} }
 }
 function _updateDuoRoleStatus(elId, label, model) {
   var _el = document.getElementById(elId);
@@ -11685,6 +11716,16 @@ function _updateDuoRoleStatus(elId, label, model) {
         _close();
         if (h.act) { h.act(); return; }
         _switchPanel(h.panel);
+        // REVEAL (2026-10-05, user): some settings are hidden by the active
+        // mode/submode (e.g. the duo ctx wrappers in direct chat). A search
+        // hit must still be usable: clear inline display:none up the chain.
+        if (h.el) {
+          var n = h.el;
+          while (n && n !== document.body) {
+            if (n.style && n.style.display === 'none') n.style.display = '';
+            n = n.parentElement;
+          }
+        }
         setTimeout(function() { _flash(h.el); }, 120);
       });
       _fsList.appendChild(row);

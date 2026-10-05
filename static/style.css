@@ -614,7 +614,7 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
   font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .chat-hist-preview{font-size:10px;color:var(--tx2);margin-top:2px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.chat-hist-meta{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-top:3px}
+.chat-hist-meta{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-top:3px;line-height:1.5}
 .chat-hist-del{background:none;border:none;color:var(--tx2);cursor:pointer;
   font-size:14px;flex-shrink:0;transition:color .15s;padding:0 2px}
 .chat-hist-del:hover{color:var(--red)}
