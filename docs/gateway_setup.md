@@ -40,9 +40,15 @@ history, not in a file, not in any log.
 ## 3. Start the gateway (same shell)
 
 ```powershell
-cd <your-hivemind-folder>
+# adjust the path to YOUR HiveMind folder first:
+cd C:\Tools\HiveMind
 python -m hivemind_gateway.main
 ```
+
+If it answers with "another gateway instance seems to run", an older
+gateway is still alive: close that window (Ctrl+C) or end its PID
+(`taskkill /PID <number> /F`), then start again. Only one instance per
+bot token is allowed — the second one refuses on purpose.
 
 The console prints a **pairing code** (uppercase letters and digits
 only, valid for five minutes). Keep this window open — the window *is*
