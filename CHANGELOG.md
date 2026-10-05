@@ -55,6 +55,9 @@ one-file-per-chat fork guard with rev-based adoption, a 200 MB save
 brake, concurrent-writer coverage.
 
 NOT built (deliberate, for a later release):
+- message edit / regenerate controls in the chat UI do not exist yet
+  (history edits are only possible via the chats API; the seed path
+  handles them - verified - but there is no button for them)
 - steering notes, status lines and approval/ask cards are not persisted
   (approval cards recover server-side only while the run lives)
 - chat size display / cleanup UI (sizes stay whatever they grow to)
