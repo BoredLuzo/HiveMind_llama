@@ -21,7 +21,8 @@
     tokens: 'tok',
     bild: 'image',
     foto: 'image',
-    vram: 'vram'
+    vram: 'vram',
+    bot: 'telegram'
   };
 
   function expandTerms(q, aliases) {

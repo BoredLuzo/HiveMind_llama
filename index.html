@@ -1661,6 +1661,22 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         </div>
       </div>
     </div>
+  <!-- TELEGRAM GATEWAY (2026-10-05): the master veto for the optional
+       Telegram bridge (hivemind_gateway/). false => a running gateway
+       shuts itself down within one poll loop and nothing polls Telegram.
+       true does NOT start the process by itself - the gateway process is
+       still started on the PC (shell today, supervisor planned). -->
+  <div class="cfg-card">
+    <div class="cfg-card-title">Telegram Gateway</div>
+    <div class="tgl-row">
+      <span class="tgl-text">Enabled</span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="tg-enabled-toggle" onchange="postSettings({telegram_gateway_enabled:this.checked})">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div class="fld-hint">Master switch for the optional Telegram bot (hivemind_gateway). Off = a running gateway stops itself within one poll loop and nothing listens. Setup: docs/gateway_setup.md - the bot process is still started on the PC; starting from this panel is planned.</div>
+  </div>
   </div>
   <!-- SUBAGENT-LITE: controls now live in the Agentic tab (opt-group "Subagent",
        at the very bottom) — where the Coder/Critic tool layers are also controlled.

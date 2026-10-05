@@ -11400,6 +11400,9 @@ async function loadGitConfig(s) {
   // v0.96.5: Additional git config fields
   var autoPushTog = document.getElementById('git-auto-push-toggle');
   if (autoPushTog) autoPushTog.checked = s.git_auto_push || false;
+  // Telegram gateway master switch (hivemind_gateway veto, 2026-10-05)
+  var tgTog = document.getElementById('tg-enabled-toggle');
+  if (tgTog) tgTog.checked = s.telegram_gateway_enabled || false;
   var emailInp = document.getElementById('git-email');
   if (emailInp) emailInp.value = s.git_email || '';
   var prefixInp = document.getElementById('git-commit-prefix');
