@@ -29,7 +29,8 @@ class FakeApi:
         self.calls = []
 
     async def send_message(self, chat_id, text, reply_to_message_id=None,
-                           disable_web_page_preview=True):
+                           disable_web_page_preview=True,
+                           parse_mode=None, reply_markup=None):
         self.calls.append(("send_message", chat_id, text))
         return {"ok": True}
 

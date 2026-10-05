@@ -14,6 +14,9 @@ dependencies = [
     "rich>=13.7",
     "uvicorn>=0.30",
     "watchfiles>=0.21",
+    # Windows Credential Manager for the optional Telegram gateway (P8
+    # supervisor spawns the gateway from this venv - vault access).
+    "keyring>=25 ; sys_platform == 'win32'",
 ]
 
 [dependency-groups]

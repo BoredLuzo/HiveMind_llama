@@ -54,7 +54,8 @@ class FakeApi:
         self.docs = []
 
     async def send_message(self, chat_id, text, reply_to_message_id=None,
-                           disable_web_page_preview=True):
+                           disable_web_page_preview=True,
+                           parse_mode=None, reply_markup=None):
         self.sent.append((str(chat_id), text))
         return {"message_id": 500 + len(self.sent)}
 
@@ -65,6 +66,12 @@ class FakeApi:
     async def send_document(self, chat_id, data, filename, caption=None,
                             reply_to_message_id=None):
         self.docs.append((str(chat_id), filename))
+        return {"ok": True}
+
+    async def answer_callback_query(self, callback_query_id, text=None):
+        if not hasattr(self, "callback_answers"):
+            self.callback_answers = []
+        self.callback_answers.append((callback_query_id, text))
         return {"ok": True}
 
 
@@ -101,6 +108,12 @@ class FakeBridge(RunBridge):
             self.mirrored = []
         self.mirrored.append(text)
         return "🧭 test"
+
+    async def mirror_callback(self, callback_id, data):
+        if not hasattr(self, "callbacks"):
+            self.callbacks = []
+        self.callbacks.append((callback_id, data))
+        return "ok"
 
 
 def _gw(tmp_name):
@@ -431,6 +444,30 @@ async def t_setup_token():
         M.TelegramApi = orig_api
 
 
+# F4: owner callback_query routes into the bridge (tappable approvals)
+async def t_f4_callback():
+    import time as _t
+    gw, st, api = _gw("gwcmd_cb_")
+    gw.bridge._mirror()["run_id"] = "ui-x"
+    gw.bridge._mirror()["approval_sig"] = "d|x"
+    cb = {
+        "update_id": 60,
+        "callback_query": {
+            "id": "cb-1",
+            "from": {"id": OWNER, "is_bot": False},
+            "message": {"message_id": 77,
+                        "chat": {"id": OWNER, "type": "private"},
+                        "date": int(_t.time()) - 5},
+            "data": "appr:ui-x:3",
+        },
+    }
+    await process_update(gw, cb)
+    check("F4: callback routed to bridge",
+          getattr(gw.bridge, "callbacks", []) == [("cb-1", "appr:ui-x:3")])
+    check("F4: toast answered via answerCallbackQuery",
+          any(c == "cb-1" for c, *_ in getattr(api, "callback_answers", [])))
+
+
 async def _main():
     await t_new()
     await t_status_verbose()
@@ -442,6 +479,7 @@ async def _main():
     await t_ui_veto()
     await t_g8_order()
     await t_g9_edits()
+    await t_f4_callback()
     await t_help()
     await t_setup_token()
 

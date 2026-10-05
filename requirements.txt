@@ -19,3 +19,8 @@ pyyaml>=6.0                # skills frontmatter
 
 # Optional (only for browser_tool; afterwards: playwright install chromium)
 playwright>=1.45
+
+# Windows Credential Manager token storage for the optional Telegram
+# gateway. The P8 supervisor spawns the gateway from THIS venv, so the
+# vault must be readable from here too.
+keyring>=25 ; sys_platform == 'win32'

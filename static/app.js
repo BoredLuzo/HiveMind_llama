@@ -11406,6 +11406,29 @@ async function loadGitConfig(s) {
   // P10: mirror engine runs to the paired phone
   var tgMirrorTog = document.getElementById('tg-mirror-toggle');
   if (tgMirrorTog) tgMirrorTog.checked = s.telegram_mirror_enabled || false;
+  // P8-lite supervisor: heartbeat status + start/stop buttons (2026-10-05)
+  async function gatewaySupervisorTick() {
+    try {
+      var st = await (await fetch('/gateway/status')).json();
+      var el = document.getElementById('tg-sup-status');
+      if (el) el.textContent = st.running
+        ? 'running (pid ' + st.pid + (st.paired ? ', paired' : ', unpaired') + ')'
+        : 'stopped';
+    } catch (e) { /* engine unreachable: keep last state */ }
+  }
+  var supStart = document.getElementById('tg-sup-start');
+  var supStop = document.getElementById('tg-sup-stop');
+  if (supStart) supStart.onclick = async function() {
+    supStart.disabled = true;
+    try { await fetch('/gateway/start', {method: 'POST'}); } catch (e) {}
+    setTimeout(function() { gatewaySupervisorTick(); supStart.disabled = false; }, 6000);
+  };
+  if (supStop) supStop.onclick = async function() {
+    supStop.disabled = true;
+    try { await fetch('/gateway/stop', {method: 'POST'}); } catch (e) {}
+    setTimeout(function() { gatewaySupervisorTick(); supStop.disabled = false; }, 1500);
+  };
+  if (supStart || supStop) { gatewaySupervisorTick(); setInterval(gatewaySupervisorTick, 5000); }
   var emailInp = document.getElementById('git-email');
   if (emailInp) emailInp.value = s.git_email || '';
   var prefixInp = document.getElementById('git-commit-prefix');

@@ -38,9 +38,30 @@ def filter_secrets(text: str, extra_patterns: tuple = ()) -> str:
 
 
 def escape_html(text: str) -> str:
-    """For the parse_mode="HTML" path ONLY (WP2 decides, with tests).
+    """For the parse_mode="HTML" path (see md_to_telegram_html).
     Plain-text sends must not use it — raw text is already safe."""
     return html.escape(text, quote=False)
+
+
+def md_to_telegram_html(text: str) -> str:
+    """Markdown-ish run output -> Telegram HTML (2026-10-05 UX round).
+
+    Escape FIRST, then translate only COMPLETE constructs inside the
+    chunk: ``` fences become <pre> blocks, `inline` becomes <code>,
+    **bold** becomes <b>. Incomplete constructs survive as escaped plain
+    text, so a chunk boundary can never produce invalid HTML — and every
+    dynamic substring (<, >, &, user content) is escaped before any tag
+    is emitted."""
+    out = html.escape(text, quote=False)
+    # fenced blocks first (```lang\n...\n``` -> <pre>...</pre>)
+    out = re.sub(r"```[A-Za-z0-9_+#-]*\n(.*?)```",
+                 lambda m: "<pre>" + m.group(1) + "</pre>", out, flags=re.S)
+    # inline code (single backticks; may also hit text inside <pre> —
+    # harmless: Telegram renders <code> inside <pre> fine)
+    out = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", out)
+    # bold
+    out = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", out)
+    return out
 
 
 def split_message(text: str, limit: int = TELEGRAM_HARD_LIMIT) -> list[str]:

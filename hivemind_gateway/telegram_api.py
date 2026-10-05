@@ -90,12 +90,18 @@ class TelegramApi:
 
     async def send_message(self, chat_id: str | int, text: str,
                            reply_to_message_id: int | None = None,
-                           disable_web_page_preview: bool = True) -> dict:
+                           disable_web_page_preview: bool = True,
+                           parse_mode: str | None = None,
+                           reply_markup: dict | None = None) -> dict:
         params: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
             "link_preview_options": {"is_disabled": disable_web_page_preview},
         }
+        if parse_mode:
+            params["parse_mode"] = parse_mode
+        if reply_markup:
+            params["reply_markup"] = reply_markup
         if reply_to_message_id is not None:
             params["reply_parameters"] = {
                 "message_id": reply_to_message_id, "allow_sending_without_reply": True}

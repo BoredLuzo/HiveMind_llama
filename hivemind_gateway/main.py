@@ -269,9 +269,11 @@ class Gateway:
 
     # -- messenger interface for the bridge (owner-addressed by policy) --
 
-    async def send_message(self, text: str) -> dict:
+    async def send_message(self, text: str, parse_mode: str | None = None,
+                           reply_markup: dict | None = None) -> dict:
         return await gw_send.send(self.api, self.owner_id, self.owner_id,
-                                  text=text)
+                                  text=text, parse_mode=parse_mode,
+                                  reply_markup=reply_markup)
 
     async def edit_message(self, message_id: int, text: str) -> None:
         await gw_send.send(self.api, self.owner_id, self.owner_id,
@@ -491,7 +493,21 @@ async def process_update(gw: Gateway, raw: dict) -> None:
         if cmd:
             await gw.handle_owner_update(p)
         elif p.kind == "callback_query":
-            log.info("[DROP] owner callback (approvals arrive with WP4)")
+            # 2026-10-05: tappable approval buttons (mirror cards) —
+            # callback_data 'appr:<rid>:<1|2|3>'. Taps count toward the
+            # rate limit (20/min is plenty); the toast answers via
+            # answerCallbackQuery.
+            if p.text.startswith("appr:"):
+                note = await gw.bridge.mirror_callback(p.callback_id,
+                                                       p.text)
+                if p.callback_id:
+                    try:
+                        await gw.api.answer_callback_query(p.callback_id,
+                                                           text=note)
+                    except TelegramApiError as exc:
+                        log.warning("[APPR] toast failed: %s", exc)
+            else:
+                log.info("[DROP] owner callback %s", p.update_id)
         elif p.kind == "edited_message":
             # audit G9: an edit of a recent text arrives as a NEW update
             # (fresh update_id — dedupe passes) with the ORIGINAL date, so
@@ -565,6 +581,12 @@ async def _mirror_loop(gw: Gateway) -> None:
     while True:
         if kill_switch_active():
             break
+        # P8-lite supervisor heartbeat: the UI's start/stop/status reads
+        # this liveness beacon (fire-and-forget, see hive_client).
+        await gw.hive.heartbeat(os.getpid(), {
+            "paired": gw.owner_id is not None,
+            "mode": gw.state.data.get("mode") or "",
+        })
         await gw.bridge.mirror_tick()
         await asyncio.sleep(5.0)
 

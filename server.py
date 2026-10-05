@@ -1807,6 +1807,89 @@ async def health():
         "gateway_overrides": True,
     }
 
+# -- Gateway supervisor (P8-lite, 2026-10-05) -------------------------------
+# The running Telegram gateway POSTs a heartbeat every 5 s (mirror loop);
+# GET /gateway/status exposes liveness to the UI, POST /gateway/start
+# spawns `sys.executable -m hivemind_gateway.main` DETACHED with
+# HIVEMIND_GATEWAY_ENABLED=1 (the user clicked - that IS the deliberate
+# master switch), POST /gateway/stop kills the heartbeat pid after a
+# freshness + process-name check (recycled-pid guard). Loopback +
+# Host-allowlist trust only, same as every other engine endpoint.
+
+@app.post("/gateway/heartbeat", include_in_schema=False)
+async def gateway_heartbeat(req: Request):
+    try:
+        body = await req.json()
+    except (ValueError, TypeError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    from infra import gateway_supervisor as _sup
+    _sup.note_heartbeat(int(body.get("pid") or 0),
+                        body.get("data") if isinstance(body.get("data"), dict) else {})
+    return {"ok": True}
+
+
+@app.get("/gateway/status", include_in_schema=False)
+async def gateway_status():
+    from infra import gateway_supervisor as _sup
+    return _sup.status()
+
+
+@app.post("/gateway/start", include_in_schema=False)
+async def gateway_start():
+    from infra import gateway_supervisor as _sup
+    if _sup.status().get("running"):
+        return JSONResponse({"ok": False,
+                             "error": "gateway already running"},
+                            status_code=409)
+    import subprocess
+    import sys as _sys
+    _logs = _THIS_DIR / "logs"
+    try:
+        _logs.mkdir(exist_ok=True)
+        _out = open(_logs / "gateway_supervised.log", "ab")
+    except OSError as _e:
+        return JSONResponse({"ok": False, "error": f"log open failed: {_e}"},
+                            status_code=500)
+    _env = dict(os.environ)
+    _env["HIVEMIND_GATEWAY_ENABLED"] = "1"
+    _flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS) \
+        if os.name == "nt" else 0
+    subprocess.Popen([_sys.executable, "-m", "hivemind_gateway.main"],
+                     cwd=str(_THIS_DIR), env=_env,
+                     stdout=_out, stderr=subprocess.STDOUT,
+                     creationflags=_flags)
+    _out.close()
+    return {"ok": True,
+            "hint": "status flips to running within one heartbeat (~5 s)"}
+
+
+@app.post("/gateway/stop", include_in_schema=False)
+async def gateway_stop():
+    import subprocess
+    from infra import gateway_supervisor as _sup
+    st = _sup.status()
+    pid = int(st.get("pid") or 0)
+    if not st.get("running") or pid <= 0:
+        return JSONResponse({"ok": False, "error": "gateway not running"},
+                            status_code=409)
+    # recycled-pid guard: the heartbeat is <=15 s old, but the pid could
+    # still have been reused - refuse to kill anything but a python proc.
+    _chk = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         f"$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; "
+         "if ($p -and $p.ProcessName -match 'python') { 'py' } else { 'no' }"],
+        capture_output=True, text=True)
+    if _chk.stdout.strip() != "py":
+        return JSONResponse(
+            {"ok": False, "error": "pid is not a python process - refusing"},
+            status_code=409)
+    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                   capture_output=True)
+    _sup.clear()
+    return {"ok": True}
+
 # -- Router Registration --
 app.include_router(automap_router)
 app.include_router(chats_router)

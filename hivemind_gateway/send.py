@@ -17,7 +17,9 @@ async def send(api, owner_chat_id: str | int | None,
                new_text: str | None = None, message_id: int | None = None,
                document_bytes: bytes | None = None,
                filename: str | None = None,
-               reply_to_message_id: int | None = None) -> dict:
+               reply_to_message_id: int | None = None,
+               parse_mode: str | None = None,
+               reply_markup: dict | None = None) -> dict:
     """All outbound traffic. Exactly one of:
       text          -> sendMessage
       new_text+id   -> editMessageText
@@ -44,4 +46,6 @@ async def send(api, owner_chat_id: str | int | None,
         raise ValueError("send() requires one of text / new_text / "
                          "document_bytes")
     return await api.send_message(chat_id, text,
-                                  reply_to_message_id=reply_to_message_id)
+                                  reply_to_message_id=reply_to_message_id,
+                                  parse_mode=parse_mode,
+                                  reply_markup=reply_markup)

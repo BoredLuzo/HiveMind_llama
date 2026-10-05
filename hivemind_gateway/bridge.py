@@ -159,6 +159,17 @@ class RunBridge:
         await self.ms.send_message(text)
         return text
 
+    async def _send_chunk(self, plain: str) -> None:
+        """Send one answer chunk as Telegram HTML (code fences render as
+        <pre>, 2026-10-05 UX round). A parse rejection falls back to the
+        plain text — formatting must never cost the answer itself."""
+        try:
+            await self.ms.send_message(
+                render.md_to_telegram_html(plain), parse_mode="HTML")
+        except TelegramApiError as exc:
+            self._log_note(f"HTML send rejected ({exc}) — resending plain")
+            await self.ms.send_message(plain)
+
     def _clear_run(self) -> None:
         if self.state.data.get("active_run"):
             self.state.set_active_run(None)
@@ -305,7 +316,7 @@ class RunBridge:
                 text.encode("utf-8"), "ergebnis.txt")
         else:
             for c in chunks:
-                await self.ms.send_message(c)
+                await self._send_chunk(c)
         try:
             await self._write_turn(
                 chat_id, {"role": "assistant", "content": text})
@@ -847,8 +858,17 @@ class RunBridge:
                     f"🛡 Approval needed (UI run {rid})\n\n"
                     f"tool: {body.get('tool')}\n\n"
                     f"{preview}\n\n"
-                    "Reply 1 = allow once, 3 = deny.\n"
-                    "('2'/always does not exist from the phone.)")
+                    "Buttons below; or reply 1 (once) / 3 (deny) as text.\n"
+                    "'2' remembers EXACTLY this call for this chat.",
+                    reply_markup={
+                        "inline_keyboard": [[
+                            {"text": "✅ Once",
+                             "callback_data": f"appr:{rid}:1"},
+                            {"text": "📁 Always (chat)",
+                             "callback_data": f"appr:{rid}:2"},
+                            {"text": "⛔ Deny",
+                             "callback_data": f"appr:{rid}:3"},
+                        ]]})
         elif m["approval_sig"] and not body.get("active"):
             m["approval_sig"] = None  # card resolved elsewhere (UI)
 
@@ -881,6 +901,41 @@ class RunBridge:
         instead of starting a run."""
         m = self._mirror()
         return bool(m.get("run_id")) and bool((text or "").strip())
+
+    async def mirror_callback(self, callback_id: str, data: str) -> str:
+        """Tappable approval buttons (2026-10-05 UX round): callback_data
+        is 'appr:<rid>:<1|2|3>' from the card's inline keyboard. The
+        decision rides the SAME path as text answers (decision_id + tool
+        echoed for the engine's duplicate/tool guards); '2' uses the
+        engine's chat-scoped exact-call memory. Returns the toast text
+        for answerCallbackQuery."""
+        m = self._mirror()
+        try:
+            _, rid, answer = data.split(":", 2)
+        except ValueError:
+            return "malformed button"
+        if rid != m.get("run_id") or not m.get("approval_sig"):
+            return "card already gone"
+        if answer not in ("1", "2", "3"):
+            return "unknown button"
+        resp = await self.hive.decide_approval(
+            rid, answer,
+            decision_id=m.get("approval_decision_id") or "",
+            tool=m.get("approval_tool") or "")
+        code = getattr(resp, "status_code", 500)
+        m["approval_sig"] = None
+        if code >= 300:
+            return f"not accepted (HTTP {code})"
+        try:
+            routed = str((resp.json() or {}).get("routed") or "")
+        except (ValueError, TypeError, AttributeError):
+            routed = ""
+        if routed == "duplicate":
+            return "already answered (UI) — nothing changed"
+        if answer == "2":
+            return "always (this chat, this exact call) — delivered"
+        return "allowed (once) — delivered" if answer == "1" \
+            else "denied — delivered"
 
     async def mirror_send(self, text: str) -> str:
         """Route a phone message into the mirrored run: while an

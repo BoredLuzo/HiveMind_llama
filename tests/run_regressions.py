@@ -104,6 +104,7 @@ SUITES = [
     ("gateway_confinement",    "tests/test_gateway_confinement.py",             90),
     ("webfetch_guard",         "tests/test_webfetch_guard.py",                  60),
     ("csrf_host_guard",        "tests/test_csrf_host_guard.py",                 60),
+    ("gateway_supervisor",     "tests/test_gateway_supervisor.py",              60),
 ]
 
 

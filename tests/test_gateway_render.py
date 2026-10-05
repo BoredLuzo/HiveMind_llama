@@ -78,3 +78,7 @@ check("escape_html basics", escape_html("<b>&x") == "&lt;b&gt;&amp;x")
 print()
 print(f"passed={passed} failed={failed}")
 sys.exit(0 if failed == 0 else 1)
+
+# F3 (2026-10-05): markdown -> Telegram HTML for run answers.\n# Escape FIRST, then translate only COMPLETE constructs.\nfrom hivemind_gateway.render import md_to_telegram_html as _md\n\n_h = _md("vor\n```html\n<b>x</b>\n```\n`c` und **f** <att>")\ncheck("md: fence -> <pre> with escaped body",\n      "<pre>" in _h and "&lt;b&gt;x&lt;/b&gt;" in _h)\ncheck("md: inline code", "<code>c</code>" in _h)\ncheck("md: bold", "<b>f</b>" in _h)\ncheck("md: raw angle brackets escaped", "&lt;att&gt;" in _h)\n_h2 = _md("```js\nnope")\ncheck("md: incomplete fence stays escaped plain",\n      "<pre>" not in _h2 and "nope" in _h2)\n\nprint()
+print(f"passed={passed} failed={failed}")
+sys.exit(0 if failed == 0 else 1)

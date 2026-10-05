@@ -83,6 +83,19 @@ class HiveClient:
             raise HiveUnreachable(f"/settings HTTP {r.status_code}")
         return r.json()
 
+    async def heartbeat(self, pid: int, data: dict) -> None:
+        """POST /gateway/heartbeat (P8-lite supervisor liveness, sent
+        every mirror-loop tick). Fire-and-forget: an unreachable engine
+        is logged at debug and otherwise ignored — the heartbeat must
+        never disturb the poll/mirror loops."""
+        try:
+            await self._post_json("/gateway/heartbeat",
+                                  {"pid": pid, "data": data})
+        except (HiveUnreachable, httpx.HTTPError) as exc:
+            import logging
+            logging.getLogger("hivemind_gateway.hive_client").debug(
+                "heartbeat skipped: %s", exc)
+
     async def create_chat(self, title: str, workspace: str | None = None) \
             -> dict:
         body: dict[str, Any] = {"title": title, "messages": []}

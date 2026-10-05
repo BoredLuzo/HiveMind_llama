@@ -133,14 +133,18 @@ class FakeHive:
 class FakeMessenger:
     def __init__(self):
         self.messages = []
+        self.parse_modes = []
+        self.markups = []
         self.edits = []          # (message_id, text)
         self.documents = []
         self._next_id = 100
         self.owner_id = "111"
 
-    async def send_message(self, text):
+    async def send_message(self, text, parse_mode=None, reply_markup=None):
         self._next_id += 1
         self.messages.append(text)
+        self.parse_modes.append(parse_mode)
+        self.markups.append(reply_markup)
         return {"message_id": self._next_id}
 
     async def edit_message(self, message_id, text):
@@ -695,9 +699,77 @@ async def _main():
     await t_stop()
     await t_takeover()
     await t_audit_fixes()
+    await t_ux_round()
 
 
-# ── 8. full-audit fixes (G1/G2/G5/G7/N7/G8/G11) ────────────────────────
+# 2026-10-05 UX round: rich rendering, tappable approvals
+async def t_ux_round():
+    # F3: run answers go out as Telegram HTML (fences -> <pre>)
+    ev = [{"type": "run_id", "run_id": "r-html"},
+          {"type": "token",
+           "content": "vorher\n```html\n<b>keep</b>\n```\nmit `code` und **fett**\nnachher"},
+          {"type": "done", "stop_reason": "completed"}]
+    br, st, ms = _mk("gwbr_html_", FakeHive(ev))
+    await br.start_text_run("q")
+    sent = ms.messages[-1]
+    check("F3: fence rendered as <pre>",
+          "<pre>" in sent and "&lt;b&gt;keep&lt;/b&gt;" in sent)
+    check("F3: inline code + bold rendered",
+          "<code>code</code>" in sent and "<b>fett</b>" in sent)
+    check("F3: sent with parse_mode HTML", ms.parse_modes[-1] == "HTML")
+
+    # F3 fallback: a parse rejection must resend the plain chunk
+    class ParseBoomMessenger(FakeMessenger):
+        async def send_message(self, text, parse_mode=None,
+                               reply_markup=None):
+            if parse_mode == "HTML":
+                raise TelegramApiError(
+                    "sendMessage", "Bad Request: can't parse entities")
+            return await super().send_message(text)
+
+    ev2 = [{"type": "run_id", "run_id": "r-fb"},
+           {"type": "token", "content": "```\ncode\n```"},
+           {"type": "done", "stop_reason": "completed"}]
+    br2, st2, ms2 = _mk("gwbr_htmlfb_", FakeHive(ev2))
+    br2.ms.__class__ = ParseBoomMessenger
+    await br2.start_text_run("q")
+    check("F3 fallback: plain text delivered on parse error",
+          any("code" in m for m in ms2.messages))
+
+    # F4: mirror card carries a 3-button keyboard; callbacks ride the
+    # SAME decision path (decision_id + tool echoed), '2' included
+    class CBHive(FakeHive):
+        def __init__(self):
+            super().__init__()
+            self.settings_body = {"telegram_mirror_enabled": True}
+            self.journal_body = {"active": True, "run_id": "ui-cb",
+                                 "done": False, "aborted": False,
+                                 "ts": time.time(), "n": 1, "frames": []}
+            self.pending_body = {"active": True, "tool": "run_bash",
+                                 "preview": "cmd", "decision_id": "d-cb"}
+            self.decided = []
+
+        async def decide_approval(self, run_id, answer, decision_id="",
+                                  tool=""):
+            self.decided.append((run_id, answer, decision_id, tool))
+            return FakeResponse(200, {"routed": "pause"})
+
+    hive_cb = CBHive()
+    br_cb, st_cb, ms_cb = _mk("gwbr_cb_", hive_cb)
+    await br_cb.mirror_tick()
+    await br_cb.mirror_tick()
+    check("F4: card sent with 3-button keyboard",
+          bool(ms_cb.markups) and
+          len(ms_cb.markups[-1]["inline_keyboard"][0]) == 3)
+    toast = await br_cb.mirror_callback("cbid", "appr:ui-cb:2")
+    check("F4: '2' (always, chat) rides decision path",
+          hive_cb.decided == [("ui-cb", "2", "d-cb", "run_bash")])
+    check("F4: '2' toast", "always" in toast)
+    check("F4: latch cleared after callback",
+          br_cb._mirror()["approval_sig"] is None)
+    toast2 = await br_cb.mirror_callback("cbid", "appr:ui-cb:1")
+    check("F4: stale rid refused", "gone" in toast2
+          and hive_cb.decided == [("ui-cb", "2", "d-cb", "run_bash")])
 async def t_audit_fixes():
     # G1: phone runs FORCE the engine approval gate via the stream body
     br, st, ms = _mk("gwbr_g1_", FakeHive(_run_events()))
