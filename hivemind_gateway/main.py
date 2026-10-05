@@ -259,6 +259,9 @@ class Gateway:
         # must update the engine or switch the global toggle on.
         self.engine_gate_support = True
         self.engine_version = "?"
+        # phone restriction (UI toggle): boot default = restricted
+        # (safe by default); the first settings fetch corrects it.
+        self.phone_restricted = True
 
     # -- outbound (always via send()) ------------------------------------
 

@@ -839,6 +839,14 @@ async def t_audit_fixes():
           br_g1b._stream_overrides().get("duo_action_approval_enabled") is True)
 
     # phone restriction toggle: restricted -> body carries the clamp
+    # DEFAULT ON: a missing key restricts (safe by default)
+    hive_d = FakeHive(_run_events())
+    hive_d.settings_body = {}
+    br_d, st_d, ms_d = _mk("gwbr_restrd_", hive_d)
+    await br_d.start_text_run("q")
+    check("restrict default ON: key sent when absent",
+          br_d.hive.stream_bodies[-1]["overrides"].get(
+              "phone_restricted") is True)
     hive_r = FakeHive(_run_events())
     hive_r.settings_body = {"telegram_phone_restricted": True}
     br_r, st_r, ms_r = _mk("gwbr_restr_", hive_r)
@@ -849,11 +857,12 @@ async def t_audit_fixes():
     br_r.ms.phone_restricted = True
     check("restrict: /status shows it",
           "web + text only" in br_r.status_text())
+    # explicit OFF: only an explicit false unlocks phone runs
     hive_u = FakeHive(_run_events())
-    hive_u.settings_body = {}
+    hive_u.settings_body = {"telegram_phone_restricted": False}
     br_u, st_u, ms_u = _mk("gwbr_restr0_", hive_u)
     await br_u.start_text_run("q")
-    check("restrict off: key absent",
+    check("restrict off (explicit): key absent",
           "phone_restricted" not in
           br_u.hive.stream_bodies[-1]["overrides"])
 

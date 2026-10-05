@@ -11408,7 +11408,7 @@ async function loadGitConfig(s) {
   if (tgMirrorTog) tgMirrorTog.checked = s.telegram_mirror_enabled || false;
   // phone runs restricted to web + text (2026-10-05 safety toggle)
   var tgRestrictTog = document.getElementById('tg-restrict-toggle');
-  if (tgRestrictTog) tgRestrictTog.checked = s.telegram_phone_restricted || false;
+  if (tgRestrictTog) tgRestrictTog.checked = s.telegram_phone_restricted !== false;
   // P8-lite supervisor: heartbeat status + start/stop buttons (2026-10-05)
   async function gatewaySupervisorTick() {
     try {

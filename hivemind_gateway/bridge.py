@@ -225,12 +225,14 @@ class RunBridge:
         # UI toggle telegram_phone_restricted (2026-10-05): restrict this
         # run to web + read-only tools. Read FRESH per run, so flipping
         # the toggle applies from the very next message — no restart.
-        _restricted = False
+        # DEFAULT ON (safe by default): a missing key restricts; only an
+        # explicit false (toggle off in the UI) unlocks phone runs.
+        _restricted = True
         try:
             _s = await self.hive.settings()
-            _restricted = bool(_s.get("telegram_phone_restricted"))
+            _restricted = bool(_s.get("telegram_phone_restricted", True))
         except (HiveUnreachable, OSError, ValueError):
-            pass  # engine offline: the run fails anyway, stay unrestricted
+            pass  # engine offline: the run fails anyway, stay restricted
         try:
             ov = self._stream_overrides()
             if _restricted:
@@ -414,7 +416,7 @@ class RunBridge:
         tools = self.state.data.get("tools")
         tools_txt = ("on" if tools is True else "off" if tools is False
                      else "engine default")
-        _restr = getattr(self.ms, "phone_restricted", None)
+        _restr = getattr(self.ms, "phone_restricted", True)
         restr_txt = ("web + text only" if _restr
                      else "off" if _restr is False else "unknown")
         # audit G1 + version-skew detection: state the invariant plainly —
@@ -765,9 +767,11 @@ class RunBridge:
         except (HiveUnreachable, OSError, ValueError):
             return  # engine unreachable: nothing to mirror, keep quiet
         # UI toggle telegram_phone_restricted: stash for /status + the
-        # supervisor heartbeat (best-effort view, refreshed every tick)
+        # supervisor heartbeat (best-effort view, refreshed every tick);
+        # missing key = restricted (safe default)
         if hasattr(self.ms, "phone_restricted"):
-            self.ms.phone_restricted = bool(s.get("telegram_phone_restricted"))
+            self.ms.phone_restricted = bool(s.get("telegram_phone_restricted",
+                                                  True))
         if not self._mirror_enabled(s):
             if m["run_id"]:
                 self._mirror_reset(m)
