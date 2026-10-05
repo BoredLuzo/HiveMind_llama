@@ -273,6 +273,18 @@ async def run_direct(ctx):
                 "[Direct] model override from run body: %s", _user_direct)
             _direct_model = _user_direct
 
+        # no-hardcoded-models fail-fast: an empty selection means nothing
+        # is downloaded/configured — say so instead of a cryptic loader
+        # error (2026-10-05).
+        if not str(_direct_model or "").strip():
+            _direct_log.error("[Direct] no model available/downloaded")
+            yield await ctx.emit({"type": "error",
+                                  "content": "No model is downloaded or "
+                                             "configured. Download a GGUF "
+                                             "(setup_models.bat) or pick "
+                                             "one in the UI."})
+            return
+
         _preload_ev = await ctx.maybe_preload(_direct_model)
         if _preload_ev:
             yield _preload_ev

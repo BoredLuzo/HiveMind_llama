@@ -131,8 +131,11 @@ def test_manifest_file_covers_catalog():
 
 
 def test_settings_defaults_resolve():
-    """The settings-default tags must resolve to the catalog files via the
-    manifest (the actual live failure)."""
+    """No-hardcoded-models (2026-10-05): shipped settings defaults carry
+    NO GGUF model names anymore. This check is now the GUARD against
+    re-hardcoding: if a default model name reappears it must at least
+    resolve via the GGUF index (else fresh installs hard-abort on
+    'model not found' — the lfm2.5 judge incident)."""
     sys.path.insert(0, str(ROOT))
     from settings import DEFAULT_SETTINGS
     tmp = Path(tempfile.mkdtemp(prefix="hvm_pin_res_"))
@@ -140,8 +143,10 @@ def test_settings_defaults_resolve():
         (tmp / fname).write_bytes(b"x" * 64)
     idx, lm = _build_index_in(tmp)
     lm_tag = DEFAULT_SETTINGS["agents"]["duo_coder"]["model"]
-    if lm_tag in idx:
-        ok(f"Settings-Default '{lm_tag}' resolved über den Index (Live-Bug behoben)")
+    if not lm_tag:
+        ok("Settings-Default leer (no-hardcoded-models Policy aktiv)")
+    elif lm_tag in idx:
+        ok(f"Settings-Default '{lm_tag}' resolved über den Index")
     else:
         fail("settings_default", f"'{lm_tag}' nicht im Index: {sorted(idx)}")
 

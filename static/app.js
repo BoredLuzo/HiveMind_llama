@@ -11439,17 +11439,32 @@ async function loadGitConfig(s) {
   }
   var supStart = document.getElementById('tg-sup-start');
   var supStop = document.getElementById('tg-sup-stop');
+  var supBusy = false;
+  if (supStart) supStart.disabled = true;  // unknown until first tick
+  if (supStop) supStop.disabled = true;
   if (supStart) supStart.onclick = async function() {
-    supStart.disabled = true; supStop.disabled = true;
+    if (supBusy) return;
+    supBusy = true; supStart.disabled = true; supStop.disabled = true;
     supSet('starting …', '#b3541e');
     try { await fetch('/gateway/start', {method: 'POST'}); } catch (e) {}
-    setTimeout(function() { gatewaySupervisorTick(); supStart.disabled = false; }, 6000);
+    var n = 0;
+    var iv = setInterval(async function() {
+      n += 1;
+      try { await gatewaySupervisorTick(); } catch (e) {}
+      if (n >= 12) { clearInterval(iv); supBusy = false; supStart.disabled = false; }
+    }, 1000);
   };
   if (supStop) supStop.onclick = async function() {
-    supStop.disabled = true;
+    if (supBusy) return;
+    supBusy = true; supStart.disabled = true; supStop.disabled = true;
     supSet('stopping …', '#b3541e');
     try { await fetch('/gateway/stop', {method: 'POST'}); } catch (e) {}
-    setTimeout(function() { gatewaySupervisorTick(); supStop.disabled = false; }, 1500);
+    var n = 0;
+    var iv = setInterval(async function() {
+      n += 1;
+      try { await gatewaySupervisorTick(); } catch (e) {}
+      if (n >= 3) { clearInterval(iv); supBusy = false; supStop.disabled = false; }
+    }, 500);
   };
   if (supStart || supStop) { gatewaySupervisorTick(); setInterval(gatewaySupervisorTick, 5000); }
   var emailInp = document.getElementById('git-email');

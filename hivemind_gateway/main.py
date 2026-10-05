@@ -893,6 +893,9 @@ def main() -> int:
     except StartupError as exc:
         print(f"startup error: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print("gateway stopped (Ctrl+C)", file=sys.stderr)
+        return 0
 
 
 if __name__ == "__main__":

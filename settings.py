@@ -18,11 +18,11 @@ CUSTOM_PROMPTS_DIR = Path(__file__).parent / "custom_prompts"
 
 DEFAULT_AGENT_CFG = {
     # AGENT-DEFAULTS (2026-10-05, no-hardcoded-models): fresh installs
-    # ship WITHOUT model names — whatever GGUF the user downloaded gets
-    # filled in at load time (_apply_model_fallbacks below: every empty
-    # model value becomes the primary available model). Picking per-role
-    # models stays exactly where it was: UI agent cards, /setModel,
-    # presets. Existing settings.json files are untouched by this.
+    # ship WITHOUT model names — a run with an unconfigured/absent model
+    # fails fast with a model-load error instead of aborting with a
+    # "not found" on some hardcoded GGUF. Pick models in the UI, via
+    # /setModel (phone) or setup_models.bat; existing settings.json
+    # files are untouched by this.
     "analyst":     {"model": "", "temperature": 0.3, "max_tokens": 1100, "thinking": False, "thinking_budget": 0},
     "refiner":     {"model": "",    "temperature": 0.3, "max_tokens": 400, "thinking": False, "thinking_budget": 0},
     "critic":      {"model": "", "temperature": 0.2, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
@@ -456,45 +456,6 @@ _load_cache_key: tuple | None = None
 _load_cache_data: dict | None = None
 
 
-def _primary_available_model() -> str:
-    """First model the machine can actually load (backend GGUF index)."""
-    try:
-        from backend.llama_models import list_available_models
-        models = list_available_models()
-        return models[0] if models else ""
-    except Exception:
-        return ""
-
-
-def _apply_model_fallbacks(s: dict) -> None:
-    """Fill every EMPTY model value with the primary available model
-    (no-hardcoded-models release, 2026-10-05). Explicit user picks and
-    non-empty existing settings always win; with nothing downloaded the
-    values stay empty and the run fails with a model-load error."""
-    primary = _primary_available_model()
-    if not primary:
-        return
-    for _ag in (s.get("agents") or {}).values():
-        if isinstance(_ag, dict) and not str(_ag.get("model") or "").strip():
-            _ag["model"] = primary
-    for _k in ("duo_profile_speed_model", "duo_profile_quality_model",
-               "duo_coder_fallback_model"):
-        if not str(s.get(_k) or "").strip():
-            s[_k] = primary
-    _ladder = s.get("subagent_lite_model_ladder")
-    if isinstance(_ladder, list) and not [x for x in _ladder if str(x or "").strip()]:
-        s["subagent_lite_model_ladder"] = [primary]
-    for _k in ("soul_evolve_agent", "intent_agent", "exploration_agent"):
-        _ag = s.get(_k)
-        if isinstance(_ag, dict) and not str(_ag.get("model") or "").strip():
-            _ag["model"] = primary
-    _workers = (s.get("exploration_agent") or {}).get("workers")
-    if isinstance(_workers, list):
-        for _w in _workers:
-            if isinstance(_w, dict) and not str(_w.get("model") or "").strip():
-                _w["model"] = primary
-
-
 def load_settings() -> dict:
     """Cached based on mtime.
 
@@ -514,9 +475,6 @@ def load_settings() -> dict:
     if _key is not None and _key == _load_cache_key and _load_cache_data is not None:
         return copy.deepcopy(_load_cache_data)
     data = _load_settings_from_disk()
-    # no-hardcoded-models: fill empty model values with what the
-    # machine actually has (applies to every load path)
-    _apply_model_fallbacks(data)
     if _key is not None:
         _load_cache_key = _key
         _load_cache_data = copy.deepcopy(data)
