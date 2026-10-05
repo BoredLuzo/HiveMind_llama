@@ -11625,7 +11625,22 @@ function _updateDuoRoleStatus(elId, label, model) {
         if (tx.closest('.cfg-card')) return; // handled above with title prefix
         if (_dead(tx)) return;
         var txt = (tx.textContent || '').trim();
-        if (txt.length >= 3) _push(pid, txt, tx, 'Toggle');
+        if (txt.length < 3) return;
+        // CONTEXT PREFIX (2026-10-05, user screenshot): short labels like
+        // "Critic" or "Synthesizer" are meaningless alone — find the nearest
+        // preceding section header and prefix.
+        var label = txt;
+        if (txt.length < 15) {
+          var _ctxSec = null;
+          var _all = panel.querySelectorAll('.sec');
+          for (var _si = 0; _si < _all.length; _si++) {
+            if (_all[_si].compareDocumentPosition(tx) & Node.DOCUMENT_POSITION_FOLLOWING) {
+              _ctxSec = _all[_si];
+            } else break;
+          }
+          if (_ctxSec) label = _ctxSec.textContent.trim() + ' — ' + txt;
+        }
+        _push(pid, label, tx, 'Toggle');
       });
       panel.querySelectorAll('label input[type="checkbox"]').forEach(function(inp) {
         var row = inp.closest('label');
@@ -11633,33 +11648,43 @@ function _updateDuoRoleStatus(elId, label, model) {
         var txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
         if (txt.length >= 3) _push(pid, txt.slice(0, 80), row, 'Checkbox');
       });
-      // dynamic agent cards with their setting fields (ctx/temp/tokens)
+      // dynamic agent cards: ONE entry per agent with comprehensive
+      // keywords. The old 5-entries-per-agent approach produced noise
+      // ("Toggle: Critic", "Agent setting: modelvisionthink", stale
+      // temperature values) — this collapses to 1 useful entry per agent
+      // whose keywords make every field findable.
       panel.querySelectorAll('#agent-cards .acard').forEach(function(card) {
         var nameEl = card.querySelector('.acard-name');
         var nm = nameEl ? nameEl.textContent.trim() : '';
         if (!nm) return;
-        _push(pid, 'Agent: ' + nm, card, 'Agent card', null, 'agent modell model');
+        // collect field labels for keywords (ctx, temperature, budget…)
+        var fields = [];
         card.querySelectorAll('.fl').forEach(function(fl) {
-          var _l = (fl.textContent || '').trim().split('\n')[0].toLowerCase().slice(0, 30);
-          if (/context|temperature|output-budget|thinking|model/i.test(_l))
-            _push(pid, nm + ' — ' + _l, fl, 'Agent setting', null,
-                 'agent ' + nm + ' ' + _l + (/context/i.test(_l) ? ' ctx kontext' : '')
-                 + (/output-budget/i.test(_l) ? ' tokens tok' : ''));
+          var t = (fl.textContent || '').trim().split('\n')[0]
+                  .replace(/\b(VISION|THINK)\b/gi, '')
+                  .replace(/\s+/g, ' ').trim();
+          if (t.length >= 3) fields.push(t.toLowerCase().slice(0, 40));
         });
+        var kw = 'agent ' + nm + ' ' + fields.join(' ')
+               + ' ctx context temperature temp output-budget budget tokens tok model thinking vision';
+        _push(pid, nm + ' (model, ctx, temp, budget)', card, 'Agent card', null, kw);
       });
       panel.querySelectorAll('button[title]').forEach(function(b) {
-        _push(pid, (b.title || '').trim(), b, 'Button');
+        var t = (b.title || '').trim();
+        // SKIP utility buttons (Apply/Save/Load/Close) - noise in a search
+        if (t.length < 8 || /^(apply|save|load|close|refresh|test)$/i.test(t)) return;
+        _push(pid, t, b, 'Button');
       });
     });
     // TABS AS ENTRIES (2026-10-05, user: 'soul, tokens, chats etc sollen
     // auch in die suche') - the seven panels are searchable destinations
     // with curated keywords; the click lands on the tab itself.
-    [['agents', 'AGENTS panel', 'agents planner coder duo execution settings vision'],
+    [['agents', 'AGENTS panel', 'agents planner coder duo execution settings vision ctx context temperature'],
      ['presets', 'PRESETS panel', 'presets prompts save load'],
      ['configs', 'CONFIGS panel', 'configs settings toggles options rollup'],
      ['memory', 'MEMORY panel', 'memory long-term notes'],
      ['soul', 'SOUL panel', 'soul personality evolution'],
-     ['models', 'MODELS panel', 'models vram tokens llama download install'],
+     ['models', 'MODELS panel', 'models vram tokens tok llama download install ctx'],
      ['chats', 'CHATS panel', 'chats history sizes tokens']].forEach(function(d) {
       var btn = null;
       document.querySelectorAll('.tab').forEach(function(b) {
@@ -11724,8 +11749,13 @@ function _updateDuoRoleStatus(elId, label, model) {
       _fsList.innerHTML = '<div class="fs-empty">No matching feature.</div>';
       return;
     }
+    var countDiv = document.createElement('div');
+    countDiv.className = 'fs-count';
+    countDiv.style.cssText = 'font-size:9px;color:#6b7f94;padding:4px 14px;border-bottom:1px solid #1a2330';
+    countDiv.textContent = hits.length + ' result' + (hits.length === 1 ? '' : 's');
+    _fsList.appendChild(countDiv);
     _fsSel = hits.length ? 0 : -1;
-    hits.slice(0, 40).forEach(function(h, i) {
+    hits.slice(0, 120).forEach(function(h, i) {
       var row = document.createElement('div');
       row.className = 'fs-row' + (i === _fsSel ? ' fs-sel' : '');
       row.style.cssText = 'display:flex;gap:10px;align-items:center;padding:8px 14px;cursor:pointer;border-bottom:1px solid #1a2330';
