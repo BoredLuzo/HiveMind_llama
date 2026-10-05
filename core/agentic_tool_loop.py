@@ -6,7 +6,35 @@ import httpx
 
 from core.tool_loop import ToolLoop, ToolLoopConfig, _build_tool_call_grammar, _grammar_compatible, _USE_GBNF_GRAMMAR
 from core.agentic_duo_state import DuoRoundState
-from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, _inject_no_think_directive, parse_sse_delta as _parse_sse_delta
+from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, _inject_no_think_directive, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, CODER_VISION_NOTE as _CODER_VISION_NOTE
+
+# NOTE REPLACEMENT (2026-10-04, Sonnet round 10 #3): removing the note only
+# stops the false claim - the model must KNOW the image is gone, or it
+# improvises. Replace, don't strip.
+_CODER_VISION_REPLACEMENT = (
+    "\n\n[VISION UPDATE]: the image is NO LONGER in your context (it fell "
+    "out of the window after earlier rounds). Work from the plan and the "
+    "task text - do NOT invent visual details you cannot currently see.")
+
+
+def _retract_vision_note_if_lost(msgs: list) -> list:
+    """[VISION]-note handling when the outgoing window lost its image
+    parts (2026-10-04, round 9 #4 / round 10 #3). Pure helper so the
+    round-level branch in post_with_retry is unit-testable: makes the FULL
+    decision itself - parts flowing (N>0) keeps the note, N==0 REPLACES it
+    with an explicit 'image is gone, don't invent' line. Non-string
+    content = untouched."""
+    try:
+        if _count_image_parts(msgs) != 0:
+            return msgs
+        _sys0 = msgs[0]
+        if isinstance(_sys0, dict) and isinstance(_sys0.get("content"), str) \
+                and _CODER_VISION_NOTE in _sys0["content"]:
+            _sys0["content"] = _sys0["content"].replace(
+                _CODER_VISION_NOTE, _CODER_VISION_REPLACEMENT)
+    except (AttributeError, IndexError, TypeError):
+        pass
+    return msgs
 
 logger = logging.getLogger("hivemind.agentic_tool_loop")
 
@@ -101,6 +129,37 @@ class AgenticToolLoop(ToolLoop):
             payload = {**payload, "messages": dtool_msgs}
         else:
             self._tail_guard_fires = 0
+
+        # IMAGES-IN-REQUEST (2026-10-04, Sonnet #4): the duo tool loop is the
+        # coder's real per-round caller and bypassed the pipeline trace
+        # entirely. Count the OUTGOING list (payload["messages"] - the same
+        # list the POST below sends, post-compression), also at 0, so "the
+        # image fell out of the window" is measurable instead of arguable.
+        _outgoing_imgs = _count_image_parts(payload.get("messages") or dtool_msgs)
+        logging.getLogger("hivemind.tool_loop").info(
+            "[TOOL-LOOP] model=%s port=%s images_in_request=%d",
+            self.cfg.model, result.get("dport"), _outgoing_imgs)
+        # NOTE-RETRACT ON LOSS (2026-10-04, Sonnet round 9 #4 + round 10 #3):
+        # the system prompt claims "[VISION] ... you can see it" while the
+        # outgoing window no longer carries image parts (compression drops
+        # them after round 1 - measured live: 1 -> 0). The helper REPLACES
+        # the note with an explicit "image gone, don't invent" line; the
+        # user gets ONE visible status (not per round).
+        _before = dtool_msgs[0].get("content") if dtool_msgs and isinstance(dtool_msgs[0], dict) else None
+        _retract_vision_note_if_lost(dtool_msgs)
+        if isinstance(_before, str) and dtool_msgs and isinstance(dtool_msgs[0].get("content"), str) \
+                and _before != dtool_msgs[0]["content"]:
+            logging.getLogger("hivemind.tool_loop").warning(
+                "[TOOL-LOOP][VISION-GATE] [VISION] note replaced - round carries "
+                "no image parts anymore (images_in_request=0)")
+            if not getattr(self.round_state, "_vision_note_retract_emitted", False):
+                try:
+                    self.round_state._vision_note_retract_emitted = True
+                    await self._emit({"type": "status",
+                        "content": "ℹ The image is no longer in the coder's context "
+                                   "(window) - later rounds work from the plan only."})
+                except (AttributeError, TypeError):
+                    pass
 
         for _post_attempt in range(self.cfg.max_post_attempts):
             try:

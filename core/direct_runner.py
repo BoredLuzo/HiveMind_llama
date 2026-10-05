@@ -104,7 +104,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
 
         _final_msgs: list | None = None
 
-        async def _capture_msgs(messages, round_num, state):
+        async def _capture_msgs(messages, _round_num, state):
             nonlocal _final_msgs
             _final_msgs = list(messages)
             return messages, None

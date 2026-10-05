@@ -298,24 +298,32 @@ def cleanup_pause_state(run_id: str) -> None:
 # machinery above: keyed by run_id, active-run check via the run-abort
 # registry (a run_id only exists there while its generator is live).
 
-_steer_queue: dict[str, list[str]] = {}
+_steer_queue: dict[str, list[dict]] = {}
 
 
-def queue_steer(run_id: str, text: str) -> bool:
-    """Queue a user message for an ACTIVE run. False = run not registered."""
+def queue_steer(run_id: str, text: str, images=None) -> bool:
+    """Queue a user message for an ACTIVE run. False = run not registered.
+    SINCE 2026-10-04 a steer can carry IMAGES (screenshots, base64/data-URL):
+    entries are dicts {"text", "images"} - legacy string entries are
+    normalised on drain."""
     _rid = str(run_id or "").strip()
     _txt = str(text or "").strip()
-    if not _rid or not _txt:
+    if not _rid or (not _txt and not (images or [])):
         return False
     if _rid not in _run_abort_registry:
         return False
-    _steer_queue.setdefault(_rid, []).append(_txt)
+    _imgs = [str(b).strip() for b in (images or []) if str(b or "").strip()]
+    _steer_queue.setdefault(_rid, []).append({"text": _txt, "images": _imgs})
     return True
 
 
 def drain_steer_messages(run_id: str) -> list:
-    """Atomically take all queued steer messages (loop side, at a boundary)."""
-    return _steer_queue.pop(str(run_id or ""), [])
+    """Atomically take all queued steer messages (loop side, at a boundary).
+    Returns list of dicts {"text", "images"} - legacy strings normalised."""
+    return [
+        {"text": item, "images": []} if isinstance(item, str) else item
+        for item in _steer_queue.pop(str(run_id or ""), [])
+    ]
 
 
 def steer_queue_view(run_id: str) -> list:

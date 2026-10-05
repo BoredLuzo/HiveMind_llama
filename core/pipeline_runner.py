@@ -741,6 +741,28 @@ async def run_pipeline(ctx):
             ctx.memory.add_to_session("user", ctx.user_input)  # SESSION-ORDER FIX
             ctx.memory.add_to_session("assistant", synth_out)
 
+            # SIDECAR SESSION (2026-10-03): pipeline runs never persisted the
+            # chat context, so a chat whose last run was a pipeline reloaded
+            # with zero/stale history (audit finding, lens continuity).
+            # Same contract as direct_runner: last 40 messages, no caps.
+            if getattr(ctx, "chat_id", None):
+                try:
+                    import logging as _logging
+                    from context.chat import _mutate_chat_context
+
+                    def _persist_pipeline_session(cdict):
+                        cdict["session"] = ctx.memory.get_session_messages(
+                            limit=40, user_cap=10**6, assistant_cap=10**6,
+                        )
+                        cdict["ts"] = time.time()
+
+                    _mutate_chat_context(ctx.chat_id, _persist_pipeline_session)
+                except (OSError, ValueError) as _persist_exc:
+                    _logging.getLogger("hivemind.pipeline").warning(
+                        "[Pipeline] Session-Persistenz fehlgeschlagen (chat=%s): %s",
+                        ctx.chat_id, _persist_exc,
+                    )
+
             # FIX: start peer ratings BEFORE "done"
             run_count = ctx.increment_run_counter()
             asyncio.create_task(run_peer_ratings(

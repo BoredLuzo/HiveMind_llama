@@ -43,8 +43,8 @@ from .llama_manager_utils import (
     _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
     VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
     _needs_mmproj, _gguf_path_to_model_name,
-    _probe_binary_build, _probe_kv_flag, _probe_moe_flag,
-    _probe_device_flag, _probe_backend_devices, _probe_backend_dlls,
+    _probe_binary_build,
+    _probe_backend_devices, _probe_backend_dlls,
     _prefetch_key, _tcp_alive, _kill_port_sync, _nm,
 )
 from .manager_load import LlamaLoadMixin
@@ -130,6 +130,18 @@ class LlamaServerManager(LlamaLoadMixin, LlamaEvictMixin, LlamaProcessMixin,
 
 
     # ── Public API ────────────────────────────────────────────────────────────
+
+    def get_slot_by_port(self, port: int):
+        """Slot for a running server port, or None.
+
+        VISION TRUTH (2026-10-04): callers (duo image gate) need the slot's
+        /props-derived state (vision_active), which ensure_loaded's int port
+        return value cannot carry.
+        """
+        for _s in self._slots:
+            if _s.port == port and _s.is_running:
+                return _s
+        return None
 
 
 

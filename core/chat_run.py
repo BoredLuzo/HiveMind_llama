@@ -7,6 +7,7 @@ and delegates to run_stream_orchestrated (core/stream.py).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -39,6 +40,26 @@ from infra.phase_timer import PhaseTimer
 from infra.token_stats import _estimate_tokens_from_content
 from utils.math import percentile_float as _percentile_float
 from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
+from utils.token import window_by_budget
+
+
+def _history_budget_tokens(settings) -> int:
+    """History budget: override wins; 0 derives from the direct model's
+    ctx (35% of n_ctx minus a 4096 reserve for system prompt + output)."""
+    _ov = int(settings.get("session_history_budget_tokens", 0) or 0)
+    if _ov > 0:
+        return _ov
+    try:
+        _ref = registry_get("direct") or registry_get("analyst") or ""
+        _nctx = int(_get_num_ctx(_ref) or 0) if _ref else 0
+    except Exception:
+        _nctx = 0
+    # NOTE: with llama-server parallel slots the per-slot ctx is
+    # n_ctx / n_parallel - divide here if parallel slots ever get enabled
+    # (the current config runs one slot, default n_parallel=1).
+    if _nctx <= 0:
+        _nctx = 16384  # sane default when no ctx override is configured
+    return max(1024, int((_nctx - 4096) * 0.35))
 from tools.websearch import _safe_web_search
 from hive_functions.prompts import AGENT_ROLES, HIVEMIND_SOUL, VISION_AGENT_PROMPT
 from hive_functions.soul_engine import (
@@ -85,7 +106,7 @@ async def run_stream(
         _get_loaded_models_set,
         _increment_run_counter,
         _is_aborted,
-        _load_chat_context,
+        _load_chat_context, get_chat_workspace, history_seed,
         _load_resume_block,
         _maybe_trigger_soul_evolution,
         _pick_direct_model,
@@ -264,6 +285,16 @@ async def run_stream(
     )
     try:
         _chat_ctx_ws = _load_chat_context(chat_id) if chat_id else {}
+        # WORKSPACE PER CHAT (2026-10-03): the run resolver must see the
+        # same workspace GET /chats/{id} serves - the json value wins over
+        # the sidecar (silent cross-project switch, audit finding).
+        if chat_id and not (_chat_ctx_ws or {}).get("workspace"):
+            try:
+                _json_ws = get_chat_workspace(chat_id)
+                if _json_ws:
+                    _chat_ctx_ws = {**(_chat_ctx_ws or {}), "workspace": _json_ws}
+            except (OSError, ValueError):
+                pass
         _ws_str, _ws_src = _resolve_workspace(settings, _chat_ctx_ws, user_input)
     except _WsForceInvalid as _wfi:
         logger.error("[WS-RESOLVE] %s", _wfi)
@@ -612,13 +643,26 @@ async def run_stream(
                     continue
                 if "," in _raw[:32]:  # strip data-url prefix if present
                     _raw = _raw.split(",", 1)[1]
+                # MAGIC SNIFF (2026-10-03 review): detect the real format,
+                # not just JPEG - webp/gif/bmp used to land as .png. The
+                # content hash in the name also makes same-second uploads
+                # collision-free (two runs in one second used to lose the
+                # second image via the skip-if-exists guard).
                 _ext = "png"
                 try:
-                    if _b64mod.b64decode(_raw[:24] + "==")[:2] == bytes([0xFF, 0xD8]):
+                    _magic = _b64mod.b64decode(_raw[:24] + "==")
+                    if _magic[:2] == bytes([0xFF, 0xD8]):
                         _ext = "jpg"
+                    elif _magic[:4] == bytes([0x89, 0x50, 0x4E, 0x47]):
+                        _ext = "png"
+                    elif _magic[:4] == bytes([0x47, 0x49, 0x46, 0x38]):
+                        _ext = "gif"
+                    elif _magic[:4] == bytes([0x52, 0x49, 0x46, 0x46]) and _magic[8:12] == b"WEBP":
+                        _ext = "webp"
                 except Exception:
                     pass
-                _fp = _up_dir / f"img_{_stamp}_{_ii + 1}.{_ext}"
+                _h8 = hashlib.sha256(_raw.encode("utf-8")).hexdigest()[:8]
+                _fp = _up_dir / f"img_{_stamp}_{_ii + 1}_{_h8}.{_ext}"
                 if not _fp.exists() or _fp.stat().st_size == 0:
                     _fp.write_bytes(_b64mod.b64decode(_raw))
                 _saved_image_paths.append(str(_fp))
@@ -753,7 +797,35 @@ async def run_stream(
                     pass
             asyncio.create_task(_prefetch_direct_post())
         if _direct_is_vision:
-            effective_images = images
+            # VISIBLE TRUTH CHECK (2026-10-04, Sonnet #5): the direct mode
+            # used to strip silently inside chat_stream - the user saw
+            # nothing and the model answered as if no image existed (the
+            # same complaint as the duo downgrade). Check the loaded slot
+            # HERE and say it out loud; chat_stream stays as the backstop.
+            if effective_images:
+                try:
+                    from core.duo_helpers import direct_vision_should_drop
+                    from backend.llama_server_manager import manager as _lsm_dvis
+                    _dvis_model = registry_get("direct") if "direct" in _state.pipeline.agents else ""
+                    _dvis_slot = None
+                    if _dvis_model:
+                        # _find_loaded matches BY MODEL NAME - a pinned planner
+                        # on another slot can never be mistaken for the direct
+                        # model (Sonnet #2's false-warning case).
+                        _dvis_slot = await _lsm_dvis._find_loaded(_dvis_model)
+                    _slot_vision = getattr(_dvis_slot, "vision_active", None) if _dvis_slot is not None else None
+                    _slot_model = getattr(_dvis_slot, "model", "") or ""
+                    if direct_vision_should_drop(_slot_vision, _slot_model, _dvis_model):
+                        effective_images = []
+                        _logger.warning("[VISION-GATE] direct model '%s' runs WITHOUT a "
+                                        "projector (vision_active=False) - image dropped "
+                                        "visibly", _dvis_model)
+                        yield await emit({"type": "status",
+                            "content": "⚠ The direct model runs without a vision projector "
+                                       "- the image was dropped. Pick a multimodal model or "
+                                       "enable the vision preprocessor."})
+                except (ImportError, AttributeError, TypeError, ValueError) as _dge:
+                    _logger.debug("[VISION-GATE] direct pre-check skipped: %s", _dge)
             _logger.debug("[Vision-Trigger] Multimodal Direct model - raw images stay in effective_images (%d)", len(images))
         else:
             effective_images = []
@@ -778,9 +850,11 @@ async def run_stream(
             # per duo role (planner/coder). The attach-time projector check
             # in the runner has the final word; this status never claims
             # more than the plan says.
-            from core.duo_helpers import _build_duo_image_plan, duo_gate_status_text
-            _pm = ((settings.get("agents") or {}).get("duo_planner") or {}).get("model", "")
-            _cm = ((settings.get("agents") or {}).get("duo_coder") or {}).get("model", "")
+            from core.duo_helpers import _build_duo_image_plan, duo_gate_status_text, resolve_duo_role_models
+            # ONE RESOLVER (2026-10-04, Sonnet #5): agent card + flat settings
+            # key are both live paths - the ad-hoc fallback chain lived here
+            # once and lied whenever only one side was set.
+            _pm, _cm = resolve_duo_role_models(settings)
             _plan = _build_duo_image_plan(_pm, _cm, settings, images, image_description, _vision_cfg)
             yield await emit({"type": "status", "content": duo_gate_status_text(_plan)})
         elif _direct_is_vision2:
@@ -797,17 +871,85 @@ async def run_stream(
                              "Enable the Vision agent in Settings (image preprocessing) or pick a multimodal model. "
                              "Agentic runs receive the image description once a vision model is configured.]"})
 
-    # P1-2 (2026-08-12): Restore the session per chat from .context.json,
-    if chat_id and not _state.memory.get_session_messages():
+    # HISTORY SOURCE (2026-10-03): the chat json transcript is the ONE
+    # continuation source - UI and model now share the same story. The
+    # sidecar "session" key demotes to a fallback for chats without a json.
+    # RE-SEED EVERY RUN (2026-10-04, Sonnet round 9 #1): the chat-switch tag
+    # alone only fixed A->B. Same-chat EDIT/REGENERATE kept the discarded
+    # history in memory (same chat_id -> no clear -> seed skips a filled
+    # memory). The json is ALWAYS fresher than the memory (the frontend PUTs
+    # every turn), so whenever a chat json exists it is re-seeded; the memory
+    # stays a fallback for chats without json, tagged per chat, and a new
+    # chat without id never inherits anything.
+    # LABEL-LIE FIX (2026-10-05, TG-PROBE experiment): history_seed() falls
+    # back to the sidecar INTERNALLY while this probe labelled the result
+    # 'source=json' - a live run on an empty-main-json chat logged
+    # 'source=json seeded 2' that was actually sidecar history. The
+    # provenance probe decides the label; history_seed only normalises.
+    _json_seed: list = []
+    _seed_source = "none"
+    if chat_id:
         try:
-            _sess_persist = (_load_chat_context(chat_id) or {}).get("session") or []
-            if _sess_persist:
-                _state.memory.seed_session(_sess_persist)
-        except Exception:
+            from context.chat import history_seed_provenance as _seed_prov
+            _raw_seed, _raw_src = _seed_prov(chat_id)
+        except (OSError, ValueError):
+            _raw_seed, _raw_src = [], "none"
+        # BRANCH ON ORIGIN, NOT ON SEED EMPTINESS (2026-10-05, Sonnet edge
+        # case): a main json holding ONLY the edited trailing user message
+        # normalizes to an empty seed - falling back on emptiness would
+        # resurrect the discarded sidecar/memory history. json/sidecar own
+        # the history: clear ALWAYS, seed whatever normalized (even empty).
+        if _raw_src in ("json", "sidecar"):
+            _json_seed = _raw_seed
+            _seed_source = _raw_src
+    _mem_cid = getattr(_state.memory, "_session_chat_id", None)
+    if _seed_source in ("json", "sidecar"):
+        # ALWAYS-RESEED: the chat files are fresher than the memory - every run.
+        _state.memory.clear_session()
+        if _json_seed:
+            _state.memory.seed_session(_json_seed)
+        try:
+            _state.memory._session_chat_id = chat_id or ""
+        except AttributeError:
             pass
+        _logger.info("[HISTORY-SEED] chat=%s source=%s seeded %d message(s)",
+                     chat_id, _seed_source, len(_json_seed))
+    else:
+        # no turns anywhere (new chat, or only a trailing user that IS the q):
+        # never inherit another chat's history - clear unless the memory is
+        # already tagged for THIS chat.
+        if _mem_cid != (chat_id or ""):
+            _state.memory.clear_session()
+            try:
+                _state.memory._session_chat_id = chat_id or ""
+            except AttributeError:
+                pass
+        elif not chat_id and _state.memory.get_session_messages():
+            _state.memory.clear_session()
+            try:
+                _state.memory._session_chat_id = ""
+            except AttributeError:
+                pass
 
     _pipeline_mem_ctx  = _state.pipeline.memory.as_context_string()
-    _pipeline_sess_msgs = _state.memory.get_session_messages()  # SESSION-CACHE: 8 DB-Calls - 1 pro Run
+    # Caps raised to sidecar parity (8000 chars): 600/1200 used to cut code
+    # answers mid-line. The window is message-count-capped via seed (40) and
+    # compression above the threshold handles older turns.
+    _pipeline_sess_msgs = _state.memory.get_session_messages(
+        limit=40, user_cap=8000, assistant_cap=8000,
+    )
+    _sess_before_window = len(_pipeline_sess_msgs)
+    # TOKEN BUDGET (2026-10-03): 40x8000 chars can dwarf a small ctx -
+    # the window keeps the newest turns and drops older ones whole.
+    _pipeline_sess_msgs = window_by_budget(
+        _pipeline_sess_msgs, _history_budget_tokens(settings),
+    )  # SESSION-CACHE: 8 DB-Calls - 1 pro Run
+    # WINDOW TRACE (2026-10-04, Sonnet): the seed count alone does not prove
+    # the budget reached the window - log before/after so run C's expected N
+    # (window_by_budget offline) can be checked against the log.
+    _logger.info("[SESSION-WINDOW] before=%d after=%d budget=%d",
+                 _sess_before_window, len(_pipeline_sess_msgs),
+                 _history_budget_tokens(settings))
     # Threshold: SESSION_COMPRESS_THRESHOLD messages (configurable via settings).
     _sess_compress_threshold = int(settings.get("session_compress_threshold", SESSION_COMPRESS_THRESHOLD))
     _skip_compress = (mode == "code_duo" or duo_config.agentic_mode)
@@ -995,7 +1137,12 @@ async def run_stream(
         _complexity_source = "judge"
         intent_agent = None
         if len(_state.memory.get_session_messages()) > _sess_compress_threshold:
-            _pipeline_sess_msgs = _state.memory.get_session_messages()  # fresh, uncompressed
+            _pipeline_sess_msgs = window_by_budget(
+                _state.memory.get_session_messages(
+                    limit=40, user_cap=8000, assistant_cap=8000,
+                ),
+                _history_budget_tokens(settings),
+            )  # fresh, uncompressed
 
     if _judge_verdict:
         _effective_task_type = _judge_tasktype  # Judge knows task_type from full analysis

@@ -18,7 +18,9 @@ from tools.errors import tool_call_failed, tool_error_has_code
 from tools.definitions import _get_inline_tools, _filter_tools_for_mode, get_tools_for_phase
 from tools.runner import _run_inline_tool, _current_run_id, _pause_timeout_s, _tool_loop_emit
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
-from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta
+from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, build_steer_user_message as _build_steer_user_message
+
+_log = logging.getLogger("hivemind.tool_loop")
 from core.model_sampling import get_sampling_profile
 from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
 
@@ -174,6 +176,9 @@ class ToolLoopConfig:
     retry_on_grammar_crash: bool = False
     retry_on_parse_error: bool = False
     retry_on_context_overflow: bool = False
+    # IMAGES-IN-REQUEST trace in ToolLoop.run (2026-10-04, Sonnet). The duo
+    # tool loop (AgenticToolLoop) always traces - it bypasses ToolLoop.run.
+    log_images_trace: bool = False
 
 
 @dataclass
@@ -281,9 +286,17 @@ class ToolLoop:
                     _tools_payload = _phase_tools
             # N1: Model-aware sampling profile
             _smp = get_sampling_profile(self.cfg.model, thinking=bool(self.cfg.thinking))
+            # IMAGES→PARTS (2026-10-04, live run D finding): the direct-chat
+            # tool loop receives messages with the raw "images" key and
+            # POSTs HERE directly - without llama_client._convert_messages
+            # that key stays in the JSON, llama-server ignores it, and the
+            # model answers "please attach the image" even though the image
+            # was in the payload. The duo path already sends content parts
+            # (attach_images_to_last_user); convert here for every ToolLoop.
+            from backend.llama_client import _convert_messages as _msgs_to_parts
             _payload = {
                 "model": self.cfg.model,
-                "messages": _tool_messages,
+                "messages": _msgs_to_parts(_tool_messages),
                 "tools": _tools_payload,
                 "stream": self.cfg.stream,
                 "temperature":       _smp.get("temperature", self.cfg.temperature),
@@ -304,6 +317,14 @@ class ToolLoop:
             if self.cfg.compress_enabled and self._on_compress:
                 _tool_messages = await self._on_compress(_tool_messages, _round)
                 _payload["messages"] = _tool_messages
+
+            # IMAGES-IN-REQUEST (2026-10-04, Sonnet): the tool loop is the
+            # coder's real per-round caller and used to bypass the pipeline
+            # trace entirely. Log every round - also at 0, so "the image
+            # fell out of the window after compression" is measurable.
+            if self.cfg.log_images_trace:
+                _log.info("[TOOL-LOOP] model=%s round=%d images_in_request=%d",
+                          self.cfg.model, _round, _count_image_parts(_tool_messages))
 
             # ── POST + parse with retry ──
             _msg = _content_text = None
@@ -445,15 +466,18 @@ class ToolLoop:
             # ── MID-RUN STEER (tool-call boundary, 2026-09-29): messages the
             # user typed while this round ran land here as user messages —
             # directly after the last tool result, before the next POST.
-            # Chat/direct/agentic runs share this loop.
+            # Chat/direct/agentic runs share this loop. SINCE 2026-10-04 a
+            # steer can carry IMAGES (screenshots) as content parts.
             if self._run_id:
-                _steer_txts = drain_steer_messages(self._run_id)
-                if _steer_txts:
+                _steer_items = drain_steer_messages(self._run_id)
+                if _steer_items:
                     yield await self._emit({"type": "status", "content":
-                        "🧭 steered: " + " | ".join(t[:80] for t in _steer_txts)})
-                    for _st in _steer_txts:
+                        "🧭 steered: " + " | ".join(
+                            (it["text"][:60] or "(image)") + ("/+img" * (1 if it["images"] else 0))
+                            for it in _steer_items)})
+                    for _st in _steer_items:
                         _tool_messages.append(
-                            {"role": "user", "content": f"[USER STEER] {_st}"})
+                            _build_steer_user_message(_st["text"], _st["images"]))
 
             # ── after_round callback ──
             if self._on_after_round:

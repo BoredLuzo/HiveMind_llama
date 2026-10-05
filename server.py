@@ -70,6 +70,7 @@ from context.chat import (
     init_chat_context,
     _get_chat_ctx_lock, _load_chat_context_locked, _save_chat_context_locked,
     _mutate_chat_context, _ctx_path_for_chat, _load_chat_context,
+    get_chat_workspace, history_seed,
     _save_chat_context, _chat_context_valid,
 )
 from context.resume import (
@@ -82,7 +83,7 @@ from context.pause_state import init_pause_state
 from infra.run_control import (
     init_run_control,
     _get_abort_lock, _get_abort_event, _clear_abort_event,
-    _is_aborted, _cleanup_abort_registry, _abort_registry_cleanup_loop,
+    _is_aborted, _cleanup_abort_registry,
     _register_abort, _unregister_abort, _abort_event,
     _register_step_skip, _step_skip_event, _clear_step_skip, _unregister_step_skip,
 )
@@ -99,7 +100,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.2.3"
+HIVEMIND_VERSION = "1.3.0-preview"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -138,7 +139,6 @@ from hive_functions.chunking import (
 )
 from infra.phase_timer import PhaseTimer
 from hive_functions.ctx_utils import (
-    run_context_pipeline,
     compute_content_budget,
     explore_to_planner_ctx,
     ContextBudget,
@@ -167,6 +167,7 @@ from core.duo_helpers import (
     _resolve_duo_runtime_profile,
     _resolve_duo_run_timeout_seconds,
     _bucket_stop_reason,
+    count_image_parts,
 )
 
 
@@ -227,7 +228,7 @@ _install_uvicorn_noise_filter()
 from hive_functions.pipeline import Pipeline
 from hive_functions.tree_scout import (
     get_workspace_tree, partition_tree, partition_tree_async,
-    parse_contract_summary, build_contract_prompt,
+    parse_contract_summary,
 )
 from hive_functions.hivemind_feature.ast_tools import (
     get_signatures_report,
@@ -241,10 +242,8 @@ from hive_functions.prompts import (
     PEER_RATING_PROMPT,     # moved from server.py inline definition
     VISION_AGENT_PROMPT,    # moved from server.py inline definition
     VISION_PREPROCESS_PROMPT,
-    get_explore_analyst_prompt,
     build_partition_explore_prompt,
     EXPLORE_CODEBASE_PROMPT,
-    STUCK_READER_INJECT,
     UNTIL_FINISHED_BLOCK,
     DUO_CRITIC_TOOLS_SYSTEM,
 )
@@ -265,8 +264,8 @@ from model_configs import (
 )
 from routing.model_automap import (
     get_automap, get_model_display_map, detect_task_type,
-    record_run_outcome, get_routing_weights_summary, get_routing_suggestion,
-    is_valid_preprocessing_model, get_best_preprocessing_model,
+    get_routing_weights_summary, get_routing_suggestion,
+    is_valid_preprocessing_model,
     save_routing_weights,
     _VISION_PREPROCESSING_ALLOWLIST,
 )
@@ -492,7 +491,7 @@ except (ImportError, ValueError) as e:
     _VRAM_LOOKUP_GB: dict[str, float] = {
         # qwen3.5 ─ echte Messungen (Vulkan, 99 GPU-Layers)
         "qwen3.5:0.8b": 0.6, "qwen3.5:2b": 1.5, "qwen3.5:4b": 2.8,
-        "qwen3.5:4b-ud": 3.0, "qwen3.5:4b-d": 3.2, "qwen3.5:9b": 5.5,
+        "qwen3.5:4b-mtp": 3.0, "qwen3.5:4b-d": 3.2, "qwen3.5:9b": 5.5,
         "qwen3.5:9b-ud": 5.8,
         # Granite / Gemma
         "granite-4.1:3b": 2.1, "granite4:1b": 1.0,
@@ -580,6 +579,16 @@ async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: in
     else:
         num_ctx = _get_num_ctx(model, agent_role)
         effective_ctx = num_ctx if num_ctx else 8192
+    # IMAGES-IN-REQUEST (2026-10-04, Sonnet): per-model-call trace - how many
+    # image parts actually went on the wire. Makes "did the model SEE the
+    # image" checkable in the log instead of arguable. Duo roles log ALWAYS
+    # (also 0 - "the image stopped being sent" after a compression must be
+    # visible, not look like a missing line); every other role logs on >0.
+    _n_imgs = count_image_parts(msgs) + sum(
+        1 for _m in msgs if isinstance(_m, dict) and _m.get("images"))
+    if _n_imgs or (agent_role or "").startswith("duo"):
+        _logger.info("[LLM-CALL] model=%s role=%s images_in_request=%d ctx=%d",
+                     model, agent_role or "-", _n_imgs, effective_ctx)
     async for tok in pipeline.ollama.chat_stream(model, msgs, temp, max_tok, ctx=effective_ctx,
                                                   think=think, thinking_budget=thinking_budget,
                                                   split_thinking=split_thinking,
@@ -1262,6 +1271,20 @@ async def stream(req: Request):
     duo_coder_tool_thinking = _as_bool(_body_or_settings("duo_coder_tool_thinking", default=False))
     duo_coder_tool_thinking_auto_mode = str(_body_or_settings("duo_coder_tool_thinking_auto_mode", default="off")).strip().lower()
     chat_id                = body.get("chat_id") or None
+    # FLUSH-FAIL IMPORT (2026-10-03): when the frontend could not persist
+    # before this run, /stream carries the DOM messages; the server writes
+    # them as the chat truth (rev bumped) so the run seeds fresh state
+    # instead of the stale pre-edit json.
+    if chat_id and body.get("flush_ok") is False:
+        try:
+            from routers.chats import import_dom_messages
+            _dom = body.get("dom_messages")
+            if isinstance(_dom, list) and _dom:
+                import_dom_messages(str(chat_id), _dom,
+                                    str(body.get("workspace") or "") or None)
+        except (OSError, ValueError) as _flush_import_exc:
+            logger.warning("[STREAM] dom import failed (chat=%s): %s",
+                           chat_id, _flush_import_exc)
     until_finished         = _as_bool(_body_or_settings("until_finished",          default=False))
     duo_runtime_profile    = body.get("duo_runtime_profile") or settings.get("duo_runtime_profile") or "balanced"
     duo_runtime_profile_lock_override = _as_bool(_body_or_settings(
@@ -1749,6 +1772,10 @@ async def health():
         "version": HIVEMIND_VERSION,
         "llama_ok": bool(_hm_running),
         "model_count": len(_hm_models),
+        # TEST-MODE VISIBILITY (2026-10-04, Sonnet #2): a negative-test env
+        # must never hide - an install silently running with omitted
+        # projectors would poison every following vision test.
+        "test_omit_mmproj": os.environ.get("HIVEMIND_TEST_OMIT_MMPROJ", "") or None,
     }
 
 # -- Router Registration --

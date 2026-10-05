@@ -19,6 +19,7 @@ settings = _load_settings()  # Runtime settings dict
 import httpx
 
 from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP
+from core.duo_helpers import count_image_parts as _count_image_parts
 from core.duo_helpers import _apply_thinking_fields
 from hive_functions.ctx_utils import compute_char_caps, extract_known_files
 
@@ -781,8 +782,10 @@ async def _llm_stream(
     _apply_thinking_fields(payload, use_thinking, thinking_budget)
 
     # DEBUG-THINKING: Log actual payload sent to llama.cpp
-    logger.info("[PLANNER-LLM] POST port=%d model=%s thinking_budget=%d payload.thinking=%s payload.thinking_budget=%s max_tokens=%d",
-                port, model, thinking_budget,
+    # IMAGES-IN-REQUEST (2026-10-04, Sonnet): count parts actually on the
+    # wire - "did the model get the image" becomes measurable per call.
+    logger.info("[PLANNER-LLM] POST port=%d model=%s images_in_request=%d thinking_budget=%d payload.thinking=%s payload.thinking_budget=%s max_tokens=%d",
+                port, model, _count_image_parts(messages), thinking_budget,
                 payload.get("thinking"), payload.get("thinking_budget"), payload.get("max_tokens"))
 
     thinking_chunks: list[str] = []
@@ -1134,6 +1137,8 @@ async def run_planner(
     emit_fn:              Callable[[dict], Awaitable[None]] | None = None,
     heartbeat_fn:         Callable[[], Awaitable[None]] | None = None,
     images:               list | None = None,
+    sees_images:          bool = False,
+    coder_sees_images:    bool = False,
 ) -> PlannerResult:
 
 
@@ -1157,6 +1162,19 @@ async def run_planner(
         _planner_sys = make_thinking_planner_sys(step_cap, model_name=planner_model)
     else:
         _planner_sys = make_planner_sys(step_cap)
+    if sees_images:
+        # VISION NOTE (2026-10-04, review fix): the text depends on what the
+        # CODER gets - the old version always claimed "the coder CANNOT see
+        # them", wrong when the plan routes raw images to the coder too.
+        if coder_sees_images:
+            _planner_sys += (
+                "\n\n[VISION] The user attached image(s) to this task and they are "
+                "visible to you. Base the plan on what the images actually show.")
+        else:
+            _planner_sys += (
+                "\n\n[VISION] The user attached image(s) to this task and they are "
+                "visible to you - but the coder CANNOT see them, so the plan must "
+                "describe every visual detail the implementation needs.")
 
     _planner_user = build_planner_user_prompt(
         task,

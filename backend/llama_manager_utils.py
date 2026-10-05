@@ -326,57 +326,6 @@ def _probe_binary_build(llama_bin: str) -> int:
         return int(_fm.group(1))
     return 0
 
-def _probe_kv_flag(llama_bin: str, kv_type: str) -> bool:
-    try:
-        from .llama_config import LLAMA_BIN as _lb
-        import re as _re2
-        m = _re2.search(r"b(\d+)", str(_lb.name))
-        if m and int(m.group(1)) >= 8278:
-            return True
-        r = subprocess.run(
-            [llama_bin, "--help"],
-            capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace",
-            creationflags=_WIN_CNF,
-        )
-        help_text = (r.stdout or "") + (r.stderr or "")
-        return "cache-type-k" in help_text.lower() or "cache_type_k" in help_text.lower()
-    except Exception:
-        return False
-
-def _probe_moe_flag(llama_bin: str) -> bool:
-    try:
-        import subprocess as _sp
-        _WIN_CNF = 0x08000000 if platform.system() == "Windows" else 0
-        r = _sp.run(
-            [str(llama_bin), "--help"],
-            capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace",
-            creationflags=_WIN_CNF,
-        )
-        help_text = (r.stdout or "") + (r.stderr or "")
-        return "n-cpu-moe" in help_text.lower()
-    except Exception:
-        return False
-
-def _probe_device_flag(llama_bin: str) -> bool:
-    try:
-        from .llama_config import LLAMA_BIN as _lb
-        import re as _re2
-        m = _re2.search(r"b(\d+)", str(_lb.name))
-        if m and int(m.group(1)) >= 8278:
-            return True
-        r = subprocess.run(
-            [llama_bin, "--help"],
-            capture_output=True, text=True, timeout=10,
-            encoding="utf-8", errors="replace",
-            creationflags=_WIN_CNF,
-        )
-        help_text = (r.stdout or "") + (r.stderr or "")
-        return "--device" in help_text.lower()
-    except Exception:
-        return False
-
 def _probe_backend_devices(llama_bin: str, backend: str) -> bool | None:
 
 

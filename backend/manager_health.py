@@ -10,8 +10,8 @@ from .llama_manager_utils import (
     _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
     VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
     _needs_mmproj, _gguf_path_to_model_name,
-    _probe_binary_build, _probe_kv_flag, _probe_moe_flag,
-    _probe_device_flag, _probe_backend_devices, _probe_backend_dlls,
+    _probe_binary_build,
+    _probe_backend_devices, _probe_backend_dlls,
     _prefetch_key, _tcp_alive, _kill_port_sync, _nm,
 )
 from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB

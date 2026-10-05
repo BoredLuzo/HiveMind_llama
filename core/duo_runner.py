@@ -140,6 +140,7 @@ from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
     build_image_desc_block, attach_images_to_last_user, resolve_image_plan,
+    count_image_parts, effective_image_plan, CODER_VISION_NOTE, build_steer_user_message as _build_steer_user_message,
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
@@ -518,20 +519,30 @@ def _inject_plan_into_coder_msgs(dtool_msgs, plan_result, *, chunking: bool, is_
     return False
 
 
-def _build_plan_anchor_text(subtasks: list, plan_tracker) -> str:
-
-
+def _build_plan_anchor_text(subtasks: list, plan_tracker, plan_content: str = "") -> str:
+    # FULL PLAN (2026-10-04, user decision: "600 zu wenig, der fertige Plan
+    # soll als Ganzes durchgegeben werden"): the anchor is the ONLY part of
+    # the plan that survives compression (verified in
+    # tests/test_compression_plan_survival.py), so the COMPLETE plan body
+    # rides along - no truncation. The anchor is re-injected verbatim, so
+    # every visual detail the planner wrote stays with the coder.
+    # Trade-off, accepted: a large plan keeps the compressed context large
+    # (planner max_tokens=8000 -> worst case ~30KB plan text).
+    _base = ""
     if subtasks:
-        return ", ".join(str(t) for t in subtasks)
-    if plan_tracker is not None and getattr(plan_tracker, "total", 0) > 0:
+        _base = ", ".join(str(t) for t in subtasks)
+    elif plan_tracker is not None and getattr(plan_tracker, "total", 0) > 0:
         _anchor_steps = []
         for _aps in getattr(plan_tracker, "_plan", None).steps:
             _aps_paths = ", ".join(getattr(_aps, "expected_paths", []) or []) or "?"
             _anchor_steps.append(
                 f"step {getattr(_aps, 'id', '?')}: {getattr(_aps, 'intent', '') or ''} → {_aps_paths}"
             )
-        return "; ".join(_anchor_steps)
-    return ""
+        _base = "; ".join(_anchor_steps)
+    _plan = str(plan_content or "").strip()
+    if _plan:
+        _base = (_base + "\nPLAN:\n" + _plan) if _base else ("PLAN:\n" + _plan)
+    return _base
 
 
 def _strip_stale_ctx_notices(msgs: list) -> list:
@@ -844,6 +855,7 @@ async def run_code_duo(ctx):
         _duo_critic_sys = ctx.get_effective_prompt_with_override(_duo_critic_key, ctx.active_preset, ctx.use_learned)
         if not _duo_critic_sys:
             _duo_critic_sys = _DUO_CRITIC_CODE_DEFAULT if ctx.duo_config.coding_mode else _DUO_CRITIC_GEN_DEFAULT
+        _critic_thinking = False
         # IMAGE DESCRIPTION FOR CRITIC (2026-10-03): the critic judges the
         # coder's output against the image - without the description it
         # cannot check visual requirements (live: "add a firework like in
@@ -1002,6 +1014,11 @@ async def run_code_duo(ctx):
         # warning; evict/coder-load cleanup was skipped). Default to the
         # coder model: the evict logic then simply excludes the coder itself.
         _planner_model = coder_mdl
+        # RESUME-DEFAULT (2026-10-04, live UI test): the plan is computed in
+        # the planner block below, which RESUME runs skip entirely - every
+        # later read (vision gates, traces, attach) crashed the whole run
+        # with UnboundLocalError. Same class as the _coder_port init.
+        _img_plan = {"planner": "none", "coder": "none", "warnings": [], "mode": None}
         if (ctx.duo_config.chunking or ctx.duo_config.planner) and not ctx.aborted() and not _resume_data and not _planner_skipped:
             _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
             _planner_is_distilled = False
@@ -1217,6 +1234,33 @@ async def run_code_duo(ctx):
                 except Exception as _port_err:
                     logger.warning("[Planner] Port resolution failed: %s", _port_err)
 
+            # VISION-TRUTH GATE (2026-10-04, Sonnet review): the requested
+            # vision flag can silently drop on load (mmproj resolution failed,
+            # VRAM restart without projector). If the loaded planner slot
+            # really runs without a projector, downgrade the plan instead of
+            # letting the planner claim it sees the image. vision_active None
+            # (/props unreachable) trusts the plan - no false fallback.
+            if _img_plan.get("planner") == "raw" and _plan_port is not None:
+                try:
+                    from backend.llama_server_manager import manager as _lsm_vgate
+                    _pslot = _lsm_vgate.get_slot_by_port(int(_plan_port))
+                    _pv = getattr(_pslot, "vision_active", None) if _pslot is not None else None
+                    if _pv is False:
+                        _img_plan, _vg_warns = effective_image_plan(
+                            _img_plan, planner_slot_vision=_pv,
+                            has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
+                        for _w in _vg_warns:
+                            logger.warning("[DUO][VISION-GATE] %s", _w)
+                            yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
+                    elif _pv is None:
+                        # UNKNOWN (2026-10-04, Sonnet): a server build without
+                        # /props modalities would make the gate a silent
+                        # no-op - say so once instead.
+                        logger.info("[DUO][VISION-GATE] planner vision state UNKNOWN "
+                                    "(/props reports no modalities?) - trusting the plan")
+                except (ImportError, AttributeError, TypeError, ValueError) as _vg_err:
+                    logger.debug("[DUO][VISION-GATE] planner check skipped: %s", _vg_err)
+
             yield await ctx.emit({
                 "type": "status",
                 "content": (
@@ -1385,6 +1429,8 @@ async def run_code_duo(ctx):
                 # ── Run planner as background task ──────────────────────────────
                 _plan_task = asyncio.create_task(run_planner(
                     task=_planner_task,
+                    sees_images=_img_plan.get("planner") == "raw",
+                    coder_sees_images=_img_plan.get("coder") == "raw",
                     images=ctx.images if _img_plan.get("planner") == "raw" else None,
                     explore_ctx=_planner_ctx,
                     planner_model=_planner_model,
@@ -1659,6 +1705,7 @@ async def run_code_duo(ctx):
         _force_compress_next: bool = False
         _compress_fail_streak: int = 0      # CONSECUTIVE-FAIL-GUARD: limit 400->compress->fail->restore cycles
         _loop_detected = False   # guard against UnboundLocalError on early exit (abort/timeout)
+        _model_load_failed = False  # coder/planner GGUF never came up (VRAM/missing)
         _chunk_budget_exhausted = False  # chunk containment: budget spent (incl. grace)
         _explore_only_rounds: int = 0
                                         # late initialization (depends on tool-round setup)
@@ -1669,6 +1716,12 @@ async def run_code_duo(ctx):
         # so ensure_loaded is a no-op after first call but costs ~200-300ms each time.
         _cached_coder_port: int | None = None
         _cached_coder_port_ctx: int | None = None
+        # LAZY-AGENTIC (2026-10-04, live gate test): in lazy mode the coder
+        # load (and with it _coder_port's first assignment) happens inside
+        # the tool loop - the attach-time vision check read it one round
+        # earlier and crashed the run (UnboundLocalError). Initialize here so
+        # every later read is defined; None means "no coder port yet".
+        _coder_port: int | None = None
         _auto_tool_promote_streak = 0
         _auto_tool_promote_notified = False
         _last_run_bash_failure: dict | None = None
@@ -1740,10 +1793,35 @@ async def run_code_duo(ctx):
             has_subtasks=bool(_subtasks),
             has_explore_ctx=_explore_has_contents,
         ) + _coder_dyn_hints + build_image_desc_block(getattr(ctx, "image_description", None))
+        # VISION-TRUTH GATE pre-prompt (2026-10-04, Sonnet review): if the
+        # coder slot is ALREADY loaded and really runs without a projector,
+        # downgrade the plan BEFORE the notes/parts decide from it. No slot
+        # loaded (fresh load below) trusts the plan - the post-load gate
+        # re-checks against /props truth.
+        if _img_plan.get("coder") == "raw":
+            try:
+                from backend.llama_server_manager import manager as _lsm_vgate
+                _cslot_pre = await _lsm_vgate._find_loaded(exec_mdl)
+                _cv = getattr(_cslot_pre, "vision_active", None) if _cslot_pre is not None else None
+                if _cv is False:
+                    _img_plan, _vg_warns = effective_image_plan(
+                        _img_plan, coder_slot_vision=_cv,
+                        has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
+                    for _w in _vg_warns:
+                        logger.warning("[DUO][VISION-GATE] %s", _w)
+                        yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
+            except (ImportError, AttributeError, TypeError, ValueError) as _vg_err:
+                logger.debug("[DUO][VISION-GATE] coder pre-check skipped: %s", _vg_err)
         if _img_plan.get("planner") == "raw" and _img_plan.get("coder") != "raw":
             _duo_coder_sys += (
                 "\n\n[IMAGE NOTE]: you cannot see the attached image — the planner saw it. "
                 "Put all relevant details (layout, texts, colors, sizes) into the plan.")
+        elif _img_plan.get("coder") == "raw":
+            # VISION NOTE (2026-10-04): the coder receives the image itself
+            # as a content part - acknowledge that so the model knows it can
+            # reference what it sees instead of guessing from the plan text.
+            # Kept as ONE constant so the post-load gate can retract it.
+            _duo_coder_sys += CODER_VISION_NOTE
         # SAVED-PATH NOTE (2026-10-03): the original upload lives in the
         # workspace now - tell the coder once so it can reference/reuse it.
         _img_paths = getattr(ctx, "image_paths", None) or []
@@ -2147,6 +2225,36 @@ async def run_code_duo(ctx):
                         return
                     yield await ctx.emit({"type": "status",
                         "content": f"✅ Coder ready ({exec_mdl.split(':')[0]})"})
+                    # VISION-TRUTH GATE post-load (2026-10-04, Sonnet review):
+                    # /props.modalities.vision is read AFTER every load (also
+                    # the in-loop reload). A dropped projector must not leave
+                    # the raw-image plan + [VISION] note claiming the coder
+                    # sees the image. None (/props unreachable) trusts the plan.
+                    if _img_plan.get("coder") == "raw" and _coder_port is not None:
+                        try:
+                            from backend.llama_server_manager import manager as _lsm_vgate2
+                            _cslot2 = _lsm_vgate2.get_slot_by_port(int(_coder_port))
+                            _cv2 = getattr(_cslot2, "vision_active", None) if _cslot2 is not None else None
+                            if _cv2 is False:
+                                _img_plan, _vg_warns2 = effective_image_plan(
+                                    _img_plan, coder_slot_vision=_cv2,
+                                    has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
+                                # RETRACT EVIDENCE (2026-10-04, Sonnet): the
+                                # negative test grades THIS line - it proves
+                                # the note left the actually-sent system
+                                # prompt (note present=True beforehand).
+                                _had_note = CODER_VISION_NOTE in _duo_coder_sys
+                                _duo_coder_sys = _duo_coder_sys.replace(CODER_VISION_NOTE, "")
+                                logger.warning("[DUO][VISION-GATE] [VISION] note retracted "
+                                               "from coder system prompt (was present=%s)", _had_note)
+                                for _w in _vg_warns2:
+                                    logger.warning("[DUO][VISION-GATE] %s", _w)
+                                    yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
+                            elif _cv2 is None:
+                                logger.info("[DUO][VISION-GATE] coder vision state UNKNOWN "
+                                            "(/props reports no modalities?) - trusting the plan")
+                        except (ImportError, AttributeError, TypeError, ValueError) as _vg_err2:
+                            logger.debug("[DUO][VISION-GATE] coder post-load check skipped: %s", _vg_err2)
                     if _subtasks:
                         yield await ctx.emit({"type": "status",
                             "content": f"🖊️ Coder active — {len(_subtasks)} subtask(s), starting with chunk 1"})
@@ -2552,12 +2660,21 @@ async def run_code_duo(ctx):
             # messages once per round and append them to the coder input — the
             # next model round sees them as user context (ZCode-style steering;
             # the tool loop drains again at its own round boundaries below).
-            _steer_txts = drain_steer_messages(ctx.run_id)
-            if _steer_txts:
+            # SINCE 2026-10-04 steers can carry IMAGES: text-only items go
+            # into the coder input as before, image items are appended as
+            # their own content-parts user message after _coder_msgs is built.
+            _steer_items = drain_steer_messages(ctx.run_id)
+            _steer_img_items = []
+            if _steer_items:
                 yield await ctx.emit({"type": "status", "content":
-                    "🧭 steered: " + " | ".join(t[:80] for t in _steer_txts)})
-                _coder_input += "\n\n" + "\n\n".join(
-                    f"[USER STEER] {t}" for t in _steer_txts)
+                    "🧭 steered: " + " | ".join(
+                        (it["text"][:60] or "(image)") + ("/+img" * (1 if it["images"] else 0))
+                        for it in _steer_items)})
+                for _st in _steer_items:
+                    if _st["images"]:
+                        _steer_img_items.append(_st)
+                    else:
+                        _coder_input += "\n\n" + f"[USER STEER] {_st['text']}"
 
             # RO-DETECT (2026-09-03): decide BEFORE building coder messages.
             # A read-only phrase (e.g. "DO NOT MODIFY") is often only a content
@@ -2633,6 +2750,18 @@ async def run_code_duo(ctx):
                 # (a non-multimodal model would answer an image it never saw).
                 from backend.llama_manager_utils import resolve_mmproj_strict as _mms
                 _mm_ok = _mms(exec_mdl) is not None
+                # VISION-TRUTH (2026-10-04): even with a resolved mmproj FILE,
+                # a mid-run reload can leave the server running without the
+                # projector loaded - check the slot's /props state when known.
+                if _mm_ok:
+                    try:
+                        from backend.llama_server_manager import manager as _lsm_vgate3
+                        _ap = int(_cached_coder_port or _coder_port or 0)
+                        _cslot3 = _lsm_vgate3.get_slot_by_port(_ap) if _ap else None
+                        if _cslot3 is not None and getattr(_cslot3, "vision_active", None) is False:
+                            _mm_ok = False
+                    except (ImportError, AttributeError, TypeError, ValueError) as _vg_err3:
+                        logger.debug("[DUO][VISION-GATE] attach check skipped: %s", _vg_err3)
                 if _mm_ok:
                     _coder_msgs = attach_images_to_last_user(_coder_msgs, ctx.images)
                 else:
@@ -2642,6 +2771,16 @@ async def run_code_duo(ctx):
                     yield await ctx.emit({"type": "status",
                         "content": "⚠ Image skipped for coder '" + exec_mdl
                                    + "': no projector (mmproj) available — the coder answers text-only."})
+
+            # STEER-IMAGES (2026-10-04): image-carrying steers become their
+            # own content-parts user message AFTER the base build - they must
+            # not be merged into the first user message (that already holds
+            # the round-1 image when the plan says raw).
+            for _st in _steer_img_items:
+                _coder_msgs.append(_build_steer_user_message(_st["text"], _st["images"]))
+                logger.info("[DUO] steer with %d image(s) appended as user parts message",
+                            len(_st["images"]))
+                _steer_img_items = []
 
             _prompt_prev = (_coder_input or "")[:500].replace("\n", " ").strip()
             if len(_coder_input or "") > 500:
@@ -2653,6 +2792,14 @@ async def run_code_duo(ctx):
                     + _touched_block_persisted
                     + "\n\n" + _coder_input
                 )
+            # IMAGES-IN-REQUEST (2026-10-04, Sonnet): per-round trace - ALSO
+            # at 0 once images are attached to the task, so "the image
+            # stopped being sent" is measurable instead of looking like a
+            # missing log line.
+            if getattr(ctx, "images", None):
+                logger.info("[DUO] coder round %d/%d: images_in_request=%d plan=planner:%s/coder:%s",
+                            _di + 1, _n_items, count_image_parts(_coder_msgs),
+                            _img_plan.get("planner"), _img_plan.get("coder"))
             yield await ctx.emit({"type": "duo_coder", "model": coder_mdl, "round": _di + 1,
                               "subtask": _subtask or None, "n_total": _n_items,
                               "prompt_preview": _prompt_prev})
@@ -3304,7 +3451,11 @@ async def run_code_duo(ctx):
                     if _dport is None:
                         for _connect_attempt in range(3):
                             try:
-                                _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
+                                # VISION RELOAD (2026-10-04): keep the mmproj
+                                # when the image plan routes raw images to the
+                                # coder - the cached slot may predate the plan
+                                _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True,
+                                                                    vision=(_img_plan.get("coder") == "raw"))
                                 break
                             except Exception as _ce:
                                 if _connect_attempt < 2:
@@ -3318,10 +3469,15 @@ async def run_code_duo(ctx):
                         _cached_coder_port = _dport
                         _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)
                     if _dport is None:
-                        _ld_setter(2497); _loop_detected = True
+                        # MODEL-LOAD-FAIL (2026-10-04, live log): a coder the
+                        # GPU cannot host is a resource error, not a loop -
+                        # loop_detected mislabeled it and the AUTO-STOP
+                        # diagnose printed misleading counters.
+                        _model_load_failed = True
                         yield await ctx.emit({"type": "status",
                             "content": f"⛔ Coder model {exec_mdl} could not be loaded "
-                                       f"(VRAM/ctx?) — run stopped."})
+                                       f"(VRAM/ctx). Lower the coder context in the agent "
+                                       f"tab, pick a smaller model, or free VRAM - run stopped."})
                         break
                     # CTX-ACTUAL (2026-09-06): the manager can downscale the slot
                     # (PRE-FLIGHT ctx-down when VRAM is tight), so the server runs a
@@ -3660,10 +3816,12 @@ async def run_code_duo(ctx):
                         _round_steer = drain_steer_messages(ctx.run_id)
                         if _round_steer:
                             yield await ctx.emit({"type": "status", "content":
-                                "🧭 steered: " + " | ".join(t[:80] for t in _round_steer)})
+                                "🧭 steered: " + " | ".join(
+                                    (it["text"][:60] or "(image)") + ("/+img" * (1 if it["images"] else 0))
+                                    for it in _round_steer)})
                             for _st in _round_steer:
                                 _dtool_msgs.append(
-                                    {"role": "user", "content": f"[USER STEER] {_st}"})
+                                    _build_steer_user_message(_st["text"], _st["images"]))
                         from tools.runner import _ask_user_gate, _ask_user_throttled_count
                         if ctx.duo_config.until_finished:
                             if _cs.test_retries >= _cs.max_test_retries:
@@ -3957,7 +4115,12 @@ async def run_code_duo(ctx):
                                 )
                             # PLAN-ANCHOR-FIX (2.2): anchor text via pure module function
                             # (testable, identical logic — see _build_plan_anchor_text).
-                            _plan_anchor_text = _build_plan_anchor_text(_subtasks, _plan_tracker)
+                            # BODY-EXCERPT: plan_content rides along so visual
+                            # details survive local-only compression.
+                            _plan_anchor_text = _build_plan_anchor_text(
+                                _subtasks, _plan_tracker,
+                                plan_content=(getattr(_plan_result, "plan_content", "") or "")
+                                if _plan_result is not None else "")
                             # CACHE-FRIENDLY partial vs full (2026-09-04):
                             # partial keeps a large raw tail byte-identical
                             # at the end -> llama.cpp --cache-reuse KV shift
@@ -6458,6 +6621,8 @@ async def run_code_duo(ctx):
         # WEDGE-HANDOFF: distinct stop reason — the run died on a wedged edit
         # whose repair handoff failed or exhausted its budget (human escalation).
         ctx.duo_stop_reason = "wedge_escalated"
+    elif _model_load_failed:
+        ctx.duo_stop_reason = "model_load_failed"
     elif _loop_detected:
         ctx.duo_stop_reason = "loop_detected"
     elif ctx.exec_ctrl.state == AgentState.HALTED:

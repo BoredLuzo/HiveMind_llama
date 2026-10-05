@@ -627,6 +627,115 @@ def attach_images_to_last_user(msgs, images):
     return msgs
 
 
+def direct_vision_should_drop(slot_vision_active, slot_model: str = "",
+                              requested_model: str = "") -> bool:
+    """Direct-mode image drop decision (2026-10-04, Sonnet #2) - pure.
+
+    Warn/drop ONLY when the loaded slot actually belongs to the requested
+    model AND /props really reported vision:false. Every other state trusts
+    the plan: no slot yet (the client loads after this check - chat_stream's
+    backstop reads the truth post-load), another model still loaded (a
+    pinned planner without a projector must NOT cause a false drop on a
+    healthy run), /props unknown (None).
+    Pinned by tests/test_vision_gate.py (4 cases).
+    """
+    if slot_model and requested_model and slot_model != requested_model:
+        return False
+    return slot_vision_active is False
+
+
+def build_steer_user_message(text: str, images=None) -> dict:
+    """Mid-run steer message builder (2026-10-04, user decision: steering
+    with screenshots). Pure: images (list of base64/data-URL strings) become
+    image_url parts FIRST, the text follows as a text part - exactly the
+    wire shape llama-server expects. No images -> plain string content.
+    Used by all steering insertion sites so the wire format is identical.
+    """
+    _txt = f"[USER STEER] {text}"
+    _imgs = [str(b or "").strip() for b in (images or []) if str(b or "").strip()]
+    if not _imgs:
+        return {"role": "user", "content": _txt}
+    parts = [{"type": "image_url", "image_url": {"url":
+              b if b.startswith("data:") else "data:image/jpeg;base64," + b}}
+             for b in _imgs]
+    parts.append({"type": "text", "text": _txt})
+    return {"role": "user", "content": parts}
+
+
+def resolve_duo_role_models(settings) -> tuple:
+    """The duo role models from ONE place (2026-10-04, Sonnet #5).
+
+    Two live resolution paths exist: the AGENTS panel writes
+    agents.duo_planner.model, the CODE panel's planner dropdown writes
+    duo_planner_model. Readers that checked only one of them produced the
+    live bug: the image status line claimed "planner '' is not multimodal"
+    while the runner used the configured model. Order: agent card first
+    (most specific), then the flat settings key.
+    Returns (planner_model, coder_model) - either may be "" when unset.
+    """
+    _agents = settings.get("agents") or {}
+    _planner = str((((_agents.get("duo_planner") or {}).get("model")))
+                   or settings.get("duo_planner_model") or "").strip()
+    _coder = str((((_agents.get("duo_coder") or {}).get("model")))
+                 or settings.get("duo_coder_model") or "").strip()
+    return _planner, _coder
+
+
+def count_image_parts(messages) -> int:
+    """Number of image_url content parts actually carried by the messages
+    (2026-10-04, Sonnet: make 'did the model get the image' measurable
+    instead of arguable). Pure; returns 0 for plain-string contents."""
+    _n = 0
+    for _m in messages or []:
+        if not isinstance(_m, dict):
+            continue
+        _c = _m.get("content")
+        if isinstance(_c, list):
+            _n += sum(1 for _p in _c
+                      if isinstance(_p, dict) and _p.get("type") == "image_url")
+    return _n
+
+
+# VISION TRUTH (2026-10-04): the coder's raw-image note as ONE constant so
+# the vision gate can retract exactly this text from an already-built
+# system prompt when the post-load /props check says the projector dropped.
+CODER_VISION_NOTE = (
+    "\n\n[VISION]: the user's attached image is included in this "
+    "conversation - you can see it. Reference concrete visual "
+    "details (layout, texts, colors, shapes) in your work.")
+
+
+def effective_image_plan(plan, *, planner_slot_vision=None, coder_slot_vision=None,
+                         has_description: bool = False):
+    """Downgrade image-plan entries the LOADED server cannot honor (2026-10-04).
+
+    resolve_image_plan() decides from settings + the model registry BEFORE the
+    load; this runs AFTER ensure_loaded and checks the slot's /props-derived
+    vision truth. slot vision values: True (server runs with projector),
+    False (server runs WITHOUT one), None (/props unavailable - trust the
+    plan, no false fallback). 'raw' + vision False falls back to the image
+    description when one exists, else to 'none'.
+    Returns (new_plan, warnings) - warnings are UI-ready strings.
+    """
+    plan = dict(plan)
+    warnings: list = []
+    for role, actual in (("planner", planner_slot_vision),
+                         ("coder", coder_slot_vision)):
+        if plan.get(role) != "raw" or actual is not False:
+            continue
+        if has_description:
+            plan[role] = "description"
+            warnings.append(
+                f"{role} runs without a vision projector (server reports vision:false) "
+                f"- falling back to the image description.")
+        else:
+            plan[role] = "none"
+            warnings.append(
+                f"{role} runs without a vision projector (server reports vision:false) "
+                f"and no image description exists - image skipped for it.")
+    return plan, warnings
+
+
 
 def resolve_image_plan(planner_mdl, coder_mdl, settings, ctx) -> dict:
     """Pure decision: how the agentic duo run handles attached images

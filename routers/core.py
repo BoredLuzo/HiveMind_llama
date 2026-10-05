@@ -17,7 +17,6 @@ from infra.run_control import (
 from infra.ask_user_governor import (
     cancel_timeout as _gov_cancel_timeout,
     is_timeout_answer_sent as _gov_timeout_sent,
-    clear_throttle_triggered as _gov_clear_throttle,
     clear_throttle_state as _gov_clear_throttle_state,
 )
 from core.state import settings
@@ -104,19 +103,35 @@ async def steer_run(run_id: str, req: Request):
     """Mid-run steering (2026-09-29): queue a typed message against a live
     run. The loop drains the queue at the next chunk/tool-round boundary and
     injects the text as user context; messages never steered are delivered
-    after the run ends (frontend-side queue)."""
+    after the run ends (frontend-side queue). SINCE 2026-10-04 a steer can
+    carry IMAGES (screenshots, base64 or data-URL strings, max 4): they are
+    injected as image_url content parts alongside the text."""
     try:
         body = await req.json()
     except Exception:
         return JSONResponse({"error": "JSON-Body erwartet"}, status_code=400)
     text = str(body.get("text", "") or "").strip()
-    if not text:
-        return JSONResponse({"error": "Field 'text' is required"}, status_code=400)
-    if not queue_steer(run_id, text):
+    raw_images = body.get("images") or []
+    if not isinstance(raw_images, list):
+        return JSONResponse({"error": "'images' must be a list"}, status_code=400)
+    if len(raw_images) > 4:
+        return JSONResponse({"error": "max 4 images per steer"}, status_code=400)
+    images = []
+    for b in raw_images:
+        if not isinstance(b, str) or len(b.strip()) < 32:
+            return JSONResponse({"error": "each image must be a base64/data-URL string"},
+                                status_code=400)
+        if len(b) > 14_000_000:  # ~10 MB binary
+            return JSONResponse({"error": "image too large (max ~10 MB)"}, status_code=400)
+        images.append(b.strip())
+    if not text and not images:
+        return JSONResponse({"error": "Field 'text' or 'images' is required"}, status_code=400)
+    if not queue_steer(run_id, text, images):
         return JSONResponse({"error": "run not active or not found"}, status_code=404)
-    logger.info("[steer] queued for run_id=%s (%d chars, queue=%d)",
-                run_id, len(text), len(steer_queue_view(run_id)))
+    logger.info("[steer] queued for run_id=%s (%d chars, %d image(s), queue=%d)",
+                run_id, len(text), len(images), len(steer_queue_view(run_id)))
     return {"status": "queued", "run_id": run_id,
+            "images": len(images),
             "queue_len": len(steer_queue_view(run_id))}
 
 
