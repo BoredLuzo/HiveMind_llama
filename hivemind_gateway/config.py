@@ -21,6 +21,11 @@ _FORBIDDEN_KEYS = ("token", "bot_token", "secret", "api_key", "password")
 
 @dataclass(frozen=True)
 class GatewayConfig:
+    # MASTER SWITCH — the gateway refuses to start unless this is
+    # explicitly true (or HIVEMIND_GATEWAY_ENABLED=1 in the environment).
+    # Fail-closed by design: nothing polls Telegram unless someone turned
+    # the feature on deliberately.
+    telegram_enabled: bool = False
     hive_base_url: str = "http://127.0.0.1:8001"
     max_text_chars: int = 4000          # longest Telegram input we accept
     rate_limit_per_min: int = 20        # per user, in-memory sliding window

@@ -463,6 +463,25 @@ async def process_update(gw: Gateway, raw: dict) -> None:
                  verdict, p.from_id, p.chat_type, p.kind)
 
 
+def ensure_enabled(cfg: GatewayConfig) -> None:
+    """MASTER SWITCH (fail-closed): the gateway must be turned on
+    deliberately, in exactly one of two places, or it refuses to start.
+    An attacker gains nothing from a feature that is off by default."""
+    if cfg.telegram_enabled:
+        return
+    env = os.environ.get("HIVEMIND_GATEWAY_ENABLED", "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        log.warning("gateway enabled via HIVEMIND_GATEWAY_ENABLED env "
+                    "(config telegram_enabled is false)")
+        return
+    raise StartupError(
+        "gateway is DISABLED (fail-closed master switch). Turn it on in "
+        "ONE of these places:\n"
+        "  1. gateway.toml next to the gateway:  telegram_enabled = true\n"
+        "  2. environment:  $env:HIVEMIND_GATEWAY_ENABLED = \"1\"\n"
+        "Nothing polls Telegram while the switch is off.")
+
+
 async def run() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -472,6 +491,7 @@ async def run() -> int:
     if cfg_path is not None:
         cfg = load_gateway_config(cfg_path)
         log.info("config loaded from %s", cfg_path)
+    ensure_enabled(cfg)
     token = resolve_token()
     acquire_instance_lock()
     state = GatewayState()
@@ -512,6 +532,19 @@ async def run() -> int:
             if kill_switch_active():
                 log.warning("kill switch activated — stopping")
                 break
+            # UI VETO (the remote off switch): when the HiveMind settings
+            # carry the key, false shuts the whole link down from the
+            # browser. Key absent = not configured = the local switch
+            # decides. Server offline: keep running, runs will report it.
+            try:
+                s = await gw.hive.settings()
+                if "telegram_gateway_enabled" in s \
+                        and not s["telegram_gateway_enabled"]:
+                    log.warning("telegram_gateway_enabled=false in "
+                                "HiveMind settings — shutting down")
+                    break
+            except (HiveUnreachable, OSError, ValueError):
+                pass
             try:
                 updates = await api.get_updates(offset=state.offset,
                                                 timeout_s=cfg.long_poll_timeout_s)

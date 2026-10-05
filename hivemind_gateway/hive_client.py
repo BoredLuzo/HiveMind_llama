@@ -53,6 +53,18 @@ class HiveClient:
             raise HiveUnreachable(f"/run/journal HTTP {r.status_code}")
         return r.json()
 
+    async def settings(self) -> dict:
+        """GET /settings — the gateway reads (never writes) it so the
+        HiveMind UI can veto the whole integration
+        (telegram_gateway_enabled=false => the gateway shuts down)."""
+        try:
+            r = await self._client.get("/settings")
+        except httpx.HTTPError as exc:
+            raise HiveUnreachable(str(exc)) from None
+        if r.status_code != 200:
+            raise HiveUnreachable(f"/settings HTTP {r.status_code}")
+        return r.json()
+
     async def create_chat(self, title: str, workspace: str | None = None) \
             -> dict:
         body: dict[str, Any] = {"title": title, "messages": []}

@@ -39,6 +39,22 @@ history, not in a file, not in any log.
 
 ## 3. Start the gateway (same shell)
 
+The gateway is **off by default** — a master switch must be on before it
+touches Telegram. Either create a one-line `gateway.toml` next to the
+gateway:
+
+```toml
+telegram_enabled = true
+```
+
+or set the switch for this shell only:
+
+```powershell
+$env:HIVEMIND_GATEWAY_ENABLED = "1"
+```
+
+Then start:
+
 ```powershell
 # adjust the path to YOUR HiveMind folder first:
 cd C:\Tools\HiveMind

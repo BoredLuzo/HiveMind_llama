@@ -100,6 +100,36 @@ cfg = load_gateway_config(_write(
     'hive_base_url = "http://127.0.0.1:8001"\napproval_expiry_s = 90\n'))
 check("custom values accepted", cfg.approval_expiry_s == 90)
 
+# ── master switch (fail-closed) ─────────────────────────────────────────
+import os
+from hivemind_gateway import main as gw_main
+
+check("master switch defaults OFF", GatewayConfig().telegram_enabled is False)
+try:
+    gw_main.ensure_enabled(GatewayConfig())
+    check("disabled config refused", False)
+except gw_main.StartupError:
+    check("disabled config refused", True)
+
+os.environ["HIVEMIND_GATEWAY_ENABLED"] = "1"
+try:
+    gw_main.ensure_enabled(GatewayConfig())
+    check("env override enables", True)
+finally:
+    os.environ.pop("HIVEMIND_GATEWAY_ENABLED", None)
+
+os.environ["HIVEMIND_GATEWAY_ENABLED"] = "0"
+try:
+    gw_main.ensure_enabled(GatewayConfig())
+    check("env 0 does not enable", False)
+except gw_main.StartupError:
+    check("env 0 does not enable", True)
+finally:
+    os.environ.pop("HIVEMIND_GATEWAY_ENABLED", None)
+
+gw_main.ensure_enabled(load_gateway_config(_write("telegram_enabled = true\n")))
+check("toml true enables", True)
+
 print()
 print(f"passed={passed} failed={failed}")
 sys.exit(0 if failed == 0 else 1)

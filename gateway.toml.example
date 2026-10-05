@@ -7,6 +7,11 @@
 # or the Windows Credential Manager (hivemind_gateway / bot_token).
 # Any token-like key in this file is a startup ERROR by design.
 
+# MASTER SWITCH — the gateway refuses to start while this is false.
+# Fail-closed on purpose: nothing polls Telegram until you turned the
+# feature on here (or via HIVEMIND_GATEWAY_ENABLED=1).
+telegram_enabled = false
+
 # HiveMind server the gateway talks to. Loopback only — the gateway
 # refuses to start against anything else.
 hive_base_url = "http://127.0.0.1:8001"
