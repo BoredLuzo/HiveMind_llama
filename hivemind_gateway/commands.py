@@ -11,10 +11,10 @@ from __future__ import annotations
 COMMAND_WHITELIST = {
     "start": "welcome + state",
     "pair": "bind the owner (one-time code from the console)",
-    "new": "start a fresh HiveMind chat (WP2)",
-    "stop": "abort the running run (WP2)",
-    "status": "current run/status (WP2)",
-    "verbose": "toggle verbose output (WP2)",
+    "new": "start a fresh HiveMind chat",
+    "stop": "abort the running run",
+    "status": "current run/status",
+    "verbose": "toggle verbose output",
     "lock": "lock the gateway until the PC unlocks it (WP6)",
     "help": "list commands",
 }

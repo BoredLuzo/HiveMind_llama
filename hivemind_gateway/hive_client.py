@@ -42,6 +42,17 @@ class HiveClient:
             raise HiveUnreachable(f"/health HTTP {r.status_code}")
         return r.json()
 
+    async def journal(self) -> dict:
+        """GET /run/journal — {active, run_id, done, aborted, ts, frames}.
+        Busiest heuristic the server offers until the WP3 409 guard."""
+        try:
+            r = await self._client.get("/run/journal")
+        except httpx.HTTPError as exc:
+            raise HiveUnreachable(str(exc)) from None
+        if r.status_code != 200:
+            raise HiveUnreachable(f"/run/journal HTTP {r.status_code}")
+        return r.json()
+
     async def create_chat(self, title: str, workspace: str | None = None) \
             -> dict:
         body: dict[str, Any] = {"title": title, "messages": []}

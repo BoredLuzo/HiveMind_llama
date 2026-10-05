@@ -30,7 +30,9 @@ from . import auth as gw_auth
 from . import commands as gw_commands
 from . import send as gw_send
 from . import state as gw_state
+from .bridge import RunBridge
 from .config import GatewayConfig, load_gateway_config, resolve_config_path
+from .hive_client import HiveClient, HiveUnreachable
 from .redaction import attach_redaction_to_root
 from .state import GatewayState, kill_switch_active
 from .telegram_api import TelegramApi, TelegramApiError
@@ -163,6 +165,8 @@ class Gateway:
         self.owner_id: int | None = state.owner_telegram_id
         self._redaction = attach_redaction_to_root([os.environ.get(
             TOKEN_ENV_VAR, "")])
+        self.hive = HiveClient(cfg.hive_base_url)
+        self.bridge = RunBridge(self.hive, state, cfg, self)
 
     # -- outbound (always via send()) ------------------------------------
 
@@ -171,17 +175,31 @@ class Gateway:
         await gw_send.send(self.api, self.owner_id, chat_id, text=text,
                            reply_to_message_id=reply_to_message_id)
 
+    # -- messenger interface for the bridge (owner-addressed by policy) --
+
+    async def send_message(self, text: str) -> dict:
+        return await gw_send.send(self.api, self.owner_id, self.owner_id,
+                                  text=text)
+
+    async def edit_message(self, message_id: int, text: str) -> None:
+        await gw_send.send(self.api, self.owner_id, self.owner_id,
+                           new_text=text, message_id=message_id)
+
+    async def send_document(self, data: bytes, filename: str) -> None:
+        await gw_send.send(self.api, self.owner_id, self.owner_id,
+                           document_bytes=data, filename=filename)
+
     # -- commands ---------------------------------------------------------
 
     async def handle_owner_update(self, p: gw_auth.ParsedUpdate) -> None:
         cmd = gw_commands.command_from_message(p)
         if cmd is None:
-            # owner non-text or forwarded: acknowledge once WP2 handles
-            # photos/steering; today: ignore quietly except a hint
             if p.kind == "message" and not p.is_forwarded:
+                # non-text update (photo/document/voice/sticker): rejected
+                # with a note until WP5 (brief: SECURITY/Inputs)
                 await self.reply(p.chat_id,
-                                 "Text commands only in this build "
-                                 "(photos/steering come with a later WP).",
+                                 "Nur Text in diesem Build (Fotos/Steering "
+                                 "kommen mit WP5).",
                                  reply_to_message_id=p.message_id)
             return
         name, arg = cmd
@@ -189,18 +207,61 @@ class Gateway:
             await self.cmd_pair(p, arg)
         elif name == "start":
             await self.reply(p.chat_id,
-                             "HiveMind gateway active. Send /help for "
-                             "commands. HiveMind runs arrive with WP2.",
+                             "HiveMind-Gateway aktiv. Einfach Text senden "
+                             "= Lauf starten. /help für Befehle.",
                              reply_to_message_id=p.message_id)
         elif name == "help":
             lines = [f"/{n} — {d}" for n, d in
                      gw_commands.COMMAND_WHITELIST.items()]
-            await self.reply(p.chat_id, "Commands:\n" + "\n".join(lines),
+            await self.reply(p.chat_id, "Befehle:\n" + "\n".join(lines),
+                             reply_to_message_id=p.message_id)
+        elif name == "new":
+            await self._owner_bridge_call(p, self.bridge.new_chat())
+        elif name == "stop":
+            # never rate-limited: the safety valve must always work
+            note = await self.bridge.stop()
+            await self.reply(p.chat_id, note,
+                             reply_to_message_id=p.message_id)
+        elif name == "status":
+            await self.reply(p.chat_id, self.bridge.status_text(),
+                             reply_to_message_id=p.message_id)
+        elif name == "verbose":
+            await self.reply(p.chat_id, self.bridge.toggle_verbose(),
+                             reply_to_message_id=p.message_id)
+        elif name == "lock":
+            await self.reply(p.chat_id,
+                             "/lock kommt mit WP6 (Kill-Switch).",
                              reply_to_message_id=p.message_id)
         else:
             await self.reply(p.chat_id,
-                             f"/{name} is whitelisted but not wired in this "
-                             "build (WP2/WP6). Nothing was done.",
+                             f"/{name} ist nicht in diesem Build.",
+                             reply_to_message_id=p.message_id)
+
+    async def _owner_bridge_call(self, p: gw_auth.ParsedUpdate, coro) -> None:
+        try:
+            note = await coro
+        except (HiveUnreachable, OSError) as exc:
+            note = f"🔌 HiveMind nicht erreichbar: {exc}"
+        await self.reply(p.chat_id, note,
+                         reply_to_message_id=p.message_id)
+
+    async def start_owner_run(self, p: gw_auth.ParsedUpdate) -> None:
+        """A plain owner text message = a run. Length-limited, then the
+        bridge does the rest (busy check, transcript, stream, result)."""
+        q = p.text.strip()
+        if not q:
+            return
+        if len(q) > self.cfg.max_text_chars:
+            await self.reply(p.chat_id,
+                             f"❌ Text zu lang ({len(q)} > "
+                             f"{self.cfg.max_text_chars} Zeichen).",
+                             reply_to_message_id=p.message_id)
+            return
+        note = await self.bridge.start_text_run(q)
+        if note and note.startswith(("⏳", "🔌", "❌")):
+            # busy/offline notes come back as messages; successful runs
+            # already delivered their own output
+            await self.reply(p.chat_id, note,
                              reply_to_message_id=p.message_id)
 
     async def cmd_pair(self, p: gw_auth.ParsedUpdate, arg: str) -> None:
@@ -248,6 +309,41 @@ def _is_stale(p: gw_auth.ParsedUpdate, max_age_s: int) -> bool:
     return time.time() - p.date > max_age_s
 
 
+async def recover_orphan_run(gw: Gateway) -> None:
+    """Restart with a running run (brief: SECURITY/Operations): check
+    run_active against the server, deny persisted open approvals, and ask
+    the owner about aborting. Never restart the run automatically."""
+    run = gw.state.data.get("active_run")
+    if not run:
+        return
+    rid = run.get("run_id")
+    if gw.state.data.get("open_approvals"):
+        gw.state.data["open_approvals"] = {}
+        gw.state.save()
+    try:
+        j = await gw.hive.journal()
+        still_active = (isinstance(j, dict) and bool(j.get("active"))
+                        and not j.get("done") and not j.get("aborted")
+                        and (not rid or str(j.get("run_id")) == str(rid)))
+    except (HiveUnreachable, OSError):
+        still_active = True  # assume the worst; do not silently clear
+    if not still_active:
+        gw.state.set_active_run(None)
+        gw.state.save()
+        log.info("[RECOVER] orphan run %s is no longer active — cleared",
+                 rid)
+        return
+    log.warning("[RECOVER] orphan run %s still active", rid)
+    if gw.owner_id is not None:
+        try:
+            await gw.reply(
+                gw.owner_id,
+                f"⚠️ Beim Neustart lief noch Run {rid}. /stop bricht ihn "
+                "ab — sonst läuft er detached weiter und hält VRAM.")
+        except TelegramApiError as exc:
+            log.error("[RECOVER] notice failed: %s", exc)
+
+
 async def process_update(gw: Gateway, raw: dict) -> None:
     p = gw_auth.parse_update(raw)
     if p is None:
@@ -257,7 +353,23 @@ async def process_update(gw: Gateway, raw: dict) -> None:
         if _is_stale(p, gw.cfg.update_max_age_s):
             log.info("[DROP] stale update %s (%s)", p.update_id, p.kind)
             return
-        await gw.handle_owner_update(p)
+        cmd = gw_commands.command_from_message(p)
+        if cmd and cmd[0] == "stop":
+            # the safety valve is never rate-limited
+            await gw.handle_owner_update(p)
+            return
+        if not gw.limiter.allow(str(p.from_id)):
+            log.warning("[RATE] owner hit the rate limit (drop)")
+            await gw.reply(p.chat_id,
+                           "⏳ Rate-Limit erreicht — kurz warten.",
+                           reply_to_message_id=p.message_id)
+            return
+        if cmd:
+            await gw.handle_owner_update(p)
+        elif p.kind == "callback_query":
+            log.info("[DROP] owner callback (approvals arrive with WP4)")
+        else:
+            await gw.start_owner_run(p)
         return
     # everyone else: silent. rate-limited log only, NEVER an answer.
     if gw.limiter.should_log_drop(str(p.from_id)):
@@ -307,6 +419,8 @@ async def run() -> int:
         state.save()
         log.info("backlog dropped: starting at offset %s", state.offset)
 
+    await recover_orphan_run(gw)
+
     try:
         while True:
             if kill_switch_active():
@@ -339,6 +453,7 @@ async def run() -> int:
         log.warning("gateway stopped")
     finally:
         await api.close()
+        await gw.hive.close()
     return 0
 
 

@@ -98,6 +98,8 @@ SUITES = [
     ("gateway_render",         "tests/test_gateway_render.py",                  60),
     ("gateway_lint_gate",      "tests/test_gateway_lint_gate.py",               60),
     ("gateway_state_path",     "tests/test_gateway_state_path.py",              60),
+    ("gateway_bridge",         "tests/test_gateway_bridge.py",                  60),
+    ("gateway_commands2",      "tests/test_gateway_commands2.py",               60),
 ]
 
 
