@@ -42,7 +42,7 @@ round of reliability work on writes, approvals and model loading.
 - Developers: a pre-commit hook ships under `scripts/hooks` (see
   README for the one-time activation).
 
-## [1.3.0-preview] - 2026-10-04
+## [1.3.0-preview] - 2026-10-05
 
 Test build for the live installation. Everything below is IN:
 image upload paths (collision-free, real formats), chat continuity
@@ -54,17 +54,35 @@ thinking/checklist persistence (small variant, out of the model seed),
 one-file-per-chat fork guard with rev-based adoption, a 200 MB save
 brake, concurrent-writer coverage.
 
+Added in the 2026-10-05 round:
+- feature search palette (Ctrl+K in the web UI): indexes every panel's
+  sections, toggles, agent cards and settings fields (alias ctx ->
+  context); a click jumps to the setting and reveals mode-hidden
+  wrappers - the startup banner shows a TIP line for it
+- chat list shows each chat's disk size (json + blobs) in the meta line
+- steering with screenshots: /steer accepts images (max 4), injected as
+  content parts at the next round boundary - the workaround for images
+  falling out of the compressed window
+- image path hardening: the direct-chat send gate uses the model
+  registry (legacy name matching silently discarded images for every
+  shipped vision model), GIF/WebP are re-encoded to JPEG in the browser,
+  the flow card refreshes on mode changes
+- qwen3.5 MTP models are vision-capable (projector pinned per model)
+
 NOT built (deliberate, for a later release):
 - message edit / regenerate controls in the chat UI do not exist yet
   (history edits are only possible via the chats API; the seed path
   handles them - verified - but there is no button for them)
 - steering notes, status lines and approval/ask cards are not persisted
   (approval cards recover server-side only while the run lives)
-- chat size display / cleanup UI (sizes stay whatever they grow to)
+- chat cleanup UI (the sizes are now displayed, but there is no button
+  to shrink a chat yet)
 - no live warning at the ctx slider when the set ctx cannot fit the
   VRAM budget (the guard only fires when a run starts; the observed
   failure class - 35B @ ctx 71680 with a pinned planner, 9B @ 40960 -
-  is only caught there); /vram/estimate ignores pinned slots too
+  is only caught there); /vram/estimate ignores pinned slots too, and
+  the preflight waits ~18 s on VRAM that will never free instead of
+  failing immediately with the concrete numbers
 - an orphaned run (browser/tab died) keeps its VRAM until it finishes
   or /abort arrives; server-side continuation is proven, but UI
   completeness after reconnect (planner parts, thinking foldout) is
@@ -78,7 +96,8 @@ NOT built (deliberate, for a later release):
   - the summary path is therefore live-untested; testable only with
   agentic_mode off
 - whether the planner's visual details survive the compression summary
-  is unverified (the "rebuild UI from image" use case depends on it)
+  is verified for the anchor (full plan re-injected every compression);
+  what the summary does to surrounding context is untested
 
 PARTIAL (known, accepted):
 - blob versions are add-only until a chat is deleted (no per-chat GC)
