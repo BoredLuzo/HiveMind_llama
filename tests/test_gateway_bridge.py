@@ -885,8 +885,19 @@ async def t_audit_fixes():
     note1 = ms_m.messages[0]
     check("resolved: simple shows the direct model",
           "model: direct-y" in note1)
+    # P9: with a /setModel override, simple runs carry direct_model and
+    # the info note shows the override instead of the engine default
+    st_m.data["run_overrides"] = {"model": "gemma-x"}
+    await br_m.start_text_run("q2")
+    check("P9: simple body carries direct_model override",
+          br_m.hive.stream_bodies[-1]["overrides"].get(
+              "direct_model") == "gemma-x")
+    note2 = ms_m.messages[3]
+    check("P9: info note shows the override model",
+          "model: gemma-x" in note2)
     check("resolved: unrestricted omits the restrict line",
           "restricted:" not in note1)
+    st_m.data["run_overrides"] = {}
     hive_m.settings_body = {
         "mode": "auto",
         "agents": {"duo_coder": {"model": "coder-x"}},
@@ -894,7 +905,7 @@ async def t_audit_fixes():
     }
     await br_m.start_text_run("q2")
     note2 = [m for m in ms_m.messages
-             if m.startswith("⏳ Run started")][-1]
+             if m.startswith("ℹ️ Run")][-1]
     check("resolved: duo shows planner+coder",
           "planner: coder-x" in note2 and "coder: coder-x" in note2)
     check("resolved: duo notes the restrict default",

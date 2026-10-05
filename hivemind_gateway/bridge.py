@@ -327,7 +327,7 @@ class RunBridge:
             or "auto"
         _eff_label = f"{_eff} (phone override)" if _sel else _eff
         if _eff in ("simple", "chat", "direct"):
-            _model_line = f"model: {_direct_mdl or 'engine default'}"
+            _model_line = f"model: {_ov_model or _direct_mdl or 'engine default'}"
         elif _ov_model:
             _model_line = f"model: {_ov_model} (planner + coder)"
         else:
@@ -335,12 +335,16 @@ class RunBridge:
                            f"coder: {_coder_mdl or 'engine default'}")
         if _restricted:
             _model_line += "\nrestricted: web + text only"
-        status = await self.ms.send_message(
-            "⏳ Run started\n\n"
+        # the info note is PERMANENT (never status-edited): mode/models/
+        # approvals/workspace stay visible in the chat while the separate
+        # progress message carries the transient ⏳/✅ states
+        await self.ms.send_message(
+            "ℹ️ Run\n\n"
             f"mode: {_eff_label}\n"
             f"{_model_line}\n"
             f"approvals: {_appr_mode}\n"
             f"workspace: {_ws_short}")
+        status = await self.ms.send_message("⏳ working …")
         status_id = status.get("message_id")
 
         parts: list[str] = []
@@ -357,6 +361,10 @@ class RunBridge:
                 ov["phone_restricted"] = True
             if _appr_mode in ("ask", "deny"):
                 ov["duo_action_approval_enabled"] = True
+            if _eff in ("simple", "chat", "direct") and _ov_model:
+                # P9 (2026-10-05): the phone model selection now applies
+                # to simple/direct runs too (engine lifts direct_model).
+                ov["direct_model"] = _ov_model
             sel_mode = _sel
             stream_mode = sel_mode
             if sel_mode == "agentic":

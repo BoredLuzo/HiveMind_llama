@@ -1223,7 +1223,8 @@ async def stream(req: Request):
         return bool(default)
 
     _model_overrides = {}
-    for _model_key in ("duo_planner_model", "duo_coder_model", "duo_critic_model"):
+    for _model_key in ("duo_planner_model", "duo_coder_model", "duo_critic_model",
+                       "direct_model"):
         if _model_key in body and str(body.get(_model_key) or "").strip():
             _model_overrides[_model_key] = str(body.get(_model_key)).strip()
 

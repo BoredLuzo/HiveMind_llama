@@ -264,6 +264,15 @@ async def run_direct(ctx):
                     )
                     _direct_model = _vision_alt
 
+        # P9 (2026-10-05): an explicit model selection rides the run body
+        # as direct_model (the Telegram gateway's /setModel) — the user's
+        # choice wins over the complexity auto-pick.
+        _user_direct = str(ctx.settings.get("direct_model") or "").strip()
+        if _user_direct:
+            _direct_log.info(
+                "[Direct] model override from run body: %s", _user_direct)
+            _direct_model = _user_direct
+
         _preload_ev = await ctx.maybe_preload(_direct_model)
         if _preload_ev:
             yield _preload_ev
