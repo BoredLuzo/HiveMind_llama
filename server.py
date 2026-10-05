@@ -1243,6 +1243,13 @@ async def stream(req: Request):
             if _ci > 0:
                 _model_overrides[_ctx_key] = _ci
 
+    # TG-GATEWAY (P10/T, 2026-10-05): per-run direct tools access level —
+    # same lift pattern as the ctx keys; the direct runner reads it from
+    # the run settings snapshot (direct_runner.py:301).
+    if "direct_tools_enabled" in body:
+        _model_overrides["direct_tools_enabled"] = _as_bool(
+            body.get("direct_tools_enabled"))
+
     _duo_tool_rounds_raw = body.get("duo_tool_rounds", None)
     if _duo_tool_rounds_raw is None:
         _duo_tool_rounds_raw = settings.get("duo_tool_rounds", 0)
