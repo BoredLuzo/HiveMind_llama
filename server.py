@@ -1831,8 +1831,12 @@ async def gateway_heartbeat(req: Request):
         body = {}
     if not isinstance(body, dict):
         body = {}
+    try:
+        _pid = int(body.get("pid") or 0)
+    except (TypeError, ValueError):
+        _pid = 0
     from infra import gateway_supervisor as _sup
-    _sup.note_heartbeat(int(body.get("pid") or 0),
+    _sup.note_heartbeat(_pid,
                         body.get("data") if isinstance(body.get("data"), dict) else {})
     return {"ok": True}
 
@@ -1878,19 +1882,37 @@ async def gateway_stop():
     from infra import gateway_supervisor as _sup
     st = _sup.status()
     pid = int(st.get("pid") or 0)
+    birth = st.get("birth")  # merged top-level from the heartbeat data
     if not st.get("running") or pid <= 0:
         return JSONResponse({"ok": False, "error": "gateway not running"},
                             status_code=409)
-    # recycled-pid guard: the heartbeat is <=15 s old, but the pid could
-    # still have been reused - refuse to kill anything but a python proc.
-    _chk = subprocess.run(
-        ["powershell", "-NoProfile", "-Command",
-         f"$p = Get-Process -Id {pid} -ErrorAction SilentlyContinue; "
-         "if ($p -and $p.ProcessName -match 'python') { 'py' } else { 'no' }"],
-        capture_output=True, text=True)
-    if _chk.stdout.strip() != "py":
+    # recycled-pid guard (deep audit 2026-10-05): the heartbeat is <=15 s
+    # old, but the pid could have been reused by ANY process in that
+    # window. Verify process name AND the process birth (FILETIME from
+    # the heartbeat) before killing - a mismatch resets the status
+    # instead of killing an innocent process.
+    _ps = (
+        "$p = Get-Process -Id " + str(pid) + " -ErrorAction SilentlyContinue; "
+        "if (-not $p) { 'no' }"
+        " elseif ($p.ProcessName -notmatch 'python') { 'no' }"
+        " else {"
+        "  $birth = [DateTimeOffset]::FromFileTime(" + str(int(birth) if birth else 0) + ")"
+        "  if ([Math]::Abs(($p.StartTime.ToUniversalTime() - $birth.UtcDateTime).TotalSeconds) -gt 1.0)"
+        "    { 'recycled' } else { 'py' }"
+        " }"
+    )
+    _chk = subprocess.run(["powershell", "-NoProfile", "-Command", _ps],
+                          capture_output=True, text=True)
+    _verdict = _chk.stdout.strip()
+    if _verdict == "recycled":
+        _sup.clear()
         return JSONResponse(
-            {"ok": False, "error": "pid is not a python process - refusing"},
+            {"ok": False,
+             "error": "pid was recycled by another process - refusing, status reset"},
+            status_code=409)
+    if _verdict != "py":
+        return JSONResponse(
+            {"ok": False, "error": "gateway process not found - status reset"},
             status_code=409)
     subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
                    capture_output=True)

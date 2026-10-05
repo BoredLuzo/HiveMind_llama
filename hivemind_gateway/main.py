@@ -650,11 +650,15 @@ async def _mirror_loop(gw: Gateway) -> None:
         if kill_switch_active():
             break
         # P8-lite supervisor heartbeat: the UI's start/stop/status reads
-        # this liveness beacon (fire-and-forget, see hive_client).
+        # this liveness beacon (fire-and-forget, see hive_client). The
+        # process birth (FILETIME) lets /gateway/stop verify the pid was
+        # not recycled by another process inside the freshness window
+        # (deep audit 2026-10-05).
         await gw.hive.heartbeat(os.getpid(), {
             "paired": gw.owner_id is not None,
             "mode": gw.state.data.get("mode") or "",
             "restricted": getattr(gw, "phone_restricted", None),
+            "birth": _process_birth(os.getpid()),
         })
         await gw.bridge.mirror_tick()
         await asyncio.sleep(5.0)
