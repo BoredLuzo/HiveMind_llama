@@ -20,6 +20,7 @@ if exist "%~dp0BUILD_INFO.txt" (
     for /f "usebackq delims=" %%B in (`powershell -NoProfile -Command "(Get-Content -LiteralPath ($env:HM_DIR + 'BUILD_INFO.txt') -ErrorAction SilentlyContinue | Select-String '^build: ').Line"`) do set "HM_BUILD=%%B"
 )
 if defined HM_BUILD echo    %HM_BUILD%
+echo    TIP: press Ctrl+K in the web UI to search every feature/setting
 echo.
 
 REM Resolve server port: settings.json "server_port" (set by install.bat), default 8001.
