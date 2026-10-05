@@ -19,6 +19,8 @@ COMMAND_WHITELIST = {
     "models": "list available models (numbered)",
     "setmodel": "select a model by number, then answer the ctx questions",
     "cancel": "abort a pending /setModel flow",
+    "workspace": "show/set the workspace for phone runs",
+    "tools": "show/set the direct chat tools level for phone runs (on|off)",
     "lock": "lock the gateway until the PC unlocks it (WP6)",
     "help": "list commands",
 }

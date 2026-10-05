@@ -94,6 +94,11 @@ class HiveClient:
         return await self._put_json(
             f"/chats/{chat_id}", {"messages": messages, "base_rev": base_rev})
 
+    async def put_chat_meta(self, chat_id: str, fields: dict) -> httpx.Response:
+        """Partial chat update (workspace, title, ...) — same CAS: 409
+        means server-wins, adopt r.json()."""
+        return await self._put_json(f"/chats/{chat_id}", fields)
+
     async def get_chat(self, chat_id: str) -> httpx.Response:
         return await self._get(f"/chats/{chat_id}")
 
@@ -138,6 +143,12 @@ class HiveClient:
         active preset for UI and phone alike. The bridge warns about
         that in its confirmation."""
         return await self._post_json(f"/presets/{name}/load", {})
+
+    async def steer(self, run_id: str, text: str) -> httpx.Response:
+        """POST /api/run/{run_id}/steer — queue a mid-run message for an
+        engine run (receipt = queued, injection at the next boundary)."""
+        return await self._post_json(f"/api/run/{run_id}/steer",
+                                     {"text": text})
 
     async def stream(self, q: str, chat_id: str, images: list | None = None,
                      mode: str = "", overrides: dict | None = None):

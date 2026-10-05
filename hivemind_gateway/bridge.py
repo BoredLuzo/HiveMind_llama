@@ -18,6 +18,7 @@ send() (the owner choke point).
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -388,6 +389,9 @@ class RunBridge:
         if cctx:
             out["duo_coder_ctx_agentic"] = int(cctx)
             out["duo_coder_ctx_normal"] = int(cctx)
+        tools = self.state.data.get("tools")
+        if tools is not None:
+            out["direct_tools_enabled"] = bool(tools)
         return out
 
     def _pending(self) -> dict | None:
@@ -564,3 +568,250 @@ class RunBridge:
         self.state.save()
         return ("Modell/CTX-Overrides gelöscht — nächste Läufe nutzen "
                 "wieder die Engine-Einstellungen.")
+
+    # -- P10: run takeover — mirror a UI/engine run to the phone ---------
+
+    def _mirror(self) -> dict:
+        if not hasattr(self, "_mirror_state"):
+            self._mirror_state = {"run_id": None, "after": 0,
+                                  "status_msg_id": None,
+                                  "last_status": "", "approval_sig": None,
+                                  "last_tick": 0.0}
+        return self._mirror_state
+
+    def _own_run_id(self) -> str | None:
+        run = self.state.data.get("active_run") or {}
+        return run.get("run_id")
+
+    def _mirror_enabled(self, engine_settings: dict) -> bool:
+        """The UI toggle (telegram_mirror_enabled) gates the takeover.
+        Key absent = off (fail-closed, same rule as the veto)."""
+        return bool(engine_settings.get("telegram_mirror_enabled"))
+
+    async def mirror_tick(self) -> None:
+        """One mirror step (called every few seconds from the mirror
+        task). Watches the engine journal for an active run that is NOT
+        the gateway's own, relays it to the phone, relays approval
+        cards. Never raises."""
+        try:
+            await self._mirror_tick_inner()
+        except (HiveUnreachable, OSError) as exc:
+            self._log_note(f"mirror tick: engine unreachable ({exc})")
+        except (TelegramApiError, ValueError) as exc:
+            self._log_note(f"mirror tick failed: {exc}")
+
+    def _parse_done(self, frames: list) -> str | None:
+        """stop_reason of the LAST done frame in the journal, if any."""
+        for raw in reversed(frames or []):
+            if isinstance(raw, str) and '"type": "done"' in raw:
+                try:
+                    payload = json.loads(raw[6:])
+                    return str(payload.get("stop_reason") or "completed")
+                except (ValueError, TypeError):
+                    continue
+        return None
+
+    async def _mirror_tick_inner(self) -> None:
+        m = self._mirror()
+        try:
+            s = await self.hive.settings()
+        except (HiveUnreachable, OSError, ValueError):
+            return  # engine unreachable: nothing to mirror, keep quiet
+        if not self._mirror_enabled(s):
+            if m["run_id"]:
+                m.update({"run_id": None, "after": 0,
+                          "status_msg_id": None, "last_status": "",
+                          "approval_sig": None})
+                await self.ms.send_message(
+                    "📴 Mirror beendet (Einstellung im UI aus).")
+            return
+        j = await self.hive.journal()
+        if not isinstance(j, dict) or not j.get("active") \
+                or j.get("done") or j.get("aborted"):
+            # nothing active: end a session, report how it ended
+            if m["run_id"]:
+                rid, frames = m["run_id"], j.get("frames") \
+                    if isinstance(j, dict) else None
+                reason = self._parse_done(frames) or "beendet"
+                m.update({"run_id": None, "after": 0,
+                          "status_msg_id": None, "last_status": "",
+                          "approval_sig": None})
+                await self.ms.send_message(
+                    f"🏁 Mirror-Lauf {rid} beendet ({reason}).")
+            return
+        rid = str(j.get("run_id") or "")
+        if rid == str(self._own_run_id() or ""):
+            return  # our own run reports natively; do not double-mirror
+        fresh = m["run_id"] != rid
+        if fresh:
+            m.update({"run_id": rid, "after": int(j.get("n") or 0),
+                      "status_msg_id": None, "last_status": "",
+                      "approval_sig": None})
+            await self.ms.send_message(
+                f"📢 Engine-Lauf übernommen (Mirror): {rid}\n"
+                "Texte von dir werden eingereiht (Steering), Freigaben "
+                "kommst du hier. /stop bricht ihn ab.")
+            m["after"] = int(j.get("n") or 0)
+            return  # next tick streams the delta
+
+        # delta frames since last tick
+        frames = j.get("frames") or []
+        after = m["after"]
+        new_frames = frames[after:] if after < len(frames) else []
+        m["after"] = len(frames)
+        done_reason = self._parse_done(new_frames)
+        last_status = ""
+        for raw in new_frames:
+            if not isinstance(raw, str):
+                continue
+            try:
+                ev = json.loads(raw[6:]) if raw.startswith("data: ") else {}
+            except ValueError:
+                continue
+            if ev.get("type") == "status":
+                last_status = str(ev.get("content") or "")[:120]
+        if last_status and last_status != m["last_status"] \
+                and (_now() - m["last_tick"]) >= self.cfg.status_min_interval_s:
+            if m["status_msg_id"] is None:
+                res = await self.ms.send_message(f"⏳ {last_status} …")
+                m["status_msg_id"] = res.get("message_id")
+            else:
+                await self._edit_status(m["status_msg_id"],
+                                        f"⏳ {last_status} …")
+            m["last_status"] = last_status
+            m["last_tick"] = _now()
+        if done_reason:
+            text = STOP_REASON_TEXT.get(
+                done_reason, f"🏁 Mirror-Lauf beendet ({done_reason}).")
+            if done_reason == "completed":
+                text = "🏁 Mirror-Lauf abgeschlossen."
+            await self.ms.send_message(text)
+            m.update({"run_id": None, "after": 0, "status_msg_id": None,
+                      "last_status": "", "approval_sig": None})
+            return
+
+        # approval relay (the point of the takeover)
+        pend = await self.hive.pending_approval(rid)
+        body = pend.json() if hasattr(pend, "json") else {}
+        if getattr(pend, "status_code", 500) == 200 and body.get("active"):
+            sig = f"{body.get('decision_id') or ''}|{body.get('preview') or ''}"
+            if sig != m["approval_sig"]:
+                m["approval_sig"] = sig
+                preview = str(body.get("preview") or "")[:1500]
+                await self.ms.send_message(
+                    f"🛡 Freigabe nötig (UI-Lauf {rid}):\n"
+                    f"Tool: {body.get('tool')}\n{preview}\n"
+                    "Antworte 1 = einmal erlauben, 3 = ablehnen. "
+                    "('2'/immer gibt es vom Handy nicht.)")
+        elif m["approval_sig"] and not body.get("active"):
+            m["approval_sig"] = None  # card resolved elsewhere (UI)
+
+    def mirror_intercept(self, text: str) -> bool:
+        """True = this text belongs to the mirrored engine run (approval
+        answer or steering); the caller must await mirror_send(text)
+        instead of starting a run."""
+        m = self._mirror()
+        return bool(m.get("run_id")) and bool((text or "").strip())
+
+    async def mirror_send(self, text: str) -> str:
+        """Route a phone message into the mirrored run: while an
+        approval card is open, 1/3 answers it ('2'/always does not exist
+        from the phone); anything else is steering."""
+        m = self._mirror()
+        rid = m.get("run_id")
+        if m.get("approval_sig"):
+            t = (text or "").strip()
+            if t == "2":
+                return ("❌ '2' (immer erlauben) gibt es vom Handy "
+                        "bewusst nicht — 1 oder 3.")
+            if t in ("1", "3"):
+                resp = await self.hive.decide_approval(rid, t)
+                code = getattr(resp, "status_code", 500)
+                m["approval_sig"] = None
+                if code >= 300:
+                    return (f"❌ Entscheidung nicht angenommen "
+                            f"(HTTP {code}) — ggf. im UI beantwortet.")
+                return ("✅ erlaubt (einmalig) — übermittelt."
+                        if t == "1" else "🛡 abgelehnt — übermittelt.")
+            return ("🛡 Es wartet eine Freigabe — antworte 1 oder 3 "
+                    "(oder beantworte sie im UI).")
+        resp = await self.hive.steer(rid, text)
+        if getattr(resp, "status_code", 500) == 404:
+            return (f"❌ Lauf {rid} ist nicht mehr aktiv — Mirror "
+                    "endet beim nächsten Tick.")
+        return ("🧭 Eingereiht — läuft an der nächsten Grenze ein "
+                "(je nach Modus; Pipeline nimmt kein Steering an).")
+
+    async def workspace_text(self, arg: str) -> str:
+        """/workspace <path> — set the workspace of the [TG] chat so
+        phone runs execute there (chat workspace wins at resolve time)."""
+        path = (arg or "").strip().strip('"').strip("'")
+        if not path:
+            current = (self._tg_chat() or {}).get("workspace", "")
+            label = current or "— nicht gesetzt (Engine-Standard)"
+            return (f"Workspace (Telegram): {label}.\n"
+                    "Setzen mit /workspace <pfad>.")
+        mapping = await self._ensure_chat()
+        chat_id = mapping["hive_chat_id"]
+        r = await self.hive.get_chat(chat_id)
+        r.raise_for_status()
+        chat = r.json()
+        rev = int(chat.get("rev") or 0)
+        for _attempt in (0, 1):
+            resp = await self.hive.put_chat_meta(
+                chat_id, {"workspace": path, "base_rev": rev})
+            if resp.status_code == 409:
+                body = resp.json()
+                rev = int(body.get("rev") or 0)
+                continue
+            resp.raise_for_status()
+            mapping["workspace"] = path
+            self.state.data["tg_chat"] = mapping
+            self.state.save()
+            return (f"📁 Workspace (Telegram) gesetzt: {path}\n"
+                    "Handy-Läufe arbeiten jetzt dort — der Agent kann "
+                    "aus diesem Ordner lesen. /workspace ohne Argument "
+                    "zeigt den aktuellen Pfad.")
+        raise HiveUnreachable("workspace write conflict (409 twice)")
+
+    def tools_text(self, arg: str) -> str:
+        """/tools on|off — per-run direct tools access level (rides the
+        run body; needs the engine lift to take effect)."""
+        a = (arg or "").strip().lower()
+        cur = self.state.data.get("tools")
+        cur_txt = ("an" if cur is True else "aus" if cur is False
+                   else "Engine-Standard")
+        if not a:
+            return (f"Zugriffsstufe (Direct, Telegram): {cur_txt}.\n"
+                    "Setzen mit /tools on oder /tools off.")
+        if a in ("on", "an", "1"):
+            self.state.data["tools"] = True
+        elif a in ("off", "aus", "0"):
+            self.state.data["tools"] = False
+        else:
+            return "❌ /tools on oder /tools off."
+        self.state.save()
+        new = self.state.data["tools"]
+        return (f"Zugriffsstufe (Direct, Telegram): "
+                f"{'an' if new else 'aus'} — gilt pro Lauf "
+                "(Engine-Lift erforderlich, siehe P10/T).")
+
+    async def stop_mirror(self) -> str | None:
+        """Abort the mirrored engine run, if any. Returns the note or
+        None when no mirror session is active."""
+        m = self._mirror()
+        rid = m.get("run_id")
+        if not rid:
+            return None
+        try:
+            resp = await self.hive.abort_run(rid)
+            code = getattr(resp, "status_code", 500)
+        except (HiveUnreachable, OSError) as exc:
+            return (f"❌ /stop für Mirror-Lauf {rid} fehlgeschlagen "
+                    f"({exc}) — läuft evtl. weiter, am PC prüfen!")
+        m.update({"run_id": None, "after": 0, "status_msg_id": None,
+                  "last_status": "", "approval_sig": None})
+        if code == 404:
+            return (f"⏹ Mirror-Lauf {rid} war dem Server unbekannt — "
+                    "Mirror beendet.")
+        return f"⏹ Abbruch gesendet für Mirror-Lauf {rid}."

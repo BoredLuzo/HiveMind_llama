@@ -456,6 +456,142 @@ async def t_stop():
     check("stop fails VISIBLY", "fehlgeschlagen" in note3 and "r10" in note3)
 
 
+# ── 7. P10 run takeover: mirror, approval relay, steer, workspace ──────
+async def t_takeover():
+    class MirrorHive(FakeHive):
+        def __init__(self):
+            super().__init__(_run_events())
+            self.settings_body = {"telegram_mirror_enabled": True}
+            self.journal_body = {"active": False}
+            self.pending_body = {"active": False}
+            self.steered = []
+            self.decided = []
+            self.aborts = []
+
+        async def settings(self):
+            return dict(self.settings_body)
+
+        async def journal(self):
+            return dict(self.journal_body)
+
+        async def pending_approval(self, run_id):
+            return FakeResponse(200, dict(self.pending_body))
+
+        async def decide_approval(self, run_id, answer):
+            self.decided.append((run_id, answer))
+            return FakeResponse(200, {"routed": "pause"})
+
+        async def steer(self, run_id, text):
+            self.steered.append((run_id, text))
+            return FakeResponse(200, {"status": "queued"})
+
+        async def abort_run(self, run_id):
+            self.aborts.append(run_id)
+            return FakeResponse(200, {"ok": True})
+
+    hive = MirrorHive()
+    br, st, ms = _mk("gwbr_take_", hive)
+    st.data["tg_chat"] = {"hive_chat_id": "chat01", "created_at": "x"}
+
+    # mirror OFF (default): tick does nothing, intercept False
+    await br.mirror_tick()
+    check("mirror off: no takeover", ms.messages == []
+          and br.mirror_intercept("irgendein text") is False)
+
+    # mirror ON + active engine run -> takeover note, intercept active
+    hive.journal_body = {"active": True, "run_id": "ui-run-1",
+                         "done": False, "aborted": False,
+                         "ts": time.time(), "n": 3, "frames": []}
+    await br.mirror_tick()
+    check("mirror takeover announced",
+          any("übernommen" in m and "ui-run-1" in m for m in ms.messages))
+    check("mirror intercept active",
+          br.mirror_intercept("weiter so") is True)
+
+    # own gateway run is NOT mirrored
+    st.data["active_run"] = {"run_id": "ui-run-1", "chat_id": "chat01"}
+    await br.mirror_tick()
+    check("own run not double-mirrored",
+          sum(1 for m in ms.messages if "übernommen" in m) == 1)
+    st.data["active_run"] = None
+
+    # approval card relayed, phone answers
+    hive.pending_body = {"active": True, "tool": "run_bash",
+                         "preview": "cmd /c del", "decision_id": "d1"}
+    await br.mirror_tick()
+    check("approval card relayed",
+          any("run_bash" in m for m in ms.messages))
+    note = await br.mirror_send("2")
+    check("phone '2' (always) rejected", "bewusst nicht" in note)
+    check("rejected '2' did not reach engine", hive.decided == [])
+    note = await br.mirror_send("3")
+    check("phone '3' denied via engine",
+          hive.decided == [("ui-run-1", "3")])
+    check("deny confirmed", "abgelehnt" in note)
+
+    # steering: plain text goes to /steer, not a new gateway run
+    runs_before = len(hive.stream_bodies)
+    note = await br.mirror_send("mach weiter mit version b")
+    check("phone text steered the mirrored run",
+          hive.steered == [("ui-run-1", "mach weiter mit version b")])
+    check("steer started no gateway run",
+          len(hive.stream_bodies) == runs_before)
+    check("steer receipt honest", "Eingereiht" in note)
+
+    # done frame ends the session
+    hive.journal_body = {"active": True, "run_id": "ui-run-1", "done": True,
+                         "aborted": False, "ts": time.time(), "n": 4,
+                         "frames": ['data: {"type": "done", '
+                                    '"stop_reason": "completed"}']}
+    await br.mirror_tick()
+    check("done ends mirror session",
+          any("Mirror-Lauf" in m or "abgeschlossen" in m
+              for m in ms.messages)
+          and br.mirror_intercept("x") is False)
+
+    # /stop aborts a mirrored run
+    hive.journal_body = {"active": True, "run_id": "ui-run-2",
+                         "done": False, "aborted": False,
+                         "ts": time.time(), "n": 1, "frames": []}
+    await br.mirror_tick()
+    note = await br.stop_mirror()
+    check("/stop aborts mirrored run", hive.aborts == ["ui-run-2"]
+          and "ui-run-2" in note)
+    check("mirror cleared after abort", br.mirror_intercept("x") is False)
+
+    # /workspace: confirmed + persisted (PUT path exercised via fake)
+    hive2 = FakeHive()
+    br2, st2, ms2 = _mk("gwbr_wsp_", hive2)
+    st2.data["tg_chat"] = {"hive_chat_id": "chat01", "created_at": "x"}
+
+    async def put_chat_meta(chat_id, fields):
+        # CAS-retry path: the FIRST PUT gets a 409 (server wins) and
+        # workspace_text must adopt rev 7 and retry successfully
+        hive2.meta_puts = getattr(hive2, "meta_puts", []) + [dict(fields)]
+        if len(hive2.meta_puts) == 1:
+            return FakeResponse(409, {"rev": 7})
+        hive2.chat.update(fields)
+        hive2.chat["rev"] = fields.get("base_rev", 0) + 1
+        return FakeResponse(200, {"ok": True,
+                                  "rev": hive2.chat["rev"]})
+    hive2.put_chat_meta = put_chat_meta
+    note = await br2.workspace_text("D:/projekte/neu")
+    check("workspace confirmed", "D:/projekte/neu" in note)
+    check("workspace 409 adopted and retried",
+          len(hive2.meta_puts) == 2
+          and hive2.meta_puts[1]["base_rev"] == 7)
+    check("workspace persisted in state+chat",
+          st2.data["tg_chat"]["workspace"] == "D:/projekte/neu"
+          and hive2.chat.get("workspace") == "D:/projekte/neu")
+
+    # /tools: state -> run body
+    check("tools default = engine", "Engine-Standard" in br2.tools_text(""))
+    br2.tools_text("off")
+    await br2.start_text_run("q")
+    check("tools off rides the run body",
+          hive2.stream_bodies[-1]["overrides"].get(
+              "direct_tools_enabled") is False)
+
 async def _main():
     await t_happy()
     await t_conflict()
@@ -467,6 +603,7 @@ async def _main():
     await t_mode()
     await t_models_flow()
     await t_stop()
+    await t_takeover()
 
 asyncio.run(_main())
 print()

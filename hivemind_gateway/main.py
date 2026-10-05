@@ -303,7 +303,15 @@ class Gateway:
         elif name == "stop":
             # never rate-limited: the safety valve must always work
             note = await self.bridge.stop()
+            mirror_note = await self.bridge.stop_mirror()
+            if mirror_note:
+                note += "\n" + mirror_note
             await self.reply(p.chat_id, note,
+                             reply_to_message_id=p.message_id)
+        elif name == "workspace":
+            await self._owner_bridge_call(p, self.bridge.workspace_text(arg))
+        elif name == "tools":
+            await self.reply(p.chat_id, self.bridge.tools_text(arg),
                              reply_to_message_id=p.message_id)
         elif name == "status":
             await self.reply(p.chat_id, self.bridge.status_text(),
@@ -347,6 +355,14 @@ class Gateway:
         setup_note = await self.bridge.consume_setup(q)
         if setup_note is not None:
             await self.reply(p.chat_id, setup_note,
+                             reply_to_message_id=p.message_id)
+            return
+        # P10 takeover: while a mirrored engine run is active, phone
+        # texts belong to that run (approval answers / steering), they
+        # never start a second run.
+        if self.bridge.mirror_intercept(q):
+            note = await self.bridge.mirror_send(q)
+            await self.reply(p.chat_id, note,
                              reply_to_message_id=p.message_id)
             return
         if len(q) > self.cfg.max_text_chars:
@@ -524,6 +540,18 @@ async def _ui_veto_active(gw: Gateway) -> bool:
     return "telegram_gateway_enabled" in s and not s["telegram_gateway_enabled"]
 
 
+async def _mirror_loop(gw: Gateway) -> None:
+    """P10: watch the engine journal for UI runs and mirror them to the
+    phone (status, approvals relayed as 1/3, steering). Runs next to the
+    Telegram poll loop; every error is contained — the mirror must
+    never take the gateway down."""
+    while True:
+        if kill_switch_active():
+            break
+        await gw.bridge.mirror_tick()
+        await asyncio.sleep(5.0)
+
+
 async def run() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -568,6 +596,8 @@ async def run() -> int:
         log.info("backlog dropped: starting at offset %s", state.offset)
 
     await recover_orphan_run(gw)
+
+    mirror_task = asyncio.create_task(_mirror_loop(gw))
 
     try:
         while True:
@@ -622,6 +652,7 @@ async def run() -> int:
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.warning("gateway stopped")
     finally:
+        mirror_task.cancel()
         await api.close()
         await gw.hive.close()
     return 0
