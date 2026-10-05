@@ -149,6 +149,64 @@ Acceptance tests: a simple-mode run with direct_model override loads
 the named model; ctx applies (log line num_ctx); without the keys
 behavior is unchanged.
 
+## P10 — Run takeover: mirror a UI run to the phone (approvals, steering, start)
+
+Owner request (2026-10-05): start an engine run at the PC (or from the
+phone), leave, and keep controlling it from the phone — approvals,
+steering, and result.
+
+All engine endpoints already exist; this is gateway + one small core
+change (T) + one frontend toggle (UI). Sub-features:
+
+- **M — Mirror:** when a settings key `telegram_mirror_enabled` is on
+  (UI toggle under the Telegram Gateway card, default OFF), the gateway
+  polls `GET /run/journal` for an ACTIVE engine run that is not its own
+  and mirrors it to the phone: throttled status edits, `done` with a
+  readable stop-reason, errors immediately. Journal frames are the
+  same SSE events the UI sees (they include tool_call details — the
+  owner's own data on the owner's phone).
+- **A — Approval relay:** while mirroring, poll
+  `GET /approval/pending/{run_id}`; when the engine holds a card, the
+  gateway renders it on the phone (tool + full command, untruncated —
+  same rules as WP4) and relays the answer via
+  `POST /approval/decide/{run_id}`. The engine already discards late
+  duplicate decisions (expired-once, decision-id mismatch), so UI
+  click and phone tap racing each other is safe: first wins.
+  Default: relay ON when the mirror toggle is on (approvals are the
+  point); master switch, UI veto and kill switch still override
+  everything.
+- **S — Steering:** a phone text while an engine run is mirrored goes
+  to `POST /api/run/{run_id}/steer` (receipt = queued; the bot states
+  per the mode matrix where it will inject — duo/tool-loops yes,
+  pipeline never).
+- **T — Direct tools access level from the phone (core change, small):**
+  `direct_tools_enabled` is read from the run's settings snapshot
+  (direct_runner.py:301) but /stream only lifts the six model/ctx body
+  keys into that snapshot. Proposal: lift `direct_tools_enabled` the
+  same way (same pattern, ~2 lines), then a `/tools on|off` phone
+  command applies per-run without touching global settings.
+- **W — Workspace from the phone (no core change):** `/workspace
+  <path>` PUTs the workspace onto the `[TG]` chat
+  (`PUT /chats/{id}`, field already live-verified); subsequent phone
+  runs run inside it. Gate: path must exist (server-side check via the
+  chats API 404/400 is absent — gateway checks via a cheap engine call
+  or accepts and reports), confirmation echoes the resolved path, and
+  the answer notes the blast radius ("der Agent liest dann dort").
+- **Start from the phone:** a phone run already starts on the PC —
+  the missing piece is only the workspace (W) and mode (/mode, live).
+  For UI-native runs started at the PC, M/A/S above close the loop.
+
+Security gates: takeover requires the pairing (owner only), the master
+switch ON, no veto, no kill switch — any of the three kills mirror,
+relay and steer instantly. The mirror never starts runs by itself; it
+only watches and relays.
+
+Acceptance tests (real-run round): UI run + mirror on → approval card
+appears on the phone within ~5 s; phone "3" denies (tool does not
+run); phone text lands as steer at the next boundary (status
+"steered"); done reaches the phone with stop_reason; mirror off →
+none of the above; veto mid-run stops the mirror within one loop.
+
 ## P6 — Smaller hardenings
 
 - `run_tests` into `_APPROVAL_TOOLS` now, before anyone wires a real
