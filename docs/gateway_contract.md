@@ -146,17 +146,21 @@ was working live; per brief the experiment waits for an approved slot).
   `3`=deny. Empty/unclear = deny (fail-safe). **The gateway sends deny as
   answer `"3"` — CONFIRMED the gateway can deny.** It must never send `"2"`
   (brief: no "always" from the phone).
-- Timeout semantics — **DIVERGENCE from the brief**: the brief assumed the
-  HiveMind timeout is an upper bound and expiry is deny. Reality:
+- Timeout semantics — **CORRECTED (2026-10-05)**: expiry IS deny
+  (fail-closed), matching the brief. The WP0 draft read stale comments in
+  tools/runner.py (:317 header and the ":687-688 auto-approve-once path"
+  note) - both corrected on main in 2e938f3; the empty-answer path from
+  countdown expiry falls into the fail-closed deny below it.
   `duo_action_approval_timeout_s` (read per gate call,
   tools/runner.py:575): `0` → no timer, abort-aware wait capped at 3600 s
-  (:387, :578); `>0` → countdown expiry is **AUTO-APPROVE-ONCE**
-  (:687-688 "countdown expired -> auto-approve-once path"), NOT deny, and
-  the card checkbox can switch the countdown off (:657, :680-685). A
-  decision arriving after expiry is discarded once
-  (routers/core.py:234-235). CONSEQUENCE for the gateway: its own expiry
-  (gateway.toml, default 120 s) must fire BEFORE the server's auto-approve
-  and send deny `"3"` itself; gateway expiry < server timeout is a
+  (:387, :578); `>0` → countdown expiry **DENIES the call once**
+  (fail-closed, "[APPROVAL] timeout ... denied once", visible status
+  line), and the card checkbox can switch the countdown off (:657,
+  :680-685). A decision arriving after expiry is discarded once
+  (routers/core.py:234-235). CONSEQUENCE for the gateway: unchanged -
+  its own expiry (gateway.toml, default 120 s) sends deny `"3"` itself,
+  which now matches the server behavior instead of racing an
+  auto-approve. Gateway expiry shorter than the server timeout stays a
   configuration invariant to test in WP4. Until WP4 stands the gateway
   auto-denies everything with `"3"`.
 - Deny result: the tool does not run; the model receives
