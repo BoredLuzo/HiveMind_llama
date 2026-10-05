@@ -84,6 +84,8 @@ class RunBridge:
         self.verbose = bool(state.data.get("verbose", False))
         # ask-mode: the ONE waiting own-run approval (rid/decision_id/tool)
         self._open_own_approval: dict | None = None
+        # Tool-Call-Relay: suppress consecutive identical activity lines
+        self._last_tool_line = ""
 
     # -- small helpers ----------------------------------------------------
 
@@ -193,6 +195,27 @@ class RunBridge:
         # the run is over — a waiting own approval is moot (the engine
         # resolved or lost it); never answer a stale card late
         self._open_own_approval = None
+
+    @staticmethod
+    def _tool_line(ev: dict) -> str:
+        """Compact one-line tool activity for the phone (Tool-Call-Relay,
+        2026-10-05): '🔧 name: first-line-of-detail'. None when there is
+        nothing concise to show."""
+        name = str(ev.get("name") or ev.get("tool") or "tool")
+        extra = ev.get("extra") if isinstance(ev.get("extra"), dict) else {}
+        detail = ""
+        for key in ("cmd", "path", "url", "query", "code", "package"):
+            v = str(extra.get(key) or "").strip()
+            if v:
+                detail = v.splitlines()[0]
+                break
+        if not detail:
+            detail = str(ev.get("label") or ev.get("detail") or "").strip()
+        if not detail:
+            return None
+        if len(detail) > 160:
+            detail = detail[:160] + "…"
+        return f"🔧 {name}: {detail}"
 
     def _effective_approval_mode(self, engine_settings: dict) -> str:
         """ask | deny | off for PHONE runs (2026-10-05 owner decision).
@@ -348,6 +371,7 @@ class RunBridge:
         status_id = status.get("message_id")
 
         parts: list[str] = []
+        self._last_tool_line = ""  # Tool-Relay dedupe reset per run
         error_text = ""
         stop_reason = ""
         last_status = ""
@@ -400,6 +424,13 @@ class RunBridge:
                         # ask / off: the gated call waits engine-side; the
                         # owner decides via tappable card or 1/2/3 text.
                         await self._relay_own_approval(ev)
+                elif etype == "tool_call":
+                    # Tool-Call-Relay (2026-10-05): compact activity lines —
+                    # the phone sees WHAT the agent is doing live.
+                    line = self._tool_line(ev)
+                    if line and line != self._last_tool_line:
+                        await self.ms.send_message(line)
+                        self._last_tool_line = line
                 elif etype == "status":
                     last_status = str(ev.get("content") or "")[:120]
                 elif etype == "done":
@@ -958,6 +989,7 @@ class RunBridge:
         m["after"] = len(frames)
         done_reason = self._parse_done(new_frames)
         last_status = ""
+        tool_lines: list[str] = []
         for raw in new_frames:
             if not isinstance(raw, str):
                 continue
@@ -967,6 +999,14 @@ class RunBridge:
                 continue
             if ev.get("type") == "status":
                 last_status = str(ev.get("content") or "")[:120]
+            elif ev.get("type") == "tool_call":
+                # Tool-Call-Relay (2026-10-05): compact activity lines so
+                # the phone sees WHAT the agent is doing, not just status
+                line = self._tool_line(ev)
+                if line and (not tool_lines or tool_lines[-1] != line):
+                    tool_lines.append(line)
+        for tl in tool_lines[-6:]:  # cap per tick, newest win
+            await self.ms.send_message(tl)
         if last_status and last_status != m["last_status"] \
                 and (_now() - m["last_tick"]) >= self.cfg.status_min_interval_s:
             if m["status_msg_id"] is None:

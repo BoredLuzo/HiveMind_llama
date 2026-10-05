@@ -604,7 +604,7 @@ async def t_takeover():
                          "preview": "x" * 300, "decision_id": "d2"}
     ms.messages.clear()
     await br.mirror_tick()
-    relayed = next((m for m in ms.messages if "run_bash" in m), "")
+    relayed = next((m for m in ms.messages if "Approval needed" in m), "")
     check("N2: full command relayed (beyond 300 chars)",
           long_cmd in relayed)
     check("N2: no blind-approval note when full cmd present",
@@ -986,6 +986,44 @@ async def t_audit_fixes():
     check("gate: confirm text", "ask" in out)
     out = await br_g.gate_text("nuclear")
     check("gate: invalid rejected", "ask|deny|off" in out)
+
+    # Tool-Call-Relay (owner request): tool activity becomes compact
+    # lines on the phone; consecutive identical lines are suppressed
+    ev_t = [{"type": "run_id", "run_id": "r-t"},
+            {"type": "tool_call", "name": "run_bash",
+             "extra": {"cmd": "echo eins"}},
+            {"type": "tool_call", "name": "run_bash",
+             "extra": {"cmd": "echo eins"}},
+            {"type": "tool_call", "name": "write_file",
+             "extra": {"path": "x.txt", "label": "x.txt"}},
+            {"type": "token", "content": "fertig"},
+            {"type": "done", "stop_reason": "completed"}]
+    br_t, st_t, ms_t = _mk("gwbr_tool_", FakeHive(ev_t))
+    await br_t.start_text_run("q")
+    tools = [m for m in ms_t.messages if m.startswith("🔧")]
+    check("tool relay: compact lines on the phone",
+          any("run_bash: echo eins" in m for m in tools)
+          and any("write_file" in m for m in tools))
+    check("tool relay: consecutive duplicate suppressed",
+          len([m for m in tools if "echo eins" in m]) == 1)
+
+    # mirror side: journal tool_call frames relayed the same way
+    hive_tm = FakeHive()
+    hive_tm.settings_body = {"telegram_mirror_enabled": True}
+    hive_tm.journal_body = {"active": True, "run_id": "ui-tm",
+                            "done": False, "aborted": False,
+                            "ts": time.time(), "n": 0, "frames": []}
+    br_tm, st_tm, ms_tm = _mk("gwbr_toolm_", hive_tm)
+    await br_tm.mirror_tick()
+    hive_tm.journal_body = {"active": True, "run_id": "ui-tm",
+                            "done": False, "aborted": False,
+                            "ts": time.time(), "n": 1, "frames": [
+        'data: {"type": "tool_call", "name": "write_file", '
+        '"extra": {"path": "spiel.txt", "cmd": "schreibe spiel"}}']}
+    await br_tm.mirror_tick()
+    check("tool relay mirror: journal frames become lines",
+          any("write_file" in m and "spiel" in m
+              for m in ms_tm.messages))
 
     # G8: steering cannot bypass the max_text_chars cap
     await br_g2.mirror_send("x" * 5000)
