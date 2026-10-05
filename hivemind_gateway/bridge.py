@@ -155,6 +155,20 @@ class RunBridge:
             return await self._fail(f"🔌 HiveMind unreachable "
                                     f"(offline?): {exc}")
 
+    @staticmethod
+    def _short_path(path: str) -> str:
+        """Collapse the user-profile segment out of a path before it
+        travels to Telegram (cloud chats are not E2E; the Windows
+        username must not ride along). C:/Users/name/x -> ~/x."""
+        try:
+            from pathlib import Path as _P
+            _home = str(_P.home())
+            if path and path.startswith(_home):
+                return "~" + path[len(_home):]
+        except (OSError, ValueError):
+            pass
+        return path
+
     async def _fail(self, text: str) -> str:
         await self.ms.send_message(text)
         return text
@@ -326,7 +340,7 @@ class RunBridge:
         chunks = render.split_message(text)
         if len(chunks) > FINAL_CHUNK_LIMIT:
             await self.ms.send_document(
-                text.encode("utf-8"), "ergebnis.txt")
+                text.encode("utf-8"), "result.txt")
         else:
             for c in chunks:
                 await self._send_chunk(c)
@@ -336,7 +350,7 @@ class RunBridge:
         except (HiveUnreachable, OSError) as exc:
             self._log_note(f"assistant turn write failed: {exc}")
         if status_id is not None:
-            await self._edit_status(status_id, "✅ fertig.")
+            await self._edit_status(status_id, "✅ done.")
         return text
 
     # -- busy heuristic against the server journal ------------------------
@@ -432,7 +446,7 @@ class RunBridge:
             "📡 Gateway status\n"
             "\n"
             f"chat: {mapping.get('hive_chat_id', '— none yet')}\n"
-            f"workspace: {mapping.get('workspace') or 'engine default'}\n"
+            f"workspace: {self._short_path(mapping.get('workspace')) if mapping.get('workspace') else 'engine default'}\n"
             f"mode: {mode}  (phone runs only)\n"
             f"model: {ov.get('model') or 'engine default'}\n"
             f"ctx: planner {ov.get('planner_ctx') or '—'} · coder "
@@ -1045,7 +1059,7 @@ class RunBridge:
             mapping["workspace"] = path
             self.state.data["tg_chat"] = mapping
             self.state.save()
-            return (f"📁 Workspace (Telegram) set: {path}\n"
+            return (f"📁 Workspace (Telegram) set: {self._short_path(path)}\n"
                     "Phone runs now work there — the agent can read "
                     "from this folder. /workspace without an argument "
                     "shows the current path.")

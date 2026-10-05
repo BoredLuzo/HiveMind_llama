@@ -195,7 +195,7 @@ async def t_happy():
     check("approval auto-denied with 3",
           hive.denies == [("1791-abc", "3")])
     check("deny note shown", any("denied" in t for _, t in ms.edits))
-    check("status finished edit", ms.edits[-1][1] == "✅ fertig.")
+    check("status finished edit", ms.edits[-1][1] == "✅ done.")
 
 # ── 2. 409 adopt-and-retry ─────────────────────────────────────────────
 async def t_conflict():
@@ -291,7 +291,7 @@ async def t_split_doc():
     br2, st2, ms2 = _mk("gwbr_doc_", FakeHive(ev2))
     await br2.start_text_run("q")
     check("overflow goes as .txt", len(ms2.documents) == 1
-          and ms2.documents[0][1] == "ergebnis.txt")
+          and ms2.documents[0][1] == "result.txt")
     check("doc content complete", huge in ms2.documents[0][0].decode("utf-8"))
 
 # ── 6b. secret filter on the .txt document path ────────────────────────
@@ -670,7 +670,11 @@ async def t_takeover():
     # G11: the path must EXIST (gateway-side check) — use a real temp dir
     ws_dir = Path(tempfile.mkdtemp(prefix="gwbr_wsp_dir_"))
     note = await br2.workspace_text(str(ws_dir))
-    check("workspace confirmed", str(ws_dir) in note)
+    _home = str(Path.home())
+    _expect = ("~" + str(ws_dir)[len(_home):]
+               if str(ws_dir).startswith(_home) else str(ws_dir))
+    check("workspace confirmed (path collapsed for Telegram)",
+          _expect in note and str(ws_dir) not in note)
     check("workspace 409 adopted and retried",
           len(hive2.meta_puts) == 2
           and hive2.meta_puts[1]["base_rev"] == 7)

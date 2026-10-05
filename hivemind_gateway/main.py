@@ -464,16 +464,16 @@ class Gateway:
             # everyone is a stranger (brief: "No answer to strangers").
             # The console is the pairing interface — it shows attempts.
             log.warning("[PAIR] LOCKED — restart the gateway for a fresh "
-                        "window (sender=%s)", p.from_id)
+                        "window (sender=%s)", _mask_tid(p.from_id))
             return
         except gw_auth.PairingDisabled:
             log.info("[PAIR] attempt while already paired (sender=%s)",
-                     p.from_id)
+                     _mask_tid(p.from_id))
             return
         except gw_auth.PairingError:
             log.warning("[PAIR] failed attempt (sender=%s, %d/%d) — "
                         "code wrong or expired",
-                        p.from_id, self.pairing.failed_attempts,
+                        _mask_tid(p.from_id), self.pairing.failed_attempts,
                         gw_auth.MAX_FAILED_ATTEMPTS)
             return
         if not ok:  # pragma: no cover - verify returns True or raises
@@ -483,10 +483,18 @@ class Gateway:
             p.from_id,
             _dt.datetime.now().astimezone().isoformat(timespec="seconds"))
         self.state.save()
-        log.warning("[PAIR] owner bound (telegram id %s)", p.from_id)
+        log.warning("[PAIR] owner bound (telegram id %s)", _mask_tid(p.from_id))
         await self.reply(p.chat_id,
                          "Paired. This Telegram account is now the owner.",
                          reply_to_message_id=p.message_id)
+
+
+def _mask_tid(tid) -> str:
+    """Telegram ids in log lines: last 3 digits only. Logs end up in
+    backups; the full id lives in Telegram itself if the owner ever
+    really needs it."""
+    s = str(tid or "")
+    return "…" + s[-3:] if len(s) > 3 else "…"
 
 
 def _is_stale(p: gw_auth.ParsedUpdate, max_age_s: int) -> bool:
@@ -709,7 +717,7 @@ async def run() -> int:
         print("=" * 60, file=sys.stderr)
     else:
         log.warning("owner already bound (%s) — pairing disabled",
-                    gw.owner_id)
+                    _mask_tid(gw.owner_id))
 
     # BACKLOG DROP: jump to the newest update, discard everything older.
     try:
