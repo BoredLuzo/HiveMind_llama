@@ -283,6 +283,20 @@ async def t_lock():
         lock.write_text("12345", encoding="utf-8")
         M.acquire_instance_lock()
         check("legacy lock format replaced", True)
+
+        # realrun bug #5: a TERMINATED process whose handle the parent
+        # still holds stays openable via OpenProcess — tasklist lists
+        # nothing, the old probe said "alive". Reproduced with a real
+        # exited child: Popen keeps its handle, the pid must count as dead.
+        import subprocess as sp
+        child = sp.Popen([sys.executable, "-c", "pass"])
+        child.wait()
+        check("exited child with open handle counts as DEAD",
+              M._pid_alive(child.pid) is False)
+        lock.write_text(
+            f'{{"pid": {child.pid}, "birth": 1}}', encoding="utf-8")
+        M.acquire_instance_lock()
+        check("terminated-child lock replaced", True)
     finally:
         S.state_home = orig_home  # type: ignore[assignment]
         if lock.exists():

@@ -75,21 +75,32 @@ def resolve_token() -> str:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Liveness probe. NOTE: os.kill(pid, 0) is NOT a probe on Windows —
-    any sig other than CTRL_C_EVENT/CTRL_BREAK_EVENT calls
-    TerminateProcess and would KILL the other gateway. Use OpenProcess."""
+    """Liveness probe. Two Windows traps handled here:
+    - os.kill(pid, 0) KILLS the target on Windows (TerminateProcess) —
+      never use it.
+    - OpenProcess SUCCEEDS for a TERMINATED process as long as anyone
+      (e.g. the parent shell) still holds its handle — tasklist shows
+      nothing, yet the lock check would refuse forever (realrun bug #5).
+      GetExitCodeProcess must confirm STILL_ACTIVE (259)."""
     if pid <= 0:
         return False
     if sys.platform == "win32":
         import ctypes
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
         k32 = ctypes.windll.kernel32
         handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False,
                                  pid)
         if not handle:
             return False
-        k32.CloseHandle(handle)
-        return True
+        try:
+            exit_code = ctypes.c_ulong()
+            if not k32.GetExitCodeProcess(handle,
+                                          ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            k32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
