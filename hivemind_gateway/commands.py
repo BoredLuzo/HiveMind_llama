@@ -16,6 +16,9 @@ COMMAND_WHITELIST = {
     "status": "current run/status",
     "verbose": "toggle verbose output",
     "mode": "show/set the phone-side run mode (auto|chat|pipeline|automap|off)",
+    "models": "list available models (numbered)",
+    "setmodel": "select a model by number, then answer the ctx questions",
+    "cancel": "abort a pending /setModel flow",
     "lock": "lock the gateway until the PC unlocks it (WP6)",
     "help": "list commands",
 }

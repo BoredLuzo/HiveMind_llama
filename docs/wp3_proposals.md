@@ -133,6 +133,22 @@ deliberate click. Onboarding gains one step: store the token in the
 Credential Manager (installer or documented PowerShell snippet).
 Needs owner go — engine-side change.
 
+## P9 — Direct-mode model/ctx overrides (body params)
+
+Risk/limitation: /setModel overrides ride the /stream body as duo keys
+(duo_planner_model/coder_model, duo_planner_ctx_target,
+duo_coder_ctx_agentic/normal — merged into the run's settings snapshot
+at chat_run.py:154). SIMPLE/direct runs resolve their model and ctx
+from settings.agents.direct and IGNORE those keys — so the phone flow
+currently only bites for duo/agentic runs (confirmed in the bot's
+answer text).
+
+Proposal: /stream accepts `direct_model` and `direct_ctx` body keys
+(or the runner reads the duo keys as fallback for the direct role).
+Acceptance tests: a simple-mode run with direct_model override loads
+the named model; ctx applies (log line num_ctx); without the keys
+behavior is unchanged.
+
 ## P6 — Smaller hardenings
 
 - `run_tests` into `_APPROVAL_TOOLS` now, before anyone wires a real

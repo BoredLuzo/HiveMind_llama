@@ -94,7 +94,10 @@ token; stop that other instance and start again.
 - Commands: `/new` (fresh chat) · `/stop` (abort) · `/status` ·
   `/verbose` (show more detail) · `/mode` (run mode for phone runs
   only — auto/chat/pipeline/automap, `/mode off` follows the engine
-  settings again) · `/help`.
+  settings again) · `/models` (numbered model list) · `/setModel <nr>`
+  (pick a model; the bot then asks one line: preset, ctx_thinking,
+  ctx_model — preset load is global, ctx applies to duo/agentic phone
+  runs) · `/cancel` (abort that flow) · `/help`.
 - One run at a time. If something is already running — including from
   the browser — the bot tells you so instead of queueing.
 - Bot conversations land as their own `[TG]` chats inside HiveMind and

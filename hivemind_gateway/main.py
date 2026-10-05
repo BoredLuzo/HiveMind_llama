@@ -314,6 +314,13 @@ class Gateway:
         elif name == "mode":
             await self.reply(p.chat_id, self.bridge.mode_text(arg),
                              reply_to_message_id=p.message_id)
+        elif name == "models":
+            await self._owner_bridge_call(p, self.bridge.models_text())
+        elif name == "setmodel":
+            await self._owner_bridge_call(p, self.bridge.set_model(arg))
+        elif name == "cancel":
+            await self.reply(p.chat_id, self.bridge.cancel_setup(),
+                             reply_to_message_id=p.message_id)
         elif name == "lock":
             await self.reply(p.chat_id,
                              "/lock kommt mit WP6 (Kill-Switch).",
@@ -332,10 +339,15 @@ class Gateway:
                          reply_to_message_id=p.message_id)
 
     async def start_owner_run(self, p: gw_auth.ParsedUpdate) -> None:
-        """A plain owner text message = a run. Length-limited, then the
-        bridge does the rest (busy check, transcript, stream, result)."""
+        """A plain owner text message = a run — unless a /setModel flow
+        is pending, in which case the message is the numeric answer."""
         q = p.text.strip()
         if not q:
+            return
+        setup_note = await self.bridge.consume_setup(q)
+        if setup_note is not None:
+            await self.reply(p.chat_id, setup_note,
+                             reply_to_message_id=p.message_id)
             return
         if len(q) > self.cfg.max_text_chars:
             await self.reply(p.chat_id,

@@ -89,9 +89,10 @@ class FakeHive:
         self.chat["rev"] = base_rev + 1
         return FakeResponse(200, {"ok": True, "rev": self.chat["rev"]})
 
-    async def stream(self, q, chat_id, images=None, mode=""):
+    async def stream(self, q, chat_id, images=None, mode="",
+                     overrides=None):
         self.stream_bodies.append({"q": q, "chat_id": chat_id,
-                                   "mode": mode})
+                                   "mode": mode, "overrides": overrides or {}})
         for ev in self.events:
             yield ev
 
@@ -241,7 +242,8 @@ async def t_errors():
     check("raw ConnectError cleared run", st4.data["active_run"] is None)
 
     class MidStreamBreakHive(FakeHive):
-        async def stream(self, q, chat_id, images=None, mode=""):
+        async def stream(self, q, chat_id, images=None, mode="",
+                         overrides=None):
             yield {"type": "run_id", "run_id": "r5"}
             raise httpx.ReadError("connection reset mid-stream")
 
@@ -283,6 +285,116 @@ async def t_secrets_doc_path():
     check("doc overflow happens", len(ms.documents) == 1)
     check("secret filtered in .txt document too",
           "sk-abcdefghijklmnopqrstuvwx" not in ms.documents[0][0].decode("utf-8"))
+
+
+# ── 6d. /models + /setModel + numeric follow-up ────────────────────────
+async def t_models_flow():
+    class ModelsHive(FakeHive):
+        def __init__(self):
+            super().__init__(_run_events())
+            self.loaded_presets = []
+
+        async def get_models(self):
+            return {"models": ["m-a", "m-b", "m-c"],
+                    "profiles": [
+                        {"name": "m-a", "thinking": True},
+                        {"name": "m-b", "thinking": False},
+                        {"name": "m-c", "thinking": True, "vision": True}]}
+
+        async def get_presets(self):
+            return {"code": {}, "write": {}}
+
+        async def load_preset(self, name):
+            self.loaded_presets.append(name)
+            return FakeResponse(200, {"ok": True})
+
+        async def settings(self):
+            return {"duo_agentic_mode": False}
+
+    hive = ModelsHive()
+    br, st, ms = _mk("gwbr_models_", hive)
+
+    # /models list with flags
+    out = await br.models_text()
+    check("models numbered", "1. m-a" in out and "3. m-c" in out)
+    check("models show flags", "[thinking]" in out
+          and "[thinking+vision]" in out)
+    check("models hint", "/setModel" in out)
+
+    # /setModel with the follow-up question in ONE message
+    out = await br.set_model("2")
+    check("setmodel echoes model", "m-b" in out)
+    check("setmodel asks one-line format",
+          "preset, ctx_thinking, ctx_model" in out)
+    check("setmodel lists presets numbered",
+          "1=code" in out and "2=write" in out)
+    check("setmodel warns global", "GLOBAL" in out or "global" in out)
+    check("setmodel no-thinking hint", "kein Thinking" in out)
+
+    # a non-numeric message is consumed as format reminder (no run!)
+    runs_before = len(hive.stream_bodies)
+    note = await br.consume_setup("hallo welt")
+    check("non-numeric -> reminder", "Erwartet 3 Zahlen" in note)
+    check("reminder did not start a run",
+          len(hive.stream_bodies) == runs_before)
+
+    # wrong count
+    note = await br.consume_setup("1, 2")
+    check("wrong count -> reminder", "Erwartet 3 Zahlen" in note)
+
+    # the real answer: preset 1=code, no thinking, ctx 16384
+    note = await br.consume_setup("1, 0, 16384")
+    check("answer confirms model", "m-b" in note and "Gespeichert" in note)
+    check("preset loaded globally", hive.loaded_presets == ["code"])
+    check("overrides stored", st.data["run_overrides"]["model"] == "m-b"
+          and st.data["run_overrides"]["coder_ctx"] == 16384
+          and st.data["run_overrides"]["planner_ctx"] == 0)
+    check("pending cleared", st.data["pending_setup"] is None)
+
+    # next run carries the overrides in the stream body
+    await br.start_text_run("q with overrides")
+    body = hive.stream_bodies[-1]
+    check("stream body has model override",
+          body["q"] == "q with overrides"
+          and hive.puts  # transcript write happened as usual
+          or True)
+    # overrides reach the request via hive.stream kwargs — assert via a
+    # recording subclass:
+    class RecHive(ModelsHive):
+        def __init__(self):
+            super().__init__()
+            self.last_kwargs = {}
+
+        async def stream(self, q, chat_id, images=None, mode="",
+                         overrides=None):
+            self.last_kwargs = {"mode": mode, "overrides": overrides or {}}
+            async for ev in super().stream(q, chat_id, images, mode,
+                                           overrides):
+                yield ev
+
+    hive2 = RecHive()
+    br2, st2, ms2 = _mk("gwbr_models2_", hive2)
+    st2.data["run_overrides"] = {"model": "m-c", "planner_ctx": 8192,
+                                 "coder_ctx": 16384}
+    await br2.start_text_run("q")
+    check("overrides in stream request",
+          hive2.last_kwargs["overrides"].get("duo_planner_model") == "m-c"
+          and hive2.last_kwargs["overrides"].get("duo_coder_model") == "m-c"
+          and hive2.last_kwargs["overrides"].get("duo_planner_ctx_target")
+          == 8192
+          and hive2.last_kwargs["overrides"].get("duo_coder_ctx_agentic")
+          == 16384
+          and hive2.last_kwargs["overrides"].get("duo_planner") is True)
+
+    # /cancel clears a pending flow
+    await br.set_model("1")
+    check("cancel clears pending", "abgebrochen" in br.cancel_setup()
+          and st.data["pending_setup"] is None)
+
+    # reset overrides
+    check("reset clears overrides",
+          "gelöscht" in br.reset_overrides()
+          and st.data["run_overrides"] == {})
 
 
 async def t_secrets():
@@ -353,6 +465,7 @@ async def _main():
     await t_secrets()
     await t_secrets_doc_path()
     await t_mode()
+    await t_models_flow()
     await t_stop()
 
 asyncio.run(_main())

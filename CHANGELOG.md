@@ -175,7 +175,9 @@ yourself. Setup guide with a security walkthrough:
   arrive as a .txt document.
 - Commands from the phone: /new, /stop (abort a running job), /status,
   /verbose, /mode (phone-side run mode via the /stream body — the
-  browser UI keeps its own mode), /help. One run at a time — if the browser already runs
+  browser UI keeps its own mode), /models + /setModel (numbered model
+  pick, then one-line preset/ctx answers; ctx overrides ride the run
+  body, preset load is global), /cancel, /help. One run at a time — if the browser already runs
   something, the phone gets a busy note instead of a queue.
 - Failure is readable: model load blocked by VRAM, engine offline or a
   run error all produce a plain-language message instead of silence.

@@ -119,19 +119,43 @@ class HiveClient:
     async def pending_approval(self, run_id: str) -> httpx.Response:
         return await self._get(f"/approval/pending/{run_id}")
 
+    async def get_models(self) -> dict:
+        """GET /models — {models: [names], profiles: [{name, thinking,
+        vision, tool_call, ...}]}."""
+        r = await self._get("/models")
+        if r.status_code != 200:
+            raise HiveUnreachable(f"/models HTTP {r.status_code}")
+        return r.json()
+
+    async def get_presets(self) -> dict:
+        r = await self._get("/presets")
+        if r.status_code != 200:
+            raise HiveUnreachable(f"/presets HTTP {r.status_code}")
+        return r.json()
+
+    async def load_preset(self, name: str) -> httpx.Response:
+        """POST /presets/{name}/load — GLOBAL state: sets the engine's
+        active preset for UI and phone alike. The bridge warns about
+        that in its confirmation."""
+        return await self._post_json(f"/presets/{name}/load", {})
+
     async def stream(self, q: str, chat_id: str, images: list | None = None,
-                     mode: str = ""):
+                     mode: str = "", overrides: dict | None = None):
         """Yield parsed SSE data payloads of a run. No token streaming is
         rendered — the caller decides what becomes a status update.
         `mode` travels in the REQUEST BODY only (never via POST /settings,
         which is taboo for the gateway): a Telegram-side mode therefore
-        never touches what the browser UI runs. Transport breaks
-        (including mid-stream read errors) raise HiveUnreachable instead
-        of raw httpx exceptions."""
+        never touches what the browser UI runs. `overrides` are the
+        model/ctx keys the engine merges into the run's settings
+        snapshot (duo_planner_model, duo_coder_model, duo_planner_ctx_target,
+        duo_coder_ctx_agentic, duo_coder_ctx_normal — verified
+        chat_run.py:154). Transport breaks raise HiveUnreachable."""
         body: dict[str, Any] = {"q": q, "images": images or [],
                                 "chat_id": chat_id}
         if mode:
             body["mode"] = mode
+        if overrides:
+            body.update(overrides)
         try:
             async with self._client.stream("POST", "/stream", json=body) as r:
                 r.raise_for_status()
