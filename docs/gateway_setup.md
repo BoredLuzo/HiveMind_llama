@@ -1,152 +1,145 @@
-# HiveMind Telegram-Gateway — Einrichtung in 15 Minuten
+# HiveMind Telegram Gateway — Setup
 
-So steuerst du HiveMind von deinem Handy: Nachricht senden, dein PC
-arbeitet, Ergebnis kommt zurück. Der Guide ist für die eigene
-Einrichtung geschrieben — Sicherheitsfragen stehen unten im Audit.
+Control HiveMind from your phone: you send a message, your PC does the
+work, the result comes back as a Telegram message. Setup takes about
+fifteen minutes.
 
----
+What you need before starting:
 
-## Voraussetzungen
+- HiveMind installed and running (check `http://127.0.0.1:8001/health`
+  in a browser — it should show a line of JSON).
+- A Telegram account with two-step verification turned on
+  (Settings → Devices → Cloud Password). Do this first; the account
+  becomes the key to your PC.
+- While you're in that menu, remove old sessions you don't recognize.
+- The PC stays on as long as you want to use the bot.
 
-- HiveMind ist installiert und läuft (Test: `http://127.0.0.1:8001/health`
-  im Browser zeigt JSON).
-- Du hast ein Telegram-Konto **mit Zwei-Schritt-Verifizierung**
-  (Einstellungen → Geräte → Cloud-Passwort setzen). Ja vorher, das Konto
-  ist hinterher der Schlüssel zu deinem PC.
-- Räume alte Telegram-Sitzungen aus (gleicher Menüpunkt).
-- Der PC bleibt an, solange du den Bot nutzen willst.
+## 1. Create the bot
 
-## Schritt 1 — Bot bei Telegram erstellen
+1. Open a chat with **@BotFather**, send `/newbot`.
+2. Pick a display name (anything).
+3. Pick a username — it has to end in `bot`, e.g. `fritz_hivemind_bot`.
+4. BotFather replies with a **token**, a long string.
 
-1. In Telegram nach **@BotFather** suchen, Chat öffnen, `/newbot` senden.
-2. Anzeigename wählen (beliebig).
-3. Username wählen — **muss auf `bot` enden**, z. B. `fritz_hivemind_bot`.
-4. BotFather antwortet mit einem **Token** (lange Zeichenkette).
+That token is the key to the bot. Whoever has it controls it. Don't
+paste it into chats, screenshots, files or mails.
 
-> Der Token ist der Schlüssel zum Bot: Wer ihn hat, kontrolliert ihn.
-> Niemals in Chats, Screenshots, Dateien oder E-Mails.
+## 2. Put the token in the shell — nowhere else
 
-## Schritt 2 — Token NUR in die Shell
-
-PowerShell öffnen und eingeben (der Token wird abgefragt, unsichtbar
-getippt):
+Open PowerShell and run (you'll be asked for the token, it stays
+invisible while typing):
 
 ```powershell
 $s = Read-Host "Bot token" -AsSecureString
 $env:HIVEMIND_TG_TOKEN = [System.Net.NetworkCredential]::new('', $s).Password
 ```
 
-Der Token lebt damit nur im Speicher dieser einen Shell — nicht in der
-History, nicht in Dateien, nicht in Logs.
+The token now lives in the memory of this one shell window. Not in the
+history, not in a file, not in any log.
 
-## Schritt 3 — Gateway starten (gleiche Shell!)
+## 3. Start the gateway (same shell)
 
 ```powershell
-cd <dein-hivemind-ordner>
+cd <your-hivemind-folder>
 python -m hivemind_gateway.main
 ```
 
-Die Konsole zeigt einen **Pairing-Code** (nur Großbuchstaben A–Z und
-Ziffern 2–7, 5 Minuten gültig). Dieses Fenster offen lassen — es IST der
-Gateway. Beenden mit Strg+C.
+The console prints a **pairing code** (uppercase letters and digits
+only, valid for five minutes). Keep this window open — the window *is*
+the gateway. Ctrl+C stops it.
 
-## Schritt 4 — Koppeln
+## 4. Pair your phone
 
-1. In Telegram deinen **eigenen Bot** suchen (`@fritz_hivemind_bot`) →
-   Chat öffnen → **Start** drücken.
-   *(Nicht den BotFather-Chat — der kennt kein /pair.)*
-2. Senden: `/pair <CODE>` — den Code **Zeichen für Zeichen** von der
-   Konsole ablesen.
-3. Kommt „**Paired.**" — fertig. Der Code ist verbraucht, das Pairing
-   ist damit dauerhaft zu.
+1. In Telegram, search for **your own bot** (`@fritz_hivemind_bot`),
+   open the chat, press **Start**. (Not the BotFather chat — it doesn't
+   know /pair.)
+2. Send `/pair <CODE>` — read the code off the console character by
+   character.
+3. When it answers "Paired.", you're done. The code is used up and
+   pairing closes itself.
 
-**Fehlerfälle:** Bei falschem/abgelaufenem Code kommt bewusst **keine
-Antwort am Handy** — die Konsole zeigt den Versuch mit Zähler. Nach
-5 Fehlversuchen sperrt das Pairing bis zum Neustart (Neustart = frischer
-Code). Bei „CONFLICT" auf der Konsole läuft etwas anderes mit deinem
-Token — andere Instanz stoppen, Gateway neu starten.
+If the code was wrong or too old, the phone stays silent on purpose —
+the console shows the attempt and a counter. Five wrong tries lock
+pairing until you restart the gateway (a restart prints a fresh code).
+If the console says CONFLICT, something else is polling with your
+token; stop that other instance and start again.
 
-## Schritt 5 — Loslegen
+## 5. Use it
 
-- Einfach **Text senden** = ein Lauf auf deinem PC.
-- Status kommt als Live-Update, danach das Ergebnis; sehr lange
-  Ergebnisse als `.txt`-Datei.
-- Befehle: `/new` (frischer Chat) · `/stop` (Abbruch) · `/status` ·
-  `/verbose` (mehr Details) · `/help`.
-- Ein Lauf gleichzeitig — ist einer aktiv (auch aus dem Browser),
-  bekommst du eine Busy-Meldung statt Warteschlange.
-- Die Bot-Unterhaltungen liegen als eigene `[TG]`-Chats in HiveMind und
-  stören deine Browser-Chats nicht.
+- Sending a **plain message** starts a run on your PC.
+- You get status updates while it works, then the result. Anything
+  longer than three messages arrives as a `.txt` file.
+- Commands: `/new` (fresh chat) · `/stop` (abort) · `/status` ·
+  `/verbose` (show more detail) · `/help`.
+- One run at a time. If something is already running — including from
+  the browser — the bot tells you so instead of queueing.
+- Bot conversations land as their own `[TG]` chats inside HiveMind and
+  don't mix with your browser chats.
 
-## Aufräumen & Notfall
+## Stopping and emergencies
 
-- **Beenden:** Strg+C in der Gateway-Shell.
-- **Ganz abschalten (Kill-Switch):** Datei `gateway.disabled` im Ordner
-  `%LOCALAPPDATA%\HiveMindGateway` anlegen — der Gateway startet dann
-  nicht mehr, egal was das Handy will.
-- **Token rotieren:** In BotFather `/revoke` → alten Token ungültig
-  machen → neuen Token wie in Schritt 2 setzen.
-- **Kopplung lösen:** Am PC `%LOCALAPPDATA%\HiveMindGateway\gateway_state.json`
-  löschen → Gateway starten → neuer Pairing-Code.
+- **Stop the gateway:** Ctrl+C in its shell.
+- **Kill switch:** create a file named `gateway.disabled` in
+  `%LOCALAPPDATA%\HiveMindGateway` and the gateway refuses to start or
+  carry on, no matter what the phone sends.
+- **Rotate the token:** `/revoke` in BotFather, then set the new token
+  as in step 2.
+- **Unpair:** delete `%LOCALAPPDATA%\HiveMindGateway\gateway_state.json`
+  on the PC and restart — you get a fresh pairing code.
 
 ---
 
-## Security-Audit (Stand 1.3-preview, ehrlich)
+## Security notes
 
-**Wer darf reden?** Nur der eine gekoppelte Account, nur im privaten
-Chat. Alle anderen Absender werden ohne Antwort verworfen (nur Log).
-Gruppen, Weiterleitungen und Fremd-Accounts sind draußen.
+**Who can talk to it.** Only the paired account, only in a private
+chat. Everyone else is ignored without an answer. No groups, no
+forwarded messages, no second account.
 
-**Wie sicher ist die Kopplung?** Der Einmalcode existiert NUR auf deiner
-PC-Konsole, gilt 5 Minuten, genau einmal, wird in Konstantzeit
-verglichen, 5 Fehlversuche = Sperre bis Neustart. Der PC ist der
-Trust-Anker: Niemand kann sich aus der Ferne koppeln — wer den Code
-nicht am Bildschirm lesen kann, kommt nicht rein.
+**How pairing works.** The one-time code exists only on your console.
+Five minutes, single use, five wrong tries lock it until a restart.
+Nobody pairs from a distance — the PC screen is the only place the code
+exists.
 
-**Wo liegt der Token?** Nur im RAM der Start-Shell (optional:
-Windows-Credential-Manager). Er taucht in keinen Logs auf (alle
-Ausgaben werden geschwärzt — inklusive der Token-URLs, im Realtest
-bestätigt), nicht im Repo, nicht im Release-Zip (Leak-Check verweigert
-solche Pakete).
+**Where the token lives.** In the RAM of the shell you started it from,
+optionally the Windows Credential Manager. It is scrubbed from every
+log line (including the URLs, which contain it), and the release
+packaging refuses zips that carry it.
 
-**Welche Ports?** Keine. Der Gateway ruft Telegram aktiv ab
-(Long-Polling), es gibt keinen Webhook und keinen offenen Port. Zur
-HiveMind-Engine spricht er nur über 127.0.0.1. Erkennt er einen
-zweiten Poller auf seinem Token, beendet er sich lautstark statt zu
-kämpfen.
+**Open ports.** None. The gateway polls Telegram outbound; there is no
+webhook and nothing listens. To HiveMind it talks over 127.0.0.1 only.
+A second poller on the same token makes it quit loudly instead of
+fighting.
 
-**Was darf der Agent vom Handy aus?** Dateizugriff ist auf den
-Workspace des Chats beschränkt — Zugriffe außerhalb (auch mit `../`-
-Tricks) werden vom Core abgelehnt (gegen den echten Code geprüft).
-Werkzeuge, die eine Freigabe verlangen (Befehle ausführen, Dateien
-schreiben, Git-Commits), werden aktuell **automatisch abgelehnt** —
-Freigabe-Buttons am Handy kommen mit WP4. Bis dahin gilt: den Bot nur
-gegen einen Arbeitsbereich ohne echte Daten richten.
+**What the agent can reach from the phone.** File access stays inside
+the chat's workspace — paths outside, including `../` tricks, are
+rejected by the engine (verified against the real handler). Tools that
+need an approval (shell commands, file writes, git commits) are denied
+automatically for now; tappable approvals come with a future update.
+Until then, point the bot at a workspace without real data.
 
-**Was ist mit manipulierten Inhalten (Prompt-Injection)?** Der Agent
-liest Repo- und Web-Inhalte; dort kann Text stehen, der ihn steuern
-will. Die Kopplung schützt nicht dagegen — die Grenzen des
-Arbeitsbereichs und (mit WP3) das verschärfte Fernsteuerungsprofil tun
-das: kein Shell-Befehl, kein Git-Push, keine Löschungen vom Handy.
+**Manipulated content.** The agent reads repos and web pages, and those
+can contain text that tries to steer it. Pairing doesn't protect
+against that — the workspace boundary does, and the hardened remote
+profile coming next goes further: no shell, no push, no deletions from
+the phone.
 
-**Replay/Doppel-Ausführung?** Nachrichten älter als 60 Sekunden werden
-verworfen, Duplikate erkannt, die Position in der Telegram-Warteschlange
-wird gespeichert, BEVOR ein Lauf startet — ein Absturz kann einen Lauf
-höchstens verlieren, nie doppelt ausführen.
+**Replays and double runs.** Updates older than 60 seconds are dropped,
+duplicates recognized, and the position in Telegram's queue is saved
+*before* a run starts — a crash can lose a run but never run it twice.
 
-**Notbremse?** Die Kill-Switch-Datei am PC gewinnt immer gegen das
-Handy. Kein Lauf wird automatisch neu gestartet; nach einem Absturz
-fragt der Bot nach, statt von sich aus weiterzumachen.
+**Off switch.** The kill-switch file on the PC always wins over the
+phone. Runs are never restarted on their own; after a crash the bot
+asks instead of continuing by itself.
 
-**Bekannte Grenzen (bewusst offen):**
+**Known limits, on purpose:**
 
-- Telegram-Chats sind **nicht Ende-zu-Ende-verschlüsselt** — Antworten,
-  Code und `.txt`-Dateien liegen auf Telegram-Servern. Der Secret-Filter
-  vor dem Senden ist ein Riegel, kein Freibrief.
-- Wer dein **Telegram-Konto** übernimmt, steuert deinen Agent. Deshalb
-  2FA-Pflicht und Sitzungs-Hygiene.
-- Die Pairing-Sperre zählt global: Ein Fremder, der absichtlich 5× ein
-  falsches `/pair` sendet, macht das Fenster zu (nervig, nicht
-  gefährlich — Neustart behebt es).
-- „Immer erlauben"-Buttons gibt es absichtlich nicht — der Gateway
-  lockert nie eine Sicherheitsregel.
+- Telegram chats are not end-to-end encrypted. Answers, code and .txt
+  files sit on Telegram's servers. There is a secret filter before
+  sending, but it's a net, not a guarantee.
+- Whoever takes over your Telegram account steers the agent. That's why
+  two-step verification is a requirement, not a suggestion.
+- The pairing lock counts globally: someone who deliberately sends five
+  wrong codes can close the window. Annoying, not dangerous — a restart
+  fixes it.
+- There is no "always allow" button, and there won't be. The gateway
+  never loosens a safety rule.

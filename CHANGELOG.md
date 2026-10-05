@@ -156,6 +156,44 @@ Vision honesty (2026-10-04 review round):
   model); if a projector fails to load, the /props gate downgrades the
   run with a warning instead of pretending
 
+### Telegram gateway (opt-in, new)
+
+Control HiveMind from your phone: plain message in, the PC runs the
+agent, status and result come back as Telegram messages. Off by
+default — nothing starts, nothing is installed until you run it
+yourself. Setup guide with a security walkthrough:
+`docs/gateway_setup.md`.
+
+- Pairing is anchored to the PC: a one-time code is printed on the
+  gateway console (5 min, single use), `/pair` binds exactly one
+  Telegram account, then pairing closes. Wrong tries count on the
+  console, five lock it until restart. Nobody pairs from a distance.
+- Text runs end to end: the message starts a run in a dedicated `[TG]`
+  chat, the conversation is written back into the HiveMind transcript
+  (both turns, so the UI shows it and the next run seeds from it),
+  status edits update one message instead of streaming, long results
+  arrive as a .txt document.
+- Commands from the phone: /new, /stop (abort a running job), /status,
+  /verbose, /help. One run at a time — if the browser already runs
+  something, the phone gets a busy note instead of a queue.
+- Failure is readable: model load blocked by VRAM, engine offline or a
+  run error all produce a plain-language message instead of silence.
+- Restart behavior: the gateway survives its own crashes without
+  double-running anything (Telegram queue position saved before a run
+  starts), recognizes an orphaned run at startup and asks the phone
+  whether to abort it.
+- Security posture: owner-only whitelist, no webhook and no open port
+  (outbound long-polling only), the bot token is read from the
+  environment and scrubbed from every log line, model/tool output is
+  filtered for secrets before sending, a kill-switch file on the PC
+  overrides everything the phone sends, and approval-gated tools are
+  denied automatically until tappable approvals ship.
+
+Not included in 1.3 (deliberate): photos and mid-run steering from the
+phone, voice messages, group chats, queues, token streaming, skills,
+cron. The bot's phone-side texts are currently German; a language
+switch is planned.
+
 ## [1.2.3] - 2026-09-26
 
 Hotfix: fresh installs crashed on startup before the server ever bound
