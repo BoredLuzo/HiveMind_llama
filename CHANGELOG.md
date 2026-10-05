@@ -1,5 +1,140 @@
 # Changelog
 
+## [1.2.4] - 2026-10-03
+
+One-click self-updates, a real image pipeline for the agentic duo, and a
+round of reliability work on writes, approvals and model loading.
+
+### Highlights
+- `update.bat` updates an installation in place from the latest GitHub
+  release: automatic backup, release notes with warning surfacing,
+  a dependency refresh for the existing .venv, and rollback
+  instructions. Downgrades are refused and the download is verified
+  against the release tag.
+- Images work end to end: an image plan decides per role whether the
+  planner/coder run with a vision projector or receive the raw image,
+  projectors resolve per model size, and uploads can optionally be kept
+  in the workspace. Previews and chat thumbnails open in a zoom
+  lightbox.
+- Runs survive a page reload or a dropped connection: the UI reattaches
+  and replays what it missed, and mid-run steering is wired in.
+- Writes: looping output is caught early, truncations are diagnosed and
+  salvaged instead of producing broken files.
+- Approvals: an unanswered card auto-approves once after a configurable
+  timeout instead of blocking the run forever.
+- VRAM: a slot that was just killed no longer tricks the pre-flight
+  gate into blocking the next load.
+- Git: auto-commits and auto-push only run when credentials are
+  configured in the Git panel, and the model installer ships a
+  projector for every vision-capable model it offers.
+
+### Also
+- Code panel tabs with a remembered view mode; reloading a chat
+  restores the panel state and tool-call chips.
+- Per-instance llama ports, so two HiveMinds can run on one machine.
+- New in the installer catalog: Sharp-MiniCPM5-2B. Duo compression
+  defaults to Auto (Coder).
+- Chat continuity: continuing a loaded chat feeds the model the saved
+  conversation (last 40 turns, up to 8k characters each) instead of a
+  small sidecar window; complex runs persist their history too; the
+  per-chat workspace is stored with the chat and survives reloads; and
+  conversation summaries reach the prompt instead of being filtered out.
+- Developers: a pre-commit hook ships under `scripts/hooks` (see
+  README for the one-time activation).
+
+## [1.3.0-preview] - 2026-10-04
+
+Test build for the live installation. Everything below is IN:
+image upload paths (collision-free, real formats), chat continuity
+(transcript seeding, token-budget window, summary fix), the hardened
+self-updater (verified end-to-end with a real release zip, including
+preview-aware version ordering), rev compare-and-set with server-wins
+409, fail-closed approval timeout, the edit shrink guard, planner/
+thinking/checklist persistence (small variant, out of the model seed),
+one-file-per-chat fork guard with rev-based adoption, a 200 MB save
+brake, concurrent-writer coverage.
+
+NOT built (deliberate, for a later release):
+- message edit / regenerate controls in the chat UI do not exist yet
+  (history edits are only possible via the chats API; the seed path
+  handles them - verified - but there is no button for them)
+- steering notes, status lines and approval/ask cards are not persisted
+  (approval cards recover server-side only while the run lives)
+- chat size display / cleanup UI (sizes stay whatever they grow to)
+- no live warning at the ctx slider when the set ctx cannot fit the
+  VRAM budget (the guard only fires when a run starts; the observed
+  failure class - 35B @ ctx 71680 with a pinned planner, 9B @ 40960 -
+  is only caught there); /vram/estimate ignores pinned slots too
+- an orphaned run (browser/tab died) keeps its VRAM until it finishes
+  or /abort arrives; server-side continuation is proven, but UI
+  completeness after reconnect (planner parts, thinking foldout) is
+  still a manual browser test
+- the per-round image trace is observe-only: when an image falls out
+  of the compressed window (measured live: round 1 carries it, later
+  rounds do not), nothing re-attaches it - the coder now gets an
+  explicit "[VISION UPDATE]: image no longer in context, do not invent
+  details" replacement note plus one visible status line instead
+- session compression never runs in agentic chat (skipped by design)
+  - the summary path is therefore live-untested; testable only with
+  agentic_mode off
+- whether the planner's visual details survive the compression summary
+  is unverified (the "rebuild UI from image" use case depends on it)
+
+PARTIAL (known, accepted):
+- blob versions are add-only until a chat is deleted (no per-chat GC)
+- message html/content stay inline in the chat json (the bulk of large
+  chats); images double-store (chat + .hive_uploads) when persistence
+  is on
+- restored tool chips stay silent when their path spelling differs from
+  the panel key
+- the judge-duo uncompressed re-read gate is dead code (unreachable
+  threshold) - judge-routed duo runs keep the compressed window
+- the history budget estimator under-counts short messages by ~1.5x
+  (measured with the real /tokenize endpoint: 340 chars filler = 131
+  real tokens vs 85 estimated); calibration open
+- killing llama-server mid-run aborts cleanly (hard_stop /
+  runtime_load_error, no loop_detected); what a SUCCESSFUL reload does
+  to partial results is untested
+- chat continuity: the chat json is re-seeded on every run (edits and
+  regenerations included); sidecars written before that fix may contain
+  foreign history and still serve as fallback for chats without json
+- a future Telegram gateway sharing one server with an open UI would
+  multiplex the (global) in-process session memory - needs a per-chat
+  session store before that lands
+
+Vision honesty (2026-10-04 review round):
+- the server's real vision capability is read back from /props after
+  every load and stored on the slot; when an image plan says "raw" but
+  the loaded model runs without a projector, the run downgrades that
+  role to the image description (or skips the image) with a visible
+  warning instead of prompting a blind model to describe what it
+  cannot see
+- the coder's [VISION] prompt note is only added when the plan really
+  routes the image to it, and is retracted when the post-load check
+  says the projector dropped; the planner note distinguishes whether
+  the coder will see the image too
+- every model call that carries images logs images_in_request=N (and
+  the planner POST logs it too), so "did the model see the image" is
+  checkable in the log
+- GIF/WebP uploads are re-encoded to JPEG in the browser (first frame)
+  before upload - the formats the server-side decoder chokes on no
+  longer reach the pipeline; a failed conversion is dropped with a
+  visible notice
+- release zips embed BUILD_INFO.txt (git describe + commit date) and
+  the start banner prints the exact build a zip-installed copy runs
+- repo syncs write the same BUILD_INFO.txt into the install, so a
+  synced live/test copy can also say which commit it runs
+- direct chat mode strips images (with a loud log line) when the
+  loaded server reports vision:false instead of sending a request the
+  server would reject
+- image panel: the duo block carries its own multimodal info line (the
+  generic one used to vanish permanently in duo mode); the chat hint
+  names the planner first and follows planner/coder model changes live
+  without re-attaching the image
+- qwen3.5 MTP specs are vision-capable now (projector pinned per
+  model); if a projector fails to load, the /props gate downgrades the
+  run with a warning instead of pretending
+
 ## [1.2.3] - 2026-09-26
 
 Hotfix: fresh installs crashed on startup before the server ever bound
