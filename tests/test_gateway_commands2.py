@@ -289,6 +289,52 @@ async def t_lock():
             lock.unlink()
 
 
+# ── UI veto semantics (N6): remote off switch, fail-safe on errors ─────
+async def t_ui_veto():
+    import hivemind_gateway.main as M
+
+    class Gw:
+        def __init__(self, hive):
+            self.hive = hive
+
+    class Hive:
+        def __init__(self, body=None, boom=None):
+            self.body = body
+            self.boom = boom
+
+        async def settings(self):
+            if self.boom is not None:
+                raise self.boom
+            return self.body
+
+    check("veto: key false shuts down",
+          await M._ui_veto_active(Gw(Hive({"telegram_gateway_enabled": False}))) is True)
+    check("veto: key true does NOT shut down",
+          await M._ui_veto_active(Gw(Hive({"telegram_gateway_enabled": True}))) is False)
+    check("veto: key ABSENT does not shut down (local switch rules)",
+          await M._ui_veto_active(Gw(Hive({}))) is False)
+    check("veto: engine offline keeps gateway up",
+          await M._ui_veto_active(Gw(Hive(boom=M.HiveUnreachable("down")))) is False)
+    check("veto: broken JSON keeps gateway up",
+          await M._ui_veto_active(Gw(Hive(boom=ValueError("bad json")))) is False)
+
+    # the UI can never OVERRIDE a locally disabled gateway (already
+    # covered in the config suite; repeated here as the contract pair)
+    from hivemind_gateway.config import GatewayConfig
+    try:
+        M.ensure_enabled(GatewayConfig())
+        check("veto pair: local OFF stays OFF regardless of UI", False)
+    except M.StartupError:
+        check("veto pair: local OFF stays OFF regardless of UI", True)
+
+    # N7: loopback client must ignore proxy environment variables
+    from hivemind_gateway.hive_client import HiveClient
+    hc = HiveClient("http://127.0.0.1:8001")
+    check("hive client ignores proxy env (trust_env=False)",
+          hc._client.trust_env is False)
+    await hc.close()
+
+
 async def _main():
     await t_new()
     await t_status_verbose()
@@ -297,6 +343,7 @@ async def _main():
     await t_recover()
     await t_pair_flow()
     await t_lock()
+    await t_ui_veto()
 
 asyncio.run(_main())
 print()

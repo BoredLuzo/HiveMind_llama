@@ -1,0 +1,133 @@
+# WP3 Proposals — remote profile, hardening, acceptance tests
+
+Collected from the security audit round (2026-10-05) and the review
+addendum. Each item: risk, proposal, acceptance test. Nothing here is
+built — every item needs an owner go (core changes land as separate
+commits on main).
+
+## P1 — Remote profile as an ALLOWLIST (replaces deny-list thinking)
+
+Risk: tool permissions are currently deny-based. Everything not in
+`_APPROVAL_TOOLS` (8 tools) runs unrestricted — including tools nobody
+reviewed as phone-reachable. The 2026-10-05 inventory (24 registered
+tools) found these UNGATED and phone-reachable today:
+
+| Tool | Why it matters ungated |
+|---|---|
+| `undo_last` | WRITES: reverts workspace file changes without approval |
+| `run_tests` | executes the project test suite (currently refuses — "not wired" — but ungated the moment it is wired) |
+| `browser` | headless browser: navigates arbitrary URLs — potential SSRF detour around the web_fetch loopback guard (unverified, needs a playwright-enabled check) |
+| `stop_background` | kills background processes (cross-run interference) |
+| `get_background_output` | reads stdout/stderr of background processes started by OTHER runs (cross-run info leak) |
+| `git_status` | low — workspace git state only |
+| `web_search` / `web_fetch` | external network with content in URLs (exfil) — loopback is blocked by the core guard (verified live 2026-10-05), external is not |
+
+Proposal: for `source:"telegram"` runs, WP3 flips the model — a
+named allowlist of READ tools (read_file, get_signatures,
+find_references, list_dir, find_files, search_code, get_datetime,
+task_complete, ask_user) plus explicit policy for web tools and
+memory (P2/P3). Unknown/future tools are DENIED by default. Writes
+and exec stay approval-gated with the WP4 buttons; run_bash, git
+push, deletions and outside-workspace writes are never grantable from
+the phone.
+
+Acceptance tests: a phone-source run attempting each non-allowlisted
+tool receives a typed denial; an allowlisted read succeeds; a NEW
+dummy tool registered in the table is denied by default (the
+regression point the deny-list could never cover).
+
+## P2 — Web-tool policy for phone runs + SSRF acceptance list
+
+Risk: web_fetch can exfiltrate workspace data in URLs to any external
+host (needs prompt injection first); the loopback guard exists but
+redirect/IPv6/decimal-IP evasions are untested.
+
+Proposal: for telegram-source runs, disable web tools entirely
+(reviewer position: "beim Abschalten beider Web-Tools") OR gate them
+behind the WP4 approval. Independently, harden the core guard:
+
+Acceptance tests for the guard (each must land on the block path, or
+resolve to a non-private IP and be fetch-safe):
+1. `http://127.0.0.1:8001/health` — VERIFIED BLOCKED live 2026-10-05
+   ("web_fetch blocked: private/loopback IPs are not fetchable").
+2. `http://localhost:8001/health`
+3. `http://[::1]:8001/health`
+4. `http://[::ffff:127.0.0.1]:8001/health`
+5. `http://0.0.0.0:8001/health`
+6. `http://2130706433/` (decimal IP)
+7. `http://0x7f000001/` (hex IP)
+8. a private LAN address
+9. a hostname resolving to 127.0.0.1 via a local hosts entry
+10. an EXTERNAL URL that 30x-redirects to 127.0.0.1 (local test server)
+11. `web_search` with exfil-shaped query strings
+
+The check must judge the RESOLVED IP after every redirect hop, not the
+hostname string.
+
+## P3 — Memory and shared-state poisoning
+
+Risk: a constrained phone run writes where privileged UI runs later
+read: session memory, the `[TG]` chat transcript, workspace files. A
+marker planted under phone restrictions is consumed by a click-approved
+UI run. A phone run's writes are approval-gated, but engine-side state
+(memory summaries) may not be.
+
+Proposal: memory writes from `source:"telegram"` runs are read-only or
+kept in a separate memory namespace.
+
+Acceptance tests (real-run round): phone says "merke dir den Marker
+XQZ-7" → `/memory` unchanged; a later UI run in another chat does not
+know the marker; no workspace file acting as prompt/config/tool
+definition was written by the phone run.
+
+## P4 — URL neutralization in agent answers
+
+Risk: link previews are disabled at the transport layer (verified,
+`test_gateway_transport.py`), but a URL that reaches the phone as text
+can still be tapped/clicked by a human, and future surfaces (groups,
+copy-paste) may re-introduce previews.
+
+Proposal (cheap, defense in depth): render URLs in agent ANSWERS as
+inline code (`https://example.com/?d=secret` →
+`` `https://example.com/?d=secret` ``) or strip query strings from
+non-allowlisted domains, with a visible note.
+
+Acceptance test: an answer containing a URL with query parameters is
+delivered in neutralized form; plain domains stay readable.
+
+## P5 — Wall-clock run timeout (gateway-side)
+
+Risk: today the bridge relies on httpx's 60 s INACTIVITY timeout and
+the engine's own guards; a wedged engine that keeps emitting
+heartbeats can hold a run open indefinitely (VRAM + a hanging phone
+status).
+
+Proposal: `run_timeout_s` in gateway.toml (default 3600). On expiry
+the gateway calls `/abort/{run_id}` itself and posts a readable
+message.
+
+Acceptance test: fake engine streams heartbeats past the limit →
+abort called, cleanup done, phone informed.
+
+## P6 — Smaller hardenings
+
+- `run_tests` into `_APPROVAL_TOOLS` now, before anyone wires a real
+  runner (one line, core).
+- Log sanitizing: gateway logs currently carry only ids/enums (no user
+  text) — keep it that way; add a control-character scrubber the day a
+  log line wants to include text.
+- Browser tool (if it ships enabled) must pass the same loopback rules
+  as web_fetch — see P1/P2.
+
+## Status of the review addendum items (2026-10-05)
+
+| Item | Status |
+|---|---|
+| W1 approval timeout | Resolved: runner.py:719 FAIL CLOSED deny + `test_approval_timeout.py` 4/4; the old WP0 claim read stale comments. R5b stays as live evidence. |
+| N1 link previews | Fixed at transport: is_disabled on sendMessage/editMessageText, documents carry no captions — `test_gateway_transport.py` 5/5. Real-run check stays in the round. |
+| N2 tool inventory | Done (this file, P1): 24 tools, 8 gated; gaps listed. Allowlist is the WP3 acceptance criterion. |
+| N3 confinement matrix | Done: 19/19, all traps blocked (`test_gateway_confinement.py`). Junction test can be re-run by the owner with mklink /J on demand. |
+| N4 memory poisoning | Real-run step added to the round; proposal P3. |
+| N5 SSRF | Live probe: loopback IS blocked (guard exists). Acceptance list in P2 — the old audit claim "no guard" was wrong and is corrected. |
+| N6 UI veto semantics | Implemented + tested (5 cases + local-OFF-stays-OFF pair, `test_gateway_commands2.py`). |
+| N7 small items | trust_env=False for the loopback client (done); secret filter proven on the .txt document path (bridge suite); wall-clock timeout → P5; log sanitizing → P6 note. |

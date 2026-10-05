@@ -26,8 +26,11 @@ class HiveUnreachable(RuntimeError):
 class HiveClient:
     def __init__(self, base_url: str):
         self._base = base_url.rstrip("/")
+        # trust_env=False: loopback traffic must NEVER detour through a
+        # proxy configured in the environment (HTTP_PROXY etc.) — the
+        # engine hop is local by contract.
         self._client = httpx.AsyncClient(
-            base_url=self._base,
+            base_url=self._base, trust_env=False,
             timeout=httpx.Timeout(60.0, connect=5.0))
 
     async def close(self) -> None:

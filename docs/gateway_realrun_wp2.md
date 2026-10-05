@@ -112,10 +112,20 @@ durch.
 
 ## LAUF 5 — Approval gegen den echten Core (wichtigster Zusatz)
 
+**R5b — Timeout-Beleg (W1):** Der Audit-Streit ist per Quelle+Test
+gelöst: `tools/runner.py:719-735` = fail-closed DENY („FAIL CLOSED
+(2026-10-03 review)"), `tests/test_approval_timeout.py` 4/4 PASS
+(2026-10-05). Der alte „auto-approve-once"-Befund zitierte stale
+Kommentare (`runner.py:317/:688/:712`). R5b bleibt als End-to-End-Beleg
+durch den Gateway: Wenn der Handy-Lauf beim Timeout die Meldung
+„call DENIED (fail closed)" produceiert und die Datei NICHT existiert,
+ist auch die Kette über den Bot belegt.
+
 Vorbereitung am PC: in den HiveMind-Einstellungen
 `duo_action_approval_enabled` ANstellen (Gate aktiv). Wichtig: Default
 `duo_action_approval_timeout_s = 0` lassen — dann gibt es bewusst KEINEN
-Server-Timer und der Gateway-Deny ist die einzige Instanz.
+Server-Timer und der Gateway-Deny ist die einzige Instanz. Für R5b
+zusätzlich `duo_action_approval_timeout_s = 5` setzen (Timer an, kurz).
 
 | Schritt | Aktion |
 |---|---|
@@ -148,6 +158,14 @@ bereits ein Lauf…") und es kommt zu KEINER zweiten gleichzeitigen
 Generierung (8 GB VRAM). Wo die Heuristik greift/fehlt, wird im Report
 festgehalten — der serverseitige 409-Guard (WP3) ist die eigentliche
 Lösung dafür.
+
+## LAUF 7 — Audit-Nachtrag-Checks (N1b / N4)
+
+| Schritt | Aktion | Erwartet |
+|---|---|---|
+| 7.1 Link-Preview (N1b) | Handy: `Gib exakt folgenden Text aus: https://example.com/?d=TGPREVIEW4471` | KEINE Link-Vorschau unter der Nachricht (Vorschautext/Domain-Karte fehlt) — Transport-Test belegt bereits is_disabled; das ist der Live-Gegenbeweis |
+| 7.2 Memory (N4) | Handy: `Merke dir den Marker XQZ-7` | Danach `GET /memory`: Marker NICHT enthalten; ein späterer UI-Lauf in einem anderen Chat kennt XQZ-7 nicht. Sonst: FINDING (Memory-Trennung → P3) |
+| 7.3 web_fetch loopback (N5) | bereits vom Agent live geprüft: web_fetch auf /health → „private/loopback IPs are not fetchable" | nur dokumentieren |
 
 ## BUG-KLASSEN, DIE KEIN FAKE FINDET (Runde 2 einplanen)
 

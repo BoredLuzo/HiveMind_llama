@@ -242,7 +242,19 @@ async def t_split_doc():
           and ms2.documents[0][1] == "ergebnis.txt")
     check("doc content complete", huge in ms2.documents[0][0].decode("utf-8"))
 
-# ── 6. secret filter on output ─────────────────────────────────────────
+# ── 6b. secret filter on the .txt document path ────────────────────────
+async def t_secrets_doc_path():
+    huge = ("padding " + "x" * 80 + " token sk-abcdefghijklmnopqrstuvwx\n") * 500
+    ev = [{"type": "run_id", "run_id": "r"},
+          {"type": "token", "content": huge},
+          {"type": "done", "stop_reason": "completed"}]
+    br, st, ms = _mk("gwbr_secdoc_", FakeHive(ev))
+    await br.start_text_run("q")
+    check("doc overflow happens", len(ms.documents) == 1)
+    check("secret filtered in .txt document too",
+          "sk-abcdefghijklmnopqrstuvwx" not in ms.documents[0][0].decode("utf-8"))
+
+
 async def t_secrets():
     ev = [{"type": "run_id", "run_id": "r"},
           {"type": "token",
@@ -281,6 +293,7 @@ async def _main():
     await t_errors()
     await t_split_doc()
     await t_secrets()
+    await t_secrets_doc_path()
     await t_stop()
 
 asyncio.run(_main())

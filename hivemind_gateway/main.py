@@ -482,6 +482,19 @@ def ensure_enabled(cfg: GatewayConfig) -> None:
         "Nothing polls Telegram while the switch is off.")
 
 
+async def _ui_veto_active(gw: Gateway) -> bool:
+    """True when the HiveMind settings EXPLICITLY switch the link off
+    (telegram_gateway_enabled=false). Key absent = not configured = the
+    local master switch decides. Any error reaching the server (offline,
+    broken JSON) keeps the gateway up — the runs report engine problems
+    readably, the control plane must not flap with them."""
+    try:
+        s = await gw.hive.settings()
+    except (HiveUnreachable, OSError, ValueError):
+        return False
+    return "telegram_gateway_enabled" in s and not s["telegram_gateway_enabled"]
+
+
 async def run() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -533,18 +546,13 @@ async def run() -> int:
                 log.warning("kill switch activated — stopping")
                 break
             # UI VETO (the remote off switch): when the HiveMind settings
-            # carry the key, false shuts the whole link down from the
-            # browser. Key absent = not configured = the local switch
-            # decides. Server offline: keep running, runs will report it.
-            try:
-                s = await gw.hive.settings()
-                if "telegram_gateway_enabled" in s \
-                        and not s["telegram_gateway_enabled"]:
-                    log.warning("telegram_gateway_enabled=false in "
-                                "HiveMind settings — shutting down")
-                    break
-            except (HiveUnreachable, OSError, ValueError):
-                pass
+            # explicitly carry telegram_gateway_enabled=false, the whole
+            # link shuts down from the browser. Key absent = the local
+            # master switch decides; server errors keep the gateway up.
+            if await _ui_veto_active(gw):
+                log.warning("telegram_gateway_enabled=false in "
+                            "HiveMind settings — shutting down")
+                break
             try:
                 updates = await api.get_updates(offset=state.offset,
                                                 timeout_s=cfg.long_poll_timeout_s)
