@@ -576,7 +576,13 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
             sd = json.loads(settings_path.read_text(encoding="utf-8"))
             for ag in sd.get("agents", {}).values():
                 m = ag.get("model", "") if isinstance(ag, dict) else ""
-                if m:
+                # AVAILABLE-ONLY (2026-10-05): shipped default agent models
+                # (qwen3.5:4b-mtp, lfm2.5:2.6b, judge …) land here on every
+                # fresh install — listing them without a GGUF on disk made
+                # /models (and the Telegram /models) offer models that
+                # cannot load. Only settings models whose GGUF is in the
+                # index get listed.
+                if m and (m in index or _strip_alias(m) in index):
                     names.add(_strip_alias(m))
     except Exception:
         pass

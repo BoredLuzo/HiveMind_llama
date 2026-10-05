@@ -48,19 +48,27 @@ def _write_matrix(tmp, coder_model):
     return path
 
 
-DEFAULT_CODER = DEFAULT_AGENT_CFG["duo_coder"]["model"]
+# no shipped models (2026-10-05): the runtime fills empty agent
+# models with the primary available one — the fixture simulates
+# that filled default for the policy tests.
+DEFAULT_CODER = DEFAULT_AGENT_CFG["duo_coder"]["model"] or "fixture-coder-default"
 POLICY_CODER = "lfm2.5:2.6b" if DEFAULT_CODER != "lfm2.5:2.6b" else "qwen3.5:2b"
 
 with tempfile.TemporaryDirectory() as tmp:
     matrix = _write_matrix(tmp, POLICY_CODER)
 
-    # 1. Untouched card at default → policy model applies (legacy behaviour).
+    # 1. Untouched card at the (runtime-filled) default -> SURVIVES.
+    #    No-hardcoded-models (2026-10-05): there is no shipped default
+    #    model anymore, so the legacy "policy stomps the untouched
+    #    default" path is gone — the load-time fill decides the model
+    #    and the policy must not overwrite it with an absent matrix
+    #    model (that regression WAS the lfm-not-found hard abort).
     s = {"safe_profile_policy": "default_8gb_v1",
          "safe_profile_matrix_file": matrix,
          "agents": {"duo_coder": {"model": DEFAULT_CODER}}}
     apply_safe_profile_policy(s, None)
-    check("1a untouched default -> policy model",
-          s["agents"]["duo_coder"]["model"] == POLICY_CODER)
+    check("1a untouched (runtime-filled) card survives",
+          s["agents"]["duo_coder"]["model"] == DEFAULT_CODER)
 
     # 2. Explicit user choice == shipped default -> user choice survives.
     s = {"safe_profile_policy": "default_8gb_v1",
@@ -80,14 +88,16 @@ with tempfile.TemporaryDirectory() as tmp:
     check("3a non-default choice survives", s["agents"]["duo_coder"]["model"] == other)
     check("3b choice backfilled into marker", s.get("agents_user_model_choice", {}).get("duo_coder") == other)
 
-    # 4. Marker for another role does not protect duo_coder.
+    # 4. Foreign marker does not protect duo_coder — but post
+    #    no-hardcoded-models a non-empty card always survives anyway
+    #    (the policy has no shipped default to stomp towards anymore).
     s = {"safe_profile_policy": "default_8gb_v1",
          "safe_profile_matrix_file": matrix,
          "agents_user_model_choice": {"duo_critic": DEFAULT_CODER},
          "agents": {"duo_coder": {"model": DEFAULT_CODER}}}
     apply_safe_profile_policy(s, None)
     check("4a foreign marker ignored",
-          s["agents"]["duo_coder"]["model"] == POLICY_CODER)
+          s["agents"]["duo_coder"]["model"] == DEFAULT_CODER)
 
     # 5. Malformed marker must not crash (an exception here fails the suite).
     s = copy.deepcopy({"safe_profile_policy": "default_8gb_v1",
@@ -96,7 +106,7 @@ with tempfile.TemporaryDirectory() as tmp:
     s["agents_user_model_choice"] = "garbage"
     apply_safe_profile_policy(s, None)
     check("5a malformed marker tolerated",
-          s["agents"]["duo_coder"]["model"] == POLICY_CODER)
+          s["agents"]["duo_coder"]["model"] == DEFAULT_CODER)
 
     # 6. Policy never pushes ctx defaults (USER-OVER-POLICY, 2026-09-10).
     s = {"safe_profile_policy": "default_8gb_v1",

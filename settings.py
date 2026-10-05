@@ -17,22 +17,20 @@ CUSTOM_PROMPTS_DIR = Path(__file__).parent / "custom_prompts"
 # CODER-TEMP (2026-08-31): higher than for Refiner/Critic — creative coding.
 
 DEFAULT_AGENT_CFG = {
-    # AGENT-DEFAULTS (2026-09-19): the recommended set for new users. The
-    # coder runs Hermes3.6 Genesis FINAL (MTP-APEX-Compact, MoE 35B-A3B) —
-    # its per-model config carries the author's agentic coding sampling,
-    # so the coder temperature stays None and the profile (0.6) wins over
-    # a hardcoded value. Helpers stay on the qwen3.5:4b/2b work tier.
-    # Strong setups (alternative coder): qwen3.6:35b-a3b-ud (Unsloth).
-    # Small systems: duo_coder on spark-x2.5:1.7b / lfm2.5:2.6b, or the
-    # previous default qwen3.5:4b-mtp.
-    "analyst":     {"model": "qwen3.5:4b-mtp", "temperature": 0.3, "max_tokens": 1100, "thinking": False, "thinking_budget": 0},
-    "refiner":     {"model": "qwen3.5:2b",    "temperature": 0.3, "max_tokens": 400, "thinking": False, "thinking_budget": 0},
-    "critic":      {"model": "qwen3.5:4b-mtp", "temperature": 0.2, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
-    "synthesizer": {"model": "qwen3.5:4b-mtp", "temperature": 0.2, "max_tokens": 900, "thinking": False, "thinking_budget": 0},
-    "direct":      {"model": "qwen3.5:4b-mtp", "temperature": 0.4, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
-    "judge":       {"model": "lfm2.5:2.6b",   "temperature": 0.1, "max_tokens": 120, "thinking": False, "thinking_budget": 0},
-    "duo_coder":   {"model": "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact", "temperature": None, "max_tokens": 8000, "thinking": False, "thinking_budget": 0},
-    "duo_critic":  {"model": "qwen3.5:4b-mtp", "temperature": 0.15, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
+    # AGENT-DEFAULTS (2026-10-05, no-hardcoded-models): fresh installs
+    # ship WITHOUT model names — whatever GGUF the user downloaded gets
+    # filled in at load time (_apply_model_fallbacks below: every empty
+    # model value becomes the primary available model). Picking per-role
+    # models stays exactly where it was: UI agent cards, /setModel,
+    # presets. Existing settings.json files are untouched by this.
+    "analyst":     {"model": "", "temperature": 0.3, "max_tokens": 1100, "thinking": False, "thinking_budget": 0},
+    "refiner":     {"model": "",    "temperature": 0.3, "max_tokens": 400, "thinking": False, "thinking_budget": 0},
+    "critic":      {"model": "", "temperature": 0.2, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
+    "synthesizer": {"model": "", "temperature": 0.2, "max_tokens": 900, "thinking": False, "thinking_budget": 0},
+    "direct":      {"model": "", "temperature": 0.4, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
+    "judge":       {"model": "",   "temperature": 0.1, "max_tokens": 120, "thinking": False, "thinking_budget": 0},
+    "duo_coder":   {"model": "", "temperature": None, "max_tokens": 8000, "thinking": False, "thinking_budget": 0},
+    "duo_critic":  {"model": "", "temperature": 0.15, "max_tokens": 600, "thinking": False, "thinking_budget": 0},
 }
 
 DEFAULT_SETTINGS = {
@@ -87,8 +85,8 @@ DEFAULT_SETTINGS = {
     "duo_pre_explore":         False,
     "until_finished":          False,
     "duo_runtime_profile":     "balanced",
-    "duo_profile_speed_model": "qwen3.5:4b-mtp",
-    "duo_profile_quality_model": "lfm2.5:2.6b",
+    "duo_profile_speed_model": "",
+    "duo_profile_quality_model": "",
     "duo_agentic_mode":        False,
     "duo_agentic_thinking":    False,
     "_thinking_before_chunking": None,  # persisted user-preference before chunking forced thinking ON
@@ -220,7 +218,7 @@ DEFAULT_SETTINGS = {
     # Token-Budget gekoppelt: max_chars ≈ budget_tokens * Faktor - Overhead.
     # Sprung; Deckel 3.3 (dokumentierter Realwert).
     "duo_write_chars_per_token": 2.5,
-    "duo_coder_fallback_model": "qwen3.5:4b-mtp",
+    "duo_coder_fallback_model": "",
     "duo_critic_ctx":          None,
 
     # ════════════════════════════════════════════════════════════════════════
@@ -353,7 +351,7 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # SUBAGENT-LITE (2026-08-24, option A from the feasibility report): serial
     "subagent_lite_enabled":   True,
-    "subagent_lite_model_ladder": ["lfm2.5:2.6b", "qwen3.5:0.8b-ud"],
+    "subagent_lite_model_ladder": [],
     "subagent_lite_ctx_default": 8192,
     "subagent_lite_min_free_ram_gb": 5.0,
     "subagent_lite_max_tools": 12,
@@ -425,22 +423,22 @@ DEFAULT_SETTINGS = {
     "mcp_servers":             [],
     "soul_evolve_agent": {
         "enabled":     False,
-        "model":       "gemma-4:e4b-it-obliterated",
+        "model": "",
         "temperature": 0.65,
         "max_tokens":  800,
     },
     "intent_agent": {
         "enabled":     False,
-        "model":       "qwen3.5:4b",
+        "model": "",
         "temperature": 0.1,
         "max_tokens":  400,
     },
     "exploration_agent": {
         "enabled": True,
-        "model":   "qwen3.5:4b-mtp",
+        "model": "",
         "workers": [
-            {"model": "qwen3.5:4b-mtp", "ctx": 8192},
-            {"model": "qwen3.5:4b-mtp", "ctx": 8192},
+            {"model": "", "ctx": 8192},
+            {"model": "", "ctx": 8192},
         ],
     },
     "ctx_overrides": {
@@ -456,6 +454,45 @@ DEFAULT_PRESETS = {}
 
 _load_cache_key: tuple | None = None
 _load_cache_data: dict | None = None
+
+
+def _primary_available_model() -> str:
+    """First model the machine can actually load (backend GGUF index)."""
+    try:
+        from backend.llama_models import list_available_models
+        models = list_available_models()
+        return models[0] if models else ""
+    except Exception:
+        return ""
+
+
+def _apply_model_fallbacks(s: dict) -> None:
+    """Fill every EMPTY model value with the primary available model
+    (no-hardcoded-models release, 2026-10-05). Explicit user picks and
+    non-empty existing settings always win; with nothing downloaded the
+    values stay empty and the run fails with a model-load error."""
+    primary = _primary_available_model()
+    if not primary:
+        return
+    for _ag in (s.get("agents") or {}).values():
+        if isinstance(_ag, dict) and not str(_ag.get("model") or "").strip():
+            _ag["model"] = primary
+    for _k in ("duo_profile_speed_model", "duo_profile_quality_model",
+               "duo_coder_fallback_model"):
+        if not str(s.get(_k) or "").strip():
+            s[_k] = primary
+    _ladder = s.get("subagent_lite_model_ladder")
+    if isinstance(_ladder, list) and not [x for x in _ladder if str(x or "").strip()]:
+        s["subagent_lite_model_ladder"] = [primary]
+    for _k in ("soul_evolve_agent", "intent_agent", "exploration_agent"):
+        _ag = s.get(_k)
+        if isinstance(_ag, dict) and not str(_ag.get("model") or "").strip():
+            _ag["model"] = primary
+    _workers = (s.get("exploration_agent") or {}).get("workers")
+    if isinstance(_workers, list):
+        for _w in _workers:
+            if isinstance(_w, dict) and not str(_w.get("model") or "").strip():
+                _w["model"] = primary
 
 
 def load_settings() -> dict:
@@ -477,6 +514,9 @@ def load_settings() -> dict:
     if _key is not None and _key == _load_cache_key and _load_cache_data is not None:
         return copy.deepcopy(_load_cache_data)
     data = _load_settings_from_disk()
+    # no-hardcoded-models: fill empty model values with what the
+    # machine actually has (applies to every load path)
+    _apply_model_fallbacks(data)
     if _key is not None:
         _load_cache_key = _key
         _load_cache_data = copy.deepcopy(data)
