@@ -314,7 +314,9 @@ _approval_pre_decisions: dict = {}
     # "one card per run until it is answered/consumed"
 _card_staged: dict = {}
 
-# APPROVAL-TIMEOUT (2026-09-30, auto-approve-once since 2026-10-01): set when
+# APPROVAL-TIMEOUT (2026-09-30; FAIL-CLOSED DENY since 2026-10-03 - the
+# 2026-10-01 auto-approve-once behavior was reverted, see the decision
+# below and tests/test_approval_timeout.py): set when
 # an unanswered card ran its countdown. A user decision arriving AFTER the
 # timeout is discarded once here — it would otherwise be stored as a
 # pre-decision and silently approve the NEXT gated call (no double-exec).
@@ -685,7 +687,7 @@ async def _check_action_approval(name: str, args: dict, workspace):
                             run_id, name)
                 continue
             if _timer_t is not None and _timer_t in _done:
-                answer = ""  # countdown expired -> auto-approve-once path below
+                answer = ""  # countdown expired -> fail-closed DENY below (2026-10-03)
                 _rc.cleanup_pause(run_id)
                 break
             if _abort_t in _done and _wait_t not in _done:
