@@ -2198,7 +2198,16 @@ async function applyAll() {
 // -- Presets ----------------------------------------------------
 function _setPresetHeader() {
   var el = document.getElementById('h-preset-label');
-  if (el) el.textContent = S.activePreset || 'no preset';
+  if (!el) return;
+  // PRESET PILL CLARITY (2026-10-05, user): saved != loaded. The pill shows
+  // the LOADED preset only; explain how to activate one on hover.
+  if (S.activePreset) {
+    el.textContent = S.activePreset;
+    el.title = 'Loaded preset: ' + S.activePreset + ' (re-applied at startup)';
+  } else {
+    el.textContent = 'no preset';
+    el.title = 'No preset loaded - open PRESETS and press Load to activate one (it then survives restarts)';
+  }
 }
 
 async function loadPresets() {

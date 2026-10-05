@@ -98,7 +98,7 @@ header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid #222a38;
 #h-dot.err{background:var(--red);box-shadow:0 0 6px var(--red)}
 #h-dot.busy{background:var(--amber);box-shadow:0 0 6px var(--amber);animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-#h-mode{font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 9px;border-radius:3px;
+#h-mode{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 7px;border-radius:3px;
   background:var(--bg3);border:1px solid var(--b2);color:var(--tx2)}
 #h-tools{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 8px;border-radius:3px;
   background:var(--bg3);border:1px solid rgba(58,153,96,.35);color:var(--green);display:none}
@@ -480,9 +480,9 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 .amap-chip.automap-active{border-color:rgba(72,120,192,.5);background:rgba(72,120,192,.08)}
 .amap-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
 .amap-agent{font-family:'IBM Plex Mono',monospace;font-size:8px;color:var(--tx2);text-transform:uppercase;letter-spacing:.06em;flex-shrink:0}
-.amap-model{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txh);font-weight:700;
+.amap-model{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txh);font-weight:700;
   max-width:80px;overflow:hidden;text-overflow:ellipsis}
-.amap-tag{font-size:8px;border-radius:2px;padding:0 3px;font-family:'IBM Plex Mono',monospace;margin-left:1px}
+.amap-tag{font-size:7px;border-radius:2px;padding:0 2px;font-family:'IBM Plex Mono',monospace;margin-left:1px}
 .amap-tag.vision{background:rgba(136,88,192,.2);color:var(--purple);border:1px solid rgba(136,88,192,.3)}
 .amap-tag.thinking{background:rgba(72,120,192,.2);color:var(--blue);border:1px solid rgba(72,120,192,.3)}
 /* -- Automap task badge -- */
