@@ -4,8 +4,11 @@ WP0 deliverable. Verified against commit `33e6cb5` (branch
 `feature/telegram-gateway` = main `01abe04` + this brief; base `a132ef6` per
 brief, rebased onto main on the owner's instruction). Line numbers refer to
 that commit; they drift — the symbols are the contract, the lines are the
-map. Marked **PENDING** where the live experiment is still owed (the owner
-was working live; per brief the experiment waits for an approved slot).
+map. The transcript write-path is VERIFIED LIVE (2026-10-05, chat
+`9b892ee3`, log lines quoted in the Transcript section); the timeout
+divergence was CORRECTED after a stale-comment misread (see Approvals).
+Remaining open item: message-shape UI-loadability, folded into the
+owner's UI checklist.
 
 ## POST /stream
 
@@ -114,9 +117,12 @@ was working live; per brief the experiment waits for an approved slot).
   `{"_ref": hash}`; reads restore them. Backend-side: the gateway can PUT
   plain inline content and must never parse `_ref` itself.
 - Message shape: `messages[]` entries with `role` ("user"/"assistant"),
-  `content` (str or content-part list) — exact UI shape (code panels `cp`,
-  image previews, ids) to be COPIED FROM A REAL UI CHAT in the live
-  experiment, not guessed. **PENDING (live).**
+  `content` (str or content-part list). The minimal gateway shape
+  `{"role", "content": str}` is PROVEN seed-safe live (three runs on chat
+  `9b892ee3`, see Transcript; the chat seeded and answered from it).
+  Still open, folded into the owner's UI checklist: confirm the same
+  minimal-shape chat renders/loadable in the UI like a UI-written one
+  (UI-only concerns: `cp` code panels, image previews, ids).
 
 ## Approvals
 
@@ -211,7 +217,7 @@ was working live; per brief the experiment waits for an approved slot).
 - Server offline: connection refused on /stream — gateway-owned "offline"
   message (brief: no auto retry).
 
-## Transcript path (static verification; live experiment PENDING)
+## Transcript path (VERIFIED LIVE, 2026-10-05, chat `9b892ee3`)
 
 - POST /chats creates the main json with 0 messages (routers/chats.py:440).
   VERIFIED live 2026-10-05. The gateway write path is VERIFIED live too:
@@ -232,12 +238,25 @@ was working live; per brief the experiment waits for an approved slot).
 - Seed source: `history_seed_provenance` (context/chat.py:65) decides
   `json | sidecar | none`; the run re-seeds EVERY run from json/sidecar
   (core/chat_run.py:872-920, LABEL-LIE FIX 2026-10-05: label follows the
-  provenance, and json/sidecar ALWAYS own — even empty). The brief's seed
-  label claims are confirmed in code. The RUN-dependent part of the
-  experiment (a /stream run writes only the sidecar; seed counts N=0
-  first turn / N=2 second turn from the [HISTORY-SEED] log; marker word
-  untouched by the run) still needs a live model run: **PENDING** (needs
-  an approved GPU slot; the chat-write half is done, see above).
+  provenance, and json/sidecar ALWAYS own — even empty).
+- LIVE RUN EVIDENCE (three runs, one chat, gateway-simulated transcript;
+  log: live/logs/hivemind.log, probe chat deleted afterwards):
+  1. Turn 1 — main json holds ONLY the trailing user turn:
+     `2026-10-05 11:45:50,645 [hivemind.chat_run] INFO [HISTORY-SEED] chat=9b892ee3 source=json seeded 0 message(s)`
+     (trailing user correctly dropped, sidecar NOT resurrected;
+     re-confirmed at 11:46:37,836).
+  2. Gateway simulation — PUT writes the sidecar-style transcript
+     (user+assistant) into the main json via base_rev.
+  3. Turn 2 — same chat after the PUT:
+     `2026-10-05 11:47:24,066 [hivemind.chat_run] INFO [HISTORY-SEED] chat=9b892ee3 source=json seeded 2 message(s)`
+     (run 1791193644-2243bca5, agentic chat; the model answered with the
+     seeded turn's original wording — the transcript, not `q` alone, fed
+     the run).
+  GATEWAY PATTERN CONFIRMED: PUT user turn before /stream, PUT both turns
+  after done, next turn seeds N>=2. Message shape used:
+  `{"role": "user"|"assistant", "content": "<str>"}` — seed-safe. Open
+  (folded into the owner's UI checklist): confirm such a gateway-written
+  chat renders/loadable in the UI like a UI-written one.
 - Chat deletion removes json + sidecar + blobs (routers/chats.py:660-679).
 
 ## Packaging inventory (today)
@@ -293,17 +312,19 @@ was working live; per brief the experiment waits for an approved slot).
 
 ## NOT tested
 
-- WP0 has no code and no test suite; nothing ran the regression suite.
-- The run-dependent transcript half (sidecar-only writes, N=0/N=2 seed
-  counts) is outstanding — needs an approved GPU slot; deliberately not
-  run while the owner was working live.
-- Real-run evidence for later WPs outstanding as planned (token/second
-  account).
+- WP0 has no runtime code of its own; the gateway suites came with WP1.
+- The transcript experiment is DONE (2026-10-05, evidence quoted in the
+  Transcript section). The gateway-pattern UI-loadability check (a
+  gateway-written chat rendering cleanly in the UI) is folded into the
+  owner's UI checklist (Tab-Kill, 409, image, A→B→A).
+- Real-run evidence for later WPs outstanding as planned (bot token /
+  second account / 2FA are owner-side prerequisites).
 
 ## Open questions
 
-- Does the UI write any field the gateway must replicate in messages
-  beyond role/content (ids? ts?) — answered by the live experiment.
+- Does the UI need fields beyond role/content to RENDER a gateway-written
+  chat (ids? ts? cp?) — seed path proven; render check on the owner's UI
+  checklist.
 - Whether `mode` values the gateway should use are exactly
   {auto, direct, duo, pipeline} or mode is derived from duo_* flags
   (settings default "auto") — confirm in WP1 against settings.json.
