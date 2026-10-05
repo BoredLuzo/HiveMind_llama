@@ -1,0 +1,19 @@
+# Ruff guardrail for HiveMind.
+#
+# Scope: correctness rules only. Pre-existing debt classes are deliberately
+# NOT selected here (F401 unused-import, F541 f-string-without-placeholder,
+# BLE001 blind-except, S110 try-except-pass) — the two except classes are
+# frozen per-file by tests/test_no_new_silent_excepts.py (AST counter with a
+# baseline; fails when a file gains new silent except handlers).
+target-version = "py312"
+line-length = 200
+
+[lint]
+select = [
+    "E9",    # syntax / io errors
+    "F821",  # undefined-name
+    "F601",  # multi-value-repeated-key-literal
+    "F811",  # redefined-while-unused
+    "F841",  # unused-variable
+    "W605",  # invalid-escape-sequence
+]

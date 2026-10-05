@@ -79,8 +79,9 @@ backups/
 # Learned routing weights (generated at runtime)
 routing_weights.json
 
-# Dev-only: not needed to run HiveMind (kept locally, not pushed)
-ruff.toml
+# ruff.toml is TRACKED since 2026-10-05: worktrees and other agents need
+# the same lint config, otherwise ruff runs with defaults and reports ~2400
+# phantom hits (the gateway worktree lint failure).
 requirements-dev.txt
 docs/tools-audit.md
 docs/structure-backlog.md
