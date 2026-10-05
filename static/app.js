@@ -11517,43 +11517,78 @@ function _updateDuoRoleStatus(elId, label, model) {
   }
 
   function _buildIndex() {
+    // NAMING ROUND (2026-10-05, user): generic row texts ("Active") get the
+    // enclosing card/section title as prefix; duplicate labels are deduped;
+    // dynamic agent cards (acard) are indexed WITH their setting fields so
+    // "ctx" finds every agent's Context slider. Index is rebuilt on every
+    // open - agent cards are rendered dynamically.
     var idx = [];
+    var seen = {};
+    function push(panel, label, el, kind, act, kw) {
+      label = String(label || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+      if (label.length < 3) return;
+      var key = (panel || '') + '|' + label.toLowerCase();
+      if (seen[key]) return;
+      seen[key] = 1;
+      idx.push({ panel: panel, label: label, el: el, kind: kind, act: act,
+                 kw: ((kw || '') + ' ' + label + ' ' + kind).toLowerCase() });
+    }
+    function _cardTitle(el) {
+      var card = el.closest('.cfg-card');
+      if (!card) return '';
+      var t = card.querySelector('.cfg-card-title');
+      if (!t) return '';
+      return (t.textContent || '').replace(/\s*(BETA|BOOT|EXP|AMBER)\s*$/, '').trim();
+    }
     document.querySelectorAll('.panel').forEach(function(panel) {
       var pid = (panel.id || '').replace(/^p-/, '');
       if (!PANEL_LABELS[pid]) return;
       panel.querySelectorAll('.sec').forEach(function(s) {
-        var t = (s.textContent || '').trim();
-        if (t.length >= 3) idx.push({ panel: pid, label: t, el: s, kind: 'Section' });
+        push(pid, (s.textContent || '').trim(), s, 'Section');
       });
-      panel.querySelectorAll('.tgl-row .tgl-text, .cfl-label').forEach(function(t) {
-        var txt = (t.textContent || '').trim();
-        if (txt.length >= 3) idx.push({ panel: pid, label: txt, el: t, kind: 'Toggle' });
+      panel.querySelectorAll('.cfg-card').forEach(function(card) {
+        var titleEl = card.querySelector('.cfg-card-title');
+        var title = titleEl ? titleEl.textContent.replace(/\s*(BETA|BOOT|EXP)\s*$/, '').trim() : '';
+        if (title.length >= 3) push(pid, title, titleEl, 'Card');
+        card.querySelectorAll('.tgl-row .tgl-text').forEach(function(tx) {
+          var txt = (tx.textContent || '').trim();
+          if (txt.length >= 3) push(pid, title ? title + ' — ' + txt : txt, tx, 'Toggle');
+        });
+      });
+      panel.querySelectorAll('.tgl-row .tgl-text, .cfl-label').forEach(function(tx) {
+        if (tx.closest('.cfg-card')) return; // handled above with title prefix
+        var txt = (tx.textContent || '').trim();
+        if (txt.length >= 3) push(pid, txt, tx, 'Toggle');
       });
       panel.querySelectorAll('label input[type="checkbox"]').forEach(function(inp) {
         var row = inp.closest('label');
         if (!row) return;
         var txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
-        if (txt.length >= 3 && !idx.some(function(i) { return i.el === row; }))
-          idx.push({ panel: pid, label: txt.slice(0, 80), el: row, kind: 'Checkbox' });
+        if (txt.length >= 3) push(pid, txt.slice(0, 80), row, 'Checkbox');
       });
-      panel.querySelectorAll('.agent-card, [class*="agent-card"]').forEach(function(card) {
-        var nameEl = card.querySelector('.agent-name, .sec, [class*="name"]');
-        var n = nameEl ? nameEl.textContent.trim() : '';
-        if (n.length >= 3 && !idx.some(function(i) { return i.el === card; }))
-          idx.push({ panel: pid, label: 'Agent: ' + n, el: card, kind: 'Agent card' });
+      // dynamic agent cards with their setting fields (ctx/temp/tokens)
+      panel.querySelectorAll('#agent-cards .acard').forEach(function(card) {
+        var nameEl = card.querySelector('.acard-name');
+        var nm = nameEl ? nameEl.textContent.trim() : '';
+        if (!nm) return;
+        push(pid, 'Agent: ' + nm, card, 'Agent card', null, 'agent modell model');
+        card.querySelectorAll('.fl').forEach(function(fl) {
+          var lbl = (fl.textContent || '').trim().split('\n')[0].slice(0, 30);
+          if (/context|temperature|output-budget|thinking|model/i.test(lbl))
+            push(pid, nm + ' — ' + lbl, fl, 'Agent setting', null,
+                 'agent ' + nm + ' ' + (lbl.toLowerCase().indexOf('context') >= 0 ? 'ctx kontext' : lbl.toLowerCase()));
+        });
       });
       panel.querySelectorAll('button[title]').forEach(function(b) {
-        var t = (b.title || '').trim();
-        if (t.length >= 3 && !idx.some(function(i) { return i.el === b; }))
-          idx.push({ panel: pid, label: t.slice(0, 80), el: b, kind: 'Button' });
+        push(pid, (b.title || '').trim(), b, 'Button');
       });
     });
-    idx.push({ panel: null, label: 'New Chat', el: null, kind: 'Action',
-               act: function() { var b = Array.from(document.querySelectorAll('button'))
-                 .find(function(x) { return /new chat/i.test(x.textContent); }); if (b) b.click(); } });
-    idx.push({ panel: null, label: 'Open chats list', el: null, kind: 'Action',
-               act: function() { var b = Array.from(document.querySelectorAll('button'))
-                 .find(function(x) { return x.textContent.trim() === 'Chats'; }); if (b) b.click(); } });
+    push(null, 'New Chat', null, 'Action',
+         function() { var b = Array.from(document.querySelectorAll('button'))
+           .find(function(x) { return /new chat/i.test(x.textContent); }); if (b) b.click(); });
+    push(null, 'Open chats list', null, 'Action',
+         function() { var b = Array.from(document.querySelectorAll('button'))
+           .find(function(x) { return x.textContent.trim() === 'Chats'; }); if (b) b.click(); });
     return idx;
   }
 
@@ -11575,7 +11610,9 @@ function _updateDuoRoleStatus(elId, label, model) {
 
   function _open() {
     if (!_fsOverlay) _buildOverlay();
-    if (!_fsIndex) _fsIndex = _buildIndex();
+    // REBUILD EVERY OPEN (2026-10-05): agent cards are rendered dynamically -
+    // a cached index goes stale the moment a model changes.
+    _fsIndex = _buildIndex();
     _fsOverlay.style.display = 'flex';
     _fsInput.value = '';
     _render('');
@@ -11584,11 +11621,23 @@ function _updateDuoRoleStatus(elId, label, model) {
 
   function _close() { if (_fsOverlay) _fsOverlay.style.display = 'none'; }
 
+  // ALIAS MATCHING (2026-10-05, user): "ctx" must find "Context" - the
+  // abbreviations people type are not substrings of the label text.
+  var _FS_ALIASES = { ctx: 'context', kontext: 'context', temp: 'temperature',
+                      bild: 'image', foto: 'image', foto: 'image' };
+
   function _render(q) {
     q = (q || '').toLowerCase().trim();
     _fsList.innerHTML = '';
+    var terms = q ? [q] : [];
+    Object.keys(_FS_ALIASES).forEach(function(a) {
+      if (q && (a === q || q.indexOf(a) >= 0) && terms.indexOf(_FS_ALIASES[a]) < 0)
+        terms.push(_FS_ALIASES[a]);
+    });
     var hits = (_fsIndex || []).filter(function(i) {
-      return !q || i.label.toLowerCase().indexOf(q) >= 0 || i.kind.toLowerCase().indexOf(q) >= 0;
+      if (!q) return true;
+      var hay = i.kw || ((i.label + ' ' + i.kind).toLowerCase());
+      return terms.some(function(t) { return hay.indexOf(t) >= 0; });
     });
     if (!hits.length) {
       _fsList.innerHTML = '<div class="fs-empty">No matching feature.</div>';
