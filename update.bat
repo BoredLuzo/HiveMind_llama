@@ -207,8 +207,11 @@ REM resume at a stale byte offset (the staged copy swaps in at the end).
 REM The user-data excludes are belt-and-suspenders: a wrongly built zip
 REM must never clobber settings, presets, models or session state - the
 REM git token lives in settings.json (token leak via bad zip).
+REM Gateway files (2026-10-05, WP1): a wrongly built zip must never
+REM overwrite gateway.toml; state/audit/kill-switch live in
+REM %LOCALAPPDATA%\HiveMindGateway and are listed anyway.
 echo  Applying update   : over this folder
-robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /XF update.bat settings.json presets.json models.json vision_model.json routing_weights.json memory.json /XD sessions .hive_uploads learning_logs logs .venv llama /NFL /NDL /NJH /NP /NJS
+robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /XF update.bat settings.json presets.json models.json vision_model.json routing_weights.json memory.json gateway.toml gateway_state.json gateway_state.json.corrupt gateway.disabled gateway.lock gateway_audit.jsonl /XD sessions .hive_uploads learning_logs logs .venv llama /NFL /NDL /NJH /NP /NJS
 if errorlevel 8 (
     echo  [ERROR] Applying the update failed. Restore by copying the
     echo         contents of %BK%\ back over this folder.
@@ -237,7 +240,7 @@ REM keeps settings.json/models.json/etc. out of the prune even if some
 REM future release zip accidentally shipped them.
 set "PRUNED=0"
 if exist "%BASE%\update_manifest_installed.txt" (
-    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$base='%BASE%'; $ex='%EXROOT%'; $trash='%BASE%\update_removed_%TAGNUM%'; $protFiles = 'settings.json','models.json','vision_model.json','presets.json','memory.json','routing_weights.json'; $protDirs = 'sessions','context','logs','custom_prompts','.hive_uploads','learning','learning_logs','.venv','llama'; $old = Get-Content '%BASE%\update_manifest_installed.txt' -ErrorAction SilentlyContinue | Where-Object { $_ -and ($protFiles -notcontains $_) -and ($protDirs -notcontains $_.Split('\')[0]) -and ((Get-Item -LiteralPath (Join-Path $base $_) -ErrorAction SilentlyContinue) -is [System.IO.FileInfo]) }; $n = 0; foreach ($f in $old) { if (-not (Test-Path -LiteralPath (Join-Path $ex $f))) { $src = Join-Path $base $f; $dst = Join-Path $trash $f; $d = Split-Path $dst -Parent; if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }; Move-Item -Force -LiteralPath $src -Destination $dst; $n++ }; if (-not (Test-Path $trash)) { New-Item -ItemType Directory -Path $trash -Force | Out-Null }; Get-ChildItem -LiteralPath $ex -Recurse -File | ForEach-Object { $_.FullName.Substring($ex.Length + 1) } | Set-Content -LiteralPath '%BASE%\update_manifest_installed.txt' -Encoding UTF8; Write-Output $n"`) do set "PRUNED=%%P"
+    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$base='%BASE%'; $ex='%EXROOT%'; $trash='%BASE%\update_removed_%TAGNUM%'; $protFiles = 'settings.json','models.json','vision_model.json','presets.json','memory.json','routing_weights.json','gateway.toml','gateway_state.json','gateway_state.json.corrupt','gateway.disabled','gateway_audit.jsonl'; $protDirs = 'sessions','context','logs','custom_prompts','.hive_uploads','learning','learning_logs','.venv','llama'; $old = Get-Content '%BASE%\update_manifest_installed.txt' -ErrorAction SilentlyContinue | Where-Object { $_ -and ($protFiles -notcontains $_) -and ($protDirs -notcontains $_.Split('\')[0]) -and ((Get-Item -LiteralPath (Join-Path $base $_) -ErrorAction SilentlyContinue) -is [System.IO.FileInfo]) }; $n = 0; foreach ($f in $old) { if (-not (Test-Path -LiteralPath (Join-Path $ex $f))) { $src = Join-Path $base $f; $dst = Join-Path $trash $f; $d = Split-Path $dst -Parent; if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }; Move-Item -Force -LiteralPath $src -Destination $dst; $n++ }; if (-not (Test-Path $trash)) { New-Item -ItemType Directory -Path $trash -Force | Out-Null }; Get-ChildItem -LiteralPath $ex -Recurse -File | ForEach-Object { $_.FullName.Substring($ex.Length + 1) } | Set-Content -LiteralPath '%BASE%\update_manifest_installed.txt' -Encoding UTF8; Write-Output $n"`) do set "PRUNED=%%P"
     if not "%PRUNED%"=="0" (
         echo  Pruned          : %PRUNED% removed release file^(s^) moved to update_removed_%TAGNUM%\
     )

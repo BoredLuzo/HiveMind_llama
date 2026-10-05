@@ -39,7 +39,10 @@ if errorlevel 1 (
 )
 
 REM SAFETY CHECK: the zip must not contain any user-state file.
-powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $bad = $z.Entries | Where-Object { $_.FullName -match '(^|/)(settings\.json|presets\.json|models\.json|vision_model\.json|routing_weights\.json|memory\.json)$' -or $_.FullName -match '(^|/)sessions/' }; if ($bad) { $bad | ForEach-Object { Write-Output ('LEAK: ' + $_.FullName) }; $z.Dispose(); exit 1 }; Write-Output ('entries: ' + $z.Entries.Count); $z.Dispose()"
+REM Gateway entries (2026-10-05, WP1): gateway.toml (owner config) and the
+REM state/audit/kill-switch files. The tracked gateway.toml.example does
+REM NOT match the anchored names below.
+powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $bad = $z.Entries | Where-Object { $_.FullName -match '(^|/)(settings\.json|presets\.json|models\.json|vision_model\.json|routing_weights\.json|memory\.json|gateway\.toml|gateway_state\.json|gateway_state\.json\.corrupt|gateway\.disabled|gateway\.lock|gateway_audit\.jsonl)$' -or $_.FullName -match '(^|/)sessions/' }; if ($bad) { $bad | ForEach-Object { Write-Output ('LEAK: ' + $_.FullName) }; $z.Dispose(); exit 1 }; Write-Output ('entries: ' + $z.Entries.Count); $z.Dispose()"
 if errorlevel 1 (
     echo  [ERROR] Zip contains user-state files - NOT usable as a release.
     echo         Fix the tracked tree; nothing was published.

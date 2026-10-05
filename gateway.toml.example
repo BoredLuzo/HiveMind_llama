@@ -1,0 +1,36 @@
+# gateway.toml.example — copy to gateway.toml (live dir) and edit.
+# gateway.toml itself must NEVER enter the repo, a release zip or a backup
+# (leak check + update.bat protect list cover it).
+#
+# SECRETS: the bot token comes from the environment variable
+#   HIVEMIND_TG_TOKEN
+# or the Windows Credential Manager (hivemind_gateway / bot_token).
+# Any token-like key in this file is a startup ERROR by design.
+
+# HiveMind server the gateway talks to. Loopback only — the gateway
+# refuses to start against anything else.
+hive_base_url = "http://127.0.0.1:8001"
+
+# Longest Telegram input accepted, characters (<= 4096).
+max_text_chars = 4000
+
+# Per-user command/message rate limit per minute.
+rate_limit_per_min = 20
+
+# Gateway-owned approval expiry in seconds (WP4). On expiry the gateway
+# itself sends DENY to HiveMind. Must stay well below HiveMind's
+# auto-approve timeout — never raise it above 3600.
+approval_expiry_s = 120
+
+# Minimum seconds between editMessageText status updates (WP2).
+status_min_interval_s = 3
+
+# Telegram replay window: updates older than this are dropped.
+update_max_age_s = 60
+
+# Telegram long-poll timeout per getUpdates call.
+long_poll_timeout_s = 25
+
+# A final result longer than one message goes out as a .txt document;
+# beyond this many characters the document is truncated with a note.
+document_limit_chars = 200000

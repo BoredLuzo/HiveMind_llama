@@ -1,0 +1,18 @@
+# Gateway dependencies — pinned (brief: ARCHITECTURE).
+#
+# The gateway deliberately adds NO new dependency: the Telegram client is
+# hand-written on httpx, which is already a HiveMind core dependency
+# (requirements.txt: httpx>=0.27). Installing the gateway therefore
+# installs nothing — the opt-in promise (no install side effects until the
+# owner activates the gateway) holds.
+#
+# This file pins the versions the gateway is developed against so a future
+# drift cannot break it silently. Hashes are generated at the WP6 release
+# check together with pip-audit (needs a network download; deliberately not
+# fabricated here).
+#
+# Install (only when activating the gateway):
+#   pip install -r hivemind_gateway/requirements-gateway.txt
+httpx==0.28.1
+# optional, only for Windows Credential Manager token storage:
+#   keyring

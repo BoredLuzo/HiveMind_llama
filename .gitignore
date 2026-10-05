@@ -117,3 +117,18 @@ _tg*.txt
 _tgprobe_cid.txt
 _tgstart.txt
 _ui_img.b64
+
+# ── Telegram gateway (WP1) ────────────────────────────────────────────────
+# The REAL gateway.toml lives next to start_gateway.bat in the live dir and
+# must never be tracked, zipped or updated over. State/audit/kill-switch
+# live in %LOCALAPPDATA%\HiveMindGateway (outside every workspace) — listed
+# here as belt-and-suspenders, enforced by update.bat /XF and the
+# package_release.bat leak check.
+gateway.toml
+gateway_audit.jsonl
+gateway_audit.jsonl.*
+gateway_state.json
+gateway_state.json.corrupt
+gateway.disabled
+gateway.lock
+gateway.pid

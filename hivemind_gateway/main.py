@@ -1,0 +1,354 @@
+"""Gateway entrypoint — config, token, state, pairing, poll loop.
+
+WP1 scope: the bot runs, pairs the owner, and answers whitelisted
+commands that do not touch HiveMind. HiveMind calls (/new, /stop, runs)
+arrive with WP2 — non-pair commands answer honestly as "not in this
+build".
+
+Hard rules implemented here:
+  - token ONLY from env (HIVEMIND_TG_TOKEN) or Windows Credential Manager;
+    never from a file, never logged (redaction filter on every handler)
+  - backlog drop at startup (offset to the newest update)
+  - updates older than update_max_age_s are dropped
+  - dedupe by update_id; offset persisted BEFORE an update is processed
+    (at-most-once)
+  - unknown users: silently dropped, rate-limited log
+  - kill switch: gateway.disabled file or HIVEMIND_GATEWAY_DISABLED env
+  - exactly one gateway process per token (lock file with liveness check)
+"""
+from __future__ import annotations
+
+import asyncio
+import datetime as _dt
+import logging
+import os
+import sys
+import time
+from collections import defaultdict, deque
+
+from . import auth as gw_auth
+from . import commands as gw_commands
+from . import send as gw_send
+from . import state as gw_state
+from .config import GatewayConfig, load_gateway_config, resolve_config_path
+from .redaction import attach_redaction_to_root
+from .state import GatewayState, kill_switch_active
+from .telegram_api import TelegramApi, TelegramApiError
+
+log = logging.getLogger("hivemind_gateway")
+
+TOKEN_ENV_VAR = "HIVEMIND_TG_TOKEN"
+
+
+class StartupError(RuntimeError):
+    """Fatal, human-readable startup condition (fail fast)."""
+
+
+# -- token ----------------------------------------------------------------
+
+
+def resolve_token() -> str:
+    """Environment first, then Windows Credential Manager (keyring).
+    Never accepts a token from a file."""
+    tok = os.environ.get(TOKEN_ENV_VAR, "").strip()
+    if tok:
+        return tok
+    try:
+        import keyring  # optional dependency; guarded on purpose
+        tok = (keyring.get_password("hivemind_gateway", "bot_token") or "").strip()
+    except ImportError:
+        tok = ""
+    if tok:
+        return tok
+    raise StartupError(
+        f"no bot token: set {TOKEN_ENV_VAR} or store it in the Windows "
+        "Credential Manager under hivemind_gateway/bot_token")
+
+
+# -- single instance ------------------------------------------------------
+
+
+def _pid_alive(pid: int) -> bool:
+    """Liveness probe. NOTE: os.kill(pid, 0) is NOT a probe on Windows —
+    any sig other than CTRL_C_EVENT/CTRL_BREAK_EVENT calls
+    TerminateProcess and would KILL the other gateway. Use OpenProcess."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False,
+                                 pid)
+        if not handle:
+            return False
+        k32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def acquire_instance_lock() -> None:
+    """One gateway process per bot token. A stale lock (dead PID) is
+    replaced, a live one is fatal."""
+    p = gw_state.lock_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if p.exists():
+        try:
+            old_pid = int(p.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            old_pid = -1
+        if _pid_alive(old_pid):
+            raise StartupError(
+                f"another gateway instance seems to run (pid {old_pid}, "
+                f"lock {p}). Close it first.")
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    try:
+        fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except FileExistsError:
+        raise StartupError("gateway lock taken concurrently") from None
+
+
+# -- rate limiting --------------------------------------------------------
+
+
+class RateLimiter:
+    def __init__(self, per_min: int):
+        self._per_min = per_min
+        self._hits: dict[str, deque] = defaultdict(lambda: deque())
+
+    def allow(self, key: str, now: float | None = None) -> bool:
+        now = now if now is not None else time.time()
+        q = self._hits[key]
+        while q and now - q[0] > 60.0:
+            q.popleft()
+        if len(q) >= self._per_min:
+            return False
+        q.append(now)
+        return True
+
+    def should_log_drop(self, key: str, min_gap_s: float = 30.0) -> bool:
+        """Rate-limited logging for dropped strangers: at most one line
+        per key per min_gap_s."""
+        now = time.time()
+        key = "log:" + key
+        q = self._hits[key]
+        if q and now - q[-1] < min_gap_s:
+            return False
+        q.append(now)
+        return True
+
+
+# -- update handling ------------------------------------------------------
+
+
+class Gateway:
+    def __init__(self, api: TelegramApi, cfg: GatewayConfig,
+                 state: GatewayState):
+        self.api = api
+        self.cfg = cfg
+        self.state = state
+        self.pairing = gw_auth.PairingManager()
+        self.limiter = RateLimiter(cfg.rate_limit_per_min)
+        self.owner_id: int | None = state.owner_telegram_id
+        self._redaction = attach_redaction_to_root([os.environ.get(
+            TOKEN_ENV_VAR, "")])
+
+    # -- outbound (always via send()) ------------------------------------
+
+    async def reply(self, chat_id: str | int, text: str,
+                    reply_to_message_id: int | None = None) -> None:
+        await gw_send.send(self.api, self.owner_id, chat_id, text=text,
+                           reply_to_message_id=reply_to_message_id)
+
+    # -- commands ---------------------------------------------------------
+
+    async def handle_owner_update(self, p: gw_auth.ParsedUpdate) -> None:
+        cmd = gw_commands.command_from_message(p)
+        if cmd is None:
+            # owner non-text or forwarded: acknowledge once WP2 handles
+            # photos/steering; today: ignore quietly except a hint
+            if p.kind == "message" and not p.is_forwarded:
+                await self.reply(p.chat_id,
+                                 "Text commands only in this build "
+                                 "(photos/steering come with a later WP).",
+                                 reply_to_message_id=p.message_id)
+            return
+        name, arg = cmd
+        if name == "pair":
+            await self.cmd_pair(p, arg)
+        elif name == "start":
+            await self.reply(p.chat_id,
+                             "HiveMind gateway active. Send /help for "
+                             "commands. HiveMind runs arrive with WP2.",
+                             reply_to_message_id=p.message_id)
+        elif name == "help":
+            lines = [f"/{n} — {d}" for n, d in
+                     gw_commands.COMMAND_WHITELIST.items()]
+            await self.reply(p.chat_id, "Commands:\n" + "\n".join(lines),
+                             reply_to_message_id=p.message_id)
+        else:
+            await self.reply(p.chat_id,
+                             f"/{name} is whitelisted but not wired in this "
+                             "build (WP2/WP6). Nothing was done.",
+                             reply_to_message_id=p.message_id)
+
+    async def cmd_pair(self, p: gw_auth.ParsedUpdate, arg: str) -> None:
+        if self.owner_id is not None:
+            await self.reply(p.chat_id, "Already paired.",
+                             reply_to_message_id=p.message_id)
+            return
+        if p.chat_type != "private":
+            log.info("[PAIR] rejected: non-private chat")
+            return
+        try:
+            ok = self.pairing.verify(arg)
+        except gw_auth.PairingLocked:
+            await self.reply(p.chat_id,
+                             "Pairing locked after too many failed "
+                             "attempts. Restart the gateway on the PC.",
+                             reply_to_message_id=p.message_id)
+            return
+        except gw_auth.PairingDisabled:
+            await self.reply(p.chat_id, "Pairing is disabled.",
+                             reply_to_message_id=p.message_id)
+            return
+        except gw_auth.PairingError:
+            await self.reply(p.chat_id,
+                             "Wrong or expired code. The code is printed "
+                             "on the gateway console.",
+                             reply_to_message_id=p.message_id)
+            return
+        if not ok:  # pragma: no cover - verify returns True or raises
+            return
+        self.owner_id = p.from_id
+        self.state.set_owner(
+            p.from_id,
+            _dt.datetime.now().astimezone().isoformat(timespec="seconds"))
+        self.state.save()
+        log.warning("[PAIR] owner bound (telegram id %s)", p.from_id)
+        await self.reply(p.chat_id,
+                         "Paired. This Telegram account is now the owner.",
+                         reply_to_message_id=p.message_id)
+
+
+def _is_stale(p: gw_auth.ParsedUpdate, max_age_s: int) -> bool:
+    if p.date is None:
+        return False
+    return time.time() - p.date > max_age_s
+
+
+async def process_update(gw: Gateway, raw: dict) -> None:
+    p = gw_auth.parse_update(raw)
+    if p is None:
+        return
+    verdict = gw_auth.classify(p, gw.owner_id)
+    if verdict == "owner":
+        if _is_stale(p, gw.cfg.update_max_age_s):
+            log.info("[DROP] stale update %s (%s)", p.update_id, p.kind)
+            return
+        await gw.handle_owner_update(p)
+        return
+    # everyone else: silent. rate-limited log only, NEVER an answer.
+    if gw.limiter.should_log_drop(str(p.from_id)):
+        log.info("[DROP] %s from=%s chat_type=%s kind=%s",
+                 verdict, p.from_id, p.chat_type, p.kind)
+
+
+async def run() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    cfg_path = resolve_config_path(start=os.getcwd())
+    cfg = GatewayConfig()
+    if cfg_path is not None:
+        cfg = load_gateway_config(cfg_path)
+        log.info("config loaded from %s", cfg_path)
+    token = resolve_token()
+    acquire_instance_lock()
+    state = GatewayState()
+    api = TelegramApi(token)
+    gw = Gateway(api, cfg, state)
+
+    if kill_switch_active():
+        log.warning("kill switch active (gateway.disabled or env) — exiting")
+        return 0
+
+    if gw.owner_id is None:
+        code = gw.pairing.start_window()
+        print("=" * 60, file=sys.stderr)
+        print("  PAIRING CODE (valid 5 min, one-time):", file=sys.stderr)
+        print(f"      {code}", file=sys.stderr)
+        print("  Send:  /pair <code>   from your Telegram account",
+              file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+    else:
+        log.warning("owner already bound (%s) — pairing disabled",
+                    gw.owner_id)
+
+    # BACKLOG DROP: jump to the newest update, discard everything older.
+    try:
+        newest = await api.get_updates(offset=-1, timeout_s=0)
+    except TelegramApiError as exc:
+        log.error("getUpdates failed at startup: %s", exc)
+        return 1
+    if newest:
+        state.set_offset(newest[-1]["update_id"] + 1)
+        state.save()
+        log.info("backlog dropped: starting at offset %s", state.offset)
+
+    try:
+        while True:
+            if kill_switch_active():
+                log.warning("kill switch activated — stopping")
+                break
+            try:
+                updates = await api.get_updates(offset=state.offset,
+                                                timeout_s=cfg.long_poll_timeout_s)
+            except TelegramApiError as exc:
+                if exc.retry_after:
+                    await asyncio.sleep(exc.retry_after + 1)
+                    continue
+                log.error("getUpdates failed: %s — retrying in 5s", exc)
+                await asyncio.sleep(5)
+                continue
+            for raw in updates:
+                uid = raw.get("update_id")
+                if not isinstance(uid, int):
+                    continue
+                # AT-MOST-ONCE: persist offset BEFORE processing.
+                state.set_offset(uid + 1)
+                if state.mark_seen(uid):
+                    state.save()
+                    try:
+                        await process_update(gw, raw)
+                    except TelegramApiError as exc:
+                        # a failed reply must not kill the poll loop
+                        log.error("update %s handling failed: %s", uid, exc)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        log.warning("gateway stopped")
+    finally:
+        await api.close()
+    return 0
+
+
+def main() -> int:
+    try:
+        return asyncio.run(run())
+    except StartupError as exc:
+        print(f"startup error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

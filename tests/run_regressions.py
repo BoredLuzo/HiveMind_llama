@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Master regression runner.
 
 Runs all standalone regression suites (tests/test_*.py) in one go and forces
@@ -91,6 +90,14 @@ SUITES = [
     ("browser_fileserve",      "tests/test_browser_fileserve.py",               30),
     ("partial_cut",            "tests/test_partial_cut.py",                     30),
     ("memory_routing",         "tests/test_memory_routing.py",                  30),
+    ("gateway_auth",           "tests/test_gateway_auth.py",                    60),
+    ("gateway_send",           "tests/test_gateway_send.py",                    60),
+    ("gateway_redaction",      "tests/test_gateway_redaction.py",               60),
+    ("gateway_state",          "tests/test_gateway_state.py",                   60),
+    ("gateway_config",         "tests/test_gateway_config.py",                  60),
+    ("gateway_render",         "tests/test_gateway_render.py",                  60),
+    ("gateway_lint_gate",      "tests/test_gateway_lint_gate.py",               60),
+    ("gateway_state_path",     "tests/test_gateway_state_path.py",              60),
 ]
 
 
