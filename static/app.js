@@ -11669,6 +11669,17 @@ function _updateDuoRoleStatus(elId, label, model) {
                + ' ctx context temperature temp output-budget budget tokens tok model thinking vision';
         _push(pid, nm + ' (model, ctx, temp, budget)', card, 'Agent card', null, kw);
       });
+      // SOUL SUB-TABS (2026-10-05, user): the "Tokens" sub-tab in the Soul
+      // panel shows Token Statistics — search should find it by name.
+      panel.querySelectorAll('#soul-sub-tabs button').forEach(function(btn) {
+        var lbl = (btn.textContent || '').trim();
+        if (lbl.length < 2) return;
+        _push(pid, 'Soul — ' + lbl, btn, 'Soul tab',
+              function(b) {
+                _switchPanel('soul');
+                setTimeout(function() { b.click(); }, 150);
+              }, 'soul ' + lbl.toLowerCase());
+      });
       panel.querySelectorAll('button[title]').forEach(function(b) {
         var t = (b.title || '').trim();
         // SKIP utility buttons (Apply/Save/Load/Close) - noise in a search
