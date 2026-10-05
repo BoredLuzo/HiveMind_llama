@@ -494,8 +494,12 @@ class RunBridge:
         # this restores the documented "gated tools are auto-denied from
         # the phone" invariant even when the engine-global toggle
         # (duo_action_approval_enabled, default false) is off. The body
-        # can only raise the gate to ON, never lower it.
-        out["duo_action_approval_enabled"] = True
+        # can only raise the gate to ON, never lower it. 2026-10-05: the
+        # owner can opt out for assistant-style use (phone runs that
+        # SHOULD write files) via gateway.toml force_approval_gate=false —
+        # with it off, the engine-global toggle alone governs the gate.
+        if self.cfg.force_approval_gate:
+            out["duo_action_approval_enabled"] = True
         return out
 
     def _pending(self) -> dict | None:

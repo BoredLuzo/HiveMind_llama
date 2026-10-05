@@ -27,6 +27,11 @@ class GatewayConfig:
     # the feature on deliberately.
     telegram_enabled: bool = False
     hive_base_url: str = "http://127.0.0.1:8001"
+    # G1 force: send duo_action_approval_enabled=true with every phone run
+    # so gated tools (shell/write/git) are auto-denied from the phone.
+    # false = assistant-style use (phone runs may write files); the
+    # engine-global duo_action_approval_enabled toggle alone governs then.
+    force_approval_gate: bool = True
     max_text_chars: int = 4000          # longest Telegram input we accept
     rate_limit_per_min: int = 20        # per user, in-memory sliding window
     approval_expiry_s: int = 120        # gateway-owned deny expiry (WP4)

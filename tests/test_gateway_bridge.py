@@ -754,6 +754,18 @@ async def t_audit_fixes():
     note = await br_g2.mirror_send("1")
     check("G2: duplicate answered honestly", "already answered" in note)
 
+    # force_approval_gate=false (assistant-style opt-out): the key is
+    # simply not sent; the engine-global toggle governs alone then
+    from hivemind_gateway.config import GatewayConfig as _GC
+    br_g1b, st_g1b, ms_g1b = _mk("gwbr_g1b_", FakeHive(_run_events()))
+    br_g1b.cfg = _GC(force_approval_gate=False)
+    check("G1 opt-out: gate key not sent",
+          "duo_action_approval_enabled"
+          not in br_g1b._stream_overrides())
+    br_g1b.cfg = _GC(force_approval_gate=True)
+    check("G1 opt-out: default still forces",
+          br_g1b._stream_overrides().get("duo_action_approval_enabled") is True)
+
     # G8: steering cannot bypass the max_text_chars cap
     await br_g2.mirror_send("x" * 5000)
     check("G8: steering capped at max_text_chars",

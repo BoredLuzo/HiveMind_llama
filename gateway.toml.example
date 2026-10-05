@@ -20,6 +20,13 @@ telegram_enabled = false
 # refuses to start against anything else.
 hive_base_url = "http://127.0.0.1:8001"
 
+# APPROVAL GATE FORCE — true (default): every phone run carries
+# duo_action_approval_enabled=true, so shell/write/git calls from the
+# phone are auto-DENIED. Set false ONLY for assistant-style use where
+# phone runs SHOULD change files: the engine's global
+# duo_action_approval_enabled toggle (UI, Agentic tab) governs alone then.
+# force_approval_gate = false
+
 # Longest Telegram input accepted, characters (<= 4096).
 max_text_chars = 4000
 
