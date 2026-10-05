@@ -130,6 +130,30 @@ finally:
 gw_main.ensure_enabled(load_gateway_config(_write("telegram_enabled = true\n")))
 check("toml true enables", True)
 
+
+# ensure_enabled_config (2026-10-05 universal-user setup): missing /
+# disabled / already-enabled gateway.toml for the setup-token flow.
+from hivemind_gateway.config import ensure_enabled_config
+
+_t = Path(tempfile.mkdtemp(prefix="gwcfg_ens_"))
+msg = ensure_enabled_config(_t)
+check("ensure: missing file written", "written" in msg
+      and (_t / "gateway.toml").read_text().strip()
+      == "telegram_enabled = true")
+(_t / "gateway.toml").write_text(
+    'hive_base_url = "http://127.0.0.1:8001"\n'
+    'telegram_enabled = false\n',
+    encoding="utf-8")
+msg2 = ensure_enabled_config(_t)
+check("ensure: disabled flipped, keys kept",
+      "-> true" in msg2
+      and 'hive_base_url = "http://127.0.0.1:8001"' in
+      (_t / "gateway.toml").read_text()
+      and "telegram_enabled = true" in (_t / "gateway.toml").read_text())
+msg3 = ensure_enabled_config(_t)
+check("ensure: already enabled is a noop", "already enabled" in msg3)
+
+
 print()
 print(f"passed={passed} failed={failed}")
 sys.exit(0 if failed == 0 else 1)

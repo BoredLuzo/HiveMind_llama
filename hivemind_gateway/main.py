@@ -647,8 +647,9 @@ def ensure_enabled(cfg: GatewayConfig) -> None:
     raise StartupError(
         "gateway is DISABLED (fail-closed master switch). Turn it on in "
         "ONE of these places:\n"
-        "  1. gateway.toml next to the gateway:  telegram_enabled = true\n"
-        "  2. environment:  $env:HIVEMIND_GATEWAY_ENABLED = \"1\"\n"
+        "  1. one-time setup (writes it for you):  start_gateway.bat setup\n"
+        "  2. gateway.toml next to the gateway:  telegram_enabled = true\n"
+        "  3. environment:  $env:HIVEMIND_GATEWAY_ENABLED = \"1\"\n"
         "Nothing polls Telegram while the switch is off.")
 
 
@@ -869,7 +870,13 @@ def _setup_token_cli() -> int:
     except StartupError as exc:
         print(f"setup failed: {exc}", file=sys.stderr)
         return 2
+    from .config import ensure_enabled_config
+    try:
+        cfg_note = ensure_enabled_config(Path.cwd())
+    except OSError as exc:
+        cfg_note = f"gateway.toml write failed ({exc}) — enable it manually"
     print(f"OK — token validated and stored. Bot: @{username}")
+    print(cfg_note)
     print("Start the gateway with start_gateway.bat (double-click) or:")
     print("  python -m hivemind_gateway.main")
     return 0

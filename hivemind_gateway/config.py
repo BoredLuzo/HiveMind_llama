@@ -71,6 +71,31 @@ def _check_no_secrets(data: dict, where: str) -> None:
             _check_no_secrets(value, where)
 
 
+def ensure_enabled_config(directory: str | Path) -> str:
+    """Setup-time convenience (universal users): make sure gateway.toml
+    in `directory` carries telegram_enabled = true, so the very next
+    start works after `setup-token`. Returns what was done; existing
+    files keep every other key (only the master-switch line is added or
+    flipped). Never touches secrets — the token stays in the vault."""
+    import re
+    p = Path(directory) / DEFAULT_CONFIG_NAME
+    if p.exists():
+        text = p.read_text(encoding="utf-8")
+        pattern = re.compile(r"(?m)^(\s*)telegram_enabled\s*=\s*(true|false)\s*$")
+        if pattern.search(text):
+            new_text = pattern.sub(
+                lambda m: m.group(1) + "telegram_enabled = true", text)
+            if new_text != text:
+                p.write_text(new_text, encoding="utf-8", newline="")
+                return f"{p.name}: telegram_enabled -> true"
+            return f"{p.name}: already enabled"
+        p.write_text(text.rstrip("\n") + "\n\ntelegram_enabled = true\n",
+                     encoding="utf-8", newline="")
+        return f"{p.name}: telegram_enabled = true appended"
+    p.write_text("telegram_enabled = true\n", encoding="utf-8", newline="")
+    return f"{p.name}: written (telegram_enabled = true)"
+
+
 def load_gateway_config(path: str | Path) -> GatewayConfig:
     """Parse + validate a gateway.toml. Raises (ValueError, OSError,
     tomllib.TOMLDecodeError) — the caller decides fail-fast vs default."""
