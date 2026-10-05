@@ -11605,19 +11605,11 @@ function _updateDuoRoleStatus(elId, label, model) {
     document.querySelectorAll('.panel').forEach(function(panel) {
       var pid = (panel.id || '').replace(/^p-/, '');
       if (!PANEL_LABELS[pid]) return;
-      var _vis = function(el) {
-        // generic scan: skip controls hidden by mode/submode UNLESS they are
-        // the allowlisted duo-ctx wrappers above. Hidden demo blocks (e.g.
-        // sequential/parallel without backend) must not surface.
-        var n = el;
-        while (n && n !== panel && n !== document.body) {
-          if (n.style && n.style.display === 'none') return false;
-          n = n.parentElement;
-        }
-        return !!(el.offsetParent || el.getClientRects().length) || true;
-      };
+      // MODE-INDEPENDENT INDEX (2026-10-05, user screenshots): results must
+      // not depend on the active mode - hidden features are exactly the ones
+      // the search exists to surface. Reveal-on-click clears the wrapper.
       panel.querySelectorAll('.sec').forEach(function(s) {
-        if (!_vis(s)) return;
+        if (_dead(s)) return;
         _push(pid, (s.textContent || '').trim(), s, 'Section');
       });
       panel.querySelectorAll('.cfg-card').forEach(function(card) {
@@ -11648,16 +11640,32 @@ function _updateDuoRoleStatus(elId, label, model) {
         if (!nm) return;
         _push(pid, 'Agent: ' + nm, card, 'Agent card', null, 'agent modell model');
         card.querySelectorAll('.fl').forEach(function(fl) {
-          var lbl = (fl.textContent || '').trim().split('\n')[0].slice(0, 30);
-          if (/context|temperature|output-budget|thinking|model/i.test(lbl))
-            _push(pid, nm + ' — ' + lbl, fl, 'Agent setting', null,
-                 'agent ' + nm + ' ' + (lbl.toLowerCase().indexOf('context') >= 0 ? 'ctx kontext' : lbl.toLowerCase()));
+          var _l = (fl.textContent || '').trim().split('\n')[0].toLowerCase().slice(0, 30);
+          if (/context|temperature|output-budget|thinking|model/i.test(_l))
+            _push(pid, nm + ' — ' + _l, fl, 'Agent setting', null,
+                 'agent ' + nm + ' ' + _l + (/context/i.test(_l) ? ' ctx kontext' : '')
+                 + (/output-budget/i.test(_l) ? ' tokens tok' : ''));
         });
       });
       panel.querySelectorAll('button[title]').forEach(function(b) {
-        if (!_vis(b)) return;
         _push(pid, (b.title || '').trim(), b, 'Button');
       });
+    });
+    // TABS AS ENTRIES (2026-10-05, user: 'soul, tokens, chats etc sollen
+    // auch in die suche') - the seven panels are searchable destinations
+    // with curated keywords; the click lands on the tab itself.
+    [['agents', 'AGENTS panel', 'agents planner coder duo execution settings vision'],
+     ['presets', 'PRESETS panel', 'presets prompts save load'],
+     ['configs', 'CONFIGS panel', 'configs settings toggles options rollup'],
+     ['memory', 'MEMORY panel', 'memory long-term notes'],
+     ['soul', 'SOUL panel', 'soul personality evolution'],
+     ['models', 'MODELS panel', 'models vram tokens llama download install'],
+     ['chats', 'CHATS panel', 'chats history sizes tokens']].forEach(function(d) {
+      var btn = null;
+      document.querySelectorAll('.tab').forEach(function(b) {
+        if (b.dataset && b.dataset.p === d[0]) btn = b;
+      });
+      _push(d[0], d[1], btn, 'Tab', null, d[2]);
     });
     _push(null, 'New Chat', null, 'Action',
          function() { var b = Array.from(document.querySelectorAll('button'))

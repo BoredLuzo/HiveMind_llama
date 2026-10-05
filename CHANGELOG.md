@@ -55,10 +55,12 @@ one-file-per-chat fork guard with rev-based adoption, a 200 MB save
 brake, concurrent-writer coverage.
 
 Added in the 2026-10-05 round:
-- feature search palette (Ctrl+K in the web UI): indexes every panel's
-  sections, toggles, agent cards and settings fields (alias ctx ->
-  context); a click jumps to the setting and reveals mode-hidden
-  wrappers - the startup banner shows a TIP line for it
+- feature search palette (/ or Ctrl+K in the web UI): indexes every
+  panel's sections, toggles, agent cards, settings fields (alias ctx ->
+  context) and the seven tabs themselves (soul, tokens -> token budgets,
+  chats...); results are mode-independent, a click jumps to the setting
+  and reveals mode-hidden wrappers - the startup banner shows a TIP
+  line for it
 - chat list shows each chat's disk size (json + blobs) in the meta line
 - steering with screenshots: /steer accepts images (max 4), injected as
   content parts at the next round boundary - the workaround for images

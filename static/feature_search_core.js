@@ -17,6 +17,8 @@
     ctx: 'context',
     kontext: 'context',
     temp: 'temperature',
+    token: 'tok',
+    tokens: 'tok',
     bild: 'image',
     foto: 'image',
     vram: 'vram'
