@@ -124,7 +124,7 @@ token; stop that other instance and start again.
 
 ## Stopping and emergencies
 
-- **Stop the gateway:** Ctrl+C in its shell.
+- **Stop the gateway:** Ctrl+C in its shell or `start_gateway.bat stop` in another window (also stops a detached/hidden instance). The installer can set the gateway up as step 7.
 - **Kill switch:** create a file named `gateway.disabled` in
   `%LOCALAPPDATA%\HiveMindGateway` and the gateway refuses to start or
   carry on, no matter what the phone sends.

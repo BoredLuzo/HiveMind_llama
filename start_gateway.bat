@@ -31,6 +31,12 @@ if /I "%~1"=="setup" (
     pause
     exit /b 0
 )
+if /I "%~1"=="stop" (
+    echo [..] Stopping the running gateway instance ...
+    "%PY%" -m hivemind_gateway.main stop
+    pause
+    exit /b 0
+)
 echo [..] Starting Telegram gateway (Ctrl+C to stop) ...
 "%PY%" -m hivemind_gateway.main
 set "GW_EXIT=%ERRORLEVEL%"

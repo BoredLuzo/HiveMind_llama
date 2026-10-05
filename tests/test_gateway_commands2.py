@@ -468,6 +468,47 @@ async def t_f4_callback():
           any(c == "cb-1" for c, *_ in getattr(api, "callback_answers", [])))
 
 
+# stop verb: stale/recycled locks clear safely; a live match is killed
+# via the injected killer (never a real kill in tests)
+def t_stop_verb():
+    import json
+    import os
+    import hivemind_gateway.main as M
+    import hivemind_gateway.state as S
+    tmp = Path(tempfile.mkdtemp(prefix="gwcmd_stopv_"))
+    lock = tmp / "gateway.lock"
+    orig = S.lock_path
+    S.lock_path = lambda: lock  # type: ignore[assignment]
+    try:
+        out = M.stop_instance()
+        check("stop: no lock -> nothing to do", "No gateway lock" in out)
+
+        lock.write_text('{"pid": 999999999, "birth": 1}', encoding="utf-8")
+        out = M.stop_instance()
+        check("stop: dead pid -> stale cleared", "Stale lock" in out
+              and not lock.exists())
+
+        live_pid = os.getpid()
+        real_birth = M._process_birth(live_pid)
+        lock.write_text(json.dumps(
+            {"pid": live_pid, "birth": (real_birth or 0) - 5,
+             "cwd": "somewhere"}), encoding="utf-8")
+        killed = []
+        out = M.stop_instance(killer=lambda p: killed.append(p))
+        check("stop: recycled pid NOT killed, cleared",
+              killed == [] and not lock.exists())
+
+        lock.write_text(json.dumps(
+            {"pid": live_pid, "birth": real_birth, "cwd": "somewhere"}),
+            encoding="utf-8")
+        out = M.stop_instance(killer=lambda p: killed.append(p))
+        check("stop: live match killed + lock removed",
+              killed == [live_pid] and not lock.exists()
+              and "somewhere" in out)
+    finally:
+        S.lock_path = orig  # type: ignore[assignment]
+
+
 async def _main():
     await t_new()
     await t_status_verbose()
@@ -480,6 +521,7 @@ async def _main():
     await t_g8_order()
     await t_g9_edits()
     await t_f4_callback()
+    t_stop_verb()
     await t_help()
     await t_setup_token()
 

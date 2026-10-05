@@ -9,12 +9,13 @@ echo  ^|    Full setup: Python, packages, GPU backend                ^|
 echo  +=============================================================+
 echo.
 echo  What this does (you will be asked before every step):
-echo    [1/6] Python            - set up python environment
-echo    [2/6] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
-echo    [3/6] llama.cpp backend - downloaded for the chosen backend
-echo    [4/6] Desktop shortcut  - optional, with the HiveMind icon
-echo    [5/6] Models            - downloaded into your chosen folder
-echo    [6/6] SearXNG           - optional web search (requires Docker)
+echo    [1/7] Python            - set up python environment
+echo    [2/7] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
+echo    [3/7] llama.cpp backend - downloaded for the chosen backend
+echo    [4/7] Desktop shortcut  - optional, with the HiveMind icon
+echo    [5/7] Models            - downloaded into your chosen folder
+echo    [6/7] SearXNG           - optional web search (requires Docker)
+echo    [7/7] Telegram         - optional: control HiveMind from your phone
 echo.
 
 choice /c YN /n /m "Install HiveMind now? [Y/N] "
@@ -27,10 +28,10 @@ if errorlevel 2 (
 echo.
 
 REM ======================================================
-REM [1/6] Python
+REM [1/7] Python
 REM ======================================================
 echo  ==========================================================
-echo   [1/6] Setting up Python
+echo   [1/7] Setting up Python
 echo  ==========================================================
 echo.
 
@@ -153,10 +154,10 @@ echo  Press any key to continue... & pause >nul & exit /b 1
 :py_ok
 
 REM ======================================================
-REM [2/6] GPU backend (auto-detection)
+REM [2/7] GPU backend (auto-detection)
 REM ======================================================
 echo  ==========================================================
-echo   [2/6] GPU backend
+echo   [2/7] GPU backend
 echo  ==========================================================
 echo.
 echo   [V] Vulkan  - AMD / Intel GPUs
@@ -232,10 +233,10 @@ if errorlevel 1 (
 echo.
 
 REM ======================================================
-REM [3/6] llama.cpp backend
+REM [3/7] llama.cpp backend
 REM ======================================================
 echo  ==========================================================
-echo   [3/6] llama.cpp backend
+echo   [3/7] llama.cpp backend
 echo  ==========================================================
 echo.
 echo   Target: %~dp0llama\
@@ -276,13 +277,13 @@ if defined HAVE_LLAMA (
 echo.
 
 REM ======================================================
-REM [4/6] Desktop shortcut (optional, HiveMind icon)
+REM [4/7] Desktop shortcut (optional, HiveMind icon)
 REM SHORTCUT-FIRST (2026-09-12): asked BEFORE the long network steps,
 REM so a fresh install always gets the icon even if the user aborts
 REM during model downloads.
 REM ======================================================
 echo  ==========================================================
-echo   [4/6] Desktop shortcut
+echo   [4/7] Desktop shortcut
 echo  ==========================================================
 echo.
 echo   Creates "HiveMind.lnk" on the Desktop that starts
@@ -295,10 +296,10 @@ call create_shortcut.bat
 echo.
 
 REM ======================================================
-REM [5/6] Models
+REM [5/7] Models
 REM ======================================================
 echo  ==========================================================
-echo   [5/6] Models
+echo   [5/7] Models
 echo  ==========================================================
 echo.
 REM No folder prompt here - setup_models.bat asks ONCE (download target;
@@ -309,11 +310,11 @@ goto searxng_step
 :searxng_step
 
 REM ======================================================
-REM [6/6] SearXNG (optional)
+REM [6/7] SearXNG (optional)
 REM ======================================================
 echo.
 echo  ==========================================================
-echo   [6/6] SearXNG (web search, requires Docker Desktop)
+echo   [6/7] SearXNG (web search, requires Docker Desktop)
 echo  ==========================================================
 echo.
 where docker >nul 2>&1
@@ -326,6 +327,22 @@ if errorlevel 1 (
     if !errorlevel! equ 1 call searxng.bat install %SEARXNG_PORT%
 )
 
+echo.
+
+echo  ==========================================================
+echo   [7/7] Telegram gateway (optional)
+echo  ==========================================================
+echo.
+echo   Control HiveMind from your phone via your own Telegram bot.
+echo   You need a bot token from @BotFather in Telegram (2-3 min)
+echo   and two-step verification ON for your Telegram account.
+echo   The gateway is OFF until you set it up - skipping is fine
+echo   (set it up anytime: start_gateway.bat setup).
+echo.
+choice /c YN /n /m "Set up the Telegram gateway now? [Y/N] "
+if errorlevel 2 goto tg_done
+call start_gateway.bat setup
+:tg_done
 echo.
 
 echo  ==============================================================

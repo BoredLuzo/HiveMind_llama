@@ -187,7 +187,12 @@ def acquire_instance_lock() -> None:
         if _lock_holder_is_live(record):
             raise StartupError(
                 f"another gateway instance seems to run (pid "
-                f"{record.get('pid')}, lock {p}). Close it first.")
+                f"{record.get('pid')}, started from "
+                f"{record.get('cwd') or 'unknown folder'}).\n"
+                f"  Stop it:  start_gateway.bat stop\n"
+                f"  (or the HiveMind UI: Telegram Gateway card -> "
+                f"Process -> Stop)\n"
+                f"  Lock: {p}")
         log.info("[LOCK] stale gateway lock replaced (pid %s)",
                  record.get("pid"))
         try:
@@ -195,13 +200,65 @@ def acquire_instance_lock() -> None:
         except OSError:
             pass
     birth = _process_birth(os.getpid())
-    payload = json.dumps({"pid": os.getpid(), "birth": birth})
+    payload = json.dumps({"pid": os.getpid(), "birth": birth,
+                          "cwd": os.getcwd()})
     try:
         fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(payload)
     except FileExistsError:
         raise StartupError("gateway lock taken concurrently") from None
+
+
+def stop_instance(killer=None) -> str:
+    """CLI 'stop': stop the recorded instance and clear the lock. The
+    birth-stamp check makes sure a recycled pid is never killed (same
+    guard as acquire_instance_lock). `killer` is injectable for tests."""
+    import json
+    if killer is None:
+        import subprocess
+
+        def killer(pid: int) -> None:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True)
+    p = gw_state.lock_path()
+    if not p.exists():
+        return ("No gateway lock found — no instance is recorded as "
+                "running. Nothing to stop.")
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(rec, dict):
+            raise ValueError
+    except (OSError, ValueError):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        return "Lock file was unreadable — removed. You can start now."
+    pid = rec.get("pid")
+    if not isinstance(pid, int) or pid <= 0 or not _pid_alive(pid):
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        return (f"Stale lock (pid {pid} is gone) — removed. "
+                "You can start now.")
+    real = _process_birth(pid)
+    stored = rec.get("birth")
+    if stored is not None and real is not None and real != stored:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        return (f"Stale lock (pid {pid} was recycled by another "
+                "process) — removed. You can start now.")
+    killer(pid)
+    try:
+        p.unlink()
+    except OSError:
+        pass
+    return (f"Gateway instance stopped (pid {pid}, from "
+            f"{rec.get('cwd') or 'unknown folder'}).")
 
 
 # -- rate limiting --------------------------------------------------------
@@ -785,6 +842,9 @@ def _setup_token_cli() -> int:
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "setup-token":
         return _setup_token_cli()
+    if len(sys.argv) > 1 and sys.argv[1] == "stop":
+        print(stop_instance())
+        return 0
     try:
         return asyncio.run(run())
     except StartupError as exc:
