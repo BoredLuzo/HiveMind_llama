@@ -11675,9 +11675,9 @@ function _updateDuoRoleStatus(elId, label, model) {
         var lbl = (btn.textContent || '').trim();
         if (lbl.length < 2) return;
         _push(pid, 'Soul — ' + lbl, btn, 'Soul tab',
-              function(b) {
+              function() {
                 _switchPanel('soul');
-                setTimeout(function() { b.click(); }, 150);
+                setTimeout(function() { btn.click(); }, 150);
               }, 'soul ' + lbl.toLowerCase());
       });
       panel.querySelectorAll('button[title]').forEach(function(b) {
