@@ -270,25 +270,26 @@ class Gateway:
                              reply_to_message_id=p.message_id)
             return
         if p.chat_type != "private":
-            log.info("[PAIR] rejected: non-private chat")
+            log.info("[PAIR] rejected: non-private chat from=%s", p.from_id)
             return
         try:
             ok = self.pairing.verify(arg)
         except gw_auth.PairingLocked:
-            await self.reply(p.chat_id,
-                             "Pairing locked after too many failed "
-                             "attempts. Restart the gateway on the PC.",
-                             reply_to_message_id=p.message_id)
+            # NO reply to an unpaired sender: until the owner is bound,
+            # everyone is a stranger (brief: "No answer to strangers").
+            # The console is the pairing interface — it shows attempts.
+            log.warning("[PAIR] LOCKED — restart the gateway for a fresh "
+                        "window (sender=%s)", p.from_id)
             return
         except gw_auth.PairingDisabled:
-            await self.reply(p.chat_id, "Pairing is disabled.",
-                             reply_to_message_id=p.message_id)
+            log.info("[PAIR] attempt while already paired (sender=%s)",
+                     p.from_id)
             return
         except gw_auth.PairingError:
-            await self.reply(p.chat_id,
-                             "Wrong or expired code. The code is printed "
-                             "on the gateway console.",
-                             reply_to_message_id=p.message_id)
+            log.warning("[PAIR] failed attempt (sender=%s, %d/%d) — "
+                        "code wrong or expired",
+                        p.from_id, self.pairing.failed_attempts,
+                        gw_auth.MAX_FAILED_ATTEMPTS)
             return
         if not ok:  # pragma: no cover - verify returns True or raises
             return
@@ -370,6 +371,22 @@ async def process_update(gw: Gateway, raw: dict) -> None:
             log.info("[DROP] owner callback (approvals arrive with WP4)")
         else:
             await gw.start_owner_run(p)
+        return
+    if verdict == "pair_window":
+        # Unpaired: the ONLY thing anyone may do here is /pair with the
+        # one-time console code. Everything else is silently dropped —
+        # no answers to strangers, even before an owner exists.
+        if p.is_forwarded or _is_stale(p, gw.cfg.update_max_age_s):
+            log.info("[PAIR] dropped (forwarded or stale) from=%s",
+                     p.from_id)
+            return
+        cmd = gw_commands.command_from_message(p)
+        if cmd and cmd[0] == "pair":
+            log.info("[PAIR] attempt from=%s", p.from_id)
+            await gw.handle_owner_update(p)
+        elif gw.limiter.should_log_drop(str(p.from_id)):
+            log.info("[DROP] %s from=%s (only /pair accepted while "
+                     "unpaired)", verdict, p.from_id)
         return
     # everyone else: silent. rate-limited log only, NEVER an answer.
     if gw.limiter.should_log_drop(str(p.from_id)):

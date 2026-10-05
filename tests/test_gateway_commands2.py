@@ -203,12 +203,46 @@ async def t_recover():
           st.data["open_approvals"] == {})
 
 
+# ── pair_window flow (integration: the path a real unpaired run hits) ──
+async def t_pair_flow():
+    gw, st, api = _gw("gwcmd_pair_")
+    gw.owner_id = None                      # UNPAIRED — the real first start
+    code = gw.pairing.start_window()
+
+    # a non-pair message while unpaired: silently dropped, no answer
+    await process_update(gw, _msg("hello bot", 20))
+    check("unpaired non-pair dropped silently", api.sent == [])
+
+    # /pair with the console code -> owner bound, pairing disabled
+    await process_update(gw, _msg(f"/pair {code}", 21))
+    check("pair_window /pair binds owner", gw.owner_id == OWNER)
+    check("owner persisted in state", st.owner_telegram_id == OWNER)
+    check("pairing disabled after success", gw.pairing.enabled is False)
+    check("confirmation sent", any("Paired" in t for _, t in api.sent))
+
+    # /pair again after binding: answered, nothing changes
+    await process_update(gw, _msg("/pair WHATEVER", 22))
+    check("post-pair /pair harmless", gw.owner_id == OWNER
+          and any("Already paired" in t for _, t in api.sent))
+
+    # wrong code from an unpaired gateway: attempt counts, NO answer goes
+    # out (brief: no answer to strangers — even in the pair window)
+    gw2, st2, api2 = _gw("gwcmd_pair2_")
+    gw2.owner_id = None
+    gw2.pairing.start_window()
+    await process_update(gw2, _msg("/pair WRONGCODE1", 23))
+    check("wrong code stays SILENT", api2.sent == [])
+    check("wrong code counted", gw2.pairing.failed_attempts == 1)
+    check("still unpaired", gw2.owner_id is None)
+
+
 async def _main():
     await t_new()
     await t_status_verbose()
     await t_run_route()
     await t_rate_limit()
     await t_recover()
+    await t_pair_flow()
 
 asyncio.run(_main())
 print()
