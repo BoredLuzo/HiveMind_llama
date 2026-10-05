@@ -27,6 +27,8 @@ import time
 from collections import defaultdict, deque
 from pathlib import Path
 
+from httpx import HTTPError
+
 from . import auth as gw_auth
 from . import commands as gw_commands
 from . import send as gw_send
@@ -35,6 +37,7 @@ from .bridge import RunBridge
 from .config import GatewayConfig, load_gateway_config, resolve_config_path
 from .hive_client import HiveClient, HiveUnreachable
 from .redaction import attach_redaction_to_root
+from .send import PolicyViolation
 from .state import GatewayState, kill_switch_active
 from .telegram_api import TelegramApi, TelegramApiError
 
@@ -583,9 +586,13 @@ async def run() -> int:
                     state.save()
                     try:
                         await process_update(gw, raw)
-                    except TelegramApiError as exc:
-                        # a failed reply must not kill the poll loop
-                        log.error("update %s handling failed: %s", uid, exc)
+                    except (TelegramApiError, HiveUnreachable, HTTPError,
+                            OSError, ValueError, PolicyViolation) as exc:
+                        # ONE broken update must never kill the poll loop
+                        # (realrun bug #4: a raw ConnectError did exactly
+                        # that). Log loudly, keep polling.
+                        log.error("update %s handling failed: %s: %s",
+                                  uid, type(exc).__name__, exc)
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.warning("gateway stopped")
     finally:

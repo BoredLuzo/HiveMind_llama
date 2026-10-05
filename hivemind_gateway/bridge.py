@@ -18,9 +18,10 @@ send() (the owner choke point).
 """
 from __future__ import annotations
 
+import logging
 import time
 
-import logging
+from httpx import HTTPError
 
 from . import render
 from .hive_client import HiveUnreachable
@@ -128,16 +129,15 @@ class RunBridge:
 
     async def start_text_run(self, q: str) -> str:
         """Returns the final chat note (for tests); sends everything to the
-        phone itself. Never raises to the caller."""
+        phone itself. Never raises to the caller. httpx.HTTPError is
+        caught as belt-and-braces — hive_client normally wraps transport
+        failures into HiveUnreachable (realrun bug #4)."""
         try:
             return await self._start_text_run_inner(q)
-        except HiveUnreachable as exc:
+        except (HiveUnreachable, HTTPError, OSError) as exc:
             self._clear_run()
             return await self._fail(f"🔌 HiveMind nicht erreichbar "
                                     f"(Offline?): {exc}")
-        except OSError as exc:
-            self._clear_run()
-            return await self._fail(f"❌ Netzwerkfehler: {exc}")
 
     async def _fail(self, text: str) -> str:
         await self.ms.send_message(text)

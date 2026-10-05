@@ -9,6 +9,8 @@ error, offline), splitting, .txt document on >3 chunks, run cleanup.
 """
 import asyncio
 import sys
+
+import httpx
 import tempfile
 import time
 from pathlib import Path
@@ -221,6 +223,31 @@ async def t_errors():
     note3 = await br3.start_text_run("q")
     check("offline readable", "nicht erreichbar" in note3)
     check("offline cleared run", st3.data["active_run"] is None)
+
+    # realrun bug #4: RAW httpx errors (not wrapped by the client) must
+    # also end as a readable offline message, never as an escaping raise
+    class RawConnectHive(FakeHive):
+        async def create_chat(self, title):
+            raise httpx.ConnectError("All connection attempts failed")
+
+    br4, st4, ms4 = _mk("gwbr_err4_", RawConnectHive())
+    st4.data.pop("tg_chat")  # fresh install: first run must CREATE the chat
+    note4 = await br4.start_text_run("q")
+    check("raw ConnectError -> readable offline note",
+          "nicht erreichbar" in note4)
+    check("raw ConnectError cleared run", st4.data["active_run"] is None)
+
+    class MidStreamBreakHive(FakeHive):
+        async def stream(self, q, chat_id, images=None):
+            yield {"type": "run_id", "run_id": "r5"}
+            raise httpx.ReadError("connection reset mid-stream")
+
+    br5, st5, ms5 = _mk("gwbr_err5_", MidStreamBreakHive())
+    st5.data["tg_chat"] = {"hive_chat_id": "chat01", "created_at": "x"}
+    note5 = await br5.start_text_run("q")
+    check("mid-stream break readable", "nicht erreichbar" in note5)
+    check("mid-stream break cleared run", st5.data["active_run"] is None)
+    check("mid-stream break answered phone", len(ms5.messages) >= 1)
 
 # ── 5. splitting + .txt document ────────────────────────────────────────
 async def t_split_doc():
