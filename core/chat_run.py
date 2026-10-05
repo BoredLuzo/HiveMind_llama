@@ -161,6 +161,11 @@ async def run_stream(
     if _run_settings.get("duo_action_approval_enabled"):
         from tools.runner import _approval_gate_run_override as _gate_cv
         _gate_cv.set(True)
+    # Phone restriction (2026-10-05 UI toggle): clamp this run's toolset
+    # to web + read-only at the single dispatch choke point.
+    if _run_settings.get("phone_restricted"):
+        from tools.runner import _tools_restricted_run as _tr_cv
+        _tr_cv.set(True)
 
     # Per-run token estimate accumulator - incremented by emit() on content events
     _run_token_estimate: int = 0

@@ -838,6 +838,25 @@ async def t_audit_fixes():
     check("G1 opt-out: default still forces",
           br_g1b._stream_overrides().get("duo_action_approval_enabled") is True)
 
+    # phone restriction toggle: restricted -> body carries the clamp
+    hive_r = FakeHive(_run_events())
+    hive_r.settings_body = {"telegram_phone_restricted": True}
+    br_r, st_r, ms_r = _mk("gwbr_restr_", hive_r)
+    await br_r.start_text_run("q")
+    check("restrict: body carries phone_restricted",
+          br_r.hive.stream_bodies[-1]["overrides"].get(
+              "phone_restricted") is True)
+    br_r.ms.phone_restricted = True
+    check("restrict: /status shows it",
+          "web + text only" in br_r.status_text())
+    hive_u = FakeHive(_run_events())
+    hive_u.settings_body = {}
+    br_u, st_u, ms_u = _mk("gwbr_restr0_", hive_u)
+    await br_u.start_text_run("q")
+    check("restrict off: key absent",
+          "phone_restricted" not in
+          br_u.hive.stream_bodies[-1]["overrides"])
+
     # G8: steering cannot bypass the max_text_chars cap
     await br_g2.mirror_send("x" * 5000)
     check("G8: steering capped at max_text_chars",

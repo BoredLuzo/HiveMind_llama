@@ -586,6 +586,7 @@ async def _mirror_loop(gw: Gateway) -> None:
         await gw.hive.heartbeat(os.getpid(), {
             "paired": gw.owner_id is not None,
             "mode": gw.state.data.get("mode") or "",
+            "restricted": getattr(gw, "phone_restricted", None),
         })
         await gw.bridge.mirror_tick()
         await asyncio.sleep(5.0)

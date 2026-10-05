@@ -338,6 +338,23 @@ _approval_auto_off_events: dict = {}
 _approval_gate_run_override: _contextvars.ContextVar[bool] = \
     _contextvars.ContextVar("approval_gate_run_override", default=False)
 
+# Phone restriction (2026-10-05 UI toggle): a run flagged via the /stream
+# body (UI toggle telegram_phone_restricted -> gateway -> phone_restricted)
+# may only use read-only + web + dialog tools. One ContextVar, one choke
+# point in _run_inline_tool — writes, shell, git and installs cannot reach
+# their handlers at all, in ANY mode/phase. Mirrors the gate-override
+# propagation (asyncio.create_task children inherit it).
+_tools_restricted_run: _contextvars.ContextVar[bool] = \
+    _contextvars.ContextVar("tools_restricted_run", default=False)
+
+# The safe set for restricted runs (keep in sync with
+# definitions._READ_ONLY_INLINE_TOOL_NAMES + web + dialog):
+_PHONE_SAFE_TOOLS = frozenset({
+    "read_file", "get_signatures", "find_references", "list_dir",
+    "find_files", "search_code", "get_background_output", "get_datetime",
+    "ask_user", "task_complete", "web_search", "web_fetch",
+})
+
 # G2 (full audit 2026-10-05): decision_ids that ALREADY resolved a waiting
 # pause. A second decision carrying one of these (UI click, then a phone tap
 # within the mirror tick) is a duplicate of an answered card and must not be
@@ -1354,6 +1371,18 @@ async def _run_inline_tool(
                 tool=name,
                 mode=tool_mode ,
                 details={"allowed_tools": sorted(_allowed)})
+
+    # Phone restriction (2026-10-05 UI toggle telegram_phone_restricted):
+    # ONE choke point for every mode/phase — anything outside the safe set
+    # (read-only + web + dialog) is rejected before its handler exists.
+    if _tools_restricted_run.get() and name not in _PHONE_SAFE_TOOLS:
+        return _tool_error_response(
+            "PHONE_RESTRICTED",
+            f"Tool '{name}' is blocked: phone runs are restricted to web "
+            "+ read-only tools (UI toggle 'Restrict phone runs').",
+            tool=name,
+            mode=str(tool_mode or ""),
+            details={"allowed_tools": sorted(_PHONE_SAFE_TOOLS)})
     _path_based_tools = {"read_file", "get_signatures", "patch_file", "edit_file", "write_file", "replace_lines", "search_code"}
     _WRITE_TOOLS_NO_FUZZY = {"patch_file", "edit_file", "write_file", "write_file_append", "replace_lines"}
     if name in _path_based_tools and "path" in args:

@@ -222,8 +222,19 @@ class RunBridge:
         last_edit = _now()
         denied = 0
 
+        # UI toggle telegram_phone_restricted (2026-10-05): restrict this
+        # run to web + read-only tools. Read FRESH per run, so flipping
+        # the toggle applies from the very next message — no restart.
+        _restricted = False
+        try:
+            _s = await self.hive.settings()
+            _restricted = bool(_s.get("telegram_phone_restricted"))
+        except (HiveUnreachable, OSError, ValueError):
+            pass  # engine offline: the run fails anyway, stay unrestricted
         try:
             ov = self._stream_overrides()
+            if _restricted:
+                ov["phone_restricted"] = True
             sel_mode = self.state.data.get("mode") or ""
             stream_mode = sel_mode
             if sel_mode == "agentic":
@@ -403,6 +414,9 @@ class RunBridge:
         tools = self.state.data.get("tools")
         tools_txt = ("on" if tools is True else "off" if tools is False
                      else "engine default")
+        _restr = getattr(self.ms, "phone_restricted", None)
+        restr_txt = ("web + text only" if _restr
+                     else "off" if _restr is False else "unknown")
         # audit G1 + version-skew detection: state the invariant plainly —
         # the gateway forces the approval gate for every phone run, but
         # ONLY if the engine lifts the body key (gateway_overrides marker).
@@ -422,6 +436,7 @@ class RunBridge:
             f"ctx: planner {ov.get('planner_ctx') or '—'} · coder "
             f"{ov.get('coder_ctx') or '—'}\n"
             f"tools (simple runs): {tools_txt}\n"
+            f"phone restrict: {restr_txt}\n"
             f"verbose: {'on' if self.verbose else 'off'}\n"
             "\n"
             f"{gate_line}\n"
@@ -749,6 +764,10 @@ class RunBridge:
             s = await self.hive.settings()
         except (HiveUnreachable, OSError, ValueError):
             return  # engine unreachable: nothing to mirror, keep quiet
+        # UI toggle telegram_phone_restricted: stash for /status + the
+        # supervisor heartbeat (best-effort view, refreshed every tick)
+        if hasattr(self.ms, "phone_restricted"):
+            self.ms.phone_restricted = bool(s.get("telegram_phone_restricted"))
         if not self._mirror_enabled(s):
             if m["run_id"]:
                 self._mirror_reset(m)

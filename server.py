@@ -1265,6 +1265,13 @@ async def stream(req: Request):
             body.get("duo_action_approval_enabled")):
         _model_overrides["duo_action_approval_enabled"] = True
 
+    # Phone restriction (2026-10-05 UI toggle): the gateway lifts the UI
+    # toggle into the run so the runner clamps phone runs to web +
+    # read-only tools. Force-ON only, same pattern as the gate key.
+    if "phone_restricted" in body and _as_bool(
+            body.get("phone_restricted")):
+        _model_overrides["phone_restricted"] = True
+
     _duo_tool_rounds_raw = body.get("duo_tool_rounds", None)
     if _duo_tool_rounds_raw is None:
         _duo_tool_rounds_raw = settings.get("duo_tool_rounds", 0)
