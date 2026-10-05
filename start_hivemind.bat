@@ -133,6 +133,21 @@ echo  --------------------------------------------------------------
 echo   HiveMind  ^>  http://localhost:%HM_PORT%   ^|   Ctrl+C to stop
 echo  --------------------------------------------------------------
 echo.
+
+REM [7b] Auto-start the optional Telegram gateway when the owner opted
+REM in (gateway.toml with telegram_enabled = true - written by installer
+REM step 7 setup or start_gateway.bat setup). Headless window; the UI
+REM veto (telegram_gateway_enabled=false) still wins inside the gateway.
+if exist "%~dp0gateway.toml" (
+    findstr /C:"telegram_enabled = true" "%~dp0gateway.toml" >nul 2>&1
+    if not errorlevel 1 (
+        if not exist "%LOCALAPPDATA%\HiveMindGateway\gateway.disabled" (
+            start "HiveMind Gateway" /min "%~dp0start_gateway_headless.bat"
+            echo   [OK] Telegram gateway started (minimized window)
+        )
+    )
+)
+echo.
 "%PY%" run.py
 if errorlevel 1 (
     echo.
