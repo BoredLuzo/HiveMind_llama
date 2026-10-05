@@ -144,6 +144,19 @@ pm4 = A.PairingManager(now=lambda: clock["t"])
 code4 = pm4.start_window()
 check("strip tolerated", pm4.verify(" " + code4 + "\n") is True)
 
+# deep audit N1: non-ASCII guesses must be a safe DENY, never a TypeError
+# (hmac.compare_digest raises on non-ASCII strings - realrun crash class)
+pm5 = A.PairingManager(now=lambda: clock["t"])
+code5 = pm5.start_window()
+try:
+    pm5.verify("\U0001F600 emoji pair")
+    check("non-ascii guess denied", False)
+except A.PairingDenied:
+    check("non-ascii guess denied", True)
+except TypeError as exc:
+    check("non-ascii guess denied", False, f" (TypeError: {exc})")
+check("non-ascii counted as failure", pm5.failed_attempts == 1)
+
 # ── approvals nonce store (pure) ────────────────────────────────────────
 from hivemind_gateway.approvals import ApprovalStore
 

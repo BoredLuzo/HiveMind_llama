@@ -538,6 +538,45 @@ async def t_takeover():
           len(hive.stream_bodies) == runs_before)
     check("steer receipt honest", "Eingereiht" in note)
 
+    # deep audit N2: relay shows the FULL command from journal frames,
+    # not the 300-char truncated server preview
+    long_cmd = "x" * 400
+    hive.journal_body = {"active": True, "run_id": "ui-run-1",
+                         "done": False, "aborted": False,
+                         "ts": time.time(), "n": 4,
+                         "frames": ['data: {"type": "tool_call", '
+                                    '"name": "run_bash", '
+                                    '"extra": {"cmd": "' + long_cmd + '"}}']}
+    hive.pending_body = {"active": True, "tool": "run_bash",
+                         "preview": "x" * 300, "decision_id": "d2"}
+    ms.messages.clear()
+    await br.mirror_tick()
+    relayed = next((m for m in ms.messages if "run_bash" in m), "")
+    check("N2: full command relayed (beyond 300 chars)",
+          long_cmd in relayed)
+    check("N2: no blind-approval note when full cmd present",
+          "gekürzt" not in relayed)
+
+    # deep audit N5: weird answers cannot crash consume_setup
+    hive.journal_body = {"active": False}
+    await br.mirror_tick()
+    br3, st3, ms3 = _mk("gwbr_n5_", FakeHive())
+    st3.data["tg_chat"] = {"hive_chat_id": "chat01", "created_at": "x"}
+    # pending flow seeded directly — consume_setup is the unit under test
+    import time as _t
+    st3.data["pending_setup"] = {"model": "m-c", "agentic": False,
+                                 "ts": _t.time()}
+    for bad in ("--5, 8192, 16384", "², 8192, 16384", "1; 2; 3"):
+        out = await br3.consume_setup(bad)
+    check("N5: weird answers contained", "Erwartet 3 Zahlen" in out)
+    # clamp: absurd ctx values are capped in the stream body
+    st3.data["run_overrides"] = {"model": "m-c", "planner_ctx": 999999,
+                                 "coder_ctx": 999999}
+    ov = br3._stream_overrides()
+    check("N5: ctx clamped to 131072",
+          ov["duo_planner_ctx_target"] == 131072
+          and ov["duo_coder_ctx_agentic"] == 131072)
+
     # done frame ends the session
     hive.journal_body = {"active": True, "run_id": "ui-run-1", "done": True,
                          "aborted": False, "ts": time.time(), "n": 4,

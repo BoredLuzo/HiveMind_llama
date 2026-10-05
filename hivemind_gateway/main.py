@@ -341,7 +341,7 @@ class Gateway:
     async def _owner_bridge_call(self, p: gw_auth.ParsedUpdate, coro) -> None:
         try:
             note = await coro
-        except (HiveUnreachable, OSError) as exc:
+        except (HiveUnreachable, HTTPError, OSError) as exc:
             note = f"🔌 HiveMind nicht erreichbar: {exc}"
         await self.reply(p.chat_id, note,
                          reply_to_message_id=p.message_id)

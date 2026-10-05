@@ -301,6 +301,11 @@ class RunBridge:
                 return (f"⏹ Run {rid} war dem Server unbekannt — "
                         "Chat-Abort als Fallback gesendet.")
             return f"⏹ Abbruch gesendet für {rid}."
+        except HTTPError as exc:
+            # deep audit N6: raise_for_status in the fallback must not
+            # break the visible-failure invariant of /stop
+            return (f"❌ /stop fehlgeschlagen ({exc}) — Lauf {rid} läuft "
+                    "evtl. weiter, bitte am PC prüfen!")
         except (HiveUnreachable, OSError) as exc:
             # /stop must fail VISIBLY: an orphaned run holds VRAM
             return f"❌ /stop fehlgeschlagen ({exc}) — Lauf {rid} läuft " \
@@ -381,14 +386,17 @@ class RunBridge:
         if model:
             out["duo_planner_model"] = model
             out["duo_coder_model"] = model
+        # deep audit N5: clamp — the engine clamps the planner ctx at
+        # 131072 but NOT the coder ctx; a fat-fingered phone value must
+        # not wedge the shared VRAM
         pctx = ov.get("planner_ctx")
         if pctx:
-            out["duo_planner_ctx_target"] = int(pctx)
+            out["duo_planner_ctx_target"] = min(int(pctx), 131072)
             out["duo_planner"] = True
         cctx = ov.get("coder_ctx")
         if cctx:
-            out["duo_coder_ctx_agentic"] = int(cctx)
-            out["duo_coder_ctx_normal"] = int(cctx)
+            out["duo_coder_ctx_agentic"] = min(int(cctx), 131072)
+            out["duo_coder_ctx_normal"] = min(int(cctx), 131072)
         tools = self.state.data.get("tools")
         if tools is not None:
             out["direct_tools_enabled"] = bool(tools)
@@ -501,7 +509,8 @@ class RunBridge:
             return None
         parts = [x.strip() for x in (text or "").split(",") if x.strip()]
         expected = 5 if p.get("agentic") else 3
-        if not all(x.lstrip("-").isdigit() for x in parts) \
+        # deep audit N5: "--5"/"²" passed the old check but crashed int()
+        if not all(x.isascii() and x.isdigit() for x in parts) \
                 or len(parts) != expected:
             return (f"Erwartet {expected} Zahlen, getrennt mit ', ' — "
                     "z. B. 0, 8192, 16384. /cancel bricht ab.")
@@ -597,8 +606,11 @@ class RunBridge:
             await self._mirror_tick_inner()
         except (HiveUnreachable, OSError) as exc:
             self._log_note(f"mirror tick: engine unreachable ({exc})")
-        except (TelegramApiError, ValueError) as exc:
-            self._log_note(f"mirror tick failed: {exc}")
+        except (TelegramApiError, ValueError, TypeError, KeyError,
+                AttributeError) as exc:
+            # deep audit N3: a malformed frame must not silently kill the
+            # mirror task — log and continue with the next tick
+            self._log_note(f"mirror tick failed: {type(exc).__name__}: {exc}")
 
     def _parse_done(self, frames: list) -> str | None:
         """stop_reason of the LAST done frame in the journal, if any."""
@@ -693,11 +705,21 @@ class RunBridge:
         # approval relay (the point of the takeover)
         pend = await self.hive.pending_approval(rid)
         body = pend.json() if hasattr(pend, "json") else {}
-        if getattr(pend, "status_code", 500) == 200 and body.get("active"):
+        if getattr(pend, "status_code", 200) == 200 and body.get("active"):
             sig = f"{body.get('decision_id') or ''}|{body.get('preview') or ''}"
             if sig != m["approval_sig"]:
                 m["approval_sig"] = sig
-                preview = str(body.get("preview") or "")[:1500]
+                # deep audit N2: the pending preview is truncated to 300
+                # chars by the engine; the full command lives in the
+                # journal's tool_call frames — dig it out so the owner
+                # never approves blind.
+                full = self._full_command_from_frames(
+                    j.get("frames"), str(body.get("tool") or ""))
+                preview = full or (str(body.get("preview") or "") + "\n"
+                                   "(Vorschau vom Server gekürzt — voller "
+                                   "Befehl im UI)")
+                if len(preview) > 2500:
+                    preview = preview[:2500] + " …"
                 await self.ms.send_message(
                     f"🛡 Freigabe nötig (UI-Lauf {rid}):\n"
                     f"Tool: {body.get('tool')}\n{preview}\n"
@@ -705,6 +727,29 @@ class RunBridge:
                     "('2'/immer gibt es vom Handy nicht.)")
         elif m["approval_sig"] and not body.get("active"):
             m["approval_sig"] = None  # card resolved elsewhere (UI)
+
+    @staticmethod
+    def _full_command_from_frames(frames: list, tool: str) -> str:
+        """Last tool_call event for `tool` in the journal frames, with
+        the untruncated command from its extra (sse/events.py keeps
+        extra['cmd'] whole). Empty string when not found."""
+        for raw in reversed(frames or []):
+            if not isinstance(raw, str) or '"type": "tool_call"' not in raw:
+                continue
+            try:
+                ev = json.loads(raw[6:] if raw.startswith("data: ") else raw)
+            except ValueError:
+                continue
+            if ev.get("type") != "tool_call":
+                continue
+            if tool and ev.get("name") != tool:
+                continue
+            extra = ev.get("extra") or {}
+            for key in ("cmd", "path", "url", "query", "code", "package"):
+                v = extra.get(key) or ev.get("label")
+                if isinstance(v, str) and v.strip():
+                    return f"{ev.get('name', tool)}: {v}"
+        return ""
 
     def mirror_intercept(self, text: str) -> bool:
         """True = this text belongs to the mirrored engine run (approval

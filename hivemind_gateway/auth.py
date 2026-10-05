@@ -157,7 +157,12 @@ class PairingManager:
             raise PairingDenied("no active pairing window")
         if self._now() > self._expires:
             raise PairingDenied("pairing code expired")
-        ok = hmac.compare_digest(self._code, str(guess or "").strip())
+        # BYTE comparison (deep audit N1): compare_digest raises TypeError
+        # on non-ASCII STRINGS — "/pair 😀" from a stranger crashed the
+        # whole gateway. Encoding both sides makes any input a safe deny.
+        ok = hmac.compare_digest(
+            self._code.encode("utf-8"),
+            str(guess or "").strip().encode("utf-8", errors="replace"))
         if not ok:
             self._failed += 1
             if self._failed >= MAX_FAILED_ATTEMPTS:
