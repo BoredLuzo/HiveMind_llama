@@ -271,6 +271,17 @@ async def run_direct(ctx):
         agent = ctx.pipeline.agents["direct"]
         sys_p = ctx.get_effective_prompt_with_override("direct", ctx.active_preset, ctx.use_learned)
         sys_p += _DIRECT_TIME_NOTE.format(dt=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        # SOUL INJECTION (2026-10-05, user: 'Soul soll auch im direct sein'):
+        # the soul's style/stance/convictions prepended to the system prompt.
+        # style_only=True keeps it compact (no full immutable text). Duo does
+        # NOT get soul (user decision) — agentic runs are task-focused.
+        if ctx.pipeline_soul:
+            try:
+                _soul_layer = ctx.build_soul_prompt_layer(ctx.pipeline_soul, style_only=True)
+                if _soul_layer:
+                    sys_p = _soul_layer + "\n\n" + sys_p
+            except (AttributeError, TypeError, ValueError) as _soul_err:
+                _direct_log.warning("[SOUL] prompt layer build failed: %s", _soul_err)
         direct_input = ctx.user_input
         if ctx.image_description:
             direct_input = ctx.user_input + f"\n\n[Image description from vision model]:\n{ctx.image_description}"
