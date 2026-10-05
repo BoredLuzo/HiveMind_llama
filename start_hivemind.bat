@@ -11,7 +11,7 @@ echo   \__/   \__/
 echo      \___/
 echo.
 echo    H I V E M I N D
-    echo    by: Luzo  ^|  v1.3.0-preview
+    echo    by: Luzo  ^|  v1.3.0
 REM BUILD INFO (2026-10-04): package_release.bat embeds git describe into
 REM BUILD_INFO.txt; a zip-installed copy shows the exact build it came from.
 set "HM_BUILD="

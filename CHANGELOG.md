@@ -42,7 +42,7 @@ round of reliability work on writes, approvals and model loading.
 - Developers: a pre-commit hook ships under `scripts/hooks` (see
   README for the one-time activation).
 
-## [1.3.0-preview] - 2026-10-05
+## [1.3.0] - 2026-10-05
 
 Test build for the live installation. Everything below is IN:
 image upload paths (collision-free, real formats), chat continuity
@@ -187,15 +187,27 @@ yourself. Setup guide with a security walkthrough:
   whether to abort it.
 - Security posture: owner-only whitelist, no webhook and no open port
   (outbound long-polling only), the bot token is read from the
-  environment and scrubbed from every log line, model/tool output is
-  filtered for secrets before sending, a kill-switch file on the PC
-  overrides everything the phone sends, and approval-gated tools are
-  denied automatically until tappable approvals ship.
+  environment or the Windows Credential Manager and scrubbed from every
+  log line, model/tool output is filtered for secrets before sending,
+  a kill-switch file on the PC overrides everything the phone sends,
+  and phone paths/usernames are collapsed before they reach Telegram.
+- Approval policy for phone runs (/gate in the chat, select in the UI):
+  deny = gated calls (shell/write/git) are auto-denied (default);
+  ask = they pause the run and arrive as tappable cards on the phone
+  (1 once / 2 always-this-chat / 3 deny); off = no gate force.
+- Restrict phone runs (default ON): phone runs may only use web and
+  read-only tools plus text — the single biggest safety switch.
+- Mirror/takeover: a run started in the browser UI appears on the phone
+  with tappable approval cards; phone texts steer the run.
+- Supervisor: Start/Stop/status for the gateway process live in the UI
+  card; one-time token setup via `start_gateway.bat setup` (Credential
+  Manager), `start_gateway.bat stop` for detached instances.
+- Model selection now also applies to simple/direct runs (P9 closed).
 
-Not included in 1.3 (deliberate): photos and mid-run steering from the
-phone, voice messages, group chats, queues, token streaming, skills,
-cron. The bot's phone-side texts are English (2026-10-05 owner
-decision; they were German during the first builds).
+Not included in 1.3 (deliberate): photos and voice messages from the
+phone, group chats, queues, token streaming, skills, cron. The bot's
+phone-side texts are English (owner decision; they were German during
+the first builds).
 
 ## [1.2.3] - 2026-09-26
 

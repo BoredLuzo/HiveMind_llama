@@ -29,7 +29,7 @@ und zitiert die Zeilen im Report.
 2. Gateway aus DIESER Shell starten:
 
    ```powershell
-   cd C:\Users\NtheP\Desktop\HiveMind\repo_gateway
+   cd C:\Users\<user>\Desktop\HiveMind\repo_gateway
    python -m hivemind_gateway.main
    ```
 
@@ -41,7 +41,7 @@ und zitiert die Zeilen im Report.
    Workspace des Chats):
 
    ```powershell
-   mkdir C:\Users\NtheP\Desktop\HiveMind\live\ws_tg_probe
+   mkdir C:\Users\<user>\Desktop\HiveMind\live\ws_tg_probe
    ```
 
    Dann dem `[TG]`-Chat diesen Workspace setzen (der Gateway überschreibt
@@ -49,7 +49,7 @@ und zitiert die Zeilen im Report.
 
    ```
    PUT http://127.0.0.1:8001/chats/<TG_CHAT_ID>
-   {"workspace": "C:/Users/NtheP/Desktop/HiveMind/live/ws_tg_probe", "base_rev": <aktuelle rev>}
+   {"workspace": "C:/Users/<user>/Desktop/HiveMind/live/ws_tg_probe", "base_rev": <aktuelle rev>}
    ```
 
    Die `<TG_CHAT_ID>` steht nach Lauf 1 in der Gateway-Konsole bzw. in
