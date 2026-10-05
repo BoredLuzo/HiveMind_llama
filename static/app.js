@@ -11541,7 +11541,7 @@ function _updateDuoRoleStatus(elId, label, model) {
 // controls; a click switches to the panel, scrolls to the element and
 // flashes it. Static DOM index (built on first open) + agent cards.
 (function() {
-  var _fsOverlay = null, _fsIndex = null, _fsList = null, _fsInput = null;
+  var _fsOverlay = null, _fsIndex = null, _fsList = null, _fsInput = null, _fsSel = -1;
 
   var PANEL_LABELS = { agents: 'AGENTS', presets: 'PRESETS', configs: 'CONFIGS',
                        memory: 'MEMORY', soul: 'SOUL', models: 'MODELS', chats: 'CHATS' };
@@ -11695,6 +11695,10 @@ function _updateDuoRoleStatus(elId, label, model) {
     setTimeout(function() { _fsInput.focus(); }, 30);
   }
 
+  window.addEventListener('load', function() {
+    if (document.getElementById('fs-inline')) _initInline();
+  });
+
   function _close() { if (_fsOverlay) _fsOverlay.style.display = 'none'; }
 
   // ALIAS MATCHING (2026-10-05): expanded by the tested pure helper in
@@ -11712,9 +11716,10 @@ function _updateDuoRoleStatus(elId, label, model) {
       _fsList.innerHTML = '<div class="fs-empty">No matching feature.</div>';
       return;
     }
-    hits.slice(0, 40).forEach(function(h) {
+    _fsSel = hits.length ? 0 : -1;
+    hits.slice(0, 40).forEach(function(h, i) {
       var row = document.createElement('div');
-      row.className = 'fs-row';
+      row.className = 'fs-row' + (i === _fsSel ? ' fs-sel' : '');
       row.style.cssText = 'display:flex;gap:10px;align-items:center;padding:8px 14px;cursor:pointer;border-bottom:1px solid #1a2330';
       var kind = document.createElement('span');
       kind.className = 'fs-kind';
@@ -11729,8 +11734,11 @@ function _updateDuoRoleStatus(elId, label, model) {
       panel.style.cssText = 'font-size:9px;color:#f0b040';
       panel.textContent = h.panel ? (PANEL_LABELS[h.panel] || h.panel) : '';
       row.appendChild(kind); row.appendChild(label); row.appendChild(panel);
-      row.addEventListener('mouseenter', function() { row.style.background = '#1c2530'; });
-      row.addEventListener('mouseleave', function() { row.style.background = ''; });
+      row.addEventListener('mouseenter', function() {
+        Array.prototype.forEach.call(_fsList.querySelectorAll('.fs-row'),
+          function(r) { r.classList.remove('fs-sel'); });
+        row.classList.add('fs-sel');
+      });
       row.addEventListener('click', function() {
         _close();
         if (h.act) { h.act(); return; }
@@ -11751,6 +11759,16 @@ function _updateDuoRoleStatus(elId, label, model) {
     });
   }
 
+  function _moveSel(delta) {
+    var rows = _fsList.querySelectorAll('.fs-row');
+    if (!rows.length) return;
+    _fsSel += delta;
+    if (_fsSel < 0) _fsSel = rows.length - 1;
+    if (_fsSel >= rows.length) _fsSel = 0;
+    rows.forEach(function(r, i) { r.classList.toggle('fs-sel', i === _fsSel); });
+    rows[_fsSel].scrollIntoView({ block: 'nearest' });
+  }
+
   function _buildOverlay() {
     _fsOverlay = document.createElement('div');
     _fsOverlay.id = 'fs-overlay';
@@ -11767,10 +11785,14 @@ function _updateDuoRoleStatus(elId, label, model) {
       'background:#0d1117;color:#d8dee9;border:none;outline:none;border-bottom:1px solid #2a3644';
     _fsInput.addEventListener('input', function() { _render(_fsInput.value); });
     _fsInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Escape') _close();
-      if (e.key === 'Enter') {
-        var first = _fsList.querySelector('.fs-row');
-        if (first) first.click();
+      if (e.key === 'Escape') { _close(); return; }
+      var rows = _fsList.querySelectorAll('.fs-row');
+      if (e.key === 'ArrowDown') { e.preventDefault(); _moveSel(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); _moveSel(-1); }
+      else if (e.key === 'Enter') {
+        e.preventDefault();
+        var sel = _fsList.querySelector('.fs-sel') || rows[0];
+        if (sel) sel.click();
       }
     });
     _fsList = document.createElement('div');
@@ -11781,8 +11803,17 @@ function _updateDuoRoleStatus(elId, label, model) {
     document.body.appendChild(_fsOverlay);
   }
 
+  // HOTKEYS (2026-10-05, user: 'besserer hotkey'): Ctrl+K/Cmd+K stays,
+  // "/" opens as a single key (GitHub/YouTube style) - guarded so typing
+  // in inputs never triggers it.
   document.addEventListener('keydown', function(e) {
+    var typing = e.target && (e.target.tagName === 'INPUT' ||
+      e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' ||
+      e.target.isContentEditable);
     if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      _open();
+    } else if (e.key === '/' && !typing) {
       e.preventDefault();
       _open();
     }

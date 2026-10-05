@@ -1363,3 +1363,17 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 #p-configs .fld-label{margin-top:12px}
 #p-configs .tgl-sub{border-left:2px solid rgba(200,150,50,.45);padding-left:12px;margin-top:2px;margin-bottom:10px}
 .tool-act-delta{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-left:4px}
+
+/* -- Sidebar feature search (2026-10-05) -- */
+#fs-inline-bar{padding:8px 10px 6px;border-bottom:1px solid var(--b2)}
+#fs-inline{width:100%;box-sizing:border-box;padding:7px 9px;font-size:11px;
+  font-family:'IBM Plex Mono',monospace;background:var(--bg3,#111);color:var(--tx,#ccc);
+  border:1px solid var(--b2,#333);border-radius:4px;outline:none}
+#fs-inline:focus{border-color:var(--amber,#f0b040)}
+#fs-inline-results{max-height:60vh;overflow-y:auto;border-bottom:1px solid var(--b2,#333)}
+#fs-inline-results .fs-row:hover{background:#1c2530}
+
+/* -- Feature search palette (2026-10-05) -- */
+#fs-overlay .fs-row.fs-sel{background:#223041;outline:1px solid rgba(240,176,64,.35)}
+#fs-overlay{animation:fs-in .12s ease-out}
+@keyframes fs-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
