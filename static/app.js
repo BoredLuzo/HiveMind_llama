@@ -11414,24 +11414,40 @@ async function loadGitConfig(s) {
   var tgApprSel = document.getElementById('tg-approval-mode-sel');
   if (tgApprSel) tgApprSel.value = s.telegram_approval_mode || 'deny';
   // P8-lite supervisor: heartbeat status + start/stop buttons (2026-10-05)
+  function supSet(text, color) {
+    var el = document.getElementById('tg-sup-status');
+    if (el) { el.textContent = text; el.style.color = color || ''; }
+  }
   async function gatewaySupervisorTick() {
     try {
       var st = await (await fetch('/gateway/status')).json();
-      var el = document.getElementById('tg-sup-status');
-      if (el) el.textContent = st.running
-        ? 'running (pid ' + st.pid + (st.paired ? ', paired' : ', unpaired') + ')'
-        : 'stopped';
-    } catch (e) { /* engine unreachable: keep last state */ }
+      var s = document.getElementById('tg-sup-start');
+      var x = document.getElementById('tg-sup-stop');
+      if (st.running) {
+        supSet('● running (pid ' + st.pid +
+               (st.paired ? ', paired' : ', unpaired') + ')', '#2e7d32');
+        if (s) s.disabled = true;
+        if (x) x.disabled = false;
+      } else {
+        supSet('○ stopped', '#888');
+        if (s) s.disabled = false;
+        if (x) x.disabled = true;
+      }
+    } catch (e) {
+      supSet('● engine unreachable', '#b3541e');
+    }
   }
   var supStart = document.getElementById('tg-sup-start');
   var supStop = document.getElementById('tg-sup-stop');
   if (supStart) supStart.onclick = async function() {
-    supStart.disabled = true;
+    supStart.disabled = true; supStop.disabled = true;
+    supSet('starting …', '#b3541e');
     try { await fetch('/gateway/start', {method: 'POST'}); } catch (e) {}
     setTimeout(function() { gatewaySupervisorTick(); supStart.disabled = false; }, 6000);
   };
   if (supStop) supStop.onclick = async function() {
     supStop.disabled = true;
+    supSet('stopping …', '#b3541e');
     try { await fetch('/gateway/stop', {method: 'POST'}); } catch (e) {}
     setTimeout(function() { gatewaySupervisorTick(); supStop.disabled = false; }, 1500);
   };
