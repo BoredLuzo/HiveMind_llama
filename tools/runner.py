@@ -564,13 +564,27 @@ async def _check_action_approval(name: str, args: dict, workspace):
     question = f"APPROVAL NEEDED: the agent wants to run {name}."
     _lg.warning("[APPROVAL] pausing run=%s tool=%s (waiting for user decision)", run_id, name)
     from infra import run_control as _rc
+    # PENDING-FIRST (recovery contract, 2026-10-03): the pending entry must
+    # be visible the moment the pause starts - a page reload during the
+    # pause recovers from the journal endpoint, not from the SSE event, so
+    # a late registration left that window cardless.
+    # APPROVAL-TIMEOUT SETTING (2026-10-01): read once per gate call - the
+    # pause card and its SSE event both carry the countdown length.
+    try:
+        from core.state import settings as _appr_ws
+        _appr_to_s = int(_appr_ws.get("duo_action_approval_timeout_s", 0) or 0)
+    except Exception:
+        _appr_to_s = 0
+    _appr_wait_s = 3600 if _appr_to_s <= 0 else _appr_to_s
+    _pending_approvals[run_id] = {"tool": name, "preview": _preview,
+                                  "decision_id": "", "auto_timeout_s": _appr_to_s}
     # PAUSE-SETUP RACE FIX (2026-09-19): register the pause BEFORE the card
-    # and _pending_approvals go out. The old order (publish -> initiate_pause)
-    # had a window where a decide POST took the preview route (pre-decision
-    # stored, pending popped) while the gate below waited on a pause event
-    # nobody would ever set: the card re-spawned from the late emit and the
-    # UI poll wiped it seconds later (spawn+fade), with the run stuck until
-    # the watchdog answered.
+    # goes out. The old order (publish -> initiate_pause) had a window where
+    # a decide POST took the preview route (pre-decision stored, pending
+    # popped) while the gate below waited on a pause event nobody would ever
+    # set: the card re-spawned from the late emit and the UI poll wiped it
+    # seconds later (spawn+fade), with the run stuck until the watchdog
+    # answered.
     await _rc.initiate_pause(run_id, question)
     # A decision that slipped in between the pre-decision check above and
     # the pause setup is consumed here instead of waiting forever.
@@ -603,14 +617,8 @@ async def _check_action_approval(name: str, args: dict, workspace):
             + (f" User message: {_note_l}" if _note_l else "")
             + " Pick a different approach that does not need " + name + ".",
             tool=name ))
-    # APPROVAL-TIMEOUT SETTING (2026-10-01): read once per gate call — the
-    # pause card and its SSE event both carry the countdown length
-    try:
-        from core.state import settings as _appr_ws
-        _appr_to_s = int(_appr_ws.get("duo_action_approval_timeout_s", 0) or 0)
-    except Exception:
-        _appr_to_s = 0
-    _appr_wait_s = 3600 if _appr_to_s <= 0 else _appr_to_s
+    # DECISION-NONCE into the pending entry: initiate_pause created it, the
+    # card and every decide POST validate against it from here on.
     _decision_id = _rc.get_decision_id(run_id)
     _pending_approvals[run_id] = {"tool": name, "preview": _preview,
                                   "decision_id": _decision_id,
@@ -640,6 +648,13 @@ async def _check_action_approval(name: str, args: dict, workspace):
     # abort; the run's own abort checks stop it right after this round.
     import asyncio as _appr_asyncio
     # (setting already read above: _appr_to_s / _appr_wait_s)
+    # S4A-FIX (2026-10-03 audit): the card's "countdown off" checkbox sets
+    # this Event via the decide endpoint - but NOTHING ever created it, so
+    # the wait below crashed with AttributeError (None.wait) whenever the
+    # timeout was enabled, killing the whole gate wait. Create the Event
+    # here, when the timer is actually armed.
+    if _appr_to_s > 0:
+        _approval_auto_off_events[str(run_id)] = _appr_asyncio.Event()
     _auto_off_ev = _approval_auto_off_events.pop(str(run_id), None) \
         if _appr_to_s > 0 else None
     if _auto_off_ev is not None:
@@ -703,16 +718,22 @@ async def _check_action_approval(name: str, args: dict, workspace):
     _appr_timed_out = (not str(answer or "").strip()
                        or str(answer).startswith("[ask_user TIMEOUT"))
     if _appr_timed_out and _appr_to_s > 0:
+        # FAIL CLOSED (2026-10-03 review): an unanswered card DENIES the
+        # call once instead of approving it. The gate wait ends immediately
+        # (no wedge - the model picks a different approach, same as an
+        # abort), and the NEXT late decision is discarded once, so a stale
+        # click can never approve the following gated call.
         _approval_expired[str(run_id)] = True
-        _lg.warning("[APPROVAL] timeout after %ds run=%s tool=%s — auto-approved once",
+        _lg.warning("[APPROVAL] timeout after %ds run=%s tool=%s — denied once (fail closed)",
                     _appr_to_s, run_id, name)
         await _safe_emit({"type": "status",
-                          "content": f"No user response for {name} within {_appr_to_s}s — auto-approved once."})
-        if name in ("write_file", "edit_file", "write_file_append") and _wpath:
-            _approval_once_paths.setdefault(_scope, set()).add(_wpath)
-            _approval_free_pass[str(run_id)] = "write"
-        return ("NOTE", f"auto-approved: no user response within {_appr_to_s}s "
-                        f"— this call ran once without explicit approval.")
+                          "content": f"No user response for {name} within {_appr_to_s}s — call DENIED (fail closed)."})
+        return ("DENY", _tool_error_response(
+            "ACTION_APPROVAL_TIMEOUT",
+            f"The approval card was not answered within {_appr_to_s}s and was "
+            "denied automatically. Pick a different approach that does not "
+            "need " + name + ", or ask the user to approve explicitly.",
+            tool=name))
     # "1|please use fetch instead" -> decision + user note for the model
     _note = ""
     if "|" in str(answer):

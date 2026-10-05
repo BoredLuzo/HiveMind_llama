@@ -113,7 +113,6 @@ def _is_junction(p: Path) -> bool:
     if hasattr(os.path, "isjunction"):
         return os.path.isjunction(p)
     try:
-        import stat as _stat
         _st = os.lstat(p)
         _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
         return bool(

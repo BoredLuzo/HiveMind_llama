@@ -213,7 +213,7 @@ set /p "PORT_IN=Server port [Enter = 8001]: "
 if defined PORT_IN set "HM_PORT=!PORT_IN!"
 echo.
 
-REM SearXNG port: fixed default, only relevant if SearXNG is set up later —
+REM SearXNG port: fixed default, only relevant if SearXNG is set up later -
 REM not worth a prompt during install (PROMPT-DIET 2026-09-12).
 set "SEARXNG_PORT=8888"
 
@@ -260,7 +260,7 @@ echo  Press any key to continue... & pause >nul & exit /b 1
 :llama_check
 set "HAVE_LLAMA="
 REM PAREN-PATH-FIX (2026-09-01): a `for /f` over "%~dp0..." breaks when the
-REM install folder contains parentheses (e.g. "...\HiveMind_v1.0.3 (3)\") —
+REM install folder contains parentheses (e.g. "...\HiveMind_v1.0.3 (3)\") -
 REM cmd eats the ')' as the end of the for-block and the batch dies silently.
 REM The path is passed to PowerShell via an ENV var so the parens never go
 REM through cmd's for-block parser.
@@ -301,7 +301,7 @@ echo  ==========================================================
 echo   [5/6] Models
 echo  ==========================================================
 echo.
-REM No folder prompt here — setup_models.bat asks ONCE (download target;
+REM No folder prompt here - setup_models.bat asks ONCE (download target;
 REM existing GGUFs in that folder get registered automatically).
 call setup_models.bat
 goto searxng_step

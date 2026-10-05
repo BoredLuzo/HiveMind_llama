@@ -80,8 +80,6 @@ backups/
 routing_weights.json
 
 # Dev-only: not needed to run HiveMind (kept locally, not pushed)
-# tests/ no longer ignored (2026-09-30): tracked success-path tests are the
-# net that would have caught the e14f64f write_file_append NameError.
 ruff.toml
 requirements-dev.txt
 docs/tools-audit.md
@@ -100,6 +98,21 @@ deploy/hivemind_windows.py
 # local smoke/bench artifacts (settings backups, SSE dumps) — never pushed
 bench_results/
 
+# BUILD_INFO.txt (2026-10-04): generated at packaging time (git describe)
+# and embedded into the release zip - never tracked.
+BUILD_INFO.txt
+
 # local test suites (fat dev tooling — never shipped with releases;
 # the pre-commit hook still runs them when present locally)
-tests/
+# tests are tracked again (2026-10-03): the persistence/format suites are
+# the verification for every future schema change; runtime artifacts inside
+# tests/ stay ignored via the global rules above.
+
+_runc*/, previews
+_edit*.txt
+_steer_*.txt
+_steer_img.b64
+_tg*.txt
+_tgprobe_cid.txt
+_tgstart.txt
+_ui_img.b64

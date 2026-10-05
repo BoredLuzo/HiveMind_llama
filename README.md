@@ -461,6 +461,18 @@ folder and start again. Once everything works, the backup folder can be
 deleted. Manual alternative: extract a release zip NEXT TO (not over) the
 installation, copy the files above across, run `install.bat`.
 
+### Dev: pre-commit hook
+
+The repo ships a pre-commit hook (ruff F821/F811/F841 + fast tests) under
+`scripts/hooks/pre-commit`. It only runs after a one-time activation:
+
+```
+git config core.hooksPath scripts/hooks
+```
+
+ruff is expected in `.venv\Scripts\ruff.exe` (or on PATH); without it the
+hook skips linting with a notice.
+
 ## Configuration
 
 All settings live in `settings.json`, generated from the `settings.py`

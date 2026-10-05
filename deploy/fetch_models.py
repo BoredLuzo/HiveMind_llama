@@ -12,7 +12,7 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   lfm2.5:2.6b             Q4_K_M        — Subagent/Worker + Judge
   qwen3.5:0.8b-ud         UD-Q4_K_XL    — Subagent ladder (smallest tier)
   qwen3.5:2b              Q4_K_M        — Refiner
-  qwen3.5:4b-ud           UD-Q4_K_XL    — Analyst/Critic/Synthesizer/Speed/Fallback
+  qwen3.5:4b-mtp          Q4_K_M        — Analyst/Critic/Synthesizer/Speed/Fallback
   qwen3.5:9b-ud           UD-Q4_K_XL    — Direct/Duo-Coder/Quality
   gemma-4:…-hauhaucs-aggressive  Q4_K_P  — Uncensored all-rounder (2026-09-21)
   minicpm5:2b-sharp       Q6_K_XL (alt. Q4_K_XL) — Sharp-MiniCPM5-2B light
@@ -216,14 +216,31 @@ SPECS: list[dict] = [
         "file_regex": [
             r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-final-mtp-apex-compact\.gguf$",
         ],
+        # The pinned repo names its projector after the BASE family
+        # (mmproj-Qwen3.6-...-Hermes-Final-F16.gguf, verified 2026-10-03) -
+        # the old hermes3.6-named regex matched nothing, a fresh install
+        # got no projector. Dest re-embeds family+size so the writer keys
+        # it as hermes3.6:35b_mmproj instead of a qwen3.6 entry.
         "mmproj_regex": [
-            r"(?i)^mmproj-hermes3\.6-35b-a3b-uncensored-genesis-f16\.gguf$",
+            r"(?i)^mmproj-qwen3\.6-35b-a3b-uncensored-genesis-hermes-final-f16\.gguf$",
         ],
+        "mmproj_dest": "mmproj-hermes3.6-35b-genesis-final-f16.gguf",
     },
-    # ── Qwen3.5 MTP pair (duo coder/planner + refiner) ────────────────────
+    # ── Qwen3.5 ladder (subagent-lite smallest tier + MTP pair) ───────────
     # unsloth MTP repos name files WITHOUT "mtp" (verified 2026-09-11) — the
     # regexes are anchored to the exact filenames and the repos are pinned,
     # so no third-party repo (Jackrong etc.) can ever match.
+    {
+        "key": "qwen3.5:0.8b-ud",
+        "tag": "qwen3.5:0.8b-ud",
+        "desc": "Qwen3.5 0.8B UD (Subagent-lite ladder smallest tier, ~0.7GB VRAM)",
+        "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+        "file_regex": [
+            r"(?i)^qwen3\.5-0\.8b-ud-q4_k_xl\.gguf$",
+        ],
+        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
+        "mmproj_dest": "mmproj-qwen3.5-0.8b-f16.gguf",
+    },
     {
         "key": "qwen3.5:4b-mtp",
         "tag": "qwen3.5:4b-mtp",
@@ -232,7 +249,13 @@ SPECS: list[dict] = [
         "file_regex": [
             r"(?i)^qwen3\.5-4b-q4_k_m\.gguf$",
         ],
-        "mmproj_regex": [],
+        # Vision projector: the unsloth MTP repos ship the GENERIC
+        # mmproj-BF16/F16/F32 names (verified 2026-10-03) - without this
+        # entry a fresh install had no projector for the default duo family
+        # and every raw image was silently skipped. Dest embeds family+size
+        # so write_models_json derives the size-keyed mmproj entry.
+        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
+        "mmproj_dest": "mmproj-qwen3.5-4b-f16.gguf",
     },
     {
         "key": "qwen3.5:9b-mtp",
@@ -242,7 +265,8 @@ SPECS: list[dict] = [
         "file_regex": [
             r"(?i)^qwen3\.5-9b-q4_k_m\.gguf$",
         ],
-        "mmproj_regex": [],
+        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
+        "mmproj_dest": "mmproj-qwen3.5-9b-f16.gguf",
     },
     {
         "key": "qwen3.5:2b-mtp",
@@ -252,7 +276,8 @@ SPECS: list[dict] = [
         "file_regex": [
             r"(?i)^qwen3\.5-2b-q4_k_m\.gguf$",
         ],
-        "mmproj_regex": [],
+        "mmproj_regex": [r"(?i)^mmproj-f16\.gguf$"],
+        "mmproj_dest": "mmproj-qwen3.5-2b-f16.gguf",
     },
 ]
 
@@ -611,7 +636,37 @@ def main() -> int:
                 _record_known_filename(Path(main_file["path"]).name, spec["tag"])
 
         if spec["mmproj_regex"]:
-            mm = pick_file(files, spec["mmproj_regex"], exclude_mmproj=False)
+            # RE-RUN GUARD (2026-10-03): an earlier install may already have
+            # this model's projector under a different filename (manual
+            # installs, pre-mmproj_dest naming). If models.json already
+            # carries an exact tag-key or size-key entry pointing at an
+            # existing file, skip the download instead of adding a duplicate
+            # multi-hundred-MB copy under the new dest name. The bare family
+            # key deliberately does NOT satisfy this guard: it may point at
+            # another size's projector.
+            _mm_skip = False
+            try:
+                _mj_path = ROOT / "models.json"
+                if _mj_path.exists():
+                    _mj = json.loads(_mj_path.read_text(encoding="utf-8"))
+                    _tag = spec.get("tag") or spec["key"]
+                    # family keeps its dots: models.json keys are written as
+                    # "qwen3.5:4b_mmproj" (only the SIZE digits are stripped)
+                    _fam = _tag.split(":")[0]
+                    _okeys = [f"{_tag}_mmproj"]
+                    if ":" in _tag:
+                        _sm = re.match(r"(\d+(?:\.\d+)?)b", _tag.split(":")[-1].lower())
+                        if _sm:
+                            _okeys.insert(1, f"{_fam}:{_sm.group(1).replace('.', '')}b_mmproj")
+                    for _ok_key in _okeys:
+                        _ov = str(_mj.get(_ok_key, "") or "")
+                        if _ov and Path(_ov).exists():
+                            print(f"    Projector already present ({Path(_ov).name}) - skipping download")
+                            _mm_skip = True
+                            break
+            except (json.JSONDecodeError, OSError) as _mm_guard_err:
+                print(f"    [WARNING] mmproj re-run guard failed ({_mm_guard_err})")
+            mm = None if _mm_skip else pick_file(files, spec["mmproj_regex"], exclude_mmproj=False)
             # MMPROJ DEST (2026-10-03): several repos ship their projector
             # under the SAME generic filename (mmproj-BF16.gguf in unsloth
             # gemma-4 e4b/e2b AND qwen3.6 repos). Downloading 1:1 made the

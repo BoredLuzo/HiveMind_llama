@@ -87,7 +87,7 @@ DEFAULT_SETTINGS = {
     "duo_pre_explore":         False,
     "until_finished":          False,
     "duo_runtime_profile":     "balanced",
-    "duo_profile_speed_model": "qwen3.5:4b-ud",
+    "duo_profile_speed_model": "qwen3.5:4b-mtp",
     "duo_profile_quality_model": "lfm2.5:2.6b",
     "duo_agentic_mode":        False,
     "duo_agentic_thinking":    False,
@@ -142,6 +142,13 @@ DEFAULT_SETTINGS = {
     "duo_compress_llm_timeout_s": 180,
     "duo_compress_local_only":   False,
     "session_compress_threshold": 20,
+    # Token budget for the conversation history a run sees (2026-10-03).
+    # Replaces blind message-count caps: newest turns verbatim, older
+    # turns dropped whole once the budget is full. 0 (default) derives
+    # the budget from the direct model's context (35% of n_ctx minus a
+    # 4096 reserve for system prompt and output); set a number to force
+    # a fixed budget.
+    "session_history_budget_tokens": 0,
 
     # ════════════════════════════════════════════════════════════════════════
     # E) EXPLORE, REPO-MAP & MEMORY
@@ -213,7 +220,7 @@ DEFAULT_SETTINGS = {
     # Token-Budget gekoppelt: max_chars ≈ budget_tokens * Faktor - Overhead.
     # Sprung; Deckel 3.3 (dokumentierter Realwert).
     "duo_write_chars_per_token": 2.5,
-    "duo_coder_fallback_model": "qwen3.5:4b-ud",
+    "duo_coder_fallback_model": "qwen3.5:4b-mtp",
     "duo_critic_ctx":          None,
 
     # ════════════════════════════════════════════════════════════════════════
@@ -307,7 +314,9 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     "vision_agent_enabled":    False,
     "vision_agent_model":      "",
-    "vision_agent_mode":       "sequential",
+    # vision_agent_mode removed (2026-10-03): no backend reader, the runner
+    # is sequential-only. It is also in _PRESET_NEVER_KEYS so stale values
+    # in old settings.json/presets can never load back.
     "vision_preprocess_timeout_seconds": 30,
     "vision_preprocess_load_timeout_seconds": 120,
     # PIPELINE-VISION (2026-08-19): feed images directly to multimodal pipeline agents?
@@ -379,13 +388,13 @@ DEFAULT_SETTINGS = {
     # commands 1:1 per exact arguments — anything new or a new chat asks
     # again). The toggle applies mid-run.
     "duo_action_approval_enabled": False,
-    # Auto-approve ONCE an unanswered approval card after N seconds (0 = off,
-    # attended runs wait as before — live smoke runs wedged 9+ min on an
-    # unanswered run_bash card). With N > 0 and nobody at the desk the call
-    # runs once after N s ("approved once" rules: writes per file, no repo
-    # memory) and the model sees an explicit auto-approved note. The NEXT
-    # late user decision is discarded once, so a stale click can never
-    # approve the following gated call.
+    # Auto-DENY an unanswered approval card after N seconds (0 = off,
+    # attended runs wait as before). With N > 0 and nobody at the desk the
+    # gated call is DENIED once (fail closed, 2026-10-03 review: the old
+    # auto-approve-once behavior approved unseen actions) - the gate wait
+    # ends immediately, the model sees a timeout note and picks a
+    # different approach. The NEXT late user decision is discarded once,
+    # so a stale click can never approve the following gated call.
     "duo_action_approval_timeout_s": 0,
     # Duo image plan (2026-10-01, replaces duo_coder_raw_images): how the
     # agentic duo run handles attached images. None = derived (active
@@ -428,10 +437,10 @@ DEFAULT_SETTINGS = {
     },
     "exploration_agent": {
         "enabled": True,
-        "model":   "qwen3.5:4b-ud",
+        "model":   "qwen3.5:4b-mtp",
         "workers": [
-            {"model": "qwen3.5:4b-ud", "ctx": 8192},
-            {"model": "qwen3.5:4b-ud", "ctx": 8192},
+            {"model": "qwen3.5:4b-mtp", "ctx": 8192},
+            {"model": "qwen3.5:4b-mtp", "ctx": 8192},
         ],
     },
     "ctx_overrides": {

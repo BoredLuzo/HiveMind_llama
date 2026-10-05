@@ -9,16 +9,24 @@ RUFF=""
 for _c in "./.venv/Scripts/ruff.exe" "./.venv/Scripts/ruff" "ruff"; do
     if command -v "$_c" >/dev/null 2>&1; then RUFF="$_c"; break; fi
 done
+# MODULE FALLBACK (2026-10-04): ruff exists as a module on this machine but
+# NOT on PATH - the hook then silently skipped EVERY commit and two
+# red-suite commits slipped through. Never skip silently again.
 if [ -z "$RUFF" ]; then
-    echo "pre-commit: ruff not found (uv pip install ruff) — skipping F821 check"
-    exit 0
+    if python -m ruff --version >/dev/null 2>&1; then
+        RUFF="python -m ruff"
+    else
+        echo "pre-commit: ruff NOT FOUND (binary or module) - BLOCKING commit" >&2
+        exit 1
+    fi
 fi
 
 FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$')
 [ -z "$FILES" ] && exit 0
 
 # shellcheck disable=SC2086
-"$RUFF" check --select F821,F811,F841 --no-cache $FILES || exit 1
+# (unquoted $RUFF on purpose: "python -m ruff" must word-split)
+$RUFF check --select F821,F811,F841 --no-cache $FILES || exit 1
 
 # fast test suites (<3s) — the success-path net; skipped when the
 # tooling deps are absent, but never skipped silently on FAILURE
