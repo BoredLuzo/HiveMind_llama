@@ -83,6 +83,14 @@ class HiveClient:
             raise HiveUnreachable(f"/settings HTTP {r.status_code}")
         return r.json()
 
+    async def set_setting(self, key: str, value) -> httpx.Response:
+        """POST /settings with EXACTLY one gateway-owned key (2026-10-05
+        owner decision: the chat may toggle the phone approval policy —
+        the old blanket 'gateway never touches POST /settings' taboo is
+        amended for this surgical single-key write; the UI select writes
+        the same key)."""
+        return await self._post_json("/settings", {key: value})
+
     async def heartbeat(self, pid: int, data: dict) -> None:
         """POST /gateway/heartbeat (P8-lite supervisor liveness, sent
         every mirror-loop tick). Fire-and-forget: an unreachable engine

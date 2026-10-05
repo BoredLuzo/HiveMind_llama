@@ -1692,6 +1692,15 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       </label>
     </div>
     <div class="fld-hint">DEFAULT ON: phone runs may only search/read the web and answer with text — no shell, no file writes, no git, no installs, regardless of /mode. Applies from the very next message (no restart). Turning it OFF unlocks assistant-style writes (approval-gate settings decide).</div>
+    <div class="fld">
+      <div class="fld-label">Phone approvals</div>
+      <select id="tg-approval-mode-sel" onchange="postSettings({telegram_approval_mode:this.value})">
+        <option value="deny">Auto-deny (safe)</option>
+        <option value="ask">Ask on phone (tappable)</option>
+        <option value="off">Off (no gate force)</option>
+      </select>
+    </div>
+    <div class="fld-hint">Approval policy for PHONE runs: auto-deny blocks shell/write/git calls; Ask relays them to the phone as tappable cards (1 once / 2 always-this-chat / 3 deny); Off sends no gate force (the engine global toggle decides). Applies from the next run — works together with /gate in the chat.</div>
     <div class="tgl-row" style="margin-top:8px;align-items:center">
       <span class="tgl-text">Process</span>
       <span id="tg-sup-status" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2)">unknown</span>
@@ -1956,6 +1965,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261005-17"></script>
+        <script src="/static/app.js?v=20261005-18"></script>
 </body>
 </html>

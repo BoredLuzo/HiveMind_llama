@@ -89,6 +89,13 @@ class FakeHive:
     async def journal(self):
         return dict(self.journal_body)
 
+    async def decide_approval(self, run_id, answer, decision_id="",
+                              tool=""):
+        if not hasattr(self, "denied"):
+            self.denied = []
+        self.denied.append((run_id, answer))
+        return FakeResponse(200, {"ok": True})
+
     async def abort_run(self, run_id):
         self.aborts.append(run_id)
         return FakeResponse(200, {"ok": True})
@@ -109,7 +116,7 @@ class FakeBridge(RunBridge):
         self.mirrored.append(text)
         return "🧭 test"
 
-    async def mirror_callback(self, callback_id, data):
+    async def approval_callback(self, callback_id, data):
         if not hasattr(self, "callbacks"):
             self.callbacks = []
         self.callbacks.append((callback_id, data))
@@ -509,6 +516,22 @@ def t_stop_verb():
         S.lock_path = orig  # type: ignore[assignment]
 
 
+# ask mode restart-deny contract: persisted open approvals are denied
+# on the engine when the gateway restarts (recover_orphan_run)
+async def t_recover_deny():
+    import time as _t
+    gw, st, api = _gw("gwcmd_rcdeny_")
+    gw.hive.journal_body = {"active": False}
+    st.data["open_approvals"] = {
+        "run-x": {"decision_id": "dx", "tool": "run_bash"}}
+    st.data["active_run"] = {"run_id": "run-x", "chat_id": "c1"}
+    await recover_orphan_run(gw)
+    check("restart-deny: persisted approval denied on engine",
+          getattr(gw.hive, "denied", []) == [("run-x", "3")])
+    check("restart-deny: open_approvals cleared",
+          st.data.get("open_approvals") == {})
+
+
 async def _main():
     await t_new()
     await t_status_verbose()
@@ -522,6 +545,7 @@ async def _main():
     await t_g9_edits()
     await t_f4_callback()
     t_stop_verb()
+    await t_recover_deny()
     await t_help()
     await t_setup_token()
 

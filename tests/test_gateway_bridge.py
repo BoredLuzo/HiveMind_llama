@@ -765,13 +765,13 @@ async def t_ux_round():
     check("F4: card sent with 3-button keyboard",
           bool(ms_cb.markups) and
           len(ms_cb.markups[-1]["inline_keyboard"][0]) == 3)
-    toast = await br_cb.mirror_callback("cbid", "appr:ui-cb:2")
+    toast = await br_cb.approval_callback("cbid", "appr:ui-cb:2")
     check("F4: '2' (always, chat) rides decision path",
           hive_cb.decided == [("ui-cb", "2", "d-cb", "run_bash")])
     check("F4: '2' toast", "always" in toast)
     check("F4: latch cleared after callback",
           br_cb._mirror()["approval_sig"] is None)
-    toast2 = await br_cb.mirror_callback("cbid", "appr:ui-cb:1")
+    toast2 = await br_cb.approval_callback("cbid", "appr:ui-cb:1")
     check("F4: stale rid refused", "gone" in toast2
           and hive_cb.decided == [("ui-cb", "2", "d-cb", "run_bash")])
 async def t_audit_fixes():
@@ -869,6 +869,112 @@ async def t_audit_fixes():
     check("restrict off (explicit): key absent",
           "phone_restricted" not in
           br_u.hive.stream_bodies[-1]["overrides"])
+
+    # resolved model attribution in the start note (owner Q: which
+    # model with which settings produces the answer?)
+    hive_m = FakeHive(_run_events())
+    hive_m.settings_body = {
+        "mode": "simple",
+        "agents": {"duo_coder": {"model": "coder-x"},
+                   "direct": {"model": "direct-y"}},
+        "duo_planner_model": None,
+        "telegram_phone_restricted": False,
+    }
+    br_m, st_m, ms_m = _mk("gwbr_resmd_", hive_m)
+    await br_m.start_text_run("q")
+    note1 = ms_m.messages[0]
+    check("resolved: simple shows the direct model",
+          "model: direct-y" in note1)
+    check("resolved: unrestricted omits the restrict line",
+          "restricted:" not in note1)
+    hive_m.settings_body = {
+        "mode": "auto",
+        "agents": {"duo_coder": {"model": "coder-x"}},
+        "duo_planner_model": None,
+    }
+    await br_m.start_text_run("q2")
+    note2 = [m for m in ms_m.messages
+             if m.startswith("⏳ Run started")][-1]
+    check("resolved: duo shows planner+coder",
+          "planner: coder-x" in note2 and "coder: coder-x" in note2)
+    check("resolved: duo notes the restrict default",
+          "restricted: web + text only" in note2)
+
+    # approval modes (ask|deny|off): gate key + relay behaviour
+    # default (settings absent) = deny: auto-deny as before
+    # ask: gated call is relayed as a TAPPABLE card, nothing auto-denied;
+    # the owner answers via button or 1/2/3 text, decision echoes
+    # decision_id+tool; persisted for restart-deny
+    # off + force_approval_gate=false: no gate key at all
+    hive_a = FakeHive(_run_events())
+    hive_a.settings_body = {"telegram_approval_mode": "ask"}
+    br_a, st_a, ms_a = _mk("gwbr_ask_", hive_a)
+    hold = asyncio.Event()
+
+    class PausedHive(FakeHive):
+        async def stream(self, q, chat_id, images=None, mode="",
+                         overrides=None):
+            self.stream_bodies.append({"q": q, "chat_id": chat_id,
+                                       "mode": mode,
+                                       "overrides": overrides or {}})
+            for ev in self.events:
+                if ev.get("type") == "done":
+                    await hold.wait()  # engine holds the run (paused)
+                yield ev
+
+    br_a.hive.__class__ = PausedHive
+    run_task = asyncio.create_task(br_a.start_text_run("q"))
+    for _ in range(100):
+        if br_a.hive.stream_bodies:
+            break
+        await asyncio.sleep(0.01)
+    check("ask: stream body forces the gate",
+          br_a.hive.stream_bodies[-1]["overrides"].get(
+              "duo_action_approval_enabled") is True)
+    check("ask: no deny recorded", hive_a.denies == [])
+    for _ in range(100):
+        if br_a.own_approval_pending():
+            break
+        await asyncio.sleep(0.01)
+    check("ask: pending own approval while paused",
+          br_a.own_approval_pending())
+    out = await br_a.own_answer("2")
+    check("ask: '2' always-chat works", "always" in out)
+    check("ask: latch cleared after answer",
+          br_a.own_approval_pending() is False)
+    hold.set()
+    await run_task
+    # off + force=false: no gate key
+    from hivemind_gateway.config import GatewayConfig as _GC
+    hive_o = FakeHive(_run_events())
+    hive_o.settings_body = {"telegram_approval_mode": "off"}
+    br_o, st_o, ms_o = _mk("gwbr_off_", hive_o)
+    br_o.cfg = _GC(force_approval_gate=False)
+    await br_o.start_text_run("q")
+    check("off + force=false: no gate key",
+          "duo_action_approval_enabled" not in
+          br_o.hive.stream_bodies[-1]["overrides"])
+    # off + force=true (default): clamped to deny
+    br_c, st_c, ms_c = _mk("gwbr_offc_", FakeHive(_run_events()))
+    br_c.cfg = _GC(force_approval_gate=True)
+    await br_c.start_text_run("q")
+    check("off + force=true: clamped to deny",
+          br_c.hive.stream_bodies[-1]["overrides"].get(
+              "duo_action_approval_enabled") is True)
+    # /gate: set + invalid
+    hive_g = FakeHive()
+    hive_g.sets = []
+    async def set_setting(key, value):
+        hive_g.sets.append((key, value))
+        return FakeResponse(200, {"ok": True})
+    hive_g.set_setting = set_setting
+    br_g, st_g, ms_g = _mk("gwbr_gate_", hive_g)
+    out = await br_g.gate_text("ask")
+    check("gate: ask set via single-key post",
+          hive_g.sets == [("telegram_approval_mode", "ask")])
+    check("gate: confirm text", "ask" in out)
+    out = await br_g.gate_text("nuclear")
+    check("gate: invalid rejected", "ask|deny|off" in out)
 
     # G8: steering cannot bypass the max_text_chars cap
     await br_g2.mirror_send("x" * 5000)

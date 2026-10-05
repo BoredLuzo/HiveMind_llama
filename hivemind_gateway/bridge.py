@@ -82,6 +82,8 @@ class RunBridge:
         self.cfg = cfg
         self.ms = messenger
         self.verbose = bool(state.data.get("verbose", False))
+        # ask-mode: the ONE waiting own-run approval (rid/decision_id/tool)
+        self._open_own_approval: dict | None = None
 
     # -- small helpers ----------------------------------------------------
 
@@ -188,6 +190,93 @@ class RunBridge:
         if self.state.data.get("active_run"):
             self.state.set_active_run(None)
             self.state.save()
+        # the run is over — a waiting own approval is moot (the engine
+        # resolved or lost it); never answer a stale card late
+        self._open_own_approval = None
+
+    def _effective_approval_mode(self, engine_settings: dict) -> str:
+        """ask | deny | off for PHONE runs (2026-10-05 owner decision).
+
+        Source: the engine setting telegram_approval_mode (UI select and
+        /gate write it; one surgical single-key POST — the blanket
+        'gateway never touches POST /settings' taboo is amended for this
+        gateway-owned key). The gateway.toml force_approval_gate stays as
+        the FLOOR: 'off' degrades to 'deny' while the force is on, so the
+        toml can always pin the safe behaviour. Unknown/missing = deny."""
+        mode = str((engine_settings or {}).get("telegram_approval_mode")
+                   or "deny").strip().lower()
+        if mode not in ("ask", "deny", "off"):
+            mode = "deny"
+        if mode == "off" and self.cfg.force_approval_gate:
+            mode = "deny"
+        return mode
+
+    def own_approval_pending(self) -> bool:
+        """True while an OWN phone-run approval waits for 1/2/3 (ask
+        mode): the run is paused engine-side until the answer lands."""
+        return bool(self._open_own_approval)
+
+    async def own_answer(self, text: str) -> str:
+        """Route the owner's 1/2/3 text answer into the waiting OWN
+        approval. Anything else gets the waiting hint — the run is
+        paused, a second run would only get the busy note anyway."""
+        oa = self._open_own_approval or {}
+        t = (text or "").strip()
+        if t not in ("1", "2", "3"):
+            return ("🛡 Approval is waiting — reply 1 (once), "
+                    "2 (always, this chat) or 3 (deny). /stop aborts.")
+        resp = await self.hive.decide_approval(
+            oa.get("rid"), t,
+            decision_id=oa.get("decision_id") or "",
+            tool=oa.get("tool") or "")
+        code = getattr(resp, "status_code", 500)
+        self._open_own_approval = None
+        self.state.data.setdefault("open_approvals", {}).pop(
+            oa.get("rid"), None)
+        self.state.save()
+        if code >= 300:
+            return (f"❌ Decision not accepted (HTTP {code}) — maybe "
+                    "answered in the UI.")
+        try:
+            routed = str((resp.json() or {}).get("routed") or "")
+        except (ValueError, TypeError, AttributeError):
+            routed = ""
+        if routed == "duplicate":
+            return "ℹ️ Already answered — nothing changed."
+        return ("✅ allowed (once) — the run continues."
+                if t == "1" else
+                "📁 always (this chat, this exact call) — the run "
+                "continues." if t == "2" else
+                "🛡 denied — pick a different approach.")
+
+    async def _relay_own_approval(self, ev: dict) -> None:
+        """ask/off mode: a gated call in an OWN phone run is relayed as a
+        tappable card; the engine holds the run (pause) until the
+        decision lands via button or 1/2/3 text. Persisted so a gateway
+        restart denies it (restart-deny contract)."""
+        rid = str(ev.get("run_id") or "")
+        if not rid:
+            return
+        decision_id = str(ev.get("decision_id") or "")
+        tool = str(ev.get("tool") or "")
+        preview = str(ev.get("preview") or "")
+        self.state.data.setdefault("open_approvals", {})[rid] = {
+            "decision_id": decision_id, "tool": tool}
+        self.state.save()
+        self._open_own_approval = {"rid": rid, "decision_id": decision_id,
+                                   "tool": tool}
+        await self.ms.send_message(
+            f"🛡 Approval needed (run {rid})\n\n"
+            f"tool: {tool}\n\n"
+            f"{preview}\n\n"
+            "Buttons below; or reply 1 (once) / 2 (always, this chat) / "
+            "3 (deny).",
+            reply_markup={"inline_keyboard": [[
+                {"text": "✅ Once", "callback_data": f"appr:{rid}:1"},
+                {"text": "📁 Always (chat)",
+                 "callback_data": f"appr:{rid}:2"},
+                {"text": "⛔ Deny", "callback_data": f"appr:{rid}:3"},
+            ]]})
 
     async def _start_text_run_inner(self, q: str) -> str:
         if self.state.data.get("active_run"):
@@ -211,20 +300,46 @@ class RunBridge:
         }
         self.state.save()
 
-        # info-rich start note (2026-10-05 UX round): mode/model/workspace
-        # up front, so the owner sees WHAT will run before tokens arrive
+        # info-rich start note (2026-10-05 UX round): mode + the RESOLVED
+        # models per role + workspace + the effective approval policy, so
+        # the owner sees WHAT will run before tokens arrive. Resolved
+        # from the engine settings (one fetch for restriction + models +
+        # approval mode): the duo planner inherits the coder model unless
+        # duo_planner_model is set (core/duo_runner.py:1038).
         _ws = (self._tg_chat() or {}).get("workspace") or "engine default"
         _ws_short = (_ws.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
                      if _ws != "engine default" else _ws)
-        _sel_label = (f"{self.state.data.get('mode')} (phone override)"
-                      if self.state.data.get("mode")
-                      else "engine default")
+        _sel = self.state.data.get("mode") or ""
+        _restricted = True
+        _s: dict = {}
+        try:
+            _s = await self.hive.settings()
+            _restricted = bool(_s.get("telegram_phone_restricted", True))
+        except (HiveUnreachable, OSError, ValueError):
+            pass  # engine offline: the run fails anyway, stay restricted
+        _appr_mode = self._effective_approval_mode(_s)
+        _agents = (_s.get("agents") or {}) if isinstance(_s, dict) else {}
+        _coder_mdl = (_agents.get("duo_coder") or {}).get("model") or ""
+        _planner_mdl = _s.get("duo_planner_model") or _coder_mdl
+        _direct_mdl = (_agents.get("direct") or {}).get("model") or ""
+        _ov_model = (self.state.data.get("run_overrides") or {}).get("model")
+        _eff = _sel or (_s.get("mode") if isinstance(_s, dict) else "") \
+            or "auto"
+        _eff_label = f"{_eff} (phone override)" if _sel else _eff
+        if _eff in ("simple", "chat", "direct"):
+            _model_line = f"model: {_direct_mdl or 'engine default'}"
+        elif _ov_model:
+            _model_line = f"model: {_ov_model} (planner + coder)"
+        else:
+            _model_line = (f"planner: {_planner_mdl or 'engine default'}\n"
+                           f"coder: {_coder_mdl or 'engine default'}")
+        if _restricted:
+            _model_line += "\nrestricted: web + text only"
         status = await self.ms.send_message(
             "⏳ Run started\n\n"
-            f"mode: {_sel_label}\n"
-            "model: "
-            + ((self.state.data.get("run_overrides") or {}).get("model")
-               or "engine default") + "\n"
+            f"mode: {_eff_label}\n"
+            f"{_model_line}\n"
+            f"approvals: {_appr_mode}\n"
             f"workspace: {_ws_short}")
         status_id = status.get("message_id")
 
@@ -236,22 +351,13 @@ class RunBridge:
         last_edit = _now()
         denied = 0
 
-        # UI toggle telegram_phone_restricted (2026-10-05): restrict this
-        # run to web + read-only tools. Read FRESH per run, so flipping
-        # the toggle applies from the very next message — no restart.
-        # DEFAULT ON (safe by default): a missing key restricts; only an
-        # explicit false (toggle off in the UI) unlocks phone runs.
-        _restricted = True
-        try:
-            _s = await self.hive.settings()
-            _restricted = bool(_s.get("telegram_phone_restricted", True))
-        except (HiveUnreachable, OSError, ValueError):
-            pass  # engine offline: the run fails anyway, stay restricted
         try:
             ov = self._stream_overrides()
             if _restricted:
                 ov["phone_restricted"] = True
-            sel_mode = self.state.data.get("mode") or ""
+            if _appr_mode in ("ask", "deny"):
+                ov["duo_action_approval_enabled"] = True
+            sel_mode = _sel
             stream_mode = sel_mode
             if sel_mode == "agentic":
                 # composite: engine mode "auto" + the agentic body flag
@@ -271,7 +377,7 @@ class RunBridge:
                     error_text = str(ev.get("content") or "unknown")
                 elif etype == "approval_request":
                     run_id = str(ev.get("run_id") or "")
-                    if run_id:
+                    if run_id and _appr_mode == "deny":
                         resp = await self.hive.decide_approval(
                             run_id, "3",
                             decision_id=str(ev.get("decision_id") or ""),
@@ -281,7 +387,11 @@ class RunBridge:
                             await self._edit_status(
                                 status_id,
                                 "🔒 Approval request auto-denied "
-                                "(WP2: approvals from the phone arrive with WP4).")
+                                "(deny mode).")
+                    elif run_id:
+                        # ask / off: the gated call waits engine-side; the
+                        # owner decides via tappable card or 1/2/3 text.
+                        await self._relay_own_approval(ev)
                 elif etype == "status":
                     last_status = str(ev.get("content") or "")[:120]
                 elif etype == "done":
@@ -939,22 +1049,45 @@ class RunBridge:
         m = self._mirror()
         return bool(m.get("run_id")) and bool((text or "").strip())
 
-    async def mirror_callback(self, callback_id: str, data: str) -> str:
-        """Tappable approval buttons (2026-10-05 UX round): callback_data
-        is 'appr:<rid>:<1|2|3>' from the card's inline keyboard. The
-        decision rides the SAME path as text answers (decision_id + tool
-        echoed for the engine's duplicate/tool guards); '2' uses the
-        engine's chat-scoped exact-call memory. Returns the toast text
-        for answerCallbackQuery."""
+    async def approval_callback(self, callback_id: str, data: str) -> str:
+        """Tappable approval buttons (2026-10-05): callback_data is
+        'appr:<rid>:<1|2|3>' from a card's inline keyboard — mirrored UI
+        runs AND own phone runs (ask mode). The decision rides the SAME
+        path as text answers (decision_id + tool echoed for the engine's
+        duplicate/tool guards); '2' uses the engine's chat-scoped
+        exact-call memory. Returns the toast text for
+        answerCallbackQuery."""
         m = self._mirror()
         try:
             _, rid, answer = data.split(":", 2)
         except ValueError:
             return "malformed button"
-        if rid != m.get("run_id") or not m.get("approval_sig"):
-            return "card already gone"
         if answer not in ("1", "2", "3"):
             return "unknown button"
+        own = self._open_own_approval or {}
+        if rid == own.get("rid"):
+            resp = await self.hive.decide_approval(
+                rid, answer,
+                decision_id=own.get("decision_id") or "",
+                tool=own.get("tool") or "")
+            code = getattr(resp, "status_code", 500)
+            self._open_own_approval = None
+            self.state.data.setdefault("open_approvals", {}).pop(rid, None)
+            self.state.save()
+            if code >= 300:
+                return f"not accepted (HTTP {code})"
+            try:
+                routed = str((resp.json() or {}).get("routed") or "")
+            except (ValueError, TypeError, AttributeError):
+                routed = ""
+            if routed == "duplicate":
+                return "already answered — nothing changed"
+            if answer == "2":
+                return "always (this chat, this exact call) — delivered"
+            return "allowed (once) — delivered" if answer == "1" \
+                else "denied — delivered"
+        if rid != m.get("run_id") or not m.get("approval_sig"):
+            return "card already gone"
         resp = await self.hive.decide_approval(
             rid, answer,
             decision_id=m.get("approval_decision_id") or "",
@@ -1017,6 +1150,39 @@ class RunBridge:
                     "ends on the next tick.")
         return ("🧭 Queued — injected at the next boundary "
                 "(mode dependent; pipeline accepts no steering).")
+
+    async def gate_text(self, arg: str) -> str:
+        """Chat control of the phone approval policy (ask|deny|off).
+        Posts EXACTLY one gateway-owned key to /settings — the blanket
+        'never touch POST /settings' taboo is amended for this single
+        surgical write by owner decision 2026-10-05 (the UI select writes
+        the same key)."""
+        arg = (arg or "").strip().lower()
+        if arg in ("ask", "deny", "off"):
+            try:
+                await self.hive.set_setting("telegram_approval_mode", arg)
+            except (HiveUnreachable, OSError) as exc:
+                return f"🔌 could not set: {exc}"
+            if hasattr(self.ms, "telegram_approval_mode"):
+                self.ms.telegram_approval_mode = arg
+            why = {
+                "ask": "gated calls wait for YOUR tap (1 once / "
+                       "2 always-this-chat / 3 deny).",
+                "deny": "gated calls are auto-denied (safe default).",
+                "off": "no gate force — the engine global toggle "
+                       "decides (ungated when it is off).",
+            }[arg]
+            return (f"🛡 Approval mode (phone runs): {arg}\n\n"
+                    f"  • {why}\n\n"
+                    "Applies from the very next run. The UI select shows "
+                    "the same setting.")
+        cur = getattr(self.ms, "telegram_approval_mode", None)
+        cur_txt = cur if cur in ("ask", "deny", "off") else "deny (default)"
+        return ("🛡 Approval mode (phone runs): " + cur_txt + "\n\n"
+                "  • ask — gated calls wait for YOUR tap\n"
+                "  • deny — gated calls are auto-denied (safe default)\n"
+                "  • off — no gate force (engine global toggle decides)\n\n"
+                "Set with /gate ask|deny|off.")
 
     async def workspace_text(self, arg: str) -> str:
         """/workspace <path> — set the workspace of the [TG] chat so

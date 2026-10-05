@@ -21,6 +21,7 @@ COMMAND_WHITELIST = {
     "cancel": "abort a pending /setModel flow",
     "workspace": "show/set the workspace for phone runs",
     "tools": "show/set the direct chat tools level for phone runs (on|off)",
+    "gate": "show/set the phone approval policy (ask|deny|off)",
     "lock": "lock the gateway until the PC unlocks it (WP6)",
     "help": "list commands",
 }
@@ -54,6 +55,7 @@ HELP_TEXT = (
     "— WORKSPACE & TOOLS —\n"
     "/workspace <path> — working folder (must exist)\n"
     "/tools on|off — direct-chat tools for simple runs\n"
+    "/gate ask|deny|off — approval policy for phone runs\n"
     "\n"
     "— SAFETY —\n"
     "• Phone runs: tools that CHANGE things (shell, files,\n"

@@ -382,6 +382,10 @@ class Gateway:
         elif name == "tools":
             await self.reply(p.chat_id, self.bridge.tools_text(arg),
                              reply_to_message_id=p.message_id)
+        elif name == "gate":
+            await self.reply(p.chat_id,
+                             await self.bridge.gate_text(arg),
+                             reply_to_message_id=p.message_id)
         elif name == "status":
             await self.reply(p.chat_id, self.bridge.status_text(),
                              reply_to_message_id=p.message_id)
@@ -428,6 +432,14 @@ class Gateway:
         # never start a second run.
         if self.bridge.mirror_intercept(q):
             note = await self.bridge.mirror_send(q)
+            await self.reply(p.chat_id, note,
+                             reply_to_message_id=p.message_id)
+            return
+        # ask mode: an OWN phone-run approval is waiting — 1/2/3 answers
+        # it, anything else gets the waiting hint (the run is paused; a
+        # second run would only get the busy note anyway).
+        if self.bridge.own_approval_pending():
+            note = await self.bridge.own_answer(q)
             await self.reply(p.chat_id, note,
                              reply_to_message_id=p.message_id)
             return
@@ -512,6 +524,18 @@ async def recover_orphan_run(gw: Gateway) -> None:
         return
     rid = run.get("run_id")
     if gw.state.data.get("open_approvals"):
+        # restart-deny contract (ask mode): a waiting approval must not
+        # silently survive the gateway restart — deny it on the engine.
+        for _rid, _oa in list(gw.state.data["open_approvals"].items()):
+            try:
+                await gw.hive.decide_approval(
+                    _rid, "3",
+                    decision_id=(_oa or {}).get("decision_id") or "",
+                    tool=(_oa or {}).get("tool") or "")
+                log.warning("[RECOVER] denied persisted approval for %s",
+                            _rid)
+            except (HiveUnreachable, OSError) as exc:
+                log.warning("[RECOVER] deny failed for %s: %s", _rid, exc)
         gw.state.data["open_approvals"] = {}
         gw.state.save()
     try:
@@ -566,8 +590,8 @@ async def process_update(gw: Gateway, raw: dict) -> None:
             # rate limit (20/min is plenty); the toast answers via
             # answerCallbackQuery.
             if p.text.startswith("appr:"):
-                note = await gw.bridge.mirror_callback(p.callback_id,
-                                                       p.text)
+                note = await gw.bridge.approval_callback(p.callback_id,
+                                                         p.text)
                 if p.callback_id:
                     try:
                         await gw.api.answer_callback_query(p.callback_id,

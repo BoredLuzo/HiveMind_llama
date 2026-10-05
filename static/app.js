@@ -11409,6 +11409,10 @@ async function loadGitConfig(s) {
   // phone runs restricted to web + text (2026-10-05 safety toggle)
   var tgRestrictTog = document.getElementById('tg-restrict-toggle');
   if (tgRestrictTog) tgRestrictTog.checked = s.telegram_phone_restricted !== false;
+  // phone approval policy (ask|deny|off) - /gate and this select write
+  // the same setting
+  var tgApprSel = document.getElementById('tg-approval-mode-sel');
+  if (tgApprSel) tgApprSel.value = s.telegram_approval_mode || 'deny';
   // P8-lite supervisor: heartbeat status + start/stop buttons (2026-10-05)
   async function gatewaySupervisorTick() {
     try {
