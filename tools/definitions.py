@@ -375,7 +375,13 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # TIER-FIX (2026-09-02): the "read" tier is now WEBSEARCH ONLY — the model
     # can search/fetch the web but gets no file-read tools. File reading moved
     # up to the python tier ("read + python"). python tier keeps web (additive).
-    "direct": {"web_search", "web_fetch"},
+    # DIALOG TRIO (2026-10-06, live): without SearXNG the web discard below
+    # emptied this set completely — the tool loop then bailed silently and
+    # the direct chat had NO tools at all (no ask_user, no steering drain,
+    # empty-run_id tool calls). ask_user/task_complete/get_datetime are
+    # always dialog-level and must survive the web discard.
+    "direct": {"web_search", "web_fetch",
+               "ask_user", "task_complete", "get_datetime"},
     "direct_python": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "run_python"},
     "direct_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
 }

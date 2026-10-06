@@ -130,6 +130,13 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             )),
             port=_port,
             workspace=getattr(ctx, "workspace", "") or "",
+            # RUN-ID PROPAGATION (2026-10-06, live): ToolLoop.run() sets the
+            # _current_run_id ContextVar from self._run_id — without it every
+            # inline tool saw run_id="" : ask_user could not register its
+            # pause (gate fell open, instant auto-answer = "ask_user was
+            # instantly aborted") and mid-run steering never drained in
+            # direct mode (the drain site keys on the same id).
+            run_id=str(getattr(ctx, "run_id", "") or ""),
             abort_check=ctx.aborted,
             on_before_post=_capture_msgs,
         )

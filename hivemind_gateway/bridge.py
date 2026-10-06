@@ -930,6 +930,7 @@ class RunBridge:
                                   "approval_decision_id": "",
                                   "approval_tool": "",
                                   "other_run_noted": "",
+                                  "answer_parts": [],
                                   "last_tick": 0.0}
         return self._mirror_state
 
@@ -939,7 +940,7 @@ class RunBridge:
         m.update({"run_id": None, "after": 0, "status_msg_id": None,
                   "last_status": "", "approval_sig": None,
                   "approval_decision_id": "", "approval_tool": "",
-                  "other_run_noted": ""})
+                  "other_run_noted": "", "answer_parts": []})
 
     def _own_run_id(self) -> str | None:
         run = self.state.data.get("active_run") or {}
@@ -1027,7 +1028,8 @@ class RunBridge:
             m.update({"run_id": rid, "after": int(j.get("n") or 0),
                       "status_msg_id": None, "last_status": "",
                       "approval_sig": None, "approval_decision_id": "",
-                      "approval_tool": "", "other_run_noted": ""})
+                      "approval_tool": "", "other_run_noted": "",
+                      "answer_parts": []})
             await self.ms.send_message(
                 f"📢 Engine run taken over (mirror): {rid}\n"
                 "Your texts are queued (steering), approvals come "
@@ -1076,6 +1078,17 @@ class RunBridge:
                 continue
             if ev.get("type") == "status":
                 last_status = str(ev.get("content") or "")[:120]
+            elif ev.get("type") == "token":
+                # FAZIT RELAY (2026-10-06, owner report): the takeover never
+                # delivered the run's RESULT - the phone watched status lines
+                # and then got a bare "🏁 completed". Accumulate the answer
+                # tokens; an agent event starts a new phase, so only the LAST
+                # phase's tokens survive (planner/critic tokens use their own
+                # event types and never land here).
+                m["answer_parts"].append(str(ev.get("content") or ""))
+            elif ev.get("type") == "agent":
+                if m["answer_parts"]:
+                    m["answer_parts"] = []
             elif ev.get("type") == "steer":
                 # STEER CARD (2026-10-06): relay the takeover run's steer
                 # pickups as their own phone message.
@@ -1104,11 +1117,26 @@ class RunBridge:
             m["last_status"] = last_status
             m["last_tick"] = _now()
         if done_reason:
+            # FAZIT RELAY (2026-10-06): deliver what the run PRODUCED, not
+            # just the fact that it ended. Same shaping as the own-run
+            # finish: chunked messages, .txt document past the chunk cap.
+            _ans = "".join(m.get("answer_parts") or []).strip()
             text = STOP_REASON_TEXT.get(
                 done_reason, f"🏁 Mirror run finished ({done_reason}).")
             if done_reason == "completed":
                 text = "🏁 Mirror run completed."
-            await self.ms.send_message(text)
+            if _ans:
+                _full = _ans + "\n\n" + text
+            else:
+                _full = text
+            _chunks = render.split_message(_full)
+            if len(_chunks) > FINAL_CHUNK_LIMIT:
+                await self.ms.send_document(
+                    _ans.encode("utf-8"), "mirror_result.txt")
+                await self.ms.send_message(text)
+            else:
+                for _c in _chunks:
+                    await self.ms.send_message(_c)
             self._mirror_reset(m)
             return
 

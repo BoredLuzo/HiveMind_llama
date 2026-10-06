@@ -100,11 +100,35 @@ def test_stop_note():
         fail("stop_note", "replacement logic missing")
 
 
+
+
+def test_fazit_relay_pins():
+    src = _src("hivemind_gateway/bridge.py")
+    acc = "answer_parts" in src and src.count("answer_parts") >= 3
+    tok = 'elif ev.get("type") == "token"' in src
+    agent = 'elif ev.get("type") == "agent"' in src
+    doc = "mirror_result.txt" in src
+    if acc and tok and agent and doc:
+        ok("takeover: answer tokens accumulated per phase, delivered (doc path for long)")
+    else:
+        fail("fazit", f"acc={acc} token={tok} agent={agent} doc={doc}")
+
+
+def test_direct_run_id_propagation():
+    src = _src("core/direct_runner.py")
+    if 'run_id=str(getattr(ctx, "run_id", "") or "")' in src:
+        ok("direct ToolLoop carries the run_id (ask_user pause + steering drain)")
+    else:
+        fail("direct_rid", "run_id propagation missing")
+
+
 if __name__ == "__main__":
     test_start_race()
     test_start_route_ast()
     test_expired_toasts()
     test_second_run_note()
     test_stop_note()
+    test_fazit_relay_pins()
+    test_direct_run_id_propagation()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)
