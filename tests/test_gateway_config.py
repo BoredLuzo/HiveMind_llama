@@ -137,9 +137,13 @@ from hivemind_gateway.config import ensure_enabled_config
 
 _t = Path(tempfile.mkdtemp(prefix="gwcfg_ens_"))
 msg = ensure_enabled_config(_t)
-check("ensure: missing file written", "written" in msg
-      and (_t / "gateway.toml").read_text().strip()
-      == "telegram_enabled = true")
+# I5 (audit r2): the written config also pins hive_base_url to the
+# settings port so setup-token + custom port actually reach the engine.
+_cfg_txt = (_t / "gateway.toml").read_text()
+check("ensure: missing file written",
+      "written" in msg
+      and "telegram_enabled = true" in _cfg_txt
+      and "hive_base_url" in _cfg_txt)
 (_t / "gateway.toml").write_text(
     'hive_base_url = "http://127.0.0.1:8001"\n'
     'telegram_enabled = false\n',

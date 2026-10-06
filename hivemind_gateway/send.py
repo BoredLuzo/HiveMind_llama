@@ -34,6 +34,21 @@ async def send(api, owner_chat_id: str | int | None,
         raise PolicyViolation(
             f"refusing to send to chat {chat_id!r}: not the owner "
             f"({owner_chat_id!r})")
+    # G3 (audit r2): filter_secrets ran ONLY in the own-run finish - the
+    # mirror fazit, tool-call relay lines and approval previews reached
+    # Telegram unfiltered. The transport boundary sees everything.
+    from . import render as _render
+    if text is not None:
+        text = _render.filter_secrets(text)
+    if new_text is not None:
+        new_text = _render.filter_secrets(new_text)
+    if document_bytes is not None:
+        try:
+            document_bytes = _render.filter_secrets(
+                document_bytes.decode("utf-8", "replace")
+            ).encode("utf-8")
+        except (UnicodeError, ValueError):
+            pass  # keep the document unfiltered rather than dropping it
     if new_text is not None:
         if message_id is None:
             raise ValueError("edit requires message_id")

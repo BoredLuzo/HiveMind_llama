@@ -379,6 +379,16 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
                     return (f"[web_fetch blocked at redirect hop {_hop + 1} - "
                             f"{_hop_url}] {_gerr}")
                 client = await _get_client_async()
+                # T4 (audit r2): re-resolve RIGHT BEFORE the connect - the
+                # classic guard-then-connect TOCTOU (guard query answered
+                # public, httpx query answered loopback) now has a sub-second
+                # window instead of a per-UA-round one.
+                from urllib.parse import urlparse as _up_final
+                _final_host = (_up_final(_hop_url).hostname or "").lower()
+                if _final_host:
+                    _gerr = await _guard_fetch_resolved(_final_host)
+                    if _gerr:
+                        return f"[web_fetch blocked pre-connect] {_gerr}"
                 resp = await client.get(
                     _hop_url,
                     headers=_req_headers,

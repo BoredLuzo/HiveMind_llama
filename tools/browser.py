@@ -99,7 +99,33 @@ def _guard_browser_url(url: str) -> str | None:
                 return ("loopback/private IPs are not navigable (only the tool's "
                         "own file server origin)")
     except ValueError:
-        pass  # normaler DNS-Hostname
+        # T3 (audit r2): a DNS hostname was judged by NAME only -
+        # rebinding domains (TTL-0) and 127-0-0-1.nip.io-style wildcards
+        # connected Chromium to loopback/LAN. Resolve and apply the SAME
+        # address rules per resolved IP.
+        import socket as _sock
+        try:
+            _infos = _sock.getaddrinfo(_host, None)
+        except (OSError, UnicodeError):
+            return "hostname does not resolve — refusing"
+        for _ai in _infos:
+            try:
+                _rip = _ipa.ip_address(_ai[4][0])
+            except ValueError:
+                continue
+            if isinstance(_rip, _ipa.IPv6Address) and _rip.ipv4_mapped:
+                _rip = _rip.ipv4_mapped
+            if _rip.version == 4 and _rip in _ipa.ip_network("100.64.0.0/10"):
+                return "CGNAT range is not navigable"
+            if (_rip.is_link_local or _rip.is_reserved or _rip.is_multicast):
+                return "metadata/link-local/reserved IPs are not navigable"
+            if (_rip.is_loopback or _rip.is_private):
+                _fs_port = _file_server.server_address[1] if _file_server is not None else None
+                _uport = _parts.port or (443 if _parts.scheme == "https" else 80)
+                if not (_fs_port is not None and _rip.version == 4
+                        and _rip == _ipa.ip_address("127.0.0.1") and _uport == _fs_port):
+                    return ("hostname resolves to loopback/private - not "
+                            "navigable (only the tool's own file server)")
     # DNS-LOOPBACK (2026-09-13): "localhost" & friends resolve to loopback —
     # block the obvious names (IP-literal + resolution hardening is the
     # request-level route guard's job, which re-runs this for every request).

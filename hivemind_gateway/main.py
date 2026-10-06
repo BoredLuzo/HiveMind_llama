@@ -218,9 +218,19 @@ def stop_instance(killer=None) -> str:
     if killer is None:
         import subprocess
 
-        def killer(pid: int) -> None:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                           capture_output=True)
+        if os.name == "nt":
+            def killer(pid: int) -> None:
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                               capture_output=True)
+        else:
+            # X3 (audit r2): taskkill is Windows-only - Linux stop died
+            # with FileNotFoundError and left the lock behind.
+            def killer(pid: int) -> None:
+                import signal as _sig
+                try:
+                    os.kill(pid, _sig.SIGTERM)
+                except OSError:
+                    pass
     p = gw_state.lock_path()
     if not p.exists():
         return ("No gateway lock found — no instance is recorded as "
@@ -465,12 +475,19 @@ class Gateway:
                              f"{self.cfg.max_text_chars} Zeichen).",
                              reply_to_message_id=p.message_id)
             return
-        note = await self.bridge.start_text_run(q)
-        if note and note.startswith(("⏳", "🔌", "❌")):
-            # busy/offline notes come back as messages; successful runs
-            # already delivered their own output
-            await self.reply(p.chat_id, note,
-                             reply_to_message_id=p.message_id)
+        # G2 (audit r2): the run executes as a TASK - awaiting it inline
+        # blocked getUpdates for minutes, so /stop and every approval
+        # tap were unreachable while an own run streamed (ask-mode cards
+        # then always resolved via the fail-closed timeout, never the
+        # owner). Commands/intercepts above stay synchronous on purpose.
+        async def _own_run_task() -> None:
+            note = await self.bridge.start_text_run(q)
+            if note and note.startswith(("⏳", "🔌", "❌")):
+                await self.reply(p.chat_id, note,
+                                 reply_to_message_id=p.message_id)
+        _t = asyncio.create_task(_own_run_task())
+        _t.add_done_callback(lambda t: t.exception() and log.warning(
+            "[RUN] own run task failed: %s", t.exception()))
 
     async def cmd_pair(self, p: gw_auth.ParsedUpdate, arg: str) -> None:
         if self.owner_id is not None:
@@ -579,7 +596,11 @@ async def process_update(gw: Gateway, raw: dict) -> None:
         return
     verdict = gw_auth.classify(p, gw.owner_id)
     if verdict == "owner":
-        if _is_stale(p, gw.cfg.update_max_age_s):
+        if p.kind != "callback_query" \
+                and _is_stale(p, gw.cfg.update_max_age_s):
+            # G4 (audit r2): callback `date` is the CARD's send time -
+            # taps on cards older than the window were silently dropped
+            # (the engine's decision_id already guards replay).
             log.info("[DROP] stale update %s (%s)", p.update_id, p.kind)
             return
         cmd = gw_commands.command_from_message(p)

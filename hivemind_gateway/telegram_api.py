@@ -51,7 +51,12 @@ class TelegramApi:
 
     async def _call(self, method: str, **params: Any) -> dict:
         c = await self._http()
-        r = await c.post(f"{self._base}/{method}", json=params)
+        try:
+            r = await c.post(f"{self._base}/{method}", json=params)
+        except httpx.HTTPError as _exc:
+            # G1 (audit r2): a raw ConnectError/ReadTimeout escaped every
+            # caller's TelegramApiError handling and killed the process.
+            raise TelegramApiError(method, f"transport: {_exc}") from _exc
         try:
             data = r.json()
         except ValueError:

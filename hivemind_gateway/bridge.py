@@ -24,6 +24,7 @@ import time
 
 from httpx import HTTPError
 
+import asyncio
 from . import render
 from .hive_client import HiveUnreachable
 from .telegram_api import TelegramApiError
@@ -185,10 +186,29 @@ class RunBridge:
             await self.ms.send_message(
                 render.md_to_telegram_html(plain), parse_mode="HTML")
         except TelegramApiError as exc:
+            # G5 (audit r2): on 429 the immediate plain resend double-hit
+            # the limit and the whole result was lost - honor retry_after.
+            _ra = getattr(exc, "retry_after", None)
+            if _ra:
+                await asyncio.sleep(int(_ra) + 1)
             self._log_note(f"HTML send rejected ({exc}) — resending plain")
             await self.ms.send_message(plain)
 
     def _clear_run(self) -> None:
+        # G6 (audit r2): a relayed-but-unanswered approval survived the
+        # run end in the persisted state forever (deny-POST noise after
+        # every restart). The run is over - its cards are moot.
+        _stale_rids = []
+        _oa_rid = (self._open_own_approval or {}).get("rid")
+        if _oa_rid:
+            _stale_rids.append(_oa_rid)
+        _ar = self.state.data.get("active_run") or {}
+        if _ar.get("run_id"):
+            _stale_rids.append(_ar["run_id"])
+        _open_apprs = self.state.data.get("open_approvals")
+        if isinstance(_open_apprs, dict) and _stale_rids:
+            for _sr in _stale_rids:
+                _open_apprs.pop(_sr, None)
         if self.state.data.get("active_run"):
             self.state.set_active_run(None)
             self.state.save()

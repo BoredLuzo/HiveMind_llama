@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # HiveMind Linux installer: system deps + venv + llama.cpp + systemd service.
-# Usage: sudo deploy/install_linux.sh   (env: HIVEMIND_GPU_BACKEND=vulkan|cpu|rocm)
+# Usage: sudo deploy/install_linux.sh   (env: HIVEMIND_GPU_BACKEND=vulkan|cuda|rocm|cpu)
 set -euo pipefail
 
 INSTALL_DIR="/opt/hivemind"
@@ -16,8 +16,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-if [ "$LLAMA_BACKEND" != "vulkan" ] && [ "$LLAMA_BACKEND" != "cpu" ] && [ "$LLAMA_BACKEND" != "rocm" ]; then
-  echo "Error: HIVEMIND_GPU_BACKEND must be vulkan, cpu or rocm (got: $LLAMA_BACKEND)"
+if [ "$LLAMA_BACKEND" != "vulkan" ] && [ "$LLAMA_BACKEND" != "cpu" ] && [ "$LLAMA_BACKEND" != "rocm" ] && [ "$LLAMA_BACKEND" != "cuda" ]; then
+  echo "Error: HIVEMIND_GPU_BACKEND must be vulkan, cpu, rocm or cuda (got: $LLAMA_BACKEND)"
   exit 1
 fi
 
@@ -104,7 +104,7 @@ echo "  journalctl -u hivemind -f        # Live logs"
 echo "  tail -f $LOG_DIR/hivemind.log    # Log file"
 echo ""
 echo "Configuration ($SERVICE_FILE):"
-echo "  - Environment=HIVEMIND_GPU_BACKEND=$LLAMA_BACKEND  (vulkan | cuda | cpu)"
+echo "  - Environment=HIVEMIND_GPU_BACKEND=$LLAMA_BACKEND  (vulkan | cuda | rocm | cpu)"
 echo "  - MemoryMax (default 12G, adjust for your RAM)"
 echo ""
 echo "Models: copy GGUFs into the models folder or run, as hivemind:"

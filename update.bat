@@ -77,10 +77,11 @@ if errorlevel 1 (
 
 set "TAG="
 set "ASSET_URL="
-for /f "usebackq delims=" %%L in (`powershell -NoProfile -Command "$r = Get-Content '%TMPDIR%\release.json' -Raw | ConvertFrom-Json; $a = $r.assets | Where-Object { $_.name -like '*.zip' } | Select-Object -First 1; Write-Output ($r.tag_name + '|' + $a.browser_download_url)"`) do set "LINE=%%L"
-for /f "tokens=1,2 delims=|" %%T in ("%LINE%") do (
+for /f "usebackq delims=" %%L in (`powershell -NoProfile -Command "$r = Get-Content '%TMPDIR%\release.json' -Raw | ConvertFrom-Json; $a = $r.assets | Where-Object { $_.name -like '*.zip' } | Select-Object -First 1; Write-Output ($r.tag_name + '|' + $a.browser_download_url + '|' + $a.digest)"`) do set "LINE=%%L"
+for /f "tokens=1,2,3 delims=|" %%T in ("%LINE%") do (
     set "TAG=%%T"
     set "ASSET_URL=%%U"
+    set "ASSET_DIGEST=%%V"
 )
 if defined TAG if defined ASSET_URL goto tag_ok
 echo  [ERROR] GitHub returned no release - rate limit or private repo?
@@ -171,7 +172,8 @@ if errorlevel 8 (
 
 REM -- 6. Download the release zip -------------------------------------------
 echo  Downloading       : %ASSET_URL%
-curl -sS -L -o "%TMPDIR%\release.zip" "%ASSET_URL%"
+REM I1 (audit r2): --fail turns an HTTP error page into a curl failure
+curl -sS -L --fail -o "%TMPDIR%\release.zip" "%ASSET_URL%"
 if errorlevel 1 (
     echo  [ERROR] Download failed. Nothing was changed
     echo         backup is in %BK%
@@ -179,6 +181,16 @@ if errorlevel 1 (
 )
 if not exist "%TMPDIR%\release.zip" (
     echo  [ERROR] Download produced no file. Nothing was changed.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+
+REM I1 (audit r2): verify the downloaded asset against the release API
+REM sha256 digest - curl exit 0 proves nothing about content identity,
+REM and the extract below installs executable code.
+powershell -NoProfile -Command "if ('%ASSET_DIGEST%' -like 'sha256:*') { $d = '%ASSET_DIGEST%'.Substring(7); $h = (Get-FileHash -Algorithm SHA256 '%TMPDIR%\release.zip').Hash.ToLower(); if ($h -ne $d) { Write-Output ('[ERROR] digest mismatch: got ' + $h + ' want ' + $d); exit 1 } } else { Write-Output '  (no digest in release metadata - skipping hash check)' }"
+if errorlevel 1 (
+    echo  [ERROR] Release zip FAILED the sha256 digest check. Nothing was changed.
+    echo         The download was tampered with or corrupted. Backup is in %BK%
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 

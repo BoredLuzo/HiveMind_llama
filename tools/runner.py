@@ -1065,6 +1065,17 @@ _DESTRUCTIVE_BASH_PATTERNS = [
     r"\bSet-ItemProperty\b",
     r"\bNew-ItemProperty\b",
     r"\breg\s+(add|delete)\b",
+    # T1 (audit r2): coverage gaps - the old list required exact flag
+    # ORDER and specific drives, so rd /s /q D:\.., del /s, Remove-Item
+    # -Recurse (no -Force), download cradles and scheduled-task
+    # persistence all passed ungated.
+    r"\b(rd|rmdir)\s+[^|&;]*\/[sS]",
+    r"\bdel\s+[^|&;]*\/[sS]",
+    r"\bRemove-Item\s+.*-[Rr]ecurse",
+    r"\b(Invoke-Expression|iex)\b",
+    r"\bschtasks\s+\/(create|change|delete)",
+    r"(curl|wget|iwr|Invoke-WebRequest)[^|;]*\|\s*(iex|Invoke-Expression|sh|bash|powershell)",
+    r"\|\s*(iex|Invoke-Expression)\b",
 ]
 # CHMOD-GATE-SCOPE (2026-09-19): 'chmod +x script.sh' ist auf POSIX
 # Routinelast (Container/Builds) — das bare chmod-Pattern hat dort jeden
@@ -1298,9 +1309,11 @@ async def _run_inline_tool(
     elif name in ("edit_file", "patch_file", "write_file", "write_file_append", "replace_lines") and "path" in args:
         raw_path = args["path"]
         _resolved_path = raw_path
-        _fp_check = Path(_resolved_path)
-        if not _fp_check.is_absolute():
-            _fp_check = workspace / _fp_check
+        # T5 (audit r2): build the probe via the SAME MSYS-stripping
+        # resolver the handler uses - '/C:/x' used to probe a phantom
+        # 'workspace//C:/x' (never exists) and both read/write guards
+        # silently skipped for in-workspace files.
+        _fp_check = Path(_inline_resolve_path(str(workspace), raw_path))
         try:
             _fp_check = _fp_check.resolve()
         except Exception:
@@ -1469,19 +1482,20 @@ async def _run_inline_tool(
                 # FILE_TOO_LARGE result used to arm the skip + the fuzzy-edit
                 # gate for content the model never saw.
                 _read_set.add(_rp_ok)
-            # READ-SIGNATURE (2026-09-17): remember mtime+size at read time so
-            # edit_file's fuzzy fallback can verify the file hasn't changed
-            # since the model last saw it (stale edits must fail clearly).
-            try:
-                _rs_fp = Path(workspace) / args.get("path", "")
-                if not _rs_fp.is_absolute():
-                    _rs_fp = workspace / _rs_fp
-                _rs_fp = _rs_fp.resolve()
-                _rs_st = _rs_fp.stat()
-                _read_signatures[_normalize_tool_path(str(_rs_fp), workspace)] = (
-                    _rs_st.st_mtime_ns, _rs_st.st_size)
-            except OSError:
-                pass
+                # T2 (audit r2): the signature block used to run on ANY
+                # outcome at its own indent level - a FAILED re-read
+                # refreshed the signature for content the model never saw,
+                # arming the fuzzy-edit stale-gate bypass. Success-only.
+                try:
+                    _rs_fp = Path(workspace) / args.get("path", "")
+                    if not _rs_fp.is_absolute():
+                        _rs_fp = workspace / _rs_fp
+                    _rs_fp = _rs_fp.resolve()
+                    _rs_st = _rs_fp.stat()
+                    _read_signatures[_normalize_tool_path(str(_rs_fp), workspace)] = (
+                        _rs_st.st_mtime_ns, _rs_st.st_size)
+                except OSError:
+                    pass
 
         # WRITTEN-SET (2026-08-21): erfolgreiche write_file/write_file_append
         if name in ("write_file", "write_file_append"):

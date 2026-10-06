@@ -22,6 +22,16 @@ _JSON_EDIT_KEY_OLD = ("old_str", "old_string", "search")
 
 from .linting import _auto_lint_result
 
+
+def _recheck_workspace_before_replace(p, workspace_lock, tool_name):
+    """T6 (audit r2): the containment check ran at handler entry; a junction
+    swapped into p.parent between check and os.replace redirected the write.
+    Re-run the SAME checks on the exact path we are about to commit."""
+    from utils.file import _inline_check_workspace as _c
+    err = _c(p, workspace_lock, tool_name)
+    if err:
+        raise PermissionError("PATH_RECHECK_FAILED")
+
 def _atomic_write_text(p: Path, text: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
@@ -285,6 +295,7 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
                             with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                                 _f.write(new_content)
                             os.replace(_tmp_path, str(p))
+                            _recheck_workspace_before_replace(p, workspace_lock, "_write_fuzzy_patch")
                         except Exception:
                             try:
                                 os.unlink(_tmp_path)
@@ -322,6 +333,7 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
                         with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                             _f.write(_nc_p2)
                         os.replace(_tmp_path, str(p))
+                        _recheck_workspace_before_replace(p, workspace_lock, "_write_p2_patch")
                     except Exception:
                         try:
                             os.unlink(_tmp_path)
@@ -353,6 +365,7 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
                 with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                     _f.write(new_content)
                 os.replace(_tmp_path, str(p))
+                _recheck_workspace_before_replace(p, workspace_lock, "_write_patch_result")
             except Exception:
                 try:
                     os.unlink(_tmp_path)
@@ -442,6 +455,7 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
             with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                 _f.write(content)
             os.replace(_tmp_path, str(p))
+            _recheck_workspace_before_replace(p, workspace_lock, "_write_now")
         except Exception:
             try: os.unlink(_tmp_path)
             except Exception: pass
@@ -570,6 +584,7 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
                     with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                         _f.write(final)
                     os.replace(_tmp_path, str(p))
+                    _recheck_workspace_before_replace(p, workspace_lock, "_write_fuzzy")
                 except Exception:
                     try: os.unlink(_tmp_path)
                     except Exception: pass
@@ -622,6 +637,7 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                 _f.write(final)
             os.replace(_tmp_path, str(p))
+            _recheck_workspace_before_replace(p, workspace_lock, "_write_exact")
         except Exception:
             try: os.unlink(_tmp_path)
             except Exception: pass

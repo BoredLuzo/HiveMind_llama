@@ -85,14 +85,38 @@ def ensure_enabled_config(directory: str | Path) -> str:
         if pattern.search(text):
             new_text = pattern.sub(
                 lambda m: m.group(1) + "telegram_enabled = true", text)
+            # I5 (audit r2): sync hive_base_url with the settings port for
+            # existing configs too - a toml from a previous install still
+            # pointed at 8001 while the engine now runs elsewhere.
+            try:
+                from settings import load_settings as _ls
+                _port = int((_ls() or {}).get("server_port") or 8001)
+                _bu = 'hive_base_url = "http://127.0.0.1:' + str(_port) + '"'
+                if not re.search(r"(?m)^hive_base_url\s*=", new_text):
+                    new_text = new_text.rstrip("\n") + "\n" + _bu + "\n"
+                elif not re.search(r"(?m)^hive_base_url\s*=.*:" + str(_port), new_text):
+                    new_text = re.sub(r"(?m)^hive_base_url\s*=.*$", _bu, new_text)
+            except (ImportError, ValueError, OSError):
+                pass
             if new_text != text:
                 p.write_text(new_text, encoding="utf-8", newline="")
-                return f"{p.name}: telegram_enabled -> true"
+                return f"{p.name}: telegram_enabled -> true (base_url synced)"
             return f"{p.name}: already enabled"
         p.write_text(text.rstrip("\n") + "\n\ntelegram_enabled = true\n",
                      encoding="utf-8", newline="")
         return f"{p.name}: telegram_enabled = true appended"
-    p.write_text("telegram_enabled = true\n", encoding="utf-8", newline="")
+    # I5 (audit r2): the installer prompts for a custom server_port one
+    # step earlier - a base_url still pointing at 8001 made every phone
+    # run fail with engine-unreachable while the gateway looked healthy.
+    try:
+        from settings import load_settings as _ls
+        _port = int((_ls() or {}).get("server_port") or 8001)
+    except (ImportError, ValueError, TypeError, OSError):
+        _port = 8001
+    p.write_text(
+        f"telegram_enabled = true\n"
+        f"hive_base_url = \"http://127.0.0.1:{_port}\"\n",
+        encoding="utf-8", newline="")
     return f"{p.name}: written (telegram_enabled = true)"
 
 

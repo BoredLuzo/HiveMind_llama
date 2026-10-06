@@ -185,12 +185,14 @@ async def t_status_verbose():
 async def t_run_route():
     gw, st, api = _gw("gwcmd_run_")
     await process_update(gw, _msg("Hallo Lauf", 6))
+    await asyncio.sleep(0)  # G2: the run executes as a task - yield to it
     check("plain text routed to bridge",
           gw.bridge.runs == ["Hallo Lauf"])
     long = "x" * (gw.cfg.max_text_chars + 1)
     api.sent.clear()
     await process_update(gw, _msg(long, 7))
     check("overlong text rejected", any("zu lang" in t for _, t in api.sent))
+    await asyncio.sleep(0)  # let the first run task finish
     check("overlong text did not run",
           gw.bridge.runs == ["Hallo Lauf"])
 
@@ -400,6 +402,7 @@ async def t_g9_edits():
     await process_update(gw, _edit("zweiter Lauf", 40))
     check("G9: edited text starts no second run", gw.bridge.runs == [])
     await process_update(gw, _msg("echter Lauf", 41))
+    await asyncio.sleep(0)  # G2: yield to the run task
     check("G9: normal text still starts a run",
           gw.bridge.runs == ["echter Lauf"])
 

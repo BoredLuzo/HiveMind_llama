@@ -9,6 +9,8 @@ import asyncio
 import os
 import re
 import shutil
+
+_BASH_BIN = shutil.which("bash") or "/bin/sh"  # X6 (audit r2): bash-less distros
 import sys
 import tempfile
 
@@ -326,7 +328,7 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             _stream_cmd = (
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _ps_cmd]
                 if sys.platform == "win32"
-                else ["/bin/bash", "-c", cmd]
+                else [_BASH_BIN, "-c", cmd]  # X6: not every distro ships /bin/bash
             )
             stdout_raw, stderr_raw, returncode, timed_out = await _stream_proc(
                 _stream_cmd, _bash_timeout, str(workspace), os.environ,

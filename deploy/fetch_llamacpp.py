@@ -327,6 +327,19 @@ def main() -> int:
     print(f"[3/3] Extracting to {target}...")
     _is_targz = tmp_zip.name.lower().endswith(".tar.gz")
     try:
+        # I2 (audit r2): verify the asset digest from the GitHub API when
+        # present - CRC32 (testzip) catches transport corruption but
+        # proves nothing about authenticity of the binary we execute.
+        _digest = asset.get("digest") if isinstance(asset, dict) else None
+        if isinstance(_digest, str) and _digest.startswith("sha256:"):
+            import hashlib as _hl
+            _h = _hl.sha256(tmp_zip.read_bytes()).hexdigest()
+            if _h != _digest.split(":", 1)[1]:
+                shutil.rmtree(target, ignore_errors=True)
+                tmp_zip.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"llama.cpp asset digest mismatch ({_h[:16]}...) - "
+                    "refusing to install a tampered/incomplete binary")
         if _is_targz:
             with tarfile.open(tmp_zip) as tf:
                 tf.extractall(target)

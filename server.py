@@ -1959,7 +1959,15 @@ async def gateway_start():
             _pid = int(_st.get("pid") or 0)
             _birth = int(_st.get("birth") or 0)
             _alive = False
-            if _pid > 0:
+            if _pid > 0 and os.name != "nt":
+                # X4 (audit r2): posix liveness via /proc (no PowerShell).
+                import subprocess as _sp_l
+                _chk = _sp_l.run(["sh", "-c",
+                                  f"test -d /proc/{_pid} && "
+                                  f"grep -q python /proc/{_pid}/comm && echo py || echo no"],
+                                 capture_output=True, text=True)
+                _alive = _chk.stdout.strip() == "py"
+            elif _pid > 0:
                 _ps = (
                     "$p = Get-Process -Id " + str(_pid) + " -ErrorAction SilentlyContinue; "
                     "if (-not $p) { 'no' }"
@@ -2019,6 +2027,37 @@ async def gateway_stop():
     # window. Verify process name AND the process birth (FILETIME from
     # the heartbeat) before killing - a mismatch resets the status
     # instead of killing an innocent process.
+    if os.name != "nt":
+        # X1 (audit r2): the PowerShell birth-check does not exist on
+        # Linux (and FILETIME is meaningless against /proc jiffies) -
+        # posix verifies name+birth via /proc and kills with os.kill.
+        try:
+            _stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+            _comm = _stat.rsplit(")", 1)[0].split("(", 1)[1]
+            _birth_ticks = int(_stat.rsplit(")", 1)[1].split()[19])
+        except (OSError, ValueError, IndexError):
+            _sup.clear()
+            return JSONResponse(
+                {"ok": False, "error": "gateway process not found - status reset"},
+                status_code=409)
+        if "python" not in _comm:
+            _sup.clear()
+            return JSONResponse(
+                {"ok": False, "error": "pid was recycled by another process - refusing, status reset"},
+                status_code=409)
+        if birth and abs(int(birth) - _birth_ticks) > 5:
+            _sup.clear()
+            return JSONResponse(
+                {"ok": False, "error": "pid was recycled by another process - refusing, status reset"},
+                status_code=409)
+        import signal as _sig
+        try:
+            os.kill(pid, _sig.SIGTERM)
+        except OSError as _ke:
+            return JSONResponse({"ok": False, "error": f"kill failed: {_ke}"},
+                                status_code=500)
+        _sup.clear()
+        return {"ok": True}
     _ps = (
         "$p = Get-Process -Id " + str(pid) + " -ErrorAction SilentlyContinue; "
         "if (-not $p) { 'no' }"

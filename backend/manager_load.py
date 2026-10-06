@@ -1683,8 +1683,13 @@ class LlamaLoadMixin:
                     import os as _os_spawn
                     _spawn_env = dict(_os_spawn.environ)
                     _bin_dir = str(LLAMA_BIN.parent)
+                    # X2 (audit r2): ubuntu tarballs ship the shared libs
+                    # in lib/ (deploy/fetch_llamacpp.py and the SO-LAYOUT
+                    # probes both say so) - without it every model load
+                    # died on 'libggml-vulkan.so: cannot open'.
+                    _ldp = _bin_dir + ":" + _bin_dir + "/lib"
                     _spawn_env["LD_LIBRARY_PATH"] = (
-                        _bin_dir + (":" + _spawn_env["LD_LIBRARY_PATH"] if _spawn_env.get("LD_LIBRARY_PATH") else "")
+                        _ldp + (":" + _spawn_env["LD_LIBRARY_PATH"] if _spawn_env.get("LD_LIBRARY_PATH") else "")
                     )
                 slot.process   = subprocess.Popen(
                     cmd,
