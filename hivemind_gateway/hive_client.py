@@ -202,7 +202,17 @@ class HiveClient:
         if overrides:
             body.update(overrides)
         try:
-            async with self._client.stream("POST", "/stream", json=body) as r:
+            # STREAM-TIMEOUT (2026-10-06, live 19:47+20:20): the shared
+            # client's 60 s read timeout killed the SSE connection exactly
+            # during cold-engine model loads (preflight + load ≈ 60 s of
+            # silence) - both stream breaks tonight were that pattern. SSE
+            # frames may legitimately pause for minutes (model load, long
+            # thinking, run_bash): 10 min read, 10 s connect. A genuinely
+            # wedged engine still breaks the stream, and the bridge's
+            # stream-broke handover takes over.
+            _stream_timeout = httpx.Timeout(600.0, connect=10.0)
+            async with self._client.stream("POST", "/stream", json=body,
+                                           timeout=_stream_timeout) as r:
                 r.raise_for_status()
                 async for line in r.aiter_lines():
                     if not line.startswith("data: "):
@@ -212,4 +222,6 @@ class HiveClient:
                     except ValueError:
                         continue  # keep-alive or malformed frame: skip
         except httpx.HTTPError as exc:
-            raise HiveUnreachable(f"stream broke: {exc}") from None
+            raise HiveUnreachable(
+                f"stream broke ({type(exc).__name__}: {exc or 'no detail'})"
+            ) from None
