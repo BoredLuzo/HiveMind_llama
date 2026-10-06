@@ -15,6 +15,7 @@ COMMAND_WHITELIST = {
     "stop": "abort the running run",
     "shutdown": "shut down the PC (two-step confirm, owner-only)",
     "purge": "evict ALL models from VRAM (free the GPU)",
+    "restrict": "phone runs restricted to web+reading+chat (on|off)",
     "status": "current run/status",
     "verbose": "toggle verbose output",
     "mode": "show/set the phone-side run mode (auto|chat|pipeline|automap|off)",

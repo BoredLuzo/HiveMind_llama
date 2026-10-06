@@ -38,6 +38,13 @@ _UI_REV_PROTECTED_KEYS = {
     "duo_compress_threshold", "duo_compress_auto_floor",
     "duo_cache_friendly_ctx", "duo_partial_compression",
     "duo_compress_local_only",
+    # STALE-TAB RACE (2026-10-06, live x2): an open tab's old snapshot
+    # reverted the gate/timeout/restrict after every restart - these now
+    # carry the same rev guard.
+    "duo_action_approval_enabled", "duo_action_approval_timeout_s",
+    "telegram_phone_restricted", "telegram_mirror_enabled",
+    "telegram_gateway_enabled", "telegram_approval_mode",
+    "git_token",
 }
 
 # Secrets / maschinen-spezifische Werte werden nie in ein Preset gespeichert

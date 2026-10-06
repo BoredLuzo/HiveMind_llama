@@ -5405,7 +5405,7 @@ async function sendMsg() {
     // RUN-JOURNAL (2026-09-20): a clean stream end WITHOUT a done event used
     // to leave the bubble on "⟳ Loading" forever. Reattach via the journal.
     if (!S._sawDoneEvent && S.currentRunId && !S._journalTailing) {
-      _journalNote('Verbindung verloren - hänge per Run-Journal wieder an ...');
+      _journalNote('Connection lost - reattaching via the run journal ...');
       _journalStartTail(S.currentRunId);
     }
   } catch(e) {
@@ -5587,17 +5587,25 @@ function _journalInitAttach() {
     .then(function(j) {
       if (!j || !j.active || !j.frames || !j.frames.length) return;
       if (j.done && ((Date.now() / 1000) - (j.ts || 0)) > 300) return;
+      // skip if we already rendered this run (page reload replays it via
+      // the chat transcript; only LIVE runs and fresh history attach)
+      if (S._attachedRunId === j.run_id) return;
+      S._attachedRunId = j.run_id;
       S._sseFrameSeq = 0; S._sseBuf = ''; S._sawDoneEvent = false;
-      _journalNote(j.done ? 'Run-Verlauf wiederhergestellt.' : 'An laufenden Run angehängt.');
+      _journalNote(j.done ? 'Run history restored.' : 'Attached to the running job (live).');
       for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
       if (!S._sawDoneEvent && !j.done && !j.aborted) _journalStartTail(j.run_id);
-      else if (j.aborted) _journalNote('Run wurde unterbrochen (Verbindung/Tab). Sende eine Nachricht zum Fortsetzen.');
+      else if (j.aborted) _journalNote('Run was interrupted (connection/tab). Send a message to resume.');
     })
     .catch(function() {});
 }
 
 // Reattach shortly after page load (script sits at end of body, #chat exists).
 setTimeout(_journalInitAttach, 1500);
+// LIVE MIRROR (2026-10-06, owner): a run started on the PHONE (or another
+// tab) while this UI sits idle now appears here too - poll the journal
+// every 10 s and attach to any new active run.
+setInterval(_journalInitAttach, 10000);
 
 function handleEvent(d) {
   if (d.type === 'run_id') {

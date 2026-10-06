@@ -422,6 +422,31 @@ class Gateway:
                              f"/shutdown {_code}\n"
                              "(/shutdown cancel aborts)",
                              reply_to_message_id=p.message_id)
+        elif name == "restrict":
+            # R6 (owner): /restrict on|off from the phone - the UI toggle's
+            # chat twin. ON: phone runs limited to web/reading/chat; OFF:
+            # same tools as desktop, gated calls still need approval.
+            arg_l = (arg or "").strip().lower()
+            if arg_l not in ("on", "off"):
+                cur = "on" if getattr(self, "phone_restricted", True) else "off"
+                await self.reply(p.chat_id,
+                                 f"Phone restriction: {cur}. Use /restrict on|off.",
+                                 reply_to_message_id=p.message_id)
+                return
+            _ron = arg_l == "on"
+            try:
+                await self.hive.set_setting("telegram_phone_restricted", _ron)
+            except (HiveUnreachable, HTTPError, OSError) as _rs_exc:
+                await self.reply(p.chat_id, f"❌ could not set: {_rs_exc}",
+                                 reply_to_message_id=p.message_id)
+                return
+            self.phone_restricted = _ron
+            await self.reply(p.chat_id,
+                             ("🔒 Phone runs restricted: web + reading + chat "
+                              "only (no shell/writes/git)." if _ron else
+                              "🔓 Phone runs unrestricted: full tools — gated "
+                              "calls still ask for approval."),
+                             reply_to_message_id=p.message_id)
         elif name == "purge":
             # R4 (owner request): /purge kills ALL loaded models - instant
             # VRAM freed, next run reloads on demand.

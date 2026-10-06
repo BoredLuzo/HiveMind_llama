@@ -132,3 +132,6 @@ gateway_state.json.corrupt
 gateway.disabled
 gateway.lock
 gateway.pid
+
+# internal audit docs - never in a release zip
+docs/gateway_audit_glm_full.md
