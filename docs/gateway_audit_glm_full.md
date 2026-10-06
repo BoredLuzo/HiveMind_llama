@@ -241,3 +241,93 @@ Three additions from the review round, all tested (85/85 suites, ruff clean):
 - **Version-skew detection (G1 hardening):** `server.py` `/health` now reports `"gateway_overrides": true`; the gateway probes it at startup (`main.py` F3 check) — a missing marker means an OLD engine that would silently ignore the forced-gate body key: loud console warning, `engine_gate_support=False`, and `/status` downgrades from "Gate erzwungen" to an explicit "⚠️ Gate-Erzwigung INAKTIV" with the remedy. The version STRING was deliberately not used as the discriminator (live already reports 1.3.0-preview without the lift); refusing to start was also rejected — it would break the documented runs against an old engine, the visible downgrade is the honest middle. Bridge test asserts the warning path.
 - **`setup-token` one-time setup (WP6 path):** `python -m hivemind_gateway.main setup-token` (and `start_gateway.bat setup`) prompts via getpass, validates the token against Telegram `getMe` (new `TelegramApi.get_me`, setup-only), stores it in the Windows Credential Manager via keyring, and prints the bot username — the token is never echoed, logged, or written to a file. Tested with an injectable store (commands2 suite). `keyring` (optional dependency, `requirements-gateway.txt` comment) was installed on this host; hash-pinning stays with the WP6 release check as documented.
 - **Docs:** `gateway_setup.md` now states the honest limit of the Credential Manager (same-user processes — including this project's own `run_bash` — can read it; the full-command approval card is the actual safeguard) and documents rotation/unpair as before.
+
+## 7. Part-3 security Q&A (2026-10-06, read-only evidence pass)
+
+Answers to the owner's security questions 12-20 (evidence pass; every claim
+is code-anchored). Verdicts: OK / GAP / NOTE.
+
+**Q12 - Tool-difference table (duo_full vs phone-SAFE vs gated).**
+24 inline tools total (`tools/definitions.py`). 12 phone-SAFE
+(`tools/runner.py:358-362`), 8 approval-gated (`runner.py:282-286`), and 6
+in NEITHER set: `git_status`, `undo_last`, `run_tests`, `stop_background`,
+`browser`, `subagent_research`. Phone runs block all 6
+(`runner.py:1384` choke, not in SAFE). Desktop duo_full runs get all 24
+with only the 8 gated — so `run_tests` (executes project code) and
+`undo_last` (reverts files) run UNGATED on desktop. `subagent_research` is
+verified non-escalating: the delegate is schema- and execution-restricted
+to `("read_file", "list_dir", "search_code")` (`core/subagent_lite.py:14`,
+`:125-135`). VERDICT: GAP (LOW, desktop-only) - consider gating
+`run_tests` + `undo_last`.
+
+**Q13 - Takeover rights.** A takeover mirrors a UI/engine run; the phone
+receives an approval card for EVERY pending gate decision of that run
+(`bridge.py:1064-1097`): Once / Always(chat) / Deny, full command recovered
+from journal frames (N2), decision echoes decision_id+tool (G2 dup guard).
+The mirrored run keeps its FULL desktop tool rights - the phone restriction
+never applies to takeover (it only gates gateway-STARTED runs). So YES:
+with takeover on, the phone can approve `run_bash` of a UI run - exactly
+when that run's own gate says ask. VERDICT: OK (by design, documented).
+
+**Q14 - Exfiltration chain with restrict ON.** `web_search`/`web_fetch`
+are phone-SAFE, so a restricted phone run keeps them. Internal targets are
+blocked at five layers: private/loopback/link-local literals
+(`websearch.py:270-285`), localhost/.local/.internal hostnames (:301-302),
+port guard (:306), RESOLVED-IP re-check (:318-338, anti-rebinding),
+redirect-hop re-guard (:377). Exfiltration to the engine (:8001) or
+SearXNG (:8888) is therefore closed. Residual: the model can still
+`web_fetch` any PUBLIC url with workspace-derived data in the path/query
+(GET-only, 10 s timeout) - the classic doc-injection exfil channel.
+Mitigation in place: every call is visible to the owner in the phone
+tool-relay. VERDICT: NOTE (residual MEDIUM-LOW, inherent to a web tool).
+
+**Q15 - /workspace storage.** `/workspace <path>` (owner-only, private
+chat) validates existence and refuses drive roots, stores chat-scoped in
+the engine chat meta (rev-guarded PUT) plus the gateway state mapping
+(`bridge.py:1270-1310`, G11/N9 fix). No sensitive-dir denylist - the owner
+is the author, the path IS the intended confinement root. VERDICT: OK.
+
+**Q16 - Old-engine health check.** Startup probes `/health` once, reads
+`gateway_overrides` + version, sets `engine_gate_support`, and warns
+loudly when an old engine would silently ignore the forced-gate body key
+(`main.py:719-740`). Not fatal by design. VERDICT: OK.
+
+**Q17 - Preset security keys.** `_PRESET_NEVER_KEYS = {git_token,
+_registry, models_dir, image_processing_mode, vision_agent_mode}`
+(`routers/config.py:51-52`). It does NOT list `telegram_approval_mode` or
+`duo_action_approval_enabled` - a preset snapshotted while the gate was
+off re-applies that state on Load (wholesale `settings[key] = deepcopy`
+at :114-118). No attacker path (presets are server-side snapshots; the
+phone can only LOAD them, `/preset`), but policy keys should not be
+preset-scoped. VERDICT: GAP (LOW) - add both keys to the denylist.
+
+**Q18 - /gate persistence and scope.** `/gate ask|deny|off` writes exactly
+ONE key, `telegram_approval_mode`, via the surgical single-key settings
+write (`bridge.py:1237-1261`, owner decision 2026-10-05). It cannot touch
+`phone_restricted` or the gateway-side `force_approval_gate`; both body
+intakes are force-ON-only (`server.py:1264-1276`). Restrict is NOT
+phone-changeable. VERDICT: OK.
+
+**Q19 - Auto-push.** The `git_commit` tool commits only
+(`tools/handlers/git_tools.py:45` -> `exec_git_commit`, zero `push`
+references). `push_after_commit` exists but fires ONLY on the duo
+auto-commit path (`core/duo_runner.py:6643/:6667`), requires the
+`git_auto_push` toggle (default False), the credential gate, and a
+configured https repo; the token rides one subprocess argv, never disk
+(`hive_functions/git_tools.py:95-142`). VERDICT: OK (opt-in).
+
+**Q20 - Supervisor routes.** `/gateway/start|stop` (`server.py:1858-1905`)
+are unauthenticated loopback endpoints (documented WP6 boundary), covered
+by the Origin-middleware for real cross-site POSTs, but bypassable via
+DNS-rebinding exactly like the rest of the write surface (G4, documented).
+Start inherits the engine env plus `HIVEMIND_GATEWAY_ENABLED=1` (no token
+in env - Credential Manager); stop verifies pid identity via name +
+birth-stamp before killing. VERDICT: OK within the loopback boundary;
+rebinding caveat stands until the middleware checks Host/Origin properly.
+
+**Restrict-ON default (decided by Q13/Q14/Q15):** KEEP restrict ON as
+default. Q13 shows takeover approvals work independently of restrict
+(mirror-only); Q14 shows the useful web subset stays available under
+restrict while the whole write/exec class stays blocked; Q15 shows the
+confinement root is owner-controlled and validated. The flag costs
+nothing for the phone's intended use and is force-ON-only from the wire.
