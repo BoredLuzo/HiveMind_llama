@@ -465,6 +465,9 @@ class RunBridge:
         parts: list[str] = []
         self._last_tool_line = ""  # Tool-Relay dedupe reset per run
         self._skip_finish = False  # R4: stream-broke handover skips _finish
+        # R4 relay: phase/plan/thinking visibility on the phone
+        last_phase = ""
+        tick_think = ""
         # PHONE-RUNS-IN-UI (2026-10-06): rid -> chat_id of runs handed
         # over to the mirror after a stream break - their answers must
         # land in the chat transcript or the UI never sees them.
@@ -524,7 +527,33 @@ class RunBridge:
                         # ask / off: the gated call waits engine-side; the
                         # owner decides via tappable card or 1/2/3 text.
                         await self._relay_own_approval(ev)
+                elif etype == "agent":
+                    # R4: phase switches as own lines (Planner / Code / …)
+                    _ph = str(ev.get("content") or "").strip()
+                    if _ph and _ph != last_phase:
+                        await self.ms.send_message(f"→ {_ph}")
+                        last_phase = _ph
+                elif etype == "planner_result":
+                    _plan = str(ev.get("content") or "")
+                    if not _plan and isinstance(ev.get("chunks"), list):
+                        _plan = "".join(str(c) for c in ev["chunks"])
+                    _plan = " ".join(_plan.split())[:350]
+                    if _plan:
+                        await self.ms.send_message(f"🧠 Plan: {_plan}")
+                elif ev.get("type") == "duo_round":
+                    _msg = f"⚙️ Coder round {ev.get('n')}/{ev.get('total')}"
+                    _st = str(ev.get("subtask") or "").strip()
+                    if _st:
+                        _msg += f": {_st[:110]}"
+                    await self.ms.send_message(_msg)
+                elif etype == "thinking_token":
+                    # R4: coder reasoning between tool calls - tail per tick
+                    tick_think += str(ev.get("content") or "")
                 elif etype == "tool_call":
+                    if tick_think.strip():
+                        _tt = " ".join(tick_think.split())[-160:]
+                        await self.ms.send_message(f"💭 …{_tt}")
+                        tick_think = ""
                     # Tool-Call-Relay (2026-10-05): compact activity lines —
                     # the phone sees WHAT the agent is doing live.
                     line = self._tool_line(ev)
@@ -1013,7 +1042,7 @@ class RunBridge:
                                   "last_status": "", "approval_sig": None,
                                   "approval_decision_id": "",
                                   "approval_tool": "",
-                                  "other_run_noted": "",
+                                  "other_run_noted": "", "last_phase": "",
                                   "answer_parts": [],
                                   "last_tick": 0.0}
         return self._mirror_state
@@ -1024,7 +1053,7 @@ class RunBridge:
         m.update({"run_id": None, "after": 0, "status_msg_id": None,
                   "last_status": "", "approval_sig": None,
                   "approval_decision_id": "", "approval_tool": "",
-                  "other_run_noted": "", "answer_parts": []})
+                  "other_run_noted": "", "last_phase": "", "answer_parts": []})
 
     def _own_run_id(self) -> str | None:
         run = self.state.data.get("active_run") or {}
@@ -1113,7 +1142,7 @@ class RunBridge:
                       "status_msg_id": None, "last_status": "",
                       "approval_sig": None, "approval_decision_id": "",
                       "approval_tool": "", "other_run_noted": "",
-                      "answer_parts": []})
+                      "last_phase": "", "answer_parts": []})
             await self.ms.send_message(
                 f"📢 Engine run taken over (mirror): {rid}\n"
                 "Your texts are queued (steering), approvals come "
@@ -1153,6 +1182,9 @@ class RunBridge:
         done_reason = self._parse_done(new_frames)
         last_status = ""
         tool_lines: list[str] = []
+        # R4 relay: phase/plan/thinking visibility on the phone
+        tick_think = ""
+        last_phase = m.get("last_phase", "")
         for raw in new_frames:
             if not isinstance(raw, str):
                 continue
@@ -1182,7 +1214,38 @@ class RunBridge:
                     if ev.get("images"):
                         _note += f" (+{ev.get('images')} img)"
                     await self.ms.send_message(_note)
+            elif ev.get("type") == "agent":
+                # R4: phase switches (Planner / Code / Answer) as own lines
+                _ph = str(ev.get("content") or "").strip()
+                if _ph and _ph != last_phase:
+                    await self.ms.send_message(f"→ {_ph}")
+                    last_phase = _ph
+            elif ev.get("type") == "planner_result":
+                # R4: the plan itself (the most informative moment of a duo
+                # run) - compact single-line preview
+                _plan = str(ev.get("content") or "")
+                if not _plan and isinstance(ev.get("chunks"), list):
+                    _plan = "".join(str(c) for c in ev["chunks"])
+                _plan = " ".join(_plan.split())[:350]
+                if _plan:
+                    await self.ms.send_message(f"🧠 Plan: {_plan}")
+            elif ev.get("type") == "duo_round":
+                _rn = ev.get("n")
+                _rt = ev.get("total")
+                _st = str(ev.get("subtask") or "").strip()
+                _msg = f"⚙️ Coder round {_rn}/{_rt}"
+                if _st:
+                    _msg += f": {_st[:110]}"
+                await self.ms.send_message(_msg)
+            elif ev.get("type") == "thinking_token":
+                # R4: coder reasoning between tool calls - keep a tail, sent
+                # with the next tool line (one 💭 per tick max)
+                tick_think += str(ev.get("content") or "")
             elif ev.get("type") == "tool_call":
+                if tick_think.strip():
+                    _tt = " ".join(tick_think.split())[-160:]
+                    await self.ms.send_message(f"💭 …{_tt}")
+                    tick_think = ""
                 # Tool-Call-Relay (2026-10-05): compact activity lines so
                 # the phone sees WHAT the agent is doing, not just status
                 line = self._tool_line(ev)

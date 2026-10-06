@@ -14,6 +14,7 @@ COMMAND_WHITELIST = {
     "new": "start a fresh HiveMind chat",
     "stop": "abort the running run",
     "shutdown": "shut down the PC (two-step confirm, owner-only)",
+    "purge": "evict ALL models from VRAM (free the GPU)",
     "status": "current run/status",
     "verbose": "toggle verbose output",
     "mode": "show/set the phone-side run mode (auto|chat|pipeline|automap|off)",

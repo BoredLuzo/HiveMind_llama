@@ -138,6 +138,11 @@ class HiveClient:
         r.raise_for_status()
         return r.json()
 
+    async def purge_models(self) -> dict:
+        """R4 (owner request): /purge on the phone - kill ALL loaded
+        llama-servers (free VRAM). Engine route: POST /vram/kill_all."""
+        return await self._post_json("/vram/kill_all", {})
+
     async def abort_run(self, run_id: str) -> httpx.Response:
         return await self._post_json(f"/abort/{run_id}", {})
 

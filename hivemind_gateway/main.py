@@ -422,6 +422,18 @@ class Gateway:
                              f"/shutdown {_code}\n"
                              "(/shutdown cancel aborts)",
                              reply_to_message_id=p.message_id)
+        elif name == "purge":
+            # R4 (owner request): /purge kills ALL loaded models - instant
+            # VRAM freed, next run reloads on demand.
+            try:
+                _res = await self.hive.purge_models()
+                _killed = _res.get("killed") or _res.get("killed_pids") or _res
+                await self.reply(p.chat_id,
+                                 f"🧹 All models purged from VRAM. {_killed}"[:300],
+                                 reply_to_message_id=p.message_id)
+            except (HiveUnreachable, HTTPError, OSError) as _pg_exc:
+                await self.reply(p.chat_id, f"❌ purge failed: {_pg_exc}",
+                                 reply_to_message_id=p.message_id)
         elif name == "stop":
             # never rate-limited: the safety valve must always work
             note = await self.bridge.stop()
