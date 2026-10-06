@@ -19,6 +19,7 @@ ROOT = Path(__file__).parent.parent
 # (name, relPath, timeout seconds) - only actually present tests.
 SUITES = [
     ("steer_card",                "tests/test_steer_card.py",                    60),
+    ("planner_reuse_ctx",         "tests/test_planner_reuse_ctx.py",             60),
     ("compression_plan_anchor",   "tests/test_compression_plan_anchor.py",     120),
     ("feature_search_core",       "tests/test_feature_search_core.py",          60),
     ("transcript_glob",           "tests/test_transcript_glob.py",              60),

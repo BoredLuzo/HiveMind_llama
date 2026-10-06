@@ -1929,32 +1929,60 @@ async def run_code_duo(ctx):
             _plan_ctx_req = int(_plan_ctx_final or 0)
         except (NameError, TypeError):
             _plan_ctx_req = 0
-        # Reuse only if the slot runs at >= the requested ctx. Query errors
-        # (actual==0) → conservatively no reuse (a clean reload is safer).
-        _planner_ctx_ok = bool(_plan_port_actual_ctx and _plan_port_actual_ctx >= _plan_ctx_req)
+        # PLANNER-EVICT-BEFORE-CODER (2026-10-06, owner decision): the
+        # planner slot may only be REUSED as the coder slot when it already
+        # runs at the CODER's effective ctx. The old check compared against
+        # the PLANNER's own ctx target — a planner at 8192 handed the coder
+        # an 8192 slot while the coder budget said 80896, the exact
+        # cached-port ctx mismatch that kills tool rounds (LD-SET 2497,
+        # live 2026-10-06 13:03: "[Planner=Coder] stays in VRAM" with
+        # ctx=8192 vs budget 80896). With the honest requirement, a normal
+        # agentic run always evicts the planner slot before the coder
+        # loads: same model → the ctx-mismatch kill+reload in ensure_loaded,
+        # different model → the SERIAL-SLOTS evict below.
+        try:
+            _coder_ctx_need = (
+                resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
+                if ctx.duo_config.agentic_mode
+                else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
+            )
+        except (NameError, TypeError, ValueError):
+            _coder_ctx_need = 0
+        # Reuse only if the slot runs at >= planner req AND >= coder need.
+        # Query errors (actual==0) → conservatively no reuse (a clean
+        # reload is safer).
+        _planner_ctx_ok = bool(
+            _plan_port_actual_ctx
+            and _plan_port_actual_ctx >= _plan_ctx_req
+            and (_coder_ctx_need <= 0 or _plan_port_actual_ctx >= _coder_ctx_need)
+        )
         if _planner_is_coder and _plan_port_available and _plan_port_alive and _planner_ctx_ok:
             _cached_coder_port = _plan_port
-            _cached_coder_port_ctx = _plan_ctx_final  # CTX-GUARD: pin planner ctx to port
-            logger.info("[Planner=Coder] Model stays in VRAM - no reload needed")
+            _cached_coder_port_ctx = _plan_port_actual_ctx  # honest slot ctx (>= coder need)
+            logger.info("[Planner=Coder] Model stays in VRAM - slot ctx=%d covers coder need=%d",
+                        _plan_port_actual_ctx, max(_plan_ctx_req, _coder_ctx_need))
             yield await ctx.emit({
                 "type": "status",
                 "content": (
                     f"⚡ Planner=Coder — {_planner_model.split(':')[0]} stays in VRAM, "
-                    "no reload needed"
+                    f"slot ctx={_plan_port_actual_ctx} covers the coder"
                 ),
             })
         elif _planner_is_coder and _plan_port_available and _plan_port_alive and not _planner_ctx_ok:
+            _ctx_need_eff = max(_plan_ctx_req, _coder_ctx_need)
             logger.warning(
-                "[PLANNER=CODER-CTX-MISMATCH] slot ctx=%d < required %d — "
-                "no reuse, coder loads fresh at full ctx",
-                _plan_port_actual_ctx, _plan_ctx_req,
+                "[PLANNER=CODER-CTX-MISMATCH] slot ctx=%d < required %d "
+                "(planner=%d, coder=%d) — planner slot evicted, coder "
+                "loads fresh at full ctx",
+                _plan_port_actual_ctx, _ctx_need_eff,
+                _plan_ctx_req, _coder_ctx_need,
             )
             yield await ctx.emit({
                 "type": "status",
                 "content": (
                     f"⚡ Planner=Coder — slot runs at ctx={_plan_port_actual_ctx} only, "
-                    f"coder needs {_plan_ctx_req} — loading coder model fresh "
-                    "(full context)."
+                    f"coder needs {_ctx_need_eff} — planner slot freed, "
+                    "loading coder model fresh (full context)."
                 ),
             })
         elif _planner_is_coder and _plan_port_available and not _plan_port_alive:
