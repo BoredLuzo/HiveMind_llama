@@ -44,7 +44,7 @@ round of reliability work on writes, approvals and model loading.
 
 ## [1.3.0] - 2026-10-05
 
-Test build for the live installation. Everything below is IN:
+The live-installation baseline. Everything below is IN:
 image upload paths (collision-free, real formats), chat continuity
 (transcript seeding, token-budget window, summary fix), the hardened
 self-updater (verified end-to-end with a real release zip, including
