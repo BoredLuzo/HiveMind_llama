@@ -60,7 +60,7 @@ class _DirectToolsResult:
 
 
 async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
-                            result: _DirectToolsResult):
+                            result: _DirectToolsResult, vision: bool = False):
     """Run the unified ToolLoop for the direct chat, STREAMING events live.
 
     Yields ToolLoop events (tokens, tool chips, results) as they happen.
@@ -86,11 +86,13 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         if not _tools:
             return
         _num_ctx = ctx.get_num_ctx(model, "direct") or 8192
-        # IMAGES (2026-10-03): raw parts need the projector — load with
-        # vision when the run carries images (upgrade-only reload in the
-        # manager; no-op for text-only models).
+        # IMAGES (2026-10-03): raw parts need the projector — the CALLER
+        # decides the flag from the same expression that built the messages
+        # (2026-10-06, live 11:45): ctx.effective_images was emptied by the
+        # gate for the registry model while the msgs still carried raw parts
+        # for the P9-override model → projector-less slot → POST 500.
         _port = await _mgr.ensure_loaded(model, num_ctx=_num_ctx,
-                                         vision=bool(getattr(ctx, "effective_images", None)))
+                                         vision=vision)
         _agent = ctx.pipeline.agents["direct"]
         _think = bool(getattr(_agent, "thinking", False))
         _budget = int(getattr(_agent, "thinking_budget", 0) or 0)
@@ -310,6 +312,18 @@ async def run_direct(ctx):
         _direct_caps = ctx.model_profile(_direct_model) if ctx.model_profile else {}
         _direct_vision = bool(_direct_caps.get("vision", False))
         _direct_images = ctx.images if (_direct_vision and ctx.images) else ctx.effective_images
+        if not _direct_vision and _direct_images:
+            # P9-override consistency (2026-10-06, live 11:45): the chat_run
+            # gate judged the REGISTRY direct model while the P9 override
+            # picked the FINAL model here. A non-vision final model must
+            # never carry raw parts — the POST would 500 on a projector-less
+            # slot ("image input is not supported"). The description-text
+            # path (image_description) stays the carrier instead.
+            _direct_log.info(
+                "[Direct-Vision] final model %r not multimodal — dropping "
+                "%d raw image part(s) from the request", _direct_model,
+                len(_direct_images))
+            _direct_images = []
         if _direct_vision and ctx.images and not ctx.image_description:
             _direct_log.debug(
                 "[Direct-Vision] %r multimodal — %d raw images directly to the model",
@@ -371,7 +385,8 @@ async def run_direct(ctx):
             # previously _run_direct_tools collected all events and emitted them
             # only after the loop ended (UI showed nothing during the run).
             async for _ev in _run_direct_tools(
-                    ctx, _direct_model, messages, _direct_tool_mode, _dt_result):
+                    ctx, _direct_model, messages, _direct_tool_mode, _dt_result,
+                    vision=bool(_direct_images)):
                 yield await ctx.emit(_ev)
             _tool_content = _dt_result.content
             _tool_final_msgs = _dt_result.final_msgs

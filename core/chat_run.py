@@ -696,7 +696,11 @@ async def run_stream(
     _logger.debug("[Vision-Trigger] images=%s enabled=%s model=%r", _vdbg_has_images, _vdbg_enabled, _vdbg_model)
     if images and _vision_cfg.get("enabled") and _vision_cfg.get("model"):
         _vision_model_name = _vision_cfg["model"]
-        _configured_direct = registry_get("direct") if "direct" in _state.pipeline.agents else ""
+        # P9-override-aware (2026-10-06): judge the model this run will
+        # actually use — the run body's direct_model beats the registry card.
+        # _run_settings (not settings) carries the merged overrides.
+        _configured_direct = str(_run_settings.get("direct_model") or "").strip() or (
+            registry_get("direct") if "direct" in _state.pipeline.agents else "")
         _direct_caps = _model_profile(_configured_direct) if _configured_direct else {}
         _direct_is_vision = bool(_direct_caps.get("vision", False))
         _multimodal_available: list = []
@@ -849,7 +853,15 @@ async def run_stream(
         _va_cfg_agent = _state.pipeline.agents.get("vision")
         _va_cfg_model = settings.get("vision_agent_model", "") or (_va_cfg_agent.model if _va_cfg_agent else "")
         _va_cfg_enabled = bool(settings.get("vision_agent_enabled", False) and _va_cfg_model)
-        _direct_caps2 = _model_profile(registry_get("direct") if "direct" in _state.pipeline.agents else "")
+        # P9-override-aware (2026-10-06, live 11:45): the run body's
+        # direct_model IS the model this run will use — the gate must judge
+        # THAT one, not the registry card. Judging the registry model while
+        # the runner applied the override emptied effective_images for a
+        # multimodal override and produced a wrong "[Image ignored]" status.
+        # _run_settings (not settings) carries the merged overrides.
+        _direct_eff2 = str(_run_settings.get("direct_model") or "").strip() or (
+            registry_get("direct") if "direct" in _state.pipeline.agents else "")
+        _direct_caps2 = _model_profile(_direct_eff2)
         _direct_is_vision2 = bool((_direct_caps2 or {}).get("vision", False))
         _multimodal_avail2: list = []
         if not _direct_is_vision2:
@@ -874,8 +886,8 @@ async def run_stream(
             yield await emit({"type": "status", "content": duo_gate_status_text(_plan)})
         elif _direct_is_vision2:
             effective_images = images
-            _disp2 = (registry_get("direct") if registry_get("direct")
-                      and bool((_model_profile(registry_get("direct")) or {}).get("vision", False))
+            _disp2 = (_direct_eff2 if _direct_eff2
+                      and bool((_model_profile(_direct_eff2) or {}).get("vision", False))
                       else (_multimodal_avail2[0] if _multimodal_avail2 else "multimodal model"))
             yield await emit({"type": "status",
                 "content": f"Multimodal model ({_disp2}) processes the image directly"})

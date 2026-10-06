@@ -26,6 +26,8 @@ SUITES = [
     ("destructive_gate",          "tests/test_destructive_gate.py",            120),
     ("direct_tools",              "tests/test_direct_tools.py",                120),
     ("ensure_loaded_stale_port",  "tests/test_ensure_loaded_stale_port.py",     60),
+    ("vision_load_race",          "tests/test_vision_load_race.py",              60),
+    ("direct_vision_flag",        "tests/test_direct_vision_flag.py",            60),
     ("loop_detect_calibration",   "tests/test_loop_detect_calibration.py",     120),
     ("loop_detect_chunk_read",    "tests/test_loop_detect_chunk_read.py",      120),
     ("loop_detect_run_bash",      "tests/test_loop_detect_run_bash.py",        120),

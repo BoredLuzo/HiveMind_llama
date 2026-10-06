@@ -330,6 +330,7 @@ class LlamaLoadMixin:
                 f"Not loadable on this GPU (8GB)."
             )
         _need_start = False
+        _vision_upgrade_pending = False
         slot = None
         async with self._lock:
             # F1-HOOK-A (2026-08-24) ADOPTION-ON-DEMAND: Ungetrackte llama-server
@@ -343,7 +344,17 @@ class LlamaLoadMixin:
                     )
             slot = await self._find_loaded(model)
             if slot:
-                if not slot._loading:
+                if slot._loading and needs_vision_reload(slot._vision, vision):
+                    # VISION-LOAD-RACE (2026-10-06, live 11:13): a text-only
+                    # prefetch can still be LOADING when an image request
+                    # arrives. Attaching to the in-flight load silently lost
+                    # the projector request — the POST then hit a projector-
+                    # less port and llama-server answered 500 "image input
+                    # is not supported". Park the upgrade; it runs after the
+                    # ready wait below (wait-then-upgrade, no caller sees an
+                    # exception).
+                    _vision_upgrade_pending = True
+                elif not slot._loading:
                     # UPGRADE-ONLY RELOAD (2026-10-01): reload from WITHOUT to
                     # WITH projector only. A plain load (no vision flag — chat,
                     # compression, critic loads of the same model) must not
@@ -541,6 +552,36 @@ class LlamaLoadMixin:
                 f"Shared slot for '{model}' died during startup — "
                 f"the underlying llama-server process failed to load."
             )
+
+        if _vision_upgrade_pending and needs_vision_reload(slot._vision, vision):
+            # Parked upgrade from the loading-slot branch: the prefetch
+            # finished WITHOUT the projector while an image request was
+            # waiting — reload WITH mmproj now. kill() swaps in a fresh
+            # ready event, so the second wait below is safe.
+            logger.info(
+                "ensure_loaded: %s loaded WITHOUT the projector while an "
+                "image request was waiting — upgrade reload with mmproj.",
+                model,
+            )
+            self._metric_inc("evictions_total")
+            self._metric_inc("evictions_vision_race")
+            await _kill_slot_async(slot)
+            slot._loading = True
+            slot.model = model
+            slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
+            slot.set_pinned(pin)
+            await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                      vision=True, n_parallel=n_parallel,
+                                      ctx_graceful=ctx_graceful)
+            try:
+                await asyncio.wait_for(slot._ready_event.wait(), timeout=240.0)
+            except asyncio.TimeoutError:
+                raise RuntimeError(f"llama-server for '{model}' did not start in time (240s timeout)")
+            if slot.model is None:
+                raise RuntimeError(
+                    f"Shared slot for '{model}' died during the vision upgrade — "
+                    f"the underlying llama-server process failed to load."
+                )
 
         slot.touch()
         return slot.port
