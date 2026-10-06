@@ -437,7 +437,10 @@ class RunBridge:
             _model_line = (f"planner: {_planner_mdl or 'engine default'}\n"
                            f"coder: {_coder_mdl or 'engine default'}")
         if _restricted:
-            _model_line += "\nrestricted: web + text only"
+            _model_line += ("\nlimited: can search the web and answer - no "
+                            "shell, no file changes (turn off 'Restrict "
+                            "phone runs' in the UI to unlock; approval "
+                            "cards will still ask first)")
         # the info note is PERMANENT (never status-edited): mode/models/
         # approvals/workspace stay visible in the chat while the separate
         # progress message carries the transient ⏳/✅ states. Both sends

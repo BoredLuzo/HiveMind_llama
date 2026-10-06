@@ -904,7 +904,7 @@ async def t_audit_fixes():
     check("resolved: duo shows planner+coder",
           "planner: coder-x" in note2 and "coder: coder-x" in note2)
     check("resolved: duo notes the restrict default",
-          "restricted: web + text only" in note2)
+          "limited: can search the web" in note2)
 
     # phone-source tag (2026-10-05): every gateway run carries it
     hive_p = FakeHive(_run_events())

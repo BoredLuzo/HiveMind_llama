@@ -1684,7 +1684,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <span class="sl"></span>
       </label>
     </div>
-    <div class="fld-hint">Master switch for the optional Telegram bot (hivemind_gateway). Off = a running gateway stops itself within one poll loop and nothing listens. Setup: docs/gateway_setup.md - the bot process is still started on the PC; starting from this panel is planned.</div>
+    <div class="fld-hint">One-time master veto for the phone link: OFF forces any running gateway to shut down within ~5 s and nothing listens on Telegram. Leave ON for normal use - the gateway process itself is started/stopped with the buttons below (token lives in the Windows Credential Manager; full setup: start_gateway.bat setup).</div>
     <div class="tgl-row" style="margin-top:6px">
       <span class="tgl-text">Mirror engine runs to phone</span>
       <label class="cfl-sw">
@@ -1692,7 +1692,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <span class="sl"></span>
       </label>
     </div>
-    <div class="fld-hint">While on, a run started here (UI) is mirrored to the paired phone: status, result and approval cards. Texts from the phone steer the run; approvals answered from the phone count like a click here. The gateway must be running (paired) for this.</div>
+    <div class="fld-hint">Shows runs that you START HERE on your phone: progress, the final result, approval cards and steering. Your phone texts go INTO the running run (steering), they do not start a second one. Only ONE run is mirrored at a time. Needs the gateway running (paired). Phone-started runs always arrive on the phone regardless of this switch.</div>
     <div class="tgl-row" style="margin-top:6px">
       <span class="tgl-text">Restrict phone runs (web + text)</span>
       <label class="cfl-sw">
@@ -1700,7 +1700,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <span class="sl"></span>
       </label>
     </div>
-    <div class="fld-hint">DEFAULT ON: phone runs may only search/read the web and answer with text — no shell, no file writes, no git, no installs, regardless of /mode. Applies from the very next message (no restart). Turning it OFF unlocks assistant-style writes (approval-gate settings decide).</div>
+    <div class="fld-hint">BIGGEST safety switch, default ON. ON: phone runs can search/read the web and chat — shell, file writes, git and installs are blocked outright (the model is told what is blocked). OFF: phone runs get the same tools as desktop runs — gated calls (shell/write/git) then wait for your approval card when Phone approvals = Ask. Applies from the next message, no restart.</div>
     <div class="fld">
       <div class="fld-label">Phone approvals</div>
       <select id="tg-approval-mode-sel" onchange="postSettings({telegram_approval_mode:this.value})">
@@ -1709,7 +1709,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <option value="off">Off (no gate force)</option>
       </select>
     </div>
-    <div class="fld-hint">Approval policy for PHONE runs: auto-deny blocks shell/write/git calls; Ask relays them to the phone as tappable cards (1 once / 2 always-this-chat / 3 deny); Off sends no gate force (the engine global toggle decides). Applies from the next run — works together with /gate in the chat.</div>
+    <div class="fld-hint">What happens when a phone run wants to run shell/write/git (only relevant with Restrict OFF): Auto-deny = refused automatically (safe default). Ask = the run PAUSES and a card arrives on your phone: Once / Always-this-chat / Deny - unanswered cards are DENIED after the timeout (fail-closed). Off = no gate; the engine-wide toggle decides. Also settable from the phone with /gate.</div>
     <div class="tgl-row" style="margin-top:8px;align-items:center">
       <span class="tgl-text">Process</span>
       <span id="tg-sup-status" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2)">unknown</span>

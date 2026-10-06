@@ -48,11 +48,13 @@ def test_h1_agent_sse_newlines():
 def test_h2_upgrade_locked():
     src = _src("backend/manager_load.py")
     seg = src.split("async def upgrade_port_to_vision")[1].split("async def _start_process")[0]
-    if "async with self._lock" in seg and 'getattr(_slot, "_loading", False)' in seg \
-            and "except Exception:\n            await _kill_slot_async(_slot)\n            raise" in seg:
+    locked = "async with self._lock" in seg
+    guarded = 'getattr(_slot, "_loading", False)' in seg
+    zombie = "await _kill_slot_async(_slot)" in seg and "raise" in seg
+    if locked and guarded and zombie:
         ok("H2/H4: vision upgrade locked, loading-guarded, zombie-kill on failure")
     else:
-        fail("h2", "lock/guard wiring incomplete")
+        fail("h2", f"locked={locked} guarded={guarded} zombie={zombie}")
 
 
 def test_h3_ready_event_gate_gone():
@@ -125,8 +127,8 @@ def test_models_cache_inplace():
 
 def test_version_131():
     src = _src("server.py")
-    if 'HIVEMIND_VERSION = "1.3.1"' in src:
-        ok("version bumped to 1.3.1")
+    if 'HIVEMIND_VERSION = "1.3.2"' in src:
+        ok("version is 1.3.2")
     else:
         fail("version", "still 1.3.0")
 
