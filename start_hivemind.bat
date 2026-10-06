@@ -138,24 +138,10 @@ echo   HiveMind  ^>  http://localhost:%HM_PORT%   ^|   Ctrl+C to stop
 echo  --------------------------------------------------------------
 echo.
 
-REM [7b] Auto-start the optional Telegram gateway when the owner opted
-REM in (gateway.toml with telegram_enabled = true - written by installer
-REM step 7 setup or start_gateway.bat setup). Headless window; the UI
-REM veto (telegram_gateway_enabled=false) still wins inside the gateway.
-REM I5b (audit r3): check BOTH config homes with a real parse - findstr
-REM substring-matched commented lines and missed spacing variants.
-set "HMGW_CONFIG=%~dp0gateway.toml"
-if not exist "%HMGW_CONFIG%" set "HMGW_CONFIG=%LOCALAPPDATA%\HiveMindGateway\gateway.toml"
-if exist "%HMGW_CONFIG%" (
-    powershell -NoProfile -Command "if ((Get-Content '%HMGW_CONFIG%' | Where-Object { $_ -match '^\s*telegram_enabled\s*=\s*true\s*(#.*)?$' })) { exit 0 } else { exit 1 }" >nul 2>&1
-    if not errorlevel 1 (
-        if not exist "%LOCALAPPDATA%\HiveMindGateway\gateway.disabled" (
-            start "HiveMind Gateway" /min "%~dp0start_gateway_headless.bat"
-            echo   [OK] Telegram gateway started (minimized window)
-        )
-    )
-)
-echo.
+REM [7b] MOVED (2026-10-06, owner): the gateway no longer auto-starts
+REM with the engine. It starts when toggled in the UI (Telegram panel,
+REM "Enabled" switch starts/stops the process) or via the Start button
+REM there / start_gateway.bat. No gateway.toml probing here anymore.
 "%PY%" run.py
 if errorlevel 1 (
     echo.

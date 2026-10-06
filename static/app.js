@@ -9398,6 +9398,19 @@ function setImageMode(mode) {
   if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
 }
 
+
+// TG-ENABLED = PROCESS (2026-10-06, owner): toggling the master switch in
+// the UI now STARTS/STOPS the gateway process itself (detached, supervised
+// routes) - previously it was only a veto and the process needed the
+// Start button or the engine autostart.
+function setTgEnabled(on) {
+  S.tgEnabled = !!on;
+  postSettings({telegram_gateway_enabled: S.tgEnabled});
+  fetch(S.tgEnabled ? '/gateway/start' : '/gateway/stop', {method: 'POST'})
+    .then(function() { if (typeof refreshTgSupStatus === 'function') { try { refreshTgSupStatus(); } catch (e) {} } })
+    .catch(function() {});
+}
+
 function setVisionAgentEnabled(enabled) {
   S.visionAgentEnabled = enabled;
   postSettings({vision_agent_enabled: enabled});
