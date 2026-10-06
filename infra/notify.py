@@ -59,6 +59,16 @@ def notify(title: str, message: str, dedup_sig: str = "") -> bool:
 
 
 def notify_agent_needs_input(run_id: str, question: str) -> None:
+    """Desktop toast for a waiting approval/question — but NOT for
+    Telegram-started runs (2026-10-05): the phone surface (tappable
+    card / gateway auto-deny) answers those within moments, and a
+    Windows toast for an auto-answered approval is pure noise."""
+    try:
+        from tools.runner import _phone_source_run
+    except ImportError:
+        _phone_source_run = None
+    if _phone_source_run is not None and _phone_source_run.get():
+        return
     notify("HiveMind — question for you", f"[{run_id}] {question[:160]}", dedup_sig=f"ask:{run_id}")
 
 

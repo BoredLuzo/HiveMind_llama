@@ -166,6 +166,9 @@ async def run_stream(
     if _run_settings.get("phone_restricted"):
         from tools.runner import _tools_restricted_run as _tr_cv
         _tr_cv.set(True)
+    if str(_run_settings.get("source") or "") == "telegram":
+        from tools.runner import _phone_source_run as _ps_cv
+        _ps_cv.set(True)
 
     # Per-run token estimate accumulator - incremented by emit() on content events
     _run_token_estimate: int = 0

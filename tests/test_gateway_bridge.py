@@ -904,6 +904,34 @@ async def t_audit_fixes():
     check("resolved: duo notes the restrict default",
           "restricted: web + text only" in note2)
 
+    # phone-source tag (2026-10-05): every gateway run carries it
+    hive_p = FakeHive(_run_events())
+    hive_p.settings_body = {"telegram_phone_restricted": False,
+                            "telegram_approval_mode": "off"}
+    br_p, st_p, ms_p = _mk("gwbr_src_", hive_p)
+    from hivemind_gateway.config import GatewayConfig as _GC
+    br_p.cfg = _GC(force_approval_gate=False)
+    await br_p.start_text_run("q")
+    check("phone runs carry the source tag",
+          br_p.hive.stream_bodies[-1]["overrides"].get("source")
+          == "telegram")
+
+    # engine side: notify_agent_needs_input is suppressed for phone runs
+    from tools import runner as _tr
+    from infra import notify as _nf
+    fired = []
+    _orig = _nf.notify
+    _nf.notify = lambda t, m, dedup_sig="": fired.append(t)
+    try:
+        _nf.notify_agent_needs_input("r-ui", "test")
+        check("UI run toasts", len(fired) == 1)
+        _tr._phone_source_run.set(True)
+        _nf.notify_agent_needs_input("r-tg", "test")
+        check("phone run toast suppressed", len(fired) == 1)
+    finally:
+        _tr._phone_source_run.set(False)
+        _nf.notify = _orig
+
     # approval modes (ask|deny|off): gate key + relay behaviour
     # default (settings absent) = deny: auto-deny as before
     # ask: gated call is relayed as a TAPPABLE card, nothing auto-denied;

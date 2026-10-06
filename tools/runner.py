@@ -347,6 +347,12 @@ _approval_gate_run_override: _contextvars.ContextVar[bool] = \
 _tools_restricted_run: _contextvars.ContextVar[bool] = \
     _contextvars.ContextVar("tools_restricted_run", default=False)
 
+# Phone-source (2026-10-05): run was started from Telegram — desktop
+# toasts for approvals/questions are suppressed (the phone surface or
+# the gateway answers them; see infra/notify).
+_phone_source_run: _contextvars.ContextVar[bool] = \
+    _contextvars.ContextVar("phone_source_run", default=False)
+
 # The safe set for restricted runs (keep in sync with
 # definitions._READ_ONLY_INLINE_TOOL_NAMES + web + dialog):
 _PHONE_SAFE_TOOLS = frozenset({

@@ -424,6 +424,9 @@ class RunBridge:
 
         try:
             ov = self._stream_overrides()
+            # source marker: lets the engine suppress desktop toasts for
+            # phone runs (the phone surface answers approvals/questions)
+            ov["source"] = "telegram"
             if _restricted:
                 ov["phone_restricted"] = True
             if _appr_mode in ("ask", "deny"):

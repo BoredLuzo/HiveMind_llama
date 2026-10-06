@@ -1273,6 +1273,13 @@ async def stream(req: Request):
             body.get("phone_restricted")):
         _model_overrides["phone_restricted"] = True
 
+    # Phone-source marker (2026-10-05): the gateway tags its runs so the
+    # engine can suppress redundant DESKTOP toasts (the phone surface
+    # answers approvals/questions; a Windows toast for an auto-answered
+    # approval is noise). Only the exact tag value is accepted.
+    if str(body.get("source") or "").strip() == "telegram":
+        _model_overrides["source"] = "telegram"
+
     _duo_tool_rounds_raw = body.get("duo_tool_rounds", None)
     if _duo_tool_rounds_raw is None:
         _duo_tool_rounds_raw = settings.get("duo_tool_rounds", 0)
