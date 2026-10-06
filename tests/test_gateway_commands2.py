@@ -413,8 +413,11 @@ async def t_help():
     await gw.handle_owner_update(_p("/help", 50))
     text = next((t for _, t in api.sent if "quick guide" in t), "")
     check("/help: instruction list title", bool(text))
+    # help rewrite: restrict wording + new commands (/purge /shutdown,
+    # /gate on|off, free-text ask answers)
     for needle in ("/stop", "/mode auto", "/setModel", "/workspace",
-                   "auto-denied", "1 (allow once)"):
+                   "restricted by default", "1 (allow once)",
+                   "/purge", "/shutdown", "/gate on|off", "free text"):
         check(f"/help: mentions {needle[:24]!r}", needle in text)
 
 
