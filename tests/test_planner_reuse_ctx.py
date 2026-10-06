@@ -84,11 +84,25 @@ def test_ast_honest_cached_ctx():
         fail("ast", "honest cached ctx or coder-need check missing")
 
 
+
+
+def test_always_vision_toggle_pins():
+    src = _src_duo()
+    if 'duo_coder_always_vision' in src             and 'not _always_vision or _plan_port_vision' in src             and src.count('_always_vision))') >= 1:
+        ok("always-vision toggle: gates reuse, ORs into both coder loads")
+    else:
+        fail("toggle", "toggle wiring incomplete")
+
+
+def _src_duo():
+    return (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+
 if __name__ == "__main__":
     test_small_planner_slot_is_not_reused()
     test_big_planner_slot_is_reused()
     test_unknown_coder_need_falls_back()
     test_query_error_never_reuses()
     test_ast_honest_cached_ctx()
+    test_always_vision_toggle_pins()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

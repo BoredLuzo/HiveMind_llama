@@ -1911,11 +1911,13 @@ async def run_code_duo(ctx):
         # planner==coder must then NOT inherit the slot as coder — the coder
         # needs its full configured context and otherwise loads fresh.
         _plan_port_actual_ctx = 0
+        _plan_port_vision = False
         if _plan_port_available and _plan_port_alive:
             try:
                 for _s_pp in _lsm_pv._slots:
                     if getattr(_s_pp, "port", None) == _plan_port and getattr(_s_pp, "_num_ctx", 0):
                         _plan_port_actual_ctx = int(_s_pp._num_ctx)
+                        _plan_port_vision = bool(getattr(_s_pp, "_vision", False))
                         break
                 if not _plan_port_actual_ctx:
                     async with httpx.AsyncClient(
@@ -1929,6 +1931,12 @@ async def run_code_duo(ctx):
             _plan_ctx_req = int(_plan_ctx_final or 0)
         except (NameError, TypeError):
             _plan_ctx_req = 0
+        # CODER ALWAYS-VISION TOGGLE (2026-10-06, owner idea): when the
+        # owner steers images regularly, the mid-run projector upgrade
+        # (~15 s stall) is avoidable — load the coder WITH the projector
+        # from the start. Opt-in (default OFF): the mmproj costs VRAM every
+        # run even when no image ever arrives.
+        _always_vision = bool(ctx.settings.get("duo_coder_always_vision", False))
         # PLANNER-EVICT-BEFORE-CODER (2026-10-06, owner decision): the
         # planner slot may only be REUSED as the coder slot when it already
         # runs at the CODER's effective ctx. The old check compared against
@@ -1956,11 +1964,13 @@ async def run_code_duo(ctx):
             and _plan_port_actual_ctx >= _plan_ctx_req
             and (_coder_ctx_need <= 0 or _plan_port_actual_ctx >= _coder_ctx_need)
         )
-        if _planner_is_coder and _plan_port_available and _plan_port_alive and _planner_ctx_ok:
+        if _planner_is_coder and _plan_port_available and _plan_port_alive \
+                and _planner_ctx_ok and (not _always_vision or _plan_port_vision):
             _cached_coder_port = _plan_port
             _cached_coder_port_ctx = _plan_port_actual_ctx  # honest slot ctx (>= coder need)
-            logger.info("[Planner=Coder] Model stays in VRAM - slot ctx=%d covers coder need=%d",
-                        _plan_port_actual_ctx, max(_plan_ctx_req, _coder_ctx_need))
+            logger.info("[Planner=Coder] Model stays in VRAM - slot ctx=%d covers coder need=%d (vision=%s)",
+                        _plan_port_actual_ctx, max(_plan_ctx_req, _coder_ctx_need),
+                        _plan_port_vision)
             yield await ctx.emit({
                 "type": "status",
                 "content": (
@@ -1968,15 +1978,28 @@ async def run_code_duo(ctx):
                     f"slot ctx={_plan_port_actual_ctx} covers the coder"
                 ),
             })
-        elif _planner_is_coder and _plan_port_available and _plan_port_alive and not _planner_ctx_ok:
+        elif _planner_is_coder and _plan_port_available and _plan_port_alive \
+                and (not _planner_ctx_ok or (_always_vision and not _plan_port_vision)):
             _ctx_need_eff = max(_plan_ctx_req, _coder_ctx_need)
-            logger.warning(
-                "[PLANNER=CODER-CTX-MISMATCH] slot ctx=%d < required %d "
-                "(planner=%d, coder=%d) — planner slot evicted, coder "
-                "loads fresh at full ctx",
-                _plan_port_actual_ctx, _ctx_need_eff,
-                _plan_ctx_req, _coder_ctx_need,
-            )
+            if _planner_ctx_ok and _always_vision and not _plan_port_vision:
+                logger.info(
+                    "[PLANNER=CODER] always-vision toggle: slot has no projector — "
+                    "planner slot evicted, coder loads fresh WITH mmproj")
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": (
+                        f"⚡ Always-vision: coder loads WITH the projector — "
+                        "planner slot freed for a fresh load."
+                    ),
+                })
+            else:
+                logger.warning(
+                    "[PLANNER=CODER-CTX-MISMATCH] slot ctx=%d < required %d "
+                    "(planner=%d, coder=%d) — planner slot evicted, coder "
+                    "loads fresh at full ctx",
+                    _plan_port_actual_ctx, _ctx_need_eff,
+                    _plan_ctx_req, _coder_ctx_need,
+                )
             # TRUE EVICTION (2026-10-06, steer retest): the fresh coder load
             # takes a FREE slot — without an explicit kill the planner slot
             # stayed resident. Two slots holding the same model then broke
@@ -1987,14 +2010,15 @@ async def run_code_duo(ctx):
                 await _lsm_pev.evict(_planner_model)
             except (RuntimeError, OSError) as _pev_err:
                 logger.warning("[PLANNER=CODER] planner evict failed: %s", _pev_err)
-            yield await ctx.emit({
-                "type": "status",
-                "content": (
-                    f"⚡ Planner=Coder — slot runs at ctx={_plan_port_actual_ctx} only, "
-                    f"coder needs {_ctx_need_eff} — planner slot freed, "
-                    "loading coder model fresh (full context)."
-                ),
-            })
+            if not _planner_ctx_ok:
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": (
+                        f"⚡ Planner=Coder — slot runs at ctx={_plan_port_actual_ctx} only, "
+                        f"coder needs {_ctx_need_eff} — planner slot freed, "
+                        "loading coder model fresh (full context)."
+                    ),
+                })
         elif _planner_is_coder and _plan_port_available and not _plan_port_alive:
             logger.warning(
                 "[Planner=Coder] Planner port %s dead (phantom slot) — cache discarded, "
@@ -2135,7 +2159,7 @@ async def run_code_duo(ctx):
                                 # degraded slot (manager: 768→256→error).
                                 _lsm2.ensure_loaded(exec_mdl, num_ctx=_coder_ctx_try,
                                                     n_parallel=1, ctx_graceful=False, pin=True,
-                                                    vision=(_img_plan.get("coder") == "raw")),
+                                                    vision=(_img_plan.get("coder") == "raw" or _always_vision)),
                                 timeout=_coder_load_timeout,
                             )
                             _coder_load_ok = True
@@ -3511,7 +3535,7 @@ async def run_code_duo(ctx):
                                 # when the image plan routes raw images to the
                                 # coder - the cached slot may predate the plan
                                 _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True,
-                                                                    vision=(_img_plan.get("coder") == "raw"))
+                                                                    vision=(_img_plan.get("coder") == "raw" or _always_vision))
                                 break
                             except Exception as _ce:
                                 if _connect_attempt < 2:

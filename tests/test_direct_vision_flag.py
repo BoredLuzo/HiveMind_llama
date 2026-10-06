@@ -101,8 +101,8 @@ def test_tool_loop_takes_caller_vision():
 
 def test_call_site_passes_direct_images():
     src = (Path(__file__).parent.parent / "core" / "direct_runner.py").read_text(encoding="utf-8")
-    if "vision=bool(_direct_images))" in src:
-        ok("call site: ensure vision flag == the parts that ride in messages")
+    if "vision=bool(_direct_images)" in src:
+        ok("call site: ensure vision flag == the parts that ride in messages (+ always-vision toggle)")
     else:
         fail("call_site", "vision=bool(_direct_images) missing at the _run_direct_tools call")
 

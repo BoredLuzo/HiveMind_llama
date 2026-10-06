@@ -1216,6 +1216,11 @@ async function loadSettings() {
     S.ctxOverrides = (s.ctx_overrides && s.ctx_overrides.roles) ? s.ctx_overrides.roles : {};
     var vaEl = document.getElementById('va-enabled-toggle');
     if (vaEl) vaEl.checked = S.visionAgentEnabled;
+    // CODER ALWAYS-VISION (2026-10-06): preload the projector for the coder
+    // so image steers don't pay the mid-run upgrade stall. Opt-in (VRAM).
+    S.coderAlwaysVision = !!s.duo_coder_always_vision;
+    var _cavEl = document.getElementById('coder-always-vision-toggle');
+    if (_cavEl) _cavEl.checked = S.coderAlwaysVision;
     // IMAGE-PROCESSING-MODE (2026-10-03): DERIVED, never persisted. The
     // persisted key had no backend reader and presets freezing UI state
     // drifted it from vision_model.json (the actual truth, loaded by
@@ -9397,6 +9402,14 @@ function setVisionAgentEnabled(enabled) {
   S.visionAgentEnabled = enabled;
   postSettings({vision_agent_enabled: enabled});
   if (typeof _updateVisionPreview === 'function') { try { _updateVisionPreview(); } catch(e) {} }
+}
+
+// CODER ALWAYS-VISION (2026-10-06): preload the projector for the coder so
+// image steers inject without the mid-run vision-upgrade stall. Costs VRAM
+// every run — opt-in.
+function setCoderAlwaysVision(enabled) {
+  S.coderAlwaysVision = !!enabled;
+  postSettings({duo_coder_always_vision: !!enabled});
 }
 
 function _applyPipelineVisionRolesUI() {
