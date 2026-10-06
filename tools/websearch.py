@@ -230,7 +230,11 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
             "or continue the task without web data."
         )
 
-    lines = [f"Search results for: {query}\n"]
+    from datetime import datetime as _ws_dt
+    _ws_today = _ws_dt.today().strftime("%Y-%m-%d")
+    lines = [f"Search results for: {query}\n"
+             "(fetched today: {_ws_today}; pages may carry older "
+             "copyright dates - that does not mean today is in the \n past)"]
     _first_url = None
     for i, r in enumerate(results[:max_results], 1):
         title   = r.get("title", "").strip()
