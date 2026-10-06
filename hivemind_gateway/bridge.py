@@ -477,6 +477,16 @@ class RunBridge:
                     if line and line != self._last_tool_line:
                         await self.ms.send_message(line)
                         self._last_tool_line = line
+                elif etype == "steer":
+                    # STEER CARD (2026-10-06): the phone typed the steer —
+                    # confirm on its own message that the run picked it up
+                    # (a status edit would be overwritten by the next tick).
+                    _st_txt = str(ev.get("content") or "").strip()
+                    if _st_txt or ev.get("images"):
+                        _note = "🧭 Steer picked up: " + (_st_txt[:300] or "(image)")
+                        if ev.get("images"):
+                            _note += f" (+{ev.get('images')} img)"
+                        await self.ms.send_message(_note)
                 elif etype == "status":
                     last_status = str(ev.get("content") or "")[:120]
                 elif etype == "done":
@@ -1034,6 +1044,15 @@ class RunBridge:
                 continue
             if ev.get("type") == "status":
                 last_status = str(ev.get("content") or "")[:120]
+            elif ev.get("type") == "steer":
+                # STEER CARD (2026-10-06): relay the takeover run's steer
+                # pickups as their own phone message.
+                _st_txt = str(ev.get("content") or "").strip()
+                if _st_txt or ev.get("images"):
+                    _note = "🧭 Steer picked up: " + (_st_txt[:300] or "(image)")
+                    if ev.get("images"):
+                        _note += f" (+{ev.get('images')} img)"
+                    await self.ms.send_message(_note)
             elif ev.get("type") == "tool_call":
                 # Tool-Call-Relay (2026-10-05): compact activity lines so
                 # the phone sees WHAT the agent is doing, not just status

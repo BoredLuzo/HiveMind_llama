@@ -2665,11 +2665,13 @@ async def run_code_duo(ctx):
             # their own content-parts user message after _coder_msgs is built.
             _steer_items = drain_steer_messages(ctx.run_id)
             _steer_img_items = []
+            for _st in _steer_items:
+                # STEER CARD (2026-10-06): dedicated event — the UI renders
+                # a persistent card, the gateway relays its own phone note.
+                yield await ctx.emit({"type": "steer",
+                                      "content": str(_st["text"] or ""),
+                                      "images": len(_st["images"] or [])})
             if _steer_items:
-                yield await ctx.emit({"type": "status", "content":
-                    "🧭 steered: " + " | ".join(
-                        (it["text"][:60] or "(image)") + ("/+img" * (1 if it["images"] else 0))
-                        for it in _steer_items)})
                 for _st in _steer_items:
                     if _st["images"]:
                         _steer_img_items.append(_st)
@@ -3814,11 +3816,11 @@ async def run_code_duo(ctx):
                         # user messages — same channel as the zero-activity
                         # nudge below.
                         _round_steer = drain_steer_messages(ctx.run_id)
+                        for _st in _round_steer:
+                            yield await ctx.emit({"type": "steer",
+                                                  "content": str(_st["text"] or ""),
+                                                  "images": len(_st["images"] or [])})
                         if _round_steer:
-                            yield await ctx.emit({"type": "status", "content":
-                                "🧭 steered: " + " | ".join(
-                                    (it["text"][:60] or "(image)") + ("/+img" * (1 if it["images"] else 0))
-                                    for it in _round_steer)})
                             for _st in _round_steer:
                                 _dtool_msgs.append(
                                     _build_steer_user_message(_st["text"], _st["images"]))

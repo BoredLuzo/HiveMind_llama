@@ -470,14 +470,16 @@ class ToolLoop:
             # steer can carry IMAGES (screenshots) as content parts.
             if self._run_id:
                 _steer_items = drain_steer_messages(self._run_id)
-                if _steer_items:
-                    yield await self._emit({"type": "status", "content":
-                        "🧭 steered: " + " | ".join(
-                            (it["text"][:60] or "(image)") + ("/+img" * (1 if it["images"] else 0))
-                            for it in _steer_items)})
-                    for _st in _steer_items:
-                        _tool_messages.append(
-                            _build_steer_user_message(_st["text"], _st["images"]))
+                for _st in _steer_items:
+                    # STEER CARD (2026-10-06): a dedicated event instead of
+                    # the 60-char status line — the UI renders a persistent
+                    # card in the chat flow and the gateway relays its own
+                    # note to the phone.
+                    yield await self._emit({"type": "steer",
+                                            "content": str(_st["text"] or ""),
+                                            "images": len(_st["images"] or [])})
+                    _tool_messages.append(
+                        _build_steer_user_message(_st["text"], _st["images"]))
 
             # ── after_round callback ──
             if self._on_after_round:

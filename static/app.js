@@ -5638,6 +5638,23 @@ function handleEvent(d) {
       }
     }
   }
+  else if (d.type === 'steer') {
+    // STEER CARD (2026-10-06): steering is part of the run's story — the
+    // injected text renders as a persistent card in the chat flow instead
+    // of a transient status divider. _autosaveChatMessage picks the card
+    // up as an assistant part, so it survives reload via the existing
+    // restore path (same trick the planner blocks use).
+    var _steerTxt = String(d.content || '').trim();
+    var _steerN = parseInt(d.images, 10) || 0;
+    var _steerCard = document.createElement('div');
+    _steerCard.className = 'msg steer-note';
+    _steerCard.style.cssText = 'border:1px solid rgba(90,150,220,.4);background:rgba(90,150,220,.08);border-radius:6px;padding:6px 10px;margin:4px 0;font-size:12px;';
+    var _steerHead = '\uD83D\uDED9 steer' + (_steerN > 0 ? ' (+' + _steerN + ' image' + (_steerN > 1 ? 's' : '') + ')' : '');
+    _steerCard.innerHTML = '<div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:#6a9ad0;text-transform:uppercase;">' + esc(_steerHead) + '</div>'
+      + '<div style="white-space:pre-wrap;word-break:break-word;">' + esc(_steerTxt || '(image only)') + '</div>';
+    document.getElementById('chat').appendChild(_steerCard);
+    scrollBtmIfNearBottom(60);
+  }
   else if (d.type === 'status') {
       // F5: render system hints as colored dividers
       var _sc = String(d.content || '');
@@ -9694,6 +9711,17 @@ function _autosaveChatMessage() {
         // path) so tool chips stay clickable in the LOADED chat too.
         msgs.push({role: 'assistant', agent: aname.textContent, content: abody.textContent,
                    html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()});
+      }
+    } else if (el.classList.contains('steer-note')) {
+      // STEER CARD PERSISTENCE (2026-10-06): save as an assistant part —
+      // the existing restore path renders it as it looked, no new format.
+      var _steerTxt = (el.textContent || '').trim();
+      if (_steerTxt) {
+        var _steerClone = el.cloneNode(true);
+        _steerClone.querySelectorAll('[id]').forEach(function(x) { x.removeAttribute('id'); });
+        msgs.push({role: 'assistant', agent: 'Steer', part: true,
+                   content: _steerTxt, html: _steerClone.innerHTML,
+                   ts: Date.now()});
       }
     } else if (el.classList.contains('planner-bubble') ||
                el.classList.contains('planner-think-block') ||
