@@ -11,19 +11,12 @@ echo   \__/   \__/
 echo      \___/
 echo.
 echo    H I V E M I N D
-    REM V1 (2026-10-06): the version used to be hardcoded here and went
-    REM stale after every code sync - read it from server.py instead.
-    for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path '%~dp0server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "HM_VER=%%V"
-    if not defined HM_VER set "HM_VER=dev"
-    echo    by: Luzo  ^|  v%HM_VER%
-REM BUILD INFO (2026-10-04): package_release.bat embeds git describe into
-REM BUILD_INFO.txt; a zip-installed copy shows the exact build it came from.
-set "HM_BUILD="
-if exist "%~dp0BUILD_INFO.txt" (
-    set "HM_DIR=%~dp0"
-    for /f "usebackq delims=" %%B in (`powershell -NoProfile -Command "(Get-Content -LiteralPath ($env:HM_DIR + 'BUILD_INFO.txt') -ErrorAction SilentlyContinue | Select-String '^build: ').Line"`) do set "HM_BUILD=%%B"
-)
-if defined HM_BUILD echo    %HM_BUILD%
+REM Version lives in server.py - single source of truth (R5, owner: plain
+REM title, no byline/build clutter in the banner).
+set "HM_VER="
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path '%~dp0server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "HM_VER=%%V"
+if not defined HM_VER set "HM_VER=dev"
+echo    v%HM_VER%
 echo    TIP: press Ctrl+K in the web UI to search every feature/setting
 echo.
 
