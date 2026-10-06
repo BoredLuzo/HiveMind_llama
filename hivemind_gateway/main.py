@@ -380,47 +380,65 @@ class Gateway:
         elif name == "new":
             await self._owner_bridge_call(p, self.bridge.new_chat())
         elif name == "shutdown":
-            # R5 (owner request): secret /shutdown - two-step confirm.
-            # /shutdown           -> arm with a 4-digit code (60 s)
-            # /shutdown <code>    -> confirm: shutdown /s /t 15
-            # /shutdown cancel    -> disarm + abort a pending OS shutdown
-            # Owner-only by dispatch; refuses while a run is active.
-            import secrets as _secrets, time as _time
+            # R5+R6 (owner): secret /shutdown - two-step confirm with an
+            # optional seconds BUFFER so the owner has time to wrap up.
+            # /shutdown            -> arm with the default buffer (60 s)
+            # /shutdown <n>        -> arm with an n-second buffer (30..86400)
+            # /shutdown <code>     -> confirm while armed: shutdown /s /t n
+            # /shutdown cancel     -> disarm + abort a pending OS shutdown
+            # Owner-only by dispatch. Works BETWEEN LLM calls: commands are
+            # dispatched before any model path and runs execute as tasks.
+            # An active run only earns a warning - it dies with the PC.
+            import secrets as _secrets, time as _time, subprocess as _sp
             now = _time.time()
             _armed = getattr(self, "_shutdown_armed", None)
-            if _armed and (now - _armed[0] > 60):
+            if _armed and (now - _armed[0] > 900):
                 self._shutdown_armed = None
                 _armed = None
-            if self.state.data.get("active_run"):
-                await self.reply(p.chat_id,
-                                 "⚠️ A run is active — /stop first, then "
-                                 "/shutdown.",
-                                 reply_to_message_id=p.message_id)
-                return
-            if arg == "cancel":
+            a = (arg or "").strip()
+
+            if a == "cancel":
                 self._shutdown_armed = None
-                import subprocess as _sp_c
-                _sp_c.run(["shutdown", "/a"], capture_output=True)
-                await self.reply(p.chat_id, "🛑 Shutdown disarmed / "
-                                 "pending OS shutdown aborted.",
-                                 reply_to_message_id=p.message_id)
-                return
-            if _armed and arg == _armed[1]:
-                self._shutdown_armed = None
+                if os.name == "nt":
+                    _sp.run(["shutdown", "/a"], capture_output=True)
+                else:
+                    _sp.run(["shutdown", "-c"], capture_output=True)
                 await self.reply(p.chat_id,
-                                 "🔴 Confirmed — shutting down the PC in "
-                                 "15 s (shutdown /a aborts on the PC).",
+                                 "🛑 Shutdown disarmed / pending OS shutdown "
+                                 "aborted.",
                                  reply_to_message_id=p.message_id)
-                import subprocess as _sp_x
-                _sp_x.run(["shutdown", "/s", "/t", "15"],
-                          capture_output=True)
                 return
+            if _armed and a == _armed[1]:
+                self._shutdown_armed = None
+                _buf = int(_armed[2])
+                await self.reply(p.chat_id,
+                                 f"🔴 Confirmed — the PC shuts down in "
+                                 f"{_buf} s. /shutdown cancel aborts.",
+                                 reply_to_message_id=p.message_id)
+                if os.name == "nt":
+                    _sp.run(["shutdown", "/s", "/t", str(_buf)],
+                            capture_output=True)
+                else:
+                    _sp.run(["shutdown", "-h", f"+{max(1, _buf // 60)}"],
+                            capture_output=True)
+                return
+            if _armed and a.isdigit():
+                return await self.reply(p.chat_id,
+                                        f"❌ Wrong code — confirm with "
+                                        f"/shutdown {_armed[1]} "
+                                        "(or /shutdown cancel).",
+                                        reply_to_message_id=p.message_id)
+            _buf = 60
+            if a.isdigit():
+                _buf = max(30, min(86400, int(a)))
             _code = f"{_secrets.randbelow(10000):04d}"
-            self._shutdown_armed = (now, _code)
+            self._shutdown_armed = (now, _code, _buf)
+            _run_note = ("\n⚠️ A run is active — it dies with the PC."
+                         if self.state.data.get("active_run") else "")
             await self.reply(p.chat_id,
-                             f"🔴 Will SHUT DOWN THE PC. Confirm within 60 s:\n"
-                             f"/shutdown {_code}\n"
-                             "(/shutdown cancel aborts)",
+                             f"🔴 Will SHUT DOWN THE PC in {_buf} s. Confirm "
+                             f"within 15 min:\n/shutdown {_code}\n"
+                             f"(/shutdown cancel aborts){_run_note}",
                              reply_to_message_id=p.message_id)
         elif name == "restrict":
             # R6 (owner): /restrict on|off from the phone - the UI toggle's

@@ -1363,11 +1363,11 @@ class RunBridge:
                        for f in _tail)
             if _timed_out:
                 await self.ms.send_message(
-                    "🛡 The call was auto-DENIED — no answer within the "
-                    "timeout (fail-closed). The model picks another way.")
+                    "🛡 The call was auto-DENIED (no answer within the "
+                    "timeout, fail-closed). The model picks another way.")
             elif _ran and _appr_tool:
                 await self.ms.send_message(
-                    f"✅ Approved in the UI — {_appr_tool} ran on the PC.")
+                    f"✅ Approved in the UI: {_appr_tool} ran on the PC.")
             else:
                 await self.ms.send_message(
                     "ℹ️ Card closed (answered in the UI, or timed out).")
