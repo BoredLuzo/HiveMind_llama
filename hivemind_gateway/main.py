@@ -379,6 +379,49 @@ class Gateway:
                              reply_to_message_id=p.message_id)
         elif name == "new":
             await self._owner_bridge_call(p, self.bridge.new_chat())
+        elif name == "shutdown":
+            # R5 (owner request): secret /shutdown - two-step confirm.
+            # /shutdown           -> arm with a 4-digit code (60 s)
+            # /shutdown <code>    -> confirm: shutdown /s /t 15
+            # /shutdown cancel    -> disarm + abort a pending OS shutdown
+            # Owner-only by dispatch; refuses while a run is active.
+            import secrets as _secrets, time as _time
+            now = _time.time()
+            _armed = getattr(self, "_shutdown_armed", None)
+            if _armed and (now - _armed[0] > 60):
+                self._shutdown_armed = None
+                _armed = None
+            if self.state.data.get("active_run"):
+                await self.reply(p.chat_id,
+                                 "⚠️ A run is active — /stop first, then "
+                                 "/shutdown.",
+                                 reply_to_message_id=p.message_id)
+                return
+            if arg == "cancel":
+                self._shutdown_armed = None
+                import subprocess as _sp_c
+                _sp_c.run(["shutdown", "/a"], capture_output=True)
+                await self.reply(p.chat_id, "🛑 Shutdown disarmed / "
+                                 "pending OS shutdown aborted.",
+                                 reply_to_message_id=p.message_id)
+                return
+            if _armed and arg == _armed[1]:
+                self._shutdown_armed = None
+                await self.reply(p.chat_id,
+                                 "🔴 Confirmed — shutting down the PC in "
+                                 "15 s (shutdown /a aborts on the PC).",
+                                 reply_to_message_id=p.message_id)
+                import subprocess as _sp_x
+                _sp_x.run(["shutdown", "/s", "/t", "15"],
+                          capture_output=True)
+                return
+            _code = f"{_secrets.randbelow(10000):04d}"
+            self._shutdown_armed = (now, _code)
+            await self.reply(p.chat_id,
+                             f"🔴 Will SHUT DOWN THE PC. Confirm within 60 s:\n"
+                             f"/shutdown {_code}\n"
+                             "(/shutdown cancel aborts)",
+                             reply_to_message_id=p.message_id)
         elif name == "stop":
             # never rate-limited: the safety valve must always work
             note = await self.bridge.stop()

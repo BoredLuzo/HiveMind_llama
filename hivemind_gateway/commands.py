@@ -13,6 +13,7 @@ COMMAND_WHITELIST = {
     "pair": "bind the owner (one-time code from the console)",
     "new": "start a fresh HiveMind chat",
     "stop": "abort the running run",
+    "shutdown": "shut down the PC (two-step confirm, owner-only)",
     "status": "current run/status",
     "verbose": "toggle verbose output",
     "mode": "show/set the phone-side run mode (auto|chat|pipeline|automap|off)",
