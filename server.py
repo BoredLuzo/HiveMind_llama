@@ -1180,6 +1180,21 @@ async def stream(req: Request):
     body = await req.json()
     q = body.get("q", "")
     images = body.get("images", [])
+    # IMAGE INTAKE CAP (2026-10-06 audit): /stream used to take ANY image
+    # list unbounded — a huge body flowed straight into the run and every
+    # downstream model POST. Same per-image ceiling as the steer route
+    # (14 MB base64), max 8 parts; the UI sends 1-4. Surplus and garbage
+    # entries are dropped here (logged), the run sees a clean list.
+    if not isinstance(images, list):
+        images = []
+    _img_raw_count = len(images)
+    images = [b for b in images if isinstance(b, str) and len(b.strip()) >= 32]
+    images = [b for b in images if len(b) <= 14_000_000]
+    if len(images) > 8:
+        images = images[:8]
+    if _img_raw_count != len(images):
+        logger.warning("[STREAM] image intake clamped: %d -> %d part(s)",
+                       _img_raw_count, len(images))
     mode = body.get("mode", settings.get("mode", "auto"))
     iters = body.get("iterations", body.get("iters", 1))
     preset = ""  # prompts come from built-ins unless a preset was explicitly Loaded
@@ -1855,60 +1870,72 @@ async def gateway_status():
     return _sup.status()
 
 
+_gateway_start_lock: asyncio.Lock | None = None
+
+
 @app.post("/gateway/start", include_in_schema=False)
 async def gateway_start():
+    global _gateway_start_lock
     from infra import gateway_supervisor as _sup
-    # START-RACE FIX (2026-10-06, live): "running" is heartbeat-freshness —
-    # after an UNCLEAN gateway kill the stale heartbeat still read as
-    # running for up to ~15 s and the start route answered 409. Verify the
-    # recorded pid is really alive (python + birth match) before refusing;
-    # a dead/recycled pid clears the stale status and starts.
-    _st = _sup.status()
-    if _st.get("running"):
-        _pid = int(_st.get("pid") or 0)
-        _birth = int(_st.get("birth") or 0)
-        _alive = False
-        if _pid > 0:
-            _ps = (
-                "$p = Get-Process -Id " + str(_pid) + " -ErrorAction SilentlyContinue; "
-                "if (-not $p) { 'no' }"
-                " elseif ($p.ProcessName -notmatch 'python') { 'recycled' }"
-                " elseif (" + str(_birth) + " -eq 0) { 'py' }"
-                " else {"
-                "  $b = [DateTimeOffset]::FromFileTime(" + str(_birth) + "); "
-                "  if ([Math]::Abs(($p.StartTime.ToUniversalTime() - $b.UtcDateTime).TotalSeconds) -gt 1.0)"
-                "    { 'recycled' } else { 'py' }"
-                " }"
-            )
-            import subprocess as _sp_start
-            _chk = _sp_start.run(["powershell", "-NoProfile", "-Command", _ps],
-                                 capture_output=True, text=True)
-            _alive = _chk.stdout.strip() == "py"
-        if _alive:
-            return JSONResponse({"ok": False,
-                                 "error": "gateway already running"},
-                                status_code=409)
-        _sup.clear()
-    import subprocess
-    import sys as _sys
-    _logs = Path(_THIS_DIR) / "logs"
-    try:
-        _logs.mkdir(exist_ok=True)
-        _out = open(_logs / "gateway_supervised.log", "ab")
-    except OSError as _e:
-        return JSONResponse({"ok": False, "error": f"log open failed: {_e}"},
-                            status_code=500)
-    _env = dict(os.environ)
-    _env["HIVEMIND_GATEWAY_ENABLED"] = "1"
-    _flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS) \
-        if os.name == "nt" else 0
-    subprocess.Popen([_sys.executable, "-m", "hivemind_gateway.main"],
-                     cwd=str(_THIS_DIR), env=_env,
-                     stdout=_out, stderr=subprocess.STDOUT,
-                     creationflags=_flags)
-    _out.close()
-    return {"ok": True,
-            "hint": "status flips to running within one heartbeat (~5 s)"}
+    # RE-AUDIT R2 (2026-10-06): the liveness check runs a PowerShell child
+    # (~0.3-0.6 s). Serialized + re-checked under the lock, or a UI
+    # double-click spawns TWO gateways (Telegram getUpdates conflict).
+    if _gateway_start_lock is None:
+        _gateway_start_lock = asyncio.Lock()
+    async with _gateway_start_lock:
+        # START-RACE FIX (2026-10-06, live): "running" is heartbeat-freshness —
+        # after an UNCLEAN gateway kill the stale heartbeat still read as
+        # running for up to ~15 s and the start route answered 409. Verify the
+        # recorded pid is really alive (python + birth match) before refusing;
+        # a dead/recycled pid clears the stale status and starts.
+        _st = _sup.status()
+        if _st.get("running"):
+            _pid = int(_st.get("pid") or 0)
+            _birth = int(_st.get("birth") or 0)
+            _alive = False
+            if _pid > 0:
+                _ps = (
+                    "$p = Get-Process -Id " + str(_pid) + " -ErrorAction SilentlyContinue; "
+                    "if (-not $p) { 'no' }"
+                    " elseif ($p.ProcessName -notmatch 'python') { 'recycled' }"
+                    " elseif (" + str(_birth) + " -eq 0) { 'py' }"
+                    " else {"
+                    "  $b = [DateTimeOffset]::FromFileTime(" + str(_birth) + "); "
+                    "  if ([Math]::Abs(($p.StartTime.ToUniversalTime() - $b.UtcDateTime).TotalSeconds) -gt 1.0)"
+                    "    { 'recycled' } else { 'py' }"
+                    " }"
+                )
+                import subprocess as _sp_start
+                _chk = await asyncio.to_thread(
+                    _sp_start.run,
+                    ["powershell", "-NoProfile", "-Command", _ps],
+                    capture_output=True, text=True)
+                _alive = _chk.stdout.strip() == "py"
+            if _alive:
+                return JSONResponse({"ok": False,
+                                     "error": "gateway already running"},
+                                    status_code=409)
+            _sup.clear()
+        import subprocess
+        import sys as _sys
+        _logs = Path(_THIS_DIR) / "logs"
+        try:
+            _logs.mkdir(exist_ok=True)
+            _out = open(_logs / "gateway_supervised.log", "ab")
+        except OSError as _e:
+            return JSONResponse({"ok": False, "error": f"log open failed: {_e}"},
+                                status_code=500)
+        _env = dict(os.environ)
+        _env["HIVEMIND_GATEWAY_ENABLED"] = "1"
+        _flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS) \
+            if os.name == "nt" else 0
+        subprocess.Popen([_sys.executable, "-m", "hivemind_gateway.main"],
+                         cwd=str(_THIS_DIR), env=_env,
+                         stdout=_out, stderr=subprocess.STDOUT,
+                         creationflags=_flags)
+        _out.close()
+        return {"ok": True,
+                "hint": "status flips to running within one heartbeat (~5 s)"}
 
 
 @app.post("/gateway/stop", include_in_schema=False)

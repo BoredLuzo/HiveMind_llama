@@ -266,6 +266,12 @@ class RunBridge:
             routed = ""
         if routed == "duplicate":
             return "ℹ️ Already answered — nothing changed."
+        if routed == "expired":
+            return "⏱ card already timed out — the call was denied (fail closed)"
+        if routed == "stale":
+            # TOAST-HONESTY (2026-10-06): nonce mismatch — the card was
+            # replaced by a newer one; the engine dropped this answer.
+            return "ℹ️ That card is outdated (a newer one replaced it) — nothing changed."
         return ("✅ allowed (once) — the run continues."
                 if t == "1" else
                 "📁 always (this chat, this exact call) — the run "
@@ -1215,6 +1221,8 @@ class RunBridge:
                 # decision (fail-closed timeout already denied the call) —
                 # "delivered" would be a lie.
                 return "⏱ card already timed out — the call was denied (fail closed)"
+            if routed == "stale":
+                return "ℹ️ That card is outdated (a newer one replaced it) — nothing changed."
             if answer == "2":
                 return "always (this chat, this exact call) — delivered"
             return "allowed (once) — delivered" if answer == "1" \
@@ -1239,6 +1247,8 @@ class RunBridge:
             # TOAST-HONESTY (2026-10-06): see approval_callback — the engine
             # discarded this decision, never claim "delivered".
             return "⏱ card already timed out — the call was denied (fail closed)"
+        if routed == "stale":
+            return "ℹ️ That card is outdated (a newer one replaced it) — nothing changed."
         if answer == "2":
             return "always (this chat, this exact call) — delivered"
         return "allowed (once) — delivered" if answer == "1" \
@@ -1274,6 +1284,12 @@ class RunBridge:
                     # instead of confirming a decision that was dropped.
                     return ("ℹ️ This card was already answered (UI) — "
                             "nothing changed.")
+                if routed == "expired":
+                    return ("⏱ card already timed out — the call was "
+                            "denied (fail closed).")
+                if routed == "stale":
+                    return ("ℹ️ That card is outdated (a newer one "
+                            "replaced it) — nothing changed.")
                 return ("✅ allowed (once) — delivered."
                         if t == "1" else "🛡 denied — delivered.")
             return ("🛡 An approval is waiting — reply 1 or 3 "
