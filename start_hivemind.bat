@@ -11,7 +11,11 @@ echo   \__/   \__/
 echo      \___/
 echo.
 echo    H I V E M I N D
-    echo    by: Luzo  ^|  v1.3.0
+    REM V1 (2026-10-06): the version used to be hardcoded here and went
+    stale after every code sync - read it from server.py instead.
+    for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path '%~dp0server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "HM_VER=%%V"
+    if not defined HM_VER set "HM_VER=dev"
+    echo    by: Luzo  ^|  v%HM_VER%
 REM BUILD INFO (2026-10-04): package_release.bat embeds git describe into
 REM BUILD_INFO.txt; a zip-installed copy shows the exact build it came from.
 set "HM_BUILD="
