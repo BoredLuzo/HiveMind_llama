@@ -393,7 +393,11 @@ async def run_direct(ctx):
             f"Current local time: {_now_dt.strftime('%H:%M')}.\n"
             "NEVER claim a date is in the future or the past without checking "
             "this section. If asked about tomorrow, use this exact date. "
-            "get_datetime() returns the same info as a tool call."
+            "get_datetime() returns the same info as a tool call.\n"
+            "\n=== LANGUAGE ===\n"
+            "ALWAYS answer in the SAME LANGUAGE the user's message is written "
+            "in (German question -> German answer). Match the user's language "
+            "exactly, including on tool-only turns."
         )
         messages = ctx.make_messages(ctx.pipeline, sys_p, direct_input, _direct_images, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
         # FIX (2026-09-01): emit the "Answer" agent event BEFORE the direct
