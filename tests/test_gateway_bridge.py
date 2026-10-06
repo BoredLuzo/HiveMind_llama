@@ -560,7 +560,9 @@ async def t_takeover():
           hive.decided == [("ui-run-1", "3", "d1", "run_bash")])
     check("deny confirmed", "denied" in note)
     check("G7: journal scoped to the mirrored run",
-          hive.journal_calls[-1] == "ui-run-1")
+          hive.journal_calls[-2] == "ui-run-1")
+    check("T2: second-run peek fires after the scoped fetch",
+          hive.journal_calls[-1] == "")
 
     # steering: plain text goes to /steer, not a new gateway run
     runs_before = len(hive.stream_bodies)

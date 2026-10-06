@@ -923,6 +923,7 @@ class RunBridge:
                                   "last_status": "", "approval_sig": None,
                                   "approval_decision_id": "",
                                   "approval_tool": "",
+                                  "other_run_noted": "",
                                   "last_tick": 0.0}
         return self._mirror_state
 
@@ -931,7 +932,8 @@ class RunBridge:
         card metadata too (G2: decision_id/tool of the relayed card)."""
         m.update({"run_id": None, "after": 0, "status_msg_id": None,
                   "last_status": "", "approval_sig": None,
-                  "approval_decision_id": "", "approval_tool": ""})
+                  "approval_decision_id": "", "approval_tool": "",
+                  "other_run_noted": ""})
 
     def _own_run_id(self) -> str | None:
         run = self.state.data.get("active_run") or {}
@@ -1019,13 +1021,37 @@ class RunBridge:
             m.update({"run_id": rid, "after": int(j.get("n") or 0),
                       "status_msg_id": None, "last_status": "",
                       "approval_sig": None, "approval_decision_id": "",
-                      "approval_tool": ""})
+                      "approval_tool": "", "other_run_noted": ""})
             await self.ms.send_message(
                 f"📢 Engine run taken over (mirror): {rid}\n"
                 "Your texts are queued (steering), approvals come "
                 "to you here. /stop aborts it.")
             m["after"] = int(j.get("n") or 0)
             return  # next tick streams the delta
+
+        # SECOND-RUN VISIBILITY (2026-10-06, audit T2): while bound to one
+        # run the mirror never looks at another one — a second engine run
+        # used to run entirely unseen on the phone. Peek the unscoped
+        # journal (most-recently-active) once per tick; when a DIFFERENT
+        # active run surfaces, say so once per foreign run id.
+        if m["run_id"]:
+            try:
+                _j_all = await self.hive.journal()
+                _other = str((_j_all or {}).get("run_id") or "")
+                if (_other and _other != m["run_id"]
+                        and _other != str(self._own_run_id() or "")
+                        and (_j_all or {}).get("active")
+                        and not (_j_all or {}).get("done")
+                        and not (_j_all or {}).get("aborted")
+                        and m.get("other_run_noted") != _other):
+                    m["other_run_noted"] = _other
+                    await self.ms.send_message(
+                        f"ℹ️ Another engine run is active ({_other[:18]}…) — "
+                        f"still mirroring {m['run_id'][:18]}… (only one run "
+                        "mirrors at a time).")
+            except (HiveUnreachable, OSError, ValueError, TypeError,
+                    KeyError, TelegramApiError):
+                pass  # the mirrored run's own relay continues regardless
 
         # delta frames since last tick
         frames = j.get("frames") or []
@@ -1184,6 +1210,11 @@ class RunBridge:
                 routed = ""
             if routed == "duplicate":
                 return "already answered — nothing changed"
+            if routed == "expired":
+                # TOAST-HONESTY (2026-10-06): the engine discarded this
+                # decision (fail-closed timeout already denied the call) —
+                # "delivered" would be a lie.
+                return "⏱ card already timed out — the call was denied (fail closed)"
             if answer == "2":
                 return "always (this chat, this exact call) — delivered"
             return "allowed (once) — delivered" if answer == "1" \
@@ -1204,6 +1235,10 @@ class RunBridge:
             routed = ""
         if routed == "duplicate":
             return "already answered (UI) — nothing changed"
+        if routed == "expired":
+            # TOAST-HONESTY (2026-10-06): see approval_callback — the engine
+            # discarded this decision, never claim "delivered".
+            return "⏱ card already timed out — the call was denied (fail closed)"
         if answer == "2":
             return "always (this chat, this exact call) — delivered"
         return "allowed (once) — delivered" if answer == "1" \

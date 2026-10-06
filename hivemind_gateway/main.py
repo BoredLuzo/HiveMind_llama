@@ -374,7 +374,11 @@ class Gateway:
             note = await self.bridge.stop()
             mirror_note = await self.bridge.stop_mirror()
             if mirror_note:
-                note += "\n" + mirror_note
+                # STOP-NOTE (2026-10-06, audit T1): during a takeover the
+                # own-run answer is "No run active." — leading with that
+                # before the mirror abort note read like a refusal.
+                note = mirror_note if note == "No run active." \
+                    else (note + "\n" + mirror_note)
             await self.reply(p.chat_id, note,
                              reply_to_message_id=p.message_id)
         elif name == "workspace":

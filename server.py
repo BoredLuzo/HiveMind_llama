@@ -1858,10 +1858,37 @@ async def gateway_status():
 @app.post("/gateway/start", include_in_schema=False)
 async def gateway_start():
     from infra import gateway_supervisor as _sup
-    if _sup.status().get("running"):
-        return JSONResponse({"ok": False,
-                             "error": "gateway already running"},
-                            status_code=409)
+    # START-RACE FIX (2026-10-06, live): "running" is heartbeat-freshness —
+    # after an UNCLEAN gateway kill the stale heartbeat still read as
+    # running for up to ~15 s and the start route answered 409. Verify the
+    # recorded pid is really alive (python + birth match) before refusing;
+    # a dead/recycled pid clears the stale status and starts.
+    _st = _sup.status()
+    if _st.get("running"):
+        _pid = int(_st.get("pid") or 0)
+        _birth = int(_st.get("birth") or 0)
+        _alive = False
+        if _pid > 0:
+            _ps = (
+                "$p = Get-Process -Id " + str(_pid) + " -ErrorAction SilentlyContinue; "
+                "if (-not $p) { 'no' }"
+                " elseif ($p.ProcessName -notmatch 'python') { 'recycled' }"
+                " elseif (" + str(_birth) + " -eq 0) { 'py' }"
+                " else {"
+                "  $b = [DateTimeOffset]::FromFileTime(" + str(_birth) + "); "
+                "  if ([Math]::Abs(($p.StartTime.ToUniversalTime() - $b.UtcDateTime).TotalSeconds) -gt 1.0)"
+                "    { 'recycled' } else { 'py' }"
+                " }"
+            )
+            import subprocess as _sp_start
+            _chk = _sp_start.run(["powershell", "-NoProfile", "-Command", _ps],
+                                 capture_output=True, text=True)
+            _alive = _chk.stdout.strip() == "py"
+        if _alive:
+            return JSONResponse({"ok": False,
+                                 "error": "gateway already running"},
+                                status_code=409)
+        _sup.clear()
     import subprocess
     import sys as _sys
     _logs = Path(_THIS_DIR) / "logs"
