@@ -461,6 +461,7 @@ class RunBridge:
 
         parts: list[str] = []
         self._last_tool_line = ""  # Tool-Relay dedupe reset per run
+        self._skip_finish = False  # R4: stream-broke handover skips _finish
         error_text = ""
         stop_reason = ""
         last_status = ""
@@ -543,29 +544,63 @@ class RunBridge:
                             status_id, f"⏳ {last_status} …")
                         last_edited_text = last_status
                         last_edit = _now()
-        finally:
-            # audit G5: _finish talks to Telegram AND the engine — a failure
-            # there (TelegramApiError from delivery, HTTPStatusError from
-            # the transcript write) must never skip the run cleanup,
-            # otherwise active_run stays latched and every further phone
-            # text gets the busy note until the gateway restarts.
-            try:
-                final_note = await self._finish(
-                    chat_id, q, parts, stop_reason, error_text, denied,
-                    status_id)
-            except (TelegramApiError, HTTPError, HiveUnreachable, OSError,
-                    ValueError, TypeError, KeyError, AttributeError) as exc:
-                self._log_note(
-                    f"finish failed ({type(exc).__name__}: {exc}) — run "
-                    "cleared anyway")
+        except HiveUnreachable as _sre:
+            # R4 (audit, live 19:48 identity crisis): the SSE stream broke
+            # but the run CONTINUES engine-side (detached producer). The old
+            # path reported "finished without any text output" + "unreachable"
+            # and then the mirror tick adopted our own run as a takeover —
+            # three confusing messages for one prompt. If the journal says the
+            # run is still active: hand it to the mirror, once, honestly.
+            _rid = str((self.state.data.get("active_run") or {}).get("run_id") or "")
+            _still_active = False
+            if _rid:
                 try:
-                    await self._fail("❌ Result could not be delivered — "
-                                     "run was cleaned up.")
-                except (TelegramApiError, HTTPError, HiveUnreachable,
-                        OSError) as exc2:
-                    self._log_note(f"failure note also failed: {exc2}")
-                final_note = "❌ finish failed (run cleared)"
-            self._clear_run()
+                    _j = await self.hive.journal(_rid)
+                    _still_active = bool(
+                        isinstance(_j, dict) and _j.get("active")
+                        and not _j.get("done") and not _j.get("aborted"))
+                except (HiveUnreachable, OSError, ValueError):
+                    _still_active = False
+            if _still_active:
+                self._skip_finish = True
+                try:
+                    await self.ms.send_message(
+                        "⚠️ The live stream broke — the run continues on the "
+                        "engine. Mirroring it here: your texts steer it, "
+                        "/stop aborts it.")
+                except (TelegramApiError, OSError):
+                    pass
+                self._clear_run()
+                return ("⚠️ Stream broke — the run continues engine-side "
+                        "and is mirrored here.")
+            raise  # engine truly unreachable: keep the honest failure path
+        finally:
+            # R4: a stream-broke handover already cleared the latch and told
+            # the phone — _finish would only add "finished without any text
+            # output" on top of the takeover.
+            if not getattr(self, "_skip_finish", False):
+                # audit G5: _finish talks to Telegram AND the engine — a failure
+                # there (TelegramApiError from delivery, HTTPStatusError from
+                # the transcript write) must never skip the run cleanup,
+                # otherwise active_run stays latched and every further phone
+                # text gets the busy note until the gateway restarts.
+                try:
+                    final_note = await self._finish(
+                        chat_id, q, parts, stop_reason, error_text, denied,
+                        status_id)
+                except (TelegramApiError, HTTPError, HiveUnreachable, OSError,
+                        ValueError, TypeError, KeyError, AttributeError) as exc:
+                    self._log_note(
+                        f"finish failed ({type(exc).__name__}: {exc}) — run "
+                        "cleared anyway")
+                    try:
+                        await self._fail("❌ Result could not be delivered — "
+                                         "run was cleaned up.")
+                    except (TelegramApiError, HTTPError, HiveUnreachable,
+                            OSError) as exc2:
+                        self._log_note(f"failure note also failed: {exc2}")
+                    final_note = "❌ finish failed (run cleared)"
+                self._clear_run()
         return final_note
 
     async def _finish(self, chat_id, q, parts, stop_reason, error_text,
