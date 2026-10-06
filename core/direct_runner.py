@@ -300,7 +300,11 @@ async def run_direct(ctx):
 
         agent = ctx.pipeline.agents["direct"]
         sys_p = ctx.get_effective_prompt_with_override("direct", ctx.active_preset, ctx.use_learned)
-        sys_p += _DIRECT_TIME_NOTE.format(dt=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        # DATE-FIX (2026-10-06, telegram): the time note moved to the LAST
+        # position of the system prompt (see append before make_messages) -
+        # mid-prompt it sat before the tool/websearch notes and the small
+        # direct models ignored it, confidently claiming "tomorrow" was a
+        # year in the future.
         # SOUL INJECTION (2026-10-05, user: 'Soul soll auch im direct sein'):
         # the soul's style/stance/convictions prepended to the system prompt.
         # style_only=True keeps it compact (no full immutable text). Duo does
@@ -376,6 +380,21 @@ async def run_direct(ctx):
         if _direct_tools_active:
             sys_p += _direct_tools_note(_direct_tool_mode,
                                         ws_ok=bool(ctx.websearch_available))
+        # DATE-FIX (2026-10-06): LAST position + explicit tomorrow anchor +
+        # a direct anti-hallucination instruction - small models weight the
+        # prompt tail most and this is exactly the failure that produced
+        # "Oktober 2026 liegt mehr als ein Jahr in der Zukunft".
+        _now_dt = datetime.now()
+        _tomorrow_dt = datetime.fromtimestamp(_now_dt.timestamp() + 86400)
+        sys_p += (
+            "\n\n=== TODAY (authoritative, set by the system) ===\n"
+            f"Today is {_now_dt.strftime('%A, %Y-%m-%d')}. "
+            f"Tomorrow is {_tomorrow_dt.strftime('%A, %Y-%m-%d')}. "
+            f"Current local time: {_now_dt.strftime('%H:%M')}.\n"
+            "NEVER claim a date is in the future or the past without checking "
+            "this section. If asked about tomorrow, use this exact date. "
+            "get_datetime() returns the same info as a tool call."
+        )
         messages = ctx.make_messages(ctx.pipeline, sys_p, direct_input, _direct_images, True, True, cached_mem_ctx=ctx.pipeline_mem_ctx, cached_sess_msgs=ctx.pipeline_sess_msgs)
         # FIX (2026-09-01): emit the "Answer" agent event BEFORE the direct
         # tools loop. Otherwise the ToolLoop streams its token events before the
