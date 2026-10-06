@@ -600,6 +600,29 @@ async def t_takeover():
           ov["duo_planner_ctx_target"] == 131072
           and ov["duo_coder_ctx_agentic"] == 131072)
 
+    # run_id-None latch (2026-10-05 live finding): active_run without a
+    # confirmed run_id must not deadlock busy vs stop
+    import datetime as _dt
+    hive_l = FakeHive()
+    br_l, st_l, ms_l = _mk("gwbr_latch_", hive_l)
+    st_l.data["active_run"] = {"run_id": None, "chat_id": "c",
+                               "started": (_dt.datetime.now().astimezone()
+                                           - _dt.timedelta(seconds=300)
+                                           ).isoformat(timespec="seconds")}
+    note = await br_l.start_text_run("q")
+    check("stale latch self-heals: the run proceeds",
+          st_l.data.get("active_run") is None
+          and any("Run" in m for m in ms_l.messages))
+    st_l.data["active_run"] = {"run_id": None, "chat_id": "c",
+                               "started": _dt.datetime.now().astimezone()
+                               .isoformat(timespec="seconds")}
+    note = await br_l.start_text_run("q")
+    check("fresh unconfirmed -> wait note", "starting" in note.lower())
+    note = await br_l.stop()
+    check("stop clears fresh unconfirmed latch",
+          "cleared" in note.lower()
+          and st_l.data.get("active_run") is None)
+
     # done frame ends the session
     hive.journal_body = {"active": True, "run_id": "ui-run-1", "done": True,
                          "aborted": False, "ts": time.time(), "n": 4,

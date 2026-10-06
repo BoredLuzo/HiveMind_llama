@@ -301,8 +301,45 @@ class RunBridge:
                 {"text": "⛔ Deny", "callback_data": f"appr:{rid}:3"},
             ]]})
 
+    def _active_run_fresh_unconfirmed(self) -> bool:
+        """True while active_run exists but the engine has not confirmed
+        a run_id yet (the window between POST /stream and the run_id
+        frame — or an engine outage). Fresh window: 120 s."""
+        run = self.state.data.get("active_run") or {}
+        if run.get("run_id"):
+            return False
+        try:
+            import datetime as _dt
+            t0 = _dt.datetime.fromisoformat(str(run.get("started")))
+            return (_dt.datetime.now().astimezone() - t0).total_seconds() < 120
+        except (ValueError, TypeError):
+            return True
+
+    def _starting_state_stale(self) -> bool:
+        """active_run without a confirmed run_id and older than 120 s:
+        the process died in the starting window — the latch is stale."""
+        run = self.state.data.get("active_run") or {}
+        if run.get("run_id"):
+            return False
+        try:
+            import datetime as _dt
+            t0 = _dt.datetime.fromisoformat(str(run.get("started")))
+            return (_dt.datetime.now().astimezone() - t0).total_seconds() >= 120
+        except (ValueError, TypeError):
+            return False
+
     async def _start_text_run_inner(self, q: str) -> str:
         if self.state.data.get("active_run"):
+            if self._active_run_fresh_unconfirmed():
+                # fresh starting window (POST /stream sent, run_id not yet
+                # confirmed): a second message would collide — wait
+                return ("⏳ A run is starting (waiting for the engine) — "
+                        "try again in a moment.")
+            if self._starting_state_stale():
+                # stale unconfirmed latch (crash in the starting window):
+                # self-heal instead of the busy-forever deadlock
+                self._clear_run()
+                return await self._start_text_run_inner(q)
             return self._busy_note()
         journal_note = await self._journal_busy()
         if journal_note:
@@ -360,15 +397,21 @@ class RunBridge:
             _model_line += "\nrestricted: web + text only"
         # the info note is PERMANENT (never status-edited): mode/models/
         # approvals/workspace stay visible in the chat while the separate
-        # progress message carries the transient ⏳/✅ states
-        await self.ms.send_message(
-            "ℹ️ Run\n\n"
-            f"mode: {_eff_label}\n"
-            f"{_model_line}\n"
-            f"approvals: {_appr_mode}\n"
-            f"workspace: {_ws_short}")
-        status = await self.ms.send_message("⏳ working …")
-        status_id = status.get("message_id")
+        # progress message carries the transient ⏳/✅ states. Both sends
+        # are INSIDE the guarded region — a Telegram hiccup here must not
+        # escape past the persisted active_run (that latch without a
+        # cleanup path was the busy-forever deadlock, 2026-10-05).
+        try:
+            await self.ms.send_message(
+                "ℹ️ Run\n\n"
+                f"mode: {_eff_label}\n"
+                f"{_model_line}\n"
+                f"approvals: {_appr_mode}\n"
+                f"workspace: {_ws_short}")
+            status = await self.ms.send_message("⏳ working …")
+            status_id = status.get("message_id")
+        except (TelegramApiError, OSError) as exc:
+            self._log_note(f"start note failed ({exc}) — run continues")
 
         parts: list[str] = []
         self._last_tool_line = ""  # Tool-Relay dedupe reset per run
@@ -527,6 +570,12 @@ class RunBridge:
         run = self.state.data.get("active_run") or {}
         rid = run.get("run_id")
         if not rid:
+            if run:
+                # unconfirmed starting-state: nothing to abort engine-side
+                # (no run_id = the engine never started it) — clear it
+                self._clear_run()
+                return ("Cleared a starting-state that never got a run id "
+                        "(the engine never confirmed it). Try again.")
             return "No run active."
         try:
             resp = await self.hive.abort_run(rid)
