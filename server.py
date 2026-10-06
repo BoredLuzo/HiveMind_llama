@@ -636,6 +636,54 @@ async def _startup():
 
     global S_models_cache
 
+    # AGENT-MODEL-SANITIZE (2026-10-06, owner rule): persisted/default agent
+    # models that are NOT on disk must not surface anywhere (UI selectors,
+    # Telegram /setModel current, run bodies). Wipe them to unconfigured ONCE
+    # at startup — runtime resolution re-picks from the DOWNLOADED models
+    # (P9 fail-fast when nothing is downloaded). Guarded: only judged against
+    # a models directory that actually contains GGUFs, so a scan hiccup can
+    # never wipe every assignment.
+    def _sanitize_agent_models() -> None:
+        try:
+            from settings import load_settings, save_settings
+            from backend.llama_models import resolve_model_path
+            from backend.llama_config import MODELS_DIR
+            _s = load_settings()
+            _ags = _s.get("agents")
+            if not isinstance(_ags, dict):
+                return
+            try:
+                if not any(Path(MODELS_DIR).rglob("*.gguf")):
+                    logger.info("[AGENT-MODEL-SANITIZE] models dir empty/missing — skip")
+                    return
+            except OSError:
+                return
+            _changed = False
+            for _name, _cfg in sorted(_ags.items()):
+                if not isinstance(_cfg, dict):
+                    continue
+                _m = str(_cfg.get("model") or "").strip()
+                if not _m:
+                    continue
+                try:
+                    _ok = bool(resolve_model_path(_m))
+                except (OSError, ValueError, KeyError):
+                    _ok = False
+                if not _ok:
+                    _cfg["model"] = ""
+                    _changed = True
+                    logger.warning(
+                        "[AGENT-MODEL-SANITIZE] agents.%s: %r is not downloaded "
+                        "— set to unconfigured (runtime re-picks from disk)",
+                        _name, _m)
+            if _changed:
+                save_settings(_s)
+                logger.warning("[AGENT-MODEL-SANITIZE] settings.json updated")
+        except (ImportError, OSError, ValueError) as _san_exc:
+            logger.warning("[AGENT-MODEL-SANITIZE] skipped: %s", _san_exc)
+
+    _sanitize_agent_models()
+
     # Batch 2.1: Extracted Module Dependency Injection
     def _init_extracted_modules():
         """Batch 2.1: Dependency injection for extracted modules."""
