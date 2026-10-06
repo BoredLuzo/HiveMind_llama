@@ -470,6 +470,19 @@ class ToolLoop:
             # steer can carry IMAGES (screenshots) as content parts.
             if self._run_id:
                 _steer_items = drain_steer_messages(self._run_id)
+                if any(_st["images"] for _st in _steer_items):
+                    # STEER-IMAGE UPGRADE (2026-10-06, live T2): the slot was
+                    # loaded without the projector (no images planned at run
+                    # start) — a mid-run image steer would 500 the next POST.
+                    # Upgrade-only reload before the message parts ride out.
+                    try:
+                        from backend.llama_server_manager import manager as _mgr_vu
+                        yield await self._emit({"type": "status", "content":
+                            "🖼 image steer received — loading vision support (~15 s)…"})
+                        await _mgr_vu.upgrade_port_to_vision(self._port)
+                    except (RuntimeError, OSError, httpx.HTTPError) as _vu_err:
+                        yield await self._emit({"type": "status", "content":
+                            f"⚠ vision upgrade failed: {str(_vu_err)[:100]}"})
                 for _st in _steer_items:
                     # STEER CARD (2026-10-06): a dedicated event instead of
                     # the 60-char status line — the UI renders a persistent

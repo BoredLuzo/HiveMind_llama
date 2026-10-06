@@ -1977,6 +1977,16 @@ async def run_code_duo(ctx):
                 _plan_port_actual_ctx, _ctx_need_eff,
                 _plan_ctx_req, _coder_ctx_need,
             )
+            # TRUE EVICTION (2026-10-06, steer retest): the fresh coder load
+            # takes a FREE slot — without an explicit kill the planner slot
+            # stayed resident. Two slots holding the same model then broke
+            # every name-based lookup (incl. the steer-image vision upgrade
+            # hitting the planner slot while the coder POSTed the other).
+            try:
+                from backend.llama_server_manager import manager as _lsm_pev
+                await _lsm_pev.evict(_planner_model)
+            except (RuntimeError, OSError) as _pev_err:
+                logger.warning("[PLANNER=CODER] planner evict failed: %s", _pev_err)
             yield await ctx.emit({
                 "type": "status",
                 "content": (
@@ -2693,6 +2703,22 @@ async def run_code_duo(ctx):
             # their own content-parts user message after _coder_msgs is built.
             _steer_items = drain_steer_messages(ctx.run_id)
             _steer_img_items = []
+            if any(_st["images"] for _st in _steer_items):
+                # STEER-IMAGE UPGRADE (2026-10-06, live T2): the coder slot
+                # may have loaded without the projector — upgrade BEFORE the
+                # image parts ride into the next chunk POST. The port MUST
+                # be the CODER port (retest live: _find_loaded(exec_mdl)
+                # matched the PLANNER slot first when planner==coder and
+                # upgraded the wrong one).
+                try:
+                    _vu_port = int(_cached_coder_port or _coder_port or 0)
+                    if _vu_port:
+                        from backend.llama_server_manager import manager as _mgr_vu
+                        yield await ctx.emit({"type": "status", "content":
+                            "🖼 image steer received — loading vision support (~15 s)…"})
+                        await _mgr_vu.upgrade_port_to_vision(_vu_port)
+                except (RuntimeError, OSError, httpx.HTTPError) as _vu_err:
+                    logger.warning("[STEER-IMAGE] vision upgrade failed: %s", _vu_err)
             for _st in _steer_items:
                 # STEER CARD (2026-10-06): dedicated event — the UI renders
                 # a persistent card, the gateway relays its own phone note.
@@ -3844,6 +3870,17 @@ async def run_code_duo(ctx):
                         # user messages — same channel as the zero-activity
                         # nudge below.
                         _round_steer = drain_steer_messages(ctx.run_id)
+                        if any(_st["images"] for _st in _round_steer):
+                            # STEER-IMAGE UPGRADE (2026-10-06, live T2): see
+                            # the chunk-boundary drain — upgrade the coder
+                            # slot before the image parts reach the POST.
+                            try:
+                                from backend.llama_server_manager import manager as _mgr_vu2
+                                yield await ctx.emit({"type": "status", "content":
+                                    "🖼 image steer received — loading vision support (~15 s)…"})
+                                await _mgr_vu2.upgrade_port_to_vision(int(_dport))
+                            except (RuntimeError, OSError, httpx.HTTPError) as _vu_err2:
+                                logger.warning("[STEER-IMAGE] vision upgrade failed: %s", _vu_err2)
                         for _st in _round_steer:
                             yield await ctx.emit({"type": "steer",
                                                   "content": str(_st["text"] or ""),

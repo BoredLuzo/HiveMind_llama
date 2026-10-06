@@ -586,6 +586,43 @@ class LlamaLoadMixin:
         slot.touch()
         return slot.port
 
+    async def upgrade_port_to_vision(self, port: int) -> bool:
+        """STEER-IMAGE (2026-10-06, live T2): a mid-run image steer can
+        arrive at a slot loaded WITHOUT the projector (the image plan said
+        "no images" at run start). SURGICAL: kill + restart THE SAME SLOT
+        so the port stays stable — going through ensure_loaded(model)
+        relocated the model to another free slot and orphaned the port
+        every caller holds (retest #2/#3: the duo POSTs kept hitting the
+        dead port). False = port unknown or already vision-capable.
+        """
+        _slot = None
+        for _s in self._slots:
+            if getattr(_s, "port", None) == port and _s.model:
+                _slot = _s
+                break
+        if _slot is None:
+            return False
+        if getattr(_slot, "_vision", False):
+            return True
+        _model = _slot.model
+        _ctx = int(getattr(_slot, "_num_ctx", 0) or 0) or CONTEXT_SIZE_DEFAULT
+        _was_pinned = bool(_slot.pinned)
+        _n_parallel = int(getattr(_slot, "_n_parallel", 1) or 1)
+        await _kill_slot_async(_slot)
+        _slot._loading = True
+        _slot.model = _model
+        _slot._idle_timeout = None if _was_pinned else DEFAULT_IDLE_TIMEOUT_SECONDS
+        _slot.set_pinned(_was_pinned)
+        await self._start_process(_slot, _model, _ctx, vision=True,
+                                  n_parallel=_n_parallel, ctx_graceful=False)
+        try:
+            await asyncio.wait_for(_slot._ready_event.wait(), timeout=240.0)
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"vision upgrade for port {port} timed out")
+        if _slot.model is None:
+            raise RuntimeError("slot died during the vision upgrade")
+        return True
+
     async def _start_process(self, slot: ModelSlot, model: str, num_ctx: int,
                              vision: bool = False, n_parallel: int = 1,
                              gpu_layers_override: Optional[int] = None,
