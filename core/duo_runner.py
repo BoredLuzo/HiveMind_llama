@@ -653,8 +653,10 @@ async def _git_checkpoint_at_chunk_start(ctx, _ws_str: str, _di: int,
         return ""
 
 
-def _ld_setter(src_line: int) -> None:
-    logger.warning("[LD-SET] _loop_detected set at line %d", src_line)
+def _ld_setter(src_line: int = 0) -> None:
+    import inspect as _insp
+    logger.warning("[LD-SET] _loop_detected set at line %d (caller %d)",
+                   src_line, _insp.currentframe().f_back.f_lineno)
 
 
 _READONLY_CODER_NOTE = (

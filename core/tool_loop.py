@@ -498,7 +498,8 @@ class ToolLoop:
             if self._on_after_round:
                 _should_continue = await self._on_after_round(_msg, _tool_messages, _round, state)
                 if not _should_continue:
-                    state.stop_reason = state.stop_reason or "callback_abort"
+                    if state.stop_reason == "completed":
+                        state.stop_reason = "callback_abort"  # H-audit: was dead (init truthy)
                     break
 
         # ── Final verification guard for openai_agent ──
@@ -506,8 +507,8 @@ class ToolLoop:
             state.stop_reason = "verification_required_after_write"
             yield {"type": "token", "content": "Verification required: latest file mutations were not followed by a successful run_bash."}
 
-        if not state.stop_reason and state.rounds_used >= self.cfg.max_rounds:
-            state.stop_reason = "max_tool_rounds"
+        if state.stop_reason == "completed" and state.rounds_used >= self.cfg.max_rounds:
+            state.stop_reason = "max_tool_rounds"  # H-audit: was dead (init truthy)
 
         if state.rounds_used >= self.cfg.max_rounds and not state.content_parts:
             _fallback = "[Tool-Agent: Max rounds reached, no output.]"

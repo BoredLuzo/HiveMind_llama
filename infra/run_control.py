@@ -72,8 +72,7 @@ async def _cleanup_abort_registry():
         known_ids = await asyncio.to_thread(_get_known_ids)
         async with _get_abort_lock():
             stale = [cid for cid in list(_chat_abort_registry)
-                     if cid not in known_ids
-                     and not _chat_abort_registry[cid].is_set()]
+                     if cid not in known_ids]  # H-audit: a set event for an unknown chat is stale too
             for cid in stale:
                 del _chat_abort_registry[cid]
         if stale:
@@ -202,6 +201,14 @@ def _register_abort(run_id: str) -> asyncio.Event:
     for rid in stale:
         _run_abort_registry.pop(rid, None)
         _run_abort_registry_ts.pop(rid, None)
+        # H-audit: sweep per-run maps the happy path can miss
+        # (disconnects; steers queued after the last boundary can
+        # carry 4 x 14 MB image payloads)
+        _steer_queue.pop(rid, None)
+        _step_skip_registry.pop(rid, None)
+        _user_answers.pop(rid, None)
+        _user_questions.pop(rid, None)
+        _pause_events.pop(rid, None)
     ev = asyncio.Event()
     _run_abort_registry[run_id] = ev
     _run_abort_registry_ts[run_id] = now

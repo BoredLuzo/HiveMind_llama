@@ -111,17 +111,40 @@ def _build_vision_prompt(user_query: str, custom_prompt: str = "") -> str:
 def _png_size_from_data_url(img: str) -> tuple[int, int] | None:
     if not isinstance(img, str):
         return None
-    if not img.startswith("data:image/png") or "," not in img:
+    if "," not in img:
         return None
     try:
-        b64 = img.split(",", 1)[1]
-        raw = base64.b64decode(b64, validate=False)
+        # H-audit: decode only the HEADER bytes (a 14 MB payload per
+        # image just to read 8-24 bytes blocked the loop) and accept
+        # JPEG alongside PNG - a 1x1 JPEG used to sail through the
+        # degenerate-image filter.
+        head = img.split(",", 1)[1][:96]
+        raw = base64.b64decode(head + "==", validate=False)
         if len(raw) < 24:
             return None
-        if raw[:8] != b"\x89PNG\r\n\x1a\n":
-            return None
-        width, height = struct.unpack(">II", raw[16:24])
-        return int(width), int(height)
+        if raw[:8] == b"\x89PNG\r\n\x1a\n":
+            if len(raw) < 24:
+                return None
+            width, height = struct.unpack(">II", raw[16:24])
+            return int(width), int(height)
+        if raw[:2] == b"\xff\xd8":
+            # JPEG: walk SOF markers for the dimensions
+            i = 2
+            while i + 9 < len(raw):
+                if raw[i] != 0xFF:
+                    i += 1
+                    continue
+                marker = raw[i + 1]
+                if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+                    height, width = struct.unpack(">HH", raw[i + 5: i + 9])
+                    return int(width), int(height)
+                if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                    i += 2
+                    continue
+                seg_len = struct.unpack(">H", raw[i + 2: i + 4])[0]
+                i += 2 + seg_len
+            return None  # header too short for SOF - size unknown, keep it
+        return None
     except Exception:
         return None
 

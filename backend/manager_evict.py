@@ -15,6 +15,7 @@ from .llama_manager_utils import (
     _prefetch_key, _tcp_alive, _kill_port_sync, _nm,
 )
 from .llama_slots import ModelSlot
+from .llama_config import DEFAULT_IDLE_TIMEOUT_SECONDS
 from typing import Optional
 from .llama_models import resolve_model_path, list_available_models, resolve_mmproj_path, _strip_alias
 from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
@@ -92,6 +93,7 @@ class LlamaEvictMixin:
             self._pending_prefetch.pop(0)
             slot._loading = True
             slot.model    = model
+            slot._idle_timeout = DEFAULT_IDLE_TIMEOUT_SECONDS  # H-audit: prefetched models must age
             self._metric_inc("prefetch_dequeued")
             self._schedule_prefetch_task(slot, model, num_ctx)
 

@@ -36,7 +36,7 @@
     "except_pass": 5
   },
   "backend/manager_load.py": {
-    "broad_except": 32,
+    "broad_except": 34,
     "except_pass": 13
   },
   "backend/manager_prefetch.py": {

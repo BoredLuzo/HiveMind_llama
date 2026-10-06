@@ -32,7 +32,7 @@ class WorkspaceForceInvalid(RuntimeError):
 
 
 def _valid_dir(p: str | None) -> bool:
-    return bool(p) and Path(p).exists()
+    return bool(p) and Path(p).is_dir()  # H-audit: a FILE is not a workspace
 
 
 def load_last_workspace() -> str:
@@ -75,8 +75,11 @@ def extract_task_path(user_input: str) -> str:
     if m:
         cand = m.group()
         try:
-            if Path(cand).exists():
-                return str(Path(cand).resolve())
+            _cand_p = Path(cand)
+            # H-audit: 'C:\\.' resolves to the DRIVE ROOT and a file path
+            # is not a workspace - both refuse.
+            if _cand_p.exists() and _cand_p.is_dir() and _cand_p.resolve() != Path(_cand_p.anchor):  # H-audit: Path-vs-str always !=
+                return str(_cand_p.resolve())
         except OSError:
             pass
     return ""

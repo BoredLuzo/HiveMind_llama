@@ -522,7 +522,10 @@ async def run_direct(ctx):
                     pass
             asyncio.create_task(_pin_direct_bg())
         run_count = ctx.increment_run_counter()
-        asyncio.create_task(run_peer_ratings(
+        def _observed(t):
+            if t.exception():
+                _direct_log.warning("background task failed: %s", t.exception())
+        _t_ratings = asyncio.create_task(run_peer_ratings(
             run_id=ctx.run_id,
             user_input=ctx.user_input,
             outputs={"direct": content},
@@ -530,5 +533,7 @@ async def run_direct(ctx):
             rating_mode="direct",
             has_images=bool(ctx.images),
         ))
-        asyncio.create_task(ctx.maybe_trigger_soul_evolution(run_count))
+        _t_ratings.add_done_callback(_observed)
+        _t_soul = asyncio.create_task(ctx.maybe_trigger_soul_evolution(run_count))
+        _t_soul.add_done_callback(_observed)
         return

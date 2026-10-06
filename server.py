@@ -100,7 +100,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.3.0"
+HIVEMIND_VERSION = "1.3.1"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -1380,8 +1380,10 @@ async def stream(req: Request):
             from routers.chats import import_dom_messages
             _dom = body.get("dom_messages")
             if isinstance(_dom, list) and _dom:
-                import_dom_messages(str(chat_id), _dom,
-                                    str(body.get("workspace") or "") or None)
+                # H-audit: full chat-json read+write off the event loop.
+                await asyncio.to_thread(
+                    import_dom_messages, str(chat_id), _dom,
+                    str(body.get("workspace") or "") or None)
         except (OSError, ValueError) as _flush_import_exc:
             logger.warning("[STREAM] dom import failed (chat=%s): %s",
                            chat_id, _flush_import_exc)
@@ -1505,6 +1507,18 @@ async def stream(req: Request):
                     await _q.put(("error", _se))
             else:
                 await _q.put(("done", None))
+            finally:
+                # H-audit: run-scoped ContextVars die with the TASK context -
+                # reset them anyway so any future host that reuses a task
+                # never inherits the previous run's gate/restriction flags.
+                try:
+                    from tools import runner as _tr_cvr
+                    _tr_cvr._approval_gate_run_override.set(False)
+                    _tr_cvr._tools_restricted_run.set(False)
+                    _tr_cvr._phone_source_run.set(False)
+                    _tr_cvr._current_run_id.set("")
+                except (ImportError, AttributeError):
+                    pass
 
         _producer = asyncio.create_task(_produce())
         try:
@@ -1621,7 +1635,11 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
 
     _OPENAI_WS_ENABLED = bool(settings.get("duo_websearch_enabled", False)) and _WEBSEARCH_AVAILABLE
     _CODING_TOOLS = _get_inline_tools(include_websearch=_OPENAI_WS_ENABLED, mode="openai_agent")
-    _OPENAI_WORKSPACE_LOCK = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+    # H-audit: derive the lock like /internal/tool/exec does - ignoring the
+    # configured workspace let agent tools run against the install dir.
+    _OPENAI_WORKSPACE_LOCK = str(Path(
+        os.environ.get("HIVEMIND_WORKSPACE") or (settings.get("workspace") or ".")
+    ).resolve())
 
     async def _execute_tool(name: str, args: dict, *, model_for_limits: str) -> str:
         if name == "hivemind_pipeline":
@@ -1629,7 +1647,7 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
             mode = args.get("mode", "auto")
             try:
                 tokens = []
-                _hivemind_port = os.environ.get("HIVEMIND_PORT", "8080")
+                _hivemind_port = str(os.environ.get("HIVEMIND_PORT") or settings.get("server_port") or 8001)  # H-audit: real default
                 async with httpx.AsyncClient(timeout=180) as client:
                     async with client.stream("POST",
                         f"http://localhost:{_hivemind_port}/stream",
@@ -1739,9 +1757,9 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
     if do_stream:
         async def _agent_stream():
             async for chunk in _agent_loop():
-                yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': created, 'model': raw_model, 'choices': [{'index': 0, 'delta': {'content': chunk}, 'finish_reason': None}]})}\\n\\n"
-            yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': created, 'model': raw_model, 'stop_reason': _agent_state['stop_reason'], 'stop_reason_bucket': _stop_bucket(_agent_state['stop_reason']), '_meta': {'tool_calls': _agent_state['tool_calls'], 'tool_errors': _agent_state['tool_errors'], 'last_tool_error': _agent_state['last_tool_error']}, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\\n\\n"
-            yield "data: [DONE]\\n\\n"
+                yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': created, 'model': raw_model, 'choices': [{'index': 0, 'delta': {'content': chunk}, 'finish_reason': None}]})}\n\n"
+            yield f"data: {json.dumps({'id': chat_id, 'object': 'chat.completion.chunk', 'created': created, 'model': raw_model, 'stop_reason': _agent_state['stop_reason'], 'stop_reason_bucket': _stop_bucket(_agent_state['stop_reason']), '_meta': {'tool_calls': _agent_state['tool_calls'], 'tool_errors': _agent_state['tool_errors'], 'last_tool_error': _agent_state['last_tool_error']}, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+            yield "data: [DONE]\n\n"
         return StreamingResponse(_agent_stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     parts = []

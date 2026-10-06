@@ -21,7 +21,7 @@ async def _inline_tool_get_signatures(args: dict, workspace: Path, workspace_loc
     if err := _inline_check_workspace(p, workspace_lock, "get_signatures"):
         return err
     max_items = int(args.get("max_items") or 400)
-    max_items = max(20, min(1200, max_items))
+    max_items = max(20, min(400, max_items))  # H-audit: schema says max 400
     _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
     if _sig_fn is None:
         return _tool_error_response(
@@ -55,7 +55,7 @@ async def _inline_tool_find_references(args: dict, workspace: Path, workspace_lo
     if err := _inline_check_workspace(p, workspace_lock, "find_references"):
         return err
     max_items = int(args.get("max_items") or 160)
-    max_items = max(20, min(2000, max_items))
+    max_items = max(20, min(160, max_items))  # H-audit: schema says max 160
     _fr_fn = _shared.find_references_report if callable(_shared.find_references_report) else None
     if _fr_fn is None:
         return _tool_error_response(

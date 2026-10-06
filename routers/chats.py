@@ -468,9 +468,17 @@ async def create_chat(req: Request):
 async def persist_chat(req: Request):
     """Create-or-update a chat in one call. Used by the auto-save feature
     (stream end, abort) and the browser-close beacon (POST-only)."""
-    _ensure_cache()
+    import asyncio as _aio
+    await _aio.to_thread(_ensure_cache)  # H-audit: first-call scan off the loop
     data = await req.json()
     msgs = data.get("messages", []) or []
+    if not isinstance(msgs, list) or not all(isinstance(m, dict) for m in msgs):
+        return {"ok": False, "error": "messages must be a list of objects"}
+    # H-audit: a garbage chat_id fed the adoption glob (*_*.json) and could
+    # overwrite a foreign chat - pin the shape the cache regex already means.
+    _cid = str(data.get("chat_id") or "")
+    if _cid and not re.fullmatch(r"[a-f0-9-]{4,64}", _cid):
+        return {"ok": False, "error": "invalid chat_id"}
     if not msgs:
         return {"ok": True, "id": data.get("chat_id"), "updated": False}
     now = datetime.now().isoformat(timespec="seconds")

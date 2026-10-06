@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.3.1] - 2026-10-06
+
+Deep-audit hardening release: 34 findings across the whole harness fixed
+(6 HIGH, 18 MED, 10 LOW), plus the takeover/steering/vision work that
+landed during 1.3.0's lifecycle.
+
+### Highlights
+- Approval integrity: the approval card now shows the REAL command
+  (run_bash's cmd key) instead of a 60-char fallback; expired and
+  superseded cards answer honestly on every phone path.
+- Slot manager: the steer-image vision upgrade is lock-protected with a
+  loading guard and a zombie-slot kill on any start failure; a stale
+  ready-event can no longer hand out a dead port; the planner slot is
+  truly evicted when the coder needs more context; vision loads of
+  unlisted models no longer crash; prefetched/unpinned models age out.
+- Containment: browser screenshots are workspace-gated, install_package
+  rejects shell-redirect characters, task-path workspaces refuse drive
+  roots and files, protected-path matching survives Win32 trailing-dot
+  and case tricks, write_file_append checks containment before probing.
+- Visibility: takeover runs now deliver the run's RESULT to the phone
+  (not just "completed"); ask_user pauses actually pause in direct mode
+  (run_id was never propagated); agent-mode OpenAI streaming works
+  (frames carried literal backslash-n).
+- Hygiene: steer queues / step-skip / pause maps swept at registration
+  time, models cache mutates in place, git_token mask can no longer be
+  persisted by a stale tab, /vram and first-chat scans off the event
+  loop, agent models not on disk wipe to unconfigured at startup.
+
 ## [1.2.4] - 2026-10-03
 
 One-click self-updates, a real image pipeline for the agentic duo, and a

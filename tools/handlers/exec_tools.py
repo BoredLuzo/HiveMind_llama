@@ -32,7 +32,7 @@ _INSTALL_CMDS = {
     "composer": "composer require {pkgs}",
 }
 
-_PKG_RE = re.compile(r"[A-Za-z0-9@/._~+!<>=,\- ]+")
+_PKG_RE = re.compile(r"[A-Za-z0-9@/._~+=,\- ]+")  # H-audit: < > are PowerShell redirects
 
 _WIN_DANGEROUS_PATTERNS = [
     "remove-item -recurse -force c:\\", "remove-item -recurse -force c:/",

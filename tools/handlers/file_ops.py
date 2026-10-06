@@ -178,15 +178,15 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
 
 
 async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_lock: str | None) -> str:
+    p = _inline_resolve_path(workspace, args.get("path", ""))
+    if err := _inline_check_workspace(p, workspace_lock, "write_file_append"):
+        return err  # H-audit: containment BEFORE the exists probe (oracle)
     target = workspace / args.get("path", "")
     if not target.exists():
         return _tool_error_response(
             "FILE_NOT_FOUND",
             "write_file_append requires an EXISTING file — create it with write_file first.",
             tool="write_file_append")
-    p = _inline_resolve_path(workspace, args.get("path", ""))
-    if err := _inline_check_workspace(p, workspace_lock, "write_file_append"):
-        return err
     content = str(args.get("content", ""))
     get_transaction().capture_before(p)
 

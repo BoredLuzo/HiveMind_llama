@@ -381,6 +381,11 @@ async def post_settings(req: Request):
     # settings blob carrying the key must not clear or rename the active
     # preset behind the user's back.
     data.pop("active_preset", None)
+    # H-audit: GET masks the token as '****' - a stale-tab snapshot POSTs
+    # it back and settings.update() would silently DESTROY the credential
+    # while has_credentials() keeps reporting True.
+    if isinstance(data, dict) and data.get("git_token") in ("****",):
+        data.pop("git_token", None)
     settings.update(data)
     _xa = settings.get("exploration_agent")
     if isinstance(_xa, dict) and _xa.get("enabled") and not (_xa.get("model") or "").strip():

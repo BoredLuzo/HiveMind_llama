@@ -138,7 +138,10 @@ async def push_after_commit(workspace: str) -> str:
         return "✅ auto-pushed HEAD to the configured repository"
     _err = (_r.stderr or _r.stdout or "").strip()
     if _token:
+        import urllib.parse as _up
         _err = _err.replace(_token, "***")
+        _err = _err.replace(_up.quote(_token), "***")  # H-audit: url-escaped form in git errors
+        _err = _err.replace(_token.replace("@", "%40"), "***")
     return f"❌ auto-push failed: {_err[:200]}"
 
 

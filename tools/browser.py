@@ -252,7 +252,7 @@ def _snapshot(page) -> str:
     return out or "(empty page)"
 
 
-def _dispatch(args: dict, workspace) -> str:
+def _dispatch(args: dict, workspace, workspace_lock=None) -> str:
     action = str(args.get("action", "")).strip().lower()
     page = _ensure_page()
 
@@ -299,6 +299,12 @@ def _dispatch(args: dict, workspace) -> str:
         import pathlib as _pl  # F821 fix: _pl was only imported in _plan_file_navigation
         _ws = str(workspace or "").strip()
         _out = (_pl.Path(_ws) / path) if _ws else _pl.Path(path)
+        # H5 (deep audit 2026-10-06): the only path-taking tool without a
+        # containment check - "../../x.png" wrote anywhere on disk. Resolve
+        # and gate like every other file tool.
+        from utils.file import _inline_check_workspace as _bws_check
+        if _err := _bws_check(_out.resolve(), workspace_lock, "browser"):
+            return _err
         _out.parent.mkdir(parents=True, exist_ok=True)
         full = bool(args.get("full_page", False))
         page.screenshot(path=str(_out), full_page=full)
@@ -352,11 +358,11 @@ def _dispatch(args: dict, workspace) -> str:
     )
 
 
-def _dispatch_on_executor(args: dict, workspace) -> str:
+def _dispatch_on_executor(args: dict, workspace, workspace_lock=None) -> str:
 
 
     try:
-        return _dispatch(args, workspace)
+        return _dispatch(args, workspace, workspace_lock)
     except Exception as e:
         if not _is_thread_affinity_error(e):
             raise
@@ -366,7 +372,7 @@ def _dispatch_on_executor(args: dict, workspace) -> str:
             type(e).__name__, e,
         )
         _reset_state()
-        return _dispatch(args, workspace)
+        return _dispatch(args, workspace, workspace_lock)
 
 
 async def browser_tool(args: dict, workspace, workspace_lock) -> str:

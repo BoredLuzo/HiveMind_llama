@@ -146,7 +146,8 @@ class LlamaProcessMixin:
             if not s.pinned:
                 return False
             return (getattr(s, "pinned_at", 0.0) or 0.0) > _now - 1800
-        candidates = [s for s in self._slots if s is not exclude_slot and s.is_running and not _protected(s)]
+        candidates = [s for s in self._slots if s is not exclude_slot and s.is_running
+                      and not getattr(s, "_loading", False) and not _protected(s)]  # H-audit: never kill a mid-load slot
         if not candidates:
             candidates = [s for s in self._slots if s is not exclude_slot and not s.pinned and not s._loading]
         if not candidates:

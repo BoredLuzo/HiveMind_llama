@@ -34,9 +34,17 @@ async def get_models():
         models = sorted(set(v for v in registry_all().values() if v))
 
     if models:
-        S_models_cache = models
+        # H-audit: mutate IN PLACE - a rebind starved every from-import
+        # consumer (chat_run automap, /v1 agent pick) of the update.
+        if isinstance(S_models_cache, list):
+            S_models_cache[:] = models
+        else:
+            S_models_cache = models
         import core.state as _state
-        _state.S_models_cache = models
+        if isinstance(_state.S_models_cache, list):
+            _state.S_models_cache[:] = models
+        else:
+            _state.S_models_cache = models
 
     try:
         prof_dict = get_model_display_map(models)

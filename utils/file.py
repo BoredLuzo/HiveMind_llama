@@ -30,7 +30,12 @@ def _is_protected_path(p: Path) -> bool:
         _resolved = p
     if _resolved in _PROTECTED_PATHS:
         return True
-    if _resolved.name.endswith(".context.json"):
+    # H-audit: Win32 strips trailing dots/spaces on open and compares
+    # case-insensitively - normalize before matching or 'settings.json.'
+    # overwrites the real settings.json.
+    if _resolved.name.rstrip(". ").lower() in {_pp.name.rstrip(". ").lower() for _pp in _PROTECTED_PATHS}:
+        return True
+    if _resolved.name.rstrip(". ").lower().endswith(".context.json"):
         return True
     try:
         _resolved.relative_to(_HIVEMIND_ROOT)

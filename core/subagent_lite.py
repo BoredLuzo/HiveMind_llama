@@ -86,8 +86,12 @@ async def run_research(task: str, workspace_lock: str | None) -> str:
 
     if not bool(_s("subagent_lite_enabled", True)):
         return "Subagent disabled — researching inline."
+    global _active
+    global _active
     if _active:
         return "Subagent already busy — researching inline."
+    _active = True  # H-audit: claim BEFORE the first await (TOCTOU)
+    _active = True  # H-audit: claim BEFORE the first await (TOCTOU)
     now = time.time()
     if now - _last_block_ts < float(_s("subagent_lite_cooldown_s", 60)):
         return "Subagent in cooldown (recently blocked) — researching inline."
@@ -198,7 +202,7 @@ async def _run_sub_loop(task: str, workspace_lock: str | None,
                     args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
                 except Exception:
                     args = {}
-                tc_id = tc.get("id") or f"call_{_round}"
+                tc_id = tc.get("id") or f"call_{_round}_{len(messages)}"  # H-audit: unique per call
                 if name not in _ALLOWED_TOOLS:
                     result = f"[blocked] '{name}' is not allowed in the subagent (read-only)."
                 else:

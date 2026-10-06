@@ -56,11 +56,21 @@ def md_to_telegram_html(text: str) -> str:
     # fenced blocks first (```lang\n...\n``` -> <pre>...</pre>)
     out = re.sub(r"```[A-Za-z0-9_+#-]*\n(.*?)```",
                  lambda m: "<pre>" + m.group(1) + "</pre>", out, flags=re.S)
+    # H-audit: stash <pre> spans - the rewrites below turned **text**
+    # inside fenced blocks into <b> nested in <pre>, which Telegram
+    # rejects (400) or misrenders.
+    _pre_spans: list = []
+    def _stash_pre(m):
+        _pre_spans.append(m.group(0))
+        return "\x00PRE" + str(len(_pre_spans) - 1) + "\x00"
+    out = re.sub(r"<pre>.*?</pre>", _stash_pre, out, flags=re.S)
     # inline code (single backticks; may also hit text inside <pre> —
     # harmless: Telegram renders <code> inside <pre> fine)
     out = re.sub(r"`([^`\n]+)`", r"<code>\1</code>", out)
     # bold
     out = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", out)
+    for _i, _span in enumerate(_pre_spans):
+        out = out.replace("\x00PRE" + str(_i) + "\x00", _span)
     return out
 
 
@@ -107,7 +117,13 @@ def split_message(text: str, limit: int = TELEGRAM_HARD_LIMIT) -> list[str]:
             for i in range(0, len(line), limit):
                 pieces = line[i:i + limit]
                 chunks.append(pieces)
-            current, cur_len = [], 0
+            # H-audit: close_chunk() reopened the fence into current and
+            # the reset below discarded it - the rest of the block lost
+            # its opening fence. Re-open it here.
+            if open_fence is not None:
+                current, cur_len = [open_fence + open_lang], len(open_fence + open_lang) + 1
+            else:
+                current, cur_len = [], 0
             continue
         if cur_len + len(line) + 1 > limit and current:
             close_chunk(open_fence is not None)

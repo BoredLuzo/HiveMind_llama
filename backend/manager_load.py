@@ -234,11 +234,17 @@ class LlamaLoadMixin:
                     raise RuntimeError("No free slot available")
                 slot._loading = True
                 slot.model    = model
+                slot._idle_timeout = DEFAULT_IDLE_TIMEOUT_SECONDS
                 slot._idle_timeout = None if pin else keep_alive_seconds
                 slot.set_pinned(pin)
                 _need_start = True
 
-        if _need_start and not slot._ready_event.is_set():
+        if _need_start:
+            # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
+            # CRASHED slot carries a stale SET event from its previous
+            # load; skipping _start_process handed callers a dead port.
+            # On a fresh claim nobody else is starting this slot and
+            # _start_process clears the event itself.
             try:
                 await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
                                           ctx_graceful=ctx_graceful)
@@ -272,6 +278,12 @@ class LlamaLoadMixin:
             await asyncio.wait_for(slot._ready_event.wait(), timeout=240.0)
         except asyncio.TimeoutError:
             raise RuntimeError(f"llama-server for '{model}' did not start in time (240s timeout)")
+        # A.2 (deep audit): a concurrent loader's kill swaps in a fresh
+        # event and wakes us with model=None - never return that slot.
+        if slot.model is None:
+            raise RuntimeError(
+                f"Shared slot for '{model}' died during startup - the "
+                "underlying llama-server process failed to load.")
 
         slot.touch()
         return slot
@@ -299,6 +311,7 @@ class LlamaLoadMixin:
                     return
                 slot._loading = True
                 slot.model    = model
+                slot._idle_timeout = DEFAULT_IDLE_TIMEOUT_SECONDS
             else:
                 logger.info(f"Prefetch pending (VRAM voll): {model} "
                             f"({current_vram:.1f}+{next_vram:.1f}>{VRAM_BUDGET_GB}GB)")
@@ -469,7 +482,12 @@ class LlamaLoadMixin:
                     if _extra2 is not None:
                         await _kill_slot_async(_extra2)
 
-        if _need_start and not slot._ready_event.is_set():
+        if _need_start:
+            # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
+            # CRASHED slot carries a stale SET event from its previous
+            # load; skipping _start_process handed callers a dead port.
+            # On a fresh claim nobody else is starting this slot and
+            # _start_process clears the event itself.
             try:
                 await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
                                           vision=vision, n_parallel=n_parallel,
@@ -570,9 +588,14 @@ class LlamaLoadMixin:
             slot.model = model
             slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
             slot.set_pinned(pin)
-            await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
-                                      vision=True, n_parallel=n_parallel,
-                                      ctx_graceful=ctx_graceful)
+            try:
+                # H4 (deep audit): same zombie-guard as upgrade_port_to_vision
+                await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                                          vision=True, n_parallel=n_parallel,
+                                          ctx_graceful=ctx_graceful)
+            except Exception:
+                await _kill_slot_async(slot)
+                raise
             try:
                 await asyncio.wait_for(slot._ready_event.wait(), timeout=240.0)
             except asyncio.TimeoutError:
@@ -593,33 +616,51 @@ class LlamaLoadMixin:
         so the port stays stable — going through ensure_loaded(model)
         relocated the model to another free slot and orphaned the port
         every caller holds (retest #2/#3: the duo POSTs kept hitting the
-        dead port). False = port unknown or already vision-capable.
+        dead port). False = port unknown, already vision-capable, or
+        mid-load. H2 (deep audit): locate + kill + claim run under the
+        manager lock so a concurrent ensure_loaded/prefetch cannot
+        interleave; the start + wait run outside it (same pattern as
+        ensure_loaded).
         """
-        _slot = None
-        for _s in self._slots:
-            if getattr(_s, "port", None) == port and _s.model:
-                _slot = _s
-                break
-        if _slot is None:
-            return False
-        if getattr(_slot, "_vision", False):
-            return True
-        _model = _slot.model
-        _ctx = int(getattr(_slot, "_num_ctx", 0) or 0) or CONTEXT_SIZE_DEFAULT
-        _was_pinned = bool(_slot.pinned)
-        _n_parallel = int(getattr(_slot, "_n_parallel", 1) or 1)
-        await _kill_slot_async(_slot)
-        _slot._loading = True
-        _slot.model = _model
-        _slot._idle_timeout = None if _was_pinned else DEFAULT_IDLE_TIMEOUT_SECONDS
-        _slot.set_pinned(_was_pinned)
-        await self._start_process(_slot, _model, _ctx, vision=True,
-                                  n_parallel=_n_parallel, ctx_graceful=False)
+        async with self._lock:
+            _slot = None
+            for _s in self._slots:
+                if getattr(_s, "port", None) == port and _s.model:
+                    _slot = _s
+                    break
+            if _slot is None or getattr(_slot, "_loading", False):
+                return False
+            if getattr(_slot, "_vision", False):
+                return True
+            _model = _slot.model
+            _ctx = int(getattr(_slot, "_num_ctx", 0) or 0) or CONTEXT_SIZE_DEFAULT
+            _was_pinned = bool(_slot.pinned)
+            _n_parallel = int(getattr(_slot, "_n_parallel", 1) or 1)
+            await _kill_slot_async(_slot)
+            _slot._loading = True  # claim BEFORE releasing the lock
+            _slot.model = _model
+            _slot._idle_timeout = None if _was_pinned else DEFAULT_IDLE_TIMEOUT_SECONDS
+            _slot.set_pinned(_was_pinned)
+        try:
+            # H4 (deep audit): _start_process can raise BEFORE Popen
+            # (VRAM preflight, DLL gate, missing GGUF) — without this guard
+            # the slot stays _loading=True forever and every later request
+            # hangs 240 s.
+            await self._start_process(_slot, _model, _ctx, vision=True,
+                                      n_parallel=_n_parallel, ctx_graceful=False)
+        except Exception as _vu_err:
+            # H4: ANY start failure must free the claimed slot - a broad
+            # catch here is the point (zombie _loading slots hang 240 s).
+            await _kill_slot_async(_slot)
+            logger.warning("vision upgrade start failed (%s) - slot freed", _vu_err)
+            raise
         try:
             await asyncio.wait_for(_slot._ready_event.wait(), timeout=240.0)
         except asyncio.TimeoutError:
+            await _kill_slot_async(_slot)
             raise RuntimeError(f"vision upgrade for port {port} timed out")
         if _slot.model is None:
+            await _kill_slot_async(_slot)
             raise RuntimeError("slot died during the vision upgrade")
         return True
 
@@ -1268,6 +1309,7 @@ class LlamaLoadMixin:
         # this env var (default off) omits --mmproj at start so ONLY the
         # post-load /props gate can catch the drop. Value = model substring
         # (e.g. "9b-ud" scopes it to one role; "*" = all models).
+        _mmproj_resolved = None  # H-audit: default for unlisted vision bases
         if _omit_mmproj_for(model, vision=vision):
             _mmproj_resolved = None
         elif _needs_mmproj(model, vision=vision):

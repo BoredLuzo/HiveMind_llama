@@ -509,7 +509,11 @@ async def stage_approval_card(run_id, name: str, emit) -> None:
 
 
 def _approval_preview(args: dict) -> str:
-    for _k in ("command", "code", "package", "url", "path"):
+    # H6 (deep audit 2026-10-06): run_bash/start_background carry "cmd",
+    # install_package carries "packages" - the old tuple missed both, so
+    # the card fell through to the 60-char generic join while the full
+    # command executed (approve sees X, runs Y).
+    for _k in ("cmd", "command", "code", "packages", "package", "url", "path"):
         _v = args.get(_k)
         if isinstance(_v, str) and _v.strip():
             _v = _v.strip()
@@ -1290,8 +1294,6 @@ async def _run_inline_tool(
                 f"Do NOT call read_file on this path again. "
                 f"Use edit_file or write_file directly.]"
             )
-        if not args.get("start_line") and not args.get("end_line"):
-            _read_set.add(_rp_str)
 
     elif name in ("edit_file", "patch_file", "write_file", "write_file_append", "replace_lines") and "path" in args:
         raw_path = args["path"]
@@ -1459,9 +1461,14 @@ async def _run_inline_tool(
             _result = f"{_result}\n[USER NOTE]: {_appr_note}"
 
         if name == "read_file" and not args.get("start_line") and not args.get("end_line"):
+            _rp_ok = _normalize_tool_path(args["path"], workspace)
             if "[FILE TRUNCATED" in _result or "[TRUNCATED:" in _result:
-                _rp_trunc = _normalize_tool_path(args["path"], workspace)
-                _read_set.discard(_rp_trunc)
+                _read_set.discard(_rp_ok)
+            elif not _result.startswith("[TOOL_ERROR"):
+                # H-audit: record ONLY successful reads - a BINARY_FILE /
+                # FILE_TOO_LARGE result used to arm the skip + the fuzzy-edit
+                # gate for content the model never saw.
+                _read_set.add(_rp_ok)
             # READ-SIGNATURE (2026-09-17): remember mtime+size at read time so
             # edit_file's fuzzy fallback can verify the file hasn't changed
             # since the model last saw it (stale edits must fail clearly).
