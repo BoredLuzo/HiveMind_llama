@@ -127,8 +127,8 @@ def test_models_cache_inplace():
 
 def test_version_131():
     src = _src("server.py")
-    if 'HIVEMIND_VERSION = "1.3.1"' in src:
-        ok("version is 1.3.1")
+    if 'HIVEMIND_VERSION = "1.3.2"' in src:
+        ok("version is 1.3.2")
     else:
         fail("version", "still 1.3.0")
 

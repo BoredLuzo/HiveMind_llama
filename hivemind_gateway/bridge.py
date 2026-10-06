@@ -1312,6 +1312,7 @@ class RunBridge:
                 # drop duplicates / tool mismatches.
                 m["approval_decision_id"] = str(body.get("decision_id") or "")
                 m["approval_tool"] = str(body.get("tool") or "")
+                m["approval_kind"] = str(body.get("kind") or "approval")
                 # deep audit N2: the pending preview is truncated to 300
                 # chars by the engine; the full command lives in the
                 # journal's tool_call frames — dig it out so the owner
@@ -1323,23 +1324,37 @@ class RunBridge:
                                    "command in the UI)")
                 if len(preview) > 2500:
                     preview = preview[:2500] + " …"
-                await self.ms.send_message(
-                    f"🛡 Approval needed (UI run {rid})\n\n"
-                    f"tool: {body.get('tool')}\n\n"
-                    f"{preview}\n\n"
-                    "Buttons below; or reply 1 (once) / 3 (deny) as text.\n"
-                    "'2' remembers EXACTLY this call for this chat.",
-                    reply_markup={
-                        "inline_keyboard": [[
-                            {"text": "✅ Once",
-                             "callback_data": f"appr:{rid}:1"},
-                            {"text": "📁 Always (chat)",
-                             "callback_data": f"appr:{rid}:2"},
-                            {"text": "⛔ Deny",
-                             "callback_data": f"appr:{rid}:3"},
-                        ]]})
+                if m["approval_kind"] == "ask":
+                    # ASK-USER ON THE PHONE (2026-10-06, owner): an agent
+                    # question is relayed as a TEXT card - the reply IS the
+                    # answer (free text beats 1/3 for open questions).
+                    await self.ms.send_message(
+                        f"❓ The agent asks (run {rid})\n\n"
+                        f"{preview}\n\n"
+                        "Reply with your answer as text — it goes straight "
+                        "back to the agent.")
+                else:
+                    await self.ms.send_message(
+                        f"🛡 Approval needed (UI run {rid})\n\n"
+                        f"tool: {body.get('tool')}\n\n"
+                        f"{preview}\n\n"
+                        "Buttons below; or reply 1 (once) / 3 (deny) as text.\n"
+                        "'2' remembers EXACTLY this call for this chat.",
+                        reply_markup={
+                            "inline_keyboard": [[
+                                {"text": "✅ Once",
+                                 "callback_data": f"appr:{rid}:1"},
+                                {"text": "📁 Always (chat)",
+                                 "callback_data": f"appr:{rid}:2"},
+                                {"text": "⛔ Deny",
+                                 "callback_data": f"appr:{rid}:3"},
+                            ]]})
         elif m["approval_sig"] and not body.get("active"):
-            m["approval_sig"] = None  # card resolved elsewhere (UI)
+            # BIDIRECTIONAL VISIBILITY (audit r3 owner request): the card
+            # resolved while the phone had it — tell the phone WHERE it went.
+            await self.ms.send_message(
+                "ℹ️ Card resolved in the UI (answered on the PC).")
+            m["approval_sig"] = None
 
     @staticmethod
     def _full_command_from_frames(frames: list, tool: str) -> str:
@@ -1443,13 +1458,37 @@ class RunBridge:
             else "denied — delivered"
 
     async def mirror_send(self, text: str) -> str:
-        """Route a phone message into the mirrored run: while an
-        approval card is open, 1/3 answers it ('2'/always does not exist
-        from the phone); anything else is steering."""
+        """Route a phone message into the mirrored run: while an APPROVAL
+        card is open, 1/3 answers it ('2'/always does not exist from the
+        phone); while an ASK-USER pause is open, ANY text is the answer
+        (free text beats yes/no for open questions); otherwise steering."""
         m = self._mirror()
         rid = m.get("run_id")
+        _pending_kind = ""
+        if m.get("approval_sig"):
+            try:
+                _pk = await self.hive.pending_approval(rid)
+                _pk_body = _pk.json() if hasattr(_pk, "json") else {}
+                if _pk_body.get("active"):
+                    _pending_kind = str(_pk_body.get("kind") or "approval")
+            except (HiveUnreachable, OSError, ValueError):
+                _pending_kind = ""
         if m.get("approval_sig"):
             t = (text or "").strip()
+            if _pending_kind == "ask" and t not in ("1", "3"):
+                # ASK-USER FREE TEXT (2026-10-06, owner): the phone answer
+                # IS the reply to the agent's question (routed like the UI
+                # answer - decide pause route sets the user answer + event).
+                resp = await self.hive.decide_approval(
+                    rid, t,
+                    decision_id=m.get("approval_decision_id") or "",
+                    tool=m.get("approval_tool") or "")
+                code = getattr(resp, "status_code", 500)
+                m["approval_sig"] = None
+                if code >= 300:
+                    return (f"❌ Answer not accepted (HTTP {code}) — maybe "
+                            "answered in the UI.")
+                return ("✅ Answer delivered to the agent: " + t[:200])
             if t == "2":
                 return ("❌ '2' (always allow) deliberately does not "
                         "exist from the phone — 1 or 3.")
@@ -1493,11 +1532,26 @@ class RunBridge:
                 "(mode dependent; pipeline accepts no steering).")
 
     async def gate_text(self, arg: str) -> str:
-        """Chat control of the phone approval policy (ask|deny|off).
+        """Chat control of the phone approval policy (ask|deny|off) plus
+        the MID-RUN TOGGLE (R4, owner): /gate on|off flips the ENGINE-WIDE
+        duo_action_approval_enabled — that key is read per gated call, so
+        a mirrored UI run picks it up live (cards start/stop mid-run).
         Posts EXACTLY one gateway-owned key to /settings — the blanket
         'never touch POST /settings' taboo is amended for this single
         surgical write by owner decision 2026-10-05 (the UI select writes
         the same key)."""
+        arg = (arg or "").strip().lower()
+        if arg in ("on", "off"):
+            try:
+                await self.hive.set_setting("duo_action_approval_enabled", arg == "on")
+            except (HiveUnreachable, OSError) as exc:
+                return f"🔌 could not set: {exc}"
+            return ("🛡 Action approvals engine-wide: "
+                    + ("ON — applies to gated calls from the next round, "
+                       "mirrored runs pick it up mid-run."
+                       if arg == "on" else
+                       "OFF — gated calls run without cards until you "
+                       "/gate on again."))
         arg = (arg or "").strip().lower()
         if arg in ("ask", "deny", "off"):
             try:

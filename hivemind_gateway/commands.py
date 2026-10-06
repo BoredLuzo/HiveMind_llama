@@ -23,7 +23,7 @@ COMMAND_WHITELIST = {
     "cancel": "clear model/ctx overrides for phone runs",
     "workspace": "show/set the workspace for phone runs",
     "tools": "show/set the direct chat tools level for phone runs (on|off)",
-    "gate": "show/set the phone approval policy (ask|deny|off)",
+    "gate": "show/set approvals (ask|deny|off|on|off-global: on/off = engine-wide toggle, works mid-run)",
     "ctx": "show/set the context for duo runs (number | off)",
     "preset": "load a preset globally (number from the preset list)",
     "planner": "separate planner model for duo runs (number | off)",
