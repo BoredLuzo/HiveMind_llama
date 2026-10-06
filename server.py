@@ -1864,7 +1864,7 @@ async def gateway_start():
                             status_code=409)
     import subprocess
     import sys as _sys
-    _logs = _THIS_DIR / "logs"
+    _logs = Path(_THIS_DIR) / "logs"
     try:
         _logs.mkdir(exist_ok=True)
         _out = open(_logs / "gateway_supervised.log", "ab")
@@ -1903,8 +1903,9 @@ async def gateway_stop():
         "$p = Get-Process -Id " + str(pid) + " -ErrorAction SilentlyContinue; "
         "if (-not $p) { 'no' }"
         " elseif ($p.ProcessName -notmatch 'python') { 'no' }"
+        " elseif (" + str(int(birth) if birth else 0) + " -eq 0) { 'py' }"
         " else {"
-        "  $birth = [DateTimeOffset]::FromFileTime(" + str(int(birth) if birth else 0) + ")"
+        "  $birth = [DateTimeOffset]::FromFileTime(" + str(int(birth) if birth else 0) + "); "
         "  if ([Math]::Abs(($p.StartTime.ToUniversalTime() - $birth.UtcDateTime).TotalSeconds) -gt 1.0)"
         "    { 'recycled' } else { 'py' }"
         " }"
@@ -1912,6 +1913,16 @@ async def gateway_stop():
     _chk = subprocess.run(["powershell", "-NoProfile", "-Command", _ps],
                           capture_output=True, text=True)
     _verdict = _chk.stdout.strip()
+    if _verdict not in ("py", "recycled", "no"):
+        _verdict = "ps-error: " + (_chk.stderr.strip()[:120]
+                                   or "empty stdout")
+    if _verdict not in ("py", "recycled", "no"):
+        return JSONResponse(
+            {"ok": False,
+             "error": f"ps failed rc={_chk.returncode} "
+                      f"out={_chk.stdout[:60]!r} err={_chk.stderr[:100]!r} "
+                      f"pid={pid} birth={birth}"},
+            status_code=500)
     if _verdict == "recycled":
         _sup.clear()
         return JSONResponse(
