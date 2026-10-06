@@ -462,6 +462,10 @@ class RunBridge:
         parts: list[str] = []
         self._last_tool_line = ""  # Tool-Relay dedupe reset per run
         self._skip_finish = False  # R4: stream-broke handover skips _finish
+        # PHONE-RUNS-IN-UI (2026-10-06): rid -> chat_id of runs handed
+        # over to the mirror after a stream break - their answers must
+        # land in the chat transcript or the UI never sees them.
+        self._handed_over: dict[str, str] = {}
         error_text = ""
         stop_reason = ""
         last_status = ""
@@ -563,6 +567,8 @@ class RunBridge:
                     _still_active = False
             if _still_active:
                 self._skip_finish = True
+                if _rid:
+                    self._handed_over[_rid] = str(chat_id)
                 try:
                     await self.ms.send_message(
                         "⚠️ The live stream broke — the run continues on the "
@@ -1215,6 +1221,16 @@ class RunBridge:
             else:
                 for _c in _chunks:
                     await self.ms.send_message(_c)
+            # PHONE-RUNS-IN-UI: persist the answer into the chat
+            # transcript so the run exists in the UI, not only on the
+            # phone (the mirror never wrote turns before).
+            _ho_chat = self._handed_over.pop(rid, None)
+            if _ho_chat and _ans:
+                try:
+                    await self._write_turn(_ho_chat, {
+                        "role": "assistant", "content": _ans})
+                except (HiveUnreachable, OSError, HTTPError) as _tw:
+                    self._log_note(f"handover transcript write failed: {_tw}")
             self._mirror_reset(m)
             return
 
