@@ -1351,10 +1351,26 @@ class RunBridge:
                                  "callback_data": f"appr:{rid}:3"},
                             ]]})
         elif m["approval_sig"] and not body.get("active"):
-            # F4 (audit r3): neutral wording - the resolution could be a
-            # UI answer OR the fail-closed timeout.
-            await self.ms.send_message(
-                "ℹ️ Card closed (answered in the UI, or timed out).")
+            # R5 (owner): show WHAT happened, not just that the card
+            # closed. Evidence in the journal tail: a fail-closed timeout
+            # denies with a status line; an approved call leaves a
+            # tool_result for the same tool.
+            _appr_tool = str(body.get("tool") or "")
+            _tail = [f for f in (j.get("frames") or [])[-40:]
+                     if isinstance(f, str)]
+            _timed_out = any("DENIED (fail closed)" in f for f in _tail)
+            _ran = any('"type": "tool_result"' in f and _appr_tool in f
+                       for f in _tail)
+            if _timed_out:
+                await self.ms.send_message(
+                    "🛡 The call was auto-DENIED — no answer within the "
+                    "timeout (fail-closed). The model picks another way.")
+            elif _ran and _appr_tool:
+                await self.ms.send_message(
+                    f"✅ Approved in the UI — {_appr_tool} ran on the PC.")
+            else:
+                await self.ms.send_message(
+                    "ℹ️ Card closed (answered in the UI, or timed out).")
             m["approval_sig"] = None
 
     @staticmethod
