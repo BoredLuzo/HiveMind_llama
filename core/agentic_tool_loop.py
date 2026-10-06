@@ -496,6 +496,30 @@ class AgenticToolLoop(ToolLoop):
                     except Exception:
                         pass
                     _dr_tcs = [result["dr_tool_calls_acc"][k] for k in sorted(result["dr_tool_calls_acc"].keys())]
+                    # CARD-REFRESH (2026-10-06, live deadlock report): the
+                    # staged card carried "(generating, content streams in
+                    # the panel)" - the args are FINAL here. Refresh the
+                    # pending entry with the real preview and re-emit, so
+                    # the UI card and the phone mirror show the actual
+                    # command instead of a placeholder that never updates.
+                    try:
+                        _tr_scope = str(_tr_stage._current_run_id.get() or "")
+                        if _tr_scope and _tr_stage._pending_approvals.get(_tr_scope, {}).get("preview", "").startswith("(generating"):
+                            for _ctc in _dr_tcs:
+                                _cfn = str((_ctc.get("function") or {}).get("name", "") or "")
+                                if _cfn in _tr_stage._APPROVAL_TOOLS:
+                                    try:
+                                        _cargs = json.loads((_ctc.get("function") or {}).get("arguments") or "{}")
+                                    except ValueError:
+                                        _cargs = {}
+                                    _real_prev = _tr_stage._approval_preview(_cargs)
+                                    _tr_stage._pending_approvals[_tr_scope]["preview"] = _real_prev
+                                    await self._emit({"type": "approval_request",
+                                                      "run_id": _tr_scope, "tool": _cfn,
+                                                      "preview": _real_prev})
+                                    break
+                    except (KeyError, AttributeError, TypeError):
+                        pass
                     _dr_content_joined = "".join(result["dr_content_parts"]).strip()
                     if _dr_content_joined and "<think" in _dr_content_joined:
                         _dr_content_joined = _RE_THINK_CLEANUP.sub("", _dr_content_joined).strip()
