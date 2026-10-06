@@ -1701,7 +1701,9 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       </label>
     </div>
     <div class="fld-hint">BIGGEST safety switch, default ON. ON: phone runs can search/read the web and chat — shell, file writes, git and installs are blocked outright (the model is told what is blocked). OFF: phone runs get the same tools as desktop runs — gated calls (shell/write/git) then wait for your approval card when Phone approvals = Ask. Applies from the next message, no restart.</div>
-    <div class="fld">
+    <!-- R4: 10px top margin - the approval selector sat flush under the
+         restrict toggle and read as if the toggle controlled it. -->
+    <div class="fld" style="margin-top:10px">
       <div class="fld-label">Phone approvals</div>
       <select id="tg-approval-mode-sel" onchange="postSettings({telegram_approval_mode:this.value})">
         <option value="deny">Auto-deny (safe)</option>
