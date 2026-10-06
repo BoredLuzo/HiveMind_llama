@@ -1263,6 +1263,7 @@ class RunBridge:
                                         f"⏳ {last_status} …")
             m["last_status"] = last_status
             m["last_tick"] = _now()
+        m["last_phase"] = last_phase  # F5: cross-tick dedupe state
         if done_reason:
             # FAZIT RELAY (2026-10-06): deliver what the run PRODUCED, not
             # just the fact that it ended. Same shaping as the own-run
@@ -1350,10 +1351,10 @@ class RunBridge:
                                  "callback_data": f"appr:{rid}:3"},
                             ]]})
         elif m["approval_sig"] and not body.get("active"):
-            # BIDIRECTIONAL VISIBILITY (audit r3 owner request): the card
-            # resolved while the phone had it — tell the phone WHERE it went.
+            # F4 (audit r3): neutral wording - the resolution could be a
+            # UI answer OR the fail-closed timeout.
             await self.ms.send_message(
-                "ℹ️ Card resolved in the UI (answered on the PC).")
+                "ℹ️ Card closed (answered in the UI, or timed out).")
             m["approval_sig"] = None
 
     @staticmethod
@@ -1465,29 +1466,41 @@ class RunBridge:
         m = self._mirror()
         rid = m.get("run_id")
         _pending_kind = ""
+        _pending_did = ""
         if m.get("approval_sig"):
             try:
                 _pk = await self.hive.pending_approval(rid)
                 _pk_body = _pk.json() if hasattr(_pk, "json") else {}
                 if _pk_body.get("active"):
                     _pending_kind = str(_pk_body.get("kind") or "approval")
+                    _pending_did = str(_pk_body.get("decision_id") or "")
             except (HiveUnreachable, OSError, ValueError):
                 _pending_kind = ""
         if m.get("approval_sig"):
             t = (text or "").strip()
-            if _pending_kind == "ask" and t not in ("1", "3"):
+            _kind_now = _pending_kind or (m.get("approval_kind") or "")
+            if _kind_now == "ask" and t not in ("1", "3"):
                 # ASK-USER FREE TEXT (2026-10-06, owner): the phone answer
-                # IS the reply to the agent's question (routed like the UI
-                # answer - decide pause route sets the user answer + event).
+                # IS the reply to the agent's question. F3 (audit r3): the
+                # LIVE decision_id from the fetched pending body is used,
+                # not the relay-time one; a stale card routes "stale" and
+                # says so instead of claiming delivery.
                 resp = await self.hive.decide_approval(
                     rid, t,
-                    decision_id=m.get("approval_decision_id") or "",
+                    decision_id=_pending_did or m.get("approval_decision_id") or "",
                     tool=m.get("approval_tool") or "")
                 code = getattr(resp, "status_code", 500)
                 m["approval_sig"] = None
                 if code >= 300:
                     return (f"❌ Answer not accepted (HTTP {code}) — maybe "
                             "answered in the UI.")
+                try:
+                    _routed = str((resp.json() or {}).get("routed") or "")
+                except (ValueError, TypeError, AttributeError):
+                    _routed = ""
+                if _routed == "stale":
+                    return ("ℹ️ That card is outdated (a newer one "
+                            "replaced it) — nothing changed.")
                 return ("✅ Answer delivered to the agent: " + t[:200])
             if t == "2":
                 return ("❌ '2' (always allow) deliberately does not "
@@ -1542,16 +1555,21 @@ class RunBridge:
         the same key)."""
         arg = (arg or "").strip().lower()
         if arg in ("on", "off"):
+            # R5 (audit): explicit semantics - on = approvals everywhere
+            # (engine-wide toggle + phone ask), off = everywhere off. The
+            # phone policy keys ride along so both surfaces stay consistent.
+            _on = arg == "on"
             try:
-                await self.hive.set_setting("duo_action_approval_enabled", arg == "on")
+                await self.hive.set_setting("duo_action_approval_enabled", _on)
+                await self.hive.set_setting(
+                    "telegram_approval_mode", "ask" if _on else "off")
             except (HiveUnreachable, OSError) as exc:
                 return f"🔌 could not set: {exc}"
-            return ("🛡 Action approvals engine-wide: "
-                    + ("ON — applies to gated calls from the next round, "
-                       "mirrored runs pick it up mid-run."
-                       if arg == "on" else
-                       "OFF — gated calls run without cards until you "
-                       "/gate on again."))
+            if hasattr(self.ms, "telegram_approval_mode"):
+                self.ms.telegram_approval_mode = "ask" if _on else "off"
+            return ("🛡 Approvals " + ("ON — approval cards for gated calls, "
+                    "everywhere (UI + phone)." if _on else
+                    "OFF — gated calls run without asking. Careful."))
         arg = (arg or "").strip().lower()
         if arg in ("ask", "deny", "off"):
             try:

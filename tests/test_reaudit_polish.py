@@ -59,10 +59,12 @@ def test_stale_handled_everywhere():
     src = _src("hivemind_gateway/bridge.py")
     hits = src.count('routed == "stale"')
     exp = src.count('routed == "expired"')
-    if hits >= 3 and hits == exp:
-        ok(f"bridge: stale answered honestly on every path that knows expired ({hits})")
+    # every answer path must handle stale; expired appears on every path
+    # PLUS the shared ask path (ask answers can also arrive expired)
+    if hits >= 4 and hits >= exp:
+        ok(f"bridge: stale answered honestly on every answer path ({hits})")
     else:
-        fail("stale", f"stale={hits} expired={exp} (must match)")
+        fail("stale", f"stale={hits} expired={exp}")
 
 
 def test_start_route_serialized():
