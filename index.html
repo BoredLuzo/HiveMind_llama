@@ -952,13 +952,6 @@
               <span class="sl"></span>
             </label>
           </div>
-          <div class="vision-row">
-            <span class="cfl-label" style="font-size:11px">Coder always loads vision (mmproj, +VRAM)</span>
-            <label class="cfl-sw">
-              <input type="checkbox" id="coder-always-vision-toggle" onchange="setCoderAlwaysVision(this.checked)">
-              <span class="sl"></span>
-            </label>
-          </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);margin-bottom:4px">Model</div>
           <div class="row" style="margin-bottom:8px">
             <select id="va-model-sel" style="flex:1" onchange="setVisionAgentModel(this.value)">
@@ -1007,9 +1000,18 @@
                 <span class="sl"></span>
               </label>
             </div>
+            <div class="vision-row" style="margin-bottom:4px">
+              <span class="cfl-label" style="font-size:11px">Coder &mdash; always load mmproj (+VRAM)</span>
+              <label class="cfl-sw">
+                <input type="checkbox" id="coder-always-vision-toggle" onchange="setCoderAlwaysVision(this.checked)">
+                <span class="sl"></span>
+              </label>
+            </div>
             <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5">
               Only roles whose model is <b>multimodal</b> actually receive the raw image.<br>
-              All other roles get the text description from the vision-agent.
+              All other roles get the text description from the vision-agent.<br>
+              Coder mmproj preload: image <b>steers</b> inject without the
+              mid-run vision reload (&#8760;15 s) &mdash; at the cost of VRAM every run.
             </div>
           </div>
         </div>
