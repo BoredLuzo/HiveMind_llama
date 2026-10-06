@@ -779,6 +779,19 @@ async def run() -> int:
     else:
         log.warning("owner already bound (%s) — pairing disabled",
                     _mask_tid(gw.owner_id))
+        # FRESH-CHAT-ON-RESTART (2026-10-06, owner): after a gateway/engine
+        # restart the next phone prompt must land in a NEW chat - the old
+        # transcript carries the conversation (and any stale model
+        # hallucinations) into every new run via history seeding.
+        # Non-fatal: a busy engine only postpones the fresh chat.
+        try:
+            _nc = await gw.bridge.new_chat()
+            log.info("[STARTUP] fresh chat for the phone: %s", _nc)
+            await gw.bridge.ms.send_message(
+                "🆕 Fresh chat started (gateway restarted) - the old "
+                "conversation is archived in the UI.")
+        except (HiveUnreachable, HTTPError, OSError, TelegramApiError) as _nc_exc:
+            log.warning("[STARTUP] fresh chat failed (non-fatal): %s", _nc_exc)
 
     # BACKLOG DROP: jump to the newest update, discard everything older.
     try:

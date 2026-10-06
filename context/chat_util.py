@@ -78,6 +78,27 @@ def _make_messages(pipeline, system, user, images, use_session, use_memory, cach
 
     user_labeled = f"[USER]\n{user}"
 
+    # DATE-TRAIL (2026-10-06, live): the seeded history can carry OLD
+    # assistant answers that assert a wrong current date ("Oktober 2026
+    # liegt mehr als ein Jahr in der Zukunft" for tomorrow). History sits
+    # AFTER the system prompt, so a small model weights those turns above
+    # the system-side date note. Two anchors: a system reminder after the
+    # history AND a short line INSIDE the user turn (highest recency -
+    # nothing in the context is nearer to the generation).
+    from datetime import datetime as _dt_trail, timedelta as _td_trail
+    _trail_now = _dt_trail.now()
+    _today_str = _trail_now.strftime("%Y-%m-%d (%A)")
+    _tomorrow_str = (_trail_now + _td_trail(days=1)).strftime("%Y-%m-%d")
+    _date_trail = (
+        "[SYSTEM DATE REMINDER] Today is " + _today_str + ". Assistant "
+        "turns above claiming a different current date are outdated "
+        "context - trust this date, not the history.")
+    user_labeled += (
+        "\n\n[System note: today is " + _today_str + "; 'tomorrow' = "
+        + _tomorrow_str + ". History claiming another current date is "
+        "outdated.]")
+    trail_msg = {"role": "system", "content": _date_trail}
+
     if images:
         img_data = []
         for b in images:
@@ -88,11 +109,13 @@ def _make_messages(pipeline, system, user, images, use_session, use_memory, cach
         return [
             {"role": "system", "content": full_sys},
             *sess_msgs,
+            trail_msg,
             {"role": "user",   "content": user_labeled, "images": img_data},
         ]
     return [
         {"role": "system", "content": full_sys},
         *sess_msgs,
+        trail_msg,
         {"role": "user",   "content": user_labeled},
     ]
 
