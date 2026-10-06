@@ -8,6 +8,9 @@ import json
 import logging
 import os
 import shutil
+# X6 (audit r3): bash-less distros fall back to /bin/sh
+import shutil as _shutil_x6
+_bash_bin = _shutil_x6.which("bash") or "/bin/sh"
 import sys
 
 from . import _shared
@@ -130,7 +133,8 @@ async def _auto_lint_result(p: "Path", workspace: "Path") -> str:
                 r = await asyncio.create_subprocess_shell(
                     lint_cmd,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                    executable="/bin/bash", cwd=str(workspace))
+                    # X6 (audit r3): bash-less distros
+                    executable=_bash_bin, cwd=str(workspace))
             out, err = await asyncio.wait_for(r.communicate(), 8)
             stdout = out.decode(errors="replace").strip()
             stderr = err.decode(errors="replace").strip()

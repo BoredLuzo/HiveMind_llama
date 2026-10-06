@@ -1072,7 +1072,11 @@ _DESTRUCTIVE_BASH_PATTERNS = [
     r"\b(rd|rmdir)\s+[^|&;]*\/[sS]",
     r"\bdel\s+[^|&;]*\/[sS]",
     r"\bRemove-Item\s+.*-[Rr]ecurse",
-    r"\b(Invoke-Expression|iex)\b",
+    # R3: bare "iex" false-positived on the Elixir REPL - require
+    # invocation context (paren or quote); pipe cradles stay covered
+    # by their own patterns.
+    r"\bInvoke-Expression\b",
+    r"\biex\s*[(\(\x27]",
     r"\bschtasks\s+\/(create|change|delete)",
     r"(curl|wget|iwr|Invoke-WebRequest)[^|;]*\|\s*(iex|Invoke-Expression|sh|bash|powershell)",
     r"\|\s*(iex|Invoke-Expression)\b",
@@ -1313,7 +1317,7 @@ async def _run_inline_tool(
         # resolver the handler uses - '/C:/x' used to probe a phantom
         # 'workspace//C:/x' (never exists) and both read/write guards
         # silently skipped for in-workspace files.
-        _fp_check = Path(_inline_resolve_path(str(workspace), raw_path))
+        _fp_check = Path(_inline_resolve_path(workspace, raw_path))  # R3: Path in, Path out
         try:
             _fp_check = _fp_check.resolve()
         except Exception:

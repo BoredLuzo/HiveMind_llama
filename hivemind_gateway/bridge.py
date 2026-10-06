@@ -85,6 +85,11 @@ class RunBridge:
         self.verbose = bool(state.data.get("verbose", False))
         # ask-mode: the ONE waiting own-run approval (rid/decision_id/tool)
         self._open_own_approval: dict | None = None
+        # R3 (audit r3): own runs execute as tasks now - without this
+        # lock two rapid texts both passed the busy check (which sits 3
+        # awaits away from the latch) and ran concurrently.
+        import asyncio as _aio_init
+        self._run_lock = _aio_init.Lock()
         # Tool-Call-Relay: suppress consecutive identical activity lines
         self._last_tool_line = ""
 
@@ -153,12 +158,20 @@ class RunBridge:
         phone itself. Never raises to the caller. httpx.HTTPError is
         caught as belt-and-braces — hive_client normally wraps transport
         failures into HiveUnreachable (realrun bug #4)."""
-        try:
-            return await self._start_text_run_inner(q)
-        except (HiveUnreachable, HTTPError, OSError) as exc:
-            self._clear_run()
-            return await self._fail(f"🔌 HiveMind unreachable "
-                                    f"(offline?): {exc}")
+        # R3 (audit r3): the busy check and the latch sit several awaits
+        # apart inside _start_text_run_inner - two rapid texts (double-send)
+        # both passed the check and ran concurrently. The lock serializes
+        # run tasks; the non-blocking peek turns the loser into the busy
+        # note instead of queueing it behind the winner.
+        if self._run_lock.locked():
+            return ("⏳ A run is already active — /stop aborts it.")
+        async with self._run_lock:
+            try:
+                return await self._start_text_run_inner(q)
+            except (HiveUnreachable, HTTPError, OSError) as exc:
+                self._clear_run()
+                return await self._fail(f"🔌 HiveMind unreachable "
+                                        f"(offline?): {exc}")
 
     @staticmethod
     def _short_path(path: str) -> str:
@@ -206,12 +219,16 @@ class RunBridge:
         if _ar.get("run_id"):
             _stale_rids.append(_ar["run_id"])
         _open_apprs = self.state.data.get("open_approvals")
+        _popped = False
         if isinstance(_open_apprs, dict) and _stale_rids:
             for _sr in _stale_rids:
-                _open_apprs.pop(_sr, None)
+                if _open_apprs.pop(_sr, None) is not None:
+                    _popped = True
         if self.state.data.get("active_run"):
             self.state.set_active_run(None)
             self.state.save()
+        elif _popped:
+            self.state.save()  # R3: persist the pop even without a latch
         # the run is over — a waiting own approval is moot (the engine
         # resolved or lost it); never answer a stale card late
         self._open_own_approval = None
@@ -427,6 +444,9 @@ class RunBridge:
         # are INSIDE the guarded region — a Telegram hiccup here must not
         # escape past the persisted active_run (that latch without a
         # cleanup path was the busy-forever deadlock, 2026-10-05).
+        status_id = None  # R3: unbound here used to NameError in _finish
+                           # (start-note transport failure) and wedge the
+                           # latch - NameError is not in the finally tuple.
         try:
             await self.ms.send_message(
                 "ℹ️ Run\n\n"
@@ -1141,6 +1161,9 @@ class RunBridge:
             # just the fact that it ended. Same shaping as the own-run
             # finish: chunked messages, .txt document past the chunk cap.
             _ans = "".join(m.get("answer_parts") or []).strip()
+            _ans = render.filter_secrets(_ans)  # R3: filter BEFORE split -
+            # per-chunk filtering missed secrets straddling hard-split
+            # boundaries (both halves individually matched no pattern)
             text = STOP_REASON_TEXT.get(
                 done_reason, f"🏁 Mirror run finished ({done_reason}).")
             if done_reason == "completed":

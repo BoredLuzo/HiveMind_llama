@@ -143,8 +143,13 @@ class TelegramApi:
                 "message_id": reply_to_message_id,
                 "allow_sending_without_reply": True}
         files = {"document": (filename, data)}
-        r = await c.post(f"{self._base}/sendDocument", data=form,
-                         files=files)
+        try:
+            r = await c.post(f"{self._base}/sendDocument", data=form,
+                             files=files)
+        except httpx.HTTPError as _exc:
+            # R3 (audit r3): the raw transport error escaped every
+            # TelegramApiError catch and killed the mirror loop.
+            raise TelegramApiError("sendDocument", f"transport: {_exc}") from _exc
         try:
             payload = r.json()
         except ValueError:

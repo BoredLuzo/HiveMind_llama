@@ -205,14 +205,20 @@ echo   Selected: %BACKEND%
 echo.
 
 REM Optional VRAM budget
-set "VRAM=8.0"
-set /p "VRAM_IN=VRAM in GB [Enter = 8.0]: "
+REM I4 (audit r3): a REPAIR re-run must keep the values the user chose
+REM the first time - seed the shown defaults from the existing settings.
+set "VRAM="
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; Write-Output $s.vram_budget_gb"`) do set "VRAM=%%V"
+if not defined VRAM set "VRAM=8.0"
+set /p "VRAM_IN=VRAM in GB [Enter = keep %VRAM%]: "
 if defined VRAM_IN set "VRAM=!VRAM_IN!"
 echo.
 
 REM Optional server port
-set "HM_PORT=8001"
-set /p "PORT_IN=Server port [Enter = 8001]: "
+set "HM_PORT="
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; Write-Output $s.server_port"`) do set "HM_PORT=%%P"
+if not defined HM_PORT set "HM_PORT=8001"
+set /p "PORT_IN=Server port [Enter = keep %HM_PORT%]: "
 if defined PORT_IN set "HM_PORT=!PORT_IN!"
 echo.
 

@@ -24,13 +24,13 @@ from .linting import _auto_lint_result
 
 
 def _recheck_workspace_before_replace(p, workspace_lock, tool_name):
-    """T6 (audit r2): the containment check ran at handler entry; a junction
-    swapped into p.parent between check and os.replace redirected the write.
-    Re-run the SAME checks on the exact path we are about to commit."""
+    """T6 (audit r3): the containment check ran at handler entry; a junction
+    swapped into p.parent between check and write redirected the write.
+    Returns the tool-error response on violation, None when contained.
+    Call sites sit BEFORE the write closures so nothing is written on a
+    violation (and a violation surfaces as a tool error, not a crash)."""
     from utils.file import _inline_check_workspace as _c
-    err = _c(p, workspace_lock, tool_name)
-    if err:
-        raise PermissionError("PATH_RECHECK_FAILED")
+    return _c(p, workspace_lock, tool_name)
 
 def _atomic_write_text(p: Path, text: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -303,6 +303,12 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
                                 pass
                             raise
 
+                    _chk = _recheck_workspace_before_replace(p, workspace_lock, "patch_file")
+
+                    if _chk:
+
+                        return _chk  # T6: containment re-check BEFORE any byte is written
+
                     await asyncio.to_thread(_write_fuzzy_patch)
                     added = new_str.count("\n") + (1 if new_str else 0)
                     removed = old_str.count("\n") + (1 if old_str else 0)
@@ -340,6 +346,9 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
                         except Exception:
                             pass
                         raise
+                _chk = _recheck_workspace_before_replace(p, workspace_lock, "patch_file")
+                if _chk:
+                    return _chk  # T6: containment re-check BEFORE any byte is written
                 await asyncio.to_thread(_write_p2_patch)
                 _lint = await _auto_lint_result(p, workspace)
                 _snippet = _old_str_snippet(old_str)
@@ -372,6 +381,12 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
                 except Exception:
                     pass
                 raise
+
+        _chk = _recheck_workspace_before_replace(p, workspace_lock, "patch_file")
+
+        if _chk:
+
+            return _chk  # T6: containment re-check BEFORE any byte is written
 
         await asyncio.to_thread(_write_patch_result)
         added = new_str.count("\n") + (1 if new_str else 0)
@@ -460,6 +475,12 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
             try: os.unlink(_tmp_path)
             except Exception: pass
             raise
+
+    _chk = _recheck_workspace_before_replace(p, workspace_lock, "write_file")
+
+    if _chk:
+
+        return _chk  # T6: containment re-check BEFORE any byte is written
 
     await asyncio.to_thread(_write_now)
     _lint = await _auto_lint_result(p, workspace)
@@ -589,6 +610,9 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
                     try: os.unlink(_tmp_path)
                     except Exception: pass
                     raise
+            _chk = _recheck_workspace_before_replace(p, workspace_lock, "edit_file")
+            if _chk:
+                return _chk  # T6: containment re-check BEFORE any byte is written
             await asyncio.to_thread(_write_fuzzy)
             _lint = await _auto_lint_result(p, workspace)
             return f"[edit_file: '{p}' edited via fuzzy match]{_lint}"
@@ -642,6 +666,12 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             try: os.unlink(_tmp_path)
             except Exception: pass
             raise
+
+    _chk = _recheck_workspace_before_replace(p, workspace_lock, "edit_file")
+
+    if _chk:
+
+        return _chk  # T6: containment re-check BEFORE any byte is written
 
     await asyncio.to_thread(_write_exact)
     _old_lines_n = content.count("\n") + 1

@@ -90,7 +90,9 @@ def start_background(cmd: str) -> dict:
         # (dash) — Bash-isms ([[ ]], source, &>) vom Modell sterben dort.
         # Explizit bash via 'executable'; Windows-cmd bleibt unverändert.
         import os as _os_bg
-        _shell_kwargs = {"executable": "/bin/bash"} if _os_bg.name != "nt" else {}
+        # X6 (audit r3): bash-less distros - resolve once via exec_tools
+        from tools.handlers.exec_tools import _BASH_BIN as _bg_bash
+        _shell_kwargs = {"executable": _bg_bash} if _os_bg.name != "nt" else {}
         proc = subprocess.Popen(
             cmd,
             shell=True,

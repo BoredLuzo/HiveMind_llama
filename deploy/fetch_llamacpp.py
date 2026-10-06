@@ -393,6 +393,20 @@ def main() -> int:
             print(f"       CUDA runtime split detected - downloading {_cudart['name']} ...")
             try:
                 download(str(_cudart["browser_download_url"]), _cu_zip)
+                # I2 completion (audit r3): the cudart zip carries executable
+                # DLLs - verify its digest like the main asset, and fail hard
+                # instead of the catch-all warning below (which would install
+                # an unverified runtime).
+                _cu_digest = str(_cudart.get("digest") or "")
+                if _cu_digest.startswith("sha256:"):
+                    import hashlib as _hl2
+                    _cu_h = _hl2.sha256(_cu_zip.read_bytes()).hexdigest()
+                    if _cu_h != _cu_digest.split(":", 1)[1]:
+                        _cu_zip.unlink(missing_ok=True)
+                        raise RuntimeError(
+                            f"cudart asset digest mismatch ({_cu_h[:16]}...) - "
+                            "refusing to install; do NOT just retry, verify "
+                            "the download source")
                 with zipfile.ZipFile(_cu_zip) as _zf:
                     _bad = _zf.testzip()
                     if _bad is not None:
