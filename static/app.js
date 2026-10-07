@@ -5074,7 +5074,7 @@ function _perfRender(finalized) {
         : 'reuse: --';
     }
     if ((_e = _qId('pbb-tok'))) _e.textContent = 'out: ' + (_outT > 0 ? _fmtTokens(_outT) : '--');
-    if ((_e = _qId('pbb-rate'))) _e.textContent = (_rateVal > 0 ? _rateVal.toFixed(1) : '--') + '/s';
+    if ((_e = _qId('pbb-rate'))) _e.textContent = (_rateVal > 0 ? _rateVal.toFixed(1) : '--') + ' t/s';
     // DECODE-RATE (2026-10-07): the cleaned figure comes from the engine
     // (llama.cpp predicted_per_second, EMA over coder calls) - reliable,
     // unlike the earlier event-pulse estimate.

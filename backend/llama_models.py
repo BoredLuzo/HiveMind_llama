@@ -596,11 +596,18 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
         if key not in file_to_names:
             file_to_names[key] = []
         file_to_names[key].append(name)
-    for name_list in file_to_names.values():
+    for path_key, name_list in file_to_names.items():
         if len(name_list) > 1:
             name_list.sort(key=len, reverse=True)
             for dup in name_list[1:]:
-                if dup in _override_names:
+                # DEDUP FIX (2026-10-07, owner: "minicpm 2x mit
+                # unterschiedlichem Namen"): an override name stays protected
+                # only when it points at a DIFFERENT file. Same-file aliases
+                # (manifest tag vs models.json override vs parsed name) now
+                # collapse to ONE listing instead of confusing the model
+                # picker with three entries for the same weights.
+                if dup in _override_names and str(
+                        overrides.get(dup, "")) != path_key:
                     continue
                 try:
                     result.remove(dup)
