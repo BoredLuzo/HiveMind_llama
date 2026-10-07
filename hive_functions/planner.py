@@ -1348,6 +1348,15 @@ async def run_planner(
         result.subtasks = subtasks
         result.parse_mode = parse_mode
         result.plan_guard = quality_meta
+        # PARSE DIAGNOSIS (2026-10-07, live test1 run: planner answered with
+        # 2109 thinking chars and ZERO parsed subtasks - no log showed the
+        # raw text, so the format mismatch was invisible):
+        logger.warning(
+            "[PLANNER-PARSE] mode=%s subtasks=%d content_chars=%d thinking_chars=%d "
+            "content_head=%r thinking_head=%r",
+            parse_mode, len(subtasks), len(_raw_output),
+            len(_plan_thinking or ""),
+            str(_raw_output)[:300], str(_plan_thinking or "")[:200])
 
         if quality_meta.get("repetitive_reject"):
             if emit_fn:
