@@ -304,6 +304,10 @@ DEFAULT_SETTINGS = {
     # J2) DIRECT-CHAT-TOOLS (Simple/Direct-Mode Tool-Use, 2026-08-31)
     # ════════════════════════════════════════════════════════════════════════
     "direct_tools_enabled":    True,
+    # run_bash shell on Windows: "auto" = Git Bash when present (small
+    # models emit POSIX bash; powershell chokes on every line), else
+    # powershell. "bash"/"powershell" force one.
+    "run_bash_shell":          "auto",
     "direct_tools_tier":       "readonly",   # off | readonly(websearch only) | python(read+python) | full
     "direct_tools_max_rounds": 12,
 

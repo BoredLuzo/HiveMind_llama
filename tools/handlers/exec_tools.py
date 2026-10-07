@@ -11,6 +11,43 @@ import re
 import shutil
 
 _BASH_BIN = shutil.which("bash") or "/bin/sh"  # X6 (audit r2): bash-less distros
+_WIN_BASH_CACHE: str | None = None
+
+
+def _windows_bash_path() -> str:
+    """RUN-BASH-SHELL FIX (2026-10-07): small coder models emit POSIX bash
+    (`npm run dev ... &`, /tmp paths, pipes) and powershell.exe chokes on
+    every line (14 no-progress rounds in the live test run). Prefer the
+    Git-for-Windows bash; explicitly avoid System32\bash.exe (WSL:
+    different mounts, usually no npm)."""
+    global _WIN_BASH_CACHE
+    if _WIN_BASH_CACHE is not None:
+        return _WIN_BASH_CACHE
+    _cand = ""
+    for _p in (r"C:\Program Files\Git\bin\bash.exe",
+               r"C:\Program Files\Git\usr\bin\bash.exe",
+               r"C:\Program Files (x86)\Git\bin\bash.exe"):
+        if os.path.isfile(_p):
+            _cand = _p
+            break
+    if not _cand:
+        _w = shutil.which("bash")
+        if _w and "system32" not in _w.lower():
+            _cand = _w
+    _WIN_BASH_CACHE = _cand
+    return _cand
+
+
+def _run_bash_shell_mode() -> str:
+    # "auto" | "bash" | "powershell" (settings.run_bash_shell)
+    try:
+        from core import state as _cs
+        _m = str((_cs.settings or {}).get("run_bash_shell", "auto")).lower()
+    except Exception:
+        _m = "auto"
+    if _m in ("bash", "powershell"):
+        return _m
+    return "bash" if _windows_bash_path() else "powershell"
 import sys
 import tempfile
 
@@ -325,11 +362,20 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " + _cmd_translated
                 if sys.platform == "win32" else _cmd_translated
             )
-            _stream_cmd = (
-                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _ps_cmd]
-                if sys.platform == "win32"
-                else [_BASH_BIN, "-c", cmd]  # X6: not every distro ships /bin/bash
-            )
+            _win_bash_exe = ""
+            if sys.platform == "win32" and _run_bash_shell_mode() == "bash":
+                _win_bash_exe = _windows_bash_path()
+            if _win_bash_exe:
+                # AUDIT FIX (1.3.3): the model's command runs in bash
+                # verbatim - the powershell translation layer above is
+                # skipped (POSIX syntax works natively there).
+                _stream_cmd = [_win_bash_exe, "-c", cmd]
+            else:
+                _stream_cmd = (
+                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _ps_cmd]
+                    if sys.platform == "win32"
+                    else [_BASH_BIN, "-c", cmd]  # X6: not every distro ships /bin/bash
+                )
             stdout_raw, stderr_raw, returncode, timed_out = await _stream_proc(
                 _stream_cmd, _bash_timeout, str(workspace), os.environ,
             )
@@ -366,8 +412,19 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
         if returncode != 0:
             result += f"\n[exit code: {returncode}]"
         if returncode != 0 and not stdout:
-            _shell_name = "powershell.exe (Windows)" if sys.platform == "win32" else "bash"
+            _shell_name = ("bash (Git Bash)" if _win_bash_exe
+                           else "powershell.exe (Windows)" if sys.platform == "win32"
+                           else "bash")
             result += f"\n[shell: {_shell_name}]"
+        if returncode != 0 and _win_bash_exe \
+                and "command not found" in (stderr or "").lower() \
+                and re.search(r"(Test-Path|Get-ChildItem|Get-Content|Remove-Item|"
+                              r"\$LASTEXITCODE|\$env:)", cmd):
+            # the model emitted POWERSHELL syntax into the bash shell -
+            # coach it instead of letting it loop on the same error
+            result += ("\n[shell note: the shell is bash (Git Bash). Use POSIX syntax "
+                       "- ls, cat, rm, cp, test -d; PowerShell cmdlets like "
+                       "Get-ChildItem/Test-Path do not exist here.]")
 
         _is_docker_detached = (
             returncode == 0 and not result
