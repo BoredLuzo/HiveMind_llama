@@ -4999,7 +4999,7 @@ function _pbbEnsure() {
         + '<span class="ctx-perf-item live" id="pbb-ctxreuse">reuse: --</span>'
         + '<span class="ctx-perf-item live" id="pbb-tok">out: --</span>'
         + '<span class="ctx-perf-item live" id="pbb-rate">tok/s: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-decode">decode: --</span>'
+
       + '</div>'
       + '<div class="ctx-perf">'
         + '<span class="ctx-perf-item ok" id="pbb-in">in: --</span>'
@@ -5072,10 +5072,9 @@ function _perfRender(finalized) {
     }
     if ((_e = _qId('pbb-tok'))) _e.textContent = 'out: ' + (_outT > 0 ? _fmtTokens(_outT) : '--');
     if ((_e = _qId('pbb-rate'))) _e.textContent = (_rateVal > 0 ? _rateVal.toFixed(1) : '--') + '/s';
-    if ((_e = _qId('pbb-decode'))) {
-      var _dr = _perfRealRate();
-      _e.textContent = 'decode: ' + (_dr > 0 ? _dr.toFixed(1) + ' t/s (bereinigt)' : '--');
-    }
+    // cleaned decode pill removed (2026-10-07, owner): the event-pulse
+    // measurement is too noisy against usage_meta token counts - the plain
+    // rate stays the single source until llama.cpp timings are wired through.
     // PERF-CONSOLIDATION: consistent '--' placeholders until the first usage_meta arrives
     if ((_e = _qId('pbb-in'))) _e.textContent = S.runPromptTokens > 0 ? ('in: ' + _fmtTokens(S.runPromptTokens)) : 'in: --';
     if ((_e = _qId('pbb-cached')))

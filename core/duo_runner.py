@@ -1592,10 +1592,18 @@ async def run_code_duo(ctx):
                             # Offene Tasks
                             _ot = re.search(r"###\s*(?:Offene Tasks|Open Tasks)\s*\n((?:\d+\.\s*.*\n?)+)", _pt, re.IGNORECASE)
                             if _ot:
-                                _project_state.open_tasks = [
-                                    re.sub(r"^\d+\.\s*", "", l).strip()
-                                    for l in _ot.group(1).strip().split("\n") if l.strip()
-                                ]
+                                # OPEN-TASKS DISPLAY FIX (2026-10-07, owner):
+                                # strip leading numbers, a leading "file: "
+                                # and a trailing empty pipe segment - the raw
+                                # plan lines rendered with a dangling "|"
+                                _ot_lines = []
+                                for _l in _ot.group(1).strip().split("\n"):
+                                    _t = re.sub(r"^\d+\.\s*", "", _l).strip()
+                                    _t = re.sub(r"\s*\|\s*$", "", _t)
+                                    _t = re.sub(r"^file:\s*", "", _t).strip()
+                                    if _t:
+                                        _ot_lines.append(_t)
+                                _project_state.open_tasks = _ot_lines
                             # Abgeschlossene Tasks
                             _ct = re.search(r"###\s*(?:Abgeschlossene Tasks|Completed Tasks)\s*\n((?:-\s*\[x\]\s*.*\n?)+)", _pt, re.IGNORECASE)
                             if _ct:
