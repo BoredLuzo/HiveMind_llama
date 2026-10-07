@@ -5796,7 +5796,11 @@ function handleEvent(d) {
     var _steerHead = '\uD83D\uDED9 steer' + (_steerN > 0 ? ' (+' + _steerN + ' image' + (_steerN > 1 ? 's' : '') + ')' : '');
     _steerCard.innerHTML = '<div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:#6a9ad0;text-transform:uppercase;">' + esc(_steerHead) + '</div>'
       + '<div style="white-space:pre-wrap;word-break:break-word;">' + esc(_steerTxt || '(image only)') + '</div>';
-    document.getElementById('chat').appendChild(_steerCard);
+    // STEER PLACEMENT (2026-10-08, owner: the card belongs inside the run
+    // block, next to the tool rows - not dangling at the chat end). Live in
+    // the active coder bubble when one exists; chat flow as fallback.
+    var _steerHost = (S.curAgent && document.getElementById('ab-' + S.curAgent.tid)) || document.getElementById('chat');
+    _steerHost.appendChild(_steerCard);
     scrollBtmIfNearBottom(60);
   }
   else if (d.type === 'status') {
