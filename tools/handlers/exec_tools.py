@@ -43,7 +43,7 @@ def _run_bash_shell_mode() -> str:
     try:
         from core import state as _cs
         _m = str((_cs.settings or {}).get("run_bash_shell", "auto")).lower()
-    except Exception:
+    except ImportError:
         _m = "auto"
     if _m in ("bash", "powershell"):
         return _m
