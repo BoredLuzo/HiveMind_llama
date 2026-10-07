@@ -855,6 +855,28 @@ async def _ui_veto_active(gw: Gateway) -> bool:
     return "telegram_gateway_enabled" in s and not s["telegram_gateway_enabled"]
 
 
+async def _cron_tick(gw: Gateway) -> None:
+    """R7 (owner, 1.3.2): fire due cron jobs as normal phone runs. Busy
+    runs SKIP this fire; the next_ts recompute is kind-aware so daily
+    at-jobs keep their schedule. Every error is contained."""
+    import time as _time
+    from hivemind_gateway.cron import next_fire_ts as _next_fire
+    mgr = gw.cron_manager
+    now = _time.time()
+    for _job in mgr.due_jobs(now):
+        if gw.state.data.get("active_run"):
+            log.info("[CRON] %s skipped - a run is active", _job.get("id"))
+            _job["next_ts"] = _next_fire(_job, now + 120)
+            continue
+        log.warning("[CRON] firing job %s: %s", _job.get("id"),
+                    str(_job.get("prompt"))[:80])
+        _task = asyncio.create_task(
+            gw.bridge.start_text_run(str(_job.get("prompt") or "")))
+        _task.add_done_callback(lambda t: t.exception() and log.warning(
+            "[CRON] run task failed: %s", t.exception()))
+        mgr.mark_fired(_job, now)
+
+
 async def _mirror_loop(gw: Gateway) -> None:
     """P10: watch the engine journal for UI runs and mirror them to the
     phone (status, approvals relayed as 1/3, steering). Runs next to the
@@ -875,6 +897,14 @@ async def _mirror_loop(gw: Gateway) -> None:
             "birth": _process_birth(os.getpid()),
         })
         await gw.bridge.mirror_tick()
+        # R7 (owner, 1.3.2): cron - fire due scheduled runs as normal phone
+        # runs. Every error is contained; the cron must never take the
+        # gateway down.
+        try:
+            await _cron_tick(gw)
+        except (HiveUnreachable, OSError, ValueError, TypeError,
+                KeyError) as _cron_exc:
+            log.warning("[CRON] tick failed: %s", _cron_exc)
         await asyncio.sleep(5.0)
 
 
@@ -895,7 +925,7 @@ async def run() -> int:
     gw = Gateway(api, cfg, state)
     # R7 (owner, 1.3.2): cron - scheduled agent runs, persisted in the
     # gateway state, fired by the poll loop as normal phone runs.
-    from hivemind_gateway.cron import CronManager
+    from hivemind_gateway.cron import CronManager, next_fire_ts as _cron_next_fire
     gw.cron_manager = CronManager(state, gw.bridge)
     # 2026-10-05: the startup filter only carries the ENV token — a token
     # from the Credential Manager would never be in the literal scrub

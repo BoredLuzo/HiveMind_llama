@@ -146,6 +146,21 @@ def test_delete():
         fail("delete", note)
 
 
+
+
+def test_at_job_reschedules():
+    st = FakeState()
+    br = FakeBridge()
+    mgr = CronManager(st, br)
+    mgr.add({"kind": "at", "at_hm": "09:00", "prompt": "daily", "id": "j1"})
+    job = mgr.jobs()[0]
+    before = job.get("next_ts")
+    mgr.mark_fired(job, before)          # fired at its slot
+    if job.get("next_ts") and job["next_ts"] > before:
+        ok("at-job: next_ts re-computed to tomorrow after firing (no dead job)")
+    else:
+        fail("at_resched", f"before={before} after={job.get('next_ts')}")
+
 if __name__ == "__main__":
     test_parse_every()
     test_parse_in()
@@ -157,5 +172,6 @@ if __name__ == "__main__":
     test_once_removes()
     test_state_persisted()
     test_delete()
+    test_at_job_reschedules()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

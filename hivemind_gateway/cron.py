@@ -157,5 +157,7 @@ class CronManager:
         elif job.get("kind") == "every":
             job["next_ts"] = now + int(job.get("interval_s") or 0)
         elif job.get("kind") == "at":
-            job.pop("next_ts", None)  # re-computed daily
+            # R5-fix (audit): the old pop left the daily job dead — nothing
+            # ever re-computed next_ts. Schedule tomorrow's occurrence.
+            job["next_ts"] = next_fire_ts(job, now + 60)
         self._save()
