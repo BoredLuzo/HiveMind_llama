@@ -1,4 +1,4 @@
-"""Auth — owner whitelist, private-only, pairing. Pure, no network.
+"""Auth - owner whitelist, private-only, pairing. Pure, no network.
 
 Rules (brief: SECURITY/Authentication):
   - Whitelist on from.id, only chat.type == private, for ALL update types
@@ -102,7 +102,7 @@ def classify(p: ParsedUpdate, owner_id: int | None) -> str:
 
 
 class PairingError(Exception):
-    """Base for verify() failures — callers answer the user generically."""
+    """Base for verify() failures - callers answer the user generically."""
 
 
 class PairingLocked(PairingError):
@@ -152,13 +152,13 @@ class PairingManager:
             raise PairingDisabled("pairing is disabled (owner already bound)")
         if self._locked:
             raise PairingLocked("pairing locked after too many failed "
-                                "attempts — restart the gateway")
+                                "attempts - restart the gateway")
         if self._code is None or self._consumed:
             raise PairingDenied("no active pairing window")
         if self._now() > self._expires:
             raise PairingDenied("pairing code expired")
         # BYTE comparison (deep audit N1): compare_digest raises TypeError
-        # on non-ASCII STRINGS — "/pair 😀" from a stranger crashed the
+        # on non-ASCII STRINGS - "/pair 😀" from a stranger crashed the
         # whole gateway. Encoding both sides makes any input a safe deny.
         ok = hmac.compare_digest(
             self._code.encode("utf-8"),

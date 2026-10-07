@@ -1,6 +1,6 @@
 """Command whitelist parsing (pure).
 
-Commands are parsed ONLY from the owner's own user messages — the auth
+Commands are parsed ONLY from the owner's own user messages - the auth
 layer guarantees that; this module only knows the whitelist and the
 syntax. Forwarded messages never yield a command (brief: replay /
 backlog).
@@ -37,50 +37,50 @@ COMMAND_WHITELIST = {
 # quick start + the safety contract in two lines. Static on purpose: the
 # behavior it describes is the tested invariant, not a config value.
 HELP_TEXT = (
-    "📖 HiveMind — quick guide\n"
+    "📖 HiveMind - quick guide\n"
     "\n"
     "Send any text = start a run.\n"
     "\n"
-    "— RUN MODES —\n"
-    "/mode auto — duo agent, CAN create/edit files\n"
-    "/mode agentic — duo + agentic loop (thorough, slower)\n"
-    "/mode chat — quick talk + web only, NO file tools\n"
+    "- RUN MODES -\n"
+    "/mode auto - duo agent, CAN create/edit files\n"
+    "/mode agentic - duo + agentic loop (thorough, slower)\n"
+    "/mode chat - quick talk + web only, NO file tools\n"
     "/mode pipeline · /mode automap · /mode off\n"
     "Bare /mode lists what each mode does.\n"
     "\n"
-    "— STEERING —\n"
-    "/stop — abort the active run (ALWAYS works)\n"
-    "/status — chat, workspace, mode, model, engine\n"
-    "/new — fresh chat\n"
-    "/verbose — toggle detailed status updates\n"
+    "- STEERING -\n"
+    "/stop - abort the active run (ALWAYS works)\n"
+    "/status - chat, workspace, mode, model, engine\n"
+    "/new - fresh chat\n"
+    "/verbose - toggle detailed status updates\n"
     "\n"
-    "— MODEL & CONTEXT —\n"
-    "/models — list models (numbered)\n"
-    "/setModel <no> — pick a model + context size\n"
+    "- MODEL & CONTEXT -\n"
+    "/models - list models (numbered)\n"
+    "/setModel <no> - pick a model + context size\n"
     "(applies to auto/agentic AND simple runs)\n"
     "\n"
-    "— WORKSPACE, TOOLS & APPROVALS —\n"
-    "/workspace <path> — working folder (must exist)\n"
-    "/tools on|off — direct-chat tools for simple runs\n"
-    "/restrict on|off — phone-run tool restriction\n"
-    "/gate — show approval settings\n"
-    "/gate on|off — approvals ON/OFF (live, mid-run; phone-started runs stay gated)\n"
-    "/gate ask|deny|off — phone-run policy nuance\n"
-    "/cron — scheduled agent runs (add/list/del/run)\n"
+    "- WORKSPACE, TOOLS & APPROVALS -\n"
+    "/workspace <path> - working folder (must exist)\n"
+    "/tools on|off - direct-chat tools for simple runs\n"
+    "/restrict on|off - phone-run tool restriction\n"
+    "/gate - show approval settings\n"
+    "/gate on|off - approvals ON/OFF (live, mid-run; phone-started runs stay gated)\n"
+    "/gate ask|deny|off - phone-run policy nuance\n"
+    "/cron - scheduled agent runs (add/list/del/run)\n"
     "\n"
-    "— POWER —\n"
-    "/purge — evict ALL models from VRAM (frees the GPU)\n"
-    "/shutdown [s] — PC shutdown, two-step confirm\n"
+    "- POWER -\n"
+    "/purge - evict ALL models from VRAM (frees the GPU)\n"
+    "/shutdown [s] - PC shutdown, two-step confirm\n"
     "(optional seconds buffer, e.g. /shutdown 600)\n"
     "\n"
-    "— APPROVALS & QUESTIONS —\n"
+    "- APPROVALS & QUESTIONS -\n"
     "🛡 Approval card: the full command is shown.\n"
     "Reply 1 (allow once) / 2 (always this chat) / 3 (deny).\n"
     "\n"
-    "❓ Agent question: reply with free text —\n"
+    "❓ Agent question: reply with free text -\n"
     "your answer goes straight back into the agent.\n"
     "\n"
-    "— SAFETY —\n"
+    "- SAFETY -\n"
     "• Phone runs are restricted by default (web +\n"
     "reading + chat; no shell/writes/git). The UI toggle\n"
     "'Restrict phone runs' unlocks approval-gated actions.\n"
@@ -102,7 +102,7 @@ def parse_command(text: str) -> tuple[str, str] | None:
 
 
 def command_from_message(p) -> tuple[str, str] | None:
-    """Command from a ParsedUpdate — None for forwarded messages or
+    """Command from a ParsedUpdate - None for forwarded messages or
     non-text updates. Take auth out of the equation: this assumes the
     update was already classified as 'owner'."""
     if p is None or p.is_forwarded:
