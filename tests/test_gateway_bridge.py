@@ -699,6 +699,7 @@ async def _main():
     await t_takeover()
     await t_audit_fixes()
     await t_ux_round()
+    await t_relay_hardening()
 
 
 # 2026-10-05 UX round: rich rendering, tappable approvals
@@ -1082,6 +1083,115 @@ async def t_audit_fixes():
     root = Path(tempfile.mkdtemp(prefix="gwbr_g11_ws_")).anchor
     out2 = await br_g11.workspace_text(root)
     check("G11: drive root refused", "not allowed" in out2)
+
+
+# ── R6 (2026-10-07): takeover relay hardening ──────────────────────────
+# Owner report: identical tool-call lines flooded the phone, and runs that
+# finished between two mirror ticks (or finished unadopted) delivered a
+# bare "finished" line instead of the produced answer.
+async def t_relay_hardening():
+    class RelayHive(FakeHive):
+        def __init__(self):
+            super().__init__([])
+            self.settings_body = {"telegram_mirror_enabled": True}
+            self.journal_body = {"active": False}
+            self.pending_body = {"active": False}
+
+        async def settings(self):
+            return dict(self.settings_body)
+
+        async def journal(self, run_id=""):
+            self.journal_calls.append(run_id)
+            return dict(self.journal_body)
+
+        async def pending_approval(self, run_id):
+            return FakeResponse(200, dict(self.pending_body))
+
+    # 1) EARLY-DONE FAZIT: run finishes between two ticks - the phone
+    #    still gets the ANSWER, not a bare "finished" line.
+    frames = ['data: {"type": "run_id", "run_id": "early-1"}',
+              'data: {"type": "token", "content": "Antwortteil "}',
+              'data: {"type": "token", "content": "zwei."}',
+              'data: {"type": "done", "stop_reason": "completed"}']
+    hive = RelayHive()
+    hive.journal_body = {"active": True, "run_id": "early-1",
+                         "done": False, "aborted": False,
+                         "ts": time.time(), "n": 3, "frames": frames[:3]}
+    br, st, ms = _mk("gwbr_relay_", hive)
+    # ts AFTER bridge construction: the late relay only replays runs that
+    # finished after the gateway process came up
+    hive.journal_body["ts"] = time.time()
+    await br.mirror_tick()  # adoption; silent catch-up fills the answer
+    check("R6 adoption note sent",
+          any("taken over" in m for m in ms.messages))
+    hive.journal_body = {"active": True, "run_id": "early-1",
+                         "done": True, "aborted": False,
+                         "ts": time.time(), "n": 4, "frames": frames}
+    await br.mirror_tick()  # finished between ticks -> early-done branch
+    check("R6 early-done delivers answer",
+          any("Antwortteil zwei." in m for m in ms.messages))
+    check("R6 early-done delivers finish line",
+          any("Mirror run completed" in m for m in ms.messages))
+    check("R6 early-done run marked relayed", "early-1" in br._late_relayed)
+
+    # 2) LATE-RESULT RELAY: never adopted, done in the journal, fresh ts
+    hive2 = RelayHive()
+    hive2.journal_body = {
+        "active": True, "run_id": "late-1", "done": True, "aborted": False,
+        "ts": time.time(), "n": 2,
+        "frames": ['data: {"type": "token", "content": "spaet fertig."}',
+                   'data: {"type": "done", "stop_reason": "completed"}']}
+    br2, st2, ms2 = _mk("gwbr_late_", hive2)
+    hive2.journal_body["ts"] = time.time()
+    await br2.mirror_tick()
+    check("R6 late result delivered",
+          any("spaet fertig." in m for m in ms2.messages))
+    await br2.mirror_tick()
+    check("R6 late result exactly once",
+          sum(1 for m in ms2.messages if "spaet fertig." in m) == 1)
+
+    # 3) GUARDS: pre-gateway-start journals and own runs never replay
+    hive2.journal_body = {
+        "active": True, "run_id": "old-1", "done": True, "aborted": False,
+        "ts": br2._proc_start - 10, "n": 2,
+        "frames": ['data: {"type": "token", "content": "alt."}',
+                   'data: {"type": "done", "stop_reason": "completed"}']}
+    await br2.mirror_tick()
+    check("R6 pre-start journal not replayed",
+          not any("alt." in m for m in ms2.messages))
+    hive2.journal_body["run_id"] = "own-1"
+    hive2.journal_body["ts"] = time.time()
+    st2.data["active_run"] = {"run_id": "own-1", "chat_id": "chat01"}
+    await br2.mirror_tick()
+    check("R6 own done run not late-relayed",
+          sum(1 for m in ms2.messages
+              if "Mirror run completed" in m) == 1)
+
+    # 4) CATCH-UP DEDUPE: a repeat loop already running before adoption
+    #    is pre-counted, so the first post-adoption repeat does not flood.
+    loop_frames = ['data: {"type": "run_id", "run_id": "loop-1"}']
+    for _ in range(3):
+        loop_frames.append('data: {"type": "tool_call", "tool": "web_fetch",'
+                           ' "extra": {"url": "http://x/"}}')
+    hive3 = RelayHive()
+    hive3.journal_body = {"active": True, "run_id": "loop-1",
+                          "done": False, "aborted": False,
+                          "ts": time.time(), "n": 4, "frames": loop_frames}
+    br3, st3, ms3 = _mk("gwbr_loop_", hive3)
+    hive3.journal_body["ts"] = time.time()
+    await br3.mirror_tick()  # adoption with pre-counted tool_relay_seen
+    m3 = br3._mirror()
+    check("R6 catch-up pre-counted repeats",
+          sum(m3["tool_relay_seen"].values()) == 3
+          and len(m3["tool_relay_seen"]) == 1)
+    before = len(ms3.messages)
+    hive3.journal_body["frames"] = loop_frames + [
+        'data: {"type": "tool_call", "tool": "web_fetch",'
+        ' "extra": {"url": "http://x/"}}']
+    hive3.journal_body["n"] = 5
+    await br3.mirror_tick()
+    check("R6 post-adoption repeat deduped (counter not re-flood)",
+          not any("web_fetch" in m for m in ms3.messages[before:]))
 
 asyncio.run(_main())
 print()

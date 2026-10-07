@@ -92,6 +92,14 @@ class RunBridge:
         self._run_lock = _aio_init.Lock()
         # Tool-Call-Relay: suppress consecutive identical activity lines
         self._last_tool_line = ""
+        # R6 late-result relay: run ids whose result already reached the
+        # phone (never double-send), and this process's start time (late
+        # relay only for runs finished after the gateway came up).
+        # _handed_over also up front: the fazit path pops it on bridges
+        # that never ran a text run.
+        self._handed_over: dict[str, str] = {}
+        self._late_relayed: set[str] = set()
+        self._proc_start: float = time.time()
 
     # -- small helpers ----------------------------------------------------
 
@@ -1133,9 +1141,30 @@ class RunBridge:
                 rid, frames = m["run_id"], j.get("frames") \
                     if isinstance(j, dict) else None
                 reason = self._parse_done(frames) or "finished"
+                # R6 FAZIT ON EARLY DONE (owner report, live 10:2x): a
+                # run that finished between two ticks landed HERE and
+                # the phone got a bare "finished" line - the produced
+                # answer was discarded. Drain accumulated tokens; fall
+                # back to the full journal frames when empty.
+                _acc = (self._accumulate_frames(frames or [])[0]
+                        if isinstance(j, dict) else "")
+                _ans = "".join(m.get("answer_parts") or []).strip() or _acc
                 self._mirror_reset(m)
-                await self.ms.send_message(
-                    f"🏁 Mirror run {rid} finished ({reason}).")
+                await self._mirror_fazit(rid, _ans, reason)
+            elif isinstance(j, dict) and j.get("done") and not j.get("aborted"):
+                # R6 LATE RESULT (owner: messages must arrive): a run
+                # that started AND finished while the mirror was not
+                # attached still delivers its result - once per run id,
+                # only for runs finished during THIS gateway process.
+                _lr_id = str(j.get("run_id") or "")
+                if (_lr_id and float(j.get("ts") or 0) > self._proc_start
+                        and _lr_id not in self._late_relayed
+                        and _lr_id != str(self._own_run_id() or "")):
+                    self._late_relayed.add(_lr_id)
+                    _lr_ans, _ = self._accumulate_frames(j.get("frames") or [])
+                    await self._mirror_fazit(
+                        _lr_id, _lr_ans,
+                        self._parse_done(j.get("frames")) or "completed")
             return
         rid = str(j.get("run_id") or "")
         # deep audit N7 (confirmed as G7): while OUR run sits between
@@ -1148,6 +1177,7 @@ class RunBridge:
                 and not _own.get("run_id"):
             return
         if rid == str(self._own_run_id() or ""):
+            self._late_relayed.add(rid)  # own path relays it
             return  # our own run reports natively; do not double-mirror
         fresh = m["run_id"] != rid
         if fresh:
@@ -1156,6 +1186,30 @@ class RunBridge:
                       "approval_sig": None, "approval_decision_id": "",
                       "approval_tool": "", "other_run_noted": "",
                       "last_phase": "", "answer_parts": []})
+            # R6 CATCH-UP (owner: messages must arrive): process the
+            # pre-adoption frames SILENTLY - the answer accumulates so
+            # the fazit relay at done carries the FULL result, and tool
+            # repeats dedupe against pre-adoption calls. No sends here.
+            for _raw in (j.get("frames") or []):
+                if not isinstance(_raw, str):
+                    continue
+                try:
+                    _cev = json.loads(
+                        _raw[6:] if _raw.startswith("data: ") else _raw)
+                except ValueError:
+                    continue
+                if _cev.get("type") == "token":
+                    m["answer_parts"].append(str(_cev.get("content") or ""))
+                elif _cev.get("type") == "agent" and m["answer_parts"]:
+                    m["answer_parts"] = []  # phase switch: last phase wins
+                elif _cev.get("type") == "tool_call":
+                    # pre-count so a repeat loop already running before
+                    # the adoption dedupes instead of re-flooding
+                    _tl = self._tool_line(_cev)
+                    if _tl:
+                        _saw = m.setdefault("tool_relay_seen", {})
+                        _saw[_tl] = _saw.get(_tl, 0) + 1
+
             await self.ms.send_message(
                 f"📢 Engine run taken over (mirror): {rid}\n"
                 "Your texts are queued (steering), approvals come "
@@ -1289,40 +1343,15 @@ class RunBridge:
             m["last_tick"] = _now()
         m["last_phase"] = last_phase  # F5: cross-tick dedupe state
         if done_reason:
-            # FAZIT RELAY (2026-10-06): deliver what the run PRODUCED, not
-            # just the fact that it ended. Same shaping as the own-run
-            # finish: chunked messages, .txt document past the chunk cap.
+            # FAZIT RELAY (2026-10-06, R6-hardened): deliver what the run
+            # PRODUCED, not just the fact that it ended. Empty accumulator
+            # falls back to the full journal frames (late adoption, phase
+            # switches) so the phone always gets the final answer.
             _ans = "".join(m.get("answer_parts") or []).strip()
-            _ans = render.filter_secrets(_ans)  # R3: filter BEFORE split -
-            # per-chunk filtering missed secrets straddling hard-split
-            # boundaries (both halves individually matched no pattern)
-            text = STOP_REASON_TEXT.get(
-                done_reason, f"🏁 Mirror run finished ({done_reason}).")
-            if done_reason == "completed":
-                text = "🏁 Mirror run completed."
-            if _ans:
-                _full = _ans + "\n\n" + text
-            else:
-                _full = text
-            _chunks = render.split_message(_full)
-            if len(_chunks) > FINAL_CHUNK_LIMIT:
-                await self.ms.send_document(
-                    _ans.encode("utf-8"), "mirror_result.txt")
-                await self.ms.send_message(text)
-            else:
-                for _c in _chunks:
-                    await self.ms.send_message(_c)
-            # PHONE-RUNS-IN-UI: persist the answer into the chat
-            # transcript so the run exists in the UI, not only on the
-            # phone (the mirror never wrote turns before).
-            _ho_chat = self._handed_over.pop(rid, None)
-            if _ho_chat and _ans:
-                try:
-                    await self._write_turn(_ho_chat, {
-                        "role": "assistant", "content": _ans})
-                except (HiveUnreachable, OSError, HTTPError) as _tw:
-                    self._log_note(f"handover transcript write failed: {_tw}")
+            if not _ans:
+                _ans, _ = self._accumulate_frames(frames)
             self._mirror_reset(m)
+            await self._mirror_fazit(rid, _ans, done_reason)
             return
 
         # approval relay (the point of the takeover)
@@ -1396,6 +1425,61 @@ class RunBridge:
                 await self.ms.send_message(
                     "ℹ️ Card closed (answered in the UI, or timed out).")
             m["approval_sig"] = None
+
+    async def _mirror_fazit(self, rid: str, answer: str, reason: str) -> None:
+        """FAZIT RELAY (2026-10-06): deliver what the run PRODUCED, not
+        just the fact that it ended. Chunked messages, .txt document past
+        the chunk cap, transcript persistence for handed-over chats;
+        marks the run relayed so the late-result path never re-sends."""
+        _ans = render.filter_secrets((answer or "").strip())  # R3: filter
+        # BEFORE split - per-chunk filtering missed secrets straddling
+        # hard-split boundaries (each half matched no pattern alone)
+        text = STOP_REASON_TEXT.get(
+            reason, f"🏁 Mirror run finished ({reason}).")
+        if reason == "completed":
+            text = "🏁 Mirror run completed."
+        _full = (_ans + "\n\n" + text) if _ans else text
+        _chunks = render.split_message(_full)
+        if len(_chunks) > FINAL_CHUNK_LIMIT:
+            await self.ms.send_document(
+                _ans.encode("utf-8"), "mirror_result.txt")
+            await self.ms.send_message(text)
+        else:
+            for _c in _chunks:
+                await self.ms.send_message(_c)
+        # PHONE-RUNS-IN-UI: persist the answer into the chat transcript
+        # so the run exists in the UI, not only on the phone.
+        _ho_chat = self._handed_over.pop(rid, None)
+        if _ho_chat and _ans:
+            try:
+                await self._write_turn(_ho_chat, {
+                    "role": "assistant", "content": _ans})
+            except (HiveUnreachable, OSError, HTTPError) as _tw:
+                self._log_note(f"handover transcript write failed: {_tw}")
+        self._late_relayed.add(rid)
+
+    @staticmethod
+    def _accumulate_frames(frames: list) -> tuple[str, str]:
+        """R6 late relay: accumulate (answer, last phase) from journal
+        frames without any sends - used for runs that finished while the
+        mirror was not attached."""
+        parts: list[str] = []
+        phase = ""
+        for raw in frames or []:
+            if not isinstance(raw, str):
+                continue
+            try:
+                ev = json.loads(raw[6:] if raw.startswith("data: ") else raw)
+            except ValueError:
+                continue
+            et = ev.get("type")
+            if et == "token":
+                parts.append(str(ev.get("content") or ""))
+            elif et == "agent" and parts:
+                parts = []  # phase switch: last phase wins
+            elif et == "phase":
+                phase = str(ev.get("content") or phase)
+        return "".join(parts).strip(), phase
 
     @staticmethod
     def _full_command_from_frames(frames: list, tool: str) -> str:
