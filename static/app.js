@@ -4650,23 +4650,36 @@ function _renderAskCard(d) {
     if (!_t) { _inp.focus(); _inp.style.borderColor = '#e06060'; return; }
     _sendAnswer(_t);
   };
-  // YES/NO BUTTONS (2026-10-07, owner: "nicht YES abtippen"): yes/no-
-  // shaped questions (the destructive gate) get tappable answers; the
-  // text field stays for own commentary ("yes, but skip the force flag").
+  // YES/NO BUTTONS (2026-10-07, owner: "nicht YES abtippen"; revised
+  // same day: own row with Yes / No / Wait-later, the text field stays
+  // pure text). "Wait later" removes only the buttons - the run keeps
+  // waiting and the free-text answer below stays available anytime.
   var _askText = (d.question || d.preview || '').toLowerCase();
-  var _yBtn = null, _nBtn = null;
+  var _yrow = null;
   if (_askText.indexOf('yes') !== -1 && _askText.indexOf('no') !== -1 &&
       (_askText.indexOf('confirm') !== -1 || _askText.indexOf('reply with') !== -1)) {
-    _yBtn = document.createElement('button');
+    _yrow = document.createElement('div');
+    _yrow.style.cssText = 'display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap';
+    var _yBtn = document.createElement('button');
     _yBtn.className = 'ghost';
-    _yBtn.style.cssText = 'font-size:10px;padding:5px 14px;border:1px solid #4dcf7f88;color:#4dcf7f';
+    _yBtn.style.cssText = 'font-size:11px;padding:5px 16px;border:1px solid #4dcf7f88;color:#4dcf7f';
     _yBtn.textContent = '\u2705 Yes';
     _yBtn.onclick = function() { _sendAnswer('yes'); };
-    _nBtn = document.createElement('button');
+    var _nBtn = document.createElement('button');
     _nBtn.className = 'ghost';
-    _nBtn.style.cssText = 'font-size:10px;padding:5px 14px;border:1px solid #e0606088;color:#e06060';
+    _nBtn.style.cssText = 'font-size:11px;padding:5px 16px;border:1px solid #e0606088;color:#e06060';
     _nBtn.textContent = '\u26D4 No';
     _nBtn.onclick = function() { _sendAnswer('no'); };
+    var _wBtn = document.createElement('button');
+    _wBtn.className = 'ghost';
+    _wBtn.style.cssText = 'font-size:11px;padding:5px 16px;border:1px solid var(--b2);color:var(--tx2)';
+    _wBtn.textContent = '\u23F3 Wait later';
+    _wBtn.title = 'Keep the run waiting - answer with text below anytime';
+    _wBtn.onclick = function() {
+      _stopTimer();               // no auto-proceed behind the owner's back
+      if (_yrow && _yrow.parentNode) _yrow.remove();
+    };
+    _yrow.appendChild(_yBtn); _yrow.appendChild(_nBtn); _yrow.appendChild(_wBtn);
   }
   var _skip = document.createElement('button');
   _skip.className = 'ghost';
@@ -4714,12 +4727,11 @@ function _renderAskCard(d) {
     if (e.key === 'Enter') { e.preventDefault(); _send.click(); }
   });
   _row.appendChild(_send);
-  if (_yBtn) _row.appendChild(_yBtn);
-  if (_nBtn) _row.appendChild(_nBtn);
   _row.appendChild(_skip);
   _row.appendChild(_tg);
   _c.appendChild(_lbl);
   _c.appendChild(_q);
+  if (_yrow) _c.appendChild(_yrow);
   _c.appendChild(_inp);
   _c.appendChild(_row);
   document.getElementById('chat').appendChild(_c);

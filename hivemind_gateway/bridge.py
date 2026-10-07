@@ -1541,12 +1541,13 @@ class RunBridge:
                             "text (e.g. 'yes, but skip the force flag').\n"
                             "(This is the agent's own question — NOT the "
                             "approval gate.)",
-                            reply_markup={"inline_keyboard": [[
-                                {"text": "✅ Yes",
-                                 "callback_data": f"ask:{rid}:yes"},
-                                {"text": "⛔ No",
-                                 "callback_data": f"ask:{rid}:no"},
-                            ]]})
+                            reply_markup={"inline_keyboard": [
+                                [{"text": "✅ Yes",
+                                  "callback_data": f"ask:{rid}:yes"},
+                                 {"text": "⛔ No",
+                                  "callback_data": f"ask:{rid}:no"}],
+                                [{"text": "⏳ Later",
+                                  "callback_data": f"ask:{rid}:later"}]]})
                     else:
                         await self.ms.send_message(
                             f"❓ The agent asks (run {rid})\n\n"
@@ -1698,6 +1699,10 @@ class RunBridge:
             # yes/no questions) ride the SAME decide_approval path as a
             # text answer; decision_id/tool from the mirrored card guard
             # duplicates. Free text stays possible alongside the buttons.
+            # 'later' (owner, 2nd round) does NOT consume the card: the
+            # run keeps waiting and the free-text answer stays open.
+            if answer.startswith("l"):
+                return "⏳ later — the run waits; answer with text anytime"
             ask_ans = "yes" if answer.startswith("y") else "no"
             if rid != m.get("run_id") or not m.get("approval_sig"):
                 return "card already gone"

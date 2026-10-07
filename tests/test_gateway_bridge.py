@@ -1458,6 +1458,14 @@ async def t_tg_audit():
     check("ASKBTN: yes/no keyboard on destructive ask card",
           any(b.get("callback_data") == "ask:ask-1:yes" for b in _btns)
           and any(b.get("callback_data") == "ask:ask-1:no" for b in _btns))
+    _rows = (_kb.get("inline_keyboard") or [])
+    check("ASKBTN: second row has wait-later",
+          any(b.get("callback_data") == "ask:ask-1:later"
+              for b in (_rows[1] if len(_rows) > 1 else [])))
+    toast = await br4.approval_callback("cb2", "ask:ask-1:later")
+    check("ASKBTN: later consumes nothing",
+          hive4.decided == [] and "later" in toast
+          and br4._mirror().get("approval_sig") is not None)
     toast = await br4.approval_callback("cb1", "ask:ask-1:yes")
     check("ASKBTN: yes button decides via decide path",
           hive4.decided == [("ask-1", "yes", "d7", "run_bash")]
