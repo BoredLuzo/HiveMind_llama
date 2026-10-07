@@ -200,7 +200,7 @@ async def _bk_ps() -> list[dict]:
     return await _api_ps()
 
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 # ─── API-Router (endpoint organisation) ───
@@ -1225,7 +1225,16 @@ def _run_journal_touch(run_id: str) -> dict:
 
 @app.post("/stream")
 async def stream(req: Request):
-    body = await req.json()
+    # INTAKE HARDENING (2026-10-07, live log): one empty POST /stream body
+    # blew up as a 500 ASGI traceback (req.json -> JSONDecodeError). A
+    # malformed intake is a 4xx for the caller, not an engine crash.
+    try:
+        body = await req.json()
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400,
+                            detail="empty or invalid JSON body") from None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body must be an object")
     q = body.get("q", "")
     images = body.get("images", [])
     # IMAGE INTAKE CAP (2026-10-06 audit): /stream used to take ANY image

@@ -1221,6 +1221,12 @@ async function loadSettings() {
     S.coderAlwaysVision = !!s.duo_coder_always_vision;
     var _cavEl = document.getElementById('coder-always-vision-toggle');
     if (_cavEl) _cavEl.checked = S.coderAlwaysVision;
+    // CODER IMAGES OFF (2026-10-07, owner): hard "coder takes no images" —
+    // wins over the role checkbox and the always-vision toggle (backend
+    // resolve_image_plan + steer drains honor it).
+    S.coderImagesOff = !!s.duo_coder_images_off;
+    var _cioEl = document.getElementById('coder-images-off-toggle');
+    if (_cioEl) _cioEl.checked = S.coderImagesOff;
     // IMAGE-PROCESSING-MODE (2026-10-03): DERIVED, never persisted. The
     // persisted key had no backend reader and presets freezing UI state
     // drifted it from vision_model.json (the actual truth, loaded by
@@ -9433,6 +9439,20 @@ function setCoderAlwaysVision(enabled) {
   postSettings({duo_coder_always_vision: !!enabled});
 }
 
+// CODER IMAGES OFF (2026-10-07, owner): hard blocker — resolve_image_plan
+// forces coder:"none", the coder slot never loads the projector, image
+// steers to the coder are dropped. Overrides the role checkbox + always
+// vision (both UI copies get disabled while it is on).
+function setCoderImagesOff(off) {
+  S.coderImagesOff = !!off;
+  postSettings({duo_coder_images_off: !!off});
+  if (S.coderImagesOff && S.coderAlwaysVision) {
+    S.coderAlwaysVision = false;
+    postSettings({duo_coder_always_vision: false});
+  }
+  updateDuoImageUI();
+}
+
 function _applyPipelineVisionRolesUI() {
   ['analyst','refiner','critic','synthesizer'].forEach(function(r) {
     var el = document.getElementById('pv-role-' + r);
@@ -11612,6 +11632,19 @@ function updateDuoImageUI() {
   var _cChk = document.getElementById('duo-img-coder');
   if (_pChk) _pChk.checked = S.duoImageToPlanner === true;
   if (_cChk) _cChk.checked = S.duoImageToCoder === true;
+  // CODER IMAGES OFF (2026-10-07, owner): the toggles live in the duo
+  // block, visible whenever the duo image plan section is (direct mode).
+  // While OFF: coder checkbox + the always-vision copies are pinned off.
+  var _cio = S.coderImagesOff === true;
+  var _cavDuo = document.getElementById('coder-always-vision-toggle-duo');
+  var _togglesRow = document.getElementById('duo-coder-img-toggles');
+  if (_togglesRow) _togglesRow.style.display = (_isDuo && _m === 'direct') ? '' : 'none';
+  if (_cavDuo) { _cavDuo.checked = !_cio && S.coderAlwaysVision === true; _cavDuo.disabled = _cio; }
+  var _cioToggle = document.getElementById('coder-images-off-toggle');
+  if (_cioToggle) _cioToggle.checked = _cio;
+  var _cavPipe = document.getElementById('coder-always-vision-toggle');
+  if (_cavPipe) { _cavPipe.checked = !_cio && S.coderAlwaysVision === true; _cavPipe.disabled = _cio; }
+  if (_cChk) { _cChk.disabled = _cio; if (_cio) _cChk.checked = false; }
   var _pm = (S.currentAssignments && S.currentAssignments.duo_planner && S.currentAssignments.duo_planner.model) || '';
   var _cm = (S.currentAssignments && S.currentAssignments.duo_coder && S.currentAssignments.duo_coder.model) || '';
   _updateDuoRoleStatus('duo-img-planner-status', 'Planner', _pm);
@@ -11625,10 +11658,15 @@ function updateDuoImageUI() {
     else {
       var _t = [];
       if (S.duoImageToPlanner) _t.push('Planner');
-      if (S.duoImageToCoder) _t.push('Coder');
-      _note.textContent = _t.length
-        ? ('→ Raw image goes to: ' + _t.join(' + '))
-        : '→ No target selected: the image will not be used';
+      if (S.duoImageToCoder && S.coderImagesOff !== true) _t.push('Coder');
+      if (_t.length) {
+        _note.textContent = '→ Raw image goes to: ' + _t.join(' + ')
+          + (S.coderImagesOff === true ? ' (coder images OFF)' : '');
+      } else {
+        _note.textContent = S.coderImagesOff === true
+          ? '→ Coder takes NO images (toggle on)'
+          : '→ No target selected: the image will not be used';
+      }
       _note.style.display = 'block';
     }
   }

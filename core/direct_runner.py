@@ -417,7 +417,8 @@ async def run_direct(ctx):
             async for _ev in _run_direct_tools(
                     ctx, _direct_model, messages, _direct_tool_mode, _dt_result,
                     vision=bool(_direct_images)
-                    or bool(ctx.settings.get("duo_coder_always_vision", False))):
+                    or (bool(ctx.settings.get("duo_coder_always_vision", False))
+                        and not bool(ctx.settings.get("duo_coder_images_off", False)))):
                 yield await ctx.emit(_ev)
             _tool_content = _dt_result.content
             _tool_final_msgs = _dt_result.final_msgs

@@ -72,6 +72,29 @@ class ResolveImagePlan(unittest.TestCase):
         self.assertEqual(r["planner"], "none")
         self.assertEqual(r["warnings"], [])
 
+    def test_coder_images_off_beats_role_checkbox(self):
+        # OWNER TOGGLE (2026-10-07): "coder takes NO images" wins over the
+        # per-role checkbox — coder plan is none even when multimodal, the
+        # planner raw path stays untouched, and the warning says why.
+        core_state.settings["duo_image_mode"] = "direct"
+        core_state.settings["duo_image_to_coder"] = True
+        core_state.settings["duo_image_to_planner"] = True
+        core_state.settings["duo_coder_images_off"] = True
+        with patch("core.model_sampling._model_profile", return_value={"vision": True}):
+            r = resolve_image_plan("p", "gemma-4:e4b", core_state.settings, _ctx([_B64]))
+        self.assertEqual(r["coder"], "none")
+        self.assertEqual(r["planner"], "raw")
+        self.assertTrue(any("coder images OFF" in w for w in r["warnings"]))
+
+    def test_coder_images_off_silent_when_coder_unchecked(self):
+        core_state.settings["duo_image_mode"] = "direct"
+        core_state.settings["duo_coder_images_off"] = True
+        r = resolve_image_plan("p", "c", core_state.settings, _ctx([_B64]))
+        self.assertEqual(r["coder"], "none")
+        # no images-off warning (coder wasn't targeted anyway); the plain
+        # no-target hint still applies since nothing is checked
+        self.assertFalse(any("coder images OFF" in w for w in r["warnings"]))
+
     def test_checked_nonmultimodal_role_warns_and_skips(self):
         core_state.settings["duo_image_mode"] = "direct"
         core_state.settings["duo_image_to_coder"] = True

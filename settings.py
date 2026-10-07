@@ -405,6 +405,11 @@ DEFAULT_SETTINGS = {
     "duo_image_mode": None,
     "duo_image_to_planner": False,
     "duo_image_to_coder": False,
+    # Owner toggle (2026-10-07): hard "the coder takes NO images" — plan
+    # says none for the coder, the coder slot never loads the projector,
+    # and image-carrying steers to the coder are dropped. Saves the mmproj
+    # VRAM even when an image arrives in the run.
+    "duo_coder_images_off": False,
     # False = uploads live only as base64 inside the run (nothing on disk);
     # True = kept under <workspace>/.hive_uploads and referenced by path.
     "image_uploads_persistent": False,

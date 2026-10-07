@@ -772,8 +772,15 @@ def resolve_image_plan(planner_mdl, coder_mdl, settings, ctx) -> dict:
                             "enable the vision model in image settings")
         return {"planner": plan["planner"], "coder": plan["coder"],
                 "warnings": warnings, "mode": mode}
+    _coder_off = bool(settings.get("duo_coder_images_off", False))
     for role, mdl, key in (("planner", planner_mdl, "duo_image_to_planner"),
                            ("coder", coder_mdl, "duo_image_to_coder")):
+        if role == "coder" and _coder_off:
+            # OWNER TOGGLE (2026-10-07): "coder takes NO images" - wins over
+            # the per-role checkbox, no projector load, no raw attach.
+            if bool(settings.get(key, False)):
+                warnings.append("coder images OFF (toggle) — image skipped for the coder")
+            continue
         if bool(settings.get(key, False)):
             from core.model_sampling import _model_profile
             if (_model_profile(str(mdl or "")) or {}).get("vision", False):

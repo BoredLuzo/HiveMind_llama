@@ -1938,7 +1938,8 @@ async def run_code_duo(ctx):
         # (~15 s stall) is avoidable — load the coder WITH the projector
         # from the start. Opt-in (default OFF): the mmproj costs VRAM every
         # run even when no image ever arrives.
-        _always_vision = bool(ctx.settings.get("duo_coder_always_vision", False))
+        _always_vision = (bool(ctx.settings.get("duo_coder_always_vision", False))
+                          and not bool(ctx.settings.get("duo_coder_images_off", False)))
         # PLANNER-EVICT-BEFORE-CODER (2026-10-06, owner decision): the
         # planner slot may only be REUSED as the coder slot when it already
         # runs at the CODER's effective ctx. The old check compared against
@@ -2729,7 +2730,8 @@ async def run_code_duo(ctx):
             # their own content-parts user message after _coder_msgs is built.
             _steer_items = drain_steer_messages(ctx.run_id)
             _steer_img_items = []
-            if any(_st["images"] for _st in _steer_items):
+            _coder_imgs_off = bool(ctx.settings.get("duo_coder_images_off", False))
+            if any(_st["images"] for _st in _steer_items) and not _coder_imgs_off:
                 # STEER-IMAGE UPGRADE (2026-10-06, live T2): the coder slot
                 # may have loaded without the projector — upgrade BEFORE the
                 # image parts ride into the next chunk POST. The port MUST
@@ -2859,6 +2861,10 @@ async def run_code_duo(ctx):
             # not be merged into the first user message (that already holds
             # the round-1 image when the plan says raw).
             for _st in _steer_img_items:
+                if _coder_imgs_off:
+                    yield await ctx.emit({"type": "status", "content":
+                        "⚠ Image steer dropped — 'Coder takes no images' is on."})
+                    continue
                 _coder_msgs.append(_build_steer_user_message(_st["text"], _st["images"]))
                 logger.info("[DUO] steer with %d image(s) appended as user parts message",
                             len(_st["images"]))
@@ -3896,7 +3902,8 @@ async def run_code_duo(ctx):
                         # user messages — same channel as the zero-activity
                         # nudge below.
                         _round_steer = drain_steer_messages(ctx.run_id)
-                        if any(_st["images"] for _st in _round_steer):
+                        if (any(_st["images"] for _st in _round_steer)
+                                and not bool(ctx.settings.get("duo_coder_images_off", False))):
                             # STEER-IMAGE UPGRADE (2026-10-06, live T2): see
                             # the chunk-boundary drain — upgrade the coder
                             # slot before the image parts reach the POST.
