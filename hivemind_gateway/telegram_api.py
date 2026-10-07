@@ -75,7 +75,13 @@ class TelegramApi:
             # after Telegram's own retry_after (capped) instead.
             if retry_after:
                 await asyncio.sleep(min(35.0, max(1.0, float(retry_after))))
-                return await self._call(method, **params)
+                try:
+                    return await self._call(method, **params)
+                except TelegramApiError:
+                    # one more patient attempt - long bundles can trip the
+                    # limit twice in a row
+                    await asyncio.sleep(min(35.0, max(1.0, float(retry_after))))
+                    return await self._call(method, **params)
             raise TelegramApiError(method, params_desc, retry_after)
         result = data.get("result")
         return result if isinstance(result, dict) else {"result": result}

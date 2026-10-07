@@ -4999,6 +4999,7 @@ function _pbbEnsure() {
         + '<span class="ctx-perf-item live" id="pbb-ctxreuse">reuse: --</span>'
         + '<span class="ctx-perf-item live" id="pbb-tok">out: --</span>'
         + '<span class="ctx-perf-item live" id="pbb-rate">tok/s: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-decode">decode: --</span>'
       + '</div>'
       + '<div class="ctx-perf">'
         + '<span class="ctx-perf-item ok" id="pbb-in">in: --</span>'
@@ -5038,9 +5039,11 @@ function _perfRender(finalized) {
   var _tokRate = Number(S.perfTokRate || 0);
   var _realRate = 0;
   if (S.perfRealTokens > 0 && S.perfFirstTokenAt) {
-    _realRate = _perfRealRate();
+    _realRate = _perfWallRate();
   }
-  // GEN-TIME-FIX: final -> prefer the real generation rate (without tool latency)
+  // SUMMARY (2026-10-07, owner: previous display was better): the collapsed
+  // line shows the plain wall-clock rate again; the CLEANED rate (active
+  // decode time only) lives as its own pill in the expanded details.
   var _rateVal = (finalized && _tokRate > 0) ? _tokRate : (_realRate > 0 ? _realRate : _tokRate);
   var _est = Math.max(0, parseInt(S.perfEstTokens || 0, 10) || 0);
   var _ctx = Math.max(0, parseInt(S.perfCtxLimit || 0, 10) || 0);
@@ -5069,6 +5072,10 @@ function _perfRender(finalized) {
     }
     if ((_e = _qId('pbb-tok'))) _e.textContent = 'out: ' + (_outT > 0 ? _fmtTokens(_outT) : '--');
     if ((_e = _qId('pbb-rate'))) _e.textContent = (_rateVal > 0 ? _rateVal.toFixed(1) : '--') + '/s';
+    if ((_e = _qId('pbb-decode'))) {
+      var _dr = _perfRealRate();
+      _e.textContent = 'decode: ' + (_dr > 0 ? _dr.toFixed(1) + ' t/s (bereinigt)' : '--');
+    }
     // PERF-CONSOLIDATION: consistent '--' placeholders until the first usage_meta arrives
     if ((_e = _qId('pbb-in'))) _e.textContent = S.runPromptTokens > 0 ? ('in: ' + _fmtTokens(S.runPromptTokens)) : 'in: --';
     if ((_e = _qId('pbb-cached')))
@@ -5121,13 +5128,7 @@ function _perfOnToken(content) {
   if (!S.perfRunStartedAt) _perfResetRuntimeState();
   var _now = Date.now();
   if (!S.perfFirstTokenAt) { S.perfFirstTokenAt = _now; S.perfLastTokAt = _now; }
-  // FIX 2026-10-07 (owner: "5.0 t/s real ist ass"): wall-clock from the
-  // first token includes tool runs and processing gaps. Count only
-  // ACTIVE decode intervals - gaps >= 2 s between token events are
-  // excluded, so the rate shows the model's real decode speed.
-  var _gap = _now - (S.perfLastTokAt || _now);
-  if (_gap >= 0 && _gap < 2000) S.perfActiveMs += _gap;
-  S.perfLastTokAt = _now;
+  // active-time accumulation now lives in handleEvent (every event type)
   var _chars = String(content).length;
   if (_chars <= 0) return;
   S.perfChars += _chars;
@@ -5146,6 +5147,13 @@ function _perfOnToken(content) {
     }
   }
   _perfRender(false);
+}
+
+function _perfWallRate() {
+  // the "normal" figure: tokens over wall clock since the first token -
+  // includes tool runs and processing gaps (honest over the whole run)
+  if (!S.perfRealTokens || !S.perfFirstTokenAt) return 0;
+  return S.perfRealTokens / Math.max(0.25, (Date.now() - S.perfFirstTokenAt) / 1000);
 }
 
 function _perfRealRate() {
@@ -5704,6 +5712,18 @@ setTimeout(_journalInitAttach, 1500);
 setInterval(_journalInitAttach, 10000);
 
 function handleEvent(d) {
+  // RATE FIX v2 (2026-10-07, owner: "1920 tok/s sind etwas viel"):
+  // active decode time must count EVERY stream activity - tokens,
+  // tool_gen bursts and thinking tokens are all model output, while
+  // usage_meta counts ALL completion tokens. Counting only text token
+  // events made tokens/active-time explode.
+  if (d && d.type && d.type !== 'heartbeat') {
+    var _an = Date.now();
+    if (!S.perfFirstTokenAt) { S.perfFirstTokenAt = _an; S.perfLastTokAt = _an; }
+    var _ag = _an - (S.perfLastTokAt || _an);
+    if (_ag >= 0 && _ag < 2000) S.perfActiveMs += _ag;
+    S.perfLastTokAt = _an;
+  }
   if (d.type === 'run_id') {
     S.currentRunId = d.run_id;
   }

@@ -1444,7 +1444,7 @@ class RunBridge:
                     _parts = m.get("answer_parts") or []
                     _upto = int(m.get("answer_sent_upto") or 0)
                     _delta = "".join(str(x) for x in _parts[_upto:]).strip()
-                    if len(_delta) >= 80:
+                    if len(_delta) >= 40:  # short coder remarks too
                         m["answer_sent_upto"] = len(_parts)
                         # AUDIT FIX (1.3.3 release audit): the fazit path
                         # filters secrets BEFORE sending - the mid-run
@@ -1478,7 +1478,9 @@ class RunBridge:
                     tool_lines.append(line)
                 elif _cnt % 5 == 0:
                     tool_lines.append(f"{line} (repeat #{_cnt})")
-        for tl in tool_lines[-6:]:  # cap per tick, newest win
+        for tl in tool_lines[-12:]:  # cap per tick, newest win
+            # (owner: "not everything arrives" - 6 was too tight once the
+            # file-change lines share the budget with the tool lines)
             await self.ms.send_message(tl)
         if last_status and last_status != m["last_status"] \
                 and (_now() - m["last_tick"]) >= self.cfg.status_min_interval_s:
