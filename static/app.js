@@ -1373,6 +1373,17 @@ async function _flushQueuedSettings() {
       var _rj = await _resp.json();
       if (_rj && _rj.settings_rev) S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
       if (_rj && _rj.stale_rejected) console.warn('postSettings: stale patch rejected for', _rj.stale_rejected);
+      // STALE-SNAPSHOT WARNING (2026-10-07, owner: "git felder sollten
+      // sich nicht resetten"): the server strips protected keys from an
+      // older tab's patch - the owner must know the save did NOT take.
+      if (_rj && Array.isArray(_rj.stripped) && _rj.stripped.length) {
+        S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
+        var _msg = 'Veralteter Tab-Zustand: ' + _rj.stripped.join(', ')
+          + ' wurde(n) NICHT gespeichert (woanders neuer gesetzt). '
+          + 'Bitte Seite neu laden (F5) und erneut speichern.';
+        if (window._showErrorToast) window._showErrorToast(_msg);
+        else alert(_msg);
+      }
     } catch (_je) {}
   } catch(e) {
     console.warn('postSettings flush failed:', e);

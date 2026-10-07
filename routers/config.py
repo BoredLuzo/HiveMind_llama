@@ -45,6 +45,13 @@ _UI_REV_PROTECTED_KEYS = {
     "telegram_phone_restricted", "telegram_mirror_enabled",
     "telegram_gateway_enabled", "telegram_approval_mode",
     "git_token",
+    # GIT PANEL (2026-10-07, owner: "git felder sollten sich nicht
+    # resetten"): every panel click posts the whole form snapshot - an
+    # older tab silently wiped email/auto-push/auto-commit again and
+    # again while the owner was mid-test.
+    "git_repo_url", "git_username", "git_email", "git_auto_push",
+    "git_default_branch", "git_commit_prefix", "duo_git_autocommit",
+    "duo_git_checkpoints",
 }
 
 # Secrets / maschinen-spezifische Werte werden nie in ein Preset gespeichert
@@ -275,6 +282,7 @@ async def post_settings(req: Request):
     data = await req.json()
     # UI-REV STALE-TAB GUARD (2026-09-09): a patch from a stale tab (snapshot
     # predates newer changes) must not silently revert the compression keys.
+    _stripped_keys: list = []
     if isinstance(data, dict):
         _ui_rev = data.pop("ui_rev", None)
         _settings_force = bool(data.pop("settings_force", False))
@@ -295,6 +303,7 @@ async def post_settings(req: Request):
                 )
                 for _k in _touched:
                     data.pop(_k)
+                _stripped_keys = sorted(_touched)
     if "ctx_overrides" in data and not isinstance(data.get("ctx_overrides"), dict):
         return JSONResponse({"error": "ctx_overrides must be an object"}, status_code=400)
     # the whole workspace chain was crippled (follow-up ran on repo root).
@@ -417,7 +426,8 @@ async def post_settings(req: Request):
         logger.warning("[settings] save_settings failed: %s", e, exc_info=True)
         return JSONResponse({"error": f"Save failed: {str(e)[:120]}"}, status_code=500)
     _settings_rev += 1
-    return {"ok": True, "settings_rev": int(_settings_rev)}
+    return {"ok": True, "settings_rev": int(_settings_rev),
+            "stripped": _stripped_keys}
 
 
 @router.post("/settings/agent")
