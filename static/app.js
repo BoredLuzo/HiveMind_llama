@@ -11501,10 +11501,12 @@ async function testGitConfig() {
       body: JSON.stringify({ workspace: S.workspace || '' })
     });
     var data = await res.json();
+    var _remote = (data.remote_msg ? (' | remote: ' + data.remote_msg) : '');
+    var _remoteBad = (data.remote_ok === false);
     if (data.valid) {
-      if (result) { result.textContent = '\u2713 ' + (data.branch ? ('OK - ' + data.branch) : 'Connection OK'); result.style.color = 'var(--green)'; }
+      if (result) { result.textContent = '\u2713 ' + (data.branch ? ('OK - ' + data.branch) : 'Connection OK') + _remote; result.style.color = _remoteBad ? '#e0a030' : 'var(--green)'; }
     } else {
-      if (result) { result.textContent = '\u2717 ' + (data.reason || 'Error'); result.style.color = 'var(--red)'; }
+      if (result) { result.textContent = '\u2717 ' + (data.reason || 'Error') + _remote; result.style.color = 'var(--red)'; }
     }
   } catch(e) {
     if (result) { result.textContent = '\u2717 Server error'; result.style.color = 'var(--red)'; }
@@ -11515,7 +11517,7 @@ async function testGitConfig() {
 async function initGitRepo() {
   var btn = document.getElementById('git-init-btn');
   var statusEl = document.getElementById('git-init-status');
-  if (btn) btn.textContent = 'Erstelle...';
+  if (btn) btn.textContent = 'Creating...';
   try {
     var res = await fetch('/git/init', {
       method: 'POST',
@@ -11531,11 +11533,17 @@ async function initGitRepo() {
     var data = await res.json();
     if (data.ok) {
       if (data.already_existed) {
-        if (statusEl) { statusEl.textContent = '\u2713 Repo existiert bereits (Branch: ' + (data.branch || '?') + ')'; statusEl.style.color = 'var(--green)'; }
+        if (statusEl) { statusEl.textContent = '\u2713 Repo already exists (branch: ' + (data.branch || '?') + ')'; statusEl.style.color = 'var(--green)'; }
       } else if (data.cloned) {
-        if (statusEl) { statusEl.textContent = '\u2713 Repo geklont: ' + data.repo; statusEl.style.color = 'var(--green)'; }
+        if (statusEl) { statusEl.textContent = '\u2713 Repo cloned: ' + data.repo; statusEl.style.color = 'var(--green)'; }
       } else if (data.initialized) {
-        if (statusEl) { statusEl.textContent = '\u2713 New repo created (branch: ' + (data.branch || 'main') + ')'; statusEl.style.color = 'var(--green)'; }
+        // GITHUB-PANEL FIX (2026-10-07): say what actually happened -
+        // local init plus (optional) real GitHub repo creation with the
+        // token, honest message when the token lacks permissions.
+        var _gm = data.github_msg ? (' | ' + data.github_msg) : '';
+        var _col = (data.github_msg && data.github_msg.indexOf('created') !== -1) ? 'var(--green)'
+          : (data.github_msg ? '#e0a030' : 'var(--green)');
+        if (statusEl) { statusEl.textContent = '\u2713 Initialized locally (branch: ' + (data.branch || 'main') + ')' + _gm; statusEl.style.color = _col; }
       }
       updateGitIntegrationUI();
     } else {

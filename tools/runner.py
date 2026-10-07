@@ -1152,14 +1152,14 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
         _matched = _is_destructive_python(_code)
         if _matched:
             _destructive = True
-            _reason = f"run_python-Code matcht destruktives Muster: '{_matched}'"
+            _reason = f"run_python code matches a destructive pattern: '{_matched}'"
             _details = _code[:200]
     elif name == "run_bash":
         _cmd = str(args.get("cmd", "") or args.get("command", ""))
         _matched = _is_destructive_bash(_cmd)
         if _matched:
             _destructive = True
-            _reason = f"run_bash-Kommando matcht destruktives Muster: '{_matched}'"
+            _reason = f"run_bash command matches a destructive pattern: '{_matched}'"
             _details = _cmd[:200]
 
     if not _destructive:
