@@ -901,18 +901,18 @@
               <span id="duo-img-coder-status">Coder</span>
             </label>
           </div>
-          <div class="vision-row" style="display:none;margin:8px 0 0 24px" id="duo-coder-img-toggles">
+          <div style="display:none;margin:8px 0 0 24px" id="duo-coder-img-toggles">
             <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:3px">
               <input type="checkbox" id="coder-images-off-toggle" onchange="setCoderImagesOff(this.checked)">
-              <span>Coder nimmt keine Bilder <span style="color:#7a8fa8">(nie mmproj, spart VRAM)</span></span>
+              <span>Coder takes no images <span style="color:#7a8fa8">(never loads mmproj, saves VRAM)</span></span>
             </label>
             <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
               <input type="checkbox" id="coder-always-vision-toggle-duo" onchange="setCoderAlwaysVision(this.checked)">
-              <span>Coder l&auml;dt mmproj immer <span style="color:#7a8fa8">(+VRAM, steers ohne Reload)</span></span>
+              <span>Coder always loads mmproj <span style="color:#7a8fa8">(+VRAM, image steers without the reload)</span></span>
             </label>
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:4px">
-              <b>Aus</b> (oben): der Coder-Slot l&auml;dt nie den Projektor &mdash; Bild-Steers an den Coder werden verworfen (0&nbsp;mmproj-VRAM).<br>
-              <b>Always</b> (unten): Projektor ab Run-Start &mdash; Bild-Steers kommen ohne den ~15&nbsp;s Mid-Run-Reload.
+            <div style="font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:4px">
+              Off: the coder slot never loads the projector, image steers to the coder are dropped (0 mmproj VRAM).
+              Always: the projector loads with the run, image steers skip the ~15 s mid-run reload.
             </div>
           </div>
           <div id="duo-image-note" style="display:none;font-size:9px;color:#20b0a0;margin-left:24px;line-height:1.5"></div>
@@ -1990,6 +1990,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261007-12"></script>
+        <script src="/static/app.js?v=20261007-13"></script>
 </body>
 </html>
