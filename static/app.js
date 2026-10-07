@@ -5793,9 +5793,10 @@ function handleEvent(d) {
     var _steerCard = document.createElement('div');
     _steerCard.className = 'msg steer-note';
     _steerCard.style.cssText = 'border:1px solid rgba(90,150,220,.4);background:rgba(90,150,220,.08);border-radius:6px;padding:6px 10px;margin:4px 0;font-size:12px;';
-    var _steerHead = '\uD83D\uDED9 steer' + (_steerN > 0 ? ' (+' + _steerN + ' image' + (_steerN > 1 ? 's' : '') + ')' : '');
+    var _steerHead = '\uD83D\uDED9 steer' + (_steerN > 0 ? ' (+' + _steerN + ' image' + (_steerN > 1 ? 's' : '') + ')' : '') + ' \u00b7 queued';
     _steerCard.innerHTML = '<div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:#6a9ad0;text-transform:uppercase;">' + esc(_steerHead) + '</div>'
-      + '<div style="white-space:pre-wrap;word-break:break-word;">' + esc(_steerTxt || '(image only)') + '</div>';
+      + '<div style="white-space:pre-wrap;word-break:break-word;">' + esc(_steerTxt || '(image only)') + '</div>'
+      + '<div style="font-size:9px;color:#7a8fa8;margin-top:4px;">forced into the next tool round \u2192 the coder sees it before generating again</div>';
     document.getElementById('chat').appendChild(_steerCard);
     scrollBtmIfNearBottom(60);
   }
