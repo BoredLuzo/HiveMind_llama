@@ -2731,7 +2731,14 @@ async def run_code_duo(ctx):
             _steer_items = drain_steer_messages(ctx.run_id)
             _steer_img_items = []
             _coder_imgs_off = bool(ctx.settings.get("duo_coder_images_off", False))
-            if any(_st["images"] for _st in _steer_items) and not _coder_imgs_off:
+            # AUDIT (1.3.3): image steers belong to the RAW path only. In
+            # preprocess mode the coder is text-only by contract - the old
+            # code force-upgraded its slot to vision (~15 s stall + VRAM)
+            # behind a mode that promises "every agent stays text-based".
+            _steer_imgs_allowed = (
+                str(ctx.settings.get("duo_image_mode") or "") != "preprocess")
+            if (any(_st["images"] for _st in _steer_items)
+                    and not _coder_imgs_off and _steer_imgs_allowed):
                 # STEER-IMAGE UPGRADE (2026-10-06, live T2): the coder slot
                 # may have loaded without the projector — upgrade BEFORE the
                 # image parts ride into the next chunk POST. The port MUST
@@ -2861,9 +2868,11 @@ async def run_code_duo(ctx):
             # not be merged into the first user message (that already holds
             # the round-1 image when the plan says raw).
             for _st in _steer_img_items:
-                if _coder_imgs_off:
+                if _coder_imgs_off or not _steer_imgs_allowed:
                     yield await ctx.emit({"type": "status", "content":
-                        "⚠ Image steer dropped — 'Coder takes no images' is on."})
+                        "⚠ Image steer dropped - in preprocess mode the coder "
+                        "stays text-only (switch to Raw image mode for image "
+                        "steers)."})
                     continue
                 _coder_msgs.append(_build_steer_user_message(_st["text"], _st["images"]))
                 logger.info("[DUO] steer with %d image(s) appended as user parts message",
@@ -3903,7 +3912,8 @@ async def run_code_duo(ctx):
                         # nudge below.
                         _round_steer = drain_steer_messages(ctx.run_id)
                         if (any(_st["images"] for _st in _round_steer)
-                                and not bool(ctx.settings.get("duo_coder_images_off", False))):
+                                and not bool(ctx.settings.get("duo_coder_images_off", False))
+                                and str(ctx.settings.get("duo_image_mode") or "") != "preprocess"):
                             # STEER-IMAGE UPGRADE (2026-10-06, live T2): see
                             # the chunk-boundary drain — upgrade the coder
                             # slot before the image parts reach the POST.

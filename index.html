@@ -902,20 +902,14 @@
             </label>
           </div>
           <div class="vision-row" style="display:none;margin:8px 0 0 24px" id="duo-coder-img-toggles">
-            <div class="vision-row" style="margin-bottom:4px">
-              <span class="cfl-label" style="font-size:10px">Coder nimmt KEINE Bilder (nie mmproj &mdash; spart VRAM)</span>
-              <label class="cfl-sw">
-                <input type="checkbox" id="coder-images-off-toggle" onchange="setCoderImagesOff(this.checked)">
-                <span class="sl"></span>
-              </label>
-            </div>
-            <div class="vision-row" style="margin-bottom:2px">
-              <span class="cfl-label" style="font-size:10px">Coder &mdash; always load mmproj (+VRAM)</span>
-              <label class="cfl-sw">
-                <input type="checkbox" id="coder-always-vision-toggle-duo" onchange="setCoderAlwaysVision(this.checked)">
-                <span class="sl"></span>
-              </label>
-            </div>
+            <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:3px">
+              <input type="checkbox" id="coder-images-off-toggle" onchange="setCoderImagesOff(this.checked)">
+              <span>Coder nimmt keine Bilder <span style="color:#7a8fa8">(nie mmproj, spart VRAM)</span></span>
+            </label>
+            <label style="display:flex;gap:6px;align-items:center;font-size:10px;color:var(--tx2);cursor:pointer;margin-bottom:4px">
+              <input type="checkbox" id="coder-always-vision-toggle-duo" onchange="setCoderAlwaysVision(this.checked)">
+              <span>Coder l&auml;dt mmproj immer <span style="color:#7a8fa8">(+VRAM, steers ohne Reload)</span></span>
+            </label>
             <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#7a8fa8;line-height:1.5;margin-bottom:4px">
               <b>Aus</b> (oben): der Coder-Slot l&auml;dt nie den Projektor &mdash; Bild-Steers an den Coder werden verworfen (0&nbsp;mmproj-VRAM).<br>
               <b>Always</b> (unten): Projektor ab Run-Start &mdash; Bild-Steers kommen ohne den ~15&nbsp;s Mid-Run-Reload.
