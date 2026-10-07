@@ -1223,6 +1223,28 @@ def _run_journal_touch(run_id: str) -> dict:
     return reg
 
 
+# VRAM PURGE (R4 + FIX 2026-10-07): /purge (phone) and the UI purge hit
+# this route. It was MISSING entirely on the engine side - every /purge
+# silently 404'd while llama-servers kept running and holding VRAM.
+# force_kill_all does the taskkill sweep (every llama-server.exe, tree
+# kill) plus per-slot http shutdown; manager.shutdown resets the registry.
+@app.post("/vram/kill_all", include_in_schema=False)
+async def vram_kill_all_ep():
+    try:
+        from backend.llama_compat import force_kill_all as _fka
+        _res = await _fka()
+    except Exception as _e:
+        logger.error("[VRAM-PURGE] force_kill_all failed: %s", _e)
+        return JSONResponse({"ok": False, "error": str(_e)[:160]}, status_code=500)
+    try:
+        from backend.llama_server_manager import manager as _sm
+        await _sm.shutdown()
+    except Exception as _se:
+        logger.debug("[VRAM-PURGE] manager shutdown: %s", _se)
+    logger.info("[VRAM-PURGE] killed: %s", (_res or {}).get("killed", []))
+    return {"ok": True, "killed": (_res or {}).get("killed", [])}
+
+
 @app.post("/stream")
 async def stream(req: Request):
     # INTAKE HARDENING (2026-10-07, live log): one empty POST /stream body
