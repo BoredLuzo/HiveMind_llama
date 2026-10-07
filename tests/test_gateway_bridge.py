@@ -8,6 +8,7 @@ auto-deny of approvals, readable error mapping (model_load_failed, run
 error, offline), splitting, .txt document on >3 chunks, run cleanup.
 """
 import asyncio
+import json
 import sys
 
 import httpx
@@ -700,6 +701,7 @@ async def _main():
     await t_audit_fixes()
     await t_ux_round()
     await t_relay_hardening()
+    await t_tg_visibility()
 
 
 # 2026-10-05 UX round: rich rendering, tappable approvals
@@ -1192,6 +1194,91 @@ async def t_relay_hardening():
     await br3.mirror_tick()
     check("R6 post-adoption repeat deduped (counter not re-flood)",
           not any("web_fetch" in m for m in ms3.messages[before:]))
+
+
+# ── TG-VISIBILITY (2026-10-07): duo_start, ctx_meter, file_change, ─────
+#    coder output deltas
+async def t_tg_visibility():
+    class VisHive(FakeHive):
+        def __init__(self):
+            super().__init__([])
+            self.settings_body = {"telegram_mirror_enabled": True}
+            self.journal_body = {"active": False}
+            self.pending_body = {"active": False}
+
+        async def settings(self):
+            return dict(self.settings_body)
+
+        async def journal(self, run_id=""):
+            self.journal_calls.append(run_id)
+            return dict(self.journal_body)
+
+        async def pending_approval(self, run_id):
+            return FakeResponse(200, dict(self.pending_body))
+
+    hive = VisHive()
+    hive.journal_body = {"active": True, "run_id": "vis-1",
+                         "done": False, "aborted": False,
+                         "ts": time.time(), "n": 1,
+                         "frames": ['data: {"type": "run_id", "run_id": "vis-1"}']}
+    br, st, ms = _mk("gwbr_vis_", hive)
+    hive.journal_body["ts"] = time.time()
+    await br.mirror_tick()  # adoption
+
+    long_coder = ("Ich habe die Physik-Schleife implementiert und die "
+                  "Integratoren eingebaut, als naechstes folgt der Renderer.")
+    hive.journal_body["frames"] = [
+        'data: {"type": "run_id", "run_id": "vis-1"}',
+        'data: {"type": "duo_start", "label": "Agentic — qwen3.5 solo '
+        '(4.1 GB @ ctx=79k)"}',
+        'data: {"type": "ctx_meter", "est_tokens": 42000, "ctx_limit": 80896,'
+        ' "compressing": false}',
+        'data: {"type": "ctx_meter", "est_tokens": 64000, "ctx_limit": 80896,'
+        ' "compressing": true}',
+        'data: {"type": "file_change", "path": "C:/x/nBodyBig/vite.config.ts",'
+        ' "op": "write", "lines": 13, "content": "import {}"}',
+        f'data: {json.dumps({"type": "token", "content": long_coder})}',
+        'data: {"type": "usage_meta", "phase": "coder", "completion_tokens":'
+        ' 42, "prompt_tokens": 12000}',
+        'data: {"type": "usage_meta", "phase": "planner", "completion_tokens":'
+        ' 42, "prompt_tokens": 12000}',
+        'data: {"type": "ctx_meter", "est_tokens": 65000, "ctx_limit": 80896,'
+        ' "compressing": false}',
+    ]
+    hive.journal_body["n"] = len(hive.journal_body["frames"])
+    await br.mirror_tick()
+    j = "\n".join(ms.messages)
+    check("VIS: duo_start label relayed", "qwen3.5 solo" in j)
+    check("VIS: ctx milestone 50% once",
+          sum(1 for m in ms.messages if "Context 51%" in m) == 1)
+    check("VIS: ctx milestone 79% fired",
+          any("Context 79%" in m for m in ms.messages))
+    check("VIS: compression note fired once",
+          sum(1 for m in ms.messages if "compressing" in m) == 1)
+    check("VIS: file change relayed",
+          any("vite.config.ts (write, 13 lines)" in m for m in ms.messages))
+    check("VIS: coder output delta relayed",
+          any(m.startswith("💬") and "Physik-Schleife" in m
+              for m in ms.messages))
+    check("VIS: planner usage_meta silent",
+          not any("planner" in m and "usage" in m for m in ms.messages))
+    # compression note does not repeat while the flag stays true
+    hive.journal_body["frames"] = hive.journal_body["frames"] + [
+        'data: {"type": "ctx_meter", "est_tokens": 66000, "ctx_limit": 80896,'
+        ' "compressing": true}']
+    hive.journal_body["n"] = len(hive.journal_body["frames"])
+    await br.mirror_tick()
+    check("VIS: compression note not repeated",
+          sum(1 for m in ms.messages if "compressing" in m) == 1)
+
+    # ASK card states it is not the gate
+    hive.pending_body = {"active": True, "tool": "ask_user",
+                         "preview": "Soll ich Tests schreiben?",
+                         "decision_id": "d9", "kind": "ask"}
+    await br.mirror_tick()
+    check("VIS: ask card says NOT the approval gate",
+          any("NOT the approval gate" in m for m in ms.messages))
+
 
 asyncio.run(_main())
 print()

@@ -1074,7 +1074,9 @@ class RunBridge:
                   "last_status": "", "approval_sig": None,
                   "approval_decision_id": "", "approval_tool": "",
                   "other_run_noted": "", "last_phase": "",
-                                  "tool_relay_seen": {}, "answer_parts": []})
+                                  "tool_relay_seen": {}, "answer_parts": [],
+                  "ctx_marks": set(), "ctx_compression_noted": False,
+                  "answer_sent_upto": 0})
 
     def _own_run_id(self) -> str | None:
         run = self.state.data.get("active_run") or {}
@@ -1185,7 +1187,9 @@ class RunBridge:
                       "status_msg_id": None, "last_status": "",
                       "approval_sig": None, "approval_decision_id": "",
                       "approval_tool": "", "other_run_noted": "",
-                      "last_phase": "", "answer_parts": []})
+                      "last_phase": "", "answer_parts": [],
+                      "ctx_marks": set(), "ctx_compression_noted": False,
+                      "answer_sent_upto": 0})
             # R6 CATCH-UP (owner: messages must arrive): process the
             # pre-adoption frames SILENTLY - the answer accumulates so
             # the fazit relay at done carries the FULL result, and tool
@@ -1304,6 +1308,60 @@ class RunBridge:
                 if _st:
                     _msg += f": {_st[:110]}"
                 await self.ms.send_message(_msg)
+            elif ev.get("type") == "duo_start":
+                # MODEL VISIBILITY (2026-10-07, owner): WHICH model with
+                # which settings runs — the label carries model, VRAM, ctx.
+                _lbl = str(ev.get("label") or "").strip()
+                if _lbl:
+                    await self.ms.send_message("🤖 " + _lbl[:200])
+            elif ev.get("type") == "ctx_meter":
+                # CONTEXT/COMPRESSION VISIBILITY (owner: "compression etc
+                # sichtbar"): milestone lines at 50/75/90 % (once each) and
+                # a one-shot note while the engine compresses context.
+                try:
+                    _est = int(ev.get("est_tokens") or 0)
+                    _lim = int(ev.get("ctx_limit") or 0)
+                except (TypeError, ValueError):
+                    _est = _lim = 0
+                if _est > 0 and _lim > 0:
+                    _pct = _est * 100 // _lim
+                    _marks = m.setdefault("ctx_marks", set())
+                    for _th in (50, 75, 90):
+                        if _pct >= _th and _th not in _marks:
+                            _marks.add(_th)
+                            await self.ms.send_message(
+                                f"🧮 Context {_pct}% "
+                                f"({_est // 1024}k/{_lim // 1024}k tokens)")
+                    _comp = bool(ev.get("compressing"))
+                    if _comp and not m.get("ctx_compression_noted"):
+                        # once per RUN (the flag can flip every frame while
+                        # the engine hovers at the limit - no re-notes)
+                        m["ctx_compression_noted"] = True
+                        await self.ms.send_message(
+                            "🗜 Context compressing (older turns are being "
+                            "summarized to stay under the limit)…")
+            elif ev.get("type") == "file_change":
+                # FILE ACTIVITY (owner): what the coder actually writes.
+                _fp = str(ev.get("path") or "").replace("\\", "/").split("/")[-1]
+                _op = str(ev.get("op") or "write")
+                _ln = ev.get("lines")
+                _fc = f"📝 {_fp} ({_op}" + (f", {_ln} lines)" if _ln else ")")
+                if not tool_lines or tool_lines[-1] != _fc:
+                    tool_lines.append(_fc)
+            elif ev.get("type") == "usage_meta":
+                # CODER OUTPUT (owner: real coder text instead of a bare
+                # "round finished"): when a coder LLM call ends, relay the
+                # free text it produced since the last relay (token events
+                # only — tool-call payloads are separate events).
+                if str(ev.get("phase") or "") == "coder":
+                    _parts = m.get("answer_parts") or []
+                    _upto = int(m.get("answer_sent_upto") or 0)
+                    _delta = "".join(str(x) for x in _parts[_upto:]).strip()
+                    if len(_delta) >= 80:
+                        m["answer_sent_upto"] = len(_parts)
+                        _txt = " ".join(_delta.split())
+                        await self.ms.send_message(
+                            "💬 " + _txt[:700] + ("…" if len(_txt) > 700 else ""))
             elif ev.get("type") == "thinking_token":
                 # R4: coder reasoning between tool calls - keep a tail, sent
                 # with the next tool line (one 💭 per tick max)
@@ -1386,7 +1444,9 @@ class RunBridge:
                         f"❓ The agent asks (run {rid})\n\n"
                         f"{preview}\n\n"
                         "Reply with your answer as text — it goes straight "
-                        "back to the agent.")
+                        "back to the agent.\n"
+                        "(This is the agent's own question — NOT the "
+                        "approval gate.)")
                 else:
                     await self.ms.send_message(
                         f"🛡 Approval needed (UI run {rid})\n\n"
