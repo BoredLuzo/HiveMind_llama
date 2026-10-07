@@ -45,8 +45,8 @@ faster-whisper. Same sidecar pattern.
 - split core/duo_runner.py (6.9k lines) into phases/ modules
 - split static/app.js (12k lines) into ES modules with a tiny build
 - minimal CI: run the 93 regression suites on every push
-- llama.cpp response timings -> the cleaned decode t/s figure (the
-  event-pulse estimate was removed as unreliable)
+- DONE in 1.3.3: llama.cpp response timings (predicted_per_second)
+  now feed the cleaned decode t/s figure in the perf panel
 - consolidate duo_coder_model: the /stream body override is ignored as
   the agentic exec model, only agents.duo_coder.model takes effect
 - multi-channel gateway (several chats/owners in parallel)
