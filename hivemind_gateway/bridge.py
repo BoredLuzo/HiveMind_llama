@@ -1240,6 +1240,7 @@ class RunBridge:
             _catchup_comp = False
             _catchup_lim = 0
             _duo_label = ""
+            _plan_catchup = ""
             for _raw in (j.get("frames") or []):
                 if not isinstance(_raw, str):
                     continue
@@ -1277,6 +1278,21 @@ class RunBridge:
                     _dl = str(_cev.get("label") or "").strip()
                     if _dl:
                         _duo_label = _dl
+                elif _cev.get("type") == "planner_result":
+                    # late adoption: the plan finished before the takeover -
+                    # summarize it into the note instead of dropping it
+                    _pch = _cev.get("chunks") or []
+                    if isinstance(_pch, list) and _pch:
+                        _titles = [str((c.get("title") or c.get("raw") or "")).strip()
+                                   for c in _pch if isinstance(c, dict)]
+                        _titles = [t for t in _titles if t]
+                        if _titles:
+                            _plan_catchup = ("Plan (" + str(len(_titles))
+                                             + " steps): " + " | ".join(_titles))
+                    if not _plan_catchup:
+                        _pth = str(_cev.get("thinking") or "").strip()
+                        if _pth:
+                            _plan_catchup = "Plan: " + _pth
             if _catchup_pct:
                 m["ctx_marks"] = {t for t in (50, 75, 90)
                                   if _catchup_pct >= t}
@@ -1292,6 +1308,8 @@ class RunBridge:
                          "/stop aborts it.")
             if _duo_label:
                 _note += "\n🤖 " + _duo_label[:200]
+            if _plan_catchup:
+                _note += "\n🧠 " + _plan_catchup[:600]
             await self.ms.send_message(_note)
             if _catchup_comp and _catchup_lim:
                 await self.ms.send_message(
@@ -1401,6 +1419,25 @@ class RunBridge:
                 _lbl = str(ev.get("label") or "").strip()
                 if _lbl:
                     await self.ms.send_message("🤖 " + _lbl[:200])
+            elif ev.get("type") == "planner_result":
+                # PLANNER ON THE PHONE (2026-10-07, owner: "planner wieder
+                # nicht angekommen"): the takeover delta loop never had this
+                # branch at all - the finished plan never reached the phone.
+                _pch = ev.get("chunks") or []
+                _plan = ""
+                if isinstance(_pch, list) and _pch:
+                    _titles = [str((c.get("title") or c.get("raw") or "")).strip()
+                               for c in _pch if isinstance(c, dict)]
+                    _titles = [t for t in _titles if t]
+                    if _titles:
+                        _plan = ("Plan (" + str(len(_titles)) + " steps): "
+                                 + " | ".join(_titles))
+                if not _plan:
+                    _plan = str(ev.get("thinking") or "").strip()
+                _plan = " ".join(_plan.split())
+                if _plan:
+                    await self.ms.send_message(
+                        "🧠 " + _plan[:600] + ("…" if len(_plan) > 600 else ""))
             elif ev.get("type") == "ctx_meter":
                 # CONTEXT/COMPRESSION VISIBILITY (owner: "compression etc
                 # sichtbar"): milestone lines at 50/75/90 % (once each) and

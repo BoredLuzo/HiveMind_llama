@@ -1472,6 +1472,30 @@ async def t_tg_audit():
           and "yes" in toast)
     check("ASKBTN: confirmation line sent",
           any("Confirmed (yes)" in m for m in ms4.messages))
+
+    # 5) PLANNER RELAY (owner: "planner wieder nicht angekommen")
+    frames5 = ['data: {"type": "run_id", "run_id": "plan-9"}',
+               'data: {"type": "planner_result", "chunks": ['
+               '{"title": "init project"}, {"title": "physics core"}, '
+               '{"title": "renderer"}], '
+               '"thinking": "Ich plane das Projekt.", "model": "qwen3.5:4b-mtp"}']
+    hive5 = AuditHive()
+    hive5.journal_body = {"active": True, "run_id": "plan-9",
+                          "done": False, "aborted": False,
+                          "ts": time.time(), "n": len(frames5),
+                          "base": 0, "frames": frames5}
+    br5, st5, ms5 = _mk("gwbr_planrel_", hive5)
+    hive5.journal_body["ts"] = time.time()
+    await br5.mirror_tick()  # adoption: plan summarized into the note
+    check("PLANREL: adoption note carries the plan summary",
+          any("taken over" in m and "3 steps" in m for m in ms5.messages))
+    hive5.journal_body["frames"] = frames5 + [
+        'data: {"type": "planner_result", "chunks": ['
+        '{"title": "late step"}], "thinking": "", "model": "x"}']
+    hive5.journal_body["n"] = len(hive5.journal_body["frames"])
+    await br5.mirror_tick()
+    check("PLANREL: delta planner_result relayed",
+          any("late step" in m for m in ms5.messages))
     # open question (no yes/no shape) stays a pure text card
     hive4.pending_body = {"active": True, "tool": "ask_user",
                           "kind": "ask", "preview": "Postgres or sqlite?",
