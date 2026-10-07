@@ -14,7 +14,7 @@ from infra.run_control import queue_steer, drain_steer_messages  # noqa: E402
 
 def test_builder_text_only_is_plain_string():
     m = build_steer_user_message("focus on the header", None)
-    assert m == {"role": "user", "content": "[USER STEER] focus on the header"}
+    assert m["role"] == "user" and "focus on the header" in m["content"] and "OWNER STEER" in m["content"]
 
 
 def test_builder_with_images_parts_first():

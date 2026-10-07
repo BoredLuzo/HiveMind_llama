@@ -2773,7 +2773,12 @@ async def run_code_duo(ctx):
                     if _st["images"]:
                         _steer_img_items.append(_st)
                     else:
-                        _coder_input += "\n\n" + f"[USER STEER] {_st['text']}"
+                        # STEER FRAME (2026-10-07): same priority framing as
+                        # build_steer_user_message (see duo_helpers).
+                        _coder_input += ("\n\n[OWNER STEER - highest priority, arrived mid-run]\n"
+                                         + _st["text"].strip()
+                                         + "\nIncorporate this immediately: it overrides your current "
+                                           "approach. Act on it with tools in this round if applicable.")
 
             # RO-DETECT (2026-09-03): decide BEFORE building coder messages.
             # A read-only phrase (e.g. "DO NOT MODIFY") is often only a content

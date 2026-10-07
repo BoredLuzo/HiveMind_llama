@@ -651,7 +651,13 @@ def build_steer_user_message(text: str, images=None) -> dict:
     wire shape llama-server expects. No images -> plain string content.
     Used by all steering insertion sites so the wire format is identical.
     """
-    _txt = f"[USER STEER] {text}"
+    # STEER FRAME (2026-10-07, owner: "forcesteer ist ass"): a bare
+    # "[USER STEER]" tag read as background chatter - small models
+    # ignored it. The owner's mid-run words are the highest-priority
+    # instruction on the table, so the frame says exactly that.
+    _txt = ("[OWNER STEER - highest priority, arrived mid-run]\n" + text.strip()
+            + "\nIncorporate this immediately: it overrides your current "
+              "approach. Act on it with tools in this round if applicable.")
     _imgs = [str(b or "").strip() for b in (images or []) if str(b or "").strip()]
     if not _imgs:
         return {"role": "user", "content": _txt}
