@@ -2903,7 +2903,9 @@ function _steerChatNote(text) {
   d.className = 'msg divider';
   d.style.cssText = 'color:#4a9eff;border-color:rgba(74,158,255,.25);font-size:9px';
   d.textContent = '\u2191 steering: ' + text;
-  c.appendChild(d);
+  // STEER PLACEMENT (2026-10-08): inside the run block like the steer card
+  const _host = (S.curAgent && document.getElementById('ab-' + S.curAgent.tid)) || c;
+  _host.appendChild(d);
   scrollBtmIfNearBottom(120);
 }
 
