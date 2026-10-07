@@ -131,6 +131,8 @@ let S = {
   perfFirstTokenAt: 0,
   perfActiveMs: 0,          // FIX 2026-10-07: active decode time only
   perfLastTokAt: 0,
+  perfToolCalls: 0, perfToolMs: 0,
+  perfToolLabel: '', perfToolStart: 0, perfLastToolTxt: '--',
   perfChars: 0,
   perfEstTokens: 0,
   perfRealTokens: 0,
@@ -4954,6 +4956,8 @@ function _perfResetRuntimeState() {
   S.perfFirstTokenAt = 0;
   S.perfActiveMs = 0;
   S.perfLastTokAt = 0;
+  S.perfToolCalls = 0; S.perfToolMs = 0;
+  S.perfToolLabel = ''; S.perfToolStart = 0; S.perfLastToolTxt = '--';
   S.perfChars = 0;
   S.perfEstTokens = 0;
   S.perfRealTokens = 0;
@@ -4990,6 +4994,9 @@ function _pbbEnsure() {
         + '<span class="ctx-perf-item ok" id="pbb-cached">cached: --</span>'
         + '<span class="ctx-perf-item ok" id="pbb-new">recomputed: --</span>'
         + '<span class="ctx-perf-item live" id="pbb-reqs">reqs: --</span>'
+      + '</div>'
+      + '<div class="ctx-perf">'
+        + '<span class="ctx-perf-item live" id="pbb-tools">tools: --</span>'
       + '</div></div>';
   try {
     if ((localStorage.getItem('hivemind-pbb-collapsed') || '') === '1')
@@ -5062,6 +5069,22 @@ function _perfRender(finalized) {
         ? ('recomputed: ' + _fmtTokens(Math.max(0, S.runPromptTokens - S.runCachedTokens)))
         : 'recomputed: --';
     if ((_e = _qId('pbb-reqs'))) _e.textContent = 'reqs: ' + ((S.runRequestCount || 0) > 0 ? S.runRequestCount : '--');
+    // TOOL METRICS (2026-10-07, owner): count, total time and the last
+    // tool with its duration - live, including a running indicator.
+    if ((_e = _qId('pbb-tools'))) {
+      var _tTxt = 'tools: --';
+      if ((S.perfToolCalls || 0) > 0 || S.perfToolStart > 0) {
+        _tTxt = 'tools: ' + (S.perfToolCalls || 0)
+          + ' · ' + ((S.perfToolMs || 0) / 1000).toFixed(1) + 's total';
+        if (S.perfToolStart > 0) {
+          _tTxt += ' · ▶ ' + S.perfToolLabel + ' '
+            + ((Date.now() - S.perfToolStart) / 1000).toFixed(1) + 's';
+        } else if (S.perfLastToolTxt && S.perfLastToolTxt !== '--') {
+          _tTxt += ' · last: ' + S.perfLastToolTxt;
+        }
+      }
+      _e.textContent = _tTxt;
+    }
     var _sumEl = _qId('pbb-summary');
     if (_sumEl) {
       // SUMMARY-REDESIGN (2026-08-26): collapsed = ctx ABS/LIMIT (P%) · N t/s · M% cached.
@@ -7426,6 +7449,11 @@ function handleEvent(d) {
     }
   }
   else if (d.type === 'tool_call') {
+    // TOOL METRICS (2026-10-07, owner): stamp the start so the expanded
+    // metric panel can show per-tool duration; before early returns.
+    S.perfToolStart = Date.now();
+    S.perfToolLabel = String(d.name || 'tool');
+    _perfRender(false);
     // model-initiated tool call — as a chip in the current coder bubble
     // Flush pending text tokens first so mid-sentence text is committed before the tool chip
     _flushTokenQueueSync();
@@ -7600,6 +7628,17 @@ function handleEvent(d) {
     scrollBtmIfNearBottom(60);
   }
   else if (d.type === 'tool_result') {
+    // TOOL METRICS (2026-10-07, owner): close the interval - duration,
+    // count and last-tool line for the expanded metric panel.
+    if (S.perfToolStart > 0) {
+      var _td = Date.now() - S.perfToolStart;
+      S.perfToolStart = 0;
+      if (_td >= 0 && _td < 3600000) {
+        S.perfToolCalls = (S.perfToolCalls || 0) + 1;
+        S.perfToolMs = (S.perfToolMs || 0) + _td;
+        S.perfLastToolTxt = S.perfToolLabel + ' ' + (_td / 1000).toFixed(1) + 's';
+      }
+    }
     // Output des Tool-Calls — aufklappbar unter dem letzten Chip
     // Flush pending text tokens first
     _flushTokenQueueSync();
