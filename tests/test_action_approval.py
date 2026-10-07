@@ -403,6 +403,24 @@ def test_decide_stores_tool_and_drops_duplicates():
         tr._pending_approvals.pop("dec-run-2", None)
 
 
+def test_gate_force_rides_body_only():
+    """FIX 2026-10-07 (live 12:46): the G1 force used to be set whenever the
+    key appeared ANYWHERE in the merged run settings — a UI run inherited the
+    pin from the global toggle and /gate off could never reach the running
+    run (override ContextVar beat the live check). The force must ride the
+    body overrides ONLY."""
+    from core.chat_run import approval_gate_force
+
+    check("body override -> force",
+          approval_gate_force({"duo_action_approval_enabled": True}) is True)
+    check("no overrides -> no force (global toggle governs live)",
+          approval_gate_force(None) is False)
+    check("empty overrides -> no force",
+          approval_gate_force({}) is False)
+    check("global-setting style run settings WITHOUT override key -> no force",
+          approval_gate_force({"duo_coder_ctx_agentic": 80896}) is False)
+
+
 if __name__ == "__main__":
     test_answer_parsing()
     test_memory_scope()
@@ -410,6 +428,7 @@ if __name__ == "__main__":
     test_gate_scope()
     test_gate_flow()
     test_decide_stores_tool_and_drops_duplicates()
+    test_gate_force_rides_body_only()
     print("\n" + "=" * 60)
     print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
     print("=" * 60)

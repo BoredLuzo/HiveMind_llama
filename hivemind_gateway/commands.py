@@ -64,7 +64,7 @@ HELP_TEXT = (
     "/tools on|off — direct-chat tools for simple runs\n"
     "/restrict on|off — phone-run tool restriction\n"
     "/gate — show approval settings\n"
-    "/gate on|off — approvals everywhere ON/OFF (live, mid-run)\n"
+    "/gate on|off — approvals ON/OFF (live, mid-run; phone-started runs stay gated)\n"
     "/gate ask|deny|off — phone-run policy nuance\n"
     "/cron — scheduled agent runs (add/list/del/run)\n"
     "\n"

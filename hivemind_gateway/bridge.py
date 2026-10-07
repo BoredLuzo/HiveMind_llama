@@ -786,8 +786,8 @@ class RunBridge:
         # the gateway forces the approval gate for every phone run, but
         # ONLY if the engine lifts the body key (gateway_overrides marker).
         if getattr(self.ms, "engine_gate_support", True):
-            gate_line = ("approvals: shell/write/git auto-denied on phone "
-                         "runs (gate enforced)")
+            gate_line = ("approvals: phone runs gated (ask/deny per /gate; "
+                         "UI runs follow the engine toggle live)")
         else:
             gate_line = ("⚠️ gate enforcement INACTIVE — engine too old; "
                          "switch on duo_action_approval_enabled in the UI")
@@ -1693,7 +1693,9 @@ class RunBridge:
                 self.ms.telegram_approval_mode = "ask" if _on else "off"
             return ("🛡 Approvals " + ("ON — approval cards for gated calls, "
                     "everywhere (UI + phone)." if _on else
-                    "OFF — gated calls run without asking. Careful."))
+                    "OFF — gated calls run without asking, UI runs included "
+                    "(live, mid-run). Careful. Phone-STARTED runs keep the "
+                    "gate (safety force)."))
         arg = (arg or "").strip().lower()
         if arg in ("ask", "deny", "off"):
             try:

@@ -778,7 +778,7 @@ async def t_audit_fixes():
           br.hive.stream_bodies[-1]["overrides"].get(
               "duo_action_approval_enabled") is True)
     check("G1: /status states the forced gate",
-          "gate enforced" in br.status_text())
+          "phone runs gated" in br.status_text())
     # version-skew detection: an engine WITHOUT the gateway_overrides
     # marker must downgrade /status instead of promising the invariant
     br.ms.engine_gate_support = False

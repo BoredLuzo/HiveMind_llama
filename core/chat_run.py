@@ -69,6 +69,17 @@ from hive_functions.soul_engine import (
 logger = logging.getLogger("hivemind.chat_run")
 _logger = logger
 
+
+def approval_gate_force(model_overrides: dict | None) -> bool:
+    """G1 (fixed 2026-10-07): the per-run approval-gate force rides ONLY the
+    body/model overrides (gateway phone runs). A True that merely sickers in
+    from the global setting must NOT pin the run — the override ContextVar
+    would beat the live toggle for the whole run and a mid-run /gate off
+    could never reach it (live: cards kept arriving after "Approvals OFF").
+    UI runs take the global toggle LIVE per gated call instead."""
+    return bool((model_overrides or {}).get("duo_action_approval_enabled"))
+
+
 async def run_stream(
     user_input: str,
     images: list,
@@ -154,11 +165,14 @@ async def run_stream(
     if model_overrides:
         _run_settings.update(model_overrides)
     logger.warning("[RUN-TRACE] settings-kopie ok (overrides=%s)", sorted(model_overrides or {}))
-    # G1 (full audit 2026-10-05): a per-run approval-gate force rides the
-    # merged run settings (gateway phone runs). Publish it to the tool gate
-    # via its ContextVar — propagates into the tool loop and create_task
-    # children like _current_run_id does.
-    if _run_settings.get("duo_action_approval_enabled"):
+    # G1 (full audit 2026-10-05; FIXED 2026-10-07): the per-run gate force
+    # rides ONLY the body/model overrides (gateway phone runs). A True that
+    # merely SICKERED IN from the global setting must not pin the run: the
+    # override ContextVar wins over the live toggle for the WHOLE run, so a
+    # mid-run /gate off could never reach it (live 12:46 — approval cards
+    # kept arriving after "Approvals OFF"). UI runs take the global toggle
+    # LIVE per gated call instead.
+    if approval_gate_force(model_overrides):
         from tools.runner import _approval_gate_run_override as _gate_cv
         _gate_cv.set(True)
     # Phone restriction (2026-10-05 UI toggle): clamp this run's toolset
