@@ -3943,6 +3943,17 @@ async def run_code_duo(ctx):
                                                   "images": len(_st["images"] or [])})
                         if _round_steer:
                             for _st in _round_steer:
+                                # AUDIT (2026-10-08): same drop rule as the
+                                # chunk-boundary drain - images_off and
+                                # preprocess mode keep the coder text-only,
+                                # raw image parts would hit the API without
+                                # a projector.
+                                if _st["images"] and (
+                                        bool(ctx.settings.get("duo_coder_images_off", False))
+                                        or str(ctx.settings.get("duo_image_mode") or "") == "preprocess"):
+                                    yield await ctx.emit({"type": "status", "content":
+                                        "⚠ Image steer dropped - the coder stays text-only (raw mode + images allowed)."})
+                                    continue
                                 _dtool_msgs.append(
                                     _build_steer_user_message(_st["text"], _st["images"]))
                         from tools.runner import _ask_user_gate, _ask_user_throttled_count

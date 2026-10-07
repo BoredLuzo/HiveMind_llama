@@ -1353,7 +1353,8 @@ async def run_planner(
         # raw text, so the format mismatch was invisible):
         _red = lambda _t: re.sub(
             r"(ghp_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}"
-            r"|\d{8,10}:AA[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{16,})",
+            r"|\d{8,10}:AA[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{16,}"
+            r"|hf_[A-Za-z0-9]{20,}|xox[bap]-[A-Za-z0-9-]{10,})",
             "***", str(_t or ""))
         logger.warning(
             "[PLANNER-PARSE] mode=%s subtasks=%d content_chars=%d thinking_chars=%d "
