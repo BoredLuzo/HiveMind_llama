@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.3.3] - 2026-10-07 (live-editing, unreleased)
+
+Telegram gateway deep-audit round + showcase fixes (owner-driven,
+edited on the branch, release cut at the end of the window):
+
+- takeover relay hardening: fazit on every end path, late-result relay
+  for never-adopted runs, silent catch-up on adoption (answer + tool
+  dedupe), no more bare "finished" lines
+- /gate: G1 force rides body overrides only (mid-run /gate off reaches
+  running UI runs); /gate off lifts the toml force floor instead of
+  silently degrading phone runs to deny; honest /gate, /help, /status
+  texts
+- visibility: duo_start model label, ctx meter milestones + compression
+  note, file-change lines, coder output deltas, own-path parity, 429
+  retry, journal cap resync (logical n + window base), adoption
+  state-sync, reattach wording
+- ask cards: Yes / No / Wait-later buttons on UI and Telegram (free
+  text stays for own commentary); ask cards state they are not the
+  approval gate
+- coder "takes no images" toggle (duo_coder_images_off); mmproj
+  toggles visible in the duo image block
+- banner byline back (by: Luzo), /stream 400 on empty body
+- git: credentials gate needs Username AND Email - empty git_email
+  silently blocked every auto-commit/push (found via live selftest)
+
 ## [1.3.1] - 2026-10-06
 
 Deep-audit hardening release: 34 findings across the whole harness fixed
