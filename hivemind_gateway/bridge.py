@@ -18,6 +18,7 @@ send() (the owner choke point).
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import time
@@ -1751,11 +1752,27 @@ class RunBridge:
                 return f"🔌 could not set: {exc}"
             if hasattr(self.ms, "telegram_approval_mode"):
                 self.ms.telegram_approval_mode = "ask" if _on else "off"
+            # OWNER OVERRIDE (2026-10-07, live "gate ausschalten am handy
+            # verhält sich komisch"): the chat command is the owner's voice
+            # - it lifts the gateway.toml force_approval_gate floor as
+            # well. Without this, /gate off degraded phone runs to DENY
+            # (floor re-pinned the gate: no questions, but shell/write/git
+            # silently refused) while the chat claimed approvals were off.
+            # Persisted in the gateway state; /gate ask|deny does NOT touch
+            # it, and a fresh install falls back to the toml default.
+            self.cfg = dataclasses.replace(
+                self.cfg, force_approval_gate=_on)
+            try:
+                self.state.data["gate_force"] = _on
+                self.state.save()
+            except (OSError, AttributeError, TypeError):
+                pass  # runtime override still active for this process
             return ("🛡 Approvals " + ("ON — approval cards for gated calls, "
-                    "everywhere (UI + phone)." if _on else
+                    "everywhere (UI + phone); phone runs gated again."
+                    if _on else
                     "OFF — gated calls run without asking, UI runs included "
-                    "(live, mid-run). Careful. Phone-STARTED runs keep the "
-                    "gate (safety force)."))
+                    "(live, mid-run). Careful. Phone-STARTED runs are "
+                    "ungated too (the safety force is lifted)."))
         arg = (arg or "").strip().lower()
         if arg in ("ask", "deny", "off"):
             try:
@@ -1777,11 +1794,14 @@ class RunBridge:
                     "the same setting.")
         cur = getattr(self.ms, "telegram_approval_mode", None)
         cur_txt = cur if cur in ("ask", "deny", "off") else "deny (default)"
-        return ("🛡 Approval mode (phone runs): " + cur_txt + "\n\n"
+        _floor = ("safety force ON" if self.cfg.force_approval_gate
+                  else "safety force lifted by /gate")
+        return ("🛡 Approval mode (phone runs): " + cur_txt + "\n"
+                + _floor + "\n\n"
                 "  • ask — gated calls wait for YOUR tap\n"
                 "  • deny — gated calls are auto-denied (safe default)\n"
                 "  • off — no gate force (engine global toggle decides)\n\n"
-                "Set with /gate ask|deny|off.")
+                "Set with /gate ask|deny|off; /gate on|off is the master.")
 
     async def workspace_text(self, arg: str) -> str:
         """/workspace <path> — set the workspace of the [TG] chat so

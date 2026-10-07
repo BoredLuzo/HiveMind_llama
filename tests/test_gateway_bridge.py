@@ -702,6 +702,7 @@ async def _main():
     await t_ux_round()
     await t_relay_hardening()
     await t_tg_visibility()
+    await t_gate_force_owner()
 
 
 # 2026-10-05 UX round: rich rendering, tappable approvals
@@ -1278,6 +1279,53 @@ async def t_tg_visibility():
     await br.mirror_tick()
     check("VIS: ask card says NOT the approval gate",
           any("NOT the approval gate" in m for m in ms.messages))
+
+
+# ── GATE FORCE OWNER OVERRIDE (2026-10-07): /gate off lifts the toml ───
+#    floor instead of silently degrading phone runs to deny
+async def t_gate_force_owner():
+    class GateHive(FakeHive):
+        def __init__(self):
+            super().__init__([])
+            self.settings_body = {"telegram_mirror_enabled": True,
+                                  "telegram_approval_mode": "off"}
+            self.sets = []
+
+        async def settings(self):
+            return dict(self.settings_body)
+
+        async def set_setting(self, key, value):
+            self.sets.append((key, value))
+            self.settings_body[key] = value
+            return FakeResponse(200, {"ok": True})
+
+    hive = GateHive()
+    br, st, ms = _mk("gwbr_gforce_", hive)
+
+    # baseline: the toml floor degrades 'off' to deny (safe default)
+    check("GF: floor degrades off -> deny",
+          br._effective_approval_mode({"telegram_approval_mode": "off"})
+          == "deny")
+
+    out = await br.gate_text("off")
+    check("GF: /gate off lifts the force",
+          br.cfg.force_approval_gate is False
+          and st.data.get("gate_force") is False)
+    check("GF: off reply states phone runs ungated",
+          "ungated too" in out)
+    check("GF: effective mode is really off now",
+          br._effective_approval_mode({"telegram_approval_mode": "off"})
+          == "off")
+    check("GF: engine keys written",
+          ("duo_action_approval_enabled", False) in hive.sets
+          and ("telegram_approval_mode", "off") in hive.sets)
+
+    out2 = await br.gate_text("on")
+    check("GF: /gate on restores the force",
+          br.cfg.force_approval_gate is True
+          and st.data.get("gate_force") is True)
+    check("GF: on reply states phone runs gated again",
+          "gated again" in out2)
 
 
 asyncio.run(_main())

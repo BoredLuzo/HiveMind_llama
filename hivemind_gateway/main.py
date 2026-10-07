@@ -921,6 +921,14 @@ async def run() -> int:
     token = resolve_token()
     acquire_instance_lock()
     state = GatewayState()
+    # /gate on|off is the OWNER's voice (2026-10-07): a persisted override
+    # on the toml force_approval_gate floor. Without it, /gate off silently
+    # degraded phone runs to DENY (the floor re-pinned the gate) while the
+    # chat claimed approvals were off - the "weird" the owner reported.
+    if "gate_force" in state.data:
+        cfg.force_approval_gate = bool(state.data.get("gate_force"))
+        log.info("gate force overridden by chat state: %s",
+                 cfg.force_approval_gate)
     api = TelegramApi(token)
     gw = Gateway(api, cfg, state)
     # R7 (owner, 1.3.2): cron - scheduled agent runs, persisted in the
