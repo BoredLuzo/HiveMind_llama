@@ -16,6 +16,7 @@ COMMAND_WHITELIST = {
     "shutdown": "shut down the PC (two-step confirm, owner-only)",
     "purge": "evict ALL models from VRAM (free the GPU)",
     "restrict": "phone runs restricted to web+reading+chat (on|off)",
+    "cron": "scheduled agent runs (add|list|del|run)",
     "status": "current run/status",
     "verbose": "toggle verbose output",
     "mode": "show/set the phone-side run mode (auto|chat|pipeline|automap|off)",
@@ -61,9 +62,11 @@ HELP_TEXT = (
     "— WORKSPACE, TOOLS & APPROVALS —\n"
     "/workspace <path> — working folder (must exist)\n"
     "/tools on|off — direct-chat tools for simple runs\n"
+    "/restrict on|off — phone-run tool restriction\n"
     "/gate — show approval settings\n"
     "/gate on|off — approvals everywhere ON/OFF (live, mid-run)\n"
     "/gate ask|deny|off — phone-run policy nuance\n"
+    "/cron — scheduled agent runs (add/list/del/run)\n"
     "\n"
     "— POWER —\n"
     "/purge — evict ALL models from VRAM (frees the GPU)\n"

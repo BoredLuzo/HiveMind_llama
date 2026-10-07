@@ -465,6 +465,65 @@ class Gateway:
                               "🔓 Phone runs unrestricted: full tools — gated "
                               "calls still ask for approval."),
                              reply_to_message_id=p.message_id)
+        elif name == "cron":
+            # R7 (owner, 1.3.2): scheduled agent runs. Every error is
+            # contained - /cron must never take the gateway down.
+            import time as _cron_time
+            mgr = getattr(self, "cron_manager", None)
+            a_c = (arg or "").strip()
+            try:
+                if not a_c or a_c in ("help", "list"):
+                    from hivemind_gateway.cron import cron_help
+                    _lines = [cron_help()]
+                    for _j in (mgr.jobs() if mgr else []):
+                        _nxt = _j.get("next_ts")
+                        _when = _cron_time.strftime(
+                            "%H:%M", _cron_time.localtime(_nxt)) if _nxt else "?"
+                        _lines.append(
+                            f"{_j.get('id')} [{_j.get('kind')}] next {_when} "
+                            f"({int(_j.get('fires') or 0)} fires): "
+                            f"{str(_j.get('prompt'))[:60]}")
+                    await self.reply(p.chat_id, "\n".join(_lines),
+                                     reply_to_message_id=p.message_id)
+                elif a_c.startswith("add "):
+                    from hivemind_gateway.cron import parse_spec
+                    _spec = parse_spec(a_c[4:].strip())
+                    if not _spec:
+                        await self.reply(
+                            p.chat_id,
+                            "❌ Unparseable — /cron add every 10m <prompt> | "
+                            "in 30m <prompt> | at 09:00 <prompt>",
+                            reply_to_message_id=p.message_id)
+                        return
+                    _ok, _note = mgr.add(_spec)
+                    await self.reply(p.chat_id, _note,
+                                     reply_to_message_id=p.message_id)
+                elif a_c.startswith("del "):
+                    _ok, _note = mgr.delete(a_c[4:].strip())
+                    await self.reply(p.chat_id, _note,
+                                     reply_to_message_id=p.message_id)
+                elif a_c.startswith("run "):
+                    _job = mgr.get(a_c[4:].strip())
+                    if not _job:
+                        await self.reply(p.chat_id, "❌ No such job.",
+                                         reply_to_message_id=p.message_id)
+                        return
+                    _task = asyncio.create_task(self.bridge.start_text_run(
+                        str(_job.get("prompt") or "")))
+                    _task.add_done_callback(
+                        lambda t: t.exception() and log.warning(
+                            "[CRON] manual run failed: %s", t.exception()))
+                    await self.reply(p.chat_id,
+                                     f"⏱ Job {_job.get('id')} fired now.",
+                                     reply_to_message_id=p.message_id)
+                else:
+                    await self.reply(p.chat_id,
+                                     "❌ /cron add|list|del|run — see /cron.",
+                                     reply_to_message_id=p.message_id)
+            except (HiveUnreachable, HTTPError, OSError) as _cron_cmd_exc:
+                await self.reply(p.chat_id,
+                                 f"🔌 engine unreachable: {_cron_cmd_exc}",
+                                 reply_to_message_id=p.message_id)
         elif name == "purge":
             # R4 (owner request): /purge kills ALL loaded models - instant
             # VRAM freed, next run reloads on demand.
@@ -834,6 +893,10 @@ async def run() -> int:
     state = GatewayState()
     api = TelegramApi(token)
     gw = Gateway(api, cfg, state)
+    # R7 (owner, 1.3.2): cron - scheduled agent runs, persisted in the
+    # gateway state, fired by the poll loop as normal phone runs.
+    from hivemind_gateway.cron import CronManager
+    gw.cron_manager = CronManager(state, gw.bridge)
     # 2026-10-05: the startup filter only carries the ENV token — a token
     # from the Credential Manager would never be in the literal scrub
     # list. Feed the RESOLVED token to the same filter (its docstring

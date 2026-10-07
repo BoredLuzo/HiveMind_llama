@@ -27,6 +27,34 @@ async def _inline_tool_subagent_research(args: dict, workspace: Path, workspace_
             tool="subagent_research")
 
 
+async def _inline_tool_remember(args: dict, _workspace: Path, _workspace_lock: str | None) -> str:
+    """R4 (owner): the agent saves durable facts itself - same HiveMindMemory
+    the auto-extraction feeds, so the fact is injected into every later run.
+    Empty value deletes the key."""
+    key = str(args.get("key") or "").strip()
+    value = str(args.get("value") or "").strip()
+    if not key:
+        return _tool_error_response(
+            "MISSING_ARG", "key is required", tool="remember")
+    try:
+        from core import state as _cs
+        _mem = getattr(getattr(_cs, "pipeline", None), "memory", None)
+        if _mem is None:
+            return _tool_error_response(
+                "MEMORY_UNAVAILABLE", "memory is not initialized",
+                tool="remember")
+        if value:
+            _mem.remember(key, value)
+            return f"[remember] {key} = {value}"
+        if _mem.forget(key):
+            return f"[remember] {key} deleted."
+        return f"[remember] {key} was not stored."
+    except (OSError, ValueError, TypeError) as _rm_err:
+        return _tool_error_response(
+            "REMEMBER_FAILED", f"memory write failed: {_rm_err}",
+            tool="remember")
+
+
 async def _inline_tool_get_datetime(args: dict, _workspace: Path, _workspace_lock: str | None) -> str:
     """Return the current local date, time, weekday and timezone offset."""
     from datetime import datetime

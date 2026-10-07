@@ -316,6 +316,28 @@ _INLINE_CODING_TOOLS = [
         ),
         "parameters": {"type": "object", "properties": {}, "required": []}
     }},
+    {
+        "type": "function",
+        "function": {
+            # REMEMBER TOOL (2026-10-06, owner): the agent saves durable
+            # facts itself - same HiveMindMemory the auto-extraction feeds,
+            # so the fact is injected into every later run.
+            "name": "remember",
+            "description": "Save a durable fact to long-term memory "
+                           "(key/value). Use for stable user/project facts "
+                           "the user wants kept across chats ('the_name = "
+                           "Pumuckel', 'deploy = 1.3.2'). An empty value "
+                           "DELETES the key.",
+            "parameters": {"type": "object", "properties": {
+                "key": {"type": "string",
+                        "description": "Short key, e.g. 'deploy' or "
+                                       "'user_name'"},
+                "value": {"type": "string",
+                          "description": "The fact to store. Omit/empty to "
+                                         "DELETE the key."}
+            }, "required": ["key"]}
+        }
+    },
     {"type": "function", "function": {
         # SUBAGENT-LITE (2026-08-24, Feasibility-Report Option A)
         "name": "subagent_research",

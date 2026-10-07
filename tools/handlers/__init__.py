@@ -39,6 +39,7 @@ from .linting import _auto_lint_result
 from .linting import _pyright_lint_result
 from .linting import _resolve_pyright_cmd
 from .misc import _inline_tool_get_datetime
+from .misc import _inline_tool_remember
 from .misc import _inline_tool_subagent_research
 from .misc import _inline_tool_task_complete
 

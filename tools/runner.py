@@ -38,6 +38,7 @@ from tools.handlers import (
     _inline_tool_get_background_output,
     _inline_tool_stop_background,
     _inline_tool_get_datetime,
+    _inline_tool_remember,
     _inline_tool_task_complete)
 
 from tools.browser import browser_tool as _browser_tool
@@ -358,6 +359,7 @@ _phone_source_run: _contextvars.ContextVar[bool] = \
 _PHONE_SAFE_TOOLS = frozenset({
     "read_file", "get_signatures", "find_references", "list_dir",
     "find_files", "search_code", "get_background_output", "get_datetime",
+    "remember",
     "ask_user", "task_complete", "web_search", "web_fetch",
 })
 
@@ -1001,6 +1003,7 @@ _INLINE_TOOL_HANDLER_MAP = {
     "git_commit": _inline_tool_git_commit,
     "subagent_research": _inline_tool_subagent_research,
     "get_datetime": _inline_tool_get_datetime,
+    "remember": _inline_tool_remember,
     "ask_user": _handle_ask_user,
     "task_complete": _inline_tool_task_complete,
     "browser": _browser_tool,
