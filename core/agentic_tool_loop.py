@@ -354,6 +354,13 @@ class AgenticToolLoop(ToolLoop):
                         try: _sse_chunk = json.loads(_sse_data)
                         except Exception: continue
                         _sse_usage = _sse_chunk.get("usage")
+                        # DECODE-RATE (2026-10-07): llama.cpp ships the real
+                        # per-call decode speed in the final chunk timings -
+                        # far more honest than any event-gap estimate.
+                        _sse_timings = _sse_chunk.get("timings") or {}
+                        if _sse_timings.get("predicted_per_second"):
+                            self.round_state.decode_tps = float(
+                                _sse_timings["predicted_per_second"])
                         if _sse_usage and _sse_usage.get("completion_tokens"):
                             # D2-DIAG (2026-08-21): cached_tokens from
                             # prompt_tokens_details → Cache-Reuse pro Request messbar.
@@ -368,6 +375,9 @@ class AgenticToolLoop(ToolLoop):
                                 "cached_tokens": _cached,
                                 "gen_ms": int((time.monotonic() - _gen_t0) * 1000),
                             }
+                            if getattr(self.round_state, "decode_tps", None):
+                                _dr_usage_final["decode_tps"] = float(
+                                    self.round_state.decode_tps)
                             # CACHE-TELEMETRY (2026-09-04): reuse% per coder round.
                             # prompt gross + cached klein => Prefix/Suffix-Cache
                             # was invalidated (in-place mutation, compression).

@@ -131,6 +131,7 @@ let S = {
   perfFirstTokenAt: 0,
   perfActiveMs: 0,          // FIX 2026-10-07: active decode time only
   perfLastTokAt: 0,
+  perfDecodeEma: 0,
   perfToolCalls: 0, perfToolMs: 0,
   perfToolLabel: '', perfToolStart: 0, perfLastToolTxt: '--',
   perfChars: 0,
@@ -4967,6 +4968,7 @@ function _perfResetRuntimeState() {
   S.perfFirstTokenAt = 0;
   S.perfActiveMs = 0;
   S.perfLastTokAt = 0;
+  S.perfDecodeEma = 0;
   S.perfToolCalls = 0; S.perfToolMs = 0;
   S.perfToolLabel = ''; S.perfToolStart = 0; S.perfLastToolTxt = '--';
   S.perfChars = 0;
@@ -4999,6 +5001,7 @@ function _pbbEnsure() {
         + '<span class="ctx-perf-item live" id="pbb-ctxreuse">reuse: --</span>'
         + '<span class="ctx-perf-item live" id="pbb-tok">out: --</span>'
         + '<span class="ctx-perf-item live" id="pbb-rate">tok/s: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-decode">decode: --</span>'
 
       + '</div>'
       + '<div class="ctx-perf">'
@@ -5072,9 +5075,13 @@ function _perfRender(finalized) {
     }
     if ((_e = _qId('pbb-tok'))) _e.textContent = 'out: ' + (_outT > 0 ? _fmtTokens(_outT) : '--');
     if ((_e = _qId('pbb-rate'))) _e.textContent = (_rateVal > 0 ? _rateVal.toFixed(1) : '--') + '/s';
-    // cleaned decode pill removed (2026-10-07, owner): the event-pulse
-    // measurement is too noisy against usage_meta token counts - the plain
-    // rate stays the single source until llama.cpp timings are wired through.
+    // DECODE-RATE (2026-10-07): the cleaned figure comes from the engine
+    // (llama.cpp predicted_per_second, EMA over coder calls) - reliable,
+    // unlike the earlier event-pulse estimate.
+    if ((_e = _qId('pbb-decode'))) {
+      var _dv = Number(S.perfDecodeEma || 0);
+      _e.textContent = 'decode: ' + (_dv > 0 ? _dv.toFixed(1) + ' t/s' : '--');
+    }
     // PERF-CONSOLIDATION: consistent '--' placeholders until the first usage_meta arrives
     if ((_e = _qId('pbb-in'))) _e.textContent = S.runPromptTokens > 0 ? ('in: ' + _fmtTokens(S.runPromptTokens)) : 'in: --';
     if ((_e = _qId('pbb-cached')))
@@ -5745,6 +5752,15 @@ function handleEvent(d) {
   }
   else if (d.type === 'usage_meta') {
     if (d.completion_tokens) S.perfRealTokens = (S.perfRealTokens || 0) + parseInt(d.completion_tokens, 10);
+    // DECODE-RATE (2026-10-07): the engine forwards llama.cpp timings
+    // (predicted_per_second) per coder call - EMA smooths per-call noise.
+    if (d.decode_tps) {
+      var _dt = parseFloat(d.decode_tps);
+      if (isFinite(_dt) && _dt > 0) {
+        S.perfDecodeEma = S.perfDecodeEma > 0 ? (S.perfDecodeEma * 0.7 + _dt * 0.3) : _dt;
+        _perfRender(false);
+      }
+    }
     // TOKEN-TRACKER UI (2026-08-25): collect the input/cache dimension too —
     // previously discarded even though the server accumulates it per phase.
     if (d.prompt_tokens) S.runPromptTokens = (S.runPromptTokens || 0) + parseInt(d.prompt_tokens, 10);
