@@ -1479,6 +1479,11 @@ async def stream(req: Request):
                             pass
                     if _state["jr_reg"] is not None:
                         _state["jr_reg"]["frames"].append(_chunk)
+                        # TG-AUDIT (2026-10-07): logical frame count - the
+                        # window slice below keeps len(frames) pinned at the
+                        # cap, clients need the true count to stay in sync.
+                        _state["jr_reg"]["n_total"] = int(
+                            _state["jr_reg"].get("n_total") or 0) + 1
                         _state["jr_reg"]["ts"] = time.time()
                         if len(_state["jr_reg"]["frames"]) > _RUN_JOURNAL_MAX_FRAMES:
                             _state["jr_reg"]["frames"] = _state["jr_reg"]["frames"][-_RUN_JOURNAL_MAX_FRAMES:]
@@ -1611,14 +1616,22 @@ async def run_journal(run_id: str = "", after: int = 0):
         if not reg:
             return {"active": False}
         _frames = reg["frames"]
+        # TG-AUDIT (2026-10-07): `base` is the window's logical offset -
+        # once the cap slices the deque, frame[0] is NOT logical frame 0
+        # anymore. Clients compute the delta as frames[after-base:] and
+        # track `n` (the logical count), not len(frames). Without a cap
+        # base==0 and everything behaves exactly as before.
+        _n_total = int(reg.get("n_total") or len(_frames))
+        _base = max(0, _n_total - len(_frames))
         return {
             "active": True,
             "run_id": run_id,
-            "n": len(_frames),
+            "n": _n_total,
+            "base": _base,
             "done": bool(reg["done"]),
             "aborted": bool(reg["aborted"]),
             "ts": float(reg["ts"]),
-            "frames": list(_frames[max(0, int(after)):]),
+            "frames": list(_frames[max(0, int(after) - _base):]),
         }
     except Exception as e:
         return JSONResponse({"active": False, "error": str(e)[:200]}, status_code=500)

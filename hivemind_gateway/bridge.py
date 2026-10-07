@@ -98,6 +98,9 @@ class RunBridge:
         # relay only for runs finished after the gateway came up).
         # _handed_over also up front: the fazit path pops it on bridges
         # that never ran a text run.
+        # TG-AUDIT: own-run visibility state (ctx milestones etc.)
+        self._own_ctx_marks: set = set()
+        self._own_ctx_compression_noted: bool = False
         self._handed_over: dict[str, str] = {}
         self._late_relayed: set[str] = set()
         self._proc_start: float = time.time()
@@ -473,6 +476,8 @@ class RunBridge:
 
         parts: list[str] = []
         self._last_tool_line = ""  # Tool-Relay dedupe reset per run
+        self._own_ctx_marks = set()
+        self._own_ctx_compression_noted = False
         self._tool_relay_seen = {}  # R6: repeat-counter reset per run
         self._skip_finish = False  # R4: stream-broke handover skips _finish
         # R4 relay: phase/plan/thinking visibility on the phone
@@ -556,6 +561,42 @@ class RunBridge:
                     if _st:
                         _msg += f": {_st[:110]}"
                     await self.ms.send_message(_msg)
+                elif etype == "duo_start":
+                    # TG-AUDIT: model visibility parity with the takeover
+                    # path - phone runs announce their model/ctx/VRAM too.
+                    _ol = str(ev.get("label") or "").strip()
+                    if _ol:
+                        await self.ms.send_message("🤖 " + _ol[:200])
+                elif etype == "ctx_meter":
+                    try:
+                        _oe = int(ev.get("est_tokens") or 0)
+                        _olim = int(ev.get("ctx_limit") or 0)
+                    except (TypeError, ValueError):
+                        _oe = _olim = 0
+                    if _oe > 0 and _olim > 0:
+                        _opct = _oe * 100 // _olim
+                        for _th in (50, 75, 90):
+                            if _opct >= _th and _th not in self._own_ctx_marks:
+                                self._own_ctx_marks.add(_th)
+                                await self.ms.send_message(
+                                    f"🧮 Context {_opct}% "
+                                    f"({_oe // 1024}k/{_olim // 1024}k tokens)")
+                        if ev.get("compressing") \
+                                and not self._own_ctx_compression_noted:
+                            self._own_ctx_compression_noted = True
+                            await self.ms.send_message(
+                                "🗜 Context compressing (older turns are "
+                                "being summarized to stay under the "
+                                "limit)…")
+                elif etype == "file_change":
+                    _ofp = str(ev.get("path") or "").replace(
+                        "\\", "/").split("/")[-1]
+                    _ofc = (f"📝 {_ofp} ({ev.get('op') or 'write'}"
+                            + (f", {ev.get('lines')} lines)"
+                               if ev.get("lines") else ")"))
+                    if _ofc != self._last_tool_line:
+                        await self.ms.send_message(_ofc)
+                        self._last_tool_line = _ofc
                 elif etype == "thinking_token":
                     # R4: coder reasoning between tool calls - tail per tick
                     tick_think += str(ev.get("content") or "")
@@ -1195,6 +1236,10 @@ class RunBridge:
             # pre-adoption frames SILENTLY - the answer accumulates so
             # the fazit relay at done carries the FULL result, and tool
             # repeats dedupe against pre-adoption calls. No sends here.
+            _catchup_pct = 0
+            _catchup_comp = False
+            _catchup_lim = 0
+            _duo_label = ""
             for _raw in (j.get("frames") or []):
                 if not isinstance(_raw, str):
                     continue
@@ -1214,11 +1259,45 @@ class RunBridge:
                     if _tl:
                         _saw = m.setdefault("tool_relay_seen", {})
                         _saw[_tl] = _saw.get(_tl, 0) + 1
+                elif _cev.get("type") == "ctx_meter":
+                    # TG-AUDIT: STATE events are silently skipped in the
+                    # replay (no spam), but the mirror must still land on
+                    # the CURRENT state - milestones already passed are
+                    # pre-marked and a live compression is announced once.
+                    try:
+                        _e = int(_cev.get("est_tokens") or 0)
+                        _l = int(_cev.get("ctx_limit") or 0)
+                    except (TypeError, ValueError):
+                        _e = _l = 0
+                    if _e > 0 and _l > 0:
+                        _catchup_pct = max(_catchup_pct, _e * 100 // _l)
+                        _catchup_lim = _l
+                        _catchup_comp = bool(_cev.get("compressing"))
+                elif _cev.get("type") == "duo_start":
+                    _dl = str(_cev.get("label") or "").strip()
+                    if _dl:
+                        _duo_label = _dl
+            if _catchup_pct:
+                m["ctx_marks"] = {t for t in (50, 75, 90)
+                                  if _catchup_pct >= t}
 
-            await self.ms.send_message(
-                f"📢 Engine run taken over (mirror): {rid}\n"
-                "Your texts are queued (steering), approvals come "
-                "to you here. /stop aborts it.")
+            _note = (f"📢 Engine run taken over (mirror): {rid}\n"
+                     "Your texts are queued (steering), approvals come "
+                     "to you here. /stop aborts it.")
+            if len(j.get("frames") or []) > 80:
+                _note = ("📢 Re-attached to engine run "
+                         f"{rid} (gateway restarted) - mid-run context "
+                         "was rebuilt silently.\n"
+                         "Steering queued, approvals come here. "
+                         "/stop aborts it.")
+            if _duo_label:
+                _note += "\n🤖 " + _duo_label[:200]
+            await self.ms.send_message(_note)
+            if _catchup_comp and _catchup_lim:
+                await self.ms.send_message(
+                    "🗜 Context is compressing "
+                    f"(~{_catchup_pct}% of {_catchup_lim // 1024}k) - "
+                    "started before the takeover.")
             m["after"] = int(j.get("n") or 0)
             return  # next tick streams the delta
 
@@ -1246,11 +1325,18 @@ class RunBridge:
                     KeyError, TelegramApiError):
                 pass  # the mirrored run's own relay continues regardless
 
-        # delta frames since last tick
+        # delta frames since last tick (TG-AUDIT 2026-10-07): `n` is the
+        # LOGICAL frame count and `base` the window offset once the
+        # engine's 20k-frame cap sliced old frames away. The old
+        # len(frames)-tracking went BLIND at the cap: the length stayed
+        # pinned while logical frames kept flowing, so every delta - tool
+        # lines, statuses, the fazit answer - was lost forever.
         frames = j.get("frames") or []
-        after = m["after"]
-        new_frames = frames[after:] if after < len(frames) else []
-        m["after"] = len(frames)
+        _base = int(j.get("base") or 0)
+        after = int(m["after"] or 0)
+        _start = after - _base
+        new_frames = frames[max(0, _start):] if _start < len(frames) else []
+        m["after"] = int(j.get("n") or (_base + len(frames)))
         done_reason = self._parse_done(new_frames)
         last_status = ""
         tool_lines: list[str] = []

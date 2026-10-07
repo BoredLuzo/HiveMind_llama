@@ -69,6 +69,13 @@ class TelegramApi:
                     and isinstance(data["parameters"], dict) \
                     and "retry_after" in data["parameters"]:
                 retry_after = int(data["parameters"]["retry_after"])
+            # TG-AUDIT (2026-10-07): mirror ticks send BUNDLES (tool lines,
+            # file changes, ctx meter) - they trip the per-chat flood limit
+            # and every bundled line was silently lost. One patient retry
+            # after Telegram's own retry_after (capped) instead.
+            if retry_after:
+                await asyncio.sleep(min(35.0, max(1.0, float(retry_after))))
+                return await self._call(method, **params)
             raise TelegramApiError(method, params_desc, retry_after)
         result = data.get("result")
         return result if isinstance(result, dict) else {"result": result}

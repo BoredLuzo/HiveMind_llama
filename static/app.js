@@ -5600,6 +5600,11 @@ function _journalInitAttach() {
       S._sseFrameSeq = 0; S._sseBuf = ''; S._sawDoneEvent = false;
       _journalNote(j.done ? 'Run history restored.' : 'Attached to the running job (live).');
       for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
+      // TG-AUDIT (2026-10-07): `n` is the LOGICAL frame count while the
+      // window only holds the newest slice (20k cap) - tail polls must
+      // ask from the logical position, not the window length.
+      S._sseFrameSeq = (typeof j.n === 'number' && j.frames.length)
+        ? j.n : (S._sseFrameSeq || 0);
       if (!S._sawDoneEvent && !j.done && !j.aborted) _journalStartTail(j.run_id);
       else if (j.aborted) _journalNote('Run was interrupted (connection/tab). Send a message to resume.');
     })

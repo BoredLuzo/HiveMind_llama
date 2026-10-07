@@ -703,6 +703,7 @@ async def _main():
     await t_relay_hardening()
     await t_tg_visibility()
     await t_gate_force_owner()
+    await t_tg_audit()
 
 
 # 2026-10-05 UX round: rich rendering, tappable approvals
@@ -1328,7 +1329,140 @@ async def t_gate_force_owner():
           "gated again" in out2)
 
 
+# ── TG-AUDIT (2026-10-07): journal cap resync, adoption state-sync, ────
+#    own-path visibility, 429 retry
+async def t_tg_audit():
+    class AuditHive(FakeHive):
+        def __init__(self):
+            super().__init__([])
+            self.settings_body = {"telegram_mirror_enabled": True}
+            self.journal_body = {"active": False}
+            self.pending_body = {"active": False}
+
+        async def settings(self):
+            return dict(self.settings_body)
+
+        async def journal(self, run_id=""):
+            self.journal_calls.append(run_id)
+            return dict(self.journal_body)
+
+        async def pending_approval(self, run_id):
+            return FakeResponse(200, dict(self.pending_body))
+
+    # 1) CAP RESYNC: base>0 window slices still produce deltas and the
+    #    fazit fires (the old len()-tracking went blind at the cap).
+    hive = AuditHive()
+    hive.journal_body = {"active": True, "run_id": "cap-1",
+                         "done": False, "aborted": False,
+                         "ts": time.time(), "n": 5, "base": 0,
+                         "frames": ['data: {"type": "run_id", '
+                                    '"run_id": "cap-1"}']}
+    br, st, ms = _mk("gwbr_cap_", hive)
+    hive.journal_body["ts"] = time.time()
+    await br.mirror_tick()  # adoption, after=5
+    hive.journal_body = {"active": True, "run_id": "cap-1",
+                         "done": True, "aborted": False,
+                         "ts": time.time(), "n": 102, "base": 100,
+                         "frames": ['data: {"type": "token", "content": '
+                                    '"Restantwort nach Cap."}',
+                                    'data: {"type": "done", '
+                                    '"stop_reason": "completed"}']}
+    await br.mirror_tick()
+    check("AUDIT: cap-window delta still delivered",
+          any("Restantwort nach Cap." in m for m in ms.messages))
+    check("AUDIT: fazit after cap resync",
+          any("Mirror run completed" in m for m in ms.messages))
+
+    # 2) ADOPTION STATE-SYNC: state events replayed silently, but the
+    #    current state lands (label, compression note, pre-marks).
+    frames = ['data: {"type": "run_id", "run_id": "sync-1"}',
+              'data: {"type": "duo_start", "label": "Agentic - qwen3.5 '
+              'solo (4.1 GB @ ctx=79k)"}',
+              'data: {"type": "ctx_meter", "est_tokens": 62000, '
+              '"ctx_limit": 80896, "compressing": true}']
+    frames += ['data: {"type": "status", "content": "working"}'
+               ] * 90  # > 80 frames -> reattach wording
+    hive2 = AuditHive()
+    hive2.journal_body = {"active": True, "run_id": "sync-1",
+                          "done": False, "aborted": False,
+                          "ts": time.time(), "n": len(frames),
+                          "base": 0, "frames": frames}
+    br2, st2, ms2 = _mk("gwbr_sync_", hive2)
+    hive2.journal_body["ts"] = time.time()
+    await br2.mirror_tick()
+    check("AUDIT: reattach wording after restart-sized journal",
+          any("Re-attached" in m and "gateway restarted" in m
+              for m in ms2.messages))
+    check("AUDIT: duo_start label caught up",
+          any("qwen3.5 solo" in m for m in ms2.messages))
+    check("AUDIT: compression catch-up note",
+          any("compressing" in m and "before the takeover" in m
+              for m in ms2.messages))
+    m2 = br2._mirror()
+    check("AUDIT: milestones pre-marked (50+75)",
+          {50, 75}.issubset(m2["ctx_marks"]))
+    hive2.journal_body["frames"] = frames + [
+        'data: {"type": "ctx_meter", "est_tokens": 61000, '
+        '"ctx_limit": 80896, "compressing": true}']
+    hive2.journal_body["n"] = len(hive2.journal_body["frames"])
+    before2 = len(ms2.messages)
+    await br2.mirror_tick()
+    check("AUDIT: no ctx spam at same level",
+          sum(1 for m in ms2.messages[before2:]
+              if "Context " in m and "tokens" in m) == 0)
+
+    # 3) OWN-PATH VISIBILITY: phone runs get label/ctx/file lines too.
+    ev = [{"type": "run_id", "run_id": "own-9"},
+          {"type": "duo_start", "label": "Agentic - spark solo (2 GB)"},
+          {"type": "ctx_meter", "est_tokens": 42000, "ctx_limit": 80896,
+           "compressing": False},
+          {"type": "file_change", "path": "C:/ws/src/main.ts",
+           "op": "write", "lines": 40, "content": "x"},
+          {"type": "token", "content": "fertig."},
+          {"type": "done", "stop_reason": "completed"}]
+    br3, st3, ms3 = _mk("gwbr_ownvis_", FakeHive(ev))
+    await br3.start_text_run("q")
+    j3 = "\n".join(ms3.messages)
+    check("AUDIT: own run duo_start label", "spark solo" in j3)
+    check("AUDIT: own run ctx milestone",
+          any("Context 51%" in m for m in ms3.messages))
+    check("AUDIT: own run file change", "main.ts (write, 40 lines)" in j3)
+
+
+def t_429_retry():
+    import hivemind_gateway.telegram_api as ta
+
+    class _R:
+        def __init__(self, body):
+            self._b = body
+
+        def json(self):
+            return self._b
+
+    calls = {"n": 0}
+
+    class _C:
+        async def post(self, url, json=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _R({"ok": False, "description": "Too Many Requests",
+                           "parameters": {"retry_after": 1}})
+            return _R({"ok": True, "result": {"message_id": 7}})
+
+    api = ta.TelegramApi("dummy")
+
+    async def _fake_http():
+        return _C()
+
+    api._http = _fake_http
+    out = asyncio.run(api.send_message(1, "hi"))
+    check("AUDIT: 429 retried after retry_after",
+          out.get("message_id") == 7)
+    check("AUDIT: exactly one retry", calls["n"] == 2)
+
+
 asyncio.run(_main())
+t_429_retry()
 print()
 print(f"passed={passed} failed={failed}")
 sys.exit(0 if failed == 0 else 1)
