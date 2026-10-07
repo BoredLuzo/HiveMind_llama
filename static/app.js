@@ -129,6 +129,8 @@ let S = {
   askUserAutoAnswer: 'Use best judgment, document decision in commit message.',
   perfRunStartedAt: 0,
   perfFirstTokenAt: 0,
+  perfActiveMs: 0,          // FIX 2026-10-07: active decode time only
+  perfLastTokAt: 0,
   perfChars: 0,
   perfEstTokens: 0,
   perfRealTokens: 0,
@@ -3078,7 +3080,7 @@ function _updatePlannerTokRate() {
   if (!_pb) return;
   var _realRate = 0;
   if (S.perfRealTokens > 0 && S.perfFirstTokenAt) {
-    _realRate = S.perfRealTokens / Math.max(0.25, (Date.now() - S.perfFirstTokenAt) / 1000);
+    _realRate = _perfRealRate();
   }
   var _t = S.perfRealTokens > 0 ? S.perfRealTokens : (S.perfEstTokens || 0);
   var _r = _realRate > 0 ? _realRate.toFixed(1) + ' t/s' : (S.perfTokRate > 0 ? S.perfTokRate.toFixed(1) + ' t/s~' : '');
@@ -4950,6 +4952,8 @@ function _perfResetRuntimeState() {
   var _now = Date.now();
   S.perfRunStartedAt = _now;
   S.perfFirstTokenAt = 0;
+  S.perfActiveMs = 0;
+  S.perfLastTokAt = 0;
   S.perfChars = 0;
   S.perfEstTokens = 0;
   S.perfRealTokens = 0;
@@ -5016,7 +5020,7 @@ function _perfRender(finalized) {
   var _tokRate = Number(S.perfTokRate || 0);
   var _realRate = 0;
   if (S.perfRealTokens > 0 && S.perfFirstTokenAt) {
-    _realRate = S.perfRealTokens / Math.max(0.25, (Date.now() - S.perfFirstTokenAt) / 1000);
+    _realRate = _perfRealRate();
   }
   // GEN-TIME-FIX: final -> prefer the real generation rate (without tool latency)
   var _rateVal = (finalized && _tokRate > 0) ? _tokRate : (_realRate > 0 ? _realRate : _tokRate);
@@ -5082,7 +5086,14 @@ function _perfOnToken(content) {
   if (!content) return;
   if (!S.perfRunStartedAt) _perfResetRuntimeState();
   var _now = Date.now();
-  if (!S.perfFirstTokenAt) S.perfFirstTokenAt = _now;
+  if (!S.perfFirstTokenAt) { S.perfFirstTokenAt = _now; S.perfLastTokAt = _now; }
+  // FIX 2026-10-07 (owner: "5.0 t/s real ist ass"): wall-clock from the
+  // first token includes tool runs and processing gaps. Count only
+  // ACTIVE decode intervals - gaps >= 2 s between token events are
+  // excluded, so the rate shows the model's real decode speed.
+  var _gap = _now - (S.perfLastTokAt || _now);
+  if (_gap >= 0 && _gap < 2000) S.perfActiveMs += _gap;
+  S.perfLastTokAt = _now;
   var _chars = String(content).length;
   if (_chars <= 0) return;
   S.perfChars += _chars;
@@ -5101,6 +5112,14 @@ function _perfOnToken(content) {
     }
   }
   _perfRender(false);
+}
+
+function _perfRealRate() {
+  // FIX 2026-10-07: tokens / ACTIVE decode time (wall-clock gaps >= 2 s
+  // between token events excluded). Falls back to 0 while no active
+  // time has accumulated yet.
+  if (!S.perfRealTokens || !(S.perfActiveMs > 0)) return 0;
+  return S.perfRealTokens / Math.max(0.25, S.perfActiveMs / 1000);
 }
 
 function _perfOnCtxMeter(estTokens, ctxLimit, compressing, realTokens, cachedTokens) {
