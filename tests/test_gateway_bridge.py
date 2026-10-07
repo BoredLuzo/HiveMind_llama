@@ -1338,6 +1338,12 @@ async def t_tg_audit():
             self.settings_body = {"telegram_mirror_enabled": True}
             self.journal_body = {"active": False}
             self.pending_body = {"active": False}
+            self.decided = []
+
+        async def decide_approval(self, run_id, answer, decision_id="",
+                                  tool=""):
+            self.decided.append((run_id, answer, decision_id, tool))
+            return FakeResponse(200, {"routed": "pause"})
 
         async def settings(self):
             return dict(self.settings_body)
@@ -1427,6 +1433,44 @@ async def t_tg_audit():
     check("AUDIT: own run ctx milestone",
           any("Context 51%" in m for m in ms3.messages))
     check("AUDIT: own run file change", "main.ts (write, 40 lines)" in j3)
+
+    # 4) ASK YES/NO BUTTONS (owner: "nicht YES abtippen"): a yes/no-shaped
+    #    ask card carries tappable buttons riding the decide path.
+    hive4 = AuditHive()
+    hive4.journal_body = {"active": True, "run_id": "ask-1",
+                          "done": False, "aborted": False,
+                          "ts": time.time(), "n": 1, "base": 0,
+                          "frames": ['data: {"type": "run_id", '
+                                     '"run_id": "ask-1"}']}
+    hive4.pending_body = {"active": True, "tool": "run_bash",
+                          "kind": "ask",
+                          "preview": "[DESTRUCTIVE GATE] run_bash requires "
+                                     "confirmation: rm -rf node_modules\n"
+                                     "Reply with 'yes' to confirm or 'no' "
+                                     "to decline.",
+                          "decision_id": "d7"}
+    br4, st4, ms4 = _mk("gwbr_askbtn_", hive4)
+    hive4.journal_body["ts"] = time.time()
+    await br4.mirror_tick()   # adoption (returns early)
+    await br4.mirror_tick()   # card tick
+    _kb = ms4.markups[-1] or {}
+    _btns = [b for row in (_kb.get("inline_keyboard") or []) for b in row]
+    check("ASKBTN: yes/no keyboard on destructive ask card",
+          any(b.get("callback_data") == "ask:ask-1:yes" for b in _btns)
+          and any(b.get("callback_data") == "ask:ask-1:no" for b in _btns))
+    toast = await br4.approval_callback("cb1", "ask:ask-1:yes")
+    check("ASKBTN: yes button decides via decide path",
+          hive4.decided == [("ask-1", "yes", "d7", "run_bash")]
+          and "yes" in toast)
+    check("ASKBTN: confirmation line sent",
+          any("Confirmed (yes)" in m for m in ms4.messages))
+    # open question (no yes/no shape) stays a pure text card
+    hive4.pending_body = {"active": True, "tool": "ask_user",
+                          "kind": "ask", "preview": "Postgres or sqlite?",
+                          "decision_id": "d8"}
+    await br4.mirror_tick()
+    check("ASKBTN: open question has no keyboard",
+          ms4.markups[-1] is None)
 
 
 def t_429_retry():

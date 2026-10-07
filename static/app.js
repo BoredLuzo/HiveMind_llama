@@ -4650,6 +4650,24 @@ function _renderAskCard(d) {
     if (!_t) { _inp.focus(); _inp.style.borderColor = '#e06060'; return; }
     _sendAnswer(_t);
   };
+  // YES/NO BUTTONS (2026-10-07, owner: "nicht YES abtippen"): yes/no-
+  // shaped questions (the destructive gate) get tappable answers; the
+  // text field stays for own commentary ("yes, but skip the force flag").
+  var _askText = (d.question || d.preview || '').toLowerCase();
+  var _yBtn = null, _nBtn = null;
+  if (_askText.indexOf('yes') !== -1 && _askText.indexOf('no') !== -1 &&
+      (_askText.indexOf('confirm') !== -1 || _askText.indexOf('reply with') !== -1)) {
+    _yBtn = document.createElement('button');
+    _yBtn.className = 'ghost';
+    _yBtn.style.cssText = 'font-size:10px;padding:5px 14px;border:1px solid #4dcf7f88;color:#4dcf7f';
+    _yBtn.textContent = '\u2705 Yes';
+    _yBtn.onclick = function() { _sendAnswer('yes'); };
+    _nBtn = document.createElement('button');
+    _nBtn.className = 'ghost';
+    _nBtn.style.cssText = 'font-size:10px;padding:5px 14px;border:1px solid #e0606088;color:#e06060';
+    _nBtn.textContent = '\u26D4 No';
+    _nBtn.onclick = function() { _sendAnswer('no'); };
+  }
   var _skip = document.createElement('button');
   _skip.className = 'ghost';
   _skip.style.cssText = 'font-size:10px;padding:5px 10px;border:1px solid #f0ad4e55;color:#f0ad4e';
@@ -4696,6 +4714,8 @@ function _renderAskCard(d) {
     if (e.key === 'Enter') { e.preventDefault(); _send.click(); }
   });
   _row.appendChild(_send);
+  if (_yBtn) _row.appendChild(_yBtn);
+  if (_nBtn) _row.appendChild(_nBtn);
   _row.appendChild(_skip);
   _row.appendChild(_tg);
   _c.appendChild(_lbl);

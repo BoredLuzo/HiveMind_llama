@@ -1527,13 +1527,34 @@ class RunBridge:
                     # ASK-USER ON THE PHONE (2026-10-06, owner): an agent
                     # question is relayed as a TEXT card - the reply IS the
                     # answer (free text beats 1/3 for open questions).
-                    await self.ms.send_message(
-                        f"❓ The agent asks (run {rid})\n\n"
-                        f"{preview}\n\n"
-                        "Reply with your answer as text — it goes straight "
-                        "back to the agent.\n"
-                        "(This is the agent's own question — NOT the "
-                        "approval gate.)")
+                    # YES/NO BUTTONS (2026-10-07, owner: "nicht YES
+                    # abtippen"): a yes/no-shaped question (destructive
+                    # gate) gets tappable buttons; free text still wins
+                    # for own commentary.
+                    _ask_low = preview.lower()
+                    if "yes" in _ask_low and "no" in _ask_low and (
+                            "confirm" in _ask_low or "reply with" in _ask_low):
+                        await self.ms.send_message(
+                            f"❓ The agent asks (run {rid})\n\n"
+                            f"{preview}\n\n"
+                            "Buttons below — or type your own answer as "
+                            "text (e.g. 'yes, but skip the force flag').\n"
+                            "(This is the agent's own question — NOT the "
+                            "approval gate.)",
+                            reply_markup={"inline_keyboard": [[
+                                {"text": "✅ Yes",
+                                 "callback_data": f"ask:{rid}:yes"},
+                                {"text": "⛔ No",
+                                 "callback_data": f"ask:{rid}:no"},
+                            ]]})
+                    else:
+                        await self.ms.send_message(
+                            f"❓ The agent asks (run {rid})\n\n"
+                            f"{preview}\n\n"
+                            "Reply with your answer as text — it goes "
+                            "straight back to the agent.\n"
+                            "(This is the agent's own question — NOT the "
+                            "approval gate.)")
                 else:
                     await self.ms.send_message(
                         f"🛡 Approval needed (UI run {rid})\n\n"
@@ -1671,6 +1692,40 @@ class RunBridge:
             _, rid, answer = data.split(":", 2)
         except ValueError:
             return "malformed button"
+        if data.startswith("ask:"):
+            # ASK BUTTONS (2026-10-07, owner: "yes/no als buttons, nicht
+            # YES abtippen"): yes/no cards (destructive gate + agent
+            # yes/no questions) ride the SAME decide_approval path as a
+            # text answer; decision_id/tool from the mirrored card guard
+            # duplicates. Free text stays possible alongside the buttons.
+            ask_ans = "yes" if answer.startswith("y") else "no"
+            if rid != m.get("run_id") or not m.get("approval_sig"):
+                return "card already gone"
+            resp = await self.hive.decide_approval(
+                rid, ask_ans,
+                decision_id=m.get("approval_decision_id") or "",
+                tool=m.get("approval_tool") or "")
+            code = getattr(resp, "status_code", 500)
+            m["approval_sig"] = None
+            if code >= 300:
+                return f"not accepted (HTTP {code})"
+            try:
+                routed = str((resp.json() or {}).get("routed") or "")
+            except (ValueError, TypeError, AttributeError):
+                routed = ""
+            if routed == "duplicate":
+                return "already answered (UI) — nothing changed"
+            if routed == "expired":
+                return "⏱ card already timed out — denied (fail closed)"
+            if routed == "stale":
+                return "ℹ️ card outdated — nothing changed"
+            try:
+                await self.ms.send_message(
+                    "✅ Confirmed (yes) — answer delivered." if ask_ans == "yes"
+                    else "⛔ Declined (no) — answer delivered.")
+            except (TelegramApiError, OSError):
+                pass  # the decision itself is delivered
+            return f"{ask_ans} — delivered"
         if answer not in ("1", "2", "3"):
             return "unknown button"
         own = self._open_own_approval or {}
