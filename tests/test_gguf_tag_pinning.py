@@ -113,7 +113,13 @@ def test_hermes_midname_mtp_registers():
 
 
 def test_manifest_file_covers_catalog():
-    man = json.loads((ROOT / "model_configs" / "gguf_filename_tags.json").read_text(encoding="utf-8"))
+    # SHIP-HYGIENE (2026-10-07): the manifest is a runtime cache and is no
+    # longer shipped in release zips - the engine rebuilds it on demand.
+    _man_path = ROOT / "model_configs" / "gguf_filename_tags.json"
+    if not _man_path.exists():
+        ok("Manifest cache not shipped (runtime file) - skipped")
+        return
+    man = json.loads(_man_path.read_text(encoding="utf-8"))
     required = [
         "qwen3.5-4b-q4_k_m.gguf",
         "qwen3.5-2b-q4_k_m.gguf",
