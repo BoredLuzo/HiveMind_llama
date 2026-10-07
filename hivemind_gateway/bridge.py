@@ -464,6 +464,7 @@ class RunBridge:
 
         parts: list[str] = []
         self._last_tool_line = ""  # Tool-Relay dedupe reset per run
+        self._tool_relay_seen = {}  # R6: repeat-counter reset per run
         self._skip_finish = False  # R4: stream-broke handover skips _finish
         # R4 relay: phase/plan/thinking visibility on the phone
         last_phase = ""
@@ -554,12 +555,22 @@ class RunBridge:
                         _tt = " ".join(tick_think.split())[-160:]
                         await self.ms.send_message(f"💭 …{_tt}")
                         tick_think = ""
-                    # Tool-Call-Relay (2026-10-05): compact activity lines —
-                    # the phone sees WHAT the agent is doing live.
+                    # Tool-Call-Relay (2026-10-05) + REPEAT-DEDUPE (R6,
+                    # live flood): identical lines relay once, counter
+                    # note every 5th repeat.
                     line = self._tool_line(ev)
-                    if line and line != self._last_tool_line:
+                    if not line:
+                        continue
+                    _seen = self._tool_relay_seen
+                    if len(_seen) > 40:
+                        _seen.clear()
+                    _cnt = _seen.get(line, 0) + 1
+                    _seen[line] = _cnt
+                    if _cnt == 1:
                         await self.ms.send_message(line)
                         self._last_tool_line = line
+                    elif _cnt % 5 == 0:
+                        await self.ms.send_message(f"{line} (repeat #{_cnt})")
                 elif etype == "steer":
                     # STEER CARD (2026-10-06): the phone typed the steer —
                     # confirm on its own message that the run picked it up
@@ -1043,6 +1054,7 @@ class RunBridge:
                                   "approval_decision_id": "",
                                   "approval_tool": "",
                                   "other_run_noted": "", "last_phase": "",
+                                  "tool_relay_seen": {},
                                   "answer_parts": [],
                                   "last_tick": 0.0}
         return self._mirror_state
@@ -1053,7 +1065,8 @@ class RunBridge:
         m.update({"run_id": None, "after": 0, "status_msg_id": None,
                   "last_status": "", "approval_sig": None,
                   "approval_decision_id": "", "approval_tool": "",
-                  "other_run_noted": "", "last_phase": "", "answer_parts": []})
+                  "other_run_noted": "", "last_phase": "",
+                                  "tool_relay_seen": {}, "answer_parts": []})
 
     def _own_run_id(self) -> str | None:
         run = self.state.data.get("active_run") or {}
@@ -1246,11 +1259,22 @@ class RunBridge:
                     _tt = " ".join(tick_think.split())[-160:]
                     await self.ms.send_message(f"💭 …{_tt}")
                     tick_think = ""
-                # Tool-Call-Relay (2026-10-05): compact activity lines so
-                # the phone sees WHAT the agent is doing, not just status
+                # Tool-Call-Relay (2026-10-05) + REPEAT-DEDUPE (R6, live
+                # flood 10:21): identical lines (same tool, same args -
+                # model retry loops) relay once, then a compact counter
+                # every 5th repeat. Cross-tick via the mirror state.
                 line = self._tool_line(ev)
-                if line and (not tool_lines or tool_lines[-1] != line):
+                if not line:
+                    continue
+                _seen = m.setdefault("tool_relay_seen", {})
+                if len(_seen) > 40:
+                    _seen.clear()
+                _cnt = _seen.get(line, 0) + 1
+                _seen[line] = _cnt
+                if _cnt == 1:
                     tool_lines.append(line)
+                elif _cnt % 5 == 0:
+                    tool_lines.append(f"{line} (repeat #{_cnt})")
         for tl in tool_lines[-6:]:  # cap per tick, newest win
             await self.ms.send_message(tl)
         if last_status and last_status != m["last_status"] \
