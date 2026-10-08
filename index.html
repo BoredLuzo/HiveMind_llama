@@ -1635,7 +1635,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
           <div class="fld-label">Token / Password</div>
           <input class="fld-input" type="password" id="git-token" placeholder="Personal Access Token"
             autocomplete="new-password" spellcheck="false"
-            onchange="postSettings({git_token:this.value})">
+            onchange="if(this.value) postSettings({git_token:this.value})">
         </div>
         <div class="fld">
           <div class="fld-label">Branch</div>
@@ -1991,6 +1991,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261007-20"></script>
+        <script src="/static/app.js?v=20261007-21"></script>
 </body>
 </html>

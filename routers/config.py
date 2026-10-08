@@ -154,9 +154,13 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
 @router.get("/settings")
 async def get_settings():
     s = dict(settings)
-    # SECURITY: Secrets nicht im Klartext an den Client geben.
-    if s.get("git_token"):
-        s["git_token"] = "****"
+    # SECURITY (UX-FIX 2026-10-07, owner: "UI zeigt viel zu kurzen
+    # token"): the masked '****' read as a broken tiny credential. The
+    # field now arrives EMPTY with an explicit saved flag; the panel
+    # shows the state as a placeholder instead of a fake value.
+    _gt_saved = bool(s.get("git_token"))
+    s["git_token"] = "" if _gt_saved else s.get("git_token", "")
+    s["git_token_saved"] = _gt_saved
     _sa = s.setdefault("agents", {})
     for _ak, _av in DEFAULT_AGENT_CFG.items():
         _sa.setdefault(_ak, _av)
@@ -400,7 +404,8 @@ async def post_settings(req: Request):
     # H-audit: GET masks the token as '****' - a stale-tab snapshot POSTs
     # it back and settings.update() would silently DESTROY the credential
     # while has_credentials() keeps reporting True.
-    if isinstance(data, dict) and data.get("git_token") in ("****",):
+    if isinstance(data, dict) and data.get("git_token") in ("****", ""):
+        # mask echo or empty field: never destroy the stored credential
         data.pop("git_token", None)
     settings.update(data)
     _xa = settings.get("exploration_agent")

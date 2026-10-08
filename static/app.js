@@ -11616,7 +11616,8 @@ async function loadGitConfig(s) {
   S.duoGitAutocommit = s.duo_git_autocommit || false;
   S.gitRepoUrl = s.git_repo_url || '';
   S.gitUsername = s.git_username || '';
-  S.gitToken = s.git_token || '';
+  S.gitToken = '';
+  S.gitTokenSaved = !!s.git_token_saved;
   S.gitBranch = s.git_branch || 'main';
   // Sync toggles
   var duoToggle = document.getElementById('duo-git-autocommit-toggle');
@@ -11631,7 +11632,12 @@ async function loadGitConfig(s) {
   var userInp = document.getElementById('git-username');
   if (userInp) userInp.value = S.gitUsername;
   var tokInp = document.getElementById('git-token');
-  if (tokInp) tokInp.value = S.gitToken;
+  if (tokInp) {
+    tokInp.value = '';
+    tokInp.placeholder = S.gitTokenSaved
+      ? '••••••••  (token saved — enter a new one to replace)'
+      : 'Personal Access Token';
+  }
   var brInp = document.getElementById('git-branch-inp');
   if (brInp) brInp.value = S.gitBranch;
   // v0.96.5: Additional git config fields
