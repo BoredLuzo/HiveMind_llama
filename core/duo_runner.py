@@ -6766,8 +6766,13 @@ async def run_code_duo(ctx):
     else:
         ctx.duo_stop_reason = "completed"
     # ── B8.3 FINAL AUTO-COMMIT (Run-Abschluss) ─────────────────────────────
+    # LOOP-AUTO-STOP COMMIT (2026-10-08, owner: "was für stopp bro?"): the
+    # loop guard ends long runs as loop_detected (internally surfaced as
+    # hard_stop) - a run with 13 written files MUST still commit and push,
+    # otherwise hours of real work silently never reach GitHub. Errors and
+    # owner aborts stay commit-free by design.
     if (ctx.duo_config.git_autocommit
-            and ctx.duo_stop_reason in ("completed", "graceful_stop")
+            and ctx.duo_stop_reason in ("completed", "graceful_stop", "loop_detected")
             and _ws_str):
         _ac_final = await _auto_commit_chunk(ctx.user_input, "", _ws_str, True)
         if _ac_final:
