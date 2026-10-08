@@ -40,6 +40,21 @@ Pocket-TTS is output only. For voice INPUT (telegram voice notes in,
 push-to-talk in the UI) evaluate whisper.cpp (local, quantized) vs
 faster-whisper. Same sidecar pattern.
 
+## Agent feedback quality (from the nBody live runs, 2026-10-08)
+
+- identical-edit cut (3x identical -> abort) should instead inject the
+  CURRENT file head into the tool result ("edit from this") - the model
+  stood one re-read away from fixing itself and got thrown out
+- run_tests output condensation: one line per failure (test name,
+  assertion, file) instead of raw `head`-capped vitest reporter walls -
+  16 failures in 100 lines meant the model saw fragments
+- re-read dedup: read_file on an unchanged file answers "(unchanged
+  since your last read)" instead of the full content again (main.ts was
+  re-read 12x in one run)
+- project_map tool: one compact listing of all workspace files plus
+  exported signatures, so the coder sees structure without reading
+  files one by one (get_signatures was used once in 120 tool rounds)
+
 ## Engineering debt (promotion candidates)
 
 - split core/duo_runner.py (6.9k lines) into phases/ modules
