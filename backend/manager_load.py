@@ -1265,6 +1265,7 @@ class LlamaLoadMixin:
                 get_reasoning as _reg_get_reasoning,
                 is_distilled as _reg_is_distilled,
                 get_chat_template as _reg_get_template,
+                is_mtp as _reg_is_mtp,
             )
             _reg_jinja = _reg_is_jinja(model)
             _reg_reasoning = _reg_get_reasoning(model)
@@ -1300,6 +1301,17 @@ class LlamaLoadMixin:
             logger.info(f"--reasoning on for thinking base: {model}")
         elif _model_base in ("qwen3.5", "omnicoder"):
             cmd += ["--reasoning", "off"]
+
+        # MTP SELF-SPECULATIVE DECODING (2026-10-08, owner: "MTP mit Wert 2"):
+        # registry mtp:true models carry predictive layers - draft-mtp uses
+        # them as their own draft model. Verified on VULKAN: the server
+        # accepts the flags and generates.
+        try:
+            if _reg_is_mtp(model) and "--spec-type" not in cmd:
+                cmd += ["--spec-type", "draft-mtp", "--spec-draft-max", "2"]
+                logger.info(f"--spec-type draft-mtp (draft-max 2) enabled for {model} (registry mtp)")
+        except Exception:
+            pass
 
         # ── mmproj (Vision-Projektor) ─────────────────────────────────────────
         # TEST SWITCH (2026-10-04, Sonnet #2): the negative test for the

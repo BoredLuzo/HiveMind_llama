@@ -110,6 +110,29 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
     start_line = args.get("start_line")
     end_line = args.get("end_line")
     _full = start_line is None and end_line is None
+    # RE-READ DEDUP (2026-10-08, owner: "91 read_file, main.ts 12x"): a full
+    # read of an UNCHANGED file returns a compact confirmation - the previous
+    # read's content is already in the model context and does not need to be
+    # paid for twice. Range reads and first reads always return content.
+    _rr_unchanged = False
+    try:
+        from tools.runner import _read_signatures as _rr_sig, _normalize_tool_path as _rr_ntp
+        _rr_prev = (_rr_sig.get(None) or {}).get(_rr_ntp(str(p), workspace))
+        _rr_st = p.stat()
+        _rr_cur = (_rr_st.st_mtime_ns, _rr_st.st_size)
+        if _rr_prev is not None and _rr_prev == _rr_cur:
+            _rr_unchanged = True
+    except Exception:
+        pass
+    if _full and _rr_unchanged:
+        try:
+            _rr_nl = await asyncio.to_thread(_fast_newline_count, p, 100000)
+            _rr_disp = str(_rr_nl)
+        except Exception:
+            _rr_disp = "?"
+        return (f"[read_file: '{p.name}' is UNCHANGED since your last read "
+                f"({_rr_disp} lines) - the content in your context above is still "
+                "current. Use start_line/end_line to force a full re-read.]")
     try:
         # READ-EARLY-ABORT (2026-09-04): full reads (no range) no longer read
         # a huge file completely just to reject it as "too large" afterwards.
