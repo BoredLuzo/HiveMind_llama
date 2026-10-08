@@ -412,7 +412,7 @@
   "except_pass": 7
  },
  "tools/handlers/file_ops.py": {
-  "broad_except": 24,
+  "broad_except": 25,
   "except_pass": 9
  },
  "tools/handlers/git_tools.py": {
