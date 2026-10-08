@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.3.4] - 2026-10-08 (live-editing, unreleased)
+
+Follow-up on the 1.3.3 showcase round:
+
+- planner parse diagnosis redacts token-like strings in logged heads
+- model list collapses same-file aliases (minicpm was listed three
+  times for two files)
+- git token field: empty field plus saved placeholder instead of the
+  cryptic mask; empty and mask-echo saves can never wipe the stored
+  token; browser autofill suppressed on the field
+- steering divider note placed inside the run block like the steer card
+- steer frame: the owner's mid-run words packaged as the highest
+  priority instruction at both injection sites
+- tool-round steer drain drops image parts under images_off/preprocess
+  like the chunk-boundary drain
+- docs: 1.4 candidate backlog (pocket-tts voice, stt, engineering debt)
+
 ## [1.3.3] - 2026-10-07 (live-editing, unreleased)
 
 Telegram gateway deep-audit round + showcase fixes (owner-driven,
