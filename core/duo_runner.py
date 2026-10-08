@@ -4389,6 +4389,38 @@ async def run_code_duo(ctx):
                                         _retry_helped,
                                     )
                                     _dtool_msgs = _dtool_msgs2
+                                    # POST-COMPRESS RE-ANCHOR (2026-10-08,
+                                    # owner-approved fix 1+2): compression
+                                    # replaces file contents with summaries -
+                                    # the model loses the exact file state and
+                                    # starts editing from memory (the
+                                    # old_text-not-found loops). Re-anchor with
+                                    # a fresh project inventory right after the
+                                    # compressed messages are installed.
+                                    try:
+                                        _inv = []
+                                        _inv_n = 0
+                                        for _iroot, _idirs, _ifnames in os.walk(_ws_str):
+                                            _idirs[:] = [x for x in _idirs if x not in
+                                                         ("node_modules", ".git", "dist",
+                                                          ".hive_uploads", "__pycache__")]
+                                            for _ifn in _ifnames:
+                                                if _inv_n >= 80:
+                                                    break
+                                                _irel = os.path.relpath(
+                                                    os.path.join(_iroot, _ifn), _ws_str)
+                                                _inv.append(_irel.replace("\\", "/"))
+                                                _inv_n += 1
+                                            if _inv_n >= 80:
+                                                break
+                                        if _inv:
+                                            _dtool_msgs.append({"role": "user", "content":
+                                                "[PROJECT FILES - these exist in the workspace "
+                                                "right now]\n" + "\n".join(_inv[:80])
+                                                + "\nread_file any file before editing it - "
+                                                "do not edit from memory."})
+                                    except Exception:
+                                        pass
                                     _condensed_files = _condensed_files2
                                     _compress_usage = _compress_usage2
                             if _compress_usage and _compress_usage.get("completion_tokens"):

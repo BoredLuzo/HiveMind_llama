@@ -616,13 +616,28 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             await asyncio.to_thread(_write_fuzzy)
             _lint = await _auto_lint_result(p, workspace)
             return f"[edit_file: '{p}' edited via fuzzy match]{_lint}"
+        # OLD-TEXT RE-ANCHOR (2026-10-08, owner: the old_text loop): the
+        # model edits from memory after context compression and repeats the
+        # same failed edit. Attach the CURRENT head of the file to the error
+        # so the very next edit can be built from real content.
+        _anchor = ""
+        try:
+            _cur = p.read_text(encoding="utf-8", errors="replace").splitlines()
+            _head = "\n".join(_cur[:60])
+            if len(_head) > 4000:
+                _head = _head[:4000] + "\n... [truncated]"
+            _anchor = ("\n\n[CURRENT CONTENT of '" + p.name + "' — first "
+                       + str(min(60, len(_cur))) + " lines. Build your next "
+                       "edit_file old_text from EXACTLY this:]\n" + _head)
+        except Exception:
+            pass
         return _tool_error_response(
             "EDIT_FILE_OLD_TEXT_NOT_FOUND",
             f"old_text not found in '{p}' (exact or fuzzy).\n"
             f"  Looking for: {_first_hint!r}\n"
             "  read_file the file and COPY the passage verbatim — check indentation "
             "and whitespace; add surrounding lines to make it unique."
-            + (_stale_note if _stale_note else ""),
+            + (_stale_note if _stale_note else "") + _anchor,
             tool="edit_file")
     if count > 1:
         return _tool_error_response(
