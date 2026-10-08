@@ -132,7 +132,12 @@ DEFAULT_SETTINGS = {
     #   summary call routinely runs into the read timeout (MoE with CPU
     #   experts, slow prefill): there the LLM attempt only costs dead time
     #   and the local summary is also more cache-friendly.
-    "duo_partial_compression":   True,
+    # SHIPPED DEFAULT CHANGE (2026-10-08, owner): full compression only.
+    # Partial kept the raw tail for prefix-cache reuse, but on slow-prefill
+    # hardware (Vulkan) the barely-shrunken large prompts cost far more in
+    # per-round prefill/decode than the occasional cache miss - and the
+    # owner's live test read the full mode as "fast + actually empties".
+    "duo_partial_compression":   False,
     "duo_compress_auto_floor":   0.70,
     "duo_compress_overflow_reserve": 1024,
     "duo_max_compressions":      40,
