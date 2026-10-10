@@ -23,6 +23,11 @@ Reliability and observability fixes for local runs:
 - lint guardrail now fails on unparseable files and scan-count
   mismatches
 - internal gateway documents removed from the public tree
+- Linux install path re-verified: windows-only packages are
+  platform-gated in the dependency lists, all windows imports are
+  guarded, the pre-flight falls back to estimates where live GPU
+  counters are unavailable, and the uv-based installer needs nothing
+  but curl
 
 ## [1.3.4] - 2026-10-08
 
