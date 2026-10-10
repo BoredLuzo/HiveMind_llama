@@ -123,10 +123,6 @@
   "broad_except": 10,
   "except_pass": 3
  },
- "core/telemetry.py": {
-  "broad_except": 2,
-  "except_pass": 1
- },
  "core/tool_loop.py": {
   "broad_except": 1,
   "except_pass": 0
