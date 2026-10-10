@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.3.4] - 2026-10-08 (live-editing, unreleased)
+## [1.3.4] - 2026-10-08
 
 Follow-up on the 1.3.3 showcase round:
 
@@ -16,6 +16,15 @@ Follow-up on the 1.3.3 showcase round:
 - tool-round steer drain drops image parts under images_off/preprocess
   like the chunk-boundary drain
 - docs: 1.4 candidate backlog (pocket-tts voice, stt, engineering debt)
+
+- full compression as the shipped default (partial off everywhere)
+- re-anchor: current file excerpt on old_text errors + project
+  inventory after compression
+- loop-detected runs commit and push their written files like
+  completed runs
+- speculative decoding (draft-mtp) flags for MTP models behind a
+  registry guard; guardrail baselines updated (re-anchor excerpt,
+  re-read dedup unbound fix)
 
 ## [1.3.3] - 2026-10-07 (live-editing, unreleased)
 
