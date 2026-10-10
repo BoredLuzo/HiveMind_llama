@@ -180,6 +180,9 @@ class AgenticToolLoop(ToolLoop):
                                 "content": "🔒 Grammar-forced retry (tool-call JSON constrained)"})
                 _timeout = httpx.Timeout(connect=10.0, read=self.round_state.tool_read_timeout_s, write=10.0, pool=5.0)
                 _gen_t0 = time.monotonic()
+                _ttfb_ms = None
+                _t_last_ms = None
+                _dr_prompt_timings = None
                 async with self._client.stream(
                     "POST", f"http://127.0.0.1:{result['dport']}/v1/chat/completions",
                     json=payload, timeout=_timeout,
@@ -353,6 +356,9 @@ class AgenticToolLoop(ToolLoop):
                         if _sse_data == "[DONE]": break
                         try: _sse_chunk = json.loads(_sse_data)
                         except Exception: continue
+                        if _ttfb_ms is None:
+                            _ttfb_ms = int((time.monotonic() - _gen_t0) * 1000)
+                        _t_last_ms = int((time.monotonic() - _gen_t0) * 1000)
                         _sse_usage = _sse_chunk.get("usage")
                         # DECODE-RATE (2026-10-07): llama.cpp ships the real
                         # per-call decode speed in the final chunk timings -
@@ -361,6 +367,16 @@ class AgenticToolLoop(ToolLoop):
                         if _sse_timings.get("predicted_per_second"):
                             self.round_state.decode_tps = float(
                                 _sse_timings["predicted_per_second"])
+                        # PREFILL-RATE (2026-10-09): the same final chunk carries
+                        # the prompt-processing side - prompt_ms / prompt_n feed
+                        # the a+b*depth prefill model (step 1h).
+                        if _sse_timings.get("prompt_ms") is not None:
+                            _dr_prompt_timings = {
+                                "prompt_n": int(_sse_timings.get("prompt_n") or 0),
+                                "prompt_ms": float(_sse_timings.get("prompt_ms") or 0.0),
+                                "prompt_per_second": float(
+                                    _sse_timings.get("prompt_per_second") or 0.0),
+                            }
                         if _sse_usage and _sse_usage.get("completion_tokens"):
                             # D2-DIAG (2026-08-21): cached_tokens from
                             # prompt_tokens_details → Cache-Reuse pro Request messbar.
@@ -485,6 +501,45 @@ class AgenticToolLoop(ToolLoop):
                     # TRUNCATION-DIAG (2026-09-30): callers log reasoning_tokens
                     # from usage to separate write-overrun from reasoning-overrun
                     result["dr_usage_final"] = _dr_usage_final
+                    # TELEMETRY (2026-10-09): one JSONL row per call - prefill
+                    # (server timings), decode, cache, waiting (ttfb), prefix
+                    # divergence (first_diff_idx). core/telemetry swallows its
+                    # own errors; no guard here on purpose.
+                    from core import telemetry as _tel
+                    try:
+                        _tel_msgs = payload.get("messages") or []
+                        _tel_hashes, _tel_fdi = _tel.message_hashes(_tel_msgs)
+                        _tel_tools = []
+                        for _tk in sorted(result["dr_tool_calls_acc"].keys()):
+                            _tfn = str(((result["dr_tool_calls_acc"][_tk].get("function")) or {}).get("name", "") or "")
+                            if _tfn:
+                                _tel_tools.append(_tfn)
+                        _tel.append_round({
+                            "phase": "coder",
+                            "model": getattr(self.round_state, "exec_model", None),
+                            "max_tokens": getattr(self.round_state, "max_tokens", None),
+                            "prompt_tokens": (_dr_usage_final or {}).get("prompt_tokens"),
+                            "cached_tokens": (_dr_usage_final or {}).get("cached_tokens"),
+                            "prompt_n": (_dr_prompt_timings or {}).get("prompt_n"),
+                            "prompt_ms": (_dr_prompt_timings or {}).get("prompt_ms"),
+                            "prompt_tps": (_dr_prompt_timings or {}).get("prompt_per_second"),
+                            "completion_tokens": (_dr_usage_final or {}).get("completion_tokens"),
+                            "gen_ms": (_dr_usage_final or {}).get("gen_ms"),
+                            "decode_tps": (_dr_usage_final or {}).get("decode_tps"),
+                            "finish_reason": _dr_finish_reason,
+                            "ttfb_ms": _ttfb_ms,
+                            "t_last_ms": _t_last_ms,
+                            "tools": ",".join(_tel_tools) or None,
+                            "compression_id": _tel.compression_id(),
+                            "n_messages": len(_tel_msgs),
+                            "first_diff_idx": _tel_fdi,
+                            "msg_hash_first": _tel_hashes[0] if _tel_hashes else None,
+                            "msg_hash_last": _tel_hashes[-1] if _tel_hashes else None,
+                        })
+                    except Exception:
+                        # the append must never break the round, but a silent
+                        # failure hid it for six runs (2026-10-09/10) - log it.
+                        logger.exception("[TELEMETRY-APPEND-FAIL]")
                     # duo_write_chars_per_token sammeln. Pro Request: completion_tokens
                     try:
                         _cal_chars = 0

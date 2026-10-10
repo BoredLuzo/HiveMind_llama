@@ -60,7 +60,7 @@
   "except_pass": 1
  },
  "core/agentic_tool_loop.py": {
-  "broad_except": 10,
+  "broad_except": 11,
   "except_pass": 5
  },
  "core/chat_run.py": {
@@ -123,6 +123,10 @@
   "broad_except": 10,
   "except_pass": 3
  },
+ "core/telemetry.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
  "core/tool_loop.py": {
   "broad_except": 1,
   "except_pass": 0
@@ -139,12 +143,20 @@
   "broad_except": 6,
   "except_pass": 1
  },
+ "deploy/backup_data.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
  "deploy/fetch_llamacpp.py": {
   "broad_except": 8,
   "except_pass": 0
  },
  "deploy/fetch_models.py": {
   "broad_except": 5,
+  "except_pass": 0
+ },
+ "deploy/gen_settings_docs.py": {
+  "broad_except": 1,
   "except_pass": 0
  },
  "explore/cache.py": {
