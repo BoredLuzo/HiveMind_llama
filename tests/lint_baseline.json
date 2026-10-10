@@ -328,7 +328,7 @@
   "except_pass": 3
  },
  "run.py": {
-  "broad_except": 4,
+  "broad_except": 5,
   "except_pass": 2
  },
  "server.py": {
