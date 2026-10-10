@@ -1321,6 +1321,21 @@ async def stream(req: Request):
                        "direct_model"):
         if _model_key in body and str(body.get(_model_key) or "").strip():
             _model_overrides[_model_key] = str(body.get(_model_key)).strip()
+    # MODEL-OVERRIDE CARD-PARITY (2026-10-10): the duo runner resolves the
+    # coder/critic model from agents.<role>.model FIRST (AGENT-CARD-FIRST,
+    # core/duo/_vram.py). A body override that only patches the flat key
+    # loses to the card dict - the override silently did nothing. Patch the
+    # card dict too (same pattern as the safe-profile policy: it writes
+    # BOTH the card AND the flat key).
+    if _model_overrides.get("duo_coder_model") or _model_overrides.get("duo_critic_model"):
+        _sa = dict(settings.get("agents") or {})
+        for _mk, _rk in (("duo_coder_model", "duo_coder"),
+                         ("duo_critic_model", "duo_critic")):
+            if _model_overrides.get(_mk):
+                _rc = dict(_sa.get(_rk) or {})
+                _rc["model"] = _model_overrides[_mk]
+                _sa[_rk] = _rc
+        _model_overrides["agents"] = _sa
 
     # CTX-OVERRIDE-WITH-RUN (2026-09-02): the context the user chose in the
     # frontend (Duo "Context Coder (Agentic)/Normal/Planner") is sent with the
