@@ -42,11 +42,18 @@ def _handler_is_broad(handler) -> bool:
     return False
 
 
+class ParseError(Exception):
+    """A tracked file could not be parsed - the guardrail must FAIL on it,
+    not silently skip it (a broken file hid a +1 debt on 2026-10-10)."""
+
+
 def _count_file(path: Path) -> tuple[int, int]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (SyntaxError, OSError, UnicodeDecodeError):
-        return (0, 0)
+    except SyntaxError as exc:
+        raise ParseError(f"{path}: {exc}") from None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ParseError(f"{path}: {exc}") from None
     n_pass = 0
     n_broad = 0
     for node in ast.walk(tree):
@@ -60,19 +67,28 @@ def _count_file(path: Path) -> tuple[int, int]:
     return (n_pass, n_broad)
 
 
-def collect() -> dict[str, dict[str, int]]:
+def collect() -> tuple[dict[str, dict[str, int]], list[str]]:
     out: dict[str, dict[str, int]] = {}
+    parse_errors: list[str] = []
     for p in _iter_py_files():
         rel = p.relative_to(ROOT).as_posix()
-        n_pass, n_broad = _count_file(p)
-        if n_pass or n_broad:
-            out[rel] = {"except_pass": n_pass, "broad_except": n_broad}
-    return out
+        try:
+            n_pass, n_broad = _count_file(p)
+        except ParseError as exc:
+            parse_errors.append(str(exc))
+            continue
+        out[rel] = {"except_pass": n_pass, "broad_except": n_broad}
+    return out, parse_errors
 
 
 def main() -> int:
     update = "--update" in sys.argv
-    current = collect()
+    current, parse_errors = collect()
+    if parse_errors:
+        print("PARSE ERRORS - the guardrail cannot vouch for the tree:")
+        for e in parse_errors:
+            print("  FAIL", e)
+        return 1
     if update:
         BASELINE.write_text(
             json.dumps(current, indent=1, sort_keys=True) + "\n", encoding="utf-8")
@@ -96,6 +112,20 @@ def main() -> int:
         return 1
     total_p = sum(v["except_pass"] for v in current.values())
     total_b = sum(v["broad_except"] for v in current.values())
+    baseline_keys = set(baseline.keys())
+    current_keys = set(current.keys())
+    _gone = sorted(baseline_keys - current_keys)
+    _new = sorted(current_keys - baseline_keys)
+    if _gone:
+        print("FILE-COUNT MISMATCH - files vanished from the scan (silent skip?):")
+        for k in _gone:
+            print("  FAIL missing from scan:", k)
+        return 1
+    if _new:
+        print("NEW FILES not in baseline - run with --update after review:")
+        for k in _new:
+            print("  FAIL not in baseline:", k)
+        return 1
     print(f"OK — no new silent excepts ({len(current)} files tracked, "
           f"{total_p} except-pass / {total_b} broad-except frozen in baseline)")
     return 0
