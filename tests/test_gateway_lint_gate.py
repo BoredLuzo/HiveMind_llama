@@ -51,7 +51,7 @@ try:
     n_pass, n_broad = _count_file(probe)
     check("collector counts except-pass", n_pass == 2, f" (got {n_pass})")
     check("collector counts broad except", n_broad == 2, f" (got {n_broad})")
-    current = collect()
+    current, parse_errors = collect()
     rel = probe.relative_to(ROOT).as_posix()
     check("collect() includes the probe file", rel in current)
     baseline_entry = json.loads(BASELINE.read_text(encoding="utf-8")) \
@@ -68,7 +68,7 @@ finally:
 check("probe cleaned up", not probe.exists())
 
 # ── 2. the package is currently clean vs baseline ───────────────────────
-current = collect()
+current, parse_errors = collect()
 baseline = json.loads(BASELINE.read_text(encoding="utf-8")) \
     if BASELINE.exists() else {}
 bad = []
