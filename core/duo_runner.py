@@ -4895,7 +4895,35 @@ async def run_code_duo(ctx):
                                     _hb_ev["prefill"] = _hb_pf
                                 yield await ctx.emit(_hb_ev)
                             await asyncio.sleep(0.02)
-                        _result = _post_task.result()
+                        # TASK-DEATH FIX (2026-10-10): post_with_retry can die
+                        # with an unhandled RuntimeError (in-loop ensure_loaded
+                        # after ctx mismatch / evict). .result() re-raises into
+                        # the surrounding frame, which swallowed it silently -
+                        # six runs ended with no usage, no [CACHE], no error
+                        # message (asyncio only logged the orphaned task).
+                        # Surface it and end the run with a real reason.
+                        try:
+                            _result = _post_task.result()
+                        except Exception as _pt_exc:
+                            logger.warning(
+                                "[CODER-ROUND-FAIL] post task died: %s: %s",
+                                type(_pt_exc).__name__, str(_pt_exc)[:200],
+                            )
+                            yield await ctx.emit({"type": "status",
+                                "content": f"⛔ Coder round failed ({type(_pt_exc).__name__}): {str(_pt_exc)[:140]}"})
+                            ctx.phase_timer.skip("coder_loop")
+                            clear_graceful_stop(ctx.run_id)
+                            _cleanup_pause_state(ctx.run_id)
+                            if ctx.chat_id:
+                                _clear_pause_state(ctx.chat_id)
+                            _cleanup_governor(ctx.chat_id or ctx.run_id)
+                            ctx.duo_stop_reason = "runtime_error"
+                            yield await ctx.emit(ctx.done_event(
+                                round(time.time() - ctx.t_total, 1),
+                                ctx.duo_stop_reason,
+                                **ctx.collect_done_metrics(),
+                            ))
+                            return
                         # _duo_state mutated in-place by AgenticToolLoop — no sync needed
                         _dport = _result["dport"]
                         _cached_coder_port = _duo_state.cached_port
