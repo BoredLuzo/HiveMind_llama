@@ -299,6 +299,11 @@ class ToolLoop:
                 "messages": _msgs_to_parts(_tool_messages),
                 "tools": _tools_payload,
                 "stream": self.cfg.stream,
+                # INCLUDE-USAGE (2026-10-10): b11456 ships the usage+timings
+                # final chunk only when this flag is set (measured: without
+                # it no usage arrives at all - six runs lost [CACHE] and
+                # telemetry to this on 09./10.10.).
+                "stream_options": {"include_usage": True},
                 "temperature":       _smp.get("temperature", self.cfg.temperature),
                 "top_p":             _smp.get("top_p", 0.95),
                 "top_k":             int(_smp.get("top_k", 20)),
