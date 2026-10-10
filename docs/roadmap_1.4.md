@@ -1,7 +1,11 @@
 # HiveMind 1.4 candidate backlog
 
-Working notes for the next minor release. Nothing here is committed to
-ship - items get promoted into the changelog when they land.
+Release targets (owner decision 2026-10-10): **1.4 = voice (TTS/STT)
+plus a smart MCP update**. 1.5 candidates follow at the end (ComfyUI
+full-AI-stack integration).
+
+Working notes. Nothing here is committed to ship - items get promoted
+into the changelog when they land.
 
 ## Voice (Clawdbot parity gap)
 
@@ -55,6 +59,28 @@ faster-whisper. Same sidecar pattern.
   exported signatures, so the coder sees structure without reading
   files one by one (get_signatures was used once in 120 tool rounds)
 
+
+## MCP modernization (1.4)
+
+Current state: hand-rolled JSON-RPC over plain HTTP
+(`infra/mcp_server.py`, ~1.5k lines, tools only, tier guards for
+read/write/exec/query, loopback bind + optional bearer token) - solid,
+but frozen at protocolVersion 2024-11-05 and no resources/prompts.
+
+Update, smallest useful steps first:
+
+1. Protocol negotiation: advertise and negotiate 2025-03-26 / 2025-06-18
+   alongside 2024-11-05 (old clients keep working).
+2. Streamable HTTP transport: single /mcp endpoint (POST JSON-RPC +
+   optional SSE downstream, session header). The plain-HTTP mode stays
+   as a compatibility fallback.
+3. Resources: expose read-only state as MCP resources - loaded slots
+   and VRAM, latest run journal, telemetry summary, workspace tree.
+4. Prompts: run-report and code-review prompt templates.
+5. Evaluate the official python `mcp` SDK for the transport layer only
+   if hand-rolling streamable HTTP turns out bigger than the shim - the
+   tier guards and loopback binding stay hand-rolled either way.
+
 ## Engineering debt (promotion candidates)
 
 - split core/duo_runner.py (6.9k lines) into phases/ modules
@@ -62,7 +88,31 @@ faster-whisper. Same sidecar pattern.
 - minimal CI: run the 93 regression suites on every push
 - DONE in 1.3.3: llama.cpp response timings (predicted_per_second)
   now feed the cleaned decode t/s figure in the perf panel
-- consolidate duo_coder_model: the /stream body override is ignored as
-  the agentic exec model, only agents.duo_coder.model takes effect
+- DONE in 1.3.5: /stream model overrides patch both the agent card
+  and the flat key (they used to lose to the card silently)
 - multi-channel gateway (several chats/owners in parallel)
 - phone parity: /forget, agent free-text notes, media richness
+
+## Looking past 1.4: 1.5 candidates (owner direction 2026-10-10)
+
+### ComfyUI integration - local full-AI stack
+
+Goal: one surface where the local LLM agents can also generate images
+(and later video) via a local ComfyUI instance - no cloud.
+
+Sketch:
+
+1. Connector: ComfyUI HTTP API on 127.0.0.1:8188 - POST /prompt with a
+   workflow JSON, GET /history/{id}, WebSocket /ws for progress. No new
+   server process if ComfyUI already runs; otherwise document a sidecar
+   start (same pattern as searxng).
+2. Agent tool `generate_image(prompt, workflow, output)`: tier-guarded
+   like browser; workflow JSON files live in the repo as templates with
+   prompt/seed/steps plugs (sd15/sdxl/flux starters).
+3. VRAM arbitration is the interesting part: ComfyUI workflows compete
+   with the llama slots for the same 8 GB. Extend the SERIAL-SLOTS idea
+   - ComfyUI counts as a slot, gets evicted before a big llama load,
+   and workflows declare an expected VRAM class (low/med/high).
+4. Surfaces: chat (image appears inline), telegram (photo message),
+   tool output (path + dimensions). Settings: enabled, host/port,
+   default workflow, auto-evict behavior.
