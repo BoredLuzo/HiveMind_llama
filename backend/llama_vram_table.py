@@ -220,6 +220,19 @@ def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
     if num_ctx <= 4096:
         return base_vram
 
+    # QWEN35-HYBRID-KV (2026-10-10, gemessen): qwen3.5 traegt KV nur auf
+    # 8 von 33 Layern (4 KV-Koepfe x 256 key_length, Rest SSM). Gemessen
+    # (llama-server -v, q4_0/FA-on): 72 MiB @8192, 1062 MiB @120832 =
+    # 9,08 KB/Token; f16 = 32 KB/Token. Die generische Formel unten
+    # (36x4x128 -> 30 MB/1k) ueberschaetzt die qwen35-KV ~2x und blockte
+    # Realruns am PRE-FLIGHT-Gate (VRAMPreFlightError, 09.10.). Nur der
+    # belegte 4B-Wert; andere Groessen unbestaetigt (alter Pfad).
+    _bn = model_name.strip().lower().split(":")[0]
+    if _bn in ("qwen3.5", "qwen35"):
+        extra_ctx = num_ctx - 4096
+        if extra_ctx > 0:
+            return round(base_vram + (extra_ctx / 1024) * 9.2 / 1000, 2)
+
     size = _extract_size_gb(model_name) or 4.0
     size_factor = size / _CTX_OVERHEAD_REF_SIZE_B
     extra_ctx = num_ctx - 4096
