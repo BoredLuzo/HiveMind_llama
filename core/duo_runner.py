@@ -638,7 +638,7 @@ async def _git_checkpoint_at_chunk_start(ctx, _ws_str: str, _di: int,
     try:
         from hive_functions.git_tools import exec_git_checkpoint as _gck
         if ctx.duo_config.git_autocommit:
-            _label = f"chunk {_di + 1}/{_n_items}: {str(subtask)[:40]}"
+            _label = f"chunk {_di + 1}/{_n_items}: {str(subtask)[:40] if subtask else 'no subtask'}"
         else:
             if getattr(ctx, "_git_session_cp_done", False):
                 return ""
@@ -4632,6 +4632,10 @@ async def run_code_duo(ctx):
                                 len(_condensed_files or []), _comp_mode,
                                 _llm_compress_fails, _rule_compress_fails, _rule_compress_used,
                             )
+                            # TELEMETRY (2026-10-09): tag the following coder
+                            # rounds with a compression id (core/telemetry).
+                            from core import telemetry as _tel
+                            _tel.bump_compression()
                             yield await ctx.emit({
                                 "type": "status",
                                 "content": f"✅ Context compressed ({int(_est_tokens_before_compress)} → {int(_est_tokens_after_compress)} est. tokens, real {int((_est_tokens_before_compress - _est_tokens_after_compress) / max(1, _est_tokens_before_compress) * 100)}%)",
