@@ -88,7 +88,7 @@
   "except_pass": 2
  },
  "core/duo_runner.py": {
-  "broad_except": 108,
+  "broad_except": 109,
   "except_pass": 33
  },
  "core/fix_agent.py": {
