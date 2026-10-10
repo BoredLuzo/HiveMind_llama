@@ -143,20 +143,12 @@
   "broad_except": 6,
   "except_pass": 1
  },
- "deploy/backup_data.py": {
-  "broad_except": 1,
-  "except_pass": 0
- },
  "deploy/fetch_llamacpp.py": {
   "broad_except": 8,
   "except_pass": 0
  },
  "deploy/fetch_models.py": {
   "broad_except": 5,
-  "except_pass": 0
- },
- "deploy/gen_settings_docs.py": {
-  "broad_except": 1,
   "except_pass": 0
  },
  "explore/cache.py": {
