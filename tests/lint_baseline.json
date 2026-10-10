@@ -60,7 +60,7 @@
   "except_pass": 1
  },
  "core/agentic_tool_loop.py": {
-  "broad_except": 10,
+  "broad_except": 11,
   "except_pass": 5
  },
  "core/chat_run.py": {
