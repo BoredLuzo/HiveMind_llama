@@ -136,3 +136,14 @@ gateway.pid
 # internal audit docs - never in a release zip
 docs/gateway_audit_glm_full.md
 model_configs/gguf_filename_tags.json
+
+# internal gateway docs (owner-only, not for the public tree)
+docs/gateway_audit_installer_ui.md
+docs/gateway_brief.md
+docs/gateway_contract.md
+docs/gateway_realrun_wp2.md
+docs/gateway_security_audit.md
+docs/gateway_security_audit_deep.md
+docs/gateway_status.md
+docs/plan_1.3.4.md
+docs/wp3_proposals.md
