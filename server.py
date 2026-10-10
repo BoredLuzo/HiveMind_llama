@@ -100,7 +100,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.3.4"
+HIVEMIND_VERSION = "1.3.5"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")

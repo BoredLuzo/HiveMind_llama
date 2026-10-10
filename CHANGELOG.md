@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.3.5] - 2026-10-10
+
+Fixes for the silently broken runs found on 09./10.10. (ten diagnostic
+runs, every blocker pinned with log evidence):
+
+- tool loop now requests usage via stream_options.include_usage -
+  b11456 ships usage/timings only with the flag; without it six runs
+  lost [CACHE] lines, decode_tps and telemetry
+- mtp spec flags fixed: --spec-draft-max was an invalid argument on the
+  b11456 binary and crashed EVERY mtp-model server start (exit=1 ->
+  coder-load 3/3 failed -> runtime_load_error). Correct flag
+  --spec-draft-n-max, validated against the binary --help; live run
+  shows MTP draft acceptance working
+- vram_table: qwen35 hybrid KV correction (8 attention layers of 33,
+  9.08 KB/token measured) - the old formula overshot ~2x and blocked
+  real loads at the PRE-FLIGHT gate
+- slot logs: timestamped filenames (no more overwrite per restart) +
+  keep the newest 10 per port
+- telemetry: one JSONL row per coder call (prefill/decode timings,
+  cache, ttfb, compression id, prefix divergence) under
+  logs/telemetry/, plus datiert-slot-log cleanup
+- checkpoint label: 'no subtask' instead of 'chunk 1/1: None'
+- guardrail: fails on unparseable files and file-count mismatches
+  (a broken file silently skipped the check once)
+- privacy: internal gateway docs removed from the public tree
+
 ## [1.3.4] - 2026-10-08
 
 Follow-up on the 1.3.3 showcase round:
