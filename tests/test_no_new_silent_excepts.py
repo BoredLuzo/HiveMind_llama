@@ -77,6 +77,10 @@ def collect() -> tuple[dict[str, dict[str, int]], list[str]]:
         except ParseError as exc:
             parse_errors.append(str(exc))
             continue
+        # files WITHOUT handlers are tracked too: the file-count check
+        # relies on the full set (a silently skipped file would vanish
+        # from it), while "not in baseline" below only fires on files
+        # with actual debt.
         out[rel] = {"except_pass": n_pass, "broad_except": n_broad}
     return out, parse_errors
 
@@ -121,9 +125,11 @@ def main() -> int:
         for k in _gone:
             print("  FAIL missing from scan:", k)
         return 1
-    if _new:
-        print("NEW FILES not in baseline - run with --update after review:")
-        for k in _new:
+    _new_with_debt = [k for k in _new
+                      if current[k]["except_pass"] or current[k]["broad_except"]]
+    if _new_with_debt:
+        print("NEW FILES with excepts not in baseline - run with --update after review:")
+        for k in _new_with_debt:
             print("  FAIL not in baseline:", k)
         return 1
     print(f"OK — no new silent excepts ({len(current)} files tracked, "
