@@ -45,6 +45,23 @@ logging.basicConfig(
     format=_LOG_FMT,
 )
 
+class _GatewayPollFilter(logging.Filter):
+    """LOG-HYGIENE (2026-10-10): the gateway polls the engine every few
+    seconds; httpx logged every poll as INFO and reached ~30% of the
+    engine log. LLM POST lines stay visible."""
+    _QUIET = ("/gateway/heartbeat", "/gateway/poll", "/run/journal",
+              "/approval/pending", "/settings")
+
+    def filter(self, record):
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        return not any(q in msg for q in self._QUIET)
+
+
+logging.getLogger("httpx").addFilter(_GatewayPollFilter())
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
 os.environ.setdefault("PYTHONWARNINGS", "ignore::DeprecationWarning")

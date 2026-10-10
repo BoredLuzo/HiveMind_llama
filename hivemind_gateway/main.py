@@ -912,6 +912,10 @@ async def run() -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # LOG-HYGIENE (2026-10-10): the gateway polls every few seconds and
+    # httpx logged every poll request - 1.8 MB of supervisor log in two
+    # days. Poll lines carry no diagnosis value.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     cfg_path = resolve_config_path(start=os.getcwd())
     cfg = GatewayConfig()
     if cfg_path is not None:
