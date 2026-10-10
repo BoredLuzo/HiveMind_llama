@@ -2,29 +2,27 @@
 
 ## [1.3.5] - 2026-10-10
 
-Fixes for the silently broken runs found on 09./10.10. (ten diagnostic
-runs, every blocker pinned with log evidence):
+Reliability and observability fixes for local runs:
 
-- tool loop now requests usage via stream_options.include_usage -
-  b11456 ships usage/timings only with the flag; without it six runs
-  lost [CACHE] lines, decode_tps and telemetry
-- mtp spec flags fixed: --spec-draft-max was an invalid argument on the
-  b11456 binary and crashed EVERY mtp-model server start (exit=1 ->
-  coder-load 3/3 failed -> runtime_load_error). Correct flag
-  --spec-draft-n-max, validated against the binary --help; live run
-  shows MTP draft acceptance working
-- vram_table: qwen35 hybrid KV correction (8 attention layers of 33,
-  9.08 KB/token measured) - the old formula overshot ~2x and blocked
-  real loads at the PRE-FLIGHT gate
-- slot logs: timestamped filenames (no more overwrite per restart) +
-  keep the newest 10 per port
-- telemetry: one JSONL row per coder call (prefill/decode timings,
-  cache, ttfb, compression id, prefix divergence) under
-  logs/telemetry/, plus datiert-slot-log cleanup
-- checkpoint label: 'no subtask' instead of 'chunk 1/1: None'
-- guardrail: fails on unparseable files and file-count mismatches
-  (a broken file silently skipped the check once)
-- privacy: internal gateway docs removed from the public tree
+- tool loop requests usage via stream_options.include_usage; llama.cpp
+  b11456 ships usage/timings only with this flag, so cache-reuse and
+  per-call metrics now arrive on every coder round
+- speculative decoding for MTP models: fixed the flag name to
+  --spec-draft-n-max and validate it against the binary's --help
+  (unsupported binaries start undrafted instead of failing the load)
+- VRAM pre-flight: qwen3.5 hybrid KV correction (only 8 of 33 layers
+  carry KV, 9.08 KB/token measured) - the old estimate overshot ~2x
+  and could block loads that fit
+- slot logs: timestamped filenames per server start (no more overwrite)
+  and automatic cleanup keeping the newest 10 per port
+- telemetry: one JSONL row per coder call under logs/telemetry/
+  (prompt/decode timings, cache reuse, time-to-first-byte, compression
+  id, prefix divergence index)
+- round labels no longer print 'chunk 1/1: None' when a subtask is
+  missing
+- lint guardrail now fails on unparseable files and scan-count
+  mismatches
+- internal gateway documents removed from the public tree
 
 ## [1.3.4] - 2026-10-08
 
@@ -37,7 +35,7 @@ Follow-up on the 1.3.3 showcase round:
   cryptic mask; empty and mask-echo saves can never wipe the stored
   token; browser autofill suppressed on the field
 - steering divider note placed inside the run block like the steer card
-- steer frame: the owner's mid-run words packaged as the highest
+- steer frame: mid-run user messages packaged as the highest
   priority instruction at both injection sites
 - tool-round steer drain drops image parts under images_off/preprocess
   like the chunk-boundary drain
@@ -52,10 +50,10 @@ Follow-up on the 1.3.3 showcase round:
   registry guard; guardrail baselines updated (re-anchor excerpt,
   re-read dedup unbound fix)
 
-## [1.3.3] - 2026-10-07 (live-editing, unreleased)
+## [1.3.3] - 2026-10-07
 
-Telegram gateway deep-audit round + showcase fixes (owner-driven,
-edited on the branch, release cut at the end of the window):
+Telegram gateway deep-audit round + showcase fixes (edited on the
+branch, release cut at the end of the window):
 
 - takeover relay hardening: fazit on every end path, late-result relay
   for never-adopted runs, silent catch-up on adoption (answer + tool
@@ -290,7 +288,7 @@ yourself. Setup guide with a security walkthrough:
   double-running anything (Telegram queue position saved before a run
   starts), recognizes an orphaned run at startup and asks the phone
   whether to abort it.
-- Security posture: owner-only whitelist, no webhook and no open port
+- Security posture: allowlist-only access, no webhook and no open port
   (outbound long-polling only), the bot token is read from the
   environment or the Windows Credential Manager and scrubbed from every
   log line, model/tool output is filtered for secrets before sending,
@@ -311,8 +309,7 @@ yourself. Setup guide with a security walkthrough:
 
 Not included in 1.3 (deliberate): photos and voice messages from the
 phone, group chats, queues, token streaming, skills, cron. The bot's
-phone-side texts are English (owner decision; they were German during
-the first builds).
+phone-side texts are English.
 
 ## [1.2.3] - 2026-09-26
 
