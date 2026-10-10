@@ -1196,7 +1196,7 @@ class RunBridge:
                 self._mirror_reset(m)
                 await self._mirror_fazit(rid, _ans, reason)
             elif isinstance(j, dict) and j.get("done") and not j.get("aborted"):
-                # R6 LATE RESULT (owner: messages must arrive): a run
+                # R6 LATE RESULT (user feedback: messages must arrive): a run
                 # that started AND finished while the mirror was not
                 # attached still delivers its result - once per run id,
                 # only for runs finished during THIS gateway process.
@@ -1232,7 +1232,7 @@ class RunBridge:
                       "last_phase": "", "answer_parts": [],
                       "ctx_marks": set(), "ctx_compression_noted": False,
                       "answer_sent_upto": 0})
-            # R6 CATCH-UP (owner: messages must arrive): process the
+            # R6 CATCH-UP (user feedback: messages must arrive): process the
             # pre-adoption frames SILENTLY - the answer accumulates so
             # the fazit relay at done carries the FULL result, and tool
             # repeats dedupe against pre-adoption calls. No sends here.
@@ -1420,8 +1420,7 @@ class RunBridge:
                 if _lbl:
                     await self.ms.send_message("🤖 " + _lbl[:200])
             elif ev.get("type") == "planner_result":
-                # PLANNER ON THE PHONE (2026-10-07, owner: "planner wieder
-                # nicht angekommen"): the takeover delta loop never had this
+                # PLANNER ON THE PHONE (2026-10-07, user feedback: the plan did not reach the phone again): the takeover delta loop never had this
                 # branch at all - the finished plan never reached the phone.
                 _pch = ev.get("chunks") or []
                 _plan = ""
@@ -1439,8 +1438,7 @@ class RunBridge:
                     await self.ms.send_message(
                         "🧠 " + _plan[:600] + ("…" if len(_plan) > 600 else ""))
             elif ev.get("type") == "ctx_meter":
-                # CONTEXT/COMPRESSION VISIBILITY (owner: "compression etc
-                # sichtbar"): milestone lines at 50/75/90 % (once each) and
+                # CONTEXT/COMPRESSION VISIBILITY (user feedback: the plan did not reach the phone again): milestone lines at 50/75/90 % (once each) and
                 # a one-shot note while the engine compresses context.
                 try:
                     _est = int(ev.get("est_tokens") or 0)
@@ -1473,7 +1471,7 @@ class RunBridge:
                 if not tool_lines or tool_lines[-1] != _fc:
                     tool_lines.append(_fc)
             elif ev.get("type") == "usage_meta":
-                # CODER OUTPUT (owner: real coder text instead of a bare
+                # CODER OUTPUT (user feedback: relay real coder text instead of a bare
                 # "round finished"): when a coder LLM call ends, relay the
                 # free text it produced since the last relay (token events
                 # only - tool-call payloads are separate events).
@@ -1516,7 +1514,7 @@ class RunBridge:
                 elif _cnt % 5 == 0:
                     tool_lines.append(f"{line} (repeat #{_cnt})")
         for tl in tool_lines[-12:]:  # cap per tick, newest win
-            # (owner: "not everything arrives" - 6 was too tight once the
+            # (user feedback: the plan did not reach the phone again - 6 was too tight once the
             # file-change lines share the budget with the tool lines)
             await self.ms.send_message(tl)
         if last_status and last_status != m["last_status"] \
@@ -1570,8 +1568,7 @@ class RunBridge:
                     # ASK-USER ON THE PHONE (2026-10-06, owner): an agent
                     # question is relayed as a TEXT card - the reply IS the
                     # answer (free text beats 1/3 for open questions).
-                    # YES/NO BUTTONS (2026-10-07, owner: "nicht YES
-                    # abtippen"): a yes/no-shaped question (destructive
+                    # YES/NO BUTTONS (2026-10-07, user feedback: the plan did not reach the phone again): a yes/no-shaped question (destructive
                     # gate) gets tappable buttons; free text still wins
                     # for own commentary.
                     _ask_low = preview.lower()
@@ -1737,8 +1734,7 @@ class RunBridge:
         except ValueError:
             return "malformed button"
         if data.startswith("ask:"):
-            # ASK BUTTONS (2026-10-07, owner: "yes/no als buttons, nicht
-            # YES abtippen"): yes/no cards (destructive gate + agent
+            # ASK BUTTONS (2026-10-07, user feedback: the plan did not reach the phone again): yes/no cards (destructive gate + agent
             # yes/no questions) ride the SAME decide_approval path as a
             # text answer; decision_id/tool from the mirrored card guard
             # duplicates. Free text stays possible alongside the buttons.

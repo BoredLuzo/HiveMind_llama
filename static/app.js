@@ -1374,9 +1374,8 @@ async function _flushQueuedSettings() {
       var _rj = await _resp.json();
       if (_rj && _rj.settings_rev) S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
       if (_rj && _rj.stale_rejected) console.warn('postSettings: stale patch rejected for', _rj.stale_rejected);
-      // STALE-SNAPSHOT WARNING (2026-10-07, owner: "git felder sollten
-      // sich nicht resetten"): the server strips protected keys from an
-      // older tab's patch - the owner must know the save did NOT take.
+      // STALE-SNAPSHOT WARNING (2026-10-07, user feedback: git fields must not reset on save): the server strips protected keys from an
+      // older tab's patch - the user must know the save did NOT take.
       if (_rj && Array.isArray(_rj.stripped) && _rj.stripped.length) {
         S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
         var _msg = 'Veralteter Tab-Zustand: ' + _rj.stripped.join(', ')
@@ -4668,7 +4667,7 @@ function _renderAskCard(d) {
     if (!_t) { _inp.focus(); _inp.style.borderColor = '#e06060'; return; }
     _sendAnswer(_t);
   };
-  // YES/NO BUTTONS (2026-10-07, owner: "nicht YES abtippen"; revised
+  // YES/NO BUTTONS (2026-10-07, user feedback: git fields must not reset on save; revised
   // same day: own row with Yes / No / Wait-later, the text field stays
   // pure text). "Wait later" removes only the buttons - the run keeps
   // waiting and the free-text answer below stays available anytime.
@@ -5046,7 +5045,7 @@ function _perfRender(finalized) {
   if (S.perfRealTokens > 0 && S.perfFirstTokenAt) {
     _realRate = _perfWallRate();
   }
-  // SUMMARY (2026-10-07, owner: previous display was better): the collapsed
+  // SUMMARY (2026-10-07, user feedback: previous display was better): the collapsed
   // line shows the plain wall-clock rate again; the CLEANED rate (active
   // decode time only) lives as its own pill in the expanded details.
   var _rateVal = (finalized && _tokRate > 0) ? _tokRate : (_realRate > 0 ? _realRate : _tokRate);
@@ -5720,7 +5719,7 @@ setTimeout(_journalInitAttach, 1500);
 setInterval(_journalInitAttach, 10000);
 
 function handleEvent(d) {
-  // RATE FIX v2 (2026-10-07, owner: "1920 tok/s sind etwas viel"):
+  // RATE FIX v2 (2026-10-07, user feedback: git fields must not reset on save):
   // active decode time must count EVERY stream activity - tokens,
   // tool_gen bursts and thinking tokens are all model output, while
   // usage_meta counts ALL completion tokens. Counting only text token
@@ -5798,7 +5797,7 @@ function handleEvent(d) {
     var _steerHead = '\uD83D\uDED9 steer' + (_steerN > 0 ? ' (+' + _steerN + ' image' + (_steerN > 1 ? 's' : '') + ')' : '');
     _steerCard.innerHTML = '<div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:#6a9ad0;text-transform:uppercase;">' + esc(_steerHead) + '</div>'
       + '<div style="white-space:pre-wrap;word-break:break-word;">' + esc(_steerTxt || '(image only)') + '</div>';
-    // STEER PLACEMENT (2026-10-08, owner: the card belongs inside the run
+    // STEER PLACEMENT (2026-10-08, user feedback: the card belongs inside the run
     // block, next to the tool rows - not dangling at the chat end). Live in
     // the active coder bubble when one exists; chat flow as fallback.
     var _steerHost = (S.curAgent && document.getElementById('ab-' + S.curAgent.tid)) || document.getElementById('chat');

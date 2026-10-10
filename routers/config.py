@@ -45,8 +45,7 @@ _UI_REV_PROTECTED_KEYS = {
     "telegram_phone_restricted", "telegram_mirror_enabled",
     "telegram_gateway_enabled", "telegram_approval_mode",
     "git_token",
-    # GIT PANEL (2026-10-07, owner: "git felder sollten sich nicht
-    # resetten"): every panel click posts the whole form snapshot - an
+    # GIT PANEL (2026-10-07, user feedback: git fields must not reset on save): every panel click posts the whole form snapshot - an
     # older tab silently wiped email/auto-push/auto-commit again and
     # again while the owner was mid-test.
     "git_repo_url", "git_username", "git_email", "git_auto_push",
@@ -154,8 +153,7 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
 @router.get("/settings")
 async def get_settings():
     s = dict(settings)
-    # SECURITY (UX-FIX 2026-10-07, owner: "UI zeigt viel zu kurzen
-    # token"): the masked '****' read as a broken tiny credential. The
+    # SECURITY (UX-FIX 2026-10-07, user feedback: git fields must not reset on save): the masked '****' read as a broken tiny credential. The
     # field now arrives EMPTY with an explicit saved flag; the panel
     # shows the state as a placeholder instead of a fake value.
     _gt_saved = bool(s.get("git_token"))

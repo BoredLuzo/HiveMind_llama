@@ -1302,7 +1302,7 @@ class LlamaLoadMixin:
         elif _model_base in ("qwen3.5", "omnicoder"):
             cmd += ["--reasoning", "off"]
 
-        # MTP SELF-SPECULATIVE DECODING (2026-10-08, owner: "MTP mit Wert 2"):
+        # MTP SELF-SPECULATIVE DECODING (2026-10-08, user feedback: use mtp decoding with draft count 2):
         # registry mtp:true models carry predictive layers - draft-mtp uses
         # them as their own draft model. Verified on VULKAN: the server
         # accepts the flags and generates.

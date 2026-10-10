@@ -110,7 +110,7 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
     start_line = args.get("start_line")
     end_line = args.get("end_line")
     _full = start_line is None and end_line is None
-    # RE-READ DEDUP (2026-10-08, owner: "91 read_file, main.ts 12x"): a full
+    # RE-READ DEDUP (2026-10-08, user feedback: one round re-read one file 12 times): a full
     # read of an UNCHANGED file returns a compact confirmation - the previous
     # read's content is already in the model context and does not need to be
     # paid for twice. Range reads and first reads always return content.
@@ -639,7 +639,7 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             await asyncio.to_thread(_write_fuzzy)
             _lint = await _auto_lint_result(p, workspace)
             return f"[edit_file: '{p}' edited via fuzzy match]{_lint}"
-        # OLD-TEXT RE-ANCHOR (2026-10-08, owner: the old_text loop): the
+        # OLD-TEXT RE-ANCHOR (2026-10-08, user feedback: the old_text retry loop): the
         # model edits from memory after context compression and repeats the
         # same failed edit. Attach the CURRENT head of the file to the error
         # so the very next edit can be built from real content.

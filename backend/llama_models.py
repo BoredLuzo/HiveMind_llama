@@ -600,8 +600,7 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
         if len(name_list) > 1:
             name_list.sort(key=len, reverse=True)
             for dup in name_list[1:]:
-                # DEDUP FIX (2026-10-07, owner: "minicpm 2x mit
-                # unterschiedlichem Namen"): an override name stays protected
+                # DEDUP FIX (2026-10-07, user feedback: minicpm listed twice under different names): an override name stays protected
                 # only when it points at a DIFFERENT file. Same-file aliases
                 # (manifest tag vs models.json override vs parsed name) now
                 # collapse to ONE listing instead of confusing the model
