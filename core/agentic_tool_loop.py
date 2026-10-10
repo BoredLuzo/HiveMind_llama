@@ -352,6 +352,7 @@ class AgenticToolLoop(ToolLoop):
                     _drift_cut = False
                     async for _sse_line in _resp.aiter_lines():
                         if not _sse_line.startswith("data:"): continue
+                        self._diag_chunk_n = getattr(self, '_diag_chunk_n', 0) + 1
                         _sse_data = _sse_line[5:].strip()
                         if _sse_data == "[DONE]": break
                         try: _sse_chunk = json.loads(_sse_data)
@@ -494,6 +495,12 @@ class AgenticToolLoop(ToolLoop):
                                 "content": "⚠ repetition drift in tool-call arguments — cutting generation early"})
                             break
 
+                    # STREAM-DIAG (2026-10-10): six runs lost usage — log the
+                    # exact end state of every stream: chunk count, usage
+                    # arrival, finish reason. One line, no behavior change.
+                    logger.info("[STREAM-DIAG] ended chunks=%d usage=%s fr=%s",
+                                getattr(self, '_diag_chunk_n', -1),
+                                _dr_usage_final is not None, _dr_finish_reason)
                     # send usage EXACTLY ONCE after the stream ends
                     if _dr_usage_final:
                         await self._emit({"type": "usage_meta", "phase": "coder", **_dr_usage_final})
