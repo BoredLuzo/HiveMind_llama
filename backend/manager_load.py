@@ -1650,8 +1650,21 @@ class LlamaLoadMixin:
                     )
 
         # ── Log-Datei ─────────────────────────────────────────────────────────
-        _log_path = Path(__file__).parent.parent / "logs" / f"llama_server_{slot.port}.log"
+        # SLOT-LOG-ROTATION (2026-10-09): timestamped filename - the fixed name
+        # was opened "w" on every start, destroying the previous run's server
+        # log (the night-run qwen log died exactly this way on restart).
+        _log_path = (Path(__file__).parent.parent / "logs" /
+                     f"llama_server_{slot.port}_{time.strftime('%Y%m%d-%H%M%S')}.log")
         _log_file = open(_log_path, "w", encoding="utf-8", errors="replace")
+        # SLOT-LOG-CLEANUP (2026-10-10): keep the newest 10 datiert logs
+        # per port, delete older ones (one file per start accumulates).
+        try:
+            _old_logs = sorted(_log_path.parent.glob(
+                f"llama_server_{slot.port}_*.log"))[:-10]
+            for _stale in _old_logs:
+                _stale.unlink(missing_ok=True)
+        except Exception:
+            pass
         _log_file_closed = False
         try:
             _log_file.write(
