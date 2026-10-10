@@ -1308,8 +1308,24 @@ class LlamaLoadMixin:
         # accepts the flags and generates.
         try:
             if _reg_is_mtp(model) and "--spec-type" not in cmd:
-                cmd += ["--spec-type", "draft-mtp", "--spec-draft-max", "2"]
-                logger.info(f"--spec-type draft-mtp (draft-max 2) enabled for {model} (registry mtp)")
+                # FLAG-NAME FIX (2026-10-10, exit=1 evidence): this build wants
+                # --spec-draft-n-max; the shipped --spec-draft-max is an
+                # invalid argument and CRASHED EVERY mtp-model server start
+                # (coder-load 3/3 failed -> runtime_load_error, run dead).
+                # Guarded like the KV flags below: the flag must exist in the
+                # binary's --help, otherwise the server starts undrafted.
+                _help_txt = ""
+                try:
+                    _help_txt = subprocess.run(
+                        [cmd[0], "--help"], capture_output=True, text=True,
+                        timeout=20, encoding="utf-8", errors="replace").stdout
+                except Exception:
+                    _help_txt = ""
+                if "--spec-draft-n-max" in _help_txt:
+                    cmd += ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2"]
+                    logger.info(f"--spec-type draft-mtp (n-max 2) enabled for {model} (registry mtp)")
+                else:
+                    logger.warning("spec-draft-n-max not supported by this binary - %s starts undrafted", model)
         except Exception:
             pass
 
