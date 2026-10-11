@@ -600,6 +600,13 @@ class RunBridge:
                 elif etype == "thinking_token":
                     # R4: coder reasoning between tool calls - tail per tick
                     tick_think += str(ev.get("content") or "")
+                elif etype == "partition_done":
+                    # PRE-EXPLORE VISIBILITY (2026-10-11): the pre-explore workers
+                    # emit partition_done once per partition - show it so early
+                    # read/search work is not invisible on the phone.
+                    _pdl = str(ev.get("label") or "").strip()
+                    if _pdl:
+                        await self.ms.send_message(f"🔍 pre-explore: {_pdl[:160]}")
                 elif etype == "tool_call":
                     if tick_think.strip():
                         _tt = " ".join(tick_think.split())[-160:]
@@ -1260,6 +1267,13 @@ class RunBridge:
                     if _tl:
                         _saw = m.setdefault("tool_relay_seen", {})
                         _saw[_tl] = _saw.get(_tl, 0) + 1
+                        # CATCHUP-TOOL-DIGEST (2026-10-11): tool calls made
+                        # before the mirror bound were relayed never (owner:
+                        # "alle tool calls, nicht nur write/read"). The last
+                        # ones ride the adoption note below.
+                        _ctl = m.setdefault("catchup_tool_lines", [])
+                        if not _ctl or _ctl[-1] != _tl:
+                            _ctl.append(_tl)
                 elif _cev.get("type") == "ctx_meter":
                     # TG-AUDIT: STATE events are silently skipped in the
                     # replay (no spam), but the mirror must still land on
@@ -1310,6 +1324,12 @@ class RunBridge:
                 _note += "\n🤖 " + _duo_label[:200]
             if _plan_catchup:
                 _note += "\n🧠 " + _plan_catchup[:600]
+            _catchup_tools = (m.get("catchup_tool_lines") or [])[-6:]
+            if _catchup_tools:
+                _nlc = "\n"
+                _note += (_nlc + "🔧" + _nlc.join(
+                    "🔧" + " " + _ct for _ct in _catchup_tools)
+                    + _nlc + "(earlier tool activity, newest last)")
             await self.ms.send_message(_note)
             if _catchup_comp and _catchup_lim:
                 await self.ms.send_message(
@@ -1513,7 +1533,7 @@ class RunBridge:
                     tool_lines.append(line)
                 elif _cnt % 5 == 0:
                     tool_lines.append(f"{line} (repeat #{_cnt})")
-        for tl in tool_lines[-12:]:  # cap per tick, newest win
+        for tl in tool_lines[-20:]:  # cap per tick, newest win
             # (user feedback: the plan did not reach the phone again - 6 was too tight once the
             # file-change lines share the budget with the tool lines)
             await self.ms.send_message(tl)
