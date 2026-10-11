@@ -2646,6 +2646,11 @@ async def run_code_duo(ctx):
                     if _ac_out:
                         yield await ctx.emit({"type": "status", "content": _ac_out})
                     _di += 1
+                    # CHUNK-PERSIST (2026-10-11): write the resume block after every
+                    # done chunk - a hard kill (power, crash, taskkill) previously lost
+                    # all in-memory chunk progress and the resumed run repeated chunks.
+                    _halt_with_resume("chunk_checkpoint")
+
                     _cs.reset_test_retries()
                     if _subtask:
                         yield await ctx.emit({"type": "status",

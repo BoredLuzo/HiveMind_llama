@@ -511,7 +511,8 @@ async def execute_tool_round(
                                             break
                                     break
                             if re.search(r"\b(pytest|python\s+-m\s+pytest|npm\s+(run\s+)?test|vitest|jest|cargo\s+test|go\s+test|mvn\s+test|dotnet\s+test)\b",
-                                         _at_cmd, re.IGNORECASE):
+                                         _at_cmd, re.IGNORECASE) \
+                               or re.search(r"\bpython3?\s+\S*test\S*\.py\b", _at_cmd):
                                 _last_test_idx_at = _at_idx
                     if _last_test_idx_at <= _last_write_idx_at:
                         _logger.info("[AUTO-TEST] No test run since last edit - running run_tests")
