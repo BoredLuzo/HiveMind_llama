@@ -2140,7 +2140,7 @@ async def run_code_duo(ctx):
                                     "content": f"🧹 Planner unloaded — full VRAM for the coder."})
                         except (RuntimeError, OSError, asyncio.TimeoutError) as _serial_err:
                             logger.debug("[SERIAL-SLOTS] planner evict failed: %s", _serial_err)
-                    for _cl_attempt in range(3):
+                    for _cl_attempt in range(5):
                         try:
                             # VISION RELOAD HINT (2026-10-01): if the coder
                             # needs the projector but its slot runs without
@@ -2233,11 +2233,11 @@ async def run_code_duo(ctx):
                             # model mismatch - same model, smaller ctx. Cascade like the generic
                             # retry instead of hard-stopping (mellum @120832 blocked, @49152
                             # fits). Falls through to hard_stop on the last attempt or at floor.
-                            if _cl_attempt < 2 and _coder_ctx_try > 8192:
+                            if _cl_attempt < 4 and _coder_ctx_try > 8192:
                                 _next_ctx = max(8192, int(_coder_ctx_try / 2))
                                 yield await ctx.emit({"type": "status",
                                     "content": f"⟳ Coder does not fit at ctx={_coder_ctx_try} — retrying "
-                                              f"attempt {_cl_attempt+2}/3 with ctx={_next_ctx} in 4s…"})
+                                              f"attempt {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
                                 await asyncio.sleep(4.0)
                                 _coder_ctx_try = _next_ctx
                                 continue
@@ -2263,13 +2263,13 @@ async def run_code_duo(ctx):
                                 ))
                                 return
                             logger.warning(
-                                "Coder-load attempt %d/3 failed (%s): %s",
+                                "Coder-load attempt %d/5 failed (%s): %s",
                                 _cl_attempt + 1, type(_cl_err).__name__, str(_cl_err)[:120],
                             )
-                            if _cl_attempt < 2:
+                            if _cl_attempt < 4:
                                 _next_ctx = max(8192, int(_coder_ctx_try / 2))
                                 yield await ctx.emit({"type": "status",
-                                    "content": f"⟳ Coder load error ({type(_cl_err).__name__}), retry {_cl_attempt+2}/3 with ctx={_next_ctx} in 4s…"})
+                                    "content": f"⟳ Coder load error ({type(_cl_err).__name__}), retry {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
                                 await asyncio.sleep(4.0)
                                 _coder_ctx_try = _next_ctx
                                 if ctx.aborted():
