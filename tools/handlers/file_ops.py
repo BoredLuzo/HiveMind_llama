@@ -142,8 +142,8 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
             _head = await asyncio.to_thread(_read_head_bytes, p, 1024)
             if _looks_binary_bytes(_head):
                 return _read_binary_error(p)
-            _nl, _capped = await asyncio.to_thread(_fast_newline_count, p, 401)
-            if _nl > 400:
+            _nl, _capped = await asyncio.to_thread(_fast_newline_count, p, 1201)
+            if _nl > 1200:
                 _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
                 _sig = await asyncio.to_thread(_sig_fn, p, 200) if _sig_fn else (
                     "(signature extraction unavailable) — use read_file with line_range=[1,50] to inspect the file header first."
@@ -197,11 +197,6 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
                 _chunk += f"\n[TRUNCATED: {len(content_chunk)-32000} more chars omitted — use smaller line range]"
             return f"[{p} lines {s+1}-{min(e, len(lines))} / {len(lines)}]\n" + _chunk
         
-        _MAX_READ_LINES = 200
-        if len(lines) > _MAX_READ_LINES:
-            _chunk = "".join(lines[:_MAX_READ_LINES])
-            _chunk += f"\n[FILE TRUNCATED — {len(lines)} lines total. Use search_code for specific sections.]"
-            return f"[{p} total lines: {len(lines)}]\n" + _chunk
         _chunk = content[:32000]
         if len(content) > 32000:
             _chunk += f"\n[TRUNCATED: {len(content)-32000} more chars omitted — use start_line/end_line to read sections]"
