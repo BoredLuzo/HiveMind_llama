@@ -482,6 +482,7 @@ class RunBridge:
         self._skip_finish = False  # R4: stream-broke handover skips _finish
         # R4 relay: phase/plan/thinking visibility on the phone
         last_phase = ""
+        planner_think = ""
         tick_think = ""
         # PHONE-RUNS-IN-UI (2026-10-06): rid -> chat_id of runs handed
         # over to the mirror after a stream break - their answers must
@@ -548,6 +549,10 @@ class RunBridge:
                     if _ph and _ph != last_phase:
                         await self.ms.send_message(f"→ {_ph}")
                         last_phase = _ph
+                    if planner_think.strip():
+                        _pt = " ".join(planner_think.split())[-160:]
+                        await self.ms.send_message(f"💭 Planning: …{_pt}")
+                        planner_think = ""
                 elif etype == "planner_result":
                     _plan = str(ev.get("content") or "")
                     if not _plan and isinstance(ev.get("chunks"), list):
@@ -597,6 +602,10 @@ class RunBridge:
                     if _ofc != self._last_tool_line:
                         await self.ms.send_message(_ofc)
                         self._last_tool_line = _ofc
+                elif etype == "planner_thinking_token":
+                    # PLANNER VISIBILITY (2026-10-11): the planning-phase tail - same
+                    # treatment as the coder thinking tail, flushed with a prefix.
+                    planner_think += str(ev.get("content") or "")
                 elif etype == "thinking_token":
                     # R4: coder reasoning between tool calls - tail per tick
                     tick_think += str(ev.get("content") or "")
