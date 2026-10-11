@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.7] - 2026-10-11
+
+Telegram mirror visibility + coder vision honesty:
+
+- browser screenshots for coders running without mmproj now state that
+  the model cannot view the image and point at snapshot/evaluate text
+  output (source of truth: slot.vision_active from /props)
+- telegram mirror relays tool calls made before the mirror attached
+  (last 6 ride the adoption note, newest last)
+- pre-explore partition_done events are relayed (one line per
+  partition - early read/search work is no longer invisible)
+- per-tick tool-line cap raised from 12 to 20
+
 ## [1.3.6] - 2026-10-10
 
 Follow-up fixes found in live runs:
