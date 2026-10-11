@@ -1,0 +1,33 @@
+{
+  "model": "k2-horizon-7b",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 16384,
+  "num_ctx_analyst": 8192,
+  "num_ctx_duo_coder": 16384,
+  "num_ctx_vision": null,
+  "chat_template": "",
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 0,
+  "gpu_layers": null,
+  "mmproj_filename": null,
+  "vram_gb_override": 6.2,
+  "sampling": {
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 0
+    },
+    "non_thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 0
+    }
+  }
+}

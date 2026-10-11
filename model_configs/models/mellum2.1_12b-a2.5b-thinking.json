@@ -1,0 +1,33 @@
+{
+  "model": "mellum2.1-12b-a2.5b-thinking",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 49152,
+  "num_ctx_analyst": 16384,
+  "num_ctx_duo_coder": 49152,
+  "num_ctx_vision": null,
+  "chat_template": "",
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 22,
+  "gpu_layers": null,
+  "mmproj_filename": null,
+  "vram_gb_override": null,
+  "sampling": {
+    "thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "non_thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20
+    }
+  }
+}

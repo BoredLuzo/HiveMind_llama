@@ -60,6 +60,8 @@ _VRAM_TABLE: dict[str, float] = {
     # 128 routed + 1 shared expert (8 active), KDA/MLA. Q4_K_L ~4.75GB weights
     # — fits in 8GB, faster than expert offloading via PCIe.
     "ling-3.0-tiny":     4.8,
+    "k2-horizon-7b":     6.2,
+    "k2-horizon-3.7b":   3.5,
 
     # Qwen3.6
     "qwen3-6:27b":       7.0,
@@ -79,7 +81,10 @@ _MOE_TABLE: dict[str, dict] = {
         "active_gpu_gb":            4.66,
         "measured_bytes_per_token": 6272,
         "calibrated_n_cpu_moe":     35,
-    },
+    
+    "mellum2.1-12b-a2.5b-thinking": {
+        "active_gpu_gb": 4.0,
+    },},
     "qwen3.6:35b-a3b-ud": {
         "active_gpu_gb":            4.66,
         "measured_bytes_per_token": 6272,
@@ -212,6 +217,17 @@ def vram_of(model_name: str) -> float:
     return 4.0
 
 
+# MODEL-KV-KB-T (2026-10-11): KV KB per token (q4_0) for models whose geometry
+# the generic formula gets wrong (hybrid attention, SWA-MoE, dense-large-KV).
+# Checked before the formula in vram_of_with_ctx.
+_CTX_KV_KB_PER_TOKEN: dict[str, float] = {
+    "qwen3.5":             9.2,   # hybrid: 8/33 layers carry KV (measured 990 MiB @112640)
+    "k2-horizon-7b":       41.5,  # dense: all 36 layers, 8 kv-heads x 128 (gguf metadata)
+    "k2-horizon-3.7b":     78.0,  # same geometry, q8_0 override
+    "mellum2.1-12b-a2.5b-thinking": 4.1,  # swa-moe: 7/28 full-attention layers
+}
+
+
 def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
 
 
@@ -228,10 +244,15 @@ def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
     # Realruns am PRE-FLIGHT-Gate (VRAMPreFlightError, 09.10.). Nur der
     # belegte 4B-Wert; andere Groessen unbestaetigt (alter Pfad).
     _bn = model_name.strip().lower().split(":")[0]
-    if _bn in ("qwen3.5", "qwen35"):
+    _kb = None
+    for _key, _kv in _CTX_KV_KB_PER_TOKEN.items():
+        if model_name.strip().lower().startswith(_key) or _bn.startswith(_key.split(":")[0]):
+            _kb = _kv
+            break
+    if _kb is not None:
         extra_ctx = num_ctx - 4096
         if extra_ctx > 0:
-            return round(base_vram + (extra_ctx / 1024) * 9.2 / 1000, 2)
+            return round(base_vram + (extra_ctx / 1024) * _kb / 1000, 2)
 
     size = _extract_size_gb(model_name) or 4.0
     size_factor = size / _CTX_OVERHEAD_REF_SIZE_B

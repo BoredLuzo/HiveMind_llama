@@ -24,6 +24,7 @@ MODEL_NUM_CTX: dict[str, int] = {
     # ── Weitere ──
     "lfm2.5":            16384,
     "ling-3.0-tiny":     16384,
+    "k2-horizon":        16384,  # dense 36-layer full-attention: KV-heavy
 }
 
 # ── Analyst-Override ──────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ MODEL_NUM_CTX_DUO_CODER: dict[str, int] = {
     "rnj-1":        8192,  # rnj-1:8b: Code-STEM, lange Outputs erwartet
     "omnicoder":    8192,  # OmniCoder-9B: ~5.5GB@ctx=6144
     "qwen3.6":      8192,
+    "k2-horizon":      16384,
     "ling-3.0-tiny": 16384,
 }
 
