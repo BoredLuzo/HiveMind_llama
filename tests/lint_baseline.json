@@ -462,5 +462,9 @@
  "vram/loader.py": {
   "broad_except": 5,
   "except_pass": 2
+ },
+ "tools/handlers/_shared.py": {
+  "broad_except": 1,
+  "except_pass": 0
  }
 }

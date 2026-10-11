@@ -334,6 +334,15 @@ def _dispatch(args: dict, workspace, workspace_lock=None) -> str:
         _out.parent.mkdir(parents=True, exist_ok=True)
         full = bool(args.get("full_page", False))
         page.screenshot(path=str(_out), full_page=full)
+        try:
+            from tools.handlers._shared import coder_vision_truth as _cvt
+            if _cvt() is False:
+                return (f"[browser] screenshot saved to {_out} "
+                        "(this coder runs WITHOUT vision/mmproj - you cannot view "
+                        "this image. Inspect the page via browser snapshot/evaluate "
+                        "text output instead.)")
+        except Exception:
+            pass
         return f"[browser] screenshot saved to {_out}"
 
     if action == "click":

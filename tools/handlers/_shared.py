@@ -52,3 +52,24 @@ def init_runtime_deps(
     get_signatures_report = _get_signatures_report
     find_references_report = _find_references_report
     edit_ast_file = _edit_ast_file
+
+
+def coder_vision_truth():
+    """VISION-TRUTH for tool results (2026-10-11): True only when a running
+    llama slot reports /props vision_active=True (mmproj loaded). False when
+    every running slot runs without vision -> tools that produce images must
+    tell the model it cannot view them. None when no slot is running or the
+    props state is unknown -> no claim either way. SERIAL-SLOTS keeps this
+    exact: the coder slot is the one running slot."""
+    try:
+        from backend.llama_server_manager import manager as _lsm
+        seen = False
+        for _s in getattr(_lsm, "_slots", []) or []:
+            if not getattr(_s, "is_running", False):
+                continue
+            seen = True
+            if getattr(_s, "vision_active", None) is True:
+                return True
+        return False if seen else None
+    except Exception:
+        return None
