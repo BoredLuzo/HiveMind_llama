@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.3.6] - 2026-10-10
+
+Follow-up fixes found in live runs:
+
+- write_file calls cut at the output limit are no longer salvaged and
+  executed - a half-written file that looks complete caused rewrite
+  loops; cut writes are dropped with a clear notice so the model
+  re-sends in smaller pieces
+- read_file's too-large message now states the file on disk is
+  complete, and write results on big files carry a note that full
+  reads above 400 lines need line ranges - stops rewrite loops caused
+  by partial views of fresh writes
+- /stream model overrides now patch the agent card dict as well as the
+  flat key; overrides used to silently lose to the card
+- ui: finished run journals no longer replay frames over the chat
+  transcript, so the end block renders once
+- log hygiene: gateway poll lines no longer flood the supervisor log
+  (~1.8 MB per two days) or the engine log
+
 ## [1.3.5] - 2026-10-10
 
 Reliability and observability fixes for local runs:
