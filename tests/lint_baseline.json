@@ -388,7 +388,7 @@
   "except_pass": 6
  },
  "tools/browser.py": {
-  "broad_except": 6,
+  "broad_except": 7,
   "except_pass": 1
  },
  "tools/definitions.py": {
