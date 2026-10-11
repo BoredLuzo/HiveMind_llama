@@ -249,7 +249,7 @@ _MOE_KV_CACHE_TYPES: dict[str, str] = {}
 # family. Matched on full key first, then on the base before the colon.
 _DENSE_KV_CACHE_TYPES: dict[str, str] = {
     "minicpm5": "q8_0",
-    "k2-horizon-3.7b": "q8_0",
+    "k2-horizon:3.7b": "q8_0",
 }
 
 

@@ -1,5 +1,5 @@
 {
-  "model": "k2-horizon-3.7b",
+  "model": "k2-horizon:3.7b",
   "capabilities": {
     "thinking": true,
     "vision": false,

@@ -60,8 +60,8 @@ _VRAM_TABLE: dict[str, float] = {
     # 128 routed + 1 shared expert (8 active), KDA/MLA. Q4_K_L ~4.75GB weights
     # — fits in 8GB, faster than expert offloading via PCIe.
     "ling-3.0-tiny":     4.8,
-    "k2-horizon-7b":     6.2,
-    "k2-horizon-3.7b":   3.5,
+    "k2-horizon:7b":      6.2,
+    "k2-horizon:3.7b":   3.5,
 
     # Qwen3.6
     "qwen3-6:27b":       7.0,
@@ -82,7 +82,7 @@ _MOE_TABLE: dict[str, dict] = {
         "measured_bytes_per_token": 6272,
         "calibrated_n_cpu_moe":     35,
     
-    "mellum2.1-12b-a2.5b-thinking": {
+    "mellum2.1:12b-a2.5b-thinking": {
         "active_gpu_gb": 4.0,
     },},
     "qwen3.6:35b-a3b-ud": {
@@ -222,9 +222,9 @@ def vram_of(model_name: str) -> float:
 # Checked before the formula in vram_of_with_ctx.
 _CTX_KV_KB_PER_TOKEN: dict[str, float] = {
     "qwen3.5":             9.2,   # hybrid: 8/33 layers carry KV (measured 990 MiB @112640)
-    "k2-horizon-7b":       41.5,  # dense: all 36 layers, 8 kv-heads x 128 (gguf metadata)
-    "k2-horizon-3.7b":     78.0,  # same geometry, q8_0 override
-    "mellum2.1-12b-a2.5b-thinking": 4.1,  # swa-moe: 7/28 full-attention layers
+    "k2-horizon:7b":       41.5,  # dense: all 36 layers, 8 kv-heads x 128 (gguf metadata)
+    "k2-horizon:3.7b":     78.0,  # same geometry, q8_0 override
+    "mellum2.1:12b-a2.5b-thinking": 4.1,  # swa-moe: 7/28 full-attention layers
 }
 
 
@@ -245,8 +245,9 @@ def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
     # belegte 4B-Wert; andere Groessen unbestaetigt (alter Pfad).
     _bn = model_name.strip().lower().split(":")[0]
     _kb = None
+    _nm = model_name.strip().lower()
     for _key, _kv in _CTX_KV_KB_PER_TOKEN.items():
-        if model_name.strip().lower().startswith(_key) or _bn.startswith(_key.split(":")[0]):
+        if _nm.startswith(_key):
             _kb = _kv
             break
     if _kb is not None:
