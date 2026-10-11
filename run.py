@@ -49,8 +49,8 @@ class _GatewayPollFilter(logging.Filter):
     """LOG-HYGIENE (2026-10-10): the gateway polls the engine every few
     seconds; httpx logged every poll as INFO and reached ~30% of the
     engine log. LLM POST lines stay visible."""
-    _QUIET = ("/gateway/heartbeat", "/gateway/poll", "/run/journal",
-              "/approval/pending", "/settings")
+    _QUIET = ("/gateway/heartbeat", "/gateway/poll", "/gateway/status",
+              "/run/journal", "/approval/pending", "/settings")
 
     def filter(self, record):
         try:
@@ -61,6 +61,9 @@ class _GatewayPollFilter(logging.Filter):
 
 
 logging.getLogger("httpx").addFilter(_GatewayPollFilter())
+# the uvicorn access log prints every INCOMING request server-side -
+# the same poll flood (owner paste, 1-2 lines per poll cycle)
+logging.getLogger("uvicorn.access").addFilter(_GatewayPollFilter())
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=PendingDeprecationWarning)

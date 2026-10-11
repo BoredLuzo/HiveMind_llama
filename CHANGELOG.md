@@ -17,7 +17,8 @@ Follow-up fixes found in live runs:
 - ui: finished run journals no longer replay frames over the chat
   transcript, so the end block renders once
 - log hygiene: gateway poll lines no longer flood the supervisor log
-  (~1.8 MB per two days) or the engine log
+  (~1.8 MB per two days), the engine httpx log, or the uvicorn access
+  log on the console
 
 ## [1.3.5] - 2026-10-10
 
