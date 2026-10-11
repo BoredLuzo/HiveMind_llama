@@ -73,6 +73,11 @@ DEFAULT_SETTINGS = {
     # cost of a larger VRAM compute buffer. Test lever for slow post-compression
     # prefill; revert to 256 if a load OOMs on tight GPUs.
     "llama_ubatch_size":       256,
+    # VRAM pre-flight gate (2026-10-11): when True (default), loads estimated
+    # not to fit are refused before llama-server starts (estimate can be
+    # wrong for foreign models - turning this OFF makes the engine attempt
+    # the load and halve ctx on real failures instead).
+    "vram_preflight_gate":     True,
 
     # ════════════════════════════════════════════════════════════════════════
     # ════════════════════════════════════════════════════════════════════════

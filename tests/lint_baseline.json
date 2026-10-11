@@ -332,7 +332,7 @@
   "except_pass": 2
  },
  "server.py": {
-  "broad_except": 33,
+  "broad_except": 34,
   "except_pass": 14
  },
  "settings.py": {

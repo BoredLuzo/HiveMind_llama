@@ -406,6 +406,20 @@ async def post_settings(req: Request):
         # mask echo or empty field: never destroy the stored credential
         data.pop("git_token", None)
     settings.update(data)
+    # VRAM-PREFLIGHT-GATE (2026-10-11): live-sync the toggle into the
+    # backend modules (same triple-sync as the startup path) so the
+    # switch takes effect without a restart.
+    if "vram_preflight_gate" in data:
+        try:
+            import backend.llama_config as _lc_pf
+            import backend.manager_load as _ml_pf
+            import backend.llama_server_manager as _lsm_pf
+            _pf_val = bool(data.get("vram_preflight_gate", True))
+            _lc_pf.VRAM_PREFLIGHT_GATE = _pf_val
+            _ml_pf.VRAM_PREFLIGHT_GATE = _pf_val
+            _lsm_pf.VRAM_PREFLIGHT_GATE = _pf_val
+        except Exception:
+            pass
     _xa = settings.get("exploration_agent")
     if isinstance(_xa, dict) and _xa.get("enabled") and not (_xa.get("model") or "").strip():
         _xa["model"] = DEFAULT_SETTINGS["exploration_agent"]["model"]

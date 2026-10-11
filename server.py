@@ -393,6 +393,16 @@ def _sync_backend_runtime_config() -> None:
         _cache_reuse_val = int(settings.get("llama_cache_reuse", 256) or 0)
         _lc_init.CACHE_REUSE = _cache_reuse_val
         _lsm_init.CACHE_REUSE = _cache_reuse_val
+        # VRAM-PREFLIGHT-GATE (2026-10-11): settings "vram_preflight_gate"
+        # synced into the same three modules as CACHE_REUSE.
+        _pf_val = bool(settings.get("vram_preflight_gate", True))
+        _lc_init.VRAM_PREFLIGHT_GATE = _pf_val
+        _lsm_init.VRAM_PREFLIGHT_GATE = _pf_val
+        try:
+            import backend.manager_load as _ml_pf
+            _ml_pf.VRAM_PREFLIGHT_GATE = _pf_val
+        except Exception:
+            pass
         # UBATCH-SEAM (2026-09-08): same three-module sync as CACHE_REUSE —
         # llama_ubatch_size overrides --ubatch-size (prefill throughput lever
         # for MoE + CPU expert offload; larger = faster prefill, more VRAM).

@@ -13,7 +13,7 @@ from .llama_config import (
     NO_MMAP_MIN_BUILD,
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS, _MOE_KV_CACHE_TYPES,
     _DENSE_KV_CACHE_TYPES,
-    MLOCK_MODEL, CACHE_REUSE, LLAMA_UBATCH,
+    MLOCK_MODEL, CACHE_REUSE, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
     _MTP_MODELS,
@@ -1631,7 +1631,16 @@ class LlamaLoadMixin:
                             )
                 except Exception as _rw_exc:
                     logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
-                if not _fit.ok:
+                if not _fit.ok and not VRAM_PREFLIGHT_GATE:
+                    # GATE-DISABLED (2026-10-11, settings vram_preflight_gate):
+                    # the estimate can be wrong for foreign models - attempt the
+                    # load anyway; real OOM crashes fall into the generic retry
+                    # with ctx halving.
+                    logger.warning(
+                        "[PRE-FLIGHT] gate disabled - attempting load of %s @ctx=%d "
+                        "although the estimate says it does not fit (needed=%dMiB, free=%dMiB)",
+                        model, num_ctx, int(_fit.needed_mib), int(_fit.free_mib))
+                if not _fit.ok and VRAM_PREFLIGHT_GATE:
                     logger.warning(
                         "[PRE-FLIGHT-BLOCK] %s @ctx=%d: external_usage_est=%d MiB "
                         "fixed_cost_dominant=%s needed=%dMiB free=%dMiB (source: %s)",

@@ -777,6 +777,14 @@
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);line-height:1.4">
             KV-shift reuse after mid-context edits. 0 = off, 256 = recommended. Applies on next model load.
+          <div style="display:flex;align-items:center;gap:6px;margin-top:8px">
+            <input type="checkbox" id="vram-preflight-gate-toggle" checked
+              onchange="S.vramPreflightGate=this.checked;postSettings({vram_preflight_gate:S.vramPreflightGate})">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);font-weight:600">VRAM Pre-Flight Gate</span>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);line-height:1.4">
+            Refuse model loads estimated not to fit VRAM. ON = safe (estimate can be wrong for foreign models). OFF = attempt the load anyway; real OOM halve ctx via retries.
+          </div>
           </div>
         </div>
 

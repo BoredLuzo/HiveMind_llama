@@ -151,6 +151,7 @@ let S = {
   duoCoderModel: '',
   llamaMlock: true,
   llamaCacheReuse: 256,
+  vramPreflightGate: true,
   moeExpertDefaults: {},
   moeAutodetect: {},
   ctxDefaults: {},
@@ -1068,6 +1069,9 @@ async function loadSettings() {
     if (configMlockEl) configMlockEl.checked = S.llamaMlock;
     updateMlockHint();
     S.llamaCacheReuse = parseInt(s.llama_cache_reuse, 10);
+    S.vramPreflightGate = s.vram_preflight_gate !== false;
+    var _pfGateEl = document.getElementById('vram-preflight-gate-toggle');
+    if (_pfGateEl) _pfGateEl.checked = S.vramPreflightGate;
     if (isNaN(S.llamaCacheReuse) || S.llamaCacheReuse < 0) S.llamaCacheReuse = 0;
     var cacheReuseEl = document.getElementById('llama-cache-reuse-input');
     if (cacheReuseEl) cacheReuseEl.value = S.llamaCacheReuse;
@@ -11914,6 +11918,13 @@ function _updateDuoRoleStatus(elId, label, model) {
       var lbl = w.querySelector('span');
       _push('agents', d[1], lbl || w, 'Duo ctx', null, d[2] + ' ctx context vram');
     });
+    // VRAM PRE-FLIGHT GATE (2026-10-11): guaranteed findability - the
+    // llama backend panel uses inline styles (no .tgl-row markup), so the
+    // DOM scan would miss it.
+    var _pfGate = document.getElementById('vram-preflight-gate-toggle');
+    if (_pfGate) _push('backend', 'VRAM Pre-Flight Gate', _pfGate, 'Llama backend', null,
+      'vram preflight gate refuse loads estimate ctx cascade backend');
+
     // NAMING ROUND (2026-10-05, user): generic row texts ("Active") get the
     // enclosing card/section title as prefix; duplicate labels are deduped;
     // dynamic agent cards (acard) are indexed WITH their setting fields so

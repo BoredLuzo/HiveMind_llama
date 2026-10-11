@@ -94,36 +94,42 @@ async def _phase_vram(ctx, state: dict):
         _vram_warn_names = coder_mdl.split(chr(58))[0] if ctx.duo_config.agentic_mode else f"{coder_mdl.split(chr(58))[0]}+{critic_mdl.split(chr(58))[0]}"
         yield await ctx.emit({"type": "status",
                           "content": f"⚠ VRAM warning: {_vram_warn_names} = {_duo_total:.1f}GB > budget {_budget_eff:.1f}GB (CPU overflow possible)"})
-    try:
-        from backend.llama_vram_table import VRAM_OVERFLOW_MODELS as _vram_overflow_models
-        from backend.llama_vram_table import vram_of_moe as _vram_moe_guard
-        _coder_base = coder_mdl.rsplit("#", 1)[0] if "#" in coder_mdl else coder_mdl
-        _critic_base = critic_mdl.rsplit("#", 1)[0] if "#" in critic_mdl else critic_mdl
-        _coder_need = float(_vram_moe_guard(_coder_base, int(_coder_ctx)))
-        if _coder_base in _vram_overflow_models or _coder_need > _budget_eff:
-            yield await ctx.emit({
-                "type": "status",
-                "content": (
-                    f"⛔ Coder ctx too large for VRAM: {_coder_ctx} (≈{_coder_need:.1f}GB > {_budget_eff:.1f}GB). "
-                    "Please reduce ctx."
-                ),
-            })
-            state["_duo_aborted"] = True
-            return
-        if not ctx.duo_config.agentic_mode:
-            _critic_need = float(_vram_moe_guard(_critic_base, int(_critic_ctx)))
-            if _critic_base in _vram_overflow_models or _critic_need > _budget_eff:
+    # VRAM-GUARD-TOGGLE (2026-10-11, settings vram_preflight_gate): the guard
+    # estimate can be wrong for foreign models - gate OFF means the load
+    # attempt decides (real OOM crashes drive the ctx cascade instead).
+    if not bool(ctx.settings.get("vram_preflight_gate", True)):
+        logger.info("[VRAM-GUARD] vram_preflight_gate=false - coder/critic ctx guard skipped")
+    else:
+        try:
+            from backend.llama_vram_table import VRAM_OVERFLOW_MODELS as _vram_overflow_models
+            from backend.llama_vram_table import vram_of_moe as _vram_moe_guard
+            _coder_base = coder_mdl.rsplit("#", 1)[0] if "#" in coder_mdl else coder_mdl
+            _critic_base = critic_mdl.rsplit("#", 1)[0] if "#" in critic_mdl else critic_mdl
+            _coder_need = float(_vram_moe_guard(_coder_base, int(_coder_ctx)))
+            if _coder_base in _vram_overflow_models or _coder_need > _budget_eff:
                 yield await ctx.emit({
                     "type": "status",
                     "content": (
-                        f"⛔ Critic ctx too large for VRAM: {_critic_ctx} (≈{_critic_need:.1f}GB > {_budget_eff:.1f}GB). "
+                        f"⛔ Coder ctx too large for VRAM: {_coder_ctx} (≈{_coder_need:.1f}GB > {_budget_eff:.1f}GB). "
                         "Please reduce ctx."
                     ),
                 })
                 state["_duo_aborted"] = True
                 return
-    except Exception:
-        logger.warning("VRAM guard failed - on-demand fallback active", exc_info=True)
+            if not ctx.duo_config.agentic_mode:
+                _critic_need = float(_vram_moe_guard(_critic_base, int(_critic_ctx)))
+                if _critic_base in _vram_overflow_models or _critic_need > _budget_eff:
+                    yield await ctx.emit({
+                        "type": "status",
+                        "content": (
+                            f"⛔ Critic ctx too large for VRAM: {_critic_ctx} (≈{_critic_need:.1f}GB > {_budget_eff:.1f}GB). "
+                            "Please reduce ctx."
+                        ),
+                    })
+                    state["_duo_aborted"] = True
+                    return
+        except Exception:
+            logger.warning("VRAM guard failed - on-demand fallback active", exc_info=True)
         pass
     try:
 

@@ -142,6 +142,11 @@ KV_CACHE_TYPE = "q4_0"
 # 0 = aus, 256 = llama.cpp-Empfehlung. Senkt Re-Prefill-Kosten massiv bei hohen ctx.
 CACHE_REUSE = 256
 
+# VRAM pre-flight gate (2026-10-11): refuse loads that the estimate
+# does not fit. False = attempt the load anyway and let real failures
+# drive the ctx cascade. Synced from settings "vram_preflight_gate".
+VRAM_PREFLIGHT_GATE = True
+
 # Prompt-processing chunk (--ubatch-size). Higher = faster prefill for MoE with
 # CPU expert offloading, but larger VRAM compute buffer. Runtime-overridable via
 # settings key llama_ubatch_size (server._sync_backend_runtime_config).
