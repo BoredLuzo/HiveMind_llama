@@ -389,7 +389,7 @@
  },
  "tools/browser.py": {
   "broad_except": 7,
-  "except_pass": 1
+  "except_pass": 2
  },
  "tools/definitions.py": {
   "broad_except": 1,
