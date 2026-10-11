@@ -5704,7 +5704,7 @@ function _journalInitAttach() {
       // DONE-JOURNAL-SILENT (2026-10-11): a finished run's journal is fully
       // covered by the chat-transcript replay - feed no frames AND print no
       // note. The restore note showed after EVERY clean run within the 300s
-      // window (owner: "steht unten nach jedem run"). Live/aborted attaches
+      // window (user report: the note showed after every run). Live/aborted attaches
       // keep their notes.
       if (j.done) return;
       S._sseFrameSeq = 0; S._sseBuf = ''; S._sawDoneEvent = false;

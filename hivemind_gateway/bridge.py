@@ -1268,7 +1268,7 @@ class RunBridge:
                         _saw = m.setdefault("tool_relay_seen", {})
                         _saw[_tl] = _saw.get(_tl, 0) + 1
                         # CATCHUP-TOOL-DIGEST (2026-10-11): tool calls made
-                        # before the mirror bound were relayed never (owner:
+                        # before the mirror bound were relayed never (user request:
                         # "alle tool calls, nicht nur write/read"). The last
                         # ones ride the adoption note below.
                         _ctl = m.setdefault("catchup_tool_lines", [])

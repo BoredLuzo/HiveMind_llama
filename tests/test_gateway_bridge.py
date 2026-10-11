@@ -1434,7 +1434,7 @@ async def t_tg_audit():
           any("Context 51%" in m for m in ms3.messages))
     check("AUDIT: own run file change", "main.ts (write, 40 lines)" in j3)
 
-    # 4) ASK YES/NO BUTTONS (owner: "nicht YES abtippen"): a yes/no-shaped
+    # 4) ASK YES/NO BUTTONS (user feedback: no typing yes): a yes/no-shaped
     #    ask card carries tappable buttons riding the decide path.
     hive4 = AuditHive()
     hive4.journal_body = {"active": True, "run_id": "ask-1",
@@ -1473,7 +1473,7 @@ async def t_tg_audit():
     check("ASKBTN: confirmation line sent",
           any("Confirmed (yes)" in m for m in ms4.messages))
 
-    # 5) PLANNER RELAY (owner: "planner wieder nicht angekommen")
+    # 5) PLANNER RELAY (user feedback: the plan did not reach the phone again)
     frames5 = ['data: {"type": "run_id", "run_id": "plan-9"}',
                'data: {"type": "planner_result", "chunks": ['
                '{"title": "init project"}, {"title": "physics core"}, '
