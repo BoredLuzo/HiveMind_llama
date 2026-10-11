@@ -19,6 +19,12 @@ Follow-up fixes found in live runs:
 - log hygiene: gateway poll lines no longer flood the supervisor log
   (~1.8 MB per two days), the engine httpx log, or the uvicorn access
   log on the console
+- VRAM pre-flight gate toggle (settings, on by default): turning it off
+  attempts loads the estimate does not trust - real OOM failures drive
+  the ctx cascade instead of the estimate
+- coder load ctx cascade raised from 3 to 5 attempts (120832 now
+  reaches the 8192 floor), and models registered for the new
+  K2-Horizon-7B/3.7B and Mellum2.1-12B-A2.5B-Thinking GGUFs
 
 ## [1.3.5] - 2026-10-10
 
