@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.3.8] - 2026-10-11
+
+Chunking and long-term-memory reliability:
+
+- chunk progress is persisted (resume block) after every completed
+  chunk - a hard kill previously lost all in-memory chunk progress
+  and a resumed run repeated chunks from zero
+- the auto-test anti-spoof check now recognizes bare python test-file
+  runs (python3 test_smoke.py counted as "no test run", which stacked
+  auto-test + nudge + unknown-runner on top of a passing test)
+- read_file limits are char-based instead of the 200/400-line double
+  gate - large files no longer force the model to assemble content
+  from many small range reads
+- memory discipline prompt: the coder must call the remember tool for
+  durable facts; plain-text storage claims no longer count as saved
+- telegram: planner thinking tail is relayed (💭 Planning: …) when the
+  plan lands
+
 ## [1.3.7] - 2026-10-11
 
 Telegram mirror visibility + coder vision honesty:
