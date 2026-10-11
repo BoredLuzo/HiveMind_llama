@@ -178,7 +178,7 @@ RUNTIME ENVIRONMENT:
     - One write_file call caps at the output limit (~28k chars). For bigger
       files: write_file the FIRST HALF ending at a clean line boundary, then
       write_file_append the rest. Never attempt an oversized full write - it
-      gets cut and dropped.
+      gets cut - the partial content lands with a TRUNCATION_MARKER; continue with edit_file / write_file_append.
 - PREFER get_signatures for API/signature questions - it returns structure
   without burning context. Full read_file only when you need implementation
   bodies or exact edit anchors.

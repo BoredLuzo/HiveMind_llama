@@ -5005,35 +5005,45 @@ async def run_code_duo(ctx):
                                 _vres["meta"]["has_tool_call"],
                                 len(_dr_msg.get("content") or ""),
                                 ("n/a" if _rt_raw is None else _rt_raw), _think_chars)
-                        # TRUNCATED-WRITE-DROP (2026-10-11): a write_file cut at
-                        # the output limit used to be salvaged and executed -
-                        # a half-written file on disk looks almost identical to
-                        # a complete one, so the model later read a partial file
-                        # and looped rewriting it (live: physics.ts, 8 rewrites).
-                        # Cut writes are dropped; the model gets a clear notice
-                        # and can re-send in smaller pieces.
+                        # TRUNCATED-WRITE-MARKER (2026-10-11, v2): a write_file cut at the output
+                        # limit was first dropped - but the salvage already holds ~90% of the
+                        # content (live: 32638 chars/844 lines) and the model just retried the
+                        # same oversized write three times anyway. Now: the salvaged content IS
+                        # written with an explicit truncation marker appended, and the model
+                        # continues from the marker with edit_file / write_file_append.
                         if _result.get("dr_finish_reason") == "length":
-                            _cut_writes = [_wi for _wi, _wtc in enumerate(_validated_tcs)
-                                           if str(((_wtc.get("function") or {}).get("name")) or "")
-                                           in ("write_file", "write_file_append")]
-                            for _wi in reversed(_cut_writes):
-                                _validated_tcs.pop(_wi)
-                            if _cut_writes:
+                            _MARK = ("\n\n"
+                                     "<<<TRUNCATION_MARKER: the generator hit the output limit at this "
+                                     "exact point. Everything above was generated and saved; the file "
+                                     "ends here and MAY be incomplete. Continue the implementation with "
+                                     "edit_file or write_file_append.>>>\n")
+                            _salvaged_paths = []
+                            for _wi in reversed(range(len(_validated_tcs))):
+                                _wtc = _validated_tcs[_wi]
+                                if str(((_wtc.get("function") or {}).get("name")) or "") not in ("write_file", "write_file_append"):
+                                    continue
+                                try:
+                                    _wa = _wtc["function"].get("arguments", "")
+                                    _ad = json.loads(_wa) if isinstance(_wa, str) else dict(_wa or {})
+                                    _ad["content"] = (str(_ad.get("content", "")) + _MARK)
+                                    _wtc["function"]["arguments"] = json.dumps(_ad, ensure_ascii=False)
+                                    _salvaged_paths.append(str(_ad.get("path", "") or "?"))
+                                except Exception:
+                                    _validated_tcs.pop(_wi)
+                            if _salvaged_paths:
                                 state["_cut_write_attempts"] = int(state.get("_cut_write_attempts", 0)) + 1
-                                if int(state.get("_cut_write_attempts", 0)) == 1:
-                                    _drop_notices.append(
-                                        "⛔ write_file was cut at the output limit (~28k chars max per "
-                                        "write) - the partial content was NOT written. The file needs "
-                                        "MORE than one write. MANDATORY plan: (1) write_file with the "
-                                        "FIRST HALF, ending at a clean line boundary. (2) write_file_append "
-                                        "with the SECOND HALF. Do NOT attempt the full write again.")
-                                else:
-                                    _drop_notices.append(
-                                        f"⛔ write_file cut at the output limit AGAIN (attempt "
-                                        f"{int(state.get('_cut_write_attempts', 0))}). You MUST split: write_file with "
-                                        "roughly the first HALF of the content ending at a clean line, "
-                                        "then write_file_append with the rest. A full-file write will "
-                                        "never fit the output limit.")
+                                _drop_notices.append(
+                                    "⚠ write_file hit the output limit and was cut - the partial content "
+                                    "WAS written to " + ", ".join(_salvaged_paths) + " with a "
+                                    "<<<TRUNCATION_MARKER>>> at the end. The marker sits in a possibly broken "
+                                    "syntax context: first edit_file it away together with any broken tail, "
+                                    "then continue with edit_file or write_file_append. Do NOT rewrite the "
+                                    "whole file.")
+                            elif not _validated_tcs:
+                                _drop_notices.append(
+                                    "⛔ write_file was cut at the output limit and could not be salvaged - "
+                                    "nothing was written. Re-send in smaller pieces: write_file the first "
+                                    "half, then write_file_append the rest.")
                         if _drop_notices:
                             _dtool_msgs.append({"role": "user",
                                                  "content": "\n".join(_drop_notices)})
