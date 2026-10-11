@@ -5701,14 +5701,14 @@ function _journalInitAttach() {
       // the chat transcript; only LIVE runs and fresh history attach)
       if (S._attachedRunId === j.run_id) return;
       S._attachedRunId = j.run_id;
-      S._sseFrameSeq = 0; S._sseBuf = ''; S._sawDoneEvent = false;
-      _journalNote(j.done ? 'Run history restored.' : 'Attached to the running job (live).');
-      // DONE-REPLAY-DUP (2026-10-11): a finished run's frames were fed a
-      // second time on top of the chat-transcript replay - the end block
-      // (files changed + LOOP DETECTED + Retry buttons) rendered twice
-      // with the note in between. The transcript already carries the
-      // whole run, so a done journal only marks the attach.
+      // DONE-JOURNAL-SILENT (2026-10-11): a finished run's journal is fully
+      // covered by the chat-transcript replay - feed no frames AND print no
+      // note. The restore note showed after EVERY clean run within the 300s
+      // window (owner: "steht unten nach jedem run"). Live/aborted attaches
+      // keep their notes.
       if (j.done) return;
+      S._sseFrameSeq = 0; S._sseBuf = ''; S._sawDoneEvent = false;
+      _journalNote('Attached to the running job (live).');
       for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
       // TG-AUDIT (2026-10-07): `n` is the LOGICAL frame count while the
       // window only holds the newest slice (20k cap) - tail polls must
