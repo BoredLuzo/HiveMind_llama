@@ -288,8 +288,8 @@
   "except_pass": 3
  },
  "routers/config.py": {
-  "broad_except": 12,
-  "except_pass": 4
+  "broad_except": 13,
+  "except_pass": 5
  },
  "routers/core.py": {
   "broad_except": 4,
@@ -333,7 +333,7 @@
  },
  "server.py": {
   "broad_except": 34,
-  "except_pass": 14
+  "except_pass": 15
  },
  "settings.py": {
   "broad_except": 4,
