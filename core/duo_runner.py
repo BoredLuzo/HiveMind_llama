@@ -5005,6 +5005,25 @@ async def run_code_duo(ctx):
                                 _vres["meta"]["has_tool_call"],
                                 len(_dr_msg.get("content") or ""),
                                 ("n/a" if _rt_raw is None else _rt_raw), _think_chars)
+                        # TRUNCATED-WRITE-DROP (2026-10-11): a write_file cut at
+                        # the output limit used to be salvaged and executed -
+                        # a half-written file on disk looks almost identical to
+                        # a complete one, so the model later read a partial file
+                        # and looped rewriting it (live: physics.ts, 8 rewrites).
+                        # Cut writes are dropped; the model gets a clear notice
+                        # and can re-send in smaller pieces.
+                        if _result.get("dr_finish_reason") == "length":
+                            _cut_writes = [_wi for _wi, _wtc in enumerate(_validated_tcs)
+                                           if str(((_wtc.get("function") or {}).get("name")) or "")
+                                           in ("write_file", "write_file_append")]
+                            for _wi in reversed(_cut_writes):
+                                _validated_tcs.pop(_wi)
+                            if _cut_writes:
+                                _drop_notices.append(
+                                    "⛔ write_file was cut at the output limit (max_tokens reached) - "
+                                    "the partial content was NOT written to the file. The file on "
+                                    "disk is unchanged. Re-send the write in smaller pieces (or use "
+                                    "edit_file for parts).")
                         if _drop_notices:
                             _dtool_msgs.append({"role": "user",
                                                  "content": "\n".join(_drop_notices)})
