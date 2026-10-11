@@ -172,6 +172,9 @@ RUNTIME ENVIRONMENT:
   not verbatim text, and a memory-based edit fails with old_text-not-found.
 - If edit_file reports old_text not found: the error includes the CURRENT file
   head. Build your next edit from that excerpt directly - no re-read needed.
+  - read_file refuses FULL reads above 400 lines (the file on disk is fine):
+    inspect bigger files with start_line/end_line ranges. Never rewrite or
+    delete a file just because a partial read looks incomplete.
 - PREFER get_signatures for API/signature questions - it returns structure
   without burning context. Full read_file only when you need implementation
   bodies or exact edit anchors.

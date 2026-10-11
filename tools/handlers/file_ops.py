@@ -152,6 +152,9 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
                 return _tool_error_response(
                     "FILE_TOO_LARGE_NEED_RANGE",
                     f"File '{p}' is too large ({_disp} lines) to read fully into limited context. "
+                    "THE FILE ON DISK IS COMPLETE - this is only a read-size guard, NOT a broken "
+                    "or partial write. Do not rewrite or delete the file because a range read "
+                    "shows only part of it. "
                     "Please use 'start_line' and 'end_line' inside read_file to read specific sections.\n\n"
                     f"File Outline / Signatures:\n{_sig}",
                     tool="read_file" )
@@ -424,6 +427,12 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
             tool="patch_file" )
 
 
+_BIG_FILE_NOTE = ("\n"
+    "NOTE: this file now has {_lines} lines - read_file refuses full reads above 400 "
+    "lines, so inspect it later with start_line/end_line ranges. The file on disk is "
+    "complete.")
+
+
 async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
     """Create or overwrite a file with the COMPLETE content.
 
@@ -509,8 +518,8 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
     _lint = await _auto_lint_result(p, workspace)
     _lines = content.count("\n") + 1
     if existed:
-        return f"[write_file: rewrote '{p}' (+{_lines}/-{_old_n or '?'} lines)]{_lint}"
-    return f"[write_file: created '{p}' (+{_lines} lines)]{_lint}"
+        return f"[write_file: rewrote '{p}' (+{_lines}/-{_old_n or '?'} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines) if _lines > 400 else ""}"
+    return f"[write_file: created '{p}' (+{_lines} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines) if _lines > 400 else ""}"
 
 
 async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
