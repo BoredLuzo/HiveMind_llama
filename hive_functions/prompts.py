@@ -175,6 +175,10 @@ RUNTIME ENVIRONMENT:
   - read_file refuses FULL reads above 400 lines (the file on disk is fine):
     inspect bigger files with start_line/end_line ranges. Never rewrite or
     delete a file just because a partial read looks incomplete.
+    - One write_file call caps at the output limit (~28k chars). For bigger
+      files: write_file the FIRST HALF ending at a clean line boundary, then
+      write_file_append the rest. Never attempt an oversized full write - it
+      gets cut and dropped.
 - PREFER get_signatures for API/signature questions - it returns structure
   without burning context. Full read_file only when you need implementation
   bodies or exact edit anchors.

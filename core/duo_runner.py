@@ -5019,11 +5019,21 @@ async def run_code_duo(ctx):
                             for _wi in reversed(_cut_writes):
                                 _validated_tcs.pop(_wi)
                             if _cut_writes:
-                                _drop_notices.append(
-                                    "⛔ write_file was cut at the output limit (max_tokens reached) - "
-                                    "the partial content was NOT written to the file. The file on "
-                                    "disk is unchanged. Re-send the write in smaller pieces (or use "
-                                    "edit_file for parts).")
+                                state["_cut_write_attempts"] = int(state.get("_cut_write_attempts", 0)) + 1
+                                if int(state.get("_cut_write_attempts", 0)) == 1:
+                                    _drop_notices.append(
+                                        "⛔ write_file was cut at the output limit (~28k chars max per "
+                                        "write) - the partial content was NOT written. The file needs "
+                                        "MORE than one write. MANDATORY plan: (1) write_file with the "
+                                        "FIRST HALF, ending at a clean line boundary. (2) write_file_append "
+                                        "with the SECOND HALF. Do NOT attempt the full write again.")
+                                else:
+                                    _drop_notices.append(
+                                        f"⛔ write_file cut at the output limit AGAIN (attempt "
+                                        f"{int(state.get('_cut_write_attempts', 0))}). You MUST split: write_file with "
+                                        "roughly the first HALF of the content ending at a clean line, "
+                                        "then write_file_append with the rest. A full-file write will "
+                                        "never fit the output limit.")
                         if _drop_notices:
                             _dtool_msgs.append({"role": "user",
                                                  "content": "\n".join(_drop_notices)})
