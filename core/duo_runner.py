@@ -2229,6 +2229,18 @@ async def run_code_duo(ctx):
                                     "No fallback loaded — reduce the ctx slider, close GPU-heavy "
                                     "apps, or pick a model that fits. Run ended with a resume block."
                                 )})
+                            # VRAM-BLOCK-CTX-CASCADE (2026-10-11): a pre-flight block is not a
+                            # model mismatch - same model, smaller ctx. Cascade like the generic
+                            # retry instead of hard-stopping (mellum @120832 blocked, @49152
+                            # fits). Falls through to hard_stop on the last attempt or at floor.
+                            if _cl_attempt < 2 and _coder_ctx_try > 8192:
+                                _next_ctx = max(8192, int(_coder_ctx_try / 2))
+                                yield await ctx.emit({"type": "status",
+                                    "content": f"⟳ Coder does not fit at ctx={_coder_ctx_try} — retrying "
+                                              f"attempt {_cl_attempt+2}/3 with ctx={_next_ctx} in 4s…"})
+                                await asyncio.sleep(4.0)
+                                _coder_ctx_try = _next_ctx
+                                continue
                             _write_pre_loop_resume()
                             break
                         except Exception as _cl_err:
