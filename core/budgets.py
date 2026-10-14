@@ -31,6 +31,7 @@ from tools.limits import (
     COMPRESS_REST_RESERVE_MULT, COMPRESS_GROWTH_TOKENS_DEFAULT,
     EXEC_RESULT_CAP_FALLBACK,
     PREFILL_RESULT_MAX_SECONDS, PREFILL_TPS_DEFAULT,
+    PREFILL_MIN_PROMPT_TOKENS,
 )
 
 
@@ -201,8 +202,13 @@ def _load_prefill_state() -> dict:
         return {}
 
 
-def update_prefill_ema(model: str, tps: float) -> float | None:
+def update_prefill_ema(model: str, tps: float, prompt_n: int = 0) -> float | None:
     try:
+        # MIN-PROMPT FLOOR (2026-10-15, task 2b): readings from prompts below
+        # PREFILL_MIN_PROMPT_TOKENS are overhead-dominated noise - ignore them
+        # entirely (they neither replace the default nor enter the EMA).
+        if int(prompt_n or 0) < PREFILL_MIN_PROMPT_TOKENS:
+            return None
         if not tps or tps <= 0.5 or tps > 5000:
             return None
         state = _load_prefill_state()

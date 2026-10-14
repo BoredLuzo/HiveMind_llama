@@ -22,6 +22,10 @@ CPT_DEFAULT = 3.92
 # ~5 minutes of prefill per read — caps must therefore also respect TIME.
 # Worst case: result_chars / cpt / prefill_tps <= PREFILL_RESULT_MAX_SECONDS.
 PREFILL_RESULT_MAX_SECONDS = 60.0
+# EMA-NOISE FLOOR (2026-10-15, task 2b): tok/s readings from prompts smaller
+# than this are dominated by fixed per-call overhead and are ignored for the
+# persisted prefill EMA.
+PREFILL_MIN_PROMPT_TOKENS = 512
 # Conservative default until the per-slot EMA has data (slow Vulkan tier).
 # core/budgets.py persists a per-model EMA from prompt_n/prompt_ms telemetry.
 PREFILL_TPS_DEFAULT = 20.0

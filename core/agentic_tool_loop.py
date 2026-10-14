@@ -387,7 +387,8 @@ class AgenticToolLoop(ToolLoop):
                                     from core.budgets import update_prefill_ema as _upe
                                     _upe(getattr(self.round_state, "exec_model", None),
                                          _dr_prompt_timings["prompt_n"]
-                                         / (_dr_prompt_timings["prompt_ms"] / 1000.0))
+                                         / (_dr_prompt_timings["prompt_ms"] / 1000.0),
+                                         prompt_n=_dr_prompt_timings["prompt_n"])
                             except Exception:
                                 pass
                         if _sse_usage and _sse_usage.get("completion_tokens"):

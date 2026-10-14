@@ -85,15 +85,21 @@ _orig_state = _budg._PREFILL_STATE
 _budg._PREFILL_STATE = _tmp_state
 try:
     check("no state -> default tps", _budg.prefill_tps_for("bench-model") == 20.0)
-    _budg.update_prefill_ema("bench-model", 45.0)
-    check("FIRST stored measurement replaces the default (no 80% placeholder)",
-          _budg.prefill_tps_for("bench-model") == 45.0,
+    # MIN-PROMPT FLOOR (task 2b): a prompt_n=65 reading is overhead noise and
+    # must not touch the EMA in any way.
+    _ignored = _budg.update_prefill_ema("bench-model", 45.0, prompt_n=65)
+    check("prompt_n=65 measurement ignored", _ignored is None
+          and _budg.prefill_tps_for("bench-model") == 20.0,
+          f"(tps_for={_budg.prefill_tps_for('bench-model')})")
+    _set = _budg.update_prefill_ema("bench-model", 45.0, prompt_n=4000)
+    check("prompt_n=4000 FIRST measurement sets the value",
+          _set == 45.0 and _budg.prefill_tps_for("bench-model") == 45.0,
           f"({_budg.prefill_tps_for('bench-model')})")
-    _budg.update_prefill_ema("bench-model", 65.0)
-    check("second sample blends", abs(_budg.prefill_tps_for("bench-model") - 49.0) < 0.1,
+    _budg.update_prefill_ema("bench-model", 65.0, prompt_n=4000)
+    check("second valid sample blends", abs(_budg.prefill_tps_for("bench-model") - 49.0) < 0.1,
           f"({_budg.prefill_tps_for('bench-model')})")
-    _budg.update_prefill_ema("bench-model", 10**7)  # implausible - ignored
-    check("implausible sample ignored", abs(_budg.prefill_tps_for("bench-model") - 49.0) < 0.1)
+    _budg.update_prefill_ema("bench-model", 10**7, prompt_n=4000)  # implausible tps - ignored
+    check("implausible tps ignored", abs(_budg.prefill_tps_for("bench-model") - 49.0) < 0.1)
 finally:
     _budg._PREFILL_STATE = _orig_state
     shutil.rmtree(_tmp_state.parent, ignore_errors=True)
