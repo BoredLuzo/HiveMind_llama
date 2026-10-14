@@ -1,0 +1,23 @@
+{
+  "model": "minicpm-v-4.7:35b-a3b-ad-q4-k",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 8192,
+  "num_ctx_analyst": 8192,
+  "num_ctx_duo_coder": 16384,
+  "num_ctx_vision": null,
+  "chat_template": null,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 35,
+  "mtp": false,
+  "gpu_layers": null,
+  "dspark_draft_filename": "MiniCPM-V-4.7-DSpark-Q8_0.gguf",
+  "mmproj_filename": null,
+  "vram_gb_override": null
+}

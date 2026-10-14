@@ -1057,6 +1057,7 @@ async function loadSettings() {
     S.moeCpuExpertsMap = (typeof _moeRaw === 'object' && _moeRaw !== null && !Array.isArray(_moeRaw)) ? _moeRaw : {};
     S.moeExpertDefaults = s.moe_expert_defaults || {};
     S.moeAutodetect = s.moe_autodetect || {};
+    S.moePins = s.moe_pins || {};
     S.ctxDefaults = s.ctx_defaults || {};
     var configMoeWrap = document.getElementById('config-moe-experts');
     if (configMoeWrap) configMoeWrap.style.display = 'block';
@@ -8698,6 +8699,39 @@ function _syncMoeInputs() {
     var el = document.getElementById(id);
     if (el) el.value = v;
   });
+  var _pinSel = document.getElementById('config-moe-pin-select');
+  if (_pinSel) {
+    var _pk = _moeKey(S.moeSelectedModel);
+    var _pv = (_pk && S.moePins && S.moePins[_pk] != null) ? S.moePins[_pk]
+            : (S.moePins && S.moePins[S.moeSelectedModel] != null) ? S.moePins[S.moeSelectedModel] : null;
+    _pinSel.value = _pv === true ? 'true' : _pv === false ? 'false' : '';
+  }
+}
+
+// MOE-PIN (2026-10-14): the explicit "is this a MoE?" answer — written to the
+// model profile so the load path skips the 30B+ name heuristic entirely.
+function onMoePinChange(val) {
+  var model = S.moeSelectedModel;
+  if (!model) return;
+  var moe = val === 'true' ? true : val === 'false' ? false : null;
+  var key = _moeKey(model);
+  if (S.moePins) {
+    if (moe === null) { if (key) delete S.moePins[key]; delete S.moePins[model]; }
+    else S.moePins[key || model] = moe;
+  }
+  fetch('/config/moe-pin', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({model: model, moe: moe})
+  }).then(function(r) { return r.json(); }).then(function(j) {
+    if (!j || j.ok !== true) {
+      var _msg = (j && j.error) ? j.error : 'unknown error';
+      updateMoeExpertDefaultHint('MoE type NOT saved: ' + _msg);
+    }
+  }).catch(function(e) {
+    updateMoeExpertDefaultHint('MoE type NOT saved: ' + e);
+  });
+  updateMoeExpertDefaultHint();
 }
 
 function onMoeModelSelect(model) {
@@ -8723,7 +8757,7 @@ function onMoeExpertsChange(val) {
   updateMoeExpertDefaultHint();
 }
 
-function updateMoeExpertDefaultHint() {
+function updateMoeExpertDefaultHint(overrideMsg) {
   var autodetect = S.moeAutodetect || {};
   var model = S.moeSelectedModel || S.duoCoderModel || S.duoPlannerModel || '';
   var key = _moeKey(model);
@@ -8731,11 +8765,17 @@ function updateMoeExpertDefaultHint() {
   var _modelShort = (key || model).split(':')[0];
   var _def = _moeDefaultCount(model);
   var _auto = !!(autodetect[key] || (key && key !== model && autodetect[model]));
+  var _pin = (key && S.moePins && S.moePins[key] != null) ? S.moePins[key]
+           : (S.moePins && S.moePins[model] != null) ? S.moePins[model] : null;
   var _defTxt = '';
-  if (_def) _defTxt = _def + ' experts' + (_auto ? ' (autodetected from model name)' : ' (table)');
+  if (_pin === false) _defTxt = 'pinned DENSE (name heuristics ignored)';
+  else if (_pin === true) _defTxt = 'pinned MoE (name heuristics ignored)';
+  else if (_def) _defTxt = _def + ' experts' + (_auto ? ' (autodetected from model name)' : ' (table)');
   else if (model) _defTxt = 'no default (experts stay on GPU)';
   var text = '';
-  if (_ovr > 0) {
+  if (overrideMsg) {
+    text = overrideMsg;
+  } else if (_ovr > 0) {
     text = model
       ? 'Override: ' + _ovr + ' experts. Default for ' + _modelShort + ': ' + _defTxt + '.'
       : '';

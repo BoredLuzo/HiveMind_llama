@@ -142,6 +142,17 @@ KV_CACHE_TYPE = "q4_0"
 # 0 = aus, 256 = llama.cpp-Empfehlung. Senkt Re-Prefill-Kosten massiv bei hohen ctx.
 CACHE_REUSE = 256
 
+# HOST-RAM-CAP (2026-10-14): b11456-era context features default to
+# host-RAM-heavy values — the prompt cache may grow to 8192 MiB and each
+# slot keeps up to 32 context checkpoints in host RAM. With per-slot KV
+# (--parallel 1) idle-slot snapshots are NOT cleared, so long installs
+# filled RAM and then swap; a compression rewrites the prefix, making the
+# cached old state dead weight anyway. Defaults below bound both.
+#   cache-ram: 0 disables the prompt cache entirely, -1 = unlimited.
+#   ctx-checkpoints: -1 keeps the binary default (32), 0 disables.
+CACHE_RAM_MIB = int(os.environ.get("HIVEMIND_CACHE_RAM_MIB", "1024") or 1024)
+CTX_CHECKPOINTS = int(os.environ.get("HIVEMIND_CTX_CHECKPOINTS", "4") or 4)
+
 # VRAM pre-flight gate (2026-10-11): refuse loads that the estimate
 # does not fit. False = attempt the load anyway and let real failures
 # drive the ctx cascade. Synced from settings "vram_preflight_gate".
@@ -168,6 +179,16 @@ def is_moe_model(model_key: str) -> bool:
     _key = str(model_key or "").strip().lower()
     if not _key:
         return False
+    # MOE-PIN (2026-10-14): an explicit profile answer ("moe": true/false in
+    # model_configs/models/*.json) beats every name heuristic — the 30B+
+    # autodetect is a guess, the model config is the user's call.
+    try:
+        from model_configs.models_registry import get_moe_pin as _reg_pin
+        _pin = _reg_pin(_key)
+        if _pin is not None:
+            return _pin
+    except Exception:
+        pass
     if _key in _MOE_EXPERT_COUNTS:
         return True
     if "moe" in _key:
@@ -236,6 +257,18 @@ _MOE_EXPERT_COUNTS = {
     "qwen3.6:35b-a3b": 35,
     "qwen3.6:35b-a3b-uncensored": 35,
 }
+
+# MiniCPM-V-4.7 35B-A3B (2026-10-13): same MoE offload as hermes3.6/qwen3.6
+# (n-cpu-moe 35, GPU-Offload 99, KV q4_0) — same 35B-A3B architecture class.
+_MOE_EXPERT_COUNTS["minicpm-v-4.7:35b-a3b"] = 35
+_MOE_EXPERT_COUNTS["minicpm-v-4.7:35b-a3b-ad-q4-k"] = 35
+
+# LFM2.5-24B-A2B (2026-10-13): 24B total / 2.45B active MoE (64 experts,
+# top-4). Measured 2026-10-14 (-lv 5 fit projection): 24 is the MAXIMUM that
+# fits — 23 missed the 1024-MiB-free target by 58 MiB, 20 projected over
+# budget. The generic autodetect only fires at >=30B total, so this needs
+# the entry.
+_MOE_EXPERT_COUNTS["lfm2.5:24b-a2b"] = 24
 
 _HERMES_V7_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v7-mtp-apex-compact"
 
@@ -322,6 +355,14 @@ BINARY_MIN_BUILD: dict[str, int] = {
     "qwen3":     8260,
     "lfm2.5":    9518,
     "ling-3.0-tiny": 10488,
+    # ("minicpm-v-4.7" is deliberately NOT gated here: build 11574 is needed
+    # for the minicpmv4_7 VISION projector only — b11456 fails the mmproj load
+    # with "unknown projector type" and runs TEXT fine (verified 2026-10-14:
+    # probe load healthy, 4754 MiB @n-cpu-moe 35). The model is registered
+    # text-only (capabilities.vision=false, no mmproj) until the binary is
+    # upgraded — on upgrade RESTORE this entry to 11574 AND re-add
+    # "minicpm-v-4.7" to _MMPROJ_REQUIRED_BASES/_VISION_CAPABLE_BASES
+    # (llama_manager_utils) plus mmproj_filename/vision in the model profile.
 }
 
 # ── Windows-Vulkan mlock/mmap-Regression (b10300+) ───────────────────────────

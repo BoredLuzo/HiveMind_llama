@@ -201,9 +201,10 @@ async def vram_estimate(model: str = "", ctx: int = 4096):
     if not model:
         return JSONResponse({"error": "model required"}, status_code=400)
     try:
-        from backend.llama_vram_table import vram_of_moe, vram_of_with_ctx, VRAM_GB, _MOE_TABLE
-        _key = model.strip().lower()
-        _moe = _MOE_TABLE.get(_key) or _MOE_TABLE.get(_key.replace("-ud", ""))
+        from backend.llama_vram_table import vram_of_moe, vram_of_with_ctx, VRAM_GB, moe_cfg_for
+        # moe_cfg_for: same exact/-ud/prefix resolution as vram_of_moe — the
+        # estimate shown in the UI must agree with the pre-flight gate.
+        _moe = moe_cfg_for(model)
         if _moe:
             total = vram_of_moe(model, int(ctx))
             kv_gb = round(max(0, total - _moe["active_gpu_gb"]), 2)

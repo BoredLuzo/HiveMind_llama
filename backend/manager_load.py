@@ -13,7 +13,7 @@ from .llama_config import (
     NO_MMAP_MIN_BUILD,
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS, _MOE_KV_CACHE_TYPES,
     _DENSE_KV_CACHE_TYPES,
-    MLOCK_MODEL, CACHE_REUSE, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
+    MLOCK_MODEL, CACHE_REUSE, CACHE_RAM_MIB, CTX_CHECKPOINTS, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
     _MTP_MODELS,
@@ -44,6 +44,16 @@ import logging
 import subprocess
 import time
 logger = logging.getLogger("llama_manager")
+
+# ── Load-path family sets (module level so tests can pin them) ─────────────
+# --jinja fallback when the registry JSON sets no explicit "jinja" key.
+_JINJA_BASES = {"qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "lfm2.5", "minicpm-v", "minicpm-v-4.7"}
+# Server <think>-Inhalte in reasoning_content → split_thinking +
+# thinking_budget greifen. Fallback when the registry sets no "reasoning".
+# NOTE: "lfm2.5" stays OUT on purpose — the small LFM models are
+# non-thinking; the 24B opts in per-model via registry reasoning:"on".
+_REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes", "minicpm-v", "minicpm-v-4.7"}
+
 
 def _omit_mmproj_for(model: str, vision: bool = False) -> bool:
     """TEST SWITCH (2026-10-04, Sonnet #2): HIVEMIND_TEST_OMIT_MMPROJ omits
@@ -878,6 +888,22 @@ class LlamaLoadMixin:
             cmd += ["--cache-reuse", str(int(CACHE_REUSE))]
             logger.info("Prompt cache reuse active: --cache-reuse %d", int(CACHE_REUSE))
 
+        # ── HOST-RAM-CAP (2026-10-14): the b11456-era context features default
+        # to host-RAM-heavy values — prompt cache up to --cache-ram 8192 MiB
+        # (idle-slot snapshots are NOT cleared with per-slot KV, which is how
+        # HiveMind slots run: --parallel 1), plus 32 context checkpoints per
+        # slot. On long-running installs this filled RAM and then swap; a
+        # compression rewrites the prefix, so the cached old state is dead
+        # weight anyway. Bound both; env-overridable for A/B.
+        if CACHE_RAM_MIB > 0:
+            cmd += ["--cache-ram", str(int(CACHE_RAM_MIB))]
+        if CTX_CHECKPOINTS >= 0:
+            cmd += ["--ctx-checkpoints", str(int(CTX_CHECKPOINTS))]
+            logger.info(
+                "Host-RAM caps active: --cache-ram %d MiB, --ctx-checkpoints %d (defaults were 8192/32)",
+                int(CACHE_RAM_MIB), int(CTX_CHECKPOINTS),
+            )
+
         # ── --device Flag (Vulkan-Device-Auswahl) ────────────────────────────
         _all_flags_uncached = (
             type(self)._device_flag_supported is None
@@ -1085,6 +1111,17 @@ class LlamaLoadMixin:
         _moe_model_key = _strip_alias(model).replace("-ud", "")
         # Per-Model-Override (dict {model_key: n_cpu_moe}) > Registry-Config > Tabellen-Default.
         _moe_count = 0
+        # MOE-PIN (2026-10-14): profile "moe": false forces dense — no expert
+        # offload even when another source (table/autodetect) suggests MoE.
+        _moe_pinned_off = False
+        try:
+            from model_configs.models_registry import get_moe_pin as _reg_moe_pin
+            if _reg_moe_pin(_moe_model_key) is False:
+                _moe_pinned_off = True
+        except Exception:
+            _moe_pinned_off = False
+        if _moe_pinned_off:
+            logger.info("MoE pin: %s is dense per model config — expert offload skipped", _moe_model_key)
         try:
             from .llama_config import _try_registry_moe as _reg_moe
             _reg_moe_v = _reg_moe(_moe_model_key)
@@ -1121,6 +1158,8 @@ class LlamaLoadMixin:
                 _moe_count = _moe_autodetect(_moe_model_key)
             except Exception:
                 _moe_count = 0
+        if _moe_pinned_off:
+            _moe_count = 0
 
         # ── VRAM calibration guard (soft) ──
         _cal_key = _strip_alias(model).strip().lower()
@@ -1252,7 +1291,7 @@ class LlamaLoadMixin:
                     )
 
         # ── Jinja-Chat-Template ───────────────────────────────────────────────
-        _JINJA_BASES = {"qwen3.5", "qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "lfm2.5"}
+        # (Bases: module-level _JINJA_BASES — registry "jinja" wins.)
 
         # User-config (model_configs/models/*.json): jinja / reasoning / distilled / template.
         _reg_jinja = None
@@ -1279,7 +1318,7 @@ class LlamaLoadMixin:
         #
         _DISTILLED_MODELS = {"qwen3.5:2b-d", "qwen3.5:4b-d", "qwen3.5:9b-d", "qwen3.5:4b-ud-v3", "qwen3.5:9b-ud"}
         # Server <think>-Inhalte in reasoning_content → split_thinking + thinking_budget greifen.
-        _REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes"}
+        # (Bases: module-level _REASONING_ON_BASES — registry "reasoning" wins.)
         # Per-model override (duo tool-thinking toggle): the flag is bound to a
         # specific server instance, so it must only fire for the model it was
         # set for — a plain consume-once flag landed on whichever model loaded
