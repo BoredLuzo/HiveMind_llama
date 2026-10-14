@@ -2,7 +2,43 @@
 
 ## [Unreleased]
 
-New model registrations (MiniCPM-V 4.7 35B-A3B, LFM2.5-24B-A2B) + estimate fix:
+Tool-pipeline performance audit, phases 0-3 (Sonnet-reviewed ordering:
+cache hygiene and measurement first):
+
+- measurement basis first: one phase="tools" telemetry row per round
+  (tool-result chars before/after the 8k cap, user-role injection
+  chars, re-read count, round ms) plus cache_miss flag and shipped
+  tools_schema_chars on the coder row - baselines are measurable
+  before/after each lever
+- real chars/token measured on the live slot via /tokenize: 3.92 for a
+  code+prose mix, not the 3.0 constant (schema ~4.3k tokens, not 5.6k;
+  the chars/4 estimator overestimates by ~30%)
+- schema truth from constants: tools/limits.py is the single source,
+  read_file's schema text is generated from it and now states the real
+  limits (REFUSED above 1200 lines / capped 32000 chars) - the stale
+  "capped at 200 lines" text sent small models into 200-line ritual
+  reads the handler no longer needs; the write-result BIG_FILE_NOTE
+  400-line lie and the handler's stale comments are gone; a new test
+  (test_schema_truth) pins handler, constants and schema text together
+- run_bash schema slimmed 1006 -> ~590 chars: the PowerShell traps
+  (backticks, -e one-liners, stderr, curl -m) moved into the coder
+  system prompt's OS hint (once per run instead of once per round in
+  the schema; the routing + UTF-16/no-shell-writes core stays in the
+  schema)
+- compression trigger gap closed: the guard already prefers the
+  server's real prompt_tokens (GUARD-REAL-BASIS), but that value is
+  one round stale - the chars appended since that POST are now added
+  with the measured real/estimator ratio (DELTA-ON-REAL), so a full
+  big-write round can no longer slip past the trigger
+- prefix-cache hygiene: the reactive-think activation used to rewrite
+  EVERY system message mid-run ("<|think_on|>" prefix) - measured
+  [CACHE-MISS] prompt=40302 cached=0, a full re-prefill on 8 GB Vulkan.
+  Thinking is now re-enabled payload-side (chat_template_kwargs keys
+  off think_runtime, overriding no-think) and the only in-context
+  change is one appended note; new test (test_prefix_stability) pins
+  the append-only behavior
+
+Model registrations (MiniCPM-V 4.7 35B-A3B, LFM2.5-24B-A2B) + estimate fix:
 
 - MiniCPM-V 4.7 35B-A3B (qwen35moe) and LFM2.5-24B-A2B (lfm2moe) are
   registered text-only with DSpark draft models wired in

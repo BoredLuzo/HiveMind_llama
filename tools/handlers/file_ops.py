@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from utils.file import fuzzy_resolve_path as _fuzzy_resolve_path, _inline_resolve_path, _inline_check_workspace
 from tools.errors import tool_error_response as _tool_error_response
+from tools.limits import READ_FULL_LINE_ABORT as _READ_LINE_ABORT
+from tools.limits import READ_CHAR_CAP as _READ_CHAR_CAP
 import asyncio
 from tools.workspace import get_transaction
 import json
@@ -137,13 +139,14 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
         # READ-EARLY-ABORT (2026-09-04): full reads (no range) no longer read
         # a huge file completely just to reject it as "too large" afterwards.
         # Instead: cheap binary sniff up front + streamed newline count
-        # (aborts at line 401).
+        # (aborts at READ_FULL_LINE_ABORT + 1).
         if _full:
             _head = await asyncio.to_thread(_read_head_bytes, p, 1024)
             if _looks_binary_bytes(_head):
                 return _read_binary_error(p)
-            _nl, _capped = await asyncio.to_thread(_fast_newline_count, p, 1201)
-            if _nl > 1200:
+            _nl, _capped = await asyncio.to_thread(
+                _fast_newline_count, p, _READ_LINE_ABORT + 1)
+            if _nl > _READ_LINE_ABORT:
                 _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
                 _sig = await asyncio.to_thread(_sig_fn, p, 200) if _sig_fn else (
                     "(signature extraction unavailable) — use read_file with line_range=[1,50] to inspect the file header first."
@@ -174,8 +177,8 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
             if len(_sample) > 0 and (_binary_chars / len(_sample)) > 0.10:
                 return _read_binary_error(p)
 
-        # Note: full reads with >400 lines abort early above
-        # (READ-EARLY-ABORT) - len(lines) <= 400 is guaranteed here.
+        # Note: full reads above READ_FULL_LINE_ABORT lines abort early above
+        # (READ-EARLY-ABORT) - only files up to that limit reach the char cap.
 
         # Hallucination guard: validate start_line/end_line against actual file length
         _actual_lines = len(lines)
@@ -192,14 +195,14 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
             s = max(0, int(start_line) - 1) if start_line else 0
             e = int(end_line) if end_line else len(lines)
             content_chunk = "".join(lines[s:e])
-            _chunk = content_chunk[:32000]
-            if len(content_chunk) > 32000:
-                _chunk += f"\n[TRUNCATED: {len(content_chunk)-32000} more chars omitted — use smaller line range]"
+            _chunk = content_chunk[:_READ_CHAR_CAP]
+            if len(content_chunk) > _READ_CHAR_CAP:
+                _chunk += f"\n[TRUNCATED: {len(content_chunk)-_READ_CHAR_CAP} more chars omitted — use smaller line range]"
             return f"[{p} lines {s+1}-{min(e, len(lines))} / {len(lines)}]\n" + _chunk
         
-        _chunk = content[:32000]
-        if len(content) > 32000:
-            _chunk += f"\n[TRUNCATED: {len(content)-32000} more chars omitted — use start_line/end_line to read sections]"
+        _chunk = content[:_READ_CHAR_CAP]
+        if len(content) > _READ_CHAR_CAP:
+            _chunk += f"\n[TRUNCATED: {len(content)-_READ_CHAR_CAP} more chars omitted — use start_line/end_line to read sections]"
         return f"[{p} total lines: {len(lines)}]\n" + _chunk
     except Exception as e:
         return _tool_error_response(
@@ -423,7 +426,7 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
 
 
 _BIG_FILE_NOTE = ("\n"
-    "NOTE: this file now has {_lines} lines - read_file refuses full reads above 400 "
+    "NOTE: this file now has {_lines} lines - read_file refuses full reads above {_abort} "
     "lines, so inspect it later with start_line/end_line ranges. The file on disk is "
     "complete.")
 
@@ -513,8 +516,8 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
     _lint = await _auto_lint_result(p, workspace)
     _lines = content.count("\n") + 1
     if existed:
-        return f"[write_file: rewrote '{p}' (+{_lines}/-{_old_n or '?'} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines) if _lines > 400 else ""}"
-    return f"[write_file: created '{p}' (+{_lines} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines) if _lines > 400 else ""}"
+        return f"[write_file: rewrote '{p}' (+{_lines}/-{_old_n or '?'} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines, _abort=_READ_LINE_ABORT) if _lines > _READ_LINE_ABORT else ""}"
+    return f"[write_file: created '{p}' (+{_lines} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines, _abort=_READ_LINE_ABORT) if _lines > _READ_LINE_ABORT else ""}"
 
 
 async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:

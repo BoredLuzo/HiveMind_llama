@@ -1,6 +1,8 @@
 """Tool-Definitionen, Allowlists und Filter-Funktionen (aus server.py extrahiert)."""
 from __future__ import annotations
 
+from tools.limits import READ_FULL_LINE_ABORT, READ_CHAR_CAP
+
 _WEBSEARCH_AVAILABLE: bool = False
 _websearch = None
 
@@ -17,7 +19,9 @@ _INLINE_CODING_TOOLS = [
         "name": "read_file", "description": (
             "Read file content. ALWAYS call read_file before edit_file on existing files. "
             "Returns RAW content (no line-number prefixes) with a header showing the total/selected line range. "
-            "For large files use start_line/end_line to read only the sections you need; full reads are capped at 200 lines / 32000 chars."
+            f"Full reads are REFUSED above {READ_FULL_LINE_ABORT} lines (use get_signatures first to find "
+            f"the ranges you need); all reads are capped at {READ_CHAR_CAP} chars — use start_line/end_line "
+            "for sections instead of re-reading."
         ),
         "parameters": {"type": "object", "properties": {
             "path":       {"type": "string", "description": "Absolute or relative file path"},
@@ -110,22 +114,14 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "run_bash",
         "description": (
-            "Execute a shell command. Windows: PowerShell 5.1 (Get-ChildItem, "
-            "Get-Content, Select-String, Test-Path, Remove-Item; chain with "
-            "'cmd1; if ($?) { cmd2 }' — never '&&'). Linux/Mac: bash.\n"
-            "Windows file-content trap: there are NO heredocs, '>' redirects "
-            "write UTF-16, and backticks (JS template literals) are PowerShell "
-            "escape characters — shell-writing code mangles it. NEVER create or "
-            "edit source files via run_bash on Windows; use write_file/edit_file. "
-            "Run code from files, not node -e one-liners with nested quotes.\n"
+            "Execute a shell command (PowerShell 5.1 on Windows, bash on Linux/Mac). "
             "Only for what no dedicated tool covers: content search -> search_code, "
             "file names -> find_files, references -> find_references, git -> git_status, "
-            "installs -> install_package.\n"
-            "Long-running services: use start_background — run_bash waits and times "
-            "out (90s default, 600s builds).\n"
-            "PowerShell stderr trap: native tools can print progress to stderr and "
-            "still succeed with exit code 1 — check OUTPUT before retrying. Never "
-            "blindly retry identical failing args. curl: add '-m 10' to health checks."
+            "installs -> install_package. Long-running services: use start_background — "
+            "run_bash waits and times out.\n"
+            "NEVER create or edit source files via run_bash — use write_file/edit_file "
+            "(on Windows '>' writes UTF-16 and there are no heredocs). "
+            "Check OUTPUT before retrying; never blindly retry identical failing args."
         ),
         "parameters": {"type": "object", "properties": {
             "cmd": {"type": "string", "description": "Shell command (PowerShell 5.1 on Windows, bash on Linux/Mac)"}

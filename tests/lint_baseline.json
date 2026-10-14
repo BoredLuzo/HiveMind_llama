@@ -88,8 +88,8 @@
     "except_pass": 2
   },
   "core/duo_runner.py": {
-    "broad_except": 110,
-    "except_pass": 33
+    "broad_except": 111,
+    "except_pass": 34
   },
   "core/fix_agent.py": {
     "broad_except": 5,
@@ -120,8 +120,8 @@
     "except_pass": 3
   },
   "core/tool_executor.py": {
-    "broad_except": 10,
-    "except_pass": 3
+    "broad_except": 11,
+    "except_pass": 4
   },
   "core/telemetry.py": {
     "broad_except": 2,

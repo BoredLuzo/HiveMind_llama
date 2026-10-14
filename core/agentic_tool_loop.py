@@ -527,6 +527,15 @@ class AgenticToolLoop(ToolLoop):
                             "max_tokens": getattr(self.round_state, "max_tokens", None),
                             "prompt_tokens": (_dr_usage_final or {}).get("prompt_tokens"),
                             "cached_tokens": (_dr_usage_final or {}).get("cached_tokens"),
+                            # PERF-TELEMETRY (2026-10-14, phase 0): cache miss
+                            # flag + shipped tool-schema size per round.
+                            "cache_miss": (
+                                (_dr_usage_final or {}).get("cached_tokens") == 0
+                                and int((_dr_usage_final or {}).get("prompt_tokens") or 0) > 4000
+                            ) or None,
+                            "tools_schema_chars": sum(
+                                len(json.dumps(_t)) for _t in (payload.get("tools") or [])
+                            ) or None,
                             "prompt_n": (_dr_prompt_timings or {}).get("prompt_n"),
                             "prompt_ms": (_dr_prompt_timings or {}).get("prompt_ms"),
                             "prompt_tps": (_dr_prompt_timings or {}).get("prompt_per_second"),

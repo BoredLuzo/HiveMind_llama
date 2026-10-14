@@ -193,6 +193,11 @@ def _build_os_hint() -> str:
             "run_bash - NOT bash/Linux commands. Example mappings: "
             "'ls' -> 'Get-ChildItem', 'cat' -> 'Get-Content', 'rm' -> 'Remove-Item', "
             "'&&' -> '; if ($?) {'. Use PowerShell syntax ONLY.\n"
+            "More PowerShell traps (2026-10-14, moved out of the run_bash schema): "
+            "backticks are escape characters (JS template literals break); run code "
+            "from files, not node/python -e one-liners with nested quotes; native "
+            "tools can print progress to stderr and still succeed - check OUTPUT "
+            "before retrying; add '-m 10' to curl health checks.\n"
         )
     if _sys.platform.startswith("linux") or _sys.platform == "darwin":
         return (
@@ -3889,6 +3894,10 @@ async def run_code_duo(ctx):
                     # est of the messages that produced the last real value
                     # (calibration basis for the chars/4 estimate)
                     _coder_est_at_real: list = [0]
+                    # len(dtool_msgs) when the last real value was captured —
+                    # everything appended after that POST is not in the server
+                    # value (DELTA-ON-REAL, audit phase 2, 2026-10-14).
+                    _coder_real_at_msgs_len: list = [0]
                     _coder_real_cached_tokens: list = [0]
                     _prev_msg_sig: list = [None]
 
@@ -3896,6 +3905,7 @@ async def run_code_duo(ctx):
                         if isinstance(event, dict) and event.get("type") == "usage_meta" and event.get("prompt_tokens"):
                             _coder_real_prompt_tokens[0] = int(event["prompt_tokens"])
                             _coder_est_at_real[0] = _estimate_ctx_tokens(_dtool_msgs)
+                            _coder_real_at_msgs_len[0] = len(_dtool_msgs)
                             _coder_real_cached_tokens[0] = int(event.get("cached_tokens") or 0)
                         _sse = await ctx.emit(event)
                         try:
@@ -4029,6 +4039,22 @@ async def run_code_duo(ctx):
                         # prompt_tokens value of the last round, fallback to the
                         # estimator (round 1 / backend without usage_meta).
                         _guard_tokens = int(_coder_real_prompt_tokens[0] or _est_tokens)
+                        # DELTA-ON-REAL (2026-10-14, audit phase 2): the server
+                        # value is one round stale. Count what was appended
+                        # since that POST (tool results, injections) with the
+                        # real/est ratio, so a full big-write round cannot slip
+                        # past the compression trigger.
+                        if _coder_real_prompt_tokens[0] > 0 and len(_dtool_msgs) > _coder_real_at_msgs_len[0]:
+                            try:
+                                _r2e = _coder_real_prompt_tokens[0] / max(1, _coder_est_at_real[0])
+                                _delta_chars = sum(
+                                    len(str(_m.get("content", "") or ""))
+                                    + len(str(_m.get("tool_calls", "") or ""))
+                                    for _m in _dtool_msgs[_coder_real_at_msgs_len[0]:]
+                                )
+                                _guard_tokens = int(_guard_tokens + _delta_chars / 4.0 * _r2e)
+                            except Exception:
+                                pass
                         # ── GUARD C: CTX-FLOOR-STOP (2026-09-06) ─────────────
                         # If the slot is degraded (real slot-ctx < requested ctx)
                         # and the round-1 baseline (pinned sys/repo-map/plan/goal)
@@ -4863,9 +4889,13 @@ async def run_code_duo(ctx):
                             _tool_payload["min_p"] = _profile["min_p"]
                         if _profile.get("cache_prompt"):
                             _tool_payload["cache_prompt"] = True
-                        if _coder_no_think:
+                        if _coder_no_think and not _duo_state.think_runtime:
                             # template-level thinking off (Spark/Qwen3-style
-                            # templates; unknown keys are ignored by others)
+                            # templates; unknown keys are ignored by others).
+                            # PHASE-3 CACHE (2026-10-14, audit): reactive-think
+                            # (think_runtime=True) overrides no-think so the
+                            # re-enable happens payload-side — mutating system
+                            # messages instead killed the whole prefix cache.
                             _tool_payload["chat_template_kwargs"] = {"enable_thinking": False}
                         _tool_payload = _apply_thinking_kwargs(
                             _tool_payload, _profile, _thinking,

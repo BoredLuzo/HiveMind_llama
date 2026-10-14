@@ -700,14 +700,16 @@ async def _maybe_activate_reactive_think(_dname, _dresult, round_state, dtool_ms
             if _should_activate:
                 round_state.think_runtime = True
                 round_state.reactive_think_activated = True
-                if exec_has_thinking:
-                    dtool_msgs[:] = [
-                        {**m, "content": "<|think_on|>" + m["content"].replace("<|think_off|>", "")
-                         if m.get("role") == "system" and "<|think_on|>" not in m["content"]
-                         else m["content"]}
-                        if m.get("role") == "system" else m
-                        for m in dtool_msgs
-                    ]
+                # PHASE-3 CACHE (2026-10-14, audit): this used to push a
+                # "<|think_on|>" prefix into EVERY system message in place —
+                # a mid-run prefix rewrite measured at [CACHE-MISS]
+                # prompt=40302 cached=0 (full re-prefill). Thinking is now
+                # re-enabled payload-side: duo_runner's chat_template_kwargs
+                # keys off think_runtime, so the only in-context change left
+                # is this appended note.
+                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                    "[THINKING ON] Repeated tool failures - think through the "
+                    "failure cause step by step before the next tool call.")})
                 await hooks.emit({
                     "type": "status",
                     "content": (

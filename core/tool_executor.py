@@ -273,6 +273,17 @@ async def execute_tool_round(
     if trs.task_complete_blocked_count is None:
         trs.task_complete_blocked_count = [0]
 
+    # PERF-TELEMETRY (2026-10-14, phase 0): per-round measurement basis for
+    # the tool-pipeline audit — tool-result chars before/after the 8k cap,
+    # user-role injection chars added this round, re-read count. One
+    # phase="tools" JSONL row at the end of the round joins the loop's
+    # phase="coder" row.
+    _perf_t0 = time.monotonic()
+    _perf_user_before = sum(
+        len(str(m.get("content", "") or ""))
+        for m in dtool_msgs if m.get("role") == "user")
+    _perf = {"tool_chars_raw": 0, "tool_chars_capped": 0, "reread_count": 0}
+
     result = ToolExecResult(
         verify_mutation_serial=trs.verify_mutation_serial,
         verify_last_ok_serial=trs.verify_last_ok_serial,
@@ -468,7 +479,9 @@ async def execute_tool_round(
             or "[write_file error: content too large" in _dresult
             or "[write_file_append error: chunk too large" in _dresult
         )
+        _perf["tool_chars_raw"] += len(_dresult)
         _dresult = _cap_tool_result(_dresult)
+        _perf["tool_chars_capped"] += len(_dresult)
         if _is_too_large:
             await _handle_too_large(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,
                                     trs.last_too_large_path, round_state, hooks)
@@ -764,7 +777,12 @@ async def execute_tool_round(
             if _dname == "read_file":
                 _rbp = str((_dargs or {}).get("path", "") or "")
                 if _rbp:
-                    trs.reads_seen[os.path.normcase(os.path.normpath(_rbp))] = True
+                    _rbn = os.path.normcase(os.path.normpath(_rbp))
+                    # PERF-TELEMETRY: a read of an already-read path is a
+                    # re-read (driven by truncation or compaction).
+                    if _rbn in trs.reads_seen:
+                        _perf["reread_count"] += 1
+                    trs.reads_seen[_rbn] = True
             elif _dname in ("edit_file", "patch_file", "replace_lines")                     and not _tool_call_failed(_dresult, _dname)                     and len(trs.freshness_warned) < 4:
                 _rbp = str((_dargs or {}).get("path", "") or "")
                 _rbn = os.path.normcase(os.path.normpath(_rbp)) if _rbp else ""
@@ -980,4 +998,29 @@ async def execute_tool_round(
     result.last_tool_result = _dresult
     result.file_changes = trs.file_changes
     result.recent_focus_paths_updated = trs.recent_focus_paths
+
+    # PERF-TELEMETRY (2026-10-14, phase 0): one row per executed round.
+    # injection_chars = user-role text added during this round (nudges,
+    # hints, menus) — the audit found ~12 such injection types that the
+    # universal tool-result cap does NOT cover.
+    try:
+        from core import telemetry as _ptel
+        _perf["injection_chars"] = max(0, sum(
+            len(str(m.get("content", "") or ""))
+            for m in dtool_msgs if m.get("role") == "user") - _perf_user_before)
+        _ptel.append_round({
+            "phase": "tools",
+            "model": exec_model,
+            "n_tool_calls": len(tool_calls),
+            "tools": ",".join(str(tc.get("function", {}).get("name", "") or "")
+                              for tc in tool_calls) or None,
+            "tool_chars_raw": _perf["tool_chars_raw"],
+            "tool_chars_capped": _perf["tool_chars_capped"],
+            "injection_chars": _perf["injection_chars"],
+            "reread_count": _perf["reread_count"],
+            "round_ms": int((time.monotonic() - _perf_t0) * 1000),
+            "compression_id": _ptel.compression_id(),
+        })
+    except Exception:
+        pass
     return result
