@@ -16,6 +16,16 @@ Settings only OVERRIDE: "budget_<name>" = number, or None/absent = auto.
 # this at runtime; core/budgets.py owns it.
 CPT_DEFAULT = 3.92
 
+# ── prefill-aware caps (2026-10-14, task 4) ─────────────────────────────────
+# A tool result lands in the NEXT round's prompt; with --cache-reuse only its
+# own tokens need re-processing. At 19 tok/s a 24k-char result (ceiling) is
+# ~5 minutes of prefill per read — caps must therefore also respect TIME.
+# Worst case: result_chars / cpt / prefill_tps <= PREFILL_RESULT_MAX_SECONDS.
+PREFILL_RESULT_MAX_SECONDS = 60.0
+# Conservative default until the per-slot EMA has data (slow Vulkan tier).
+# core/budgets.py persists a per-model EMA from prompt_n/prompt_ms telemetry.
+PREFILL_TPS_DEFAULT = 20.0
+
 # ── fractions of n_ctx (the actual dials) ───────────────────────────────────
 # Tool-result cap:      0.12 × n_ctx × cpt, clamp(TOOL_RESULT_MIN/MAX)
 TOOL_RESULT_FRAC = 0.12

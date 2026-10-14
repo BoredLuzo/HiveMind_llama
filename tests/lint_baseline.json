@@ -60,8 +60,8 @@
     "except_pass": 1
   },
   "core/agentic_tool_loop.py": {
-    "broad_except": 12,
-    "except_pass": 6
+    "broad_except": 13,
+    "except_pass": 7
   },
   "core/chat_run.py": {
     "broad_except": 20,
@@ -328,8 +328,8 @@
     "except_pass": 3
   },
   "run.py": {
-    "broad_except": 5,
-    "except_pass": 2
+    "broad_except": 9,
+    "except_pass": 5
   },
   "server.py": {
     "broad_except": 35,
@@ -469,7 +469,7 @@
   },
   "core/budgets.py": {
     "except_pass": 0,
-    "broad_except": 1
+    "broad_except": 3
   },
   "context/resume.py": {
     "except_pass": 0,

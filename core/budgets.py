@@ -16,7 +16,9 @@ trigger, the injection budget.
 from __future__ import annotations
 
 import contextvars
+import json
 from dataclasses import dataclass, asdict
+from pathlib import Path
 
 from tools.limits import (
     CPT_DEFAULT,
@@ -28,6 +30,7 @@ from tools.limits import (
     COMPRESS_RESERVE_CTX_FRAC, COMPRESS_TRIGGER_RESERVE_MULT,
     COMPRESS_REST_RESERVE_MULT, COMPRESS_GROWTH_TOKENS_DEFAULT,
     EXEC_RESULT_CAP_FALLBACK,
+    PREFILL_RESULT_MAX_SECONDS, PREFILL_TPS_DEFAULT,
 )
 
 
@@ -54,6 +57,7 @@ class Budgets:
     compress_trigger_tokens: int   # guard_tokens above this -> compress
     compress_rest_tokens: int      # guard_tokens below this -> at rest
     growth_tokens: int
+    prefill_tps: float
     # provenance
     overrides_used: tuple
 
@@ -62,7 +66,8 @@ class Budgets:
 
 
 def resolve(n_ctx: int, cpt: float | None = None, max_out: int = 4096,
-            settings: dict | None = None) -> Budgets:
+            settings: dict | None = None,
+            prefill_tps: float | None = None) -> Budgets:
     """Resolve every budget from measured sizes. settings values named
     "budget_<field>" override the derivation (None/absent = auto)."""
     settings = settings or {}
@@ -86,7 +91,16 @@ def resolve(n_ctx: int, cpt: float | None = None, max_out: int = 4096,
                                                SCHEMA_MIN, SCHEMA_MAX))
     injection_budget = _ov("injection_budget", _frac(n_ctx, cpt, INJECTION_FRAC,
                                                      INJECTION_MIN, INJECTION_MAX))
-    injection_msg_cap = max(300, min(4000, injection_budget // 3))
+    # PREFILL-AWARE CAPS (2026-10-14, task 4): a tool result is prefilled as
+    # the tail of the next round — its own chars / cpt / tps is the worst-case
+    # prefill TIME it costs. Freeze rule: `prefill_tps` is the PERSISTED EMA
+    # from previous runs, resolved once per run; live updates only feed the
+    # next run. tps=20 caps 16k/3.92 at ~4.7k chars (vs the 7.7k fraction —
+    # on fast slots the fraction stays the binding dial).
+    tps = float(prefill_tps) if prefill_tps and prefill_tps > 1 else PREFILL_TPS_DEFAULT
+    prefill_time_cap = max(1200, int(PREFILL_RESULT_MAX_SECONDS * tps * cpt))
+    tool_result_cap = min(tool_result_cap, prefill_time_cap)
+    injection_budget = min(injection_budget, prefill_time_cap)
     anchor_lines = _ov("anchor_lines", max(ANCHOR_MIN, min(
         ANCHOR_MAX, injection_budget // (AVG_LINE_CHARS * 8))))
     outline_items = _ov("outline_items", anchor_lines * OUTLINE_PER_ANCHOR)
@@ -103,12 +117,13 @@ def resolve(n_ctx: int, cpt: float | None = None, max_out: int = 4096,
         read_char_cap=read_char_cap,
         schema_budget=schema_budget,
         injection_budget=injection_budget,
-        injection_msg_cap=injection_msg_cap,
+        injection_msg_cap=max(300, min(4000, injection_budget // 3)),
         anchor_lines=anchor_lines,
         outline_items=outline_items,
         compress_trigger_tokens=compress_trigger,
         compress_rest_tokens=compress_rest,
         growth_tokens=growth,
+        prefill_tps=round(tps, 2),
         overrides_used=tuple(used),
     )
 
@@ -165,3 +180,43 @@ def update_cpt_ema(model: str, sent_chars: int, prompt_tokens: int) -> float | N
 
 def cpt_for(model: str) -> float:
     return _cpt_ema.get(str(model or ""), CPT_DEFAULT)
+
+
+# ── prefill-rate EMA (per model, persisted; task 4) ──────────────────────────
+# Feed from real responses: tps = prompt_n / (prompt_ms / 1000). Stored next
+# to the telemetry rows; Budgets.resolve takes the PERSISTED value (freeze
+# rule) - a mid-run update only affects the NEXT run.
+_PREFILL_STATE = (Path(__file__).resolve().parent.parent / "logs" / "telemetry"
+                  / "prefill_ema.json")
+_PREFILL_ALPHA = 0.2
+
+
+def _load_prefill_state() -> dict:
+    try:
+        return json.loads(_PREFILL_STATE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def update_prefill_ema(model: str, tps: float) -> float | None:
+    try:
+        if not tps or tps <= 0.5 or tps > 5000:
+            return None
+        state = _load_prefill_state()
+        key = str(model or "unknown")
+        old = float(state.get(key) or PREFILL_TPS_DEFAULT)
+        new = round(old * (1 - _PREFILL_ALPHA) + float(tps) * _PREFILL_ALPHA, 2)
+        state[key] = new
+        _PREFILL_STATE.parent.mkdir(parents=True, exist_ok=True)
+        _PREFILL_STATE.write_text(json.dumps(state), encoding="utf-8")
+        return new
+    except Exception:
+        return None
+
+
+def prefill_tps_for(model: str) -> float:
+    try:
+        v = float(_load_prefill_state().get(str(model or ""), 0) or 0)
+        return v if v > 1 else PREFILL_TPS_DEFAULT
+    except Exception:
+        return PREFILL_TPS_DEFAULT

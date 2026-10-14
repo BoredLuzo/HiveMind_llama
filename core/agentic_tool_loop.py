@@ -378,6 +378,18 @@ class AgenticToolLoop(ToolLoop):
                                 "prompt_per_second": float(
                                     _sse_timings.get("prompt_per_second") or 0.0),
                             }
+                            # PREFILL-EMA FEED (2026-10-14, task 4): real
+                            # prompt tok/s per model -> persisted state file
+                            # (core/budgets reads it at the NEXT run's
+                            # resolve - freeze rule, no mid-run change).
+                            try:
+                                if _dr_prompt_timings["prompt_ms"] > 0 and _dr_prompt_timings["prompt_n"] > 0:
+                                    from core.budgets import update_prefill_ema as _upe
+                                    _upe(getattr(self.round_state, "exec_model", None),
+                                         _dr_prompt_timings["prompt_n"]
+                                         / (_dr_prompt_timings["prompt_ms"] / 1000.0))
+                            except Exception:
+                                pass
                         if _sse_usage and _sse_usage.get("completion_tokens"):
                             # D2-DIAG (2026-08-21): cached_tokens from
                             # prompt_tokens_details → Cache-Reuse pro Request messbar.

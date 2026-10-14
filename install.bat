@@ -39,33 +39,48 @@ echo.
 
 REM ======================================================
 REM uv (fast Python package manager)
+REM UV-ROBUST (2026-10-14): detection is existence-based over ALL known
+REM install locations, and PATH changes are applied OUTSIDE parenthesized
+REM blocks (batch expands %VARS% at parse time inside a block, so the old
+REM in-block "set PATH + where uv" could never see a fresh install - the
+ ERROR-every-second-run report).
 REM ======================================================
 echo  ==========================================================
 echo   [uv] Setting up package manager
 echo  ==========================================================
 echo.
+set "UV_DIR="
 where uv >nul 2>&1
-if errorlevel 1 (
+if not errorlevel 1 set "UV_DIR=on_path"
+if not defined UV_DIR if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_DIR=%USERPROFILE%\.local\bin"
+if not defined UV_DIR if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe" set "UV_DIR=%LOCALAPPDATA%\Microsoft\WinGet\Links"
+
+if not defined UV_DIR (
     echo  [uv] uv not found - installing...
     echo  [uv] Target: %USERPROFILE%\.local\bin (added to PATH)
     where winget >nul 2>&1
     if not errorlevel 1 (
         REM --source winget supresses the MS store license agreement prompt
         winget install --id astral-sh.uv --source winget --silent
-        set "PATH=%PATH%;%LOCALAPPDATA%\Microsoft\WinGet\Links"
     ) else (
         powershell -NoProfile -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex"
-        set "PATH=%PATH%;%USERPROFILE%\.local\bin"
-    )
-    where uv >nul 2>&1
-    if errorlevel 1 (
-        echo.
-        echo   [ERROR] uv could not be installed.
-        echo   Install it manually: https://docs.astral.sh/uv/
-        echo.
-        echo  Press any key to continue... & pause >nul & exit /b 1
     )
 )
+
+if not defined UV_DIR if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_DIR=%USERPROFILE%\.local\bin"
+if not defined UV_DIR if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe" set "UV_DIR=%LOCALAPPDATA%\Microsoft\WinGet\Links"
+where uv >nul 2>&1
+if not errorlevel 1 set "UV_DIR=on_path"
+
+if not defined UV_DIR (
+    echo.
+    echo   [ERROR] uv could not be installed.
+    echo   Install it manually: https://docs.astral.sh/uv/
+    echo.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+if not "%UV_DIR%"=="on_path" set "PATH=%PATH%;%UV_DIR%"
+echo   [uv] ok: %UV_DIR%
 uv --version
 
 SET "UV_NO_DEV=1"

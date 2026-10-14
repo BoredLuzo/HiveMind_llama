@@ -3736,6 +3736,9 @@ async def run_code_duo(ctx):
                         cpt=_budg.cpt_for(exec_mdl),
                         max_out=int(_duo_out_budget or 1024),
                         settings=ctx.settings,
+                        # FREEZE RULE (task 4): the persisted EMA from
+                        # PREVIOUS runs - never a mid-run value.
+                        prefill_tps=_budg.prefill_tps_for(exec_mdl),
                     )
                     _budg.set_active(_run_budgets)
                     state["_budgets"] = _run_budgets

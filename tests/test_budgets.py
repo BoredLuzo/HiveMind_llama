@@ -10,7 +10,9 @@ keeps model-name staffels OUT of the budget/tool-selection code.
 """
 import json
 import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -36,11 +38,16 @@ def check(name, cond, extra=""):
 print("=== budgets: derivation, base case, monotonicity, overrides ===")
 
 # ── 1. 16k base case reproduces the tuned values ─────────────────────────
+# PREFILL-AWARE (task 4): the 60-second safety cap binds at the default
+# tps=20 -> tool cap ~4.7k at 16k (fast slots keep the 7.7k fraction).
 b16 = resolve(16384, 3.92, 8000, {})
-check("tool_result_cap ~7.7k at 16k", 7000 <= b16.tool_result_cap <= 8300,
+check("tool_result_cap ~4.7k at 16k (60s prefill safety)", 4400 <= b16.tool_result_cap <= 5000,
       f"({b16.tool_result_cap})")
 check("read_char_cap ~32k at 16k", 30000 <= b16.read_char_cap <= 33500,
       f"({b16.read_char_cap})")
+check("injection budget also capped by prefill safety",
+      b16.injection_budget <= b16.tool_result_cap + 1,
+      f"({b16.injection_budget})")
 check("compress trigger ~0.70 x ctx at 16k/8k-out",
       abs(b16.compress_trigger_tokens - int(0.70 * 16384)) <= 200,
       f"({b16.compress_trigger_tokens} vs {int(0.70*16384)})")
@@ -59,6 +66,32 @@ for field in ("tool_result_cap", "read_char_cap", "schema_budget",
     check(f"monotone in n_ctx: {field}",
           getattr(b8, field) <= getattr(b16, field) <= getattr(b32, field),
           f"({getattr(b8, field)}/{getattr(b16, field)}/{getattr(b32, field)})")
+
+# ── 2b. prefill-aware caps: fast slots keep the fraction dial ────────────
+bfast = resolve(16384, 3.92, 8000, {}, prefill_tps=90)
+check("fast slot (90 tps) keeps fraction cap",
+      bfast.tool_result_cap > b16.tool_result_cap,
+      f"({bfast.tool_result_cap})")
+check("prefill_tps recorded on budgets", bfast.prefill_tps == 90.0)
+slower = resolve(16384, 3.92, 8000, {}, prefill_tps=10)
+check("slower slot -> tighter cap", slower.tool_result_cap < b16.tool_result_cap,
+      f"({slower.tool_result_cap})")
+
+# ── 2c. persisted prefill EMA roundtrip ──────────────────────────────────
+import core.budgets as _budg
+_tmp_state = Path(tempfile.mkdtemp(prefix="hvm_budgets_")) / "prefill_ema.json"
+_orig_state = _budg._PREFILL_STATE
+_budg._PREFILL_STATE = _tmp_state
+try:
+    check("no state -> default tps", _budg.prefill_tps_for("bench-model") == 20.0)
+    _budg.update_prefill_ema("bench-model", 45.0)
+    check("ema stored and read back", abs(_budg.prefill_tps_for("bench-model") - 25.0) < 0.1,
+          f"({_budg.prefill_tps_for('bench-model')})")
+    _budg.update_prefill_ema("bench-model", 10**7)  # implausible - ignored
+    check("implausible sample ignored", abs(_budg.prefill_tps_for("bench-model") - 25.0) < 0.1)
+finally:
+    _budg._PREFILL_STATE = _orig_state
+    shutil.rmtree(_tmp_state.parent, ignore_errors=True)
 
 # ── 3. floors/ceilings hold at extremes ──────────────────────────────────
 btiny = resolve(2048, 3.92, 1024, {})

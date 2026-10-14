@@ -15,13 +15,91 @@ import urllib.error
 import logging
 from logging.handlers import RotatingFileHandler
 
+# ── DEATH FORENSICS (2026-10-14, task 5): the engine died several times
+# without any traceback (last: mid-coder-call, log ended on a console ^C).
+# This block makes every exit path VISIBLE:
+#   - faulthandler dumps threads on native crashes AND on SIGTERM/SIGBREAK
+#   - signal handlers log which signal arrived
+#   - atexit logs a normal-exit marker
+#   - a heartbeat file (logs/engine_heartbeat.json) timestamps liveness
+# Diagnosis rule: process gone + NO atexit/signal line = hard TerminateProcess
+# from outside; signal line = console event; faulthandler dump = native crash.
 _LOG_FMT = "%(asctime)s [%(name)s] %(levelname)s %(message)s"
+
+_LOG_DIR_EARLY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_LOG_DIR_EARLY, exist_ok=True)
+_DEATH_LOG_PATH = os.path.join(_LOG_DIR_EARLY, "engine_death.log")
+_faulthandler_stream = None
+try:
+    import faulthandler as _fh
+    import signal as _signal
+    import time as _time_mod
+    _T0 = _time_mod.time()
+    _faulthandler_stream = open(_DEATH_LOG_PATH, "a", encoding="utf-8")
+    _fh.enable(file=_faulthandler_stream)
+    _fh.register(_faulthandler_stream)
+
+    def _log_death_signal(signum, frame):
+        try:
+            with open(_DEATH_LOG_PATH, "a", encoding="utf-8") as _f:
+                _f.write(f"{_time_mod.strftime('%Y-%m-%d %H:%M:%S')} SIGNAL signum={signum}\n")
+        except Exception:
+            pass
+        # restore default so the process still terminates as expected
+        _signal.signal(signum, _signal.SIG_DFL)
+        _signal.raise_signal(signum)
+
+    for _sig_name in ("SIGTERM", "SIGBREAK", "SIGABRT", "SIGINT"):
+        _sig = getattr(_signal, _sig_name, None)
+        if _sig is not None:
+            try:
+                _signal.signal(_sig, _log_death_signal)
+            except (ValueError, OSError):
+                pass
+
+    import atexit as _atexit
+
+    @_atexit.register
+    def _death_forensics_atexit():
+        try:
+            with open(_DEATH_LOG_PATH, "a", encoding="utf-8") as _f:
+                _f.write(f"{_time_mod.strftime('%Y-%m-%d %H:%M:%S')} ATEXIT normal exit "
+                         f"uptime={_time_mod.time() - _T0:.0f}s\n")
+        except Exception:
+            pass
+
+    def _heartbeat_loop():
+        import json as _json
+        import threading as _threading
+        import time as _t2
+
+        def _loop():
+            while True:
+                try:
+                    with open(os.path.join(_LOG_DIR_EARLY, "engine_heartbeat.json"),
+                              "w", encoding="utf-8") as _f:
+                        _json.dump({"pid": os.getpid(),
+                                    "ts": _t2.strftime("%Y-%m-%d %H:%M:%S"),
+                                    "uptime_s": round(_t2.time() - _T0)}, _f)
+                except Exception:
+                    pass
+                _t2.sleep(10)
+
+        _t = _threading.Thread(target=_loop, daemon=True, name="engine-heartbeat")
+        _t.start()
+
+    _heartbeat_loop()
+except Exception as _forensics_err:
+    print(f"[WARN] death forensics unavailable: {_forensics_err}")
 
 # CONSOLE-KILL (2026-09-10, Windows): bind the whole process tree (python +
 # all spawned llama-server children) to a Job object with kill-on-close.
 # Closing the console window then reliably terminates the entire stack
 # instead of leaving orphaned llama-servers on the GPU. Linux/uv-managed
 # setups use systemd which already reaps children.
+# NOTE (2026-10-14 forensics): this job also makes the process die with the
+# console on ^C — engine_wmi.log ended on a console ^C mid-request. When
+# starting the engine detached (pythonw/WMI), console events cannot reach it.
 if sys.platform == "win32":
     _win32job = None
     try:
