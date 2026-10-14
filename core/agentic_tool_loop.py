@@ -572,6 +572,11 @@ class AgenticToolLoop(ToolLoop):
                             "gen_ms": (_dr_usage_final or {}).get("gen_ms"),
                             "decode_tps": (_dr_usage_final or {}).get("decode_tps"),
                             "finish_reason": _dr_finish_reason,
+                            # SLOT-ATTRIBUTION (2026-10-15, task 3 addendum):
+                            # tok/s must never be averaged across models or
+                            # slots - every coder row carries the port that
+                            # served THIS request.
+                            "port": result.get("dport"),
                             "ttfb_ms": _ttfb_ms,
                             "t_last_ms": _t_last_ms,
                             "tools": ",".join(_tel_tools) or None,
