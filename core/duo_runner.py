@@ -585,11 +585,21 @@ def _apply_thinking_kwargs(payload, profile, thinking, coder_tool_think):
 
 
 async def _auto_commit_chunk(user_input: str, subtask: str, workspace: str,
-                             git_enabled: bool, files: list[str] | None = None) -> str:
+                             git_enabled: bool, files: list[str] | None = None,
+                             commit_allowed: bool = True) -> str:
 
 
     if not git_enabled or not workspace:
         return ""
+    # COMMIT-GATE (2026-10-14, security fix): a run without an explicit
+    # workspace (and without a chat session carrying one) must never commit
+    # anywhere - the gravSandbox incident: a stray API run landed in
+    # "last used" and swept 1186 files into a commit.
+    if not commit_allowed:
+        logger.warning(
+            "[AUTO-COMMIT] skipped: run has no explicit workspace and no chat "
+            "session workspace - committing is disabled for this run")
+        return "ℹ️ auto-commit skipped: run has no explicit workspace (commit-gated)"
     try:
         from hive_functions.git_tools import auto_commit_block_reason as _acb_reason
         _block = _acb_reason(workspace)
@@ -616,7 +626,7 @@ async def _auto_commit_chunk(user_input: str, subtask: str, workspace: str,
             return "" if _fold_out.startswith("ℹ️") else _fold_out
 
         _out = await exec_git_commit(message=_message, workspace=workspace,
-                                     files=files or None)
+                                     files=files or None, allow_add_all=False)
         if _out.startswith(("ℹ️", "⚠️")):
             return ""
         return _out
@@ -635,10 +645,19 @@ def _git_checkpoints_enabled(ctx) -> bool:
 
 
 async def _git_checkpoint_at_chunk_start(ctx, _ws_str: str, _di: int,
-                                         _n_items: int, subtask) -> str:
+                                         _n_items: int, subtask,
+                                         run_files: list[str] | None = None) -> str:
 
 
     if not _ws_str or not _git_checkpoints_enabled(ctx):
+        return ""
+    # COMMIT-GATE (2026-10-14, security fix): chunk-start checkpoints run
+    # `git add -A` by design - for a run without an explicit/chat workspace
+    # that would sweep foreign (owner) changes into a run commit.
+    if not getattr(ctx, "workspace_commit_allowed", True):
+        logger.info(
+            "[GIT-CHECKPOINT] skipped: run has no explicit/chat workspace "
+            "(commit-gated) - a checkpoint here would sweep foreign changes")
         return ""
     try:
         from hive_functions.git_tools import exec_git_checkpoint as _gck
@@ -648,7 +667,10 @@ async def _git_checkpoint_at_chunk_start(ctx, _ws_str: str, _di: int,
             if getattr(ctx, "_git_session_cp_done", False):
                 return ""
             _label = "session start"
-        _out = await _gck(_label, _ws_str)
+        # RUN-SCOPED (2026-10-14): the checkpoint stages only the files THIS
+        # run wrote so far - never `add -A` on the owner's dirty repo.
+        _out = await _gck(_label, _ws_str,
+                          files=list(run_files or []) or None)
         if _out and not ctx.duo_config.git_autocommit \
                 and not _out.startswith("ℹ️"):
             ctx._git_session_cp_done = True
@@ -2458,7 +2480,8 @@ async def run_code_duo(ctx):
             new_transaction().begin()
             # details/semantics see _git_checkpoint_at_chunk_start).
             _ck_out = await _git_checkpoint_at_chunk_start(
-                ctx, _ws_str, _di, _n_items, _subtask)
+                ctx, _ws_str, _di, _n_items, _subtask,
+                run_files=list(_cs.written_files or []))
             if _ck_out:
                 yield await ctx.emit({"type": "status", "content": _ck_out})
             # it is also used outside (cache invalidation, written_files tracking).
@@ -2647,7 +2670,8 @@ async def run_code_duo(ctx):
                             "content": f"⏭ Round {_di+1} skipped"})
                     _ac_out = await _auto_commit_chunk(ctx.user_input, _subtask, _ws_str,
                                                        ctx.duo_config.git_autocommit,
-                                                       files=list(_cs.written_files[-20:]))
+                                                       files=list(_cs.written_files[-20:]),
+                                                       commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
                     if _ac_out:
                         yield await ctx.emit({"type": "status", "content": _ac_out})
                     _di += 1
@@ -6139,6 +6163,10 @@ async def run_code_duo(ctx):
                         "content": f"⏭ Chunk {_di+1} ended (tool budget exhausted) — moving to chunk {_di+2}/{_n_items}"})
                     _cs.reset_test_retries()
                     _di += 1
+                    # CHUNK-PERSIST (2026-10-14): the containment decision is
+                    # final - the resume block must reflect it, or a hard kill
+                    # re-runs the deliberately skipped chunk.
+                    _halt_with_resume("chunk_checkpoint")
                     continue
                 yield await ctx.emit({"type": "status",
                     "content": "⏹ Tool budget exhausted — last chunk ended."})
@@ -6257,7 +6285,8 @@ async def run_code_duo(ctx):
                                 "content": f"\u26a0\ufe0f Chunk {_di+1}: test failures remain after {_cs.max_test_retries+1} attempts — note and continue"})
                 _ac_out = await _auto_commit_chunk(ctx.user_input, _subtask, _ws_str,
                                                    ctx.duo_config.git_autocommit,
-                                                   files=list(_cs.written_files[-20:]))
+                                                   files=list(_cs.written_files[-20:]),
+                                                   commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
                 if _ac_out:
                     yield await ctx.emit({"type": "status", "content": _ac_out})
                 _di += 1
@@ -6285,7 +6314,8 @@ async def run_code_duo(ctx):
                     _cs.mark_chunk_done(_subtask)
                     _ac_out = await _auto_commit_chunk(ctx.user_input, _subtask, _ws_str,
                                                        ctx.duo_config.git_autocommit,
-                                                       files=list(_cs.written_files[-20:]))
+                                                       files=list(_cs.written_files[-20:]),
+                                                       commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
                     if _ac_out:
                         yield await ctx.emit({"type": "status", "content": _ac_out})
                 if _is_last:
@@ -6524,7 +6554,8 @@ async def run_code_duo(ctx):
                     # B8.3 AUTO-COMMIT: chunk completion (critic approve). Fires
                     _ac_out = await _auto_commit_chunk(ctx.user_input, _subtask, _ws_str,
                                                        ctx.duo_config.git_autocommit,
-                                                       files=list(_cs.written_files[-20:]))
+                                                       files=list(_cs.written_files[-20:]),
+                                                       commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
                     if _ac_out:
                         yield await ctx.emit({"type": "status", "content": _ac_out})
                     # ── P3: Auto-Test after chunk completion (Self-Awakening) ──────────
@@ -7032,7 +7063,9 @@ async def run_code_duo(ctx):
     if (ctx.duo_config.git_autocommit
             and ctx.duo_stop_reason in ("completed", "graceful_stop", "loop_detected")
             and _ws_str):
-        _ac_final = await _auto_commit_chunk(ctx.user_input, "", _ws_str, True)
+        _ac_final = await _auto_commit_chunk(ctx.user_input, "", _ws_str, True,
+                                             files=list(_cs.written_files[-50:]),
+                                             commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
         if _ac_final:
             yield await ctx.emit({"type": "status", "content": _ac_final})
         if _ac_final and _ac_final.startswith("✅"):

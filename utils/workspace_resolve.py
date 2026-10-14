@@ -91,8 +91,23 @@ def resolve_workspace(
     user_input: str = "",
     *,
     force: bool | None = None,
+    request_workspace: str = "",
 ) -> tuple[str, str]:
 
+    # REQUEST-WINS (2026-10-14, security fix): an explicit /stream workspace
+    # parameter beats every other source. Before this, the body parameter was
+    # ignored entirely and runs silently landed in "last used" (the
+    # gravSandbox contamination: a stray API run committed 1186 files there).
+    _req = str(request_workspace or "").strip()
+    if _req and _valid_dir(_req):
+        return str(Path(_req).resolve()), "request"
+    if _req:
+        logger.warning(
+            "[WS-RESOLVE] request workspace '%s' does not exist or is not a "
+            "directory - ignoring it (run will NOT auto-commit anywhere)",
+            _req[:120],
+        )
+        return "", "request_invalid"
 
     _mode = str((settings or {}).get("mode") or "").strip().lower()
     _force = bool(settings.get("workspace_force_ui")) if force is None else bool(force)
@@ -126,3 +141,16 @@ def resolve_workspace(
         return str(Path(env_ws).resolve()), "env"
 
     return str(Path(".").resolve()), "cwd_fallback"
+
+
+def commit_allowed_for(request_workspace: str, chat_ctx: dict | None) -> bool:
+    """COMMITS (2026-10-14, security fix): an API run may only auto-commit
+    when it EXPLICITLY addressed a workspace (valid request parameter) or
+    continues an existing chat session (UI flow persists the workspace in
+    the chat context). A run with neither - the gravSandbox incident shape -
+    may read the fallback workspace but must never commit anywhere."""
+    _req = str(request_workspace or "").strip()
+    if _req and _valid_dir(_req):
+        return True
+    cw = str(((chat_ctx or {}).get("workspace")) or "").strip()
+    return bool(cw and _valid_dir(cw))

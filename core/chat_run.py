@@ -93,6 +93,7 @@ async def run_stream(
     chat_id: str | None = None,
     duo_config: DuoConfig | None = None,
     model_overrides: dict | None = None,
+    request_workspace: str = "",
 ):
     # Lazy server import (avoids an import cycle; server is loaded at runtime).
     from server import (
@@ -308,6 +309,7 @@ async def run_stream(
     # WORKSPACE-PERSISTENCE (2026-08-25 REWORK): Central resolution via
     from utils.workspace_resolve import (
         resolve_workspace as _resolve_workspace,
+        commit_allowed_for as _commit_allowed_for,
         sync_env_workspace as _sync_env_workspace,
         save_last_workspace as _save_last_ws,
         WorkspaceForceInvalid as _WsForceInvalid,
@@ -324,7 +326,15 @@ async def run_stream(
                     _chat_ctx_ws = {**(_chat_ctx_ws or {}), "workspace": _json_ws}
             except (OSError, ValueError):
                 pass
-        _ws_str, _ws_src = _resolve_workspace(settings, _chat_ctx_ws, user_input)
+        _ws_str, _ws_src = _resolve_workspace(settings, _chat_ctx_ws, user_input,
+                                              request_workspace=request_workspace)
+        # COMMIT-GATE (2026-10-14, security fix): auto-commit only when the
+        # run explicitly addressed a workspace (request parameter) or
+        # continues a chat session with a persisted workspace (UI flow). A
+        # stray API run with neither reads the fallback but never commits.
+        _ws_commit_allowed = _commit_allowed_for(request_workspace, _chat_ctx_ws)
+        if _ws_src == "request_invalid":
+            _ws_commit_allowed = False
     except _WsForceInvalid as _wfi:
         logger.error("[WS-RESOLVE] %s", _wfi)
         yield await emit({"type": "status", "content": f"\u26d4 {_wfi}"})
@@ -1342,6 +1352,7 @@ async def run_stream(
             effective_task_type=_effective_task_type,
             use_learned=use_learned,
             workspace=_ws_str,
+            workspace_commit_allowed=_ws_commit_allowed,
             image_paths=_saved_image_paths,
             prepro_success=_prepro_success,
             image_description=image_description,

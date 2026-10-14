@@ -6,7 +6,11 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import logging
+
 from settings import load_settings as _load_settings
+
+logger = logging.getLogger("hivemind.git_tools")
 settings = _load_settings()  # Runtime settings dict
 
 
@@ -145,7 +149,8 @@ async def push_after_commit(workspace: str) -> str:
     return f"❌ auto-push failed: {_err[:200]}"
 
 
-async def exec_git_commit(message: str, workspace: str, files: list[str] | None = None) -> str:
+async def exec_git_commit(message: str, workspace: str, files: list[str] | None = None,
+                          allow_add_all: bool = True) -> str:
 
 
     import asyncio as _asyncio
@@ -184,16 +189,32 @@ async def exec_git_commit(message: str, workspace: str, files: list[str] | None 
         _existing = [f for f in files if (Path(workspace) / f).exists()]
         if not _existing:
             return "ℹ️ git_commit: none of the listed files exist — no commit."
-        add_result = await _git("git", "add", "--", *_existing)
-        if add_result.returncode != 0:
-            return f"❌ git add fehlgeschlagen: {add_result.stderr.strip()}"
-        staged = await _git("git", "diff", "--cached", "--name-only")
-        if not staged.stdout.strip():
-            return "ℹ️ git_commit: No changes to commit."
-    else:
-        add_result = await _git("git", "add", "-A")
-        if add_result.returncode != 0:
-            return f"❌ git add fehlgeschlagen: {add_result.stderr.strip()}"
+        # RUN-SCOPED COMMIT (2026-10-14, security fix): `git commit -- paths`
+        # commits ONLY those paths and ignores everything else in the index.
+        # The previous `git add -- files` + bare `git commit` committed the
+        # WHOLE index — foreign already-staged work (the owner's, in the
+        # gravSandbox incident: 1186 files / 819k lines) was swept into the
+        # run's chunk commit.
+        commit_result = await _git(
+            "git", "commit", "-m", message[:72], "--", *_existing)
+        if commit_result.returncode != 0:
+            _err = commit_result.stderr.strip()
+            if "nothing to commit" in _err.lower() or "no changes added" in _err.lower():
+                return "ℹ️ git_commit: no changes in the listed files — no commit."
+            return f"❌ git commit fehlgeschlagen: {_err}"
+        hash_result = await _git("git", "rev-parse", "--short", "HEAD")
+        short_hash = hash_result.stdout.strip()
+        return f"✅ Committed: [{short_hash}] {message[:72]}"
+
+    if not allow_add_all:
+        # AUTO-COMMIT without a file list: `git add -A` here is exactly the
+        # index sweep the 2026-10-14 policy bans. The final commit passes the
+        # run's written files; nothing should reach this branch ungated.
+        return "ℹ️ git_commit: no file list — refusing to commit the whole index."
+
+    add_result = await _git("git", "add", "-A")
+    if add_result.returncode != 0:
+        return f"❌ git add fehlgeschlagen: {add_result.stderr.strip()}"
 
     commit_result = await _git("git", "commit", "-m", message[:72])
     if commit_result.returncode != 0:
@@ -212,7 +233,8 @@ async def exec_git_commit(message: str, workspace: str, files: list[str] | None 
 import os as _os
 
 
-async def exec_git_checkpoint(label: str, workspace: str) -> str:
+async def exec_git_checkpoint(label: str, workspace: str,
+                              files: list[str] | None = None) -> str:
 
 
     import asyncio as _asyncio
@@ -249,10 +271,24 @@ async def exec_git_checkpoint(label: str, workspace: str) -> str:
         h = await _git("git", "rev-parse", "--short", "HEAD")
         return f"[checkpoint {h.stdout.strip()}: {label[:50]}]"
 
-    add = await _git("git", "add", "-A")
+    # DIRTY-REPO GUARD (2026-10-14, security fix): the checkpoint used to run
+    # `git add -A` on a dirty repo - the gravSandbox checkpoint commit
+    # (5a29baa) swept the owner's uncommitted work plus build artifacts into
+    # a run commit. Without an explicit file list from the RUN, a dirty repo
+    # is not ours to commit.
+    if not files:
+        logger.warning(
+            "[git_checkpoint] dirty repo and no run file list - checkpoint "
+            "skipped (would sweep foreign changes): %s", label[:60])
+        return ""
+    _existing = [f for f in files if (Path(workspace) / f).exists()]
+    if not _existing:
+        return ""
+    add = await _git("git", "add", "--", *_existing)
     if add.returncode != 0:
         return ""
-    cmd = ["git", "commit", "-m", f"{_checkpoint_marker()} {label}"[:72]]
+    cmd = ["git", "commit", "-m", f"{_checkpoint_marker()} {label}"[:72],
+           "--", *_existing]
     if not has_head:
         cmd.append("--allow-empty")
     c = await _git(*cmd)

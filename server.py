@@ -1440,6 +1440,10 @@ async def stream(req: Request):
     duo_coder_tool_thinking = _as_bool(_body_or_settings("duo_coder_tool_thinking", default=False))
     duo_coder_tool_thinking_auto_mode = str(_body_or_settings("duo_coder_tool_thinking_auto_mode", default="off")).strip().lower()
     chat_id                = body.get("chat_id") or None
+    # REQUEST-WINS (2026-10-14, security fix): an explicit workspace in the
+    # body overrides last-used/settings for THIS run; a run WITHOUT one is
+    # commit-gated (workspace_commit_allowed=False in chat_run).
+    request_workspace      = str(body.get("workspace") or "").strip()
     # FLUSH-FAIL IMPORT (2026-10-03): when the frontend could not persist
     # before this run, /stream carries the DOM messages; the server writes
     # them as the chat truth (rev bumped) so the run seeds fresh state
@@ -1471,6 +1475,7 @@ async def stream(req: Request):
                    skip_agents=skip_agents,
                    judge_bias=judge_bias,
                    chat_id=chat_id,
+                   request_workspace=request_workspace,
                    model_overrides=_model_overrides,
                    duo_config=DuoConfig.from_legacy_params(
                        duo_tool_rounds=duo_tool_rounds,

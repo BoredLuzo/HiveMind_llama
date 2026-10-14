@@ -37,6 +37,10 @@ class RunContext:
 
     # ── Workspace (resolved per run) ──
     workspace: str = ""
+    # COMMIT-GATE (2026-10-14, security fix): False = the run got no explicit
+    # workspace and continues no chat session with one (stray API run shape,
+    # the gravSandbox incident) - auto-commits and checkpoints are skipped.
+    workspace_commit_allowed: bool = True
 
     # ── Vision / prepro ──
     prepro_success: bool = False
