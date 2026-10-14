@@ -516,6 +516,22 @@ class AgenticToolLoop(ToolLoop):
                     try:
                         _tel_msgs = payload.get("messages") or []
                         _tel_hashes, _tel_fdi = _tel.message_hashes(_tel_msgs)
+                        # CPT-EMA (2026-10-14, Sonnet redesign): real
+                        # chars/token per model from each real response —
+                        # Budgets.resolve uses this instead of a constant.
+                        try:
+                            _tel_chars = sum(
+                                len(str(_m.get("content", "") or ""))
+                                + len(str(_m.get("tool_calls", "") or ""))
+                                for _m in _tel_msgs
+                            )
+                            _tel.update_cpt_ema(
+                                getattr(self.round_state, "exec_model", None),
+                                _tel_chars,
+                                int((_dr_usage_final or {}).get("prompt_tokens") or 0),
+                            )
+                        except Exception:
+                            pass
                         _tel_tools = []
                         for _tk in sorted(result["dr_tool_calls_acc"].keys()):
                             _tfn = str(((result["dr_tool_calls_acc"][_tk].get("function")) or {}).get("name", "") or "")

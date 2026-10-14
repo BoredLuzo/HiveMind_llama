@@ -235,19 +235,11 @@ async def _phase_vram(ctx, state: dict):
 
     _duo_ws    = ctx.settings.get("duo_websearch_enabled", False) and ctx.websearch_available
     _duo_seen_web_queries: set[str] = set()
-    # TOOL-PROFILE (2026-10-14, audit phase 6): "compact" keeps the essential
-    # dozen tools with one-line descriptions for context-constrained coders.
-    # Settings tool_profile: auto | full | compact.
-    _tool_profile = str(ctx.settings.get("tool_profile", "auto") or "auto").strip().lower()
-    if _tool_profile not in ("full", "compact", "auto"):
-        _tool_profile = "auto"
-    if _tool_profile == "auto":
-        _prof_mdl = str(coder_mdl or "").strip().lower()
-        _prof_small = any(k in _prof_mdl for k in (
-            ":0.8b", ":2b", ":4b", ":1.7b", "0.5b", "1.5b", ":3.7b", ":2.6b"))
-        _tool_profile = "compact" if _prof_small else "full"
-    _xtools_ws = _get_inline_tools(include_websearch=_duo_ws, mode="duo_full",
-                                   profile=_tool_profile)
+    # BUDGETS (2026-10-14, Sonnet redesign): the schema is REBUILT per run in
+    # duo_runner once the real coder ctx is known (budget-fitted there via
+    # core/budgets). This initial build is the plain full set — no profile
+    # staffels, no model-name heuristics.
+    _xtools_ws = _get_inline_tools(include_websearch=_duo_ws, mode="duo_full")
     _tool_think_auto_mode = str(ctx.duo_config.coder_tool_thinking_auto_mode or ctx.settings.get("ctx.duo_config.coder_tool_thinking_auto_mode", "off") or "off").strip().lower()
     if _tool_think_auto_mode == "critical":
         _tool_think_auto_mode = "on_fail"

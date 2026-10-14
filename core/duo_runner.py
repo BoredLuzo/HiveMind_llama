@@ -3698,8 +3698,56 @@ async def run_code_duo(ctx):
                         _comp_llm_cfg = ""
                     _comp_llm_timeout_s = int(ctx.settings.get("duo_compress_llm_timeout_s", 180) or 180)
                     _compress_local_only = bool(ctx.settings.get("duo_compress_local_only", False))
+                    # BUDGETS (2026-10-14, Sonnet redesign of audit phase 6):
+                    # ONE resolve per run from measured sizes only — n_ctx,
+                    # the per-model chars/token EMA and the output budget.
+                    # Nothing here branches on model names; settings keys
+                    # "budget_<field>" override individual derived values
+                    # (None = auto). Frozen for the whole run: everything the
+                    # schema shows (tool caps, tool list) must not change
+                    # mid-run or the prefix cache dies.
+                    from core import budgets as _budg
+                    _run_budgets = _budg.resolve(
+                        n_ctx=int(_dtool_ctx or 16384),
+                        cpt=_budg.cpt_for(exec_mdl),
+                        max_out=int(_duo_out_budget or 1024),
+                        settings=ctx.settings,
+                    )
+                    _budg.set_active(_run_budgets)
+                    state["_budgets"] = _run_budgets
+                    _xtools_ws = _get_inline_tools(
+                        include_websearch=_duo_ws, mode="duo_full",
+                        budget_chars=_run_budgets.schema_budget)
+                    state["_xtools_ws"] = _xtools_ws
+                    logger.info(
+                        "[BUDGETS] ctx=%d cpt=%.2f out=%d -> tool_cap=%d read_cap=%d schema=%d "
+                        "inj=%d anchor=+%d outline=%d compress@%d/rest@%d overrides=%s",
+                        _run_budgets.n_ctx, _run_budgets.cpt, _run_budgets.max_out,
+                        _run_budgets.tool_result_cap, _run_budgets.read_char_cap,
+                        _run_budgets.schema_budget, _run_budgets.injection_budget,
+                        _run_budgets.anchor_lines, _run_budgets.outline_items,
+                        _run_budgets.compress_trigger_tokens,
+                        _run_budgets.compress_rest_tokens,
+                        ",".join(_run_budgets.overrides_used) or "-",
+                    )
+                    try:
+                        from core import telemetry as _b_tel
+                        _b_tel.append_round({
+                            "phase": "budgets",
+                            "model": exec_mdl,
+                            **_run_budgets.as_dict(),
+                        })
+                    except Exception:
+                        pass
                     _max_tool_rounds_cfg = int(ctx.settings.get("duo_max_tool_rounds", 64))
                     _max_tool_rounds_cfg = 8 if duo_rounds > 1 else _max_tool_rounds_cfg
+                    if not _stored_threshold:
+                        # BUDGETS (2026-10-14): headroom-based compression
+                        # trigger (free < 1.5 × reserve with reserve =
+                        # clamped max_out + growth) replaces the fixed floor —
+                        # write-heavy runs trigger earlier without a special
+                        # case. An explicit ui_threshold still wins.
+                        _compress_threshold = _run_budgets.compress_trigger_tokens
                     _max_tool_rounds = _resolve_tool_budget(
                         _max_tool_rounds_cfg,
                         ctx.duo_config.until_finished,

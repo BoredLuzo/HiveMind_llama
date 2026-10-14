@@ -154,8 +154,18 @@ class ToolExecResult:
 
 
 
-def _cap_tool_result(result: str, max_chars: int = 8000) -> str:
-    """Truncate tool results exceeding max_chars to prevent silent context-window overflow."""
+def _cap_tool_result(result: str, max_chars: int | None = None) -> str:
+    """Truncate tool results exceeding max_chars to prevent silent context-window overflow.
+    BUDGETS (2026-10-14): the default cap derives from the run's resolved
+    budgets (fraction of n_ctx) — no fixed staffel. Fallback constant only
+    for contexts without a run."""
+    if max_chars is None:
+        try:
+            from core.budgets import active as _b_active
+            max_chars = _b_active().tool_result_cap
+        except Exception:
+            from tools.limits import EXEC_RESULT_CAP_FALLBACK
+            max_chars = EXEC_RESULT_CAP_FALLBACK
     if not isinstance(result, str) or len(result) <= max_chars:
         return result
     cutoff = result.rfind("\n", 0, max_chars)

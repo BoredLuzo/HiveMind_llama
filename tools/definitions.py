@@ -1,8 +1,6 @@
 """Tool-Definitionen, Allowlists und Filter-Funktionen (aus server.py extrahiert)."""
 from __future__ import annotations
 
-from tools.limits import READ_FULL_LINE_ABORT, READ_CHAR_CAP
-
 _WEBSEARCH_AVAILABLE: bool = False
 _websearch = None
 
@@ -19,9 +17,9 @@ _INLINE_CODING_TOOLS = [
         "name": "read_file", "description": (
             "Read file content. ALWAYS call read_file before edit_file on existing files. "
             "Returns RAW content (no line-number prefixes) with a header showing the total/selected line range. "
-            f"Full reads are REFUSED above {READ_FULL_LINE_ABORT} lines (use get_signatures first to find "
-            f"the ranges you need); all reads are capped at {READ_CHAR_CAP} chars — use start_line/end_line "
-            "for sections instead of re-reading."
+            "Files above the run's read budget are refused with a range hint; "
+            "use get_signatures first and start_line/end_line to read only the sections you need. "
+            "(Run-specific budget numbers are inserted when the run resolves its budgets.)"
         ),
         "parameters": {"type": "object", "properties": {
             "path":       {"type": "string", "description": "Absolute or relative file path"},
@@ -448,40 +446,126 @@ def _filter_tools_for_mode(tools: list, mode: str, include_websearch: bool = Fal
     return [t for t in tools if t.get("function", {}).get("name") in allowed]
 
 
-# ── TOOL-PROFILE (2026-10-14, audit phase 6) ────────────────────────────────
-# Compact profile for context-constrained models: the essential dozen with
-# one-line descriptions (~4k chars instead of ~15k). Fewer, terser tools also
-# improve tool-call accuracy on small models — they drown in a 27-tool schema.
-_COMPACT_PROFILE_TOOLS = {
-    "read_file", "edit_file", "write_file", "write_file_append",
-    "run_bash", "run_tests", "task_complete", "list_dir", "search_code",
-    "find_files", "get_signatures", "ask_user", "get_datetime", "undo_last",
-}
+# ── TOOL-SCHEMA BUDGET FIT (2026-10-14, audit phase 6 → Sonnet redesign) ────
+# No model-name staffels: the schema is a CONTINUUM fitted to the run's
+# schema budget (SCHEMA_FRAC of n_ctx — see core/budgets). Every tool has a
+# priority (core tools are always kept) and three description levels. The
+# fitter starts ALL tools at the minimal level and upgrades by priority
+# while the budget holds; non-core tools that do not fit even minimally are
+# dropped. At 16k ctx the full schema (~15.3k of a ~16.1k budget) survives —
+# the same code auto-shortens at 8k ctx. No name knows a model.
+_TOOL_PRIORITY = [
+    # tier 0 — always kept, even at miserable budgets
+    "read_file", "edit_file", "write_file", "run_bash", "task_complete",
+    # tier 1 — the working set
+    "run_tests", "search_code", "list_dir", "find_files", "get_signatures",
+    "undo_last", "ask_user", "get_datetime", "write_file_append",
+    # tier 2 — everything else (web, git, background, browser, research...)
+]
 
 
-def _compactify_profile(tools: list) -> list:
-    import re as _re_prof
+def _tool_priority(name: str) -> int:
+    try:
+        return _TOOL_PRIORITY.index(name)
+    except ValueError:
+        return len(_TOOL_PRIORITY)
+
+
+def _desc_at_level(desc: str, level: int) -> str:
+    import re as _re_d
+    flat = desc.replace("\n", " ").strip()
+    if level >= 2:
+        return flat
+    if level == 1:
+        return _re_d.split(r"(?<=[.!?])\s", flat)[0].strip()
+    return " ".join(flat.split()[:10]).rstrip(".,;:")  # minimal: ~10 words
+
+
+def fit_tools_to_budget(tools: list, budget_chars: int) -> list:
+    import json as _json
+    if budget_chars is None or budget_chars <= 0 or not tools:
+        return list(tools)
+
+    def _total(state: dict, pool: dict) -> int:
+        s = 0
+        for n, t in pool.items():
+            fn = t["function"]
+            s += len(_json.dumps({**t, "function": {
+                **fn, "description": _desc_at_level(str(fn.get("description", "")),
+                                                    state.get(n, 0))}}))
+        return s
+
+    pool = {}
+    for t in tools:
+        n = t.get("function", {}).get("name", "")
+        if n:
+            pool[n] = t
+    state = {n: 0 for n in pool}
+
+    # 1. drop non-core tools that keep the MINIMAL set over budget
+    for n in sorted(pool, key=_tool_priority, reverse=True):
+        if _total(state, pool) <= budget_chars:
+            break
+        if _tool_priority(n) == 0:
+            continue  # tier 0 is always kept
+        del pool[n]
+        del state[n]
+
+    # 2. upgrade by priority, two steps (minimal -> sentence -> full)
+    for target_level in (1, 2):
+        for n in sorted(pool, key=_tool_priority):
+            if state[n] >= target_level:
+                continue
+            old = state[n]
+            state[n] = target_level
+            if _total(state, pool) > budget_chars:
+                state[n] = old
+    return [
+        {**pool[n], "function": {**pool[n]["function"],
+                                 "description": _desc_at_level(
+                                     str(pool[n]["function"].get("description", "")),
+                                     state[n])}}
+        for n in pool
+    ]
+
+
+def _apply_budget_texts(tools: list, budgets) -> list:
+    """Insert the run's RESOLVED budget numbers into schema-visible texts
+    (audit phase 6 redesign: the schema states the truth of THIS run, not a
+    module constant). Called before the budget fit — description lengths
+    participate in the fit."""
+    _rc = int(getattr(budgets, "read_char_cap", 0) or 0)
+    if _rc <= 0:
+        return tools
     out = []
     for t in tools:
         fn = t.get("function", {})
-        name = fn.get("name", "")
-        if name not in _COMPACT_PROFILE_TOOLS:
-            continue
-        desc = str(fn.get("description", "") or "").replace("\n", " ").strip()
-        first = _re_prof.split(r"(?<=[.!?])\s", desc)[0].strip()
-        out.append({**t, "function": {**fn, "description": first}})
+        if fn.get("name") == "read_file":
+            out.append({**t, "function": {**fn, "description": (
+                "Read file content. ALWAYS call read_file before edit_file on existing files. "
+                "Returns RAW content (no line-number prefixes) with a header showing the total/selected line range. "
+                f"Files bigger than ~{_rc} chars are REFUSED with a range hint (use get_signatures first); "
+                f"reads are capped at {_rc} chars — use start_line/end_line for sections."
+            )}})
+        else:
+            out.append(t)
     return out
 
 
 def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
-                      profile: str | None = None) -> list:
+                      budget_chars: int | None = None) -> list:
     tools = list(_INLINE_CODING_TOOLS)
     if include_websearch and _WEBSEARCH_AVAILABLE and _websearch is not None:
         tools.extend(_websearch.get_tool_defs())
     if mode:
         tools = _filter_tools_for_mode(tools, mode, include_websearch=include_websearch)
-    if profile == "compact":
-        tools = _compactify_profile(tools)
+    if budget_chars:
+        try:
+            from core.budgets import active as _b_active
+            tools = _apply_budget_texts(tools, _b_active())
+        except Exception:
+            pass
+        tools = fit_tools_to_budget(tools, budget_chars)
     try:
         from settings import load_settings as _ls_settings
         if not bool((_ls_settings() or {}).get("subagent_lite_enabled", True)):

@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from utils.file import fuzzy_resolve_path as _fuzzy_resolve_path, _inline_resolve_path, _inline_check_workspace
 from tools.errors import tool_error_response as _tool_error_response
-from tools.limits import READ_FULL_LINE_ABORT as _READ_LINE_ABORT
-from tools.limits import READ_CHAR_CAP as _READ_CHAR_CAP
 import asyncio
 from tools.workspace import get_transaction
 import json
@@ -136,25 +134,26 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
                 f"({_rr_disp} lines) - the content in your context above is still "
                 "current. Use start_line/end_line to force a full re-read.]")
     try:
-        # READ-EARLY-ABORT (2026-09-04): full reads (no range) no longer read
-        # a huge file completely just to reject it as "too large" afterwards.
-        # Instead: cheap binary sniff up front + streamed newline count
-        # (aborts at READ_FULL_LINE_ABORT + 1).
+        # READ-EARLY-ABORT (2026-09-04, budget-driven 2026-10-14): full reads
+        # (no range) are refused by ESTIMATED SIZE against the run's read
+        # budget (core/budgets — derived from n_ctx, no fixed line staffel).
+        # Cheap stat() up front, no streaming count needed anymore.
+        from core.budgets import active as _bgt_active
+        _bgt = _bgt_active()
         if _full:
             _head = await asyncio.to_thread(_read_head_bytes, p, 1024)
             if _looks_binary_bytes(_head):
                 return _read_binary_error(p)
-            _nl, _capped = await asyncio.to_thread(
-                _fast_newline_count, p, _READ_LINE_ABORT + 1)
-            if _nl > _READ_LINE_ABORT:
+            _size_chars = p.stat().st_size
+            if _size_chars > _bgt.read_char_cap:
                 _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
-                _sig = await asyncio.to_thread(_sig_fn, p, 60) if _sig_fn else (
+                _sig = await asyncio.to_thread(_sig_fn, p, _bgt.outline_items) if _sig_fn else (
                     "(signature extraction unavailable) — use read_file with line_range=[1,50] to inspect the file header first."
                 )
-                _disp = f"{_nl}+" if _capped else str(_nl)
                 return _tool_error_response(
                     "FILE_TOO_LARGE_NEED_RANGE",
-                    f"File '{p}' is too large ({_disp} lines) to read fully into limited context. "
+                    f"File '{p}' is ~{_size_chars} chars — above this run's read budget "
+                    f"({_bgt.read_char_cap} chars; derived from the context size). "
                     "THE FILE ON DISK IS COMPLETE - this is only a read-size guard, NOT a broken "
                     "or partial write. Do not rewrite or delete the file because a range read "
                     "shows only part of it. "
@@ -177,8 +176,8 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
             if len(_sample) > 0 and (_binary_chars / len(_sample)) > 0.10:
                 return _read_binary_error(p)
 
-        # Note: full reads above READ_FULL_LINE_ABORT lines abort early above
-        # (READ-EARLY-ABORT) - only files up to that limit reach the char cap.
+        # Note: full reads above the run's read budget abort early above
+        # (READ-EARLY-ABORT) - only smaller files reach the char cap.
 
         # Hallucination guard: validate start_line/end_line against actual file length
         _actual_lines = len(lines)
@@ -195,14 +194,14 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
             s = max(0, int(start_line) - 1) if start_line else 0
             e = int(end_line) if end_line else len(lines)
             content_chunk = "".join(lines[s:e])
-            _chunk = content_chunk[:_READ_CHAR_CAP]
-            if len(content_chunk) > _READ_CHAR_CAP:
-                _chunk += f"\n[TRUNCATED: {len(content_chunk)-_READ_CHAR_CAP} more chars omitted — use smaller line range]"
+            _chunk = content_chunk[:_bgt.read_char_cap]
+            if len(content_chunk) > _bgt.read_char_cap:
+                _chunk += f"\n[TRUNCATED: {len(content_chunk)-_bgt.read_char_cap} more chars omitted — use smaller line range]"
             return f"[{p} lines {s+1}-{min(e, len(lines))} / {len(lines)}]\n" + _chunk
-        
-        _chunk = content[:_READ_CHAR_CAP]
-        if len(content) > _READ_CHAR_CAP:
-            _chunk += f"\n[TRUNCATED: {len(content)-_READ_CHAR_CAP} more chars omitted — use start_line/end_line to read sections]"
+
+        _chunk = content[:_bgt.read_char_cap]
+        if len(content) > _bgt.read_char_cap:
+            _chunk += f"\n[TRUNCATED: {len(content)-_bgt.read_char_cap} more chars omitted — use start_line/end_line to read sections]"
         return f"[{p} total lines: {len(lines)}]\n" + _chunk
     except Exception as e:
         return _tool_error_response(
@@ -426,9 +425,9 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
 
 
 _BIG_FILE_NOTE = ("\n"
-    "NOTE: this file now has {_lines} lines - read_file refuses full reads above {_abort} "
-    "lines, so inspect it later with start_line/end_line ranges. The file on disk is "
-    "complete.")
+    "NOTE: this file is now ~{_lines} lines (roughly above this run's read budget of "
+    "{_abort} chars) - read_file will refuse a full read, so inspect it later with "
+    "start_line/end_line ranges. The file on disk is complete.")
 
 
 async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
@@ -515,9 +514,14 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
     await asyncio.to_thread(_write_now)
     _lint = await _auto_lint_result(p, workspace)
     _lines = content.count("\n") + 1
+    try:
+        from core.budgets import active as _bgt_note
+        _note_cap = _bgt_note().read_char_cap
+    except Exception:
+        _note_cap = 0
     if existed:
-        return f"[write_file: rewrote '{p}' (+{_lines}/-{_old_n or '?'} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines, _abort=_READ_LINE_ABORT) if _lines > _READ_LINE_ABORT else ""}"
-    return f"[write_file: created '{p}' (+{_lines} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines, _abort=_READ_LINE_ABORT) if _lines > _READ_LINE_ABORT else ""}"
+        return f"[write_file: rewrote '{p}' (+{_lines}/-{_old_n or '?'} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines, _abort=_note_cap) if _note_cap and _lines * 80 > _note_cap else ""}"
+    return f"[write_file: created '{p}' (+{_lines} lines)]{_lint}{_BIG_FILE_NOTE.format(_lines=_lines, _abort=_note_cap) if _note_cap and _lines * 80 > _note_cap else ""}"
 
 
 async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: str | None) -> str:
@@ -665,8 +669,15 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             except Exception:
                 _anchor_center = -1
             if _anchor_center >= 0:
-                _lo = max(0, _anchor_center - 5)
-                _hi = min(len(_cur), _anchor_center + max(old_n.count("\n"), 0) + 6)
+                # PHASE-5/BUDGETS (2026-10-14): window from the run's injection
+                # budget (core/budgets anchor_lines), not a fixed ±5.
+                try:
+                    from core.budgets import active as _bgt_anchor
+                    _aw = int(_bgt_anchor().anchor_lines)
+                except Exception:
+                    _aw = 8
+                _lo = max(0, _anchor_center - _aw)
+                _hi = min(len(_cur), _anchor_center + max(old_n.count("\n"), 0) + _aw + 1)
                 _head = "\n".join(_cur[_lo:_hi])
                 if len(_head) > 1200:
                     _head = _head[:1200] + "\n... [truncated]"

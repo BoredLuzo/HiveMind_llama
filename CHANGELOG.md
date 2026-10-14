@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+Budgets redesign (Sonnet review of the audit): no model-class staffels
+
+- core/budgets.py: Budgets.resolve(n_ctx, cpt, max_out, settings) derives
+  every cap from measured sizes ONCE per run and freezes them (schema-
+  visible values must not change mid-run — prefix cache). Settings keys
+  "budget_<field>" override single values; None/absent = auto. tools/
+  limits.py now holds ONLY fractions and named floors/ceilings — the
+  only hard numbers left in the codebase
+- the fixed staffels are gone: tool-result cap = 0.12 × n_ctx × cpt
+  (clamp 2k-24k; ~7.7k at 16k, practically yesterday's 8k), read refusal
+  by estimated SIZE against the read budget instead of a 1200-line
+  count, anchor window and outline derived from the injection budget,
+  compression trigger headroom-based (reserve = clamped max_out + p90
+  growth; free < 1.5 × reserve triggers, reproducing ~0.70 at 16k/8k)
+  — write-heavy runs trigger earlier without a special case
+- tool schema is a CONTINUUM, not compact/full: every tool has a
+  priority (tier-0 core always kept), three description levels, and the
+  fitter upgrades by priority while the schema budget (0.25 × n_ctx ×
+  cpt) holds; what does not fit minimally is dropped. At 16k MiniCPM
+  keeps the full schema; an 8k model shortens automatically — no model
+  names anywhere (grep test enforces it)
+- chars/token is a per-model EMA now (update from every real response:
+  sent chars vs usage.prompt_tokens), start value 3.92 from the live
+  /tokenize probe — Budgets use it instead of the 3.0 constant
+- resolved budgets are logged ([BUDGETS] line) and written as a
+  phase="budgets" telemetry row so every run shows what was derived
+- new tests: test_budgets (monotonicity in n_ctx, the 16k base case
+  reproduces the tuned values, override rule, floors/ceilings at
+  extremes, cpt EMA convergence, schema continuum, and a grep test that
+  keeps model names/size staffels out of budget and tool-selection
+  code); test_schema_truth now pins the schema text to the RESOLVED
+  run budgets
+
 Tool-pipeline audit phases 4-7 (compression, injections, tool profiles, web):
 
 - compression without slot eviction: deterministic observation masking

@@ -149,9 +149,6 @@ DEFAULT_SETTINGS = {
     # summary and can resolve the threshold crossing without it — no LLM
     # call, no slot evict.
     "duo_mask_before_compress":  True,
-    # TOOL-PROFILE (2026-10-14, audit phase 6): compact = essential dozen
-    # tools with one-line descriptions for context-constrained coders.
-    "tool_profile":              "auto",
     "duo_compress_overflow_reserve": 1024,
     "duo_max_compressions":      40,
     "duo_compress_model":        "auto",

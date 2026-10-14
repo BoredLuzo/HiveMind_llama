@@ -1,21 +1,16 @@
-"""SCHEMA-TRUTH (2026-10-14, audit phase 1): the tool schema text must state
-the SAME limits the handlers enforce. The audit found the read_file schema
-claiming "capped at 200 lines" while the handler aborts at 1201 lines, and a
-stale 400-line note in write results — small models obey the text and
-ritual-read in 200-line slices the handler no longer needs. limits.py is the
-single source; this test pins handler behavior and schema text to it.
+"""SCHEMA-TRUTH (2026-10-14): the tool schema text must state the SAME limits
+the handlers enforce — resolved from the run's budgets (core/budgets), not
+module constants. Pins handler behavior, resolved budgets and schema text
+together; the budget redesign removed the fixed staffels (200/400-line lies
+were the original offenders).
 """
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.limits import (
-    READ_FULL_LINE_ABORT,
-    READ_CHAR_CAP,
-    EXEC_RESULT_CAP,
-)
+from core.budgets import resolve, set_active  # noqa: E402
 
 passed = 0
 failed = 0
@@ -31,38 +26,41 @@ def check(name, cond):
         print(f"  [FAIL] {name}")
 
 
-def _schema_text(name):
+def _schema_text(name, budget_chars=None):
     from tools.definitions import _get_inline_tools
-    for t in _get_inline_tools():
+    for t in _get_inline_tools(budget_chars=budget_chars):
         if t.get("function", {}).get("name") == name:
             return json.dumps(t)
     raise AssertionError(f"tool '{name}' missing from schema list")
 
 
-print("=== schema truth (limits.py vs handlers vs schema text) ===")
+print("=== schema truth (resolved budgets vs handlers vs schema text) ===")
 
-_txt = _schema_text("read_file")
+_b = resolve(16384, 3.92, 4096, {})
+set_active(_b)
+
+_txt = _schema_text("read_file", budget_chars=_b.schema_budget)
 check("read_file schema has no stale 200-line cap",
       "capped at 200 lines" not in _txt and " 200 lines" not in _txt)
-check("read_file schema states the real line abort",
-      str(READ_FULL_LINE_ABORT) in _txt)
-check("read_file schema states the real char cap",
-      str(READ_CHAR_CAP) in _txt)
+check("read_file schema states THIS run's resolved read cap",
+      str(_b.read_char_cap) in _txt)
+check("read_file schema has no fixed line staffel",
+      "1200 lines" not in _txt and "400 lines" not in _txt)
+_generic = _schema_text("read_file")
+check("generic (no-budget) schema carries no numbers",
+      str(_b.read_char_cap) not in _generic)
 
 import tools.handlers.file_ops as _fo
-check("file_ops imports the limits constants",
-      _fo._READ_LINE_ABORT == READ_FULL_LINE_ABORT
-      and _fo._READ_CHAR_CAP == READ_CHAR_CAP)
-
-_note = _fo._BIG_FILE_NOTE.format(_lines=9999, _abort=_fo._READ_LINE_ABORT)
-check("BIG_FILE_NOTE has no stale 400 number", "400" not in _note)
-check("BIG_FILE_NOTE states the real abort", str(READ_FULL_LINE_ABORT) in _note)
-check("BIG_FILE_NOTE says the disk file is complete", "complete" in _note.lower())
+cap = _b.read_char_cap
+check("BIG_FILE_NOTE has no stale 400 number",
+      "400" not in _fo._BIG_FILE_NOTE.format(_lines=9999, _abort=cap))
+check("BIG_FILE_NOTE says the disk file is complete", "complete" in _note.lower()
+      if (_note := _fo._BIG_FILE_NOTE.format(_lines=9999, _abort=cap)) else False)
 
 import core.tool_executor as _te
-_capped = _te._cap_tool_result("x" * (EXEC_RESULT_CAP + 5000))
-check("executor cap still enforced at the constant",
-      len(_capped) <= EXEC_RESULT_CAP + 200 and "truncated at" in _capped)
+_capped = _te._cap_tool_result("x" * (_b.tool_result_cap + 5000))
+check("executor cap follows the resolved budget",
+      len(_capped) <= _b.tool_result_cap + 200 and "truncated at" in _capped)
 
 from tools.definitions import _get_inline_tools as _git
 _names = {t["function"]["name"] for t in _git()}
