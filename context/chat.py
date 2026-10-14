@@ -189,6 +189,13 @@ def _ctx_path_for_chat(chat_id: str) -> Path | None:
             return p.with_suffix(".context.json")
         for f in _SESSIONS_DIR.glob(f"*_{chat_id}.json"):
             return f.with_suffix(".context.json")
+        # STANDALONE FALLBACK (2026-10-14): API-driven runs have no session
+        # file — the path resolved to None and resume-block writes silently
+        # no-opped while the log claimed "Block saved" (found in the
+        # chunk-resume verify run: hard kill -> resume started from scratch
+        # despite the checkpoint). Give every chat_id a durable home; the
+        # name deliberately does NOT match the *_{chat_id}.json glob above.
+        return _SESSIONS_DIR / f"standalone_{chat_id}.context.json"
     except Exception as _e:
         logger.warning("_ctx_path_for_chat(%s) failed: %s", chat_id, _e)
     return None

@@ -59,8 +59,24 @@ def _write_resume_block(
                 ctx["graceful_stop_after_chunk"] = graceful_stop_chunk_index
 
     _mutate_chat_context(chat_id, _apply)
-    logger.info("[resume] Block saved: %d/%d chunks done, halt_reason=%s, chat=%s",
-                len(chunks_done), chunks_total, halt_reason, chat_id)
+    # HONEST PERSIST (2026-10-14): the mutation silently no-opped when the
+    # chat had no context file (API runs without a session) — the log below
+    # claimed "Block saved" while nothing reached disk. Verify instead of
+    # trusting the write.
+    try:
+        from context.chat import _load_chat_context as _lc
+        _chk = _lc(chat_id) or {}
+        _persisted = bool(_chk.get("resume")) and _chk.get("halt_reason") == halt_reason
+    except Exception:
+        _persisted = False
+    if _persisted:
+        logger.info("[resume] Block saved: %d/%d chunks done, halt_reason=%s, chat=%s",
+                    len(chunks_done), chunks_total, halt_reason, chat_id)
+    else:
+        logger.warning(
+            "[resume] Block NOT persisted for chat=%s (halt_reason=%s) — "
+            "resume will start fresh; check _ctx_path_for_chat",
+            chat_id, halt_reason)
 
 
 def _load_resume_block(chat_id: str) -> dict | None:

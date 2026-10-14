@@ -470,5 +470,9 @@
   "core/budgets.py": {
     "except_pass": 0,
     "broad_except": 1
+  },
+  "context/resume.py": {
+    "except_pass": 0,
+    "broad_except": 1
   }
 }

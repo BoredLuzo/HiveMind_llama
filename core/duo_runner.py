@@ -6198,6 +6198,7 @@ async def run_code_duo(ctx):
                     break
                 _di += 1
                 _cs.reset_test_retries()
+                _halt_with_resume("chunk_checkpoint")
                 continue
 
             # ── Critic ─────────────────────────────────────────────────────
@@ -6261,6 +6262,7 @@ async def run_code_duo(ctx):
                     yield await ctx.emit({"type": "status", "content": _ac_out})
                 _di += 1
                 _cs.reset_test_retries()
+                _halt_with_resume("chunk_checkpoint")
                 continue
 
             # HIGH-CONFIDENCE AUTO-APPROVE:
@@ -6290,6 +6292,7 @@ async def run_code_duo(ctx):
                     break
                 _di += 1
                 _cs.reset_test_retries()
+                _halt_with_resume("chunk_checkpoint")
                 continue
             _critic_task_ref = _subtask if _subtask else ctx.user_input
             _content_label = "Code" if ctx.duo_config.coding_mode else "Answer"
@@ -6534,6 +6537,7 @@ async def run_code_duo(ctx):
                         "content": f"⏭ Auto-test skipped for chunk {_di+1}"})
                         _di += 1
                         _cs.reset_test_retries()
+                        _halt_with_resume("chunk_checkpoint")
                         if _is_last:
                             break
                     elif _duo_test_feedback and _cs.has_written_files and not ctx.aborted():
@@ -6551,6 +6555,7 @@ async def run_code_duo(ctx):
                                 "content": f"\u2705 Tests passed ({_chunk_test_result.language})"})
                             _di += 1
                             _cs.reset_test_retries()
+                            _halt_with_resume("chunk_checkpoint")
                             if _is_last:
                                 break
                         else:
@@ -6579,12 +6584,14 @@ async def run_code_duo(ctx):
                                 "content": f"\u26a0\ufe0f Chunk {_di+1}: test failures persist after {_cs.max_test_retries+1} attempts — note and continue"})
                                 _di += 1
                                 _cs.reset_test_retries()
+                                _halt_with_resume("chunk_checkpoint")
                                 if _is_last:
                                     break
                     else:
                         # No auto-test or no files written — normal completion
                         _di += 1
                         _cs.reset_test_retries()
+                        _halt_with_resume("chunk_checkpoint")
                         if _is_last:
                             break
                 else:

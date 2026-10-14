@@ -7885,7 +7885,11 @@ function handleEvent(d) {
       _trSum.innerHTML = _trNameHtml + _trInner;
     }
     _trBlock.appendChild(_trSum);
-    _trBlock.appendChild(_trPre); // BUG-1 FIX: always append, open= controls visibility
+    // SHORT-RESULT DEDUP (2026-10-14): short results force the block open
+    // (_trShort sets open=true) — the summary already carries the FULL text,
+    // so the pre rendered the same line a second time (seen on every green
+    // run_tests result). Skip the pre when the summary IS the content.
+    if (!(_trShort && _trText === _trFull)) _trBlock.appendChild(_trPre);
     _appendToolEl(_trBody, _trBlock);
     _liveMdReset(_trBody);  // next text token starts a fresh live-md segment after this result
     scrollBtmIfNearBottom(60);

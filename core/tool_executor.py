@@ -609,7 +609,9 @@ async def execute_tool_round(
                                     "[NO TEST SUITE] No test framework was detected. Before completing: "
                                     "write a minimal smoke test that loads/executes the files you created and "
                                     "fails on errors (e.g. tests/smoke_test.py, or a quick headless check for "
-                                    "HTML/JS projects). Run it via run_bash and ensure exit code 0, then call "
+                                    "HTML/JS projects). The test MUST contain at least one real assertion or "
+                                    "explicit output check — a file that cannot fail does not count as a test. "
+                                    "Run it via run_bash and ensure exit code 0, then call "
                                     "task_complete again."
                                 )})
                                 _auto_test_skips_gate = True

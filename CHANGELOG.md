@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+Chunk-resume verification run (Sonnet's five criteria) + resume durability:
+
+- chunk checkpoints now cover EVERY done path: the persist call existed
+  only on the skip branch (the "after every done chunk" comment
+  overstated it) - all seven normal completion paths (critic-skipped,
+  auto-approve, auto-test skipped/passed/exhausted, normal completion)
+  write the resume block after advancing
+- _halt_with_resume does NOT halt anything (name misleading) - it only
+  writes the resume block; the chunk loop continues on its own
+- RESUME DURABILITY (found by the verification run): resume-block
+  writes for API-driven runs (no chat session file) silently no-opped -
+  the context path resolved to None while the log claimed "Block
+  saved"; a hard kill then lost the checkpoint. Every chat_id now gets
+  a standalone context file under sessions/, and _write_resume_block
+  VERIFIES the write and logs honestly when it did not persist
+- verified live end-to-end: planner reads index.html in one call, chunk
+  1 committed then chunk 2 starts without pause, the plan is injected
+  into the chunk-2 coder context, exactly ONE final test message, and
+  after a hard engine kill + restart the resume intake reports
+  "Resuming: 2/3 chunks already done" and continues at chunk 3
+- ui: short tool results rendered the same text twice (summary carried
+  the full text AND the force-opened pre repeated it - every green
+  run_tests row); the pre is skipped when the summary IS the content
+- the smoke-test nudge now demands at least one real assertion - a file
+  that cannot fail does not count as a test (anti-spoof tightening)
+- kill-timeline reconstruction (13.10 16:54): the run died 42s in from
+  the deploy engine restart, not start_hivemind.bat; the resume block
+  WAS saved (0/1 chunks done) - "saved" and "resume starts fresh" were
+  both true because nothing was done yet
+
 Budgets redesign (Sonnet review of the audit): no model-class staffels
 
 - core/budgets.py: Budgets.resolve(n_ctx, cpt, max_out, settings) derives
