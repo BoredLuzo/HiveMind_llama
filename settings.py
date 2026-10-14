@@ -144,6 +144,14 @@ DEFAULT_SETTINGS = {
     # owner's live test read the full mode as "fast + actually empties".
     "duo_partial_compression":   False,
     "duo_compress_auto_floor":   0.70,
+    # MASK-FIRST (2026-10-14, audit phase 4): deterministic observation
+    # masking (stale tool outputs -> recall markers) runs before the LLM
+    # summary and can resolve the threshold crossing without it — no LLM
+    # call, no slot evict.
+    "duo_mask_before_compress":  True,
+    # TOOL-PROFILE (2026-10-14, audit phase 6): compact = essential dozen
+    # tools with one-line descriptions for context-constrained coders.
+    "tool_profile":              "auto",
     "duo_compress_overflow_reserve": 1024,
     "duo_max_compressions":      40,
     "duo_compress_model":        "auto",

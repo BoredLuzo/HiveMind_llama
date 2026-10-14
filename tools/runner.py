@@ -158,6 +158,29 @@ def _consume_web_search_budget() -> bool:
     return _c[0] > _limit
 
 
+# FETCH-BUDGET (2026-10-14, audit phase 7): web_fetch previously drained the
+# SAME pool as web_search — a pure doc-fetching run silently killed search.
+# Separate counter, own settings key (webfetch_max_calls, same default).
+_web_fetch_count: _contextvars.ContextVar[list] = _contextvars.ContextVar(
+    "web_fetch_count", default=None
+)
+
+
+def _consume_web_fetch_budget() -> bool:
+
+    try:
+        from core.state import settings as _ws_settings
+        _limit = int(_ws_settings.get("webfetch_max_calls", _WEBSEARCH_BUDGET_DEFAULT))
+    except Exception:
+        _limit = _WEBSEARCH_BUDGET_DEFAULT
+    _c = _web_fetch_count.get(None)
+    if _c is None:
+        _c = [0]
+        _web_fetch_count.set(_c)
+    _c[0] += 1
+    return _c[0] > _limit
+
+
 # A-P1-6: Dependency-Install-Call-Budget (Governor analog web_search). Install-
 _install_count: _contextvars.ContextVar[list] = _contextvars.ContextVar(
     "install_count", default=None
@@ -1431,11 +1454,20 @@ async def _run_inline_tool(
         pass
     if handler is not None:
         # ── A-P1-9: Web-Search-Call-Budget (Governor analog ask_user) ──
-        if name in ("web_search", "web_fetch") and _consume_web_search_budget():
+        # FETCH-BUDGET (2026-10-14, phase 7): web_fetch has its OWN pool now.
+        if name == "web_search" and _consume_web_search_budget():
             return _tool_error_response(
                 "WEBSEARCH_BUDGET_EXHAUSTED",
                 "Web search budget exhausted (duo_websearch_max_calls calls per run). "
                 "Do not keep searching — work with the context you already have "
+                "or document the open point in task_complete.",
+                tool=name,
+                mode=str(tool_mode or "") )
+        if name == "web_fetch" and _consume_web_fetch_budget():
+            return _tool_error_response(
+                "WEBFETCH_BUDGET_EXHAUSTED",
+                "Web fetch budget exhausted (webfetch_max_calls calls per run). "
+                "Work with the pages you already fetched "
                 "or document the open point in task_complete.",
                 tool=name,
                 mode=str(tool_mode or "") )

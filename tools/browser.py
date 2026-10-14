@@ -349,8 +349,31 @@ def _dispatch(args: dict, workspace, workspace_lock=None) -> str:
         selector = str(args.get("selector", "")).strip()
         if not selector:
             return "[browser error] action='click' requires 'selector'"
+        # CLICK-DELTA (2026-10-14, audit phase 7): a click used to re-send the
+        # FULL page snapshot (up to 8k chars) per interaction. Send only the
+        # CHANGED lines against the last snapshot (capped) — the model just
+        # saw the rest; explicit action='snapshot' still returns everything.
+        _before = ""
+        try:
+            _before = (page.inner_text("body") or "").strip()
+        except Exception:
+            _before = ""
         page.click(selector, timeout=15000)
-        return "[browser] clicked " + selector + "\n\n" + _snapshot(page)
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
+        _after = _snapshot(page)
+        _after_body = _after.split("\n\n[JS-Console]")[0].split("\n\n[JS-Errors]")[0]
+        _before_lines = set(_before.splitlines())
+        _changed = [ln for ln in _after_body.splitlines() if ln not in _before_lines]
+        _delta = "\n".join(_changed).strip()
+        if not _delta:
+            return (f"[browser] clicked {selector} — page content unchanged "
+                    "(call action='snapshot' for the full page if needed)")
+        if len(_delta) > 2000:
+            _delta = _delta[:2000] + "\n… [delta truncated — action='snapshot' for full page]"
+        return f"[browser] clicked {selector} — changed content:\n{_delta}" + _after[len(_after_body):]
 
     if action == "type":
         selector = str(args.get("selector", "")).strip()
@@ -365,7 +388,13 @@ def _dispatch(args: dict, workspace, workspace_lock=None) -> str:
         if not js:
             return "[browser error] action='evaluate' requires 'js'"
         result = page.evaluate(js)
-        return "[browser] evaluate result:\n" + str(result)
+        _out = "[browser] evaluate result:\n" + str(result)
+        # EVALUATE-CAP (2026-10-14, audit phase 7): evaluate was the only
+        # browser action with NO cap at all (only the executor's universal
+        # 8k bounded it in duo mode).
+        if len(_out) > _SNAPSHOT_MAX_CHARS:
+            _out = _out[:_SNAPSHOT_MAX_CHARS] + "\n… [truncated]"
+        return _out
 
     if action == "console":
         if not _console_msgs and not _pageerrors:

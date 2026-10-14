@@ -75,15 +75,22 @@ def _apply_test_truth_to_tc(result_text: str, outcome: str) -> str:
     _new = "passing" if outcome == "green" else "failing"
     return str(result_text).replace("Build: untested", f"Build: {_new}", 1)
 
-def _render_tool_menu(tool_mode: str, duo_ws: bool, max_items: int = 30) -> str:
+def _render_tool_menu(tool_mode: str, duo_ws: bool, max_items: int = 30,
+                      compact: bool = False) -> str:
     """BASH-LOOP-REINJECT (2026-09-02): build a compact list of the tools that
     are actually available in this mode, so a bash-looping model is reminded of
-    its full toolset instead of being aborted."""
+    its full toolset instead of being aborted.
+    compact=True (audit phase 5, 2026-10-14): names only — the full menu ran
+    up to ~5.2k chars and this injection can fire on EVERY bash-loop breach;
+    the model already has the full descriptions in its tool schema."""
     try:
         from tools.definitions import _get_inline_tools as _gt
         _tools = _gt(include_websearch=duo_ws, mode=tool_mode) or []
     except Exception:
         return ""
+    if compact:
+        _names = [t.get("function", {}).get("name", "") for t in _tools[:max_items]]
+        return "  " + ", ".join(n for n in _names if n)
     _lines = []
     for _t in _tools[:max_items]:
         try:
@@ -918,7 +925,10 @@ async def execute_tool_round(
                 # loop must NOT abort the run. Instead re-inject the full tool
                 # list so the model can pick a different tool, then let the round
                 # continue (round budget still bounds the loop).
-                _menu = _render_tool_menu(tool_mode, duo_ws)
+                # PHASE-5 (2026-10-14, audit): names-only menu — the full menu
+                # ran up to ~5.2k chars per bash-loop breach; the model already
+                # carries the full descriptions in its tool schema.
+                _menu = _render_tool_menu(tool_mode, duo_ws, compact=True)
                 await hooks.emit({"type": "token", "content": f"\n[Tool loop: {_loop_label} — re-injecting all tools]\n"})
                 dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
                     f"[LOOP DETECTED] run_bash was called repeatedly with the same or "

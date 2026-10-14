@@ -448,12 +448,40 @@ def _filter_tools_for_mode(tools: list, mode: str, include_websearch: bool = Fal
     return [t for t in tools if t.get("function", {}).get("name") in allowed]
 
 
-def _get_inline_tools(include_websearch: bool = False, mode: str | None = None) -> list:
+# ── TOOL-PROFILE (2026-10-14, audit phase 6) ────────────────────────────────
+# Compact profile for context-constrained models: the essential dozen with
+# one-line descriptions (~4k chars instead of ~15k). Fewer, terser tools also
+# improve tool-call accuracy on small models — they drown in a 27-tool schema.
+_COMPACT_PROFILE_TOOLS = {
+    "read_file", "edit_file", "write_file", "write_file_append",
+    "run_bash", "run_tests", "task_complete", "list_dir", "search_code",
+    "find_files", "get_signatures", "ask_user", "get_datetime", "undo_last",
+}
+
+
+def _compactify_profile(tools: list) -> list:
+    import re as _re_prof
+    out = []
+    for t in tools:
+        fn = t.get("function", {})
+        name = fn.get("name", "")
+        if name not in _COMPACT_PROFILE_TOOLS:
+            continue
+        desc = str(fn.get("description", "") or "").replace("\n", " ").strip()
+        first = _re_prof.split(r"(?<=[.!?])\s", desc)[0].strip()
+        out.append({**t, "function": {**fn, "description": first}})
+    return out
+
+
+def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
+                      profile: str | None = None) -> list:
     tools = list(_INLINE_CODING_TOOLS)
     if include_websearch and _WEBSEARCH_AVAILABLE and _websearch is not None:
         tools.extend(_websearch.get_tool_defs())
     if mode:
         tools = _filter_tools_for_mode(tools, mode, include_websearch=include_websearch)
+    if profile == "compact":
+        tools = _compactify_profile(tools)
     try:
         from settings import load_settings as _ls_settings
         if not bool((_ls_settings() or {}).get("subagent_lite_enabled", True)):

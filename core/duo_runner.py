@@ -3798,6 +3798,9 @@ async def run_code_duo(ctx):
                     _current_run_id.set(_run_id_global)
                     _pause_timeout_s.set(ctx.duo_config.pause_timeout_s)
                     _web_search_count.set([0])
+                    # FETCH-BUDGET (2026-10-14, phase 7): own pool for web_fetch.
+                    from tools.runner import _web_fetch_count as _wf_count
+                    _wf_count.set([0])
                     _install_count.set([0])
                     from infra.ask_user_governor import configure_run as _configure_governor
                     _configure_governor(_run_id_global, until_finished=ctx.duo_config.until_finished, settings=ctx.settings)
@@ -4250,6 +4253,38 @@ async def run_code_duo(ctx):
                                             "stale tool output(s) replaced by recall markers."
                                         ),
                                     })
+                        # MASK-FIRST (2026-10-14, audit phase 4): the
+                        # deterministic observation masking (stale tool
+                        # outputs -> recall markers, same machinery as the
+                        # emergency valve) runs BEFORE the LLM summary
+                        # decision. No LLM call, no slot evict, bounded to
+                        # the threshold target — and it can CLEAR
+                        # _compress_ok, so the LLM compression below only
+                        # fires when masking alone was not enough.
+                        # Settings toggle: duo_mask_before_compress.
+                        if _compress_ok and ctx.settings.get("duo_mask_before_compress", True):
+                            try:
+                                _mask_n = _evict_stale_tool_outputs(
+                                    messages=_dtool_msgs,
+                                    lru=_tool_ctx_lru,
+                                    target_token_budget=int(_compress_threshold),
+                                    hard_floor_tokens=int(_dtool_ctx * 0.62),
+                                )
+                            except Exception as _mask_err:
+                                logger.warning("[CTX-MASK] failed: %s", _mask_err)
+                                _mask_n = 0
+                            if _mask_n > 0:
+                                _est_tokens = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
+                                _guard_tokens = max(
+                                    int(_coder_real_prompt_tokens[0] or 0), int(_est_tokens))
+                                yield await ctx.emit({"type": "status",
+                                    "content": f"🧹 Masked {_mask_n} stale tool output(s) — no summary needed."})
+                                logger.info(
+                                    "[CTX-MASK] masked=%d est_after=%d threshold=%d (LLM compression skipped)",
+                                    _mask_n, int(_est_tokens), int(_compress_threshold),
+                                )
+                                if _guard_tokens <= int(_compress_threshold):
+                                    _compress_ok = False
                         if _compress_ok:
                             # it's in hivemind.log.
                             _compress_reason = (
@@ -4344,11 +4379,29 @@ async def run_code_duo(ctx):
                                     and not _compress_local_only):
                                 try:
                                     from backend.llama_server_manager import manager as _lsm_comp
+                                    # NO-EVICT (2026-10-14, audit phase 4): the
+                                    # fit check must treat the coder slot's VRAM
+                                    # as unavailable — the documented live case
+                                    # (light model evicted the coder: ~20s
+                                    # reload + reuse=0%) cost more than the
+                                    # slower self-compression. If the light
+                                    # model does not fit NEXT TO the coder, the
+                                    # coder compresses itself (default below).
+                                    _coder_slot_for_comp = None
+                                    try:
+                                        _coder_slot_for_comp = _lsm_comp.get_slot_by_port(_dport)
+                                    except Exception:
+                                        _coder_slot_for_comp = None
+                                    _coder_slot_id = getattr(_coder_slot_for_comp, "slot_id", None)
                                     _comp_ctx_try = 16384
-                                    _fit_comp = _lsm_comp.can_fit(_comp_llm_cfg, _comp_ctx_try)
+                                    _fit_comp = _lsm_comp.can_fit(
+                                        _comp_llm_cfg, _comp_ctx_try,
+                                        exclude_slot_id=_coder_slot_id)
                                     if not _fit_comp.ok:
                                         _comp_ctx_try = 8192
-                                        _fit_comp = _lsm_comp.can_fit(_comp_llm_cfg, _comp_ctx_try)
+                                        _fit_comp = _lsm_comp.can_fit(
+                                            _comp_llm_cfg, _comp_ctx_try,
+                                            exclude_slot_id=_coder_slot_id)
                                     if _fit_comp.ok:
                                         _comp_port_new = await asyncio.wait_for(
                                             _lsm_comp.ensure_loaded(_comp_llm_cfg, num_ctx=_comp_ctx_try, n_parallel=1),

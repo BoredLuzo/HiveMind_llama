@@ -88,7 +88,7 @@
     "except_pass": 2
   },
   "core/duo_runner.py": {
-    "broad_except": 111,
+    "broad_except": 113,
     "except_pass": 34
   },
   "core/fix_agent.py": {
@@ -388,8 +388,8 @@
     "except_pass": 6
   },
   "tools/browser.py": {
-    "broad_except": 7,
-    "except_pass": 2
+    "broad_except": 9,
+    "except_pass": 3
   },
   "tools/definitions.py": {
     "broad_except": 1,
@@ -408,7 +408,7 @@
     "except_pass": 7
   },
   "tools/handlers/file_ops.py": {
-    "broad_except": 27,
+    "broad_except": 28,
     "except_pass": 11
   },
   "tools/handlers/git_tools.py": {
@@ -428,7 +428,7 @@
     "except_pass": 0
   },
   "tools/runner.py": {
-    "broad_except": 25,
+    "broad_except": 26,
     "except_pass": 18
   },
   "tools/sandbox.py": {

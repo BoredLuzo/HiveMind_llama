@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+Tool-pipeline audit phases 4-7 (compression, injections, tool profiles, web):
+
+- compression without slot eviction: deterministic observation masking
+  (stale tool outputs -> recall markers, the same machinery as the old
+  >90% emergency valve) now runs BEFORE the LLM summary and can resolve
+  the threshold crossing without it - no LLM call, no coder evict
+  (settings: duo_mask_before_compress, default on)
+- the light compression model (duo_compress_model) is only loaded when
+  it fits NEXT TO the coder (can_fit excludes the coder's slot) - the
+  documented live case (light model evicted the coder: ~20s reload +
+  reuse=0%) can no longer happen; otherwise the coder compresses itself
+- edit_file failure anchor: instead of a fixed 60-line file head (up to
+  4.3k chars per failed attempt) the error now shows +-5 lines around
+  the CLOSEST match to the failed old_text (best_match_location in
+  patch_2_fuzzy_edit), capped at 1200 chars - the retry loop edits from
+  the right region on the first retry
+- bash-loop reinject menu is names-only (~300 instead of ~5.2k chars -
+  the model already carries the full descriptions in its schema); the
+  too-large-read signature outline dropped 200 -> 60 items
+- tool profiles: settings tool_profile = auto | full | compact. compact
+  keeps the essential 14 tools with one-line descriptions (5.9k instead
+  of 15.3k chars schema, ~1.5k tokens on the live coder); auto picks
+  compact for small models (qwen3.5:4b, lfm2.5:2.6b, ...)
+- web_fetch has its OWN call budget (webfetch_max_calls, default 20) -
+  pure doc-fetching no longer drains the web_search budget
+- trafilatura extraction runs in a worker thread - a heavy page no
+  longer freezes all streaming on the event loop
+- browser click returns only the CHANGED content vs the previous
+  snapshot (capped 2000, explicit snapshot for the full page); evaluate
+  is capped at 8000 like every other browser action
+
 Tool-pipeline performance audit, phases 0-3 (Sonnet-reviewed ordering:
 cache hygiene and measurement first):
 

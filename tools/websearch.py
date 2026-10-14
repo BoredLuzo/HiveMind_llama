@@ -438,7 +438,10 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
     # parsing them as HTML spams ERROR logs and their tag-like content gets
     # destroyed by the <[^>]+> removal.
     if _is_html_content(body, _content_type):
-        text = _extract_text(body, url)
+        # PHASE-7 (2026-10-14, audit): trafilatura extraction runs in a worker
+        # thread — on the event loop a heavy page froze ALL streaming for the
+        # whole run.
+        text = await asyncio.to_thread(_extract_text, body, url)
     else:
         text = _clean_plain_text(body)
 

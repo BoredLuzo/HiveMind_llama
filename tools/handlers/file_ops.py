@@ -148,7 +148,7 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
                 _fast_newline_count, p, _READ_LINE_ABORT + 1)
             if _nl > _READ_LINE_ABORT:
                 _sig_fn = _shared.get_signatures_report if callable(_shared.get_signatures_report) else None
-                _sig = await asyncio.to_thread(_sig_fn, p, 200) if _sig_fn else (
+                _sig = await asyncio.to_thread(_sig_fn, p, 60) if _sig_fn else (
                     "(signature extraction unavailable) — use read_file with line_range=[1,50] to inspect the file header first."
                 )
                 _disp = f"{_nl}+" if _capped else str(_nl)
@@ -648,17 +648,39 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             return f"[edit_file: '{p}' edited via fuzzy match]{_lint}"
         # OLD-TEXT RE-ANCHOR (2026-10-08, user feedback: the old_text retry loop): the
         # model edits from memory after context compression and repeats the
-        # same failed edit. Attach the CURRENT head of the file to the error
-        # so the very next edit can be built from real content.
+        # same failed edit. Attach the CURRENT content around the CLOSEST
+        # match to the failed old_text (audit phase 5, 2026-10-14: was a
+        # fixed 60-line head, up to 4000 chars per failed attempt — the
+        # closest-window anchor is smaller AND points at the right region).
         _anchor = ""
         try:
             _cur = p.read_text(encoding="utf-8", errors="replace").splitlines()
-            _head = "\n".join(_cur[:60])
-            if len(_head) > 4000:
-                _head = _head[:4000] + "\n... [truncated]"
-            _anchor = ("\n\n[CURRENT CONTENT of '" + p.name + "' — first "
-                       + str(min(60, len(_cur))) + " lines. Build your next "
-                       "edit_file old_text from EXACTLY this:]\n" + _head)
+            _anchor_center = -1
+            _anchor_ratio = 0.0
+            try:
+                from tools.patch_2_fuzzy_edit import best_match_location as _bml
+                _loc = _bml("\n".join(_cur), old_n)
+                if _loc:
+                    _anchor_center, _anchor_ratio = int(_loc[0]), float(_loc[1])
+            except Exception:
+                _anchor_center = -1
+            if _anchor_center >= 0:
+                _lo = max(0, _anchor_center - 5)
+                _hi = min(len(_cur), _anchor_center + max(old_n.count("\n"), 0) + 6)
+                _head = "\n".join(_cur[_lo:_hi])
+                if len(_head) > 1200:
+                    _head = _head[:1200] + "\n... [truncated]"
+                _anchor = ("\n\n[CURRENT CONTENT of '" + p.name + "' lines "
+                           + str(_lo + 1) + "-" + str(_hi) + " (closest match to your old_text, ratio "
+                           + f"{_anchor_ratio:.2f}" + ") — build your next edit_file "
+                           "old_text from EXACTLY this:]\n" + _head)
+            else:
+                _head = "\n".join(_cur[:30])
+                if len(_head) > 1200:
+                    _head = _head[:1200] + "\n... [truncated]"
+                _anchor = ("\n\n[CURRENT CONTENT of '" + p.name + "' — first "
+                           + str(min(30, len(_cur))) + " lines (no close match found). "
+                           "read_file the file and COPY a passage verbatim:]\n" + _head)
         except Exception:
             pass
         return _tool_error_response(
