@@ -18,7 +18,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from core.budgets import resolve, update_cpt_ema, cpt_for  # noqa: E402
+from core.budgets import (resolve, set_active, update_cpt_ema,
+                          update_prefill_ema, cpt_for)  # noqa: E402
 from tools.limits import SCHEMA_FRAC  # noqa: E402
 
 passed = 0
@@ -85,13 +86,37 @@ _budg._PREFILL_STATE = _tmp_state
 try:
     check("no state -> default tps", _budg.prefill_tps_for("bench-model") == 20.0)
     _budg.update_prefill_ema("bench-model", 45.0)
-    check("ema stored and read back", abs(_budg.prefill_tps_for("bench-model") - 25.0) < 0.1,
+    check("FIRST stored measurement replaces the default (no 80% placeholder)",
+          _budg.prefill_tps_for("bench-model") == 45.0,
+          f"({_budg.prefill_tps_for('bench-model')})")
+    _budg.update_prefill_ema("bench-model", 65.0)
+    check("second sample blends", abs(_budg.prefill_tps_for("bench-model") - 49.0) < 0.1,
           f"({_budg.prefill_tps_for('bench-model')})")
     _budg.update_prefill_ema("bench-model", 10**7)  # implausible - ignored
-    check("implausible sample ignored", abs(_budg.prefill_tps_for("bench-model") - 25.0) < 0.1)
+    check("implausible sample ignored", abs(_budg.prefill_tps_for("bench-model") - 49.0) < 0.1)
 finally:
     _budg._PREFILL_STATE = _orig_state
     shutil.rmtree(_tmp_state.parent, ignore_errors=True)
+
+# ── 2d. per-tool cap field: read_file bounded by read_char_cap only ──────
+import core.tool_executor as _tex
+set_active(b16)
+check("(a) effective read_file cap = read_char_cap at 16k (32112)",
+      _tex._cap_for_tool("read_file") == 32112,
+      f"({_tex._cap_for_tool('read_file')})")
+check("(b) tool_result_cap 4704 and injection 4704 at tps=20",
+      b16.tool_result_cap == 4704 and b16.injection_budget == 4704,
+      f"({b16.tool_result_cap}/{b16.injection_budget})")
+_bash = _tex._cap_tool_result("x" * 6000, tool_name="run_bash")
+check("(c) run_bash result >4704 chars still capped",
+      len(_bash) <= b16.tool_result_cap + 200 and "truncated at" in _bash,
+      f"({len(_bash)})")
+_rf = _tex._cap_tool_result("y" * 30000, tool_name="read_file")
+check("(d) 30k-char read_file result passes through uncut",
+      len(_rf) == 30000,
+      f"({len(_rf)})")
+check("default (no tool name) still uses tool_result_cap",
+      len(_tex._cap_tool_result("x" * 6000)) <= b16.tool_result_cap + 200)
 
 # ── 3. floors/ceilings hold at extremes ──────────────────────────────────
 btiny = resolve(2048, 3.92, 1024, {})

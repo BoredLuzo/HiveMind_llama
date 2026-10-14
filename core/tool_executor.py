@@ -154,18 +154,39 @@ class ToolExecResult:
 
 
 
-def _cap_tool_result(result: str, max_chars: int | None = None) -> str:
+# BUDGET-CAP FIELDS (2026-10-14, task 2): which Budgets field caps which
+# tool's result. Tools not listed use the default field (tool_result_cap,
+# prefill-time-capped). read_file is listed: its handler already self-caps at
+# read_char_cap WITH a range hint (file_ops TRUNCATED tails), so giving it the
+# prefill-capped default here would throw away legitimate range-read content
+# and force ~7 calls for one 30k-char file. One mapping, no scattered ifs.
+_TOOL_CAP_FIELD = {
+    "read_file": "read_char_cap",
+}
+_TOOL_CAP_FIELD_DEFAULT = "tool_result_cap"
+
+
+def _cap_for_tool(tool_name: str) -> int:
+    try:
+        from core.budgets import active as _b_active
+        b = _b_active()
+        field = _TOOL_CAP_FIELD.get(str(tool_name or ""), _TOOL_CAP_FIELD_DEFAULT)
+        return int(getattr(b, field, b.tool_result_cap) or b.tool_result_cap)
+    except Exception:
+        from tools.limits import EXEC_RESULT_CAP_FALLBACK
+        return EXEC_RESULT_CAP_FALLBACK
+
+
+def _cap_tool_result(result: str, max_chars: int | None = None,
+                     tool_name: str = "") -> str:
     """Truncate tool results exceeding max_chars to prevent silent context-window overflow.
     BUDGETS (2026-10-14): the default cap derives from the run's resolved
     budgets (fraction of n_ctx) — no fixed staffel. Fallback constant only
-    for contexts without a run."""
+    for contexts without a run. The cap FIELD is per-tool (_TOOL_CAP_FIELD):
+    read_file uses read_char_cap (its handler self-caps with a range hint),
+    everything else uses the prefill-capped tool_result_cap."""
     if max_chars is None:
-        try:
-            from core.budgets import active as _b_active
-            max_chars = _b_active().tool_result_cap
-        except Exception:
-            from tools.limits import EXEC_RESULT_CAP_FALLBACK
-            max_chars = EXEC_RESULT_CAP_FALLBACK
+        max_chars = _cap_for_tool(tool_name)
     if not isinstance(result, str) or len(result) <= max_chars:
         return result
     cutoff = result.rfind("\n", 0, max_chars)
@@ -497,7 +518,7 @@ async def execute_tool_round(
             or "[write_file_append error: chunk too large" in _dresult
         )
         _perf["tool_chars_raw"] += len(_dresult)
-        _dresult = _cap_tool_result(_dresult)
+        _dresult = _cap_tool_result(_dresult, tool_name=_dname)
         _perf["tool_chars_capped"] += len(_dresult)
         if _is_too_large:
             await _handle_too_large(_dname, _dargs, _dresult, _dtc_call, dtool_msgs,

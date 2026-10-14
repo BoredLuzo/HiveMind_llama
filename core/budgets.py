@@ -186,6 +186,9 @@ def cpt_for(model: str) -> float:
 # Feed from real responses: tps = prompt_n / (prompt_ms / 1000). Stored next
 # to the telemetry rows; Budgets.resolve takes the PERSISTED value (freeze
 # rule) - a mid-run update only affects the NEXT run.
+# FIRST MEASUREMENT REPLACES THE DEFAULT (2026-10-14, task 2 review): the
+# default tps is a placeholder valid only until the first stored sample -
+# blending it in at alpha=0.2 would keep the placeholder at 80% weight.
 _PREFILL_STATE = (Path(__file__).resolve().parent.parent / "logs" / "telemetry"
                   / "prefill_ema.json")
 _PREFILL_ALPHA = 0.2
@@ -204,8 +207,11 @@ def update_prefill_ema(model: str, tps: float) -> float | None:
             return None
         state = _load_prefill_state()
         key = str(model or "unknown")
-        old = float(state.get(key) or PREFILL_TPS_DEFAULT)
-        new = round(old * (1 - _PREFILL_ALPHA) + float(tps) * _PREFILL_ALPHA, 2)
+        if key in state:
+            old = float(state[key])
+            new = round(old * (1 - _PREFILL_ALPHA) + float(tps) * _PREFILL_ALPHA, 2)
+        else:
+            new = round(float(tps), 2)  # first stored measurement replaces the default
         state[key] = new
         _PREFILL_STATE.parent.mkdir(parents=True, exist_ok=True)
         _PREFILL_STATE.write_text(json.dumps(state), encoding="utf-8")
