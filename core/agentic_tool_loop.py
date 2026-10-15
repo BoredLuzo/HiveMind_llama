@@ -6,7 +6,7 @@ import httpx
 
 from core.tool_loop import ToolLoop, ToolLoopConfig, _build_tool_call_grammar, _grammar_compatible, _USE_GBNF_GRAMMAR
 from core.agentic_duo_state import DuoRoundState
-from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, _inject_no_think_directive, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, CODER_VISION_NOTE as _CODER_VISION_NOTE
+from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, CODER_VISION_NOTE as _CODER_VISION_NOTE
 
 # NOTE REPLACEMENT (2026-10-04, Sonnet round 10 #3): removing the note only
 # stops the false claim - the model must KNOW the image is gone, or it
@@ -27,11 +27,14 @@ def _retract_vision_note_if_lost(msgs: list) -> list:
     try:
         if _count_image_parts(msgs) != 0:
             return msgs
+        # CACHE (task 4): the correction is APPENDED as a user note - the old
+        # in-place system replace killed the prompt-cache prefix for the rest
+        # of the run.
         _sys0 = msgs[0]
         if isinstance(_sys0, dict) and isinstance(_sys0.get("content"), str) \
                 and _CODER_VISION_NOTE in _sys0["content"]:
-            _sys0["content"] = _sys0["content"].replace(
-                _CODER_VISION_NOTE, _CODER_VISION_REPLACEMENT)
+            msgs.append({"role": "user",
+                         "content": _CODER_VISION_REPLACEMENT.strip()})
     except (AttributeError, IndexError, TypeError):
         pass
     return msgs
@@ -204,7 +207,13 @@ class AgenticToolLoop(ToolLoop):
                                 self.round_state.parse_errors = 0
                                 if not self.round_state.inject_no_think:
                                     self.round_state.inject_no_think = True
-                                    dtool_msgs[:] = _inject_no_think_directive(dtool_msgs)
+                                    # CACHE (task 4): was a full system-message
+                                    # rewrite (<|think_off|> prefix) - now the
+                                    # appended note below carries the switch.
+                                    dtool_msgs.append({"role": "user", "content":
+                                        "[THINKING OFF] Tool-call JSON errors were "
+                                        "caused by thinking - continue WITHOUT a "
+                                        "thinking section in your next answer."})
                                     payload = {**payload, "messages": dtool_msgs}
                                 payload = {**payload, "thinking": False, "thinking_budget": 0,
                                            "max_tokens": int(self.round_state.dtool_opts.get("num_predict", 800) or 800)}
@@ -242,7 +251,13 @@ class AgenticToolLoop(ToolLoop):
                                 payload["chat_template_kwargs"] = _ctk_call
                                 if not self.round_state.inject_no_think:
                                     self.round_state.inject_no_think = True
-                                    dtool_msgs[:] = _inject_no_think_directive(dtool_msgs)
+                                    # CACHE (task 4): was a full system-message
+                                    # rewrite (<|think_off|> prefix) - now the
+                                    # appended note below carries the switch.
+                                    dtool_msgs.append({"role": "user", "content":
+                                        "[THINKING OFF] Tool-call JSON errors were "
+                                        "caused by thinking - continue WITHOUT a "
+                                        "thinking section in your next answer."})
                                     payload = {**payload, "messages": dtool_msgs}
                                 await self._emit({"type": "status",
                                     "content": "? Grammar crash (CallExpression) — disabling tool thinking and retrying."})

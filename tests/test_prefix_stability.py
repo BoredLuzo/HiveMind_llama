@@ -85,6 +85,25 @@ _run(_maybe_activate_reactive_think(
 check("success neither activates nor appends",
       len(_m2) == 2 and _rs2.think_runtime is False)
 
+print("=== prefix stability: no-think + vision-retract must be append-only ===")
+
+_src_loop = (Path(__file__).resolve().parent.parent / "core" / "agentic_tool_loop.py").read_text(
+    encoding="utf-8")
+check("no in-place no-think system rewrite remains",
+      "dtool_msgs[:] = _inject_no_think_directive" not in _src_loop)
+check("no in-place vision-retract system rewrite remains",
+      "_sys0[\"content\"] = _sys0[\"content\"].replace" not in _src_loop)
+
+from core.agentic_tool_loop import _retract_vision_note_if_lost, _CODER_VISION_NOTE
+_msgs2 = [{"role": "system", "content": "note " + _CODER_VISION_NOTE},
+          {"role": "user", "content": "q"}]
+_rs = DuoRoundState.think_runtime  # touch import chain
+_before = dict(_msgs2[0])
+_retract_vision_note_if_lost(_msgs2)  # plain coroutine-less helper
+check("vision retract leaves system byte-identical", _msgs2[0] == _before)
+check("vision retract appends correction note",
+      len(_msgs2) == 3 and "NO LONGER" in str(_msgs2[-1].get("content", "")))
+
 print()
 print(f"{'='*50}")
 print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
