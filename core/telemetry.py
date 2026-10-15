@@ -68,3 +68,32 @@ def append_round(row: dict) -> None:
             f.write(json.dumps(out, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+# ── DEBUG-DUMP (request instrumentation) ─────────────────────────────────────
+def should_dump(settings) -> bool:
+    """True only when Setting debug_dump_request is set (None/absent = off)."""
+    try:
+        return bool((settings or {}).get("debug_dump_request"))
+    except Exception:
+        return False
+
+
+def dump_request(role: str, chat_id, messages, tools=None,
+                 extra: dict | None = None) -> str | None:
+    """Write messages+tools EXACTLY as sent to
+    dump_<role>_<chatid>_<ts>.json in the telemetry dir. Never raises."""
+    try:
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        safe = "".join(c if (c.isalnum() or c in "-_.") else "_"
+                       for c in str(chat_id or "nochat"))[:60]
+        path = _LOG_DIR / f"dump_{role}_{safe}_{time.strftime('%Y%m%d-%H%M%S')}.json"
+        out = {"role": role, "chat_id": str(chat_id or ""),
+               "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+               "messages": messages, "tools": tools}
+        if extra:
+            out.update(extra)
+        path.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+        return str(path)
+    except Exception:
+        return None

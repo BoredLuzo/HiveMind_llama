@@ -1456,6 +1456,16 @@ async def run_inloop_planner(
     }
     _apply_thinking_fields(_plan_payload, use_thinking, _inloop_eff_budget)
 
+    # DEBUG-DUMP (task: dump instrumentation): the in-loop planner request,
+    # gated by Setting debug_dump_request (role "planner" in the filename).
+    try:
+        from core.telemetry import dump_request as _p_dump, should_dump as _p_should
+        if _p_should(settings):
+            _p_dump("planner", "inloop-planner", _plan_payload.get("messages"),
+                    _plan_payload.get("tools"))
+    except Exception:
+        pass
+
     _inloop_read_timeout = 600.0
     _plan_resp = None
     _plan_err_last = None

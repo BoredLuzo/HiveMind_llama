@@ -60,8 +60,8 @@
     "except_pass": 1
   },
   "core/agentic_tool_loop.py": {
-    "broad_except": 13,
-    "except_pass": 7
+    "broad_except": 14,
+    "except_pass": 8
   },
   "core/chat_run.py": {
     "broad_except": 20,
@@ -124,7 +124,7 @@
     "except_pass": 4
   },
   "core/telemetry.py": {
-    "broad_except": 2,
+    "broad_except": 4,
     "except_pass": 1
   },
   "core/tool_loop.py": {
@@ -184,8 +184,8 @@
     "except_pass": 2
   },
   "hive_functions/planner.py": {
-    "broad_except": 23,
-    "except_pass": 15
+    "broad_except": 24,
+    "except_pass": 16
   },
   "hive_functions/pre_explore/contracts.py": {
     "broad_except": 9,

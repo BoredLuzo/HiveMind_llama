@@ -12,6 +12,9 @@ class DuoRoundState:
 
     # ── POST+retry mutable state (AgenticToolLoop modifies) ──
     think_runtime: bool = True
+    # DEBUG-DUMP (task: dump instrumentierung): first request of this run
+    # already written to telemetry? (one dump per RUN, not per round)
+    request_dump_done: bool = False
     inject_no_think: bool = False
     http_404_retries: int = 0
     parse_errors: int = 0

@@ -528,6 +528,19 @@ class AgenticToolLoop(ToolLoop):
                     from core import telemetry as _tel
                     try:
                         _tel_msgs = payload.get("messages") or []
+                        # DEBUG-DUMP (task: dump instrumentation): round 1 of
+                        # the run, gated by Setting debug_dump_request.
+                        try:
+                            from core.state import settings as _dump_settings
+                            if (_tel.should_dump(_dump_settings)
+                                    and not getattr(self.round_state, "request_dump_done", False)):
+                                self.round_state.request_dump_done = True
+                                _tel.dump_request(
+                                    "coder", getattr(self.round_state, "chat_id", ""),
+                                    _tel_msgs, payload.get("tools"),
+                                    extra={"prompt_tokens": (_dr_usage_final or {}).get("prompt_tokens")})
+                        except Exception:
+                            pass
                         _tel_hashes, _tel_fdi = _tel.message_hashes(_tel_msgs)
                         # CPT-EMA (2026-10-14, Sonnet redesign): real
                         # chars/token per model from each real response —
