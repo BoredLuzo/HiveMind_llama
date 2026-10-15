@@ -1000,6 +1000,22 @@ async def execute_tool_round(
                     f"different pattern, path, or tool instead."
                 )})
 
+        # ── RUN-BASH-REPEAT HINT (2026-10-16): identical failing command
+        # twice with NOTHING changed in between (live: PowerShell syntax in
+        # bash, exit 2, identical retry). Hint only - the 3x BASH-LOOP-
+        # REINJECT above stays the hard stop. ──
+        elif (_last2_identical and _dname == "run_bash"
+              and result.last_run_bash_failure
+              and not result.changed_since_failure):
+            if not _recovery_saturated(dtool_msgs):
+                dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
+                    "The same run_bash command just failed twice with identical args "
+                    "and NO file changed since the first failure - an unchanged retry "
+                    "will fail again. Change the command (the error names the shell "
+                    "that ran), pick a different tool, or call "
+                    "task_complete(status='blocked', reason='...')."
+                )})
+
         # ── Read-file ladder: 3+ consecutive reads with no write/edit ──
         elif _consecutive_reads >= 3 and not _read_ladder_fired and any(
             isinstance(_m, dict) and _m.get("role") == "tool" and _m.get("name") in (

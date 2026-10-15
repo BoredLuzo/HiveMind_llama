@@ -49,6 +49,33 @@ def main():
     h_unix = shell_os_hint("bash", "linux")
     check("unix-hint: bash guidance", "bash/sh on Unix" in h_unix)
 
+    # SHELL-FALLBACK (2026-10-16): beide Zweige per Monkeypatch der
+    # Erkennung - ohne Git Bash darf NIE "bash" herauskommen, auch nicht
+    # bei explizit gepinnter Einstellung run_bash_shell="bash".
+    import core.state as _cs
+    from tools.handlers import exec_tools as _et
+    _orig_bash_path, _orig_setting = _et._windows_bash_path, _cs.settings.get("run_bash_shell")
+    try:
+        _et._windows_bash_path = lambda: ""  # Git Bash NICHT installiert
+        _cs.settings["run_bash_shell"] = "auto"
+        check("no git bash + auto -> powershell",
+              _et._run_bash_shell_mode() == "powershell")
+        _cs.settings["run_bash_shell"] = "bash"
+        check("no git bash + pinned bash -> falls back to powershell",
+              _et._run_bash_shell_mode() == "powershell")
+        _et._windows_bash_path = lambda: r"C:\Program Files\Git\bin\bash.exe"
+        check("git bash + pinned bash -> bash",
+              _et._run_bash_shell_mode() == "bash")
+        _cs.settings["run_bash_shell"] = "powershell"
+        check("explicit powershell stays powershell",
+              _et._run_bash_shell_mode() == "powershell")
+    finally:
+        _et._windows_bash_path = _orig_bash_path
+        if _orig_setting is None:
+            _cs.settings.pop("run_bash_shell", None)
+        else:
+            _cs.settings["run_bash_shell"] = _orig_setting
+
     # Source-Guards: der Prompt-Hint delegiert an die aufgeloeste Shell ...
     _dr = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(
         encoding="utf-8", errors="replace")

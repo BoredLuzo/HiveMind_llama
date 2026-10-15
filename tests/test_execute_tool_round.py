@@ -340,6 +340,24 @@ res, hooks, msgs, rs, seen, ltl = run_round([
 ], trs=_persist_trs, dtool_msgs=list(_prior_write))
 check("ladder persists across rounds", any("[READ LADDER]" in str(m.get("content", "")) for m in msgs))
 
+# ── RUN-BASH-REPEAT HINT (2026-10-16): identical failing run_bash twice
+# with nothing changed in between -> hint injected (no abort, no loop flag).
+# Live: PowerShell syntax in bash, exit 2, identical retry.
+_HANDLERS["run_bash"] = "[stderr]\nbash: Test-Path: command not found\n---\n[exit code: 2]"
+_rep_trs = _TRS(**_slot_defs)
+run_round([tc("run_bash", {"cmd": "Test-Path x"})], trs=_rep_trs)
+_res2, _h2, _m2, _, _, _ = run_round([tc("run_bash", {"cmd": "Test-Path x"})],
+                                     trs=_rep_trs)
+check("run_bash repeat: hint injected on 2nd identical failure",
+      any("failed twice with identical args" in str(m.get("content", ""))
+          for m in _m2 if m.get("role") == "user"))
+check("run_bash repeat: no loop abort at 2x", not _res2.loop_detected)
+# 3rd identical call -> BASH-LOOP-REINJECT still fires (hard stop preserved)
+_res3, _h3, _m3, _, _, _ = run_round([tc("run_bash", {"cmd": "Test-Path x"})],
+                                     trs=_rep_trs)
+check("run_bash repeat: 3x reinject still fires",
+      any("[LOOP DETECTED]" in str(m.get("content", "")) for m in _m3))
+
 print()
 print(f"{'='*50}")
 print(f"  {passed} passed, {failed} failed  (total {passed + failed})")

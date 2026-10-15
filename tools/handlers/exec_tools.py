@@ -45,6 +45,13 @@ def _run_bash_shell_mode() -> str:
         _m = str((_cs.settings or {}).get("run_bash_shell", "auto")).lower()
     except ImportError:
         _m = "auto"
+    if _m == "bash" and not _windows_bash_path():
+        # SHELL-FALLBACK (2026-10-16): a pinned "bash" without a Git Bash
+        # install used to report "bash" while execution silently ran
+        # powershell.exe - hint, error shell-name and actual shell disagreed
+        # (same failure class as the PowerShell-into-bash loop, just on
+        # machines without Git Bash).
+        return "powershell"
     if _m in ("bash", "powershell"):
         return _m
     return "bash" if _windows_bash_path() else "powershell"
