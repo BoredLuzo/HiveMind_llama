@@ -143,6 +143,55 @@ def resolve_workspace(
     return str(Path(".").resolve()), "cwd_fallback"
 
 
+def bootstrap_workspace(
+    request_workspace: str,
+    chat_run_workspace: str,
+    resume_workspace: str,
+    fallback_fn=None,
+) -> tuple[str, str]:
+    """WS-PROVENANCE (2026-10-15, gravSandbox incident): priority for the
+    pre-explore/agentic bootstrap and every run-internal consumer (tree scout,
+    repo map, planner context). The incident: _pre_explore.py:179 let a stale
+    resume block or the process-global ENV override the workspace chat_run had
+    resolved from the request (RUN-TRACE calc_app, tree scout gravSandbox).
+
+    Priority: request > resume block (only reaches this function on a real
+    resume of the same chat_id - _try_resume loads exactly that chat's block)
+    > the chat_run resolution. ENV is NEVER a primary source here; when
+    nothing is known, the caller's full resolver chain decides (env is its
+    documented second-to-last resort, above cwd only)."""
+    req = str(request_workspace or "").strip()
+    if req:
+        cw = str(chat_run_workspace or "").strip()
+        if cw:
+            return str(Path(cw).resolve()), "request"
+        # Request present but no chat_run resolution in scope (direct/test
+        # call): re-resolve, never fall through to the stale resume block.
+        if fallback_fn is not None:
+            return fallback_fn()
+        return str(Path(".").resolve()), "cwd_fallback"
+    rw = str(resume_workspace or "").strip()
+    if rw:
+        return str(Path(rw).resolve()), "resume"
+    cw = str(chat_run_workspace or "").strip()
+    if cw:
+        return str(Path(cw).resolve()), "chat_run"
+    if fallback_fn is not None:
+        return fallback_fn()
+    return str(Path(".").resolve()), "cwd_fallback"
+
+
+def effective_run_workspace(ctx_workspace: str = "", state_workspace: str = "") -> str:
+    """WS-PROVENANCE (2026-10-15): authoritative workspace for run-internal
+    side effects (auto-test suites, chunk checks). The chat_run-resolved value
+    wins; ENV is only a last resort because a parallel run re-points the
+    process-global (sync_env_workspace) at any time."""
+    ws = str(ctx_workspace or "").strip() or str(state_workspace or "").strip()
+    if ws:
+        return str(Path(ws).resolve())
+    return str(Path(os.environ.get("HIVEMIND_WORKSPACE") or ".").resolve())
+
+
 def commit_allowed_for(request_workspace: str, chat_ctx: dict | None) -> bool:
     """COMMITS (2026-10-14, security fix): an API run may only auto-commit
     when it EXPLICITLY addressed a workspace (valid request parameter) or

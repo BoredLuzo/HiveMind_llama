@@ -176,18 +176,28 @@ async def _phase_pre_explore_bootstrap(ctx, state: dict):
     if _resume_data:
         _resume_block    = _resume_data["resume"]
         _explore_ctx     = _resume_data.get("explore_ctx", "")
-        _ws_str          = _resume_data.get("workspace", "") or str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
         _pre_explore_msgs = []
 
     _chat_ctx_loaded: dict = _load_chat_context(ctx.chat_id) if ctx.chat_id else {}
     _chat_ctx_valid:  bool = _chat_context_valid(_chat_ctx_loaded)
 
-    if not _resume_data:
-        # WORKSPACE-REWORK (2026-08-25): Central resolution via
-        # utils/workspace_resolve.py — identical chain as server.py/duo_runner.
-        from utils.workspace_resolve import resolve_workspace as _ws_resolve_fn
-        _ws_str, _ws_src = _ws_resolve_fn(ctx.settings or {}, _chat_ctx_loaded, ctx.user_input)
-        logger.warning("[WS-RESOLVE] pre-explore workspace=%s (source=%s)", _ws_str, _ws_src)
+    # WS-PROVENANCE (2026-10-15, gravSandbox incident): the workspace resolved
+    # in chat_run (ctx.workspace / ctx.request_workspace) is authoritative and
+    # is what tree scout, repo map and the planner context see. A resume block
+    # only wins on a real resume of the same chat_id AND when the request
+    # carried no workspace; ENV is never a primary source (old :179 read
+    # os.environ["HIVEMIND_WORKSPACE"] directly and could override both).
+    from utils.workspace_resolve import (
+        bootstrap_workspace as _boot_ws_fn,
+        resolve_workspace as _ws_resolve_fn,
+    )
+    _ws_str, _ws_src = _boot_ws_fn(
+        getattr(ctx, "request_workspace", ""),
+        getattr(ctx, "workspace", ""),
+        _resume_data.get("workspace", "") if _resume_data else "",
+        fallback_fn=lambda: _ws_resolve_fn(ctx.settings or {}, _chat_ctx_loaded, ctx.user_input),
+    )
+    logger.warning("[WS-RESOLVE] pre-explore workspace=%s (source=%s)", _ws_str, _ws_src)
 
     if _chat_ctx_valid and not _explore_ctx and not ctx.duo_config.pre_explore:
         _explore_ctx      = _chat_ctx_loaded.get("explore_ctx", "")

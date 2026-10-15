@@ -1352,6 +1352,7 @@ async def run_stream(
             effective_task_type=_effective_task_type,
             use_learned=use_learned,
             workspace=_ws_str,
+            request_workspace=request_workspace,
             workspace_commit_allowed=_ws_commit_allowed,
             image_paths=_saved_image_paths,
             prepro_success=_prepro_success,

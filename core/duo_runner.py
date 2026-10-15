@@ -801,11 +801,20 @@ async def run_code_duo(ctx):
 
 
     # WORKSPACE-FIX (2026-08-25 REWORK): Zentrale Aufloesung via
+    # utils/workspace_resolve.py. WS-PROVENANCE (2026-10-15): the chat_run
+    # resolution (ctx.workspace, request-aware) is authoritative — the old
+    # re-resolution here ignored request_workspace and chat_ctx, so a request
+    # for calc_app could silently land in last_used (gravSandbox) and the
+    # re-sync then re-pointed the process-global ENV for the whole run.
     from utils.workspace_resolve import (
         resolve_workspace as _ws_resolve,
         sync_env_workspace as _ws_sync_env,
+        effective_run_workspace as _eff_run_ws,
     )
-    _ws_str, _ws_src = _ws_resolve(ctx.settings, None, ctx.user_input)
+    if getattr(ctx, "workspace", ""):
+        _ws_str, _ws_src = ctx.workspace, "chat_run"
+    else:
+        _ws_str, _ws_src = _ws_resolve(ctx.settings, None, ctx.user_input)
     _ws_sync_env(_ws_str)
     logger.warning("[WS-RESOLVE] duo pre-phase workspace=%s (source=%s)", _ws_str, _ws_src)
     state["_ws_str"] = _ws_str
@@ -6250,7 +6259,7 @@ async def run_code_duo(ctx):
                     yield await ctx.emit({"type":"status",
                             "content": f"⏭ Auto-test skipped for chunk {_di+1}"})
                 elif _duo_test_feedback and _cs.has_written_files and not ctx.aborted():
-                    _ws_path = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+                    _ws_path = _eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", ""))
                     _chunk_test_result, _is_clean = await _cs.run_auto_test(
                         workspace=_ws_path,
                         di=_di,
@@ -6575,7 +6584,7 @@ async def run_code_duo(ctx):
                         if _is_last:
                             break
                     elif _duo_test_feedback and _cs.has_written_files and not ctx.aborted():
-                        _ws_path = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+                        _ws_path = _eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", ""))
                         _chunk_test_result, _is_clean = await _cs.run_auto_test(
                             workspace=_ws_path,
                             di=_di,
@@ -6837,7 +6846,7 @@ async def run_code_duo(ctx):
         yield await ctx.emit({"type": "status", "content": "\U0001f9ea Final test run after all chunks..."})
         try:
             _final_test_result = await _run_test_suite(
-                workspace=str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve()),
+                workspace=_eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", "")),
                 timeout=120,
                 chat_id=ctx.chat_id or "",
             )

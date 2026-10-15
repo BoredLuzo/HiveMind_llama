@@ -37,6 +37,10 @@ class RunContext:
 
     # ── Workspace (resolved per run) ──
     workspace: str = ""
+    # WS-PROVENANCE (2026-10-15): the raw /stream workspace parameter. Empty
+    # = request carried none. Lets run-internal consumers (pre-explore
+    # bootstrap, duo pre-phase) honor request-wins without re-resolving.
+    request_workspace: str = ""
     # COMMIT-GATE (2026-10-14, security fix): False = the run got no explicit
     # workspace and continues no chat session with one (stray API run shape,
     # the gravSandbox incident) - auto-commits and checkpoints are skipped.
