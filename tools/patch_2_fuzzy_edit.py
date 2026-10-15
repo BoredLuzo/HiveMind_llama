@@ -39,13 +39,20 @@ def best_match_location(content: str, old_str: str) -> tuple[int, float] | None:
         if not large_block and first_search and c_lines[start].strip() != first_search:
             continue
         if large_block:
-            sm = difflib.SequenceMatcher(None, old_lines, c_lines[start:start + o_len])
+            # AUTOJUNK-OFF (2026-10-15): autojunk purges every element that
+            # occurs in >1% of b once len(b) >= 200. For SEARCH blocks made of
+            # many identical lines that purges EVERY character/line of the
+            # candidate window and the ratio collapses (measured 0.07 vs 0.95
+            # for a 19-identical-line block with one drifted line) -> the edit
+            # fails although the window is nearly perfect. Matching accuracy
+            # beats the autojunk speed heuristic here; windows are small.
+            sm = difflib.SequenceMatcher(None, old_lines, c_lines[start:start + o_len], autojunk=False)
             if sm.quick_ratio() < 0.5:
                 continue
             ratio = sm.ratio()
         else:
             ratio = difflib.SequenceMatcher(
-                None, o_norm, "\n".join(c_lines[start:start + o_len])).ratio()
+                None, o_norm, "\n".join(c_lines[start:start + o_len]), autojunk=False).ratio()
         if ratio > best_ratio:
             best_start = start
             best_ratio = ratio
@@ -94,12 +101,14 @@ def fuzzy_replace(content: str, old_str: str, new_str: str) -> str | None:
 
         cand = "\n".join(c_lines[start:start + o_len])
         if large_block:
-            sm = difflib.SequenceMatcher(None, old_lines, c_lines[start:start + o_len])
+            # AUTOJUNK-OFF (2026-10-15): see best_match_location — popular-
+            # element purging collapses the ratio on identical-line blocks.
+            sm = difflib.SequenceMatcher(None, old_lines, c_lines[start:start + o_len], autojunk=False)
             if sm.quick_ratio() < 0.7:
                 continue
             ratio = sm.ratio()
         else:
-            ratio = difflib.SequenceMatcher(None, o_norm, cand).ratio()
+            ratio = difflib.SequenceMatcher(None, o_norm, cand, autojunk=False).ratio()
 
         if ratio > best_ratio:
             second_ratio = best_ratio

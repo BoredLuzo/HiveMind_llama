@@ -49,6 +49,7 @@ SUITES = [
     ("run_audit",                 "tests/test_run_audit.py",                    60),
     ("workspace_guards",          "tests/test_workspace_guards.py",             60),
     ("workspace_provenance",      "tests/test_workspace_provenance.py",         60),
+    ("fuzzy_autojunk",            "tests/test_fuzzy_autojunk.py",               60),
     ("tool_budgets",              "tests/test_tool_budgets.py",                 60),
     ("ctx_budget",                "tests/test_ctx_budget.py",                   60),
     ("dispatch_smoke",            "tests/test_dispatch_smoke.py",               60),
