@@ -31,8 +31,9 @@ and no performance claim is made.
 ## Reliability / budgets (suite)
 - Prefill-aware budgets (60-s rule, EMA feed with 512-token floor,
   per-tool cap fields), budget redesign without model-class staffels,
-  chunk-resume durability, cache stability fixes, debug_dump_request
-  (b261de3..834ded8 range).
+  chunk-resume durability, cache stability fixes, debug_dump_request,
+  engine death forensics, resume shutdown-semantics documentation
+  (cfb06e4, 8ce756d, cddae6a, 1725429, 63eb515, 834ded8).
 
 ## Installer / updater (suite-tested logic only, never run against live)
 - package_release embeds the exact commit hash; update.bat gains
