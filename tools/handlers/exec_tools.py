@@ -48,6 +48,41 @@ def _run_bash_shell_mode() -> str:
     if _m in ("bash", "powershell"):
         return _m
     return "bash" if _windows_bash_path() else "powershell"
+
+
+def shell_os_hint(shell_mode: str, platform: str) -> str:
+    """SHELL-HINT (2026-10-15): guidance text for the shell run_bash will
+    ACTUALLY use. The old hint claimed "Windows PowerShell" unconditionally
+    while auto-mode runs Git Bash whenever it is installed - the model
+    followed the prompt, sent PowerShell syntax into bash and looped on
+    exit 2 (live: Test-Path / Write-Host). Kept here (import-light) so
+    tests can exercise it without importing core.duo_runner."""
+    if platform == "win32" and shell_mode == "bash":
+        return (
+            "\nRUNTIME SHELL: bash (Git Bash) on Windows. Use POSIX syntax in "
+            "run_bash - ls, cat, grep, rm, cp, mv, sed, test -d, "
+            "./script.sh; && and pipes work. PowerShell cmdlets "
+            "(Get-ChildItem, Test-Path, Write-Host, Remove-Item, $env:) do "
+            "NOT exist in this shell - translating them wastes a call.\n"
+        )
+    if platform == "win32" and shell_mode == "powershell":
+        return (
+            "\nCRITICAL - Windows PowerShell. Use PowerShell-native commands in "
+            "run_bash - NOT bash/Linux commands. Example mappings: "
+            "'ls' -> 'Get-ChildItem', 'cat' -> 'Get-Content', 'rm' -> 'Remove-Item', "
+            "'&&' -> '; if ($?) {'. Use PowerShell syntax ONLY.\n"
+            "More PowerShell traps (2026-10-14, moved out of the run_bash schema): "
+            "backticks are escape characters (JS template literals break); run code "
+            "from files, not node/python -e one-liners with nested quotes; native "
+            "tools can print progress to stderr and still succeed - check OUTPUT "
+            "before retrying; add '-m 10' to curl health checks.\n"
+        )
+    if platform.startswith("linux") or platform == "darwin":
+        return (
+            "\nRUNTIME SHELL: bash/sh on Unix. Use bash commands in run_bash "
+            "(ls, cat, grep, ...) - not PowerShell.\n"
+        )
+    return ""
 import sys
 import tempfile
 
@@ -405,6 +440,12 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
 
         stdout = stdout_raw.strip()
         stderr = stderr_raw.strip()
+        # SHELL-NAME (2026-10-15): computed unconditionally - the NONZERO
+        # error must name the shell that ran so a PS-syntax-into-bash
+        # mismatch is diagnosable even when stdout is non-empty.
+        _shell_name = ("bash (Git Bash)" if _win_bash_exe
+                       else "powershell.exe (Windows)" if sys.platform == "win32"
+                       else "bash")
         result = ""
         if stderr:
             result += f"[stderr]\n{stderr}\n---\n"
@@ -412,9 +453,6 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
         if returncode != 0:
             result += f"\n[exit code: {returncode}]"
         if returncode != 0 and not stdout:
-            _shell_name = ("bash (Git Bash)" if _win_bash_exe
-                           else "powershell.exe (Windows)" if sys.platform == "win32"
-                           else "bash")
             result += f"\n[shell: {_shell_name}]"
         if returncode != 0 and _win_bash_exe \
                 and "command not found" in (stderr or "").lower() \
@@ -446,7 +484,7 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             _result_tail = result[-2500:] if result else "(no output)"
             return _tool_error_response(
                 "RUN_BASH_NONZERO",
-                f"run_bash exited with code {returncode}.\n{_result_tail}",
+                f"run_bash exited with code {returncode} (shell: {_shell_name}).\n{_result_tail}",
                 tool="run_bash" ,
                 details={
                     "cmd": str(cmd)[:400],

@@ -184,27 +184,19 @@ _DUO_HEARTBEAT_DEFAULT = 10
 
 def _build_os_hint() -> str:
     """OS-HINT (2026-09-02): platform-specific run_bash guidance, appended to the
-    coder system prompt. The static coder prompt blocks are OS-neutral now, so
-    Linux/other platforms never receive Windows-only instructions."""
+    coder system prompt. SHELL-FIX (2026-10-15): the hint names the shell
+    run_bash will ACTUALLY use (settings.run_bash_shell / Git-Bash probe),
+    not a hardcoded "Windows PowerShell" - auto-mode runs Git Bash whenever
+    it is installed, and the old PS-only prompt sent PowerShell syntax into
+    bash (live: Test-Path -> exit 2 -> identical retry loop)."""
     import sys as _sys
-    if _sys.platform == "win32":
-        return (
-            "\nCRITICAL - Windows PowerShell. Use PowerShell-native commands in "
-            "run_bash - NOT bash/Linux commands. Example mappings: "
-            "'ls' -> 'Get-ChildItem', 'cat' -> 'Get-Content', 'rm' -> 'Remove-Item', "
-            "'&&' -> '; if ($?) {'. Use PowerShell syntax ONLY.\n"
-            "More PowerShell traps (2026-10-14, moved out of the run_bash schema): "
-            "backticks are escape characters (JS template literals break); run code "
-            "from files, not node/python -e one-liners with nested quotes; native "
-            "tools can print progress to stderr and still succeed - check OUTPUT "
-            "before retrying; add '-m 10' to curl health checks.\n"
-        )
-    if _sys.platform.startswith("linux") or _sys.platform == "darwin":
-        return (
-            "\nRUNTIME SHELL: bash/sh on Unix. Use bash commands in run_bash "
-            "(ls, cat, grep, ...) - not PowerShell.\n"
-        )
-    return ""
+    try:
+        from tools.handlers.exec_tools import _run_bash_shell_mode as _mode_fn
+        _mode = _mode_fn()
+    except ImportError:
+        _mode = "powershell" if _sys.platform == "win32" else "bash"
+    from tools.handlers.exec_tools import shell_os_hint
+    return shell_os_hint(_mode, _sys.platform)
 
 
 def _read_hb_interval(settings: dict | None) -> int:

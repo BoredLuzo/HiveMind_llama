@@ -112,7 +112,10 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "run_bash",
         "description": (
-            "Execute a shell command (PowerShell 5.1 on Windows, bash on Linux/Mac). "
+            "Execute a shell command. On Windows the shell is Git Bash when "
+            "installed (POSIX syntax), else Windows PowerShell 5.1 - "
+            "settings.run_bash_shell (auto|bash|powershell) decides, and the "
+            "error output names the shell that ran. On Linux/Mac it is bash. "
             "Only for what no dedicated tool covers: content search -> search_code, "
             "file names -> find_files, references -> find_references, git -> git_status, "
             "installs -> install_package. Long-running services: use start_background — "
@@ -122,7 +125,7 @@ _INLINE_CODING_TOOLS = [
             "Check OUTPUT before retrying; never blindly retry identical failing args."
         ),
         "parameters": {"type": "object", "properties": {
-            "cmd": {"type": "string", "description": "Shell command (PowerShell 5.1 on Windows, bash on Linux/Mac)"}
+            "cmd": {"type": "string", "description": "Shell command - POSIX bash syntax when the shell is Git Bash, PowerShell syntax only when the shell is powershell.exe"}
         }, "required": ["cmd"]}
     }},
     {"type": "function", "function": {
