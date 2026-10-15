@@ -109,22 +109,49 @@ _MOE_TABLE: dict[str, dict] = {
         "active_gpu_gb":            4.8,
         "measured_bytes_per_token": 12288,
     },
+    # MiniCPM-V 4.7 35B-A3B (qwen35moe, 256x2.6B, TEXT-ONLY on b11456 — the
+    # minicpmv4_7 projector type is unknown to this build, mmproj fails to
+    # load). Measured 2026-10-14 (-lv 5 fit projection @c4096, f16 KV):
+    # n-cpu-moe 35 -> 4754 MiB projected, 2337 MiB left free.
+    # KV: 10/40 layers carry KV (2 kv-heads x 256). Live loads run q4_0 KV
+    # (MoE default in manager_load) -> ~10240 bytes/token; the f16-probe
+    # numbers below keep the pre-flight gate on the conservative side.
+    "minicpm-v-4.7:35b": {
+        "active_gpu_gb":            4.64,
+        "measured_bytes_per_token": 20480,
+        "calibrated_n_cpu_moe":     35,
+    },
+    # LFM2.5-24B-A2B (lfm2moe, 64x1.4B: 2 dense + 38 MoE blocks). Measured
+    # 2026-10-14 (-lv 5 fit projection @c4096, f16 KV): n-cpu-moe 24 ->
+    # 6051 MiB, 1289 MiB left free, fit "no changes needed". (23 missed the
+    # 1024-free target by 58 MiB, 20 projected 7347/7341 — fit aborts on
+    # user -ngl.) KV: 10/40 layers, 8 kv-heads x 64; live q4_0 KV halves
+    # the per-token cost vs the f16 probe (see minicpm note).
+    "lfm2.5:24b": {
+        "active_gpu_gb":            5.91,
+        "measured_bytes_per_token": 20480,
+        "calibrated_n_cpu_moe":     24,
+    },
 }
+
+
+def moe_cfg_for(model_name: str) -> dict | None:
+    """_MOE_TABLE resolution shared by vram_of_moe and the /vram/estimate route:
+    exact, -ud-stripped, then prefix (GGUF auto-discovery appends quant/finetune
+    suffixes the table keys deliberately do not carry)."""
+    key = model_name.strip().lower()
+    cfg = _MOE_TABLE.get(key) or _MOE_TABLE.get(key.replace("-ud", ""))
+    if not cfg:
+        for table_key in _MOE_TABLE:
+            if key.startswith(table_key):
+                return _MOE_TABLE[table_key]
+    return cfg
 
 
 def vram_of_moe(model_name: str, num_ctx: int = 4096) -> float:
 
 
-    key = model_name.strip().lower()
-    cfg = _MOE_TABLE.get(key) or _MOE_TABLE.get(key.replace("-ud", ""))
-    if not cfg:
-        # Prefix-Match: GGUF auto-discovery can append suffixes like -hauhaucs-aggressive
-        # that are not in _MOE_TABLE. Match "qwen3.6:35b-a3b-uncensored" as prefix of
-        # "qwen3.6:35b-a3b-uncensored-hauhaucs-aggressive".
-        for table_key in _MOE_TABLE:
-            if key.startswith(table_key):
-                cfg = _MOE_TABLE[table_key]
-                break
+    cfg = moe_cfg_for(model_name)
     if not cfg:
         return vram_of_with_ctx(model_name, num_ctx)  # dense fallback
 
@@ -225,6 +252,8 @@ _CTX_KV_KB_PER_TOKEN: dict[str, float] = {
     "k2-horizon:7b":       41.5,  # dense: all 36 layers, 8 kv-heads x 128 (gguf metadata)
     "k2-horizon:3.7b":     78.0,  # same geometry, q8_0 override
     "mellum2.1:12b-a2.5b-thinking": 4.1,  # swa-moe: 7/28 full-attention layers
+    "minicpm-v-4.7:35b":   20.5,  # qwen35moe hybrid: 10/40 layers, 2 kv-heads x 256 (gguf tensors)
+    "lfm2.5:24b":          20.5,  # lfm2moe hybrid: 10/40 layers, 8 kv-heads x 64 (gguf tensors)
 }
 
 

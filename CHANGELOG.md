@@ -132,6 +132,57 @@ cache hygiene and measurement first):
   change is one appended note; new test (test_prefix_stability) pins
   the append-only behavior
 
+Model registrations (MiniCPM-V 4.7 35B-A3B, LFM2.5-24B-A2B) + estimate fix:
+
+- MiniCPM-V 4.7 35B-A3B (qwen35moe) and LFM2.5-24B-A2B (lfm2moe) are
+  registered text-only with DSpark draft models wired in
+  (draft-dspark, per-model profile). b11456 loads both archs; the
+  minicpmv4_7 vision projector is NOT supported by this build, so the
+  model is registered without mmproj/vision - re-enable checklist is
+  documented in llama_config BINARY_MIN_BUILD (restore 11574 + vision
+  sets + profile mmproj after a binary upgrade)
+- n-cpu-moe calibrated by load measurement (-lv 5 fit projection,
+  c4096): MiniCPM-V 4.7 = 35 (4754 MiB, 2337 MiB free), LFM2.5-24B =
+  24 (6051 MiB, 1289 MiB free; 23 misses the 1024-MiB-free target by
+  58 MiB). Both run with 16384 coder ctx within the 8 GB budget
+- /vram/estimate now resolves _MOE_TABLE with the same exact/-ud/
+  prefix logic as vram_of_moe (new moe_cfg_for helper) - the UI
+  estimate previously fell through to the dense heuristic and showed
+  21.0 GB for the 35B MoE where the pre-flight gate correctly used
+  4.6 GB
+- both models verified end-to-end through the engine: pre-flight pass,
+  slot up with --n-cpu-moe and draft-dspark active, vision_active
+  false from /props, inference with thinking + correct answer
+
+Host-RAM caps (the "compression frees RAM, then swap fills" report):
+
+- b11456-era context features defaulted to host-RAM-heavy values: the
+  prompt cache could grow to 8192 MiB (idle-slot snapshots are NOT
+  cleared with per-slot KV, which is how HiveMind slots run) and each
+  slot kept 32 context checkpoints in host RAM. On long installs this
+  filled RAM and then swap; a compression rewrites the prefix, so the
+  cached old state was dead weight anyway
+- slots now start with --cache-ram 1024 and --ctx-checkpoints 4;
+  settings keys llama_cache_ram_mib / llama_ctx_checkpoints (synced
+  like llama_cache_reuse), env HIVEMIND_CACHE_RAM_MIB /
+  HIVEMIND_CTX_CHECKPOINTS as fallback
+
+task_complete badge honesty ("untested" despite green tests):
+
+- the badge showed the model-supplied build_status default ("untested")
+  even when the run itself had green tests on record. The run's own
+  test outcome (model-invoked run_tests, auto-test, anti-spoof-verified
+  bash) is now tracked per run and upgrades ONLY the default: untested
+  -> passing/failing; an explicit model status like "blocked" stays
+
+MoE is now a question, not a name guess:
+
+- the 30B+ heuristic silently decided which models get expert offload.
+  Model profiles accept "moe": true/false (config > heuristic), the
+  config UI asks per model (Auto / MoE / Dense, POST /config/moe-pin)
+  and the hint shows whether the default is pinned, table-calibrated
+  or name-autodetected
+
 ## [1.3.8] - 2026-10-11
 
 Chunking and long-term-memory reliability:

@@ -197,6 +197,20 @@ async def get_settings():
                 _autodetect[_key] = True
         s["moe_expert_defaults"] = _defaults
         s["moe_autodetect"] = _autodetect
+        # MOE-PIN (2026-10-14): per-model explicit answers from the profiles
+        # ("moe": true/false) — the UI shows whether a model is pinned dense /
+        # pinned MoE or just name-autodetected.
+        try:
+            from model_configs.models_registry import get_moe_pin as _moe_pin_of
+            _pins: dict[str, bool] = {}
+            for _c in _cands:
+                _pk = str(_c).replace("-ud", "")
+                _pv = _moe_pin_of(_pk)
+                if _pv is not None:
+                    _pins[_pk] = _pv
+            s["moe_pins"] = _pins
+        except Exception:
+            pass
     except Exception:
         pass
     # CTX-DEFAULTS (2026-08-27): effective num_ctx default per agent role from
@@ -528,6 +542,33 @@ async def set_all_model(req: Request):
         logger.warning("[settings/all_model] save_settings failed: %s", e, exc_info=True)
         return JSONResponse({"error": f"Save failed: {str(e)[:120]}"}, status_code=500)
     return {"ok": True}
+
+
+@router.post("/moe-pin")
+async def set_moe_pin(req: Request):
+    """MOE-PIN (2026-10-14): the model-config answer to "is this a MoE?" —
+    written into the model's own profile JSON (key "moe"). true/false pins it
+    over every name heuristic (30B+ autodetect included), null removes the
+    pin (back to auto). Takes effect on the next model load."""
+    d = await req.json()
+    m = str(d.get("model", "")).strip()
+    if not m:
+        return JSONResponse({"ok": False, "error": "model missing"}, status_code=400)
+    moe = d.get("moe", None)
+    if moe is not None and not isinstance(moe, bool):
+        return JSONResponse({"ok": False, "error": "moe must be true, false or null"}, status_code=400)
+    try:
+        from model_configs.models_registry import set_profile_key
+        _path = await asyncio.to_thread(set_profile_key, m, "moe", moe)
+    except Exception as e:
+        logger.warning("[config/moe-pin] failed for %s: %s", m, e, exc_info=True)
+        return JSONResponse({"ok": False, "error": str(e)[:120]}, status_code=500)
+    if _path is None:
+        return JSONResponse(
+            {"ok": False,
+             "error": f"no model profile found for '{m}' — open its model config once so the profile JSON exists"},
+            status_code=404)
+    return {"ok": True, "model": m, "moe": moe}
 
 
 @router.get("/registry")

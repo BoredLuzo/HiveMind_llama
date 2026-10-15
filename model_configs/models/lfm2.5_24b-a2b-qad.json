@@ -1,0 +1,23 @@
+{
+  "model": "lfm2.5:24b-a2b-qad",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 8192,
+  "num_ctx_analyst": null,
+  "num_ctx_duo_coder": 16384,
+  "num_ctx_vision": null,
+  "chat_template": null,
+  "jinja": true,
+  "reasoning": null,
+  "distilled": false,
+  "moe_cpu_experts": 24,
+  "mtp": false,
+  "gpu_layers": null,
+  "dspark_draft_filename": "LFM2.5-2.6B-DSpark-Q4_K_M.gguf",
+  "mmproj_filename": null,
+  "vram_gb_override": null
+}

@@ -393,6 +393,19 @@ def _sync_backend_runtime_config() -> None:
         _cache_reuse_val = int(settings.get("llama_cache_reuse", 256) or 0)
         _lc_init.CACHE_REUSE = _cache_reuse_val
         _lsm_init.CACHE_REUSE = _cache_reuse_val
+        # HOST-RAM-CAP (2026-10-14): settings for the prompt-cache RAM cap and
+        # the per-slot context-checkpoint count (see llama_config) — synced the
+        # same way as CACHE_REUSE so a UI setting changes the startup flags.
+        _lc_init.CACHE_RAM_MIB = int(settings.get("llama_cache_ram_mib", _lc_init.CACHE_RAM_MIB))
+        _lsm_init.CACHE_RAM_MIB = _lc_init.CACHE_RAM_MIB
+        _lc_init.CTX_CHECKPOINTS = int(settings.get("llama_ctx_checkpoints", _lc_init.CTX_CHECKPOINTS))
+        _lsm_init.CTX_CHECKPOINTS = _lc_init.CTX_CHECKPOINTS
+        try:
+            import backend.manager_load as _ml_cram
+            _ml_cram.CACHE_RAM_MIB = _lc_init.CACHE_RAM_MIB
+            _ml_cram.CTX_CHECKPOINTS = _lc_init.CTX_CHECKPOINTS
+        except Exception:
+            pass
         # VRAM-PREFLIGHT-GATE (2026-10-11): settings "vram_preflight_gate"
         # synced into the same three modules as CACHE_REUSE.
         _pf_val = bool(settings.get("vram_preflight_gate", True))

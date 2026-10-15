@@ -64,6 +64,17 @@ def _task_complete_ladder(trs, dtool_msgs, result, allow_on_blocked: bool,
     result.task_complete_called = True
     return "allow_break" if allow_on_blocked else "allow"
 
+def _apply_test_truth_to_tc(result_text: str, outcome: str) -> str:
+    """TC-TEST-TRUTH (2026-10-14): the task_complete handler defaults
+    build_status to "untested" when the model passes no explicit status —
+    the UI badge then showed "untested" even on runs with green tests.
+    Upgrade ONLY the default: an explicit model status like "blocked" stays,
+    "nosuite" (no test framework found) stays untested on purpose."""
+    if outcome not in ("green", "red"):
+        return result_text
+    _new = "passing" if outcome == "green" else "failing"
+    return str(result_text).replace("Build: untested", f"Build: {_new}", 1)
+
 def _render_tool_menu(tool_mode: str, duo_ws: bool, max_items: int = 30,
                       compact: bool = False) -> str:
     """BASH-LOOP-REINJECT (2026-09-02): build a compact list of the tools that
@@ -458,6 +469,19 @@ async def execute_tool_round(
                 break
         else:
             trs.ws_budget_streak[0] = 0
+        # TC-TEST-TRUTH (2026-10-14): remember what the run's own test runs
+        # said, so task_complete can upgrade its "untested" default.
+        if _dname == "run_tests":
+            if "[TEST-RESULT] ✅" in _dresult:
+                trs.last_test_outcome[0] = "green"
+            elif "[TEST-RESULT] ❌" in _dresult:
+                trs.last_test_outcome[0] = "red"
+            elif "[TEST-RESULT] ⚠️" in _dresult:
+                trs.last_test_outcome[0] = "nosuite"
+        # TC-TEST-TRUTH: upgrade a missing model status with the run's own
+        # test outcome BEFORE the result event reaches the UI badge.
+        if _dname == "task_complete" and trs.last_test_outcome[0]:
+            _dresult = _apply_test_truth_to_tc(_dresult, trs.last_test_outcome[0])
         await hooks.emit(_make_tool_result_event(_dname, _dresult))
         if _dname == "ask_user":
             # ASK-USER-GATE-FIX (2026-09-02): agent_resumed only when the run
@@ -600,10 +624,12 @@ async def execute_tool_round(
                         except Exception:
                             pass
                         if "[TEST-RESULT] ✅" in _at_res:
+                            trs.last_test_outcome[0] = "green"
                             result.task_complete_called = True
                             _logger.info("[AUTO-TEST] Tests green - task_complete allowed through")
                             break
                         if _at_res.startswith("[TEST-RESULT] ⚠️"):
+                            trs.last_test_outcome[0] = "nosuite"
                             # SMOKE-NUDGE (2026-09-10): no test framework found —
                             # nudge the coder ONCE to write a minimal smoke test
                             # and run it, instead of silently passing.
@@ -624,6 +650,8 @@ async def execute_tool_round(
                             _logger.info("[AUTO-TEST] No tests in the project - task_complete allowed through (smoke test nudge already given)")
                             result.task_complete_called = True
                             break
+                        if "[TEST-RESULT] ❌" in _at_res:
+                            trs.last_test_outcome[0] = "red"
                         _gate = _task_complete_ladder(
                             trs, dtool_msgs, result, True,
                             "[AUTO-TEST BLOCKED] task_complete rejected: the test suite is NOT green "

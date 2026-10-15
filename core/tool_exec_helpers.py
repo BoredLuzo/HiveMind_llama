@@ -1069,3 +1069,9 @@ class ToolRoundState:
     # WEBSEARCH-BUDGET-STOP (2026-09-17): consecutive budget-exhausted
     # web_search calls; >=2 stops the run (run-persistent ref).
     ws_budget_streak: list = field(default_factory=lambda: [0])
+    # TC-TEST-TRUTH (2026-10-14): last observed test outcome for this RUN
+    # ("green" / "red" / "nosuite"), set from run_tests results (model-invoked
+    # and auto-test). task_complete upgrades its "untested" build_status
+    # default with this — the badge previously said "untested" even when the
+    # model had written and run green tests (run truth > missing model claim).
+    last_test_outcome: list = field(default_factory=lambda: [None])
