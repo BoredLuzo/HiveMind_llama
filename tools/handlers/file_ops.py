@@ -194,10 +194,25 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
             s = max(0, int(start_line) - 1) if start_line else 0
             e = int(end_line) if end_line else len(lines)
             content_chunk = "".join(lines[s:e])
-            _chunk = content_chunk[:_bgt.read_char_cap]
+            _head = f"[{p} lines {s+1}-{min(e, len(lines))} / {len(lines)}]\n"
             if len(content_chunk) > _bgt.read_char_cap:
-                _chunk += f"\n[TRUNCATED: {len(content_chunk)-_bgt.read_char_cap} more chars omitted — use smaller line range]"
-            return f"[{p} lines {s+1}-{min(e, len(lines))} / {len(lines)}]\n" + _chunk
+                # TRUNCATION-HONESTY (2026-10-15): header + note must fit
+                # INSIDE the char cap together (the executor re-cap would
+                # otherwise cut exactly this note off), and the note must
+                # carry the full file's line AND char count plus the concrete
+                # continuation line - a bare chunk read as "the write did not
+                # complete" (live: 482-line write, 148-line range read).
+                _cont = min(e, len(lines)) + 1
+                _note = (
+                    f"\n[TRUNCATED: showing the first {_bgt.read_char_cap} chars of this range — "
+                    f"file total: {len(lines)} lines / {len(content)} chars — "
+                    f"continue with start_line={_cont}]"
+                )
+                _avail = max(0, _bgt.read_char_cap - len(_head) - len(_note))
+                _chunk = content_chunk[:_avail] + _note
+            else:
+                _chunk = content_chunk
+            return _head + _chunk
 
         _chunk = content[:_bgt.read_char_cap]
         if len(content) > _bgt.read_char_cap:

@@ -192,6 +192,16 @@ def _cap_tool_result(result: str, max_chars: int | None = None,
     cutoff = result.rfind("\n", 0, max_chars)
     if cutoff < max_chars // 2:
         cutoff = max_chars
+    # TRUNCATION-HONESTY (2026-10-15): the generic tail told the model to
+    # "Use read_file" ON a read_file result (circular) and carried no
+    # pointer - read as "the write did not complete". read_file gets its
+    # own tail; every other tool keeps the generic one.
+    if str(tool_name or "") == "read_file":
+        return (
+            result[:cutoff]
+            + f"\n\n[read_file output truncated at {max_chars} chars — "
+              "the file on disk is COMPLETE; continue with start_line/end_line]"
+        )
     return (
         result[:cutoff]
         + "\n\n[...output truncated at "
