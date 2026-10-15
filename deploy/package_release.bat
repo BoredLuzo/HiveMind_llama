@@ -59,7 +59,14 @@ for /f "usebackq delims=" %%D in (`git describe --tags --always`) do set "BUILD_
 if not defined BUILD_DESC set "BUILD_DESC=%VER%"
 set "BUILD_DATE="
 for /f "usebackq delims=" %%D in (`git log -1 --format^=%%ci`) do set "BUILD_DATE=%%D"
-powershell -NoProfile -Command "$zipPath = (Resolve-Path ('..\' + $env:OUT)).ToString(); Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [System.IO.Compression.ZipFile]::Open($zipPath, 'Update'); $entry = $zip.CreateEntry($env:ROOTNAME + '/BUILD_INFO.txt'); $sw = New-Object System.IO.StreamWriter($entry.Open()); $sw.WriteLine('version: ' + $env:VER); $sw.WriteLine('build: ' + $env:BUILD_DESC); $sw.WriteLine('commit_date: ' + $env:BUILD_DATE); $sw.Dispose(); $zip.Dispose()"
+REM BUILD-INFO-COMMIT (2026-10-15): the exact commit hash - build/date alone
+REM could not explain how an install ran v1.3.8 with a v1.3.1 BUILD_INFO
+REM (live finding). git archive pins HEAD, so the hash describes the
+REM packaged tree exactly.
+set "BUILD_COMMIT="
+for /f "usebackq delims=" %%D in (`git rev-parse HEAD`) do set "BUILD_COMMIT=%%D"
+if not defined BUILD_COMMIT set "BUILD_COMMIT=unknown"
+powershell -NoProfile -Command "$zipPath = (Resolve-Path ('..\' + $env:OUT)).ToString(); Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [System.IO.Compression.ZipFile]::Open($zipPath, 'Update'); $entry = $zip.CreateEntry($env:ROOTNAME + '/BUILD_INFO.txt'); $sw = New-Object System.IO.StreamWriter($entry.Open()); $sw.WriteLine('version: ' + $env:VER); $sw.WriteLine('build: ' + $env:BUILD_DESC); $sw.WriteLine('commit: ' + $env:BUILD_COMMIT); $sw.WriteLine('commit_date: ' + $env:BUILD_DATE); $sw.Dispose(); $zip.Dispose()"
 if errorlevel 1 (
     echo  [WARN] Could not embed BUILD_INFO.txt - banner will show no build line.
 ) else (

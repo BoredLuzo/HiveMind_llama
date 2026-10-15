@@ -18,6 +18,16 @@ echo    - Backs up the current code to update_backup_(version)\
 echo    - Shows warnings from the release notes before applying
 echo    - Applies the new build over this folder
 echo    - Refreshes Python dependencies into the existing .venv (uv)
+echo  Usage:
+echo    update.bat             update from the latest GitHub release
+echo    update.bat --zip PATH  apply a LOCAL release zip (e.g. the
+echo                           HiveMind_v*_release.zip built by
+echo                           deploy\package_release.bat) - no GitHub
+echo                           round trip, same backup/excludes
+echo  Rollback (both modes): copy the CONTENTS of update_backup_(version)\
+echo  back over this folder, then start_hivemind.bat. The backup includes
+echo  settings.json; user data (models, sessions, logs, .venv) is never
+echo  touched by the update in the first place.
 echo  Your settings.json, models.json, .venv, llama\, logs\ and
 echo  sessions\ are NOT touched. New settings keys pick up their
 echo  defaults automatically on the next start.
@@ -26,6 +36,23 @@ echo.
 REM -- Config ----------------------------------------------------------------
 set "REPO=BoredLuzo/HiveMind_llama"
 set "TMPDIR=%~dp0_update_tmp"
+
+REM -- 0a. --zip option (apply a local release zip, skip GitHub) -------------
+REM LOCAL-ZIP (2026-10-15): update.bat --zip <path> installs a locally built
+REM release zip (deploy\package_release.bat output) without any GitHub round
+REM trip. Extract, backup and the user-data exclude list are the SAME code
+REM path as the GitHub flow below - only fetch, digest check and release
+REM notes are skipped, and the same/older version gates do not apply (an
+REM explicit local zip may deliberately re-apply a version).
+set "LOCAL_ZIP="
+if /I "%~1"=="--zip" (
+    if "%~2"=="" (
+        echo  [ERROR] --zip needs the path to a release zip, e.g.
+        echo          update.bat --zip ..\HiveMind_v1.3.9_release.zip
+        echo  Press any key to continue... & pause >nul & exit /b 1
+    )
+    set "LOCAL_ZIP=%~2"
+)
 
 REM -- 0. curl present? (ships with Windows 10 1803+) ------------------------
 where curl >nul 2>&1
@@ -65,6 +92,53 @@ if not defined CURRENT (
 )
 echo  Installed version : %CURRENT%
 
+REM -- 2b. Local zip mode ----------------------------------------------------
+if not defined LOCAL_ZIP goto fetch_release
+if not exist "%LOCAL_ZIP%" (
+    echo  [ERROR] Zip not found: %LOCAL_ZIP%
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
+mkdir "%TMPDIR%" 2>nul
+echo  Local zip         : %LOCAL_ZIP%
+copy /y "%LOCAL_ZIP%" "%TMPDIR%\release.zip" >nul
+if errorlevel 1 (
+    echo  [ERROR] Could not copy the zip into %TMPDIR%. Nothing was changed.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+REM Layout check BEFORE anything in this folder is touched: extraction
+REM lands in _update_tmp\extracted only - a failure here changes nothing.
+powershell -NoProfile -Command "Expand-Archive -Path '%TMPDIR%\release.zip' -DestinationPath '%TMPDIR%\extracted' -Force"
+if errorlevel 1 (
+    echo  [ERROR] Could not extract the zip. Nothing was changed.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+set "EXROOT="
+for /d %%D in ("%TMPDIR%\extracted\*") do set "EXROOT=%%D"
+if not defined EXROOT (
+    echo  [ERROR] Zip contained no version folder. Nothing was changed.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+if not exist "%EXROOT%\core" (
+    echo  [ERROR] Zip layout wrong: no core\ folder in the zip. This does not
+    echo          look like a HiveMind release zip. Nothing was changed.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+if not exist "%EXROOT%\utils" (
+    echo  [ERROR] Zip layout wrong: no utils\ folder in the zip. Nothing was changed.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+set "TAGNUM="
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path '%EXROOT%\server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "TAGNUM=%%V"
+if not defined TAGNUM (
+    echo  [ERROR] Zip carries no server.py HIVEMIND_VERSION. Nothing was changed.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+set "TAG=v%TAGNUM%"
+echo  Zip version       : %TAGNUM%
+goto after_fetch
+
+:fetch_release
 REM -- 3. Latest release from GitHub -----------------------------------------
 if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
 mkdir "%TMPDIR%" 2>nul
@@ -158,6 +232,7 @@ if /I "%CONT%"=="n" (
 )
 
 REM -- 5. Backup the current code (user data is excluded) --------------------
+:after_fetch
 set "BK=update_backup_%TAGNUM%"
 echo  Backing up code   : %BK%\
 REM /R:1 /W:1: a single locked file must not hang the update for hours
@@ -171,6 +246,7 @@ if errorlevel 8 (
 )
 
 REM -- 6. Download the release zip -------------------------------------------
+if defined LOCAL_ZIP goto zip_staged
 echo  Downloading       : %ASSET_URL%
 REM I1 (audit r2): --fail turns an HTTP error page into a curl failure
 curl -sS -L --fail -o "%TMPDIR%\release.zip" "%ASSET_URL%"
@@ -193,6 +269,7 @@ if errorlevel 1 (
     echo         The download was tampered with or corrupted. Backup is in %BK%
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
+:zip_staged
 
 REM -- 7. Extract (zip carries a version root folder) ------------------------
 powershell -NoProfile -Command "Expand-Archive -Path '%TMPDIR%\release.zip' -DestinationPath '%TMPDIR%\extracted' -Force"
@@ -238,6 +315,18 @@ if /I not "%NEWVER%"=="%TAGNUM%" (
     echo         The update did not apply cleanly. Restore by copying the
     echo         contents of %BK%\ back over this folder.
     echo  Press any key to continue... & pause >nul & exit /b 1
+)
+
+REM -- 9a-2. BUILD_INFO.txt fallback ------------------------------------------
+REM BUILD_INFO.txt is NOT in git - deploy\package_release.bat embeds it into
+REM the zip. Older release zips carry none, which is how an install could
+REM report a years-old build (live showed v1.3.1 while v1.3.8 ran). If the
+REM applied build has none, write one so the start banner tells the truth.
+if not exist "%BASE%\BUILD_INFO.txt" (
+    > "%BASE%\BUILD_INFO.txt" echo version: %NEWVER%
+    >>"%BASE%\BUILD_INFO.txt" echo build: %TAGNUM%
+    >>"%BASE%\BUILD_INFO.txt" echo commit_date: unknown - zip carried no BUILD_INFO
+    >>"%BASE%\BUILD_INFO.txt" echo written_by: update.bat fallback
 )
 
 REM -- 9a. Prune files the PREVIOUS release shipped but this one dropped ----
