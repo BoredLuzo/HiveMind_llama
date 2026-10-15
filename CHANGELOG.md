@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.9] - 2026-10-15
 
 Chunk-resume verification run (Sonnet's five criteria) + resume durability:
 

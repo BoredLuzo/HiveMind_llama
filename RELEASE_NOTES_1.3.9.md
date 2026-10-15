@@ -1,45 +1,52 @@
 # Release 1.3.9
 
-Scope: commits b3d0c4e..HEAD (22). Honesty note: "suite" below means the
-standalone regression suite (104/104 PASS, offline, no LLM/GPU). "live"
-means observed in a real engine session — nothing here was re-verified
-live after the fix; runtime behavior (models, speed, VRAM) is UNMEASURED
-and no performance claim is made.
+Scope: b3d0c4e..HEAD (27 commits; dev is a superset of origin/main).
+Honesty note: "suite" = the offline regression suite (105/105 PASS, no
+LLM, no GPU). "Seen live" = observed in a real engine session; ONLY the
+symptoms below were live. NONE of today's fixes were re-verified live
+afterwards. Runtime behavior (models, speed, VRAM, prefill) is
+UNMEASURED — no performance claims.
 
-## Workspace provenance (suite + live root-cause)
-- WS-PROVENANCE (8302c23): a stale resume block or the process-global
-  HIVEMIND_WORKSPACE could override the request workspace inside
-  pre-explore (live: RUN-TRACE calc_app, tree scout on gravSandbox).
-  Priority now: request > real resume > chat_run resolution; ENV never
-  primary. PUT /chats/{id} rejects dead workspace paths (d09b56e, audit
-  N9).
+## Symptoms seen live, fixes pinned in the suite
+- tree_scout ran in the wrong workspace (gravSandbox) while RUN-TRACE
+  reported the request workspace → WS-PROVENANCE: request > real resume
+  > chat_run resolution; ENV never primary (8302c23). PUT /chats/{id}
+  rejects dead workspace paths (d09b56e, audit N9).
+- write_file 15.6 KB, read_file showed 3.9 KB → model concluded a
+  broken write (c9467ab): range reads now carry the full line AND char
+  count plus a continuation line; the executor re-cap no longer cuts
+  that note away; the file on disk was always complete.
+- PowerShell syntax looped in bash (exit 2) → hint and schema name the
+  shell that actually runs; NONZERO errors carry it too (749ac6e).
+- Confirmation loop on harmless python runs → the destructive gate now
+  gates only genuinely destructive patterns (e6e5d58).
+- edit_match_fail on many identical lines → autojunk=False; anchors and
+  ratios no longer collapse (de861de).
 
-## Tool pipeline (suite; symptoms seen live)
-- read_file truncation honesty: range reads carry full line/char count
-  and a continuation line; the executor re-cap no longer cuts that note
-  or tells the model to "use read_file" on a read_file result
-  (c9467ab; live: 15.6 KB write read back as 3.9 KB).
-- run_bash: OS hint and schema name the shell that actually runs
-  (Git Bash vs PowerShell); NONZERO errors carry the shell name
-  (749ac6e; live: PowerShell syntax looped in bash).
-- fuzzy edit: autojunk=False on all SequenceMatcher sites — anchors and
-  ratios on identical-line blocks were corrupted (de861de).
-- destructive gate: routine python (subprocess, requests, eval, ...)
-  no longer asks for confirmation; rm -rf / del /s / git reset --hard
-  stay gated (e6e5d58; live: confirmation loop on harmless runs).
-
-## Reliability / budgets (suite)
-- Prefill-aware budgets (60-s rule, EMA feed with 512-token floor,
-  per-tool cap fields), budget redesign without model-class staffels,
-  chunk-resume durability, cache stability fixes, debug_dump_request
-  (b261de3..834ded8 range).
-
-## Installer / updater (suite-tested logic only, never run against live)
-- package_release embeds the exact commit hash; update.bat gains
-  `--zip <path>` (local zip, layout guard core/+utils/, backup and
-  excludes unchanged, rollback documented) and a BUILD_INFO fallback
-  (52971da).
-
-## Known open
-- Inject-Budget-Gate wiring, repomap consolidation, gateway audit
-  N7/N9-adjacent gateway items (N9 engine side closed here).
+## Suite-tested, NOT live-verified
+- b261de3 content (restored via f157631 after revert 39c834f):
+  MiniCPM-V 4.7 + LFM2.5-24B registration (text-only, DSpark drafts),
+  host-RAM caps (--cache-ram 1024 / --ctx-checkpoints 4,
+  llama_cache_ram_mib / llama_ctx_checkpoints, env override HIVEMIND_*;
+  the 8192/32 binary defaults are reachable via env), MoE pin (profile
+  beats name heuristic), /vram/estimate via _MOE_TABLE,
+  task_complete test truth. Suite: test_restored_caps_truth (8 checks,
+  no slot start). Live runs of these models are NOT part of this
+  release.
+- Tool-pipeline audit phases 0-7 (7ac1f9f, 28f9b5e): schema continuum,
+  mask-first compression, prefix-cache hygiene — pinned in the suite
+  (test_schema_truth et al.), effect on real runs UNMEASURED. Same for
+  the prefix/cache stability commit 63eb515 (append-only corrections):
+  suite evidence only, no live evidence.
+- Budgets redesign without model-class staffels (d307463), prefill
+  budgets with 60-s rule + EMA floor 512 (cfb06e4, 8ce756d, 1583982),
+  chunk-resume durability (bc12b5a), debug_dump_request (1725429),
+  engine death forensics, bench forensics (cddae6a), resume shutdown
+  semantics doc (834ded8).
+- Security: request workspace wins, commit gate, run-scoped git staging
+  (3d0a4ad).
+- Installer/updater: BUILD_INFO with commit hash, update.bat --zip with
+  layout guard, rollback docs (52971da, c08611a). Batch logic tested
+  against fake zips only, never executed against live/.
+- Test infra: UTF-8 suites without PYTHONUTF8 (ba28342), new suites
+  (105 total).
