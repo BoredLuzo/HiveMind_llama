@@ -619,6 +619,22 @@ async def get_chat(chat_id: str):
 async def update_chat(chat_id: str, req: Request):
     _ensure_cache()
     data = await req.json()
+    # WORKSPACE-GUARD (2026-10-15, audit N9): PUT /chats/{id} applied any
+    # string as workspace unvalidated - in contrast to POST /settings
+    # (routers/config.py), which rejects dead paths. A silent cross-project
+    # switch here poisons the whole chat (GET /chats/{id} serves the json
+    # value into the run resolver). Same contract: empty string clears.
+    if "workspace" in data:
+        _ws_raw = str(data.get("workspace") or "").strip()
+        if _ws_raw and not Path(_ws_raw).exists():
+            logger.warning(
+                "[CHATS-GUARD] workspace '%s' does not exist - rejected "
+                "(previous value stays active)", _ws_raw[:120],
+            )
+            return JSONResponse({
+                "error": f"Workspace path does not exist: {_ws_raw}",
+            }, status_code=400)
+        data["workspace"] = _ws_raw
     now = datetime.now().isoformat(timespec="seconds")
 
     # ATOMIC UPDATE (2026-10-03 review fix): load, mutate and save under

@@ -279,22 +279,26 @@ def main():
             fail("make_messages alternation", str(final_roles))
 
         # ── 3. workspace per chat ────────────────────────────────────────
+        # WORKSPACE-GUARD (PUT /chats/{id}, audit N9): dead paths are now
+        # rejected - the roundtrip uses real directories.
+        (ws / "proj_firework").mkdir(exist_ok=True)
+        (ws / "proj_other").mkdir(exist_ok=True)
         created = asyncio.run(C.create_chat(_FakeRequest({
-            "title": "ws test", "workspace": "C:/proj/FireWork",
+            "title": "ws test", "workspace": str(ws / "proj_firework"),
             "messages": [{"role": "user", "content": "hello"}],
         })))
         new_id = created["id"]
         got = asyncio.run(C.get_chat(new_id))
-        if got.get("workspace") == "C:/proj/FireWork":
+        if got.get("workspace") == str(ws / "proj_firework"):
             ok("create_chat stores + get_chat returns the workspace")
         else:
             fail("workspace roundtrip", repr(got.get("workspace")))
 
         req = _FakeRequest({"messages": [{"role": "user", "content": "v2"}],
-                            "workspace": "C:/proj/Other"})
+                            "workspace": str(ws / "proj_other")})
         asyncio.run(C.update_chat(new_id, req))
         got2 = asyncio.run(C.get_chat(new_id))
-        if got2.get("workspace") == "C:/proj/Other" and \
+        if got2.get("workspace") == str(ws / "proj_other") and \
                 got2["messages"][0]["content"] == "v2":
             ok("update_chat carries workspace + messages")
         else:
