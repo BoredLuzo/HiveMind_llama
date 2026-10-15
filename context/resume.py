@@ -28,6 +28,13 @@ def init_resume_deps(build_resume_block_fn=None, load_resume_data_fn=None,
 
 
 def _write_resume_block(
+    # SHUTDOWN SEMANTICS (2026-10-15, widerspruchsklaerung): this function is
+    # only ever REACHED on controlled shutdowns (abort, graceful stop, chunk
+    # checkpoint, engine shutdown with working finally). A hard kill
+    # (TerminateProcess/power) never writes one HERE — resume then works from
+    # the LAST chunk_checkpoint written earlier in the run (all advance paths
+    # persist since 2026-10-14). Log line "Block saved (hard_stop)" therefore
+    # means: engine shutdown ran the finally path and saved what was done.
     chat_id:          str,
     workspace:        str,
     chunks_total:     int,
