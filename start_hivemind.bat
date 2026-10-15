@@ -99,16 +99,26 @@ if not errorlevel 1 goto deps_ok
 echo  [..] Installing missing packages...
 where uv >nul 2>&1
 if not errorlevel 1 goto deps_uv
-"%PY%" -m pip install httpx fastapi uvicorn rich watchfiles --quiet
+"%PY%" -m pip install httpx fastapi uvicorn rich watchfiles pywin32 --quiet
 goto deps_done
 :deps_uv
-uv pip install --python "%PY%" httpx fastapi uvicorn rich watchfiles --quiet
+uv pip install --python "%PY%" httpx fastapi uvicorn rich watchfiles pywin32 --quiet
 :deps_done
 if errorlevel 1 (
-    echo  [WARN] Package install failed - the server may not start.
+    echo  [WARN] Package install failed - trying to continue with a check.
 ) else (
     echo  [OK] Packages installed.
 )
+REM IMPORT-VERIFY (2026-10-16, 1.3.8 incident): pip/uv exit 0 proved nothing
+REM - a fresh install reported "[OK] Packages installed" and crashed right
+REM after with "ImportError: cannot import name 'ArgsKwargs' from
+REM 'pydantic_core._pydantic_core' (unknown location)" (compiled .pyd
+REM missing/quarantined). Verify the imports for real; one guided repair
+REM attempt; abort with user steps if that fails too.
+"%PY%" "%~dp0tools\env_check.py" --repair
+if not errorlevel 1 goto deps_ok
+echo.
+echo  Press any key to continue... & pause >nul & exit /b 1
 echo.
 :deps_ok
 

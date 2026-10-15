@@ -106,7 +106,13 @@ if sys.platform == "win32":
         import win32api
         import win32job as _win32job
     except ImportError:
-        print("[WARN] pywin32 missing - console-close will not kill llama-servers")
+        # PYWIN32-HINT (2026-10-16): the bare "missing" gave the user no
+        # action. pywin32 is pinned for Windows (pyproject/requirements) -
+        # if the import fails in a Windows venv the install is incomplete:
+        # repair via install.bat or install the package explicitly.
+        print("[WARN] pywin32 missing - console-close will not kill "
+              "llama-servers. Fix: run install.bat again, or "
+              ".venv\\Scripts\\python.exe -m pip install pywin32")
     if _win32job is not None:
         try:
             _hjob = _win32job.CreateJobObject(None, "")

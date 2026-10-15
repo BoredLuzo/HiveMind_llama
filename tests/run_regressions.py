@@ -56,6 +56,7 @@ SUITES = [
     ("run_bash_shell_hint",       "tests/test_run_bash_shell_hint.py",          60),
     ("update_zip_layout",         "tests/test_update_zip_layout.py",           120),
     ("restored_caps_truth",       "tests/test_restored_caps_truth.py",          60),
+    ("env_check",                 "tests/test_env_check.py",                   120),
     ("tool_budgets",              "tests/test_tool_budgets.py",                 60),
     ("ctx_budget",                "tests/test_ctx_budget.py",                   60),
     ("dispatch_smoke",            "tests/test_dispatch_smoke.py",               60),
