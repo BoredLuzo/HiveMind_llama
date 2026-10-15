@@ -1956,15 +1956,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
     <div id="config-moe-experts" style="display:none;margin-top:8px">
       <div class="sec" style="margin-top:4px">MoE CPU experts (per model)</div>
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);white-space:nowrap">Model type:</span>
-        <select id="config-moe-pin-select" onchange="onMoePinChange(this.value)"
-          style="flex:1;min-width:0;background:var(--bg);border:1px solid var(--b);border-radius:5px;padding:5px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txh);outline:none">
-          <option value="">Auto (detect from name)</option>
-          <option value="true">MoE — expert offload on</option>
-          <option value="false">Dense — no MoE offload</option>
-        </select>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
         <select id="config-moe-model-select" onchange="onMoeModelSelect(this.value)"
           style="flex:1;min-width:0;background:var(--bg);border:1px solid var(--b);border-radius:5px;padding:5px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txh);outline:none"></select>
         <input type="number" id="config-moe-cpu-experts" value="0" min="0" max="99" step="1"

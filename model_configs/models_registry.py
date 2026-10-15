@@ -248,40 +248,6 @@ def get_dspark_draft(model_name: str) -> str | None:
     return str(v).strip() if v else None
 
 
-def get_moe_pin(model_name: str) -> bool | None:
-    """MOE-PIN (2026-10-14): explicit "moe": true/false from the model's own
-    profile — the user's answer to "is this a MoE?" — or None when unset
-    (name heuristics decide, e.g. the 30B+ autodetect)."""
-    v = get_profile(model_name).get("moe")
-    return bool(v) if v is not None else None
-
-
-def set_profile_key(model_name: str, key: str, value) -> Path | None:
-    """Patch a single key in the model's OWN profile file (not the merged
-    view). value=None removes the key. Returns the file path, or None when
-    no profile file exists for this exact model name."""
-    _MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    want = (model_name or "").strip()
-    if not want:
-        return None
-    for p in sorted(_MODELS_DIR.glob("*.json")):
-        try:
-            raw = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(raw, dict) and str(raw.get("model", "")).strip() == want:
-            if value is None:
-                raw.pop(key, None)
-            else:
-                raw[key] = value
-            tmp = p.with_suffix(".tmp")
-            tmp.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(p)
-            refresh()
-            return p
-    return None
-
-
 def get_gpu_layers(model_name: str) -> int | None:
     v = get_profile(model_name).get("gpu_layers")
     if v:
