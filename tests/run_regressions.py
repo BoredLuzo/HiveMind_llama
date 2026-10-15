@@ -9,6 +9,7 @@ Run:
     python tests/run_regressions.py            # all suites
     python tests/run_regressions.py --only stuck_bash   # name filter (substring)
 """
+import os
 import subprocess
 import sys
 import time
@@ -124,10 +125,11 @@ SUITES = [
 
 
 def main() -> int:
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
     only = ""
     if "--only" in sys.argv:
@@ -152,10 +154,16 @@ def main() -> int:
             print(f"[FAIL] {name:<20} ({rel} missing)")
             continue
         t0 = time.time()
+        # ENC-FIX (2026-10-15): suites print non-ASCII (❌/✅, umlauts) — a
+        # cp1252 console (PowerShell without PYTHONUTF8) killed them with
+        # UnicodeEncodeError. Force UTF-8 for every child, independent of
+        # the invoking console's locale.
+        _suite_env = {**os.environ, "PYTHONIOENCODING": "utf-8:replace"}
         r = subprocess.run(
             [sys.executable, str(target)],
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
+            env=_suite_env,
             cwd=str(ROOT), timeout=timeout)
         dur = time.time() - t0
         ok = r.returncode == 0

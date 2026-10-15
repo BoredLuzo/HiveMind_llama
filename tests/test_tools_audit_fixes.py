@@ -32,6 +32,13 @@ import sys
 import tempfile
 from pathlib import Path
 
+# ENC-FIX (2026-10-15): the ok()/fail() labels contain ❌/✅ (outside
+# cp1252) - under a Windows PowerShell console this suite died with
+# UnicodeEncodeError on print. UTF-8 with replacement, independent of
+# PYTHONUTF8/PYTHONIOENCODING.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 passed = 0
