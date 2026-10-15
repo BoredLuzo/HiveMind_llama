@@ -1128,29 +1128,26 @@ def _is_destructive_bash(cmd: str) -> str | None:
 
 
 _DESTRUCTIVE_PYTHON_PATTERNS = [
+    # GATE-SCOPE FIX (2026-10-15): the list used to gate ROUTINE code -
+    # subprocess.run (every generated test script), requests.post/httpx
+    # (any API smoke test), shutil.move (workspace file management),
+    # ctypes/socket, and eval/exec/compile/__import__ (metaprogramming that
+    # adds nothing the run_python call itself does not already allow). The
+    # model kept getting asked for confirmation on harmless python runs
+    # (live loop). Narrowed to what is destructive PER SE: raw shell
+    # escape, file deletion, absolute-path open, registry writes.
     # Shell/system access
     r"\bos\.system\s*\(",
     r"\bos\.popen\s*\(",
-    r"\bsubprocess\.(call|run|Popen|check_output|check_call)\s*\(",
     r"\bcommands\.(getoutput|getstatusoutput)\s*\(",
     # Dateisystem destruktiv
     r"\bshutil\.rmtree\s*\(",
-    r"\bshutil\.move\s*\(",
     r"\bos\.remove\s*\(",
     r"\bos\.unlink\s*\(",
     r"\bos\.rmdir\s*\(",
     r"\bos\.renames\s*\(",
-    r"\bopen\s*\(\s*['\"]\s*(?:/|[A-Za-z]:\\|~|\.\.)",
+    r"\bopen\s*\(\s*['\"]\s*(?:/|[A-Za-z]:[/\\]|~|\.\.)",
     r"\bwinreg\.(CreateKey|DeleteKey|SetValue)\s*\(",
-    r"\bctypes\.(windll|cdll)\b",
-    r"\bsocket\.(connect|sendto)\s*\(",
-    r"\brequests\.(post|put|patch|delete)\s*\(",
-    r"\bhttpx\.(post|put|patch|delete)\s*\(",
-    # Code-Ausfuehrung
-    r"\beval\s*\(",
-    r"\bexec\s*\(",
-    r"\bcompile\s*\(",
-    r"\b__import__\s*\(",
 ]
 
 
