@@ -706,8 +706,8 @@ def _build_file_index(partitions: list[PartitionInfo]) -> str:
 
 def compute_content_budget(
     model_ctx: int | None,
-    system_prompt_tokens: int = 800,
-    tool_def_tokens: int = 1200,
+    system_prompt_tokens: int | None = 800,
+    tool_def_tokens: int | None = 1200,
     history_reserve_tokens: int = 1500,
     profile: str = "balanced",
 ) -> int:
@@ -715,12 +715,21 @@ def compute_content_budget(
     Available content tokens for task context.
     model_ctx: model's num_ctx. None → 16384.
     profile: "fast" | "balanced" | "critical" — scales history reserve.
+
+    MEASURED OVERHEADS (2026-10-17): callers that know the real artefacts pass
+    them in (core/budgets.tokens_for_text on the actual tool-schema JSON and the
+    coder prompt). The 800/1200 defaults are the old pre-budget assumptions and
+    understate the tool schema badly - the derived schema budget is
+    SCHEMA_FRAC(0.25) x n_ctx, i.e. ~2050 tokens at 8k, not 1200. Callers that
+    pass nothing keep the old numbers unchanged.
     """
     total = model_ctx or 16384
     history_scale = {"fast": 0.6, "balanced": 1.0, "critical": 1.8}
     history = int(history_reserve_tokens * history_scale.get(profile, 1.0))
     safety = int(total * 0.12)
-    content = total - system_prompt_tokens - tool_def_tokens - history - safety
+    _sys_tok = 800 if system_prompt_tokens is None else int(system_prompt_tokens)
+    _tool_tok = 1200 if tool_def_tokens is None else int(tool_def_tokens)
+    content = total - _sys_tok - _tool_tok - history - safety
     return max(2048, content)
 
 

@@ -196,6 +196,20 @@ def schema_budget_for(n_ctx: int, model: str = "", max_out: int = 1200,
         return 0
 
 
+def tokens_for_text(text: str, model: str = "", cpt: float | None = None) -> int:
+    """Token estimate for a REAL artefact (tool-schema JSON, system prompt) in
+    the model's chars-per-token. Used for the content budget instead of the
+    hardcoded 800/1200 assumptions: the schema we are about to send is known
+    exactly before the run starts, so its size does not have to be guessed."""
+    try:
+        _cpt = float(cpt) if cpt else cpt_for(model)
+        if _cpt <= 1:
+            _cpt = CPT_DEFAULT
+        return max(0, int(len(text or "") / _cpt))
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
 # ── chars/token from a REAL tokenizer probe (2026-10-17) ────────────────────
 # Until now a run used the per-model EMA (seeded with the 3.92 module default,
 # from ONE live probe on one model) or that constant. When a slot for the exec

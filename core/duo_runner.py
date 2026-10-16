@@ -1377,7 +1377,34 @@ async def run_code_duo(ctx):
             _runtime_profile = ctx.resolve_duo_runtime_profile(
                 None, important_task=False, until_finished=ctx.duo_config.until_finished,
             )
-            _content_tokens = compute_content_budget(_exec_ctx, profile=_runtime_profile)
+            # MEASURED OVERHEADS (2026-10-17): the content budget used to
+            # subtract the hardcoded assumptions 800 (system) / 1200 (tools) -
+            # the tool schema really is ~2050 tokens at 8k (SCHEMA_FRAC of the
+            # window), so the planner/explore content was over-committed by
+            # ~850-2500 tokens. Both numbers now come from the real artefacts:
+            # the coder prompt constant and the tool-schema JSON, capped by the
+            # schema budget this run will actually allow.
+            _ov_sys_tok = 0
+            _ov_tool_tok = 0
+            try:
+                from core import budgets as _budg_ov
+                from hive_functions.prompts import PROMPTS as _PROMPTS_OV
+                _ov_prompt_txt = max(
+                    str(_PROMPTS_OV.get("duo_coder_execution") or ""),
+                    str(_PROMPTS_OV.get("duo_coder_autonomous") or ""), key=len)
+                _ov_sys_tok = _budg_ov.tokens_for_text(_ov_prompt_txt, exec_mdl)
+                _ov_schema_chars = len(json.dumps(_xtools_ws or []))
+                _ov_cap = _budg_ov.schema_budget_for(int(_exec_ctx or 16384), exec_mdl)
+                if _ov_cap > 0:
+                    _ov_schema_chars = min(_ov_schema_chars, _ov_cap)
+                _ov_tool_tok = _budg_ov.tokens_for_text("x" * _ov_schema_chars, exec_mdl)
+            except (ImportError, AttributeError, TypeError, ValueError):
+                _ov_sys_tok = _ov_tool_tok = 0
+            _content_tokens = compute_content_budget(
+                _exec_ctx, profile=_runtime_profile,
+                system_prompt_tokens=_ov_sys_tok or None,
+                tool_def_tokens=_ov_tool_tok or None,
+            )
             _ctx_budget = ContextBudget.from_content_tokens(_content_tokens).with_static_map_override(
                 ctx.settings.get("duo_static_map_chars", 0)
             )
