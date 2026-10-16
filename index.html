@@ -1373,6 +1373,14 @@
       </div>
       <div class="fld-hint">Injects a read_file nudge after 2 ineffective edits on the same file.</div>
       <div class="tgl-row">
+        <span class="tgl-text">Wedge handoff</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="duo-wedge-handoff-toggle" onchange="onFlagToggle('duo_wedge_handoff_enabled', this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">When the coder fails the same edit on one file 4x in a row, a fresh-context repair agent takes over that one edit (same model, clean window, max 2 per run). Ask for its log line "Wedge handoff" in the chat to see it work.</div>
+      <div class="tgl-row">
           <span class="sl"></span>
         </label>
       </div>
@@ -2008,6 +2016,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261014-02"></script>
+        <script src="/static/app.js?v=20261017-01"></script>
 </body>
 </html>
