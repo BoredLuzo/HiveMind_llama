@@ -4322,8 +4322,26 @@ function doneAgent(elapsed) {
   if (_bodyDone) {
     _bodyDone.querySelectorAll('.think-block').forEach(function(_tb) {
       _tb.classList.remove('live');
+      // INLINE-THINK-COLLAPSE (2026-10-17): inline reasoning used to stay
+      // OPEN forever, so a coder run with several tool rounds was a wall of
+      // expanded reasoning. Collapse it like any other block - the header
+      // keeps the char count and one click opens the (now formatted) text.
+      _tb.classList.remove('open');
       var _tbt = _tb.querySelector('.th-tokens');
       if (_tbt) _tbt.textContent = (_tbt.textContent || '').replace(' \u2713', '') + ' \u2713';
+      // INLINE-THINK-FORMAT (2026-10-17): the reasoning that arrives BETWEEN
+      // tool calls goes through _createThinkBlock() and was the only path that
+      // never got the fence formatting. The main streaming block did get it
+      // (_renderThinkCodeBlocks above), so the very same reasoning looked raw
+      // inside the coder's expanded tool-call flow (owner report: "beim
+      // streaming gut formatiert, als aufgeklappter toolcall scheiße").
+      var _tbb = _tb.querySelector('.think-body');
+      if (_tbb && _tbb.textContent.trim()) {
+        _renderThinkCodeBlocks(_tbb);
+        if (_tbt) {
+          _tbt.textContent = ' \u00b7 ' + _tbb.textContent.length + ' chars \u00b7 \u2713';
+        }
+      }
     });
   }
   // ── Markdown finalization for coder bubbles ──────────────────────
