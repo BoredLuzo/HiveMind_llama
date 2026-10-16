@@ -123,11 +123,54 @@ def test_source_guards():
     (ok if not bad else fail)(f"source guards {'' if not bad else str(bad)}")
 
 
+def test_installer_is_executable():
+    """README says `sudo deploy/install_linux.sh` - that only works when the
+    file carries the executable bit in git (a fresh clone has no local chmod)."""
+    import subprocess
+    root = Path(__file__).parent.parent
+    r = subprocess.run(["git", "ls-files", "-s", "deploy/install_linux.sh"],
+                       cwd=str(root), capture_output=True, text=True)
+    out = (r.stdout or "").strip()
+    (ok if out.startswith("100755") else fail)(f"install_linux.sh mode {out[:6] or '?'} (want 100755)")
+    mode = os.stat(root / "deploy" / "install_linux.sh").st_mode
+    (ok if mode & 0o111 or os.name == "nt" else fail)("install_linux.sh executable on disk (or Windows)")
+
+
+def test_shell_mode_is_posix_on_unix():
+    """A bash-less distro (Alpine: /bin/sh only) must not be labelled
+    'powershell' - execution already falls back to /bin/sh, the label lied."""
+    from unittest.mock import patch
+    from tools.handlers.exec_tools import _run_bash_shell_mode, shell_os_hint
+    with patch("sys.platform", "linux"):
+        m = _run_bash_shell_mode()
+    (ok if m == "bash" else fail)(f"shell mode on linux = {m!r} (want 'bash')")
+    hint = shell_os_hint("bash", "linux")
+    # the unix branch says "bash/sh on Unix ... not PowerShell" - it must not
+    # carry the Windows CRITICAL block
+    (ok if "RUNTIME SHELL: bash" in hint and "CRITICAL - Windows PowerShell" not in hint
+     else fail)("linux hint names bash and carries no Windows block")
+    src = (Path(__file__).parent.parent / "tools" / "handlers" / "exec_tools.py"
+           ).read_text(encoding="utf-8")
+    (ok if 'if sys.platform != "win32":\n        return "bash"' in src
+     else fail)("POSIX short-circuit present in _run_bash_shell_mode")
+
+
+def test_fetch_llamacpp_documents_linux():
+    src = (Path(__file__).parent.parent / "deploy" / "fetch_llamacpp.py"
+           ).read_text(encoding="utf-8")
+    head = src[:900]
+    (ok if "Linux" in head else fail)("fetch_llamacpp docstring mentions Linux")
+    (ok if "ubuntu" in src and "tarfile.open" in src else fail)("ubuntu assets + tarfile handling present")
+
+
 if __name__ == "__main__":
     test_gpu_backend_cpu()
     test_binary_discovery_posix()
     test_meminfo_parser()
     test_proc_net_parser()
     test_source_guards()
+    test_installer_is_executable()
+    test_shell_mode_is_posix_on_unix()
+    test_fetch_llamacpp_documents_linux()
     print(f"\n=== {passed} passed, {failed} failed ===")
     sys.exit(1 if failed else 0)

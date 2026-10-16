@@ -9,6 +9,7 @@ import asyncio
 import os
 import re
 import shutil
+import sys
 
 _BASH_BIN = shutil.which("bash") or "/bin/sh"  # X6 (audit r2): bash-less distros
 _WIN_BASH_CACHE: str | None = None
@@ -40,6 +41,16 @@ def _windows_bash_path() -> str:
 
 def _run_bash_shell_mode() -> str:
     # "auto" | "bash" | "powershell" (settings.run_bash_shell)
+    #
+    # POSIX-SHELL (2026-10-17): "powershell" is a WINDOWS mode. On a non-Windows
+    # host the old code asked _windows_bash_path() (which only looks for
+    # C:\Program Files\Git\... plus a `which bash`) and answered "powershell"
+    # on a bash-less distro (Alpine: /bin/sh only) - the tool then reported a
+    # shell that does not exist there. Execution was already correct
+    # ([_BASH_BIN, "-c", cmd], _BASH_BIN falls back to /bin/sh); only the
+    # label/hint lied. Unix always has a POSIX shell, so answer "bash".
+    if sys.platform != "win32":
+        return "bash"
     try:
         from core import state as _cs
         _m = str((_cs.settings or {}).get("run_bash_shell", "auto")).lower()
@@ -90,7 +101,6 @@ def shell_os_hint(shell_mode: str, platform: str) -> str:
             "(ls, cat, grep, ...) - not PowerShell.\n"
         )
     return ""
-import sys
 import tempfile
 
 from . import _shared

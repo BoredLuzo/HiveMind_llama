@@ -1,15 +1,21 @@
 """
 fetch_llamacpp.py
 =================
-Downloads the latest llama.cpp release (Windows) from GitHub and
+Downloads the latest llama.cpp release (Windows and Linux) from GitHub and
 extracts it to <HiveMind>/llama/.
 
-Usage:
+Assets are picked per platform: win-*-x64 on Windows, ubuntu-*-x64 on Linux
+(.zip there, .tar.gz on Linux) - see ASSET_REGEX / _OS_TAG below.
+
+Usage (Windows):
   python deploy\\fetch_llamacpp.py --backend vulkan          # AMD/Intel
   python deploy\\fetch_llamacpp.py --backend cuda            # NVIDIA
   python deploy\\fetch_llamacpp.py --backend vulkan --force  # re-download even if a build exists
 
-Stdlib only (urllib/zipfile) — no extra dependencies needed.
+Usage (Linux, also run by deploy/install_linux.sh):
+  ./.venv/bin/python deploy/fetch_llamacpp.py --backend vulkan|cuda|rocm|cpu
+
+Stdlib only (urllib/zipfile/tarfile) — no extra dependencies needed.
 """
 from __future__ import annotations
 
