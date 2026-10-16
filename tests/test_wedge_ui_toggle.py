@@ -49,6 +49,27 @@ check("the toggle has a visible label",
       "Wedge handoff" in _html)
 check("the toggle explains what it does",
       "fresh-context repair agent" in _html)
+# BETA WARNING (owner request 2026-10-17): the feature is young and off by
+# default - the row says both, in the same badge style the other cards use.
+check("the row carries a BETA badge",
+      'class="cfl-badge"' in _html and ">BETA</span>" in _html)
+check("the badge sits in the wedge row",
+      _html.index(">BETA</span>") < _html.index('id="duo-wedge-handoff-toggle"')
+      and _html.index(">BETA</span>") > _html.index("Wedge handoff"))
+check("the badge uses the amber warning colour", "var(--amber)" in _html[_html.index(">BETA</span>") - 320:_html.index(">BETA</span>")])
+check("the hint states beta explicitly", "Beta &mdash; off by default." in _html)
+check("the hint names the setting key", "duo_wedge_handoff_enabled" in _html)
+# ── default off, in code and in every shipped preset template ───────────────
+from settings import DEFAULT_SETTINGS                            # noqa: E402
+check("settings.py default is OFF",
+      DEFAULT_SETTINGS.get("duo_wedge_handoff_enabled") is False)
+_live_presets = Path(r"C:\Users\user\Desktop\HiveMind\live\presets.json")
+if _live_presets.exists():
+    import json as _json                                          # noqa: E402
+    _pd = _json.loads(_live_presets.read_text(encoding="utf-8"))
+    _on = [n for n, b in _pd.items()
+           if isinstance(b, dict) and b.get("duo_wedge_handoff_enabled") is True]
+    check("no shipped/ live preset turns it on", not _on, f" (on: {_on})")
 
 # ── (b) read + (c) sync ─────────────────────────────────────────────────────
 check("app.js reads the setting",

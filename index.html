@@ -1385,13 +1385,13 @@
       </div>
       <div class="fld-hint">Injects a read_file nudge after 2 ineffective edits on the same file.</div>
       <div class="tgl-row">
-        <span class="tgl-text">Wedge handoff</span>
+        <span class="tgl-text">Wedge handoff <span class="cfl-badge" style="color:var(--amber);border-color:rgba(200,150,50,.4);margin-left:6px">BETA</span></span>
         <label class="cfl-sw">
           <input type="checkbox" id="duo-wedge-handoff-toggle" onchange="onFlagToggle('duo_wedge_handoff_enabled', this.checked)">
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">When the coder fails the same edit on one file 4x in a row, a fresh-context repair agent takes over that one edit (same model, clean window, max 2 per run). Ask for its log line "Wedge handoff" in the chat to see it work.</div>
+      <div class="fld-hint"><b>Beta &mdash; off by default.</b> When the coder fails the same edit on one file 4x in a row, a fresh-context repair agent takes over that one edit (same model, clean window, max 2 per run). It stays off unless you switch it on here or set <span style="font-family:'IBM Plex Mono',monospace">duo_wedge_handoff_enabled</span> yourself; watch for the "Wedge handoff" log line to see whether it did anything.</div>
       <div class="tgl-row">
         <span class="tgl-text">Partial compression</span>
         <label class="cfl-sw">

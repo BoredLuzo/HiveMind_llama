@@ -130,7 +130,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_websearch_timeout_critical_seconds` | int | `24` | — |
 | `duo_websearch_timeout_fast_seconds` | int | `13` | — |
 | `duo_websearch_timeout_seconds` | int | `20` | — |
-| `duo_wedge_handoff_enabled` | bool | `False` | — |
+| `duo_wedge_handoff_enabled` | bool | `False` | **Beta, off by default.** When the coder fails the same edit on one file 4x in a row, a fresh-context repair agent takes over that one edit (same model, clean window, max `duo_wedge_handoff_max_per_run` per run). |
 | `duo_wedge_handoff_max_per_run` | int | `2` | — |
 | `duo_wedge_handoff_max_rounds` | int | `10` | — |
 | `duo_wedge_handoff_max_tokens` | int | `1200` | output budget of one fix-agent round |
