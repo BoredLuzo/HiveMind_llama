@@ -116,3 +116,116 @@ Sketch:
 4. Surfaces: chat (image appears inline), telegram (photo message),
    tool output (path + dimensions). Settings: enabled, host/port,
    default workflow, auto-evict behavior.
+
+## 1.4 execution plan (2026-10-17)
+
+Release target from the backlog above: **voice (TTS + STT) plus the MCP
+modernization**. Sequencing is driver-first: the audio paths are only worth
+building once the sidecar lifecycle they share is proven, so Phase 1 delivers a
+reusable sidecar supervisor and TTS rides on it.
+
+| Phase | Deliverable | Estimate | Depends on |
+|-------|-------------|----------|------------|
+| 0 | Decisions frozen (STT engine, audio format, voice source, packaging) | 0.5 d | - |
+| 1 | Sidecar supervisor + TTS engine + chat speaker + `say` tool | 4-6 d | 0 |
+| 2 | Telegram voice OUT (ogg/opus voice notes, per-chat toggle) | 2 d | 1 |
+| 3 | STT engine + Telegram voice IN + UI push-to-talk | 3-5 d | 1 |
+| 4 | MCP modernization (per-client tool policy, auth, audit log) | 2-4 d | - |
+| 5 | Hardening, docs, installer/packaging, release | 2-3 d | 1-4 |
+
+Total ~2-3 focused weeks for one person. Phases 2 and 4 are independent and can
+run in any order after 1.
+
+### Phase 0 - decisions (recommendations)
+
+- **STT engine: whisper.cpp**, `base`/`small` quantized, fetched like llama.cpp
+  (`deploy/fetch_whisper.py`, same asset-name logic). Reason: no torch in the
+  core install, CPU-only like pocket-tts, same sidecar/asset pattern the repo
+  already tests. Trade-off: faster-whisper is simpler in Python but pulls torch
+  and a second Python dependency tree.
+- **Audio: ogg/opus** as the wire format (Telegram voice notes require it),
+  16 kHz mono for STT, 24 kHz for TTS output. Encode with ffmpeg when present,
+  else `soundfile`/`opuslib`; the installer must say clearly when neither is
+  available instead of failing at runtime.
+- **Voice source: premade catalog first**, cloned embedding as a second step
+  (voice cloning raises a consent/licensing question that the README should
+  answer before it ships).
+- **Packaging: strictly optional.** `[tts]`/`[stt]` extras plus a sidecar. An
+  install without the extras must behave exactly like 1.3.9 - enforced by the
+  existing regression suite plus one new "extras absent" test.
+
+### Phase 1 - sidecar supervisor + TTS
+
+1. `core/sidecar.py`: generic supervised child process (spawn, port probe,
+   health endpoint, restart with backoff, RAM budget, shutdown with the engine,
+   no orphan on crash). Property-tested without real processes.
+2. `deploy/fetch_tts.py` + docs: pocket-tts (gated HF repo, CC-BY-4.0, accept
+   the terms once); `uvx pocket-tts serve` documented as the manual path.
+3. Engine API: `POST /tts` (text, voice, speed -> audio bytes), `GET /tts/voices`,
+   caching per `(text, voice)`, hard caps on text length and response size.
+4. Surfaces: speaker button on assistant messages (on demand, never autoplay),
+   `say` tool (tier 2 so it drops out at small windows, budgeted like any other
+   tool so it cannot flood the context).
+5. Settings + UI: enabled, port, voice, speed, per-surface toggles; CHANGELOG,
+   `docs/settings.md`, README section.
+
+Acceptance: engine without the extra unchanged (suite green); with the extra,
+`/tts` returns audio for a 200-char sentence in under 2 s on CPU after the first
+call; killing the sidecar is recovered within the restart budget; no VRAM used.
+
+### Phase 2 - Telegram voice OUT
+
+`sendVoice` (ogg/opus), per-chat toggle, size cap handling, fallback to a text
+message when encoding fails. Acceptance: a run started from the phone answers
+with a voice note when the toggle is on, and with text when it is off.
+
+### Phase 3 - STT
+
+1. Sidecar + `POST /stt` (audio -> text, language setting, duration cap),
+   transcript redaction in logs by default.
+2. Telegram voice IN: `getFile`, size check (Telegram caps bot downloads at
+   20 MB), transcode, transcribe, inject as a user message marked as
+   transcribed audio (untrusted input - same treatment as typed text).
+3. UI push-to-talk (MediaRecorder -> `/stt`), transcript prefilled into the
+   input box instead of sending immediately.
+
+Acceptance: 30 s voice note -> transcript in under ~15 s on CPU; wrong-language
+input does not abort the run; no transcript in `logs/` unless debug dumping is on.
+
+### Phase 4 - MCP modernization
+
+Per-client tool exposure policy (which tools an IDE client may see/call),
+token auth for the MCP HTTP server, audit log of MCP tool calls, and a
+confinement check that reuses the workspace guards. Acceptance: a client without
+a token gets 401; a client with a read-only policy cannot reach a write tool;
+every MCP call appears in the audit log.
+
+### Phase 5 - hardening and release
+
+Suite additions per phase (sidecar, TTS/STT API contracts, tool wiring, UI
+guards, extras-absent), docs (README voice section, gateway voice notes,
+settings), installer messages for ffmpeg/opus, fresh-folder smoke with and
+without the extras, release notes with the honest limitations (CPU speed of STT,
+voice quality of a 100M TTS).
+
+### Risks
+
+| Risk | Mitigation |
+|------|------------|
+| Sidecar lifecycle (the real risk, not the models) | Phase 1 builds it once, property tests, restart budget, orphan checks |
+| Audio dependencies (ffmpeg/opus) differ per OS | detect + clear installer message; pure-Python fallback where possible |
+| Gated HF repo / licenses (CC-BY-4.0) | Phase 0 documents the one-time acceptance and attribution |
+| Telegram limits (20 MB down, 50 MB up, codec) | size checks before download, transcode, text fallback |
+| Scope creep (voice + MCP + ComfyUI in one release) | ComfyUI stays a 1.5 candidate; 1.4 ships voice + MCP only |
+
+### 1.3.10 candidates (if a patch line is wanted before 1.4)
+
+- steering latency: drain steers between tool calls, not only at round
+  boundaries (the UI promises "next tool-call boundary")
+- `subagent_lite`: tool timeout, message-list cap, and its first tests
+- direct/tool-agent path: `max_post_attempts` is 1, so a single malformed
+  response aborts the loop
+- `update.bat` / `install.bat`: verify the downloaded release zip against a
+  published hash (currently HTTPS + GitHub trust only)
+- drop the three unreachable editors (`edit_ast`, `patch_file`, `replace_lines`)
+
