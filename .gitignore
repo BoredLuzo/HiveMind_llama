@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -48,8 +48,11 @@ searxng-config/settings.yml
 models.json
 
 # Session data
-sessions/*.json
+sessions/
 infra/sessions/
+
+# Uploaded chat attachments (written by the web UI; user data)
+.hive_uploads/
 
 # Large data — loaded via install.bat/setup_models.bat, NOT part of the repo
 /llama/
@@ -102,6 +105,18 @@ bench_results/
 # BUILD_INFO.txt (2026-10-04): generated at packaging time (git describe)
 # and embedded into the release zip - never tracked.
 BUILD_INFO.txt
+
+# Updater state and scratch (update.bat): the installed-file manifest, the
+# backup copy of the whole install, the extraction temp dir and the trash
+# folder for files a newer release no longer ships. All local, never pushed.
+update_manifest_installed.txt
+update_backup_*/
+_update_tmp/
+update_removed_*/
+
+# Vision pipeline config (written by the Vision UI, /vision/config) — user data
+vision_model.json
+gateway_state.tmp
 
 # local test suites (fat dev tooling — never shipped with releases;
 # the pre-commit hook still runs them when present locally)
