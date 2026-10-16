@@ -629,7 +629,7 @@ def attach_images_to_last_user(msgs, images):
 
 def direct_vision_should_drop(slot_vision_active, slot_model: str = "",
                               requested_model: str = "") -> bool:
-    """Direct-mode image drop decision (2026-10-04, Sonnet #2) - pure.
+    """Direct-mode image drop decision (2026-10-04) - pure.
 
     Warn/drop ONLY when the loaded slot actually belongs to the requested
     model AND /props really reported vision:false. Every other state trusts
@@ -669,7 +669,7 @@ def build_steer_user_message(text: str, images=None) -> dict:
 
 
 def resolve_duo_role_models(settings) -> tuple:
-    """The duo role models from ONE place (2026-10-04, Sonnet #5).
+    """The duo role models from ONE place (2026-10-04).
 
     Two live resolution paths exist: the AGENTS panel writes
     agents.duo_planner.model, the CODE panel's planner dropdown writes
@@ -689,7 +689,7 @@ def resolve_duo_role_models(settings) -> tuple:
 
 def count_image_parts(messages) -> int:
     """Number of image_url content parts actually carried by the messages
-    (2026-10-04, Sonnet: make 'did the model get the image' measurable
+    (2026-10-04: make 'did the model get the image' measurable
     instead of arguable). Pure; returns 0 for plain-string contents."""
     _n = 0
     for _m in messages or []:

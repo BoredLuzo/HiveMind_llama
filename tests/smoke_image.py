@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Vision smoke test over the live API (2026-10-04, Sonnet gate round).
+"""Vision smoke test over the live API (2026-10-04).
 
 Builds a PNG with verifiable ground truth (colored regions + an ASCII code
 rendered from a 5x7 bitmap font - no Pillow needed), fires ONE code_duo run
 against a running HiveMind (default http://localhost:8001) and prints the
-evidence Sonnet's gate asks for:
+evidence the vision gate asks for:
 
   - planner/coder CMD --mmproj lines and /props modalities (from the logs)
   - images_in_request traces (planner POST + coder rounds + [LLM-CALL])
@@ -156,7 +156,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="http://localhost:8001")
     ap.add_argument("--code", default="",
-                    help="default: RANDOM per run (2026-10-04, Sonnet #1: a fixed "
+                    help="default: RANDOM per run (2026-10-04: a fixed "
                          "pattern like the old XY42 default is hallucinatable)")
     ap.add_argument("--timeout", type=float, default=1200)
     ap.add_argument("--chat-id", default=None, help="continue this chat instead of a new one")
@@ -229,7 +229,7 @@ def main() -> int:
     round1 = "".join(round1_tokens)
     everything = " ".join(planner_txt + [round1]) + " " + " ".join(statuses)
 
-    # IMAGE-PLAN ABORT (2026-10-04, Sonnet #5): vision_model.json enabled on
+    # IMAGE-PLAN ABORT (2026-10-04): vision_model.json enabled on
     # the install silently reroutes the run to the PREPROCESS path (text
     # description) - a PASS would then prove nothing about raw/projector.
     # Code_duo: abort unless the plan says raw/raw. Chat (run D): abort on
@@ -263,7 +263,7 @@ def main() -> int:
         "code anywhere (model+tools)": args.code.upper() in everything.upper(),
     }
     if args.mode == "chat":
-        # RUN D (2026-10-04, Sonnet #5): the direct image path has NO tools
+        # RUN D (2026-10-04): the direct image path has NO tools
         # and NO planner - the answer naming the code IS the vision proof.
         checks = {
             "run completed": bool(done) and done.get("stop_reason") == "completed",

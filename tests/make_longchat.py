@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Build a ~30-turn chat for the context test (2026-10-04, Sonnet #2).
+"""Build a ~30-turn chat for the context test (2026-10-04).
 
 16d792a7 has two messages - it proves source=json but NOT budget window,
 compression or role alternation. This script writes a chat the way the
@@ -57,7 +57,7 @@ def main() -> int:
                          "expected windowed message count (window_by_budget, offline)")
     args = ap.parse_args()
 
-    # PROBE WORDS (2026-10-04, Sonnet): hex codes invite paraphrase - the
+    # PROBE WORDS (2026-10-04): hex codes invite paraphrase - the
     # model hallucinated live ("KIVU-E11DB9" vs E14D3B). Words are verbatim-
     # checkable, so a wrong quote is PROOF of context loss, not sloppiness.
     _WORDS = ["ANCHOR", "BANJO", "CANDLE", "DYNAMO", "EMBER", "FALCON"]

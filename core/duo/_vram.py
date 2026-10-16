@@ -235,7 +235,7 @@ async def _phase_vram(ctx, state: dict):
 
     _duo_ws    = ctx.settings.get("duo_websearch_enabled", False) and ctx.websearch_available
     _duo_seen_web_queries: set[str] = set()
-    # BUDGETS (2026-10-14, Sonnet redesign): the schema is REBUILT per run in
+    # BUDGETS (2026-10-14): the schema is REBUILT per run in
     # duo_runner once the real coder ctx is known (budget-fitted there via
     # core/budgets). This initial build is the plain full set — no profile
     # staffels, no model-name heuristics.

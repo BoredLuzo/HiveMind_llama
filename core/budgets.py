@@ -1,6 +1,6 @@
 """Budgets — one resolver per run, derived sizes only (2026-10-14).
 
-Sonnet review principle: nothing branches on model classes, everything is
+Design principle: nothing branches on model classes, everything is
 derived from measured sizes, settings only override. Budgets.resolve() takes
 ONLY n_ctx, the measured chars-per-token (EMA) and max_output, plus settings,
 and produces every cap the tool pipeline needs. Fractions and named

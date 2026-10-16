@@ -204,7 +204,7 @@ class LlamaClient:
         t0 = time.perf_counter()
         _vision = self._has_images(messages)
         port = await manager.ensure_loaded(model, num_ctx=ctx, vision=_vision)
-        # VISION TRUTH (2026-10-04, Sonnet #4): direct mode used to trust the
+        # VISION TRUTH (2026-10-04): direct mode used to trust the
         # profile flag + the requested load flag only. If the loaded server
         # really runs WITHOUT a projector (/props vision:false), sending the
         # image would 400 the whole request - degrade to text-only with a

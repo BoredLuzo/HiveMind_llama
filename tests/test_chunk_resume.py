@@ -1,4 +1,4 @@
-"""CHUNK-RESUME REGRESSION (2026-10-14, follow-up to bc12b5a — Sonnet review):
+"""CHUNK-RESUME REGRESSION (2026-10-14, follow-up to bc12b5a):
 
 1. STRUCTURAL: every `_di += 1` chunk-advance site in duo_runner.py writes a
    chunk_checkpoint resume block within the following few statements. The

@@ -602,7 +602,7 @@ async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: in
     else:
         num_ctx = _get_num_ctx(model, agent_role)
         effective_ctx = num_ctx if num_ctx else 8192
-    # IMAGES-IN-REQUEST (2026-10-04, Sonnet): per-model-call trace - how many
+    # IMAGES-IN-REQUEST (2026-10-04): per-model-call trace - how many
     # image parts actually went on the wire. Makes "did the model SEE the
     # image" checkable in the log instead of arguable. Duo roles log ALWAYS
     # (also 0 - "the image stopped being sent" after a compression must be
@@ -1977,7 +1977,7 @@ async def health():
         "version": HIVEMIND_VERSION,
         "llama_ok": bool(_hm_running),
         "model_count": len(_hm_models),
-        # TEST-MODE VISIBILITY (2026-10-04, Sonnet #2): a negative-test env
+        # TEST-MODE VISIBILITY (2026-10-04): a negative-test env
         # must never hide - an install silently running with omitted
         # projectors would poison every following vision test.
         "test_omit_mmproj": os.environ.get("HIVEMIND_TEST_OMIT_MMPROJ", "") or None,

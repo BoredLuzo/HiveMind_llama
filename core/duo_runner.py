@@ -1264,7 +1264,7 @@ async def run_code_duo(ctx):
                 except Exception as _port_err:
                     logger.warning("[Planner] Port resolution failed: %s", _port_err)
 
-            # VISION-TRUTH GATE (2026-10-04, Sonnet review): the requested
+            # VISION-TRUTH GATE (2026-10-04): the requested
             # vision flag can silently drop on load (mmproj resolution failed,
             # VRAM restart without projector). If the loaded planner slot
             # really runs without a projector, downgrade the plan instead of
@@ -1283,7 +1283,7 @@ async def run_code_duo(ctx):
                             logger.warning("[DUO][VISION-GATE] %s", _w)
                             yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
                     elif _pv is None:
-                        # UNKNOWN (2026-10-04, Sonnet): a server build without
+                        # UNKNOWN (2026-10-04): a server build without
                         # /props modalities would make the gate a silent
                         # no-op - say so once instead.
                         logger.info("[DUO][VISION-GATE] planner vision state UNKNOWN "
@@ -1831,7 +1831,7 @@ async def run_code_duo(ctx):
             has_subtasks=bool(_subtasks),
             has_explore_ctx=_explore_has_contents,
         ) + _coder_dyn_hints + build_image_desc_block(getattr(ctx, "image_description", None))
-        # VISION-TRUTH GATE pre-prompt (2026-10-04, Sonnet review): if the
+        # VISION-TRUTH GATE pre-prompt (2026-10-04): if the
         # coder slot is ALREADY loaded and really runs without a projector,
         # downgrade the plan BEFORE the notes/parts decide from it. No slot
         # loaded (fresh load below) trusts the plan - the post-load gate
@@ -2338,7 +2338,7 @@ async def run_code_duo(ctx):
                         return
                     yield await ctx.emit({"type": "status",
                         "content": f"✅ Coder ready ({exec_mdl.split(':')[0]})"})
-                    # VISION-TRUTH GATE post-load (2026-10-04, Sonnet review):
+                    # VISION-TRUTH GATE post-load (2026-10-04):
                     # /props.modalities.vision is read AFTER every load (also
                     # the in-loop reload). A dropped projector must not leave
                     # the raw-image plan + [VISION] note claiming the coder
@@ -2352,7 +2352,7 @@ async def run_code_duo(ctx):
                                 _img_plan, _vg_warns2 = effective_image_plan(
                                     _img_plan, coder_slot_vision=_cv2,
                                     has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
-                                # RETRACT EVIDENCE (2026-10-04, Sonnet): the
+                                # RETRACT EVIDENCE (2026-10-04): the
                                 # negative test grades THIS line - it proves
                                 # the note left the actually-sent system
                                 # prompt (note present=True beforehand).
@@ -2949,7 +2949,7 @@ async def run_code_duo(ctx):
                     + _touched_block_persisted
                     + "\n\n" + _coder_input
                 )
-            # IMAGES-IN-REQUEST (2026-10-04, Sonnet): per-round trace - ALSO
+            # IMAGES-IN-REQUEST (2026-10-04): per-round trace - ALSO
             # at 0 once images are attached to the task, so "the image
             # stopped being sent" is measurable instead of looking like a
             # missing log line.
@@ -3723,7 +3723,7 @@ async def run_code_duo(ctx):
                         _comp_llm_cfg = ""
                     _comp_llm_timeout_s = int(ctx.settings.get("duo_compress_llm_timeout_s", 180) or 180)
                     _compress_local_only = bool(ctx.settings.get("duo_compress_local_only", False))
-                    # BUDGETS (2026-10-14, Sonnet redesign of audit phase 6):
+                    # BUDGETS (2026-10-14, redesign of audit phase 6):
                     # ONE resolve per run from measured sizes only — n_ctx,
                     # the per-model chars/token EMA and the output budget.
                     # Nothing here branches on model names; settings keys

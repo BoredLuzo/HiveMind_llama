@@ -2,7 +2,7 @@
 
 ## [1.3.9] - 2026-10-15
 
-Chunk-resume verification run (Sonnet's five criteria) + resume durability:
+Chunk-resume verification run + resume durability:
 
 - chunk checkpoints now cover EVERY done path: the persist call existed
   only on the skip branch (the "after every done chunk" comment
@@ -27,12 +27,8 @@ Chunk-resume verification run (Sonnet's five criteria) + resume durability:
   run_tests row); the pre is skipped when the summary IS the content
 - the smoke-test nudge now demands at least one real assertion - a file
   that cannot fail does not count as a test (anti-spoof tightening)
-- kill-timeline reconstruction (13.10 16:54): the run died 42s in from
-  the deploy engine restart, not start_hivemind.bat; the resume block
-  WAS saved (0/1 chunks done) - "saved" and "resume starts fresh" were
-  both true because nothing was done yet
 
-Budgets redesign (Sonnet review of the audit): no model-class staffels
+Budgets redesign: no model-class staffels
 
 - core/budgets.py: Budgets.resolve(n_ctx, cpt, max_out, settings) derives
   every cap from measured sizes ONCE per run and freezes them (schema-
@@ -96,7 +92,7 @@ Tool-pipeline audit phases 4-7 (compression, injections, tool profiles, web):
   snapshot (capped 2000, explicit snapshot for the full page); evaluate
   is capped at 8000 like every other browser action
 
-Tool-pipeline performance audit, phases 0-3 (Sonnet-reviewed ordering:
+Tool-pipeline performance audit, phases 0-3 (reviewed ordering:
 cache hygiene and measurement first):
 
 - measurement basis first: one phase="tools" telemetry row per round
@@ -125,34 +121,19 @@ cache hygiene and measurement first):
   with the measured real/estimator ratio (DELTA-ON-REAL), so a full
   big-write round can no longer slip past the trigger
 - prefix-cache hygiene: the reactive-think activation used to rewrite
-  EVERY system message mid-run ("<|think_on|>" prefix) - measured
-  [CACHE-MISS] prompt=40302 cached=0, a full re-prefill on 8 GB Vulkan.
-  Thinking is now re-enabled payload-side (chat_template_kwargs keys
-  off think_runtime, overriding no-think) and the only in-context
-  change is one appended note; new test (test_prefix_stability) pins
-  the append-only behavior
+  EVERY system message mid-run ("<|think_on|>" prefix), which forced a
+  full re-prefill on 8 GB Vulkan. Thinking is now re-enabled
+  payload-side (chat_template_kwargs keys off think_runtime, overriding
+  no-think) and the only in-context change is one appended note; new
+  test (test_prefix_stability) pins the append-only behavior
 
-Model registrations (MiniCPM-V 4.7 35B-A3B, LFM2.5-24B-A2B) + estimate fix:
+/vram/estimate fix:
 
-- MiniCPM-V 4.7 35B-A3B (qwen35moe) and LFM2.5-24B-A2B (lfm2moe) are
-  registered text-only with DSpark draft models wired in
-  (draft-dspark, per-model profile). b11456 loads both archs; the
-  minicpmv4_7 vision projector is NOT supported by this build, so the
-  model is registered without mmproj/vision - re-enable checklist is
-  documented in llama_config BINARY_MIN_BUILD (restore 11574 + vision
-  sets + profile mmproj after a binary upgrade)
-- n-cpu-moe calibrated by load measurement (-lv 5 fit projection,
-  c4096): MiniCPM-V 4.7 = 35 (4754 MiB, 2337 MiB free), LFM2.5-24B =
-  24 (6051 MiB, 1289 MiB free; 23 misses the 1024-MiB-free target by
-  58 MiB). Both run with 16384 coder ctx within the 8 GB budget
 - /vram/estimate now resolves _MOE_TABLE with the same exact/-ud/
   prefix logic as vram_of_moe (new moe_cfg_for helper) - the UI
   estimate previously fell through to the dense heuristic and showed
-  21.0 GB for the 35B MoE where the pre-flight gate correctly used
-  4.6 GB
-- both models verified end-to-end through the engine: pre-flight pass,
-  slot up with --n-cpu-moe and draft-dspark active, vision_active
-  false from /props, inference with thinking + correct answer
+  the dense size for a large MoE where the pre-flight gate used the
+  MoE row
 
 Host-RAM caps (the "compression frees RAM, then swap fills" report):
 

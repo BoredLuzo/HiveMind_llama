@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""VISION-TRUTH gate (2026-10-04, Sonnet review).
+"""VISION-TRUTH gate (2026-10-04).
 
 effective_image_plan() must downgrade 'raw' entries when the LOADED server
 really runs without a projector (slot.vision_active is False from
@@ -225,7 +225,7 @@ def test_coder_reload_keeps_same_vision_arg():
 
 
 def test_direct_load_path_has_truth_gate():
-    # RUN D / SONNET #5: the direct mode is the path fresh installs use
+    # RUN D: the direct mode is the path fresh installs use
     # first. chat_stream must (a) request the projector from the wire shape
     # and (b) check the /props truth and strip images when it says false.
     import io
@@ -239,7 +239,7 @@ def test_direct_load_path_has_truth_gate():
         "chat_stream must check /props truth and strip images visibly in the log"
 
 
-# ── direct-mode drop decision (Sonnet round 7 #2): the warning may fire
+# ── direct-mode drop decision: the warning may fire
 #    ONLY when the slot belongs to the requested model AND /props really
 #    said false. All other states trust the plan. ─────────────────────────
 
@@ -345,7 +345,7 @@ def test_retract_helper_tolerates_non_string_system():
 
 # ── ToolLoop payload BEHAVIOR test: a fake llama-server records the body -
 #    the request the loop actually sends must carry image_url parts and no
-#    raw "images" key (Sonnet round 9 #5). ────────────────────────────────
+#    raw "images" key. ──────────────────────────────────────────────────
 
 def test_toolloop_fake_server_sees_parts(tmp_path=None):
     import asyncio
@@ -399,7 +399,7 @@ def test_toolloop_fake_server_sees_parts(tmp_path=None):
 
 
 # ── the graded-down plan must never carry the [VISION] note
-#    (Sonnet round 7 #3): tests the REAL prompt-build branch, not the
+#    tests the REAL prompt-build branch, not the
 #    retraction string-replace. ────────────────────────────────────────────
 
 class _PromptCtx:

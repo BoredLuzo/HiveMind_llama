@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Transcript provenance (2026-10-05, TG-PROBE experiment + Sonnet audit).
+"""Transcript provenance (2026-10-05, TG-PROBE experiment + audit).
 
 Live experiment (chat 16420a06): POST /chats creates the main json with 0
 messages; a /stream run writes ONLY the sidecar (.context.json session) at
@@ -7,7 +7,7 @@ completion. The seed then logged `source=json seeded 2` although the main
 json was empty - history_seed() falls back to the sidecar INTERNALLY and
 chat_run labelled the result 'json'. THE LABEL LIED.
 
-Corrected diagnosis (Sonnet audit): the sidecar NEVER matches the glob
+Corrected diagnosis (audit): the sidecar NEVER matches the glob
 `*_<id>.json` (it ends in `.context.json`), and `sorted()[-1]` picks the
 MAIN json (`.` < `c`... verified with real filenames below). The glob
 exclusion added first is a harmless no-op; the REAL fix is
@@ -42,7 +42,7 @@ def _write(tmp: str, name: str, data: dict):
 
 
 def test_real_filenames_sidecar_never_matches_glob():
-    # Sonnet's demand: verify with the REAL file names, not synthetic ones.
+    # Requirement: verify with the REAL file names, not synthetic ones.
     import fnmatch
     assert not fnmatch.fnmatch(REAL_SIDECAR, "*_16420a06.json"), \
         "sidecar matching would resurrect the false diagnosis"
@@ -102,7 +102,7 @@ def test_provenance_none_when_neither_has_turns(monkeypatch):
 
 
 def test_provenance_origin_survives_empty_normalization(monkeypatch):
-    # SONNET EDGE CASE (2026-10-05): main json holds ONLY the edited
+    # EDGE CASE (2026-10-05): main json holds ONLY the edited
     # trailing user message -> normalization empties the seed. The ORIGIN
     # must stay 'json' (not fall through to 'none'), so chat_run clears the
     # stale memory instead of resurrecting the old history.

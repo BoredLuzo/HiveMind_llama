@@ -1,4 +1,4 @@
-"""BUDGETS (2026-10-14, Sonnet redesign): one resolver per run, derived sizes
+"""BUDGETS (2026-10-14): one resolver per run, derived sizes
 only. Pins the three invariants the design rests on:
 
 1. Monotonicity  — n_ctx up => every cap up (or clamped, never down)

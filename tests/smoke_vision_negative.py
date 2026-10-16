@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Negative test for the /props vision gate (2026-10-04, Sonnet #2).
+"""Negative test for the /props vision gate (2026-10-04).
 
 Proves the ONE case the positive runs cannot: the image plan says raw,
 the profile says vision, the mmproj file EXISTS - but the coder's server
@@ -31,7 +31,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke_image import build_png, post_stream  # noqa: E402
 
-# VISUAL-CLAIM PATTERNS (2026-10-04, Sonnet #2): patterns that ASSERT the
+# VISUAL-CLAIM PATTERNS (2026-10-04): patterns that ASSERT the
 # model sees the image. A bare "in the image" is deliberately NOT here -
 # it also matches negations like "there is nothing in the image" and the
 # echoed question. Pinned by tests/test_smoke_harness.py.
@@ -134,7 +134,7 @@ def main() -> int:
         skipped = any("image skipped" in s or "falling back to the image description" in s
                       for s in statuses)
 
-        # WHICH GATE FIRED (2026-10-04, Sonnet #3): in lazy mode the
+        # WHICH GATE FIRED (2026-10-04): in lazy mode the
         # attach-time check runs BEFORE the coder load and only sees
         # vision_active=None (trusts the plan). Only the POST-LOAD gate can
         # know vision_active:false - its log line is the actual evidence.
@@ -155,7 +155,7 @@ def main() -> int:
         except OSError as _le:
             print(f"[neg] WARNING: cannot read install log: {_le}")
 
-        # /props AT THE CODER PORT (2026-10-04, Sonnet #3): the server must
+        # /props AT THE CODER PORT (2026-10-04): the server must
         # really run without modalities.vision while the plan said raw -
         # found by scanning the fixed llama port range for the coder model.
         coder_props = None
@@ -168,7 +168,7 @@ def main() -> int:
                     break
             except (OSError, ValueError):
                 continue
-        # VISUAL-CLAIM CHECK (2026-10-04, Sonnet #3): without image and
+        # VISUAL-CLAIM CHECK (2026-10-04): without image and
         # without a description the coder must not CLAIM to see anything.
         # (The code itself MAY legitimately appear via the planner text -
         # the planner keeps its projector by design - so it is reported,
@@ -230,7 +230,7 @@ def main() -> int:
         if not _clean_ok:
             print("[neg] FAIL-CLEANUP: clean install did not come back up - check manually!")
         else:
-            # POST-CLEANUP PROOF (2026-10-04, Sonnet #2): the restarted
+            # POST-CLEANUP PROOF (2026-10-04): the restarted
             # process must carry NO test env - /health exposes it. A failed
             # cleanup would otherwise leave HiveMind silently running
             # without projectors.

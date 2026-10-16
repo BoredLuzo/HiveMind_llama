@@ -4,7 +4,7 @@ write_models_json derive the right family+size key.
 
 Regression for the 1.2.4 audit: qwen3.5 MTP specs shipped with
 mmproj_regex: [] so fresh installs had NO projector for the default duo
-family. Sonnet review also flagged the case trap: pick_file compiles the
+family. Review also flagged the case trap: pick_file compiles the
 regex case-SENSITIVE unless it carries (?i) - a lowercase regex against
 the upper-case repo filenames (mmproj-F16.gguf) matches nothing, which
 is the same bug wearing a fix sticker.

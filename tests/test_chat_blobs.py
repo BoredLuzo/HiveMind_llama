@@ -1,6 +1,6 @@
 """Chat blob store: hash-based content storage for the chat growth fix.
 
-Sonnet's checklist, pinned as tests:
+The verification checklist, pinned as tests:
   - roundtrip: big panel/image payloads survive save -> load byte-exact
     while the ON-DISK json holds only {"_ref": hash}
   - migration: a legacy chat file (everything inline) loads unchanged

@@ -56,7 +56,7 @@ _REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes", "minicpm-v", "minicpm-v
 
 
 def _omit_mmproj_for(model: str, vision: bool = False) -> bool:
-    """TEST SWITCH (2026-10-04, Sonnet #2): HIVEMIND_TEST_OMIT_MMPROJ omits
+    """TEST SWITCH (2026-10-04): HIVEMIND_TEST_OMIT_MMPROJ omits
     --mmproj at server start so ONLY the post-load /props vision gate can
     catch a dropped projector (renaming the file would fire the older
     attach-time file check instead - the wrong layer). Value = model
@@ -1372,7 +1372,7 @@ class LlamaLoadMixin:
             pass
 
         # ── mmproj (Vision-Projektor) ─────────────────────────────────────────
-        # TEST SWITCH (2026-10-04, Sonnet #2): the negative test for the
+        # TEST SWITCH (2026-10-04): the negative test for the
         # /props vision gate needs a server that RUNS without the projector
         # while the plan, the profile and the file on disk all say vision.
         # Renaming the file fires the OLDER attach-time file check instead -

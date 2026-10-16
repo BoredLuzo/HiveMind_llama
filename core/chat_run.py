@@ -840,7 +840,7 @@ async def run_stream(
                     pass
             asyncio.create_task(_prefetch_direct_post())
         if _direct_is_vision:
-            # VISIBLE TRUTH CHECK (2026-10-04, Sonnet #5): the direct mode
+            # VISIBLE TRUTH CHECK (2026-10-04): the direct mode
             # used to strip silently inside chat_stream - the user saw
             # nothing and the model answered as if no image existed (the
             # same complaint as the duo downgrade). Check the loaded slot
@@ -854,7 +854,7 @@ async def run_stream(
                     if _dvis_model:
                         # _find_loaded matches BY MODEL NAME - a pinned planner
                         # on another slot can never be mistaken for the direct
-                        # model (Sonnet #2's false-warning case).
+                        # model (the false-warning case).
                         _dvis_slot = await _lsm_dvis._find_loaded(_dvis_model)
                     _slot_vision = getattr(_dvis_slot, "vision_active", None) if _dvis_slot is not None else None
                     _slot_model = getattr(_dvis_slot, "model", "") or ""
@@ -902,7 +902,7 @@ async def run_stream(
             # in the runner has the final word; this status never claims
             # more than the plan says.
             from core.duo_helpers import _build_duo_image_plan, duo_gate_status_text, resolve_duo_role_models
-            # ONE RESOLVER (2026-10-04, Sonnet #5): agent card + flat settings
+            # ONE RESOLVER (2026-10-04): agent card + flat settings
             # key are both live paths - the ad-hoc fallback chain lived here
             # once and lied whenever only one side was set.
             _pm, _cm = resolve_duo_role_models(settings)
@@ -925,7 +925,7 @@ async def run_stream(
     # HISTORY SOURCE (2026-10-03): the chat json transcript is the ONE
     # continuation source - UI and model now share the same story. The
     # sidecar "session" key demotes to a fallback for chats without a json.
-    # RE-SEED EVERY RUN (2026-10-04, Sonnet round 9 #1): the chat-switch tag
+    # RE-SEED EVERY RUN (2026-10-04): the chat-switch tag
     # alone only fixed A->B. Same-chat EDIT/REGENERATE kept the discarded
     # history in memory (same chat_id -> no clear -> seed skips a filled
     # memory). The json is ALWAYS fresher than the memory (the frontend PUTs
@@ -945,7 +945,7 @@ async def run_stream(
             _raw_seed, _raw_src = _seed_prov(chat_id)
         except (OSError, ValueError):
             _raw_seed, _raw_src = [], "none"
-        # BRANCH ON ORIGIN, NOT ON SEED EMPTINESS (2026-10-05, Sonnet edge
+        # BRANCH ON ORIGIN, NOT ON SEED EMPTINESS (2026-10-05, edge
         # case): a main json holding ONLY the edited trailing user message
         # normalizes to an empty seed - falling back on emptiness would
         # resurrect the discarded sidecar/memory history. json/sidecar own
@@ -995,7 +995,7 @@ async def run_stream(
     _pipeline_sess_msgs = window_by_budget(
         _pipeline_sess_msgs, _history_budget_tokens(settings),
     )  # SESSION-CACHE: 8 DB-Calls - 1 pro Run
-    # WINDOW TRACE (2026-10-04, Sonnet): the seed count alone does not prove
+    # WINDOW TRACE (2026-10-04): the seed count alone does not prove
     # the budget reached the window - log before/after so run C's expected N
     # (window_by_budget offline) can be checked against the log.
     _logger.info("[SESSION-WINDOW] before=%d after=%d budget=%d",

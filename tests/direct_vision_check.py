@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Direct vision control, no HiveMind in the loop (2026-10-04, Sonnet #1+#4).
+"""Direct vision control, no HiveMind in the loop (2026-10-04).
 
 Starts its OWN llama-server on a private port with the SAME model, the SAME
 projector resolution and the SAME flags as the real planner CMD line, asks
@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke_image import build_png  # noqa: E402
 
 _ALPHABET = "0123456789ABCDEFXYZ"  # every char has a 5x7 glyph
-# FLAGS PARITY (2026-10-04, Sonnet): copied from the real planner CMD line
+# FLAGS PARITY (2026-10-04): copied from the real planner CMD line
 # in logs/llama_server_8101.log (vision behaviour depends on ctx/batch).
 _BASE_FLAGS = ["--n-gpu-layers", "99", "--parallel", "1", "--flash-attn", "on",
                "--batch-size", "1024", "--ubatch-size", "256",
@@ -114,7 +114,7 @@ def _port_free(port: int) -> bool:
 
 
 def _stop_tree(proc: subprocess.Popen) -> None:
-    """Kill the llama-server AND its children (2026-10-04, Sonnet #2): an
+    """Kill the llama-server AND its children (2026-10-04): an
     orphaned child keeps holding the VRAM. taskkill /T walks the tree;
     pinned by tests/test_smoke_harness.py against a dummy process tree."""
     if proc.poll() is None:

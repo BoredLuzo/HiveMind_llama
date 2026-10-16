@@ -1,6 +1,6 @@
 """Budget constants — the ONLY place with hard numbers (2026-10-14).
 
-Sonnet review of the tool-pipeline audit: no behavior may branch on model
+Review of the tool-pipeline audit: no behavior may branch on model
 classes or fixed staffels. Everything is DERIVED from measured sizes
 (n_ctx, chars-per-token EMA, max_output) via the fractions below, clamped by
 named floors/ceilings. `Budgets.resolve()` in core/budgets.py is the single

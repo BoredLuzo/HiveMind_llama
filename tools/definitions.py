@@ -449,7 +449,7 @@ def _filter_tools_for_mode(tools: list, mode: str, include_websearch: bool = Fal
     return [t for t in tools if t.get("function", {}).get("name") in allowed]
 
 
-# ── TOOL-SCHEMA BUDGET FIT (2026-10-14, audit phase 6 → Sonnet redesign) ────
+# ── TOOL-SCHEMA BUDGET FIT (2026-10-14) ────────────────────────────────────
 # No model-name staffels: the schema is a CONTINUUM fitted to the run's
 # schema budget (SCHEMA_FRAC of n_ctx — see core/budgets). Every tool has a
 # priority (core tools are always kept) and three description levels. The

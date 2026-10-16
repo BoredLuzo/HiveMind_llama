@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Harness tests for the vision smoke scripts (2026-10-04, Sonnet #2).
+"""Harness tests for the vision smoke scripts (2026-10-04).
 
 The dry-runs only covered path resolution and PNG rendering - the GRADING
 logic and the CLEANUP never ran. These tests exercise both without GPU:

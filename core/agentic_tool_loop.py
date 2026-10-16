@@ -8,7 +8,7 @@ from core.tool_loop import ToolLoop, ToolLoopConfig, _build_tool_call_grammar, _
 from core.agentic_duo_state import DuoRoundState
 from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, CODER_VISION_NOTE as _CODER_VISION_NOTE
 
-# NOTE REPLACEMENT (2026-10-04, Sonnet round 10 #3): removing the note only
+# NOTE REPLACEMENT (2026-10-04): removing the note only
 # stops the false claim - the model must KNOW the image is gone, or it
 # improvises. Replace, don't strip.
 _CODER_VISION_REPLACEMENT = (
@@ -133,7 +133,7 @@ class AgenticToolLoop(ToolLoop):
         else:
             self._tail_guard_fires = 0
 
-        # IMAGES-IN-REQUEST (2026-10-04, Sonnet #4): the duo tool loop is the
+        # IMAGES-IN-REQUEST (2026-10-04): the duo tool loop is the
         # coder's real per-round caller and bypassed the pipeline trace
         # entirely. Count the OUTGOING list (payload["messages"] - the same
         # list the POST below sends, post-compression), also at 0, so "the
@@ -142,7 +142,7 @@ class AgenticToolLoop(ToolLoop):
         logging.getLogger("hivemind.tool_loop").info(
             "[TOOL-LOOP] model=%s port=%s images_in_request=%d",
             self.cfg.model, result.get("dport"), _outgoing_imgs)
-        # NOTE-RETRACT ON LOSS (2026-10-04, Sonnet round 9 #4 + round 10 #3):
+        # NOTE-RETRACT ON LOSS (2026-10-04):
         # the system prompt claims "[VISION] ... you can see it" while the
         # outgoing window no longer carries image parts (compression drops
         # them after round 1 - measured live: 1 -> 0). The helper REPLACES
@@ -557,7 +557,7 @@ class AgenticToolLoop(ToolLoop):
                         except Exception:
                             pass
                         _tel_hashes, _tel_fdi = _tel.message_hashes(_tel_msgs)
-                        # CPT-EMA (2026-10-14, Sonnet redesign): real
+                        # CPT-EMA (2026-10-14): real
                         # chars/token per model from each real response —
                         # Budgets.resolve uses this instead of a constant.
                         try:

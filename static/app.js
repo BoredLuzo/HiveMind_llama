@@ -2598,7 +2598,7 @@ function stopAskUserCountdown() {
 // profiles). They are ALWAYS re-encoded to jpeg via the canvas (first
 // frame) even when small; if that fails, cb(null) and the caller drops the
 // image with a visible notice instead of shipping dead bytes.
-// WHITE FILL (2026-10-04, Sonnet): the canvas starts transparent and jpeg
+// WHITE FILL (2026-10-04): the canvas starts transparent and jpeg
 // has no alpha - without the fill every transparent pixel turned BLACK.
 // cb(url, meta) where meta = {reencoded, mime} so callers can surface the
 // "first frame only" note for animations.

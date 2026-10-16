@@ -176,7 +176,7 @@ class ToolLoopConfig:
     retry_on_grammar_crash: bool = False
     retry_on_parse_error: bool = False
     retry_on_context_overflow: bool = False
-    # IMAGES-IN-REQUEST trace in ToolLoop.run (2026-10-04, Sonnet). The duo
+    # IMAGES-IN-REQUEST trace in ToolLoop.run (2026-10-04). The duo
     # tool loop (AgenticToolLoop) always traces - it bypasses ToolLoop.run.
     log_images_trace: bool = False
 
@@ -323,7 +323,7 @@ class ToolLoop:
                 _tool_messages = await self._on_compress(_tool_messages, _round)
                 _payload["messages"] = _tool_messages
 
-            # IMAGES-IN-REQUEST (2026-10-04, Sonnet): the tool loop is the
+            # IMAGES-IN-REQUEST (2026-10-04): the tool loop is the
             # coder's real per-round caller and used to bypass the pipeline
             # trace entirely. Log every round - also at 0, so "the image
             # fell out of the window after compression" is measurable.
