@@ -42,7 +42,12 @@ REM SAFETY CHECK: the zip must not contain any user-state file.
 REM Gateway entries (2026-10-05, WP1): gateway.toml (owner config) and the
 REM state/audit/kill-switch files. The tracked gateway.toml.example does
 REM NOT match the anchored names below.
-powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $bad = $z.Entries | Where-Object { $_.FullName -match '(^|/)(settings\.json|presets\.json|models\.json|vision_model\.json|routing_weights\.json|memory\.json|gguf_filename_tags\.json|gateway\.toml|gateway_state\.json|gateway_state\.json\.corrupt|gateway\.disabled|gateway\.lock|gateway_audit\.jsonl|gateway_audit\.jsonl\.\d+|gateway_state\.tmp)$' -or $_.FullName -match '(^|/)sessions/' }; if ($bad) { $bad | ForEach-Object { Write-Output ('LEAK: ' + $_.FullName) }; $z.Dispose(); exit 1 }; Write-Output ('entries: ' + $z.Entries.Count); $z.Dispose()"
+REM 2026-10-16: the same check now also rejects local scratch artefacts that
+REM the tracked-tree gate flags (prepush_check.ps1 point c): out*.txt,
+REM dump_*, and ANY .patch/.csv/.log/.pyc/.gguf/.env file. requirements.txt
+REM and requirements-gateway.txt are legitimate and do NOT match (the txt
+REM rule is anchored on the "out" prefix).
+powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $bad = $z.Entries | Where-Object { $_.FullName -match '(^|/)(settings\.json|presets\.json|models\.json|vision_model\.json|routing_weights\.json|memory\.json|gguf_filename_tags\.json|gateway\.toml|gateway_state\.json|gateway_state\.json\.corrupt|gateway\.disabled|gateway\.lock|gateway_audit\.jsonl|gateway_audit\.jsonl\.\d+|gateway_state\.tmp)$' -or $_.FullName -match '(^|/)sessions/' -or $_.FullName -match '(^|/)(out[^/]*\.txt|dump_[^/]*|[^/]*\.(patch|csv|log|pyc|gguf)|\.env)$' }; if ($bad) { $bad | ForEach-Object { Write-Output ('LEAK: ' + $_.FullName) }; $z.Dispose(); exit 1 }; Write-Output ('entries: ' + $z.Entries.Count); $z.Dispose()"
 if errorlevel 1 (
     echo  [ERROR] Zip contains user-state files - NOT usable as a release.
     echo         Fix the tracked tree; nothing was published.

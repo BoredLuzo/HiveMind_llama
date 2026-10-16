@@ -109,6 +109,95 @@ def main():
     check("empty: kein Root-Ordner -> 'Zip contained no version folder'",
           all(not k.is_dir() for k in kids))
 
+    # ---- core+utils, aber OHNE server.py ---------------------------------
+    # Der Layout-Guard (core/utils) laesst das durch; erst der Versions-Probe
+    # (update.bat:132) bricht ab. Ohne diesen Fall waere "core+utils reicht"
+    # eine unbewiesene Annahme.
+    with zipfile.ZipFile(tmp / "nosrv.zip", "w") as z:
+        z.writestr("HiveMind_v1.3.9-test/core/x.py", "a = 1\n")
+        z.writestr("HiveMind_v1.3.9-test/utils/y.py", "b = 2\n")
+    dest_nosrv = tmp / "extracted_nosrv"
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         f"Expand-Archive -Path '{tmp / 'nosrv.zip'}' "
+         f"-DestinationPath '{dest_nosrv}' -Force"],
+        capture_output=True, text=True, timeout=60)
+    check("extract nosrv.zip", r.returncode == 0)
+    exroot_nosrv = next(iter(dest_nosrv.iterdir()), None)
+    check("nosrv: Layout-Guard (core+utils) greift NICHT - kein core/utils-Fehler",
+          exroot_nosrv is not None
+          and (exroot_nosrv / "core").is_dir()
+          and (exroot_nosrv / "utils").is_dir()
+          and not (exroot_nosrv / "server.py").exists())
+    v_nosrv = ps(VERSION_PS.format(srv=exroot_nosrv / "server.py")) \
+        if exroot_nosrv else "?"
+    check("nosrv: Versions-Probe leer -> 'Zip carries no server.py' greift",
+          v_nosrv == "", f" got {v_nosrv!r}")
+
+    # ---- package_release: Leak-Check funktional gegen Fake-Zips -----------
+    # Der Regex wird NICHT nachgebaut, sondern aus deploy/package_release.bat
+    # gelesen und per PowerShell auf echte Zips angewandt.
+    prb = (Path(__file__).parent.parent / "deploy" / "package_release.bat"
+           ).read_text(encoding="utf-8", errors="replace")
+
+    def _leak_cmd(zip_path):
+        for line in prb.splitlines():
+            s = line.strip()
+            if s.lower().startswith("powershell") and "sessions/" in s:
+                body = s[s.index('"') + 1: s.rindex('"')]
+                return body.replace("..\\%OUT%",
+                                    str(zip_path).replace("\\", "/"))
+        return None
+
+    check("package_release: Leak-Check-Zeile gefunden", _leak_cmd(tmp) is not None)
+
+    def _run_leak(zp):
+        cmd = _leak_cmd(zp)
+        rr = subprocess.run(["powershell", "-NoProfile", "-Command", cmd],
+                            capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", timeout=120)
+        return rr.returncode, (rr.stdout or "").strip()
+
+    clean = tmp / "leak_clean.zip"
+    with zipfile.ZipFile(clean, "w") as z:
+        z.writestr("HiveMind_v1.3.9/README.md", "x\n")
+        z.writestr("HiveMind_v1.3.9/requirements.txt", "fastapi\n")
+        z.writestr("HiveMind_v1.3.9/hivemind_gateway/requirements-gateway.txt", "x\n")
+    rc, out = _run_leak(clean)
+    check("package_release: sauberes Zip akzeptiert (requirements*.txt zaehlen NICHT)",
+          rc == 0, f" rc={rc} out={out[:60]!r}")
+
+    for name in ("out.txt", "logs/dump_1.json", "a.patch", "b.csv",
+                 "c.log", "d.pyc", "e.gguf", ".env", "out_run2.txt"):
+        zp = tmp / ("leak_" + name.replace("/", "_").replace(".", "_") + ".zip")
+        with zipfile.ZipFile(zp, "w") as z:
+            z.writestr("HiveMind_v1.3.9/README.md", "x\n")
+            z.writestr(f"HiveMind_v1.3.9/{name}", "x\n")
+        rc, out = _run_leak(zp)
+        check(f"package_release: {name} wird als LEAK abgelehnt",
+              rc == 1 and "LEAK" in out, f" rc={rc} out={out[:50]!r}")
+
+    # Gegenprobe mit dem echten getrackten Baum: kein Pfad darf anschlagen.
+    tracked = subprocess.run(["git", "ls-files"],
+                             cwd=str(Path(__file__).parent.parent),
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace").stdout.splitlines()
+    import re as _re
+    _pats = []
+    for line in prb.splitlines():
+        s = line.strip()
+        if s.lower().startswith("powershell") and "sessions/" in s:
+            body = s[s.index('"') + 1: s.rindex('"')]
+            _pats = _re.findall(r"-match '([^']+)'", body)
+            break
+    check("package_release: mindestens 3 Match-Muster gefunden", len(_pats) >= 3,
+          f" got {len(_pats)}")
+    if len(_pats) >= 3:
+        rx = _re.compile("|".join(f"(?:{p})" for p in _pats))
+        hitting = [f for f in tracked if rx.search("/" + f)]
+        check("package_release: kein getrackter Pfad matcht die Guard-Muster",
+              not hitting, f" {hitting[:5]}")
+
     import shutil
     shutil.rmtree(tmp, ignore_errors=True)
 
