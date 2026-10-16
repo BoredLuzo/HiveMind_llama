@@ -63,7 +63,8 @@ check("the hint names the setting key", "duo_wedge_handoff_enabled" in _html)
 from settings import DEFAULT_SETTINGS                            # noqa: E402
 check("settings.py default is OFF",
       DEFAULT_SETTINGS.get("duo_wedge_handoff_enabled") is False)
-_live_presets = Path(r"C:\Users\user\Desktop\HiveMind\live\presets.json")
+# the live install sits next to the repo checkout; no user path here
+_live_presets = ROOT.parent / "live" / "presets.json"
 if _live_presets.exists():
     import json as _json                                          # noqa: E402
     _pd = _json.loads(_live_presets.read_text(encoding="utf-8"))

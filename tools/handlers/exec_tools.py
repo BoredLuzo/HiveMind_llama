@@ -326,8 +326,8 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             # (what Git Bash shows on Windows). The old rewrite turned that into
             # `C:\\Users\\...` - BACKSLASHES inside a bash command. bash strips
             # them as escapes, so the path collapsed into garbage:
-            #   python3 C:\\Users\\user\\Desktop\\x.py
-            #     -> can't open file 'C:\\\\Users\\\\user\\\\Desktop\\\\x.py'
+            #   python3 C:\\Users\\<user>\\Desktop\\x.py
+            #     -> can't open file 'C:\\\\Users\\\\<user>\\\\Desktop\\\\x.py'
             #     (live: "bash exiting", exit 2 on every absolute path, and the
             #      model then looped on quoting/`C:` theories)
             # Forward slashes are accepted by bash itself AND by native Windows
