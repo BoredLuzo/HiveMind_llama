@@ -70,6 +70,27 @@ def _fallback_extract_tool_calls(content: str) -> list[dict]:
 
 # ── K2: Retry Feedback Injection ──────────────────────────────────────
 
+# TOOL-FEEDBACK-FIX (2026-10-17): the unknown-tool hint used to announce
+# `sorted(names)[:8]` - the first eight names ALPHABETICALLY. Measured for
+# every mode (tool_agent, direct_full, duo_full): that list contained
+# browser/find_references/find_files/get_background_output/get_datetime/
+# get_signatures/edit_file/ask_user and NOT read_file, write_file, run_bash,
+# run_tests or task_complete. A small model that mistyped a tool was therefore
+# corrected with a list that hid the tools it actually needed.
+_FEEDBACK_TOOL_LIMIT = 12
+
+
+def _rank_tool_names(names) -> list[str]:
+    """Most important first: core tools (tools.definitions._TOOL_PRIORITY),
+    then everything else alphabetically. Unknown names sort last."""
+    _clean = sorted({str(n) for n in (names or []) if str(n or "").strip()})
+    try:
+        from tools.definitions import _tool_priority
+        return sorted(_clean, key=lambda n: (_tool_priority(n), n))
+    except (ImportError, AttributeError, TypeError):
+        return _clean
+
+
 def _inject_retry_feedback(
     messages: list,
     error_type: str,
@@ -83,8 +104,14 @@ def _inject_retry_feedback(
     elif error_type == "no_tool_call":
         _fb = "Your last response contained no tool call. You MUST respond with a tool call. No text, no explanation."
     elif error_type == "unknown_tool":
-        _names_json = json.dumps((tool_names or [])[:8])
-        _fb = f"Your last response used an unknown tool name. Valid tool names: {_names_json}. Use exactly one of these names."
+        _all = [str(n) for n in (tool_names or []) if str(n or "").strip()]
+        _ranked = _rank_tool_names(_all)
+        _shown = _ranked[:_FEEDBACK_TOOL_LIMIT]
+        _more = len(_ranked) - len(_shown)
+        _fb = (f"Your last response used an unknown tool name. "
+               f"Valid tool names ({len(_ranked)} total, most important first"
+               + (f", {_more} more available" if _more > 0 else "") + "): "
+               f"{json.dumps(_shown)}. Use exactly one of these names.")
     else:
         _fb = "Your last response was invalid. Respond with a valid tool call."
     messages.append({"role": "user", "content": _fb})
