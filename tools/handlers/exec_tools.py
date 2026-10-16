@@ -694,16 +694,48 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
         _cmd += " --save-dev"
     from tools.runner import _run_inline_tool as _dispatch_bash
     _res = await _dispatch_bash("run_bash", {"cmd": _cmd}, workspace_lock=workspace_lock)
-    # SOURCE-BUILD-HINT (2026-09-15): when pip falls back to building an sdist
-    # (no prebuilt wheel for this venv's Python version — e.g. pygame on
-    # 3.14), the compiler wall is useless to the model. Translate it.
-    if "RUN_BASH_NONZERO" in _res and ("Building wheel for" in _res or "Preparing metadata" in _res or "config_win.py" in _res):
+    # TOOL-LABEL-FIX (2026-10-17, live): install_package runs its command
+    # through the run_bash handler, so every failure came back labelled
+    #   [TOOL_ERROR:RUN_BASH_NONZERO] run_bash: run_bash exited with code 1
+    # for a call the model made as install_package (screenshot: "install_package
+    # · pip: pygame" followed by a run_bash error). Confusing in the chat, in
+    # the error-rollup rollup keys and in the telemetry. Re-label the wrapper.
+    if "RUN_BASH_NONZERO" in _res or "RUN_BASH_EXEC_ERROR" in _res:
+        _code = "INSTALL_FAILED" if "RUN_BASH_NONZERO" in _res else "INSTALL_EXEC_ERROR"
+        _body = _res
+        for _tag in ("[TOOL_ERROR:RUN_BASH_NONZERO]", "[TOOL_ERROR:RUN_BASH_EXEC_ERROR]"):
+            _body = _body.replace(_tag, "")
+        _body = _body.replace("run_bash: run_bash exited with code",
+                              f"install_package: '{manager} install {packages}' failed, exit code")
+        _body = _body.replace("run_bash exited with code",
+                              f"install_package: '{manager} install {packages}' failed, exit code")
+        _body = _body.replace("run_bash execution error",
+                              f"install_package: '{manager} install {packages}' execution error")
+        _body = _body.replace('"tool": "run_bash"', '"tool": "install_package"')
+        _res = f"[TOOL_ERROR:{_code}]" + _body
+    # SOURCE-BUILD-HINT (2026-09-15, broadened 2026-10-17): when pip has no
+    # prebuilt wheel for this venv's Python it silently switches to an sdist
+    # build and the model gets a compiler wall. The old trigger only matched
+    # "Building wheel for"/"Preparing metadata"/"config_win.py" - the live
+    # pygame/3.14 run showed "Installing build dependencies" +
+    # "Getting requirements to build wheel ... status 'error'" + a
+    # FileNotFoundError instead, so no hint appeared and the model retried.
+    if "INSTALL_FAILED" in _res and any(_p in _res for _p in (
+            "Building wheel for", "Preparing metadata", "config_win.py",
+            "Getting requirements to build wheel", "Installing build dependencies",
+            "metadata-generation-failed", "subprocess-exited-with-error",
+            "Microsoft Visual C++", "error: command", "No module named 'setuptools'")):
         _res += (
-            "\n\n[HINT] pip fell back to building from SOURCE — this package has no "
+            "\n\n[HINT] pip fell back to building from SOURCE - this package has no "
             "prebuilt wheel for your venv's Python version (e.g. pygame on 3.14). "
-            "Don't retry the same install. Options: use a wheel-distributed variant "
-            "(e.g. 'pygame-ce'), pick a pure-python alternative, or recreate the "
-            "venv with a Python version that ships wheels for this package."
+            "Do NOT retry the same install. Try, in this order:\n"
+            f"  1. prove there is no wheel: run_bash(cmd='\"{_venv_py}\" -m pip install "
+            f"--only-binary=:all: {packages} 2>&1') - a fast, clear 'no matching "
+            "distribution' is the answer, not a compiler wall\n"
+            "  2. a wheel-distributed variant (pygame -> 'pygame-ce') or a pure-python "
+            "alternative\n"
+            "  3. recreate the venv with a Python version that ships wheels for this "
+            "package (run_bash: '<that python> -m venv .venv')"
         )
     return _res
 
