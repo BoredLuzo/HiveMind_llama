@@ -37,7 +37,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_coder_ctx_agentic` | null | `null` | — |
 | `duo_coder_ctx_normal` | null | `null` | — |
 | `duo_coder_explore_chars` | int | `0` | — |
-| `duo_coder_fallback_model` | str | `"qwen3.5:4b-ud"` | — |
+| `duo_coder_fallback_model` | str | `""` | — |
 | `duo_coder_model` | str | `""` | — |
 | `duo_coder_tool_thinking` | bool | `False` | — |
 | `duo_coder_tool_thinking_auto_mode` | str | `"off"` | — |
@@ -94,7 +94,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_pre_explore_timeout_seconds` | int | `600` | — |
 | `duo_pre_explore_tokens` | int | `700` | — |
 | `duo_profile_quality_model` | str | `"lfm2.5:2.6b"` | — |
-| `duo_profile_speed_model` | str | `"qwen3.5:4b-ud"` | — |
+| `duo_profile_speed_model` | str | `""` | — |
 | `duo_pyright_path` | str | `""` | — |
 | `duo_read_timeout` | int | `390` | — |
 | `duo_repo_memory_enabled` | bool | `True` | — |
@@ -140,7 +140,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_worker_slots` | int | `2` | — |
 | `duo_write_chars_per_token` | float | `2.5` | — |
 | `duo_write_guard_enabled` | bool | `True` | — |
-| `exploration_agent` | object | `{'enabled': True, 'model': 'qwen3.5:4b-ud', 'workers': [{...` | — |
+| `exploration_agent` | object | `{'enabled': True, 'model': '', 'workers': [{...` | — |
 | `git_auto_push` | bool | `False` | — |
 | `git_commit_prefix` | str | `"hivemind:"` | — |
 | `git_default_branch` | str | `"main"` | — |
