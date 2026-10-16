@@ -183,6 +183,33 @@ def cpt_for(model: str) -> float:
     return _cpt_ema.get(str(model or ""), CPT_DEFAULT)
 
 
+# ── chars/token from a REAL tokenizer probe (2026-10-17) ────────────────────
+# Until now a run used the per-model EMA (seeded with the 3.92 module default,
+# from ONE live probe on one model) or that constant. When a slot for the exec
+# model is already loaded, the run can ask the server itself: POST /tokenize on
+# the exact tool-schema JSON returns the true token count, and chars/tokens is
+# this model's real chars-per-token - no staffel, no assumption.
+CPT_PROBE_MIN_CHARS = 200      # below this the per-call overhead dominates
+CPT_PROBE_MIN = 1.5            # same plausibility window as the EMA sampler
+CPT_PROBE_MAX = 12.0
+
+
+def cpt_from_measurement(sent_chars: int, prompt_tokens: int) -> float | None:
+    """chars-per-token from one real tokenizer measurement, or None if the
+    sample is unusable. Mirrors update_cpt_ema's window so both paths agree."""
+    try:
+        if not sent_chars or not prompt_tokens:
+            return None
+        if sent_chars < CPT_PROBE_MIN_CHARS or prompt_tokens <= 0:
+            return None
+        ratio = float(sent_chars) / float(prompt_tokens)
+        if not (CPT_PROBE_MIN < ratio < CPT_PROBE_MAX):
+            return None
+        return round(ratio, 3)
+    except Exception:
+        return None
+
+
 # ── prefill-rate EMA (per model, persisted; task 4) ──────────────────────────
 # Feed from real responses: tps = prompt_n / (prompt_ms / 1000). Stored next
 # to the telemetry rows; Budgets.resolve takes the PERSISTED value (freeze

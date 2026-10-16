@@ -38,6 +38,33 @@ def _retry_backoff(attempt: int, status_code: int = 0) -> float:
     return min(1.5, 0.25 * (attempt + 1))
 
 
+async def tokenize_count(port: int, text: str, timeout_s: float = 5.0) -> int | None:
+    """Real token count for `text` from the running llama-server (/tokenize).
+
+    Returns None on any problem (no slot, old build without the endpoint,
+    timeout, malformed answer) - callers must fall back to their estimate.
+    One short local call, no retry: this is instrumentation, not a
+    correctness path."""
+    if not port or not text:
+        return None
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=2.0, read=timeout_s, write=2.0, pool=2.0)
+        ) as c:
+            r = await c.post(f"http://127.0.0.1:{int(port)}/tokenize",
+                             json={"content": text})
+            if r.status_code != 200:
+                return None
+            data = r.json() or {}
+            toks = data.get("tokens")
+            if isinstance(toks, list) and toks:
+                return len(toks)
+    except Exception as _e:                                     # noqa: BLE001
+        logging.getLogger("hivemind.llama_client").debug(
+            "tokenize probe on port %s failed: %s", port, _e)
+    return None
+
+
 class LlamaClient:
 
 

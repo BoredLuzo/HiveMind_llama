@@ -3732,9 +3732,29 @@ async def run_code_duo(ctx):
                     # schema shows (tool caps, tool list) must not change
                     # mid-run or the prefix cache dies.
                     from core import budgets as _budg
+                    from backend.llama_client import tokenize_count
+                    # REAL-CPT PROBE (2026-10-17): if the coder slot is already
+                    # up, ask the server for the true token count of the exact
+                    # tool-schema JSON we are about to send. chars/tokens is
+                    # then THIS model's measured ratio instead of the module
+                    # default 3.92 / the previous runs' EMA. Failure -> EMA.
+                    _cpt_for_run = _budg.cpt_for(exec_mdl)
+                    _cpt_source = "ema"
+                    try:
+                        _probe_port = int(_cached_coder_port or 0)
+                        if _probe_port and _xtools_ws:
+                            _probe_txt = json.dumps(_xtools_ws)
+                            _probe_toks = await tokenize_count(_probe_port, _probe_txt)
+                            _probe_cpt = _budg.cpt_from_measurement(
+                                len(_probe_txt), int(_probe_toks or 0))
+                            if _probe_cpt:
+                                _cpt_for_run = _probe_cpt
+                                _cpt_source = f"tokenize({len(_probe_txt)}c/{_probe_toks}t)"
+                    except Exception as _cpt_err:
+                        logger.debug("[BUDGETS] cpt probe skipped: %s", _cpt_err)
                     _run_budgets = _budg.resolve(
                         n_ctx=int(_dtool_ctx or 16384),
-                        cpt=_budg.cpt_for(exec_mdl),
+                        cpt=_cpt_for_run,
                         max_out=int(_duo_out_budget or 1024),
                         settings=ctx.settings,
                         # FREEZE RULE (task 4): the persisted EMA from
@@ -3748,9 +3768,10 @@ async def run_code_duo(ctx):
                         budget_chars=_run_budgets.schema_budget)
                     state["_xtools_ws"] = _xtools_ws
                     logger.info(
-                        "[BUDGETS] ctx=%d cpt=%.2f out=%d -> tool_cap=%d read_cap=%d schema=%d "
+                        "[BUDGETS] ctx=%d cpt=%.2f(%s) out=%d -> tool_cap=%d read_cap=%d schema=%d "
                         "inj=%d anchor=+%d outline=%d compress@%d/rest@%d overrides=%s",
-                        _run_budgets.n_ctx, _run_budgets.cpt, _run_budgets.max_out,
+                        _run_budgets.n_ctx, _run_budgets.cpt, _cpt_source,
+                        _run_budgets.max_out,
                         _run_budgets.tool_result_cap, _run_budgets.read_char_cap,
                         _run_budgets.schema_budget, _run_budgets.injection_budget,
                         _run_budgets.anchor_lines, _run_budgets.outline_items,
