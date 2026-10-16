@@ -136,6 +136,34 @@ check("the venv guard still answers first",
 shutil.rmtree(_empty_ws, ignore_errors=True)
 shutil.rmtree(_WS, ignore_errors=True)
 
+# ── (e) the same hint on the run_bash path ──────────────────────────────────
+# install_package is tier 99 and drops out at small windows; at exactly those
+# sizes run_bash is the only path left, so the pip guidance must live there too.
+from tools.handlers.exec_tools import (_pip_packages_from_cmd,   # noqa: E402
+                                       _pip_source_build_hint)
+check("plain pip install", _pip_packages_from_cmd("pip install pygame") == "pygame")
+check("venv interpreter + flags",
+      _pip_packages_from_cmd('".venv/Scripts/python.exe" -m pip install --prefer-binary pygame 2>&1')
+      == "pygame")
+check("chained command with a pipe",
+      _pip_packages_from_cmd("cd /c/x && python -m pip install pygame-ce | tail -5") == "pygame-ce")
+check("requirements-file installs get no package hint",
+      _pip_packages_from_cmd("python -m pip install -r requirements.txt") == "")
+check("non-pip commands are ignored",
+      _pip_packages_from_cmd("npm install left-pad") == ""
+      and _pip_packages_from_cmd("ls -la") == "")
+_h = _pip_source_build_hint("pygame", "C:/ws/.venv/Scripts/python.exe")
+check("hint carries the interpreter and package",
+      "C:/ws/.venv/Scripts/python.exe" in _h and "--only-binary=:all: pygame" in _h)
+_src_exec = (ROOT / "tools" / "handlers" / "exec_tools.py").read_text(encoding="utf-8", errors="replace")
+check("run_bash checks the shared marker list",
+      "any(_p in _err for _p in _PIP_SOURCE_BUILD_MARKERS)" in _src_exec)
+check("run_bash appends the hint for pip failures",
+      "_err += _pip_source_build_hint(_pkgs)" in _src_exec)
+check("install_package uses the same helper",
+      "_res += _pip_source_build_hint(packages" in _src_exec)
+check("one marker list, not two", _src_exec.count("_PIP_SOURCE_BUILD_MARKERS = (") == 1)
+
 print()
 print(f"SUMMARY install_package_errors: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

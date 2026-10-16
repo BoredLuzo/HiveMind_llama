@@ -125,6 +125,51 @@ _INSTALL_CMDS = {
 
 _PKG_RE = re.compile(r"[A-Za-z0-9@/._~+=,\- ]+")  # H-audit: < > are PowerShell redirects
 
+# PIP-SOURCE-BUILD (2026-10-17): markers that mean "pip has no wheel for this
+# Python and is building from source". Shared by install_package and run_bash.
+_PIP_SOURCE_BUILD_MARKERS = (
+    "Building wheel for", "Preparing metadata", "config_win.py",
+    "Getting requirements to build wheel", "Installing build dependencies",
+    "metadata-generation-failed", "subprocess-exited-with-error",
+    "Microsoft Visual C++", "error: command", "No module named 'setuptools'",
+)
+
+_PIP_INSTALL_RX = re.compile(r"(^|[\s;&|(])(?:\S*python\S*\s+-m\s+)?pip\s+install\s+(.+)",
+                             re.IGNORECASE)
+
+
+def _pip_packages_from_cmd(cmd: str) -> str:
+    """Package list of a `pip install ...` command ('' when it is not one)."""
+    m = _PIP_INSTALL_RX.search(str(cmd or ""))
+    if not m:
+        return ""
+    _tail = m.group(2).strip()
+    # a requirements-file install is not a single package name - no hint
+    if re.search(r"(^|\s)(-r|--requirement)\b", _tail):
+        return ""
+    # drop redirections/pipes and flags; keep the package-ish tokens
+    _tail = _tail.split(" 2>&1")[0].split("|")[0].strip()
+    _pkgs = [t for t in _tail.split() if not t.startswith("-")]
+    return " ".join(_pkgs[:6])
+
+
+def _pip_source_build_hint(packages: str, venv_py: str = "") -> str:
+    """The actionable "no wheel for this Python" hint, shared by both paths."""
+    _py = venv_py or "python"
+    _pkgs = packages or "<package>"
+    return (
+        "\n\n[HINT] pip fell back to building from SOURCE - this package has no "
+        "prebuilt wheel for your venv's Python version (e.g. pygame on 3.14). "
+        "Do NOT retry the same install. Try, in this order:\n"
+        f"  1. prove there is no wheel: run_bash(cmd='\"{_py}\" -m pip install "
+        f"--only-binary=:all: {_pkgs} 2>&1') - a fast, clear 'no matching "
+        "distribution' is the answer, not a compiler wall\n"
+        "  2. a wheel-distributed variant (pygame -> 'pygame-ce') or a pure-python "
+        "alternative\n"
+        "  3. recreate the venv with a Python version that ships wheels for this "
+        "package (run_bash: '<that python> -m venv .venv')"
+    )
+
 _WIN_DANGEROUS_PATTERNS = [
     "remove-item -recurse -force c:\\", "remove-item -recurse -force c:/",
     "rd /s /q c:\\", "rd /s /q c:/",
@@ -511,7 +556,7 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
 
         if returncode != 0:
             _result_tail = result[-2500:] if result else "(no output)"
-            return _tool_error_response(
+            _err = _tool_error_response(
                 "RUN_BASH_NONZERO",
                 f"run_bash exited with code {returncode} (shell: {_shell_name}).\n{_result_tail}",
                 tool="run_bash" ,
@@ -521,6 +566,15 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     "stdout_tail": stdout[-1200:] if stdout else "",
                     "stderr_tail": stderr[-1200:] if stderr else "",
                 })
+            # PIP-HINT-IN-RUN_BASH (2026-10-17): the same "no wheel for this
+            # Python" guidance must reach the model when IT runs pip itself.
+            # install_package is tier 99 and is dropped at small windows, so at
+            # exactly the sizes where a small model needs the hint, run_bash is
+            # the only remaining path.
+            _pkgs = _pip_packages_from_cmd(str(cmd))
+            if _pkgs and any(_p in _err for _p in _PIP_SOURCE_BUILD_MARKERS):
+                _err += _pip_source_build_hint(_pkgs)
+            return _err
         return f"[run_bash: exit 0]\n{result}" if result else "[run_bash: exit 0 — no output]"
     except Exception as e:
         return _tool_error_response(
@@ -713,30 +767,18 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
                               f"install_package: '{manager} install {packages}' execution error")
         _body = _body.replace('"tool": "run_bash"', '"tool": "install_package"')
         _res = f"[TOOL_ERROR:{_code}]" + _body
-    # SOURCE-BUILD-HINT (2026-09-15, broadened 2026-10-17): when pip has no
-    # prebuilt wheel for this venv's Python it silently switches to an sdist
-    # build and the model gets a compiler wall. The old trigger only matched
-    # "Building wheel for"/"Preparing metadata"/"config_win.py" - the live
-    # pygame/3.14 run showed "Installing build dependencies" +
+    # SOURCE-BUILD-HINT (2026-09-15, broadened + shared 2026-10-17): when pip
+    # has no prebuilt wheel for this venv's Python it silently switches to an
+    # sdist build and the model gets a compiler wall. The old trigger only
+    # matched "Building wheel for"/"Preparing metadata"/"config_win.py" - the
+    # live pygame/3.14 run showed "Installing build dependencies" +
     # "Getting requirements to build wheel ... status 'error'" + a
     # FileNotFoundError instead, so no hint appeared and the model retried.
-    if "INSTALL_FAILED" in _res and any(_p in _res for _p in (
-            "Building wheel for", "Preparing metadata", "config_win.py",
-            "Getting requirements to build wheel", "Installing build dependencies",
-            "metadata-generation-failed", "subprocess-exited-with-error",
-            "Microsoft Visual C++", "error: command", "No module named 'setuptools'")):
-        _res += (
-            "\n\n[HINT] pip fell back to building from SOURCE - this package has no "
-            "prebuilt wheel for your venv's Python version (e.g. pygame on 3.14). "
-            "Do NOT retry the same install. Try, in this order:\n"
-            f"  1. prove there is no wheel: run_bash(cmd='\"{_venv_py}\" -m pip install "
-            f"--only-binary=:all: {packages} 2>&1') - a fast, clear 'no matching "
-            "distribution' is the answer, not a compiler wall\n"
-            "  2. a wheel-distributed variant (pygame -> 'pygame-ce') or a pure-python "
-            "alternative\n"
-            "  3. recreate the venv with a Python version that ships wheels for this "
-            "package (run_bash: '<that python> -m venv .venv')"
-        )
+    # The same hint now also fires for a pip install run through run_bash (see
+    # _pip_source_build_hint below): install_package is tier 99 and drops out at
+    # small windows, and then run_bash is the only path the model has.
+    if any(_p in _res for _p in _PIP_SOURCE_BUILD_MARKERS):
+        _res += _pip_source_build_hint(packages, str(_venv_py))
     return _res
 
 
