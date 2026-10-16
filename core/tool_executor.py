@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Callable, Awaitable
 
 from tools.runner import _run_inline_tool
+from tools.limits import READ_LADDER_SAME_PATH, READ_LADDER_WIDE
 from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
 from tools.errors import tool_call_failed as _tool_call_failed, tool_error_has_code as _tool_error_has_code, tool_error_response as _tool_error_response
@@ -38,7 +39,7 @@ from core.tool_exec_helpers import (
     _run_bash_fail_fix_pass_insight, _patch_file_fallback_hint,
     _read_required_and_python_hints, _unknown_error_hint,
     _track_file_changes, _register_context_lru, _track_edit_noop,
-    _recovery_saturated,
+    _recovery_saturated, _mode_can_write,
 )
 
 _logger = logging.getLogger("tool_executor")
@@ -945,6 +946,7 @@ async def execute_tool_round(
         if _dname != "task_complete":
             trs.tc_consecutive[0] = 0
         _consecutive_reads = trs.consecutive_reads[0]
+        _wide_read_streak = trs.wide_read_streak[0]
         _read_ladder_fired = trs.read_ladder_fired[0]
 
         # ── Loop detection ──
@@ -1016,26 +1018,42 @@ async def execute_tool_round(
                     "task_complete(status='blocked', reason='...')."
                 )})
 
-        # ── Read-file ladder: 3+ consecutive reads with no write/edit ──
-        elif _consecutive_reads >= 3 and not _read_ladder_fired and any(
-            isinstance(_m, dict) and _m.get("role") == "tool" and _m.get("name") in (
-                "edit_file", "write_file", "patch_file", "write_file_append",
-                "replace_lines", "run_bash", "run_python")
-            for _m in dtool_msgs
-        ):
+        # ── Read-file ladder: reads without any write/edit ──
+        # READ-LADDER FIX (2026-10-17): the old condition additionally required
+        # a write/bash call SOMEWHERE in the history - a model that read ten
+        # files before its first edit never got the hint. What matters is
+        # whether this MODE can write at all (read-only modes stay silent).
+        # Two triggers, because `consecutive_reads` resets on every path change
+        # (PATH-RESET 2026-09-09): the same path read 3x, or 8 reads across
+        # different paths with no write at all - the case the text describes.
+        # NOTE for the same-path trigger: three IDENTICAL repeat calls are
+        # caught earlier by the loop detector, and same-path reads with
+        # different line ranges are `range_read` and do not count - so in
+        # practice the WIDE trigger is the live one. The same-path condition
+        # stays as a safety net if the loop detector changes.
+        elif (_consecutive_reads >= READ_LADDER_SAME_PATH
+              or _wide_read_streak >= READ_LADDER_WIDE) \
+                and not _read_ladder_fired \
+                and _mode_can_write(tool_mode, duo_ws):
+            _ladder_n = max(_consecutive_reads, _wide_read_streak)
+            _ladder_kind = ("same file" if _consecutive_reads >= READ_LADDER_SAME_PATH
+                            else "different files")
             if not _recovery_saturated(dtool_msgs):
-                _logger.info("[READ-LADDER] fired consecutive=%d recovery_saturated=False", _consecutive_reads)
+                _logger.info("[READ-LADDER] fired consecutive=%d wide=%d kind=%s",
+                             _consecutive_reads, _wide_read_streak, _ladder_kind)
                 dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
-                    f"[READ LADDER] {_consecutive_reads} consecutive read_file calls without any write/edit. "
+                    f"[READ LADDER] {_ladder_n} read_file calls ({_ladder_kind}) without any write/edit. "
                     f"You are exploring but not implementing. Pick the MOST RELEVANT file you've read and "
                     f"call write_file or edit_file on it NOW. Do NOT read any more files until you've "
                     f"made a change."
                 )})
             else:
-                _logger.info("[READ-LADDER] skipped (recovery_saturated=True) consecutive=%d", _consecutive_reads)
-            await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_consecutive_reads}x reads ohne Write — Hint injiziert]\n"})
+                _logger.info("[READ-LADDER] skipped (recovery_saturated=True) consecutive=%d wide=%d",
+                             _consecutive_reads, _wide_read_streak)
+            await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_ladder_n}x reads ohne Write — Hint injiziert]\n"})
             trs.read_ladder_fired[0] = True
             trs.consecutive_reads[0] = 0
+            trs.wide_read_streak[0] = 0
 
     # NO-OP HINT (2026-09-07): append only after all tool results of this
     # round, so the assistant(tool_calls) -> tool-result ordering stays

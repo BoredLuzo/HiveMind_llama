@@ -206,6 +206,7 @@ def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "",
     not blind exploration — they neither escalate nor reset.
     """
     if dname == "read_file" and not args_parse_failed:
+        trs.wide_read_streak[0] = trs.wide_read_streak[0] + 1
         if range_read:
             return
         if read_path and trs.last_read_path[0] and read_path != trs.last_read_path[0]:
@@ -216,6 +217,7 @@ def _update_read_ladder(trs, dname, args_parse_failed, read_path: str = "",
     elif dname in ("edit_file", "write_file", "patch_file", "write_file_append",
                    "replace_lines", "run_bash", "run_python"):
         trs.consecutive_reads[0] = 0
+        trs.wide_read_streak[0] = 0
         trs.read_ladder_fired[0] = False
 
 
@@ -233,7 +235,7 @@ _RECOVERY_PHRASES = (
 
 
 def _recovery_saturated(msgs: list) -> bool:
-    """True if last 6 messages already carry 3+ recovery hints."""
+    """True if the recent messages already carry 3+ recovery hints."""
     recent = msgs[-6:] if len(msgs) >= 6 else msgs
     count = sum(
         1 for m in recent
@@ -242,6 +244,29 @@ def _recovery_saturated(msgs: list) -> bool:
                 for phrase in _RECOVERY_PHRASES)
     )
     return count >= 3
+
+
+# ── Write-capability of a tool mode (READ-LADDER fix, 2026-10-17) ───────────
+# The read-ladder hint ("you are exploring but not implementing") only makes
+# sense when the current mode can write at all. It used to require a write or
+# bash call SOMEWHERE in the history, so a model that read 10 files before its
+# first edit never got the hint.
+_WRITE_TOOL_NAMES = ("edit_file", "write_file", "write_file_append",
+                     "patch_file", "replace_lines", "edit_ast")
+
+
+def _mode_can_write(tool_mode: str, duo_ws: bool = False) -> bool:
+    """True if the mode exposes at least one write/edit tool.
+
+    Mode-specific by construction, so a read-only mode stays silent. A mode
+    without a write tool (or an unknown/empty mode) returns False; an import
+    failure returns True - a dead guard would be worse than a hint too many."""
+    try:
+        from tools.definitions import _tool_names_for_mode
+        names = _tool_names_for_mode(tool_mode or "", include_websearch=duo_ws)
+        return bool(set(names) & set(_WRITE_TOOL_NAMES))
+    except Exception:
+        return True
 
 
 
@@ -1066,6 +1091,12 @@ class ToolRoundState:
     consecutive_reads: list = field(default_factory=lambda: [0])
     last_read_path: list = field(default_factory=lambda: [""])
     read_ladder_fired: list = field(default_factory=lambda: [False])
+    # WIDE-READ-STREAK (2026-10-17): consecutive read_file calls across ALL
+    # paths, reset by any write/bash. `consecutive_reads` resets on a path
+    # change (PATH-RESET 2026-09-09: reading different files is normal
+    # exploration), so it can never see "read 8 files, wrote nothing" — which
+    # is the case the ladder hint talks about. This counter is the wide view.
+    wide_read_streak: list = field(default_factory=lambda: [0])
     # WEBSEARCH-BUDGET-STOP (2026-09-17): consecutive budget-exhausted
     # web_search calls; >=2 stops the run (run-persistent ref).
     ws_budget_streak: list = field(default_factory=lambda: [0])
