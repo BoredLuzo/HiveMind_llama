@@ -5566,6 +5566,12 @@ async def run_code_duo(ctx):
                                 port=_cached_coder_port,
                                 max_rounds=int(ctx.settings.get("duo_wedge_handoff_max_rounds", 10) or 10),
                                 timeout_s=float(ctx.settings.get("duo_wedge_handoff_timeout_s", 900) or 900),
+                                # CTX-MATCH (2026-10-17): the fix agent defaulted
+                                # to 8192 while the coder may run at another ctx;
+                                # ensure_loaded then killed and reloaded the warm
+                                # slot (manager_load.py:402) - the opposite of the
+                                # "NEVER evicts" promise in fix_agent's docstring.
+                                num_ctx=int(_dtool_ctx or 8192),
                             )
                             # BUDGET-EXEMPT: the handoff wait does not burn the
                             # chunk deadline — push it forward by the elapsed

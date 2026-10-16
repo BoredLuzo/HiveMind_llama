@@ -133,6 +133,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_wedge_handoff_enabled` | bool | `False` | — |
 | `duo_wedge_handoff_max_per_run` | int | `2` | — |
 | `duo_wedge_handoff_max_rounds` | int | `10` | — |
+| `duo_wedge_handoff_max_tokens` | int | `1200` | output budget of one fix-agent round |
 | `duo_wedge_handoff_model` | str | `""` | empty = coder model (fresh context, same weights) |
 | `duo_wedge_handoff_streak_threshold` | int | `4` | — |
 | `duo_wedge_handoff_timeout_s` | int | `900` | — |

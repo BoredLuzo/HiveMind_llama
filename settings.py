@@ -287,6 +287,11 @@ DEFAULT_SETTINGS = {
     "duo_wedge_handoff_max_per_run":     2,
     "duo_wedge_handoff_timeout_s":       900,
     "duo_wedge_handoff_max_rounds":      10,
+    # MAX-TOKENS-KEY (2026-10-17): core/fix_agent.py has always read this key
+    # (int(_s("duo_wedge_handoff_max_tokens", 1200))), but it was missing here
+    # and in docs/settings.md - the value was fixed at 1200 and could not be
+    # configured. Listed now so the UI/settings.json can set it.
+    "duo_wedge_handoff_max_tokens":      1200,
     "duo_wedge_handoff_model":           "",   # empty = coder model (fresh context, same weights)
     "keep_awake_during_run":   True,
     # DESKTOP-NOTIFICATIONS (2026-08-27, User-Wunsch): Windows-Toasts via
