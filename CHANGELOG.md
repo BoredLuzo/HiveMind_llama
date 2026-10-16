@@ -25,8 +25,12 @@ Chunk-resume verification run + resume durability:
 - ui: short tool results rendered the same text twice (summary carried
   the full text AND the force-opened pre repeated it - every green
   run_tests row); the pre is skipped when the summary IS the content
-- the smoke-test nudge now demands at least one real assertion - a file
-  that cannot fail does not count as a test (anti-spoof tightening)
+- the smoke-test nudge now INSTRUCTS the model to include at least one real
+  assertion or explicit output check ("a file that cannot fail does not
+  count as a test"). This is prompt text only: the auto-test gate checks the
+  command string of the last run_bash (it looks like a test run), not the
+  content of the written test file - a test that cannot fail still passes
+  the gate
 
 Budgets redesign: no model-class staffels
 
@@ -143,18 +147,22 @@ Host-RAM caps (the "compression frees RAM, then swap fills" report):
   slot kept 32 context checkpoints in host RAM. On long installs this
   filled RAM and then swap; a compression rewrites the prefix, so the
   cached old state was dead weight anyway
-- slots now start with --cache-ram 1024 and --ctx-checkpoints 4;
-  settings keys llama_cache_ram_mib / llama_ctx_checkpoints (synced
-  like llama_cache_reuse), env HIVEMIND_CACHE_RAM_MIB /
-  HIVEMIND_CTX_CHECKPOINTS as fallback
+- slots now start with --cache-ram 1024 and --ctx-checkpoints 4. The
+  effective override path is the environment: HIVEMIND_CACHE_RAM_MIB /
+  HIVEMIND_CTX_CHECKPOINTS (read in backend/llama_config.py). The settings
+  keys llama_cache_ram_mib / llama_ctx_checkpoints are read by server.py,
+  but they have no entry in DEFAULT_SETTINGS, no UI field and no
+  documentation - they only take effect if written into settings.json by
+  hand, and a settings.json entry then also overrides the env variables
 
 task_complete badge honesty ("untested" despite green tests):
 
 - the badge showed the model-supplied build_status default ("untested")
   even when the run itself had green tests on record. The run's own
-  test outcome (model-invoked run_tests, auto-test, anti-spoof-verified
-  bash) is now tracked per run and upgrades ONLY the default: untested
-  -> passing/failing; an explicit model status like "blocked" stays
+  test outcome (model-invoked run_tests, auto-test, or a bash run that
+  looks like a test invocation) is now tracked per run and upgrades ONLY
+  the default: untested -> passing/failing; an explicit model status like
+  "blocked" stays
 
 MoE is now a question, not a name guess:
 

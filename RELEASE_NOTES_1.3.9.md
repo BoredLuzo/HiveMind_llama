@@ -31,9 +31,10 @@
   start banner prints it.
 
 ## Host-RAM caps, MoE pin, task_complete
-- `--cache-ram` and `--ctx-checkpoints` are configurable via
-  `llama_cache_ram_mib` / `llama_ctx_checkpoints` (plus `HIVEMIND_*` env
-  overrides); the previous binary defaults remain reachable.
+- `--cache-ram` and `--ctx-checkpoints` default to 1024 MiB / 4 and are
+  overridden with the environment variables `HIVEMIND_CACHE_RAM_MIB` and
+  `HIVEMIND_CTX_CHECKPOINTS`; the previous binary defaults remain reachable.
+  (There is no UI field or documented settings key for these two values.)
 - `HIVEMIND_MTP_SPEC=0` really switches speculative decoding off for every
   model; it used to force `--spec-type draft-mtp` on instead.
 - A model profile's own MoE answer beats the name heuristic, and
@@ -42,7 +43,16 @@
 ## Known limitations
 - Without Git Bash installed, `run_bash` runs through PowerShell;
   `install.bat` neither installs Git nor warns that Git Bash is missing.
+- The smoke-test nudge only *instructs* the model to write a test containing a
+  real assertion. The auto-test gate checks that a test-looking command ran,
+  not what the test file contains.
 - The installer check and every fix above are verified by the offline
   regression suite only, not on a foreign machine.
 - No performance claim: runtime behaviour (models, speed, VRAM, prefill) is
   unmeasured for this release.
+
+## Release content and upgrading
+- The zip no longer ships the developer regression suite (`tests/`) or
+  `deploy/release_checks.bat`. Updating from 1.3.8 moves existing copies of
+  them (and of `docs/roadmap_1.4.md`) into `update_removed_1.3.9\` on the
+  target install - reversible, and nothing user-side is touched.
