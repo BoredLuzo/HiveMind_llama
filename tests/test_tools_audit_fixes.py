@@ -189,10 +189,16 @@ def test_browser_loopback_guard():
 def test_skip_trap_and_ladder_hint():
     src_c = (ROOT / "context" / "compression.py").read_text(encoding="utf-8")
     src_h = (ROOT / "core" / "tool_exec_helpers.py").read_text(encoding="utf-8")
-    ok_all = ("SKIP-TRAP-FIX" in src_c and "_rs.discard(path)" in src_c
+    # 2026-10-17: the direct `_rs.discard(path)` became _drop_read_guard_paths()
+    # because the guard stores absolute paths while the LRU keeps relative ones
+    # (the plain discard missed). Both call sites - the dedupe path and the
+    # mask-first path - now go through it; the behaviour itself is covered
+    # functionally by tests/test_skip_trap.py.
+    ok_all = ("SKIP-TRAP-FIX" in src_c and "_drop_read_guard_paths([path])" in src_c
+              and "_drop_read_guard_paths(_evicted_read_paths)" in src_c
               and 'if _dname not in ("patch_file", "edit_file"):' in src_h)
     if ok_all:
-        ok("SKIP-Trap (read-guard drop nach Evict) + patch-hint dname-Guard")
+        ok("SKIP-Trap (read-guard drop nach Evict, beide Pfade) + patch-hint dname-Guard")
     else:
         fail("skip_trap", "fixes fehlen")
 

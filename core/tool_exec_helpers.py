@@ -235,7 +235,17 @@ _RECOVERY_PHRASES = (
 
 
 def _recovery_saturated(msgs: list) -> bool:
-    """True if the recent messages already carry 3+ recovery hints."""
+    """True if the recent messages already carry enough recovery hints.
+
+    Two ways to saturate:
+      - 3+ hint messages inside the last 6 messages (the historical rule)
+      - BUDGET (2026-10-17): the user-role text in that window already exceeds
+        the run's injection_budget. That budget was computed, logged and then
+        ignored, so ~73 hint sites could stack text without any cap; the
+        per-round telemetry row (injection_chars) showed the size but nothing
+        stopped it.
+
+    Unreadable budgets -> phrase rule only (never a reason to spam hints)."""
     recent = msgs[-6:] if len(msgs) >= 6 else msgs
     count = sum(
         1 for m in recent
@@ -243,7 +253,19 @@ def _recovery_saturated(msgs: list) -> bool:
         and any(phrase in (m.get("content") or "")
                 for phrase in _RECOVERY_PHRASES)
     )
-    return count >= 3
+    if count >= 3:
+        return True
+    try:
+        from core.budgets import active as _b_active
+        _budget = int(getattr(_b_active(), "injection_budget", 0) or 0)
+    except (ImportError, AttributeError, TypeError, ValueError):
+        _budget = 0
+    if _budget > 0:
+        _inj = sum(len(str(m.get("content") or ""))
+                   for m in recent if m.get("role") == "user")
+        if _inj > _budget:
+            return True
+    return False
 
 
 # ── Write-capability of a tool mode (READ-LADDER fix, 2026-10-17) ───────────
