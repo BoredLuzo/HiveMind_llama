@@ -60,6 +60,7 @@ SUITES = [
     ("read_ladder",               "tests/test_read_ladder.py",                  60),
     ("git_tool_gating",           "tests/test_git_tool_gating.py",              60),
     ("cpt_probe",                 "tests/test_cpt_probe.py",                    60),
+    ("skip_trap",                 "tests/test_skip_trap.py",                    60),
     ("env_check",                 "tests/test_env_check.py",                   120),
     ("tool_budgets",              "tests/test_tool_budgets.py",                 60),
     ("ctx_budget",                "tests/test_ctx_budget.py",                   60),

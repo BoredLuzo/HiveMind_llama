@@ -265,7 +265,7 @@ def _mode_can_write(tool_mode: str, duo_ws: bool = False) -> bool:
         from tools.definitions import _tool_names_for_mode
         names = _tool_names_for_mode(tool_mode or "", include_websearch=duo_ws)
         return bool(set(names) & set(_WRITE_TOOL_NAMES))
-    except Exception:
+    except (ImportError, AttributeError, KeyError, TypeError):
         return True
 
 

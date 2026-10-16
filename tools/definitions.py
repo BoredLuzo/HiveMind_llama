@@ -466,7 +466,7 @@ def git_tools_enabled(settings: dict | None = None) -> bool:
         if settings is None:
             from settings import load_settings
             settings = load_settings() or {}
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, OSError):
         return True
     _raw = settings.get("git_tools_enabled", "auto")
     if isinstance(_raw, bool):

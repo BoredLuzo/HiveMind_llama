@@ -206,7 +206,7 @@ def cpt_from_measurement(sent_chars: int, prompt_tokens: int) -> float | None:
         if not (CPT_PROBE_MIN < ratio < CPT_PROBE_MAX):
             return None
         return round(ratio, 3)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 

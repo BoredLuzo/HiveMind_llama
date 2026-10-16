@@ -59,7 +59,7 @@ async def tokenize_count(port: int, text: str, timeout_s: float = 5.0) -> int | 
             toks = data.get("tokens")
             if isinstance(toks, list) and toks:
                 return len(toks)
-    except Exception as _e:                                     # noqa: BLE001
+    except (httpx.HTTPError, ValueError, TypeError, KeyError, OSError) as _e:
         logging.getLogger("hivemind.llama_client").debug(
             "tokenize probe on port %s failed: %s", port, _e)
     return None

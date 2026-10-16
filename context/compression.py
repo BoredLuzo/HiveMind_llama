@@ -104,15 +104,44 @@ def evict_stale_reads_for_path(
         # path, so a fresh read_file returned "[SKIP: already read ... full
         # content is in your context]" — which is FALSE after eviction (the
         # content is gone). Drop the path so re-reads are allowed again.
-        try:
-            from tools.runner import _files_read_in_run as _fri
-            _rs = _fri.get(None)
-            if _rs is not None:
-                _rs.discard(path)
-                _rs.discard(str(path))
-        except (ImportError, AttributeError) as _e:
-            logging.debug("SKIP-TRAP read-guard drop skipped: %s", _e)
+        _drop_read_guard_paths([path])
     return evicted
+
+
+def _drop_read_guard_paths(paths) -> int:
+    """Remove paths from tools.runner._files_read_in_run so a re-read is
+    allowed again after their content was evicted from the context.
+
+    PATH-FORM MISMATCH (2026-10-17): the read guard stores
+    utils.file.normalize_tool_path() results - ABSOLUTE, forward-slash,
+    lowercase - while the LRU keeps whatever the model sent, usually a
+    workspace-relative path ("src/app.py"). A plain set.discard() therefore
+    missed, which made the 2026-09-13 SKIP-TRAP fix and the mask-first path
+    silent no-ops. Matching by trailing path segment covers both forms.
+
+    Dropping an entry only means "a re-read is allowed" (a small token cost),
+    never a correctness problem, so this errs towards dropping."""
+    try:
+        from tools.runner import _files_read_in_run as _fri
+        _rs = _fri.get(None)
+    except (ImportError, AttributeError) as _e:
+        logging.debug("SKIP-TRAP read-guard drop skipped: %s", _e)
+        return 0
+    if _rs is None:
+        return 0
+    _wanted = [str(p).replace("\\", "/").strip().lower().lstrip("./")
+               for p in (paths or []) if str(p or "").strip()]
+    if not _wanted:
+        return 0
+    _dropped = 0
+    for _g in list(_rs):
+        _gn = str(_g).replace("\\", "/").strip().lower()
+        if any(_gn == _w or _gn.endswith("/" + _w) for _w in _wanted):
+            _rs.discard(_g)
+            _dropped += 1
+    if _dropped:
+        logging.debug("SKIP-TRAP: read guard released %d path(s)", _dropped)
+    return _dropped
 
 
 def _evict_stale_tool_outputs(
@@ -136,6 +165,7 @@ def _evict_stale_tool_outputs(
         return 0
 
     evicted = 0
+    _evicted_read_paths: list[str] = []
     for entry in lru.candidates():
         if est <= target_token_budget:
             break
@@ -158,6 +188,8 @@ def _evict_stale_tool_outputs(
             "content": placeholder,
         }
         lru.mark_evicted(idx)
+        if str(entry.get("kind", "") or "") == "read_file" and p:
+            _evicted_read_paths.append(str(p))
         # P1-4 FIX: Incremental token delta instead of O(n) full re-scan.
         # Previously: est = _estimate_ctx_tokens(messages) — O(n) per eviction.
         # Now: adjust by the delta of old vs placeholder content.
@@ -165,6 +197,16 @@ def _evict_stale_tool_outputs(
         evicted += 1
         if est <= hard_floor_tokens:
             break
+
+    # SKIP-TRAP (2026-10-17): this is the mask-first path (default on) and it
+    # returned only a COUNT, so the caller could not clean the read guard - the
+    # same trap as in evict_stale_reads_for_path, plus the path-form mismatch
+    # documented on _drop_read_guard_paths. A masked read_file stayed in
+    # _files_read_in_run, so a fresh full read answered "[SKIP: ... already
+    # read ... the full content is in your context above]" while the content
+    # was gone.
+    if _evicted_read_paths:
+        _drop_read_guard_paths(_evicted_read_paths)
 
     return evicted
 

@@ -3750,7 +3750,7 @@ async def run_code_duo(ctx):
                             if _probe_cpt:
                                 _cpt_for_run = _probe_cpt
                                 _cpt_source = f"tokenize({len(_probe_txt)}c/{_probe_toks}t)"
-                    except Exception as _cpt_err:
+                    except (TypeError, ValueError, KeyError, AttributeError) as _cpt_err:
                         logger.debug("[BUDGETS] cpt probe skipped: %s", _cpt_err)
                     _run_budgets = _budg.resolve(
                         n_ctx=int(_dtool_ctx or 16384),
