@@ -1273,7 +1273,16 @@ async def run_stream(
         _tool_round = 0
         _tool_stop_reason = "completed"
         _tool_ws = bool(settings.get("duo_websearch_enabled", False)) and _WEBSEARCH_AVAILABLE
-        _active_tools = _get_inline_tools(include_websearch=_tool_ws, mode="tool_agent")
+        # SCHEMA-FIT (2026-10-17): this path shipped the full 25-tool schema
+        # (~15.6k chars) whatever the tool-agent ctx was. Fit it to the window.
+        _tool_schema_budget = 0
+        try:
+            from core.budgets import schema_budget_for as _sbf
+            _tool_schema_budget = _sbf(_tool_ctx_override, _tool_model)
+        except (ImportError, AttributeError, TypeError, ValueError):
+            _tool_schema_budget = 0
+        _active_tools = _get_inline_tools(include_websearch=_tool_ws, mode="tool_agent",
+                                          budget_chars=_tool_schema_budget or None)
         # Timeout strategy:
         _tool_read_timeout_s = float(settings.get("duo_llm_slow_timeout_s", 300))
         _tool_http_timeout = _make_httpx_timeout(read_s=_tool_read_timeout_s)

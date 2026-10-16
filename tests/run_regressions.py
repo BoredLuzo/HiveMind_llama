@@ -62,6 +62,7 @@ SUITES = [
     ("cpt_probe",                 "tests/test_cpt_probe.py",                    60),
     ("skip_trap",                 "tests/test_skip_trap.py",                    60),
     ("tool_feedback",             "tests/test_tool_feedback.py",                60),
+    ("schema_fit_paths",          "tests/test_schema_fit_paths.py",             60),
     ("env_check",                 "tests/test_env_check.py",                   120),
     ("tool_budgets",              "tests/test_tool_budgets.py",                 60),
     ("ctx_budget",                "tests/test_ctx_budget.py",                   60),

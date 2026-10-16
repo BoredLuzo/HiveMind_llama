@@ -82,10 +82,20 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
 
     try:
         _ws_avail = bool(ctx.websearch_available)
-        _tools = _tools_fn(include_websearch=_ws_avail, mode=tool_mode)
+        _num_ctx = ctx.get_num_ctx(model, "direct") or 8192
+        # SCHEMA-FIT (2026-10-17): the direct tiers used to ship the FULL tool
+        # schema regardless of the window (direct_full = 25 tools / ~15.6k
+        # chars, i.e. ~2x the 8k budget). Fit it like the duo coder does.
+        _schema_budget = 0
+        try:
+            from core.budgets import schema_budget_for
+            _schema_budget = schema_budget_for(_num_ctx, model)
+        except (ImportError, AttributeError, TypeError, ValueError):
+            _schema_budget = 0
+        _tools = _tools_fn(include_websearch=_ws_avail, mode=tool_mode,
+                           budget_chars=_schema_budget or None)
         if not _tools:
             return
-        _num_ctx = ctx.get_num_ctx(model, "direct") or 8192
         # IMAGES (2026-10-03): raw parts need the projector — the CALLER
         # decides the flag from the same expression that built the messages
         # (2026-10-06, live 11:45): ctx.effective_images was emptied by the

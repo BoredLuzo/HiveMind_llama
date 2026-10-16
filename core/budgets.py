@@ -183,6 +183,19 @@ def cpt_for(model: str) -> float:
     return _cpt_ema.get(str(model or ""), CPT_DEFAULT)
 
 
+def schema_budget_for(n_ctx: int, model: str = "", max_out: int = 1200,
+                      settings: dict | None = None) -> int:
+    """Schema budget (chars) for a path that resolves no full run budgets -
+    the direct tiers, the tool agent and the helper agents. SCHEMA_FRAC of the
+    context, in the model's measured chars-per-token, so those paths fit their
+    tool descriptions to the window instead of shipping the full set."""
+    try:
+        return int(resolve(int(n_ctx or 8192), cpt_for(model),
+                           int(max_out or 1200), settings or {}).schema_budget)
+    except (TypeError, ValueError, AttributeError, KeyError):
+        return 0
+
+
 # ── chars/token from a REAL tokenizer probe (2026-10-17) ────────────────────
 # Until now a run used the per-model EMA (seeded with the 3.92 module default,
 # from ONE live probe on one model) or that constant. When a slot for the exec
