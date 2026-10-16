@@ -138,11 +138,29 @@ run in any order after 1.
 
 ### Phase 0 - decisions (recommendations)
 
-- **STT engine: whisper.cpp**, `base`/`small` quantized, fetched like llama.cpp
-  (`deploy/fetch_whisper.py`, same asset-name logic). Reason: no torch in the
-  core install, CPU-only like pocket-tts, same sidecar/asset pattern the repo
-  already tests. Trade-off: faster-whisper is simpler in Python but pulls torch
-  and a second Python dependency tree.
+- **STT engine: whisper.cpp**, with the model file as the tier - the same release
+  ships `whisper-cli`/`whisper-server` *and* `parakeet-cli`, so "support weak
+  CPUs" is a model choice, not a second install. Measured on the owner's machine
+  (see `C:\Users\NtheP\Desktop\STTEngineTest\RESULTS.md`):
+  whisper `tiny` 205 MB / 0.6-0.95 s, `base` 317 MB / 1.2-1.4 s,
+  `small` 582 MB / 3.5-4.5 s, Parakeet TDT 0.6B v3 `q4_k` 552 MB / 1.4-1.6 s,
+  `q8_0` 794 MB / 1.8-1.9 s (per 17.6 s German / 13.6 s English clip).
+  English is the owner's main case: **Parakeet v3** is the accuracy pick
+  (LibriSpeech clean/other 1.49 %/4.73 % for v2 - it beats whisper-large-v3 and
+  large-v3-turbo on noisy speech at 4-8x the speed, and its transducer cost
+  tracks audio length, so it is predictable on weak CPUs); non-English falls
+  back to whisper `base`/`small`. English-only v2 is the alternative if German
+  accuracy proves weak in practice.
+- **Decode stays in Python**: both CLIs (miniaudio) fail on real Ogg/Opus, which
+  is exactly what Telegram sends; `soundfile` (2 MB wheel, no ffmpeg) decodes it
+  in ~15 ms with an identical transcript. Verified: whisper.cpp reads **only
+  WAV** without ffmpeg, and `whisper-server --convert` exits when ffmpeg is
+  missing.
+- **Language must be explicit.** Without a `language` field the whisper server
+  transcribed German audio into English (it even reported the correct detected
+  language while translating); `-l auto` in the CLI is correct, and the server
+  needs `--language auto` or a per-request field.
+
 - **Audio: ogg/opus** as the wire format (Telegram voice notes require it),
   16 kHz mono for STT, 24 kHz for TTS output. Encode with ffmpeg when present,
   else `soundfile`/`opuslib`; the installer must say clearly when neither is
