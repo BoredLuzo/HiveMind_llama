@@ -40,6 +40,23 @@
 - A model profile's own MoE answer beats the name heuristic, and
   `task_complete` reflects the real test result unless a status is explicit.
 
+## Known issues
+- **Linux:** the installer path (`deploy/install_linux.sh`, the systemd unit,
+  the ubuntu llama.cpp assets) is verified by the offline suite and code review
+  only - it has not been run on a Linux host yet.
+- **Model loading with a mixed preset:** if one role holds a small model while
+  another role asks for a model that does not fit, the pre-flight now refuses
+  that load with `[PRE-FLIGHT-REFUSE]` instead of evicting a pinned or in-use
+  slot. Before this fix the pre-flight could kill the slot a running coder
+  round was using (visible as `[CODER-ROUND-FAIL] ... ConnectError`); the guard
+  covers pinned and in-flight slots, but a load that still cannot be satisfied
+  is now refused rather than forced.
+- **Cache reuse with MTP models:** llama.cpp disables `--cache-reuse` when MTP
+  speculative decoding is active ("cache_reuse is not supported by this
+  context"), so rounds after a large tool result re-prefill part of the prompt
+  (measured 63-98% reuse). Not a regression, but the reuse numbers in the log
+  are lower than on non-MTP models.
+
 ## Known limitations
 - Without Git Bash installed, `run_bash` runs through PowerShell;
   `install.bat` neither installs Git nor warns that Git Bash is missing.
