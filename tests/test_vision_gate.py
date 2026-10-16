@@ -207,6 +207,10 @@ def test_coder_reload_keeps_same_vision_arg():
                         "core", "duo_runner.py")
     lines = io.open(path, encoding="utf-8").read().splitlines()
     _allowed = re.compile(r'^\(?_img_plan\.get\("(planner|coder)"\) == "raw"\)?$')
+    # ALWAYS-VISION (42cbf22): the coder load may OR in the owner's
+    # "keep the projector loaded" toggle - still derived from the image plan,
+    # never a literal.
+    _allowed_always = '_img_plan.get("coder") == "raw" or _always_vision'
     _checked = 0
     for i, line in enumerate(lines):
         if "ensure_loaded(" not in line:
@@ -219,7 +223,8 @@ def test_coder_reload_keeps_same_vision_arg():
             expr = expr.rstrip(")").strip().lstrip("(").strip()
             _checked += 1
             assert expr in ('_img_plan.get("planner") == "raw"',
-                            '_img_plan.get("coder") == "raw"'), \
+                            '_img_plan.get("coder") == "raw"',
+                            _allowed_always), \
                 f"ensure_loaded near line {i+1}: vision arg not from the image plan: {expr!r}"
     assert _checked >= 3, f"expected at least the 3 known vision loads, found {_checked}"
 
@@ -313,13 +318,23 @@ def test_vision_note_retracted_when_outgoing_count_zero():
         {"role": "user", "content": "plan text"},
     ]
     assert atl._count_image_parts(msgs) == 0
-    # the replacement must BOTH stop the false claim AND tell the model
-    # the image is gone (round 10 #3: remove-only left it improvising)
+    # APPEND-ONLY (cache fix 63eb515, pinned in test_prefix_stability.py): the
+    # system message stays byte-identical - rewriting it mid-run killed the
+    # prompt-cache prefix. The correction is an appended note that both stops
+    # the false claim and says the image is gone.
+    _sys_before = dict(msgs[0])
     msgs = atl._retract_vision_note_if_lost(msgs)
-    assert CODER_VISION_NOTE not in msgs[0]["content"]
-    assert "NO LONGER in your context" in msgs[0]["content"]
-    assert "do NOT invent" in msgs[0]["content"]
+    assert msgs[0] == _sys_before
+    assert CODER_VISION_NOTE in msgs[0]["content"]
+    _tail = str(msgs[-1].get("content", ""))
+    assert "NO LONGER in your context" in _tail
     assert "plan text" == msgs[1]["content"]  # untouched
+
+    # ONCE PER RUN (2026-10-17): repeated rounds must not append it again.
+    _n = len(msgs)
+    for _ in range(4):
+        atl._retract_vision_note_if_lost(msgs)
+    assert len(msgs) == _n, "the retract note must be appended at most once"
 
 
 def test_vision_note_kept_while_parts_flow():
@@ -418,28 +433,29 @@ class _PromptCtx:
 
 
 def test_downgraded_plan_builds_coder_prompt_without_vision_note():
-    from core.duo_helpers import _build_duo_coder_sys, effective_image_plan, CODER_VISION_NOTE
+    from core.duo_helpers import (_build_duo_coder_sys, effective_image_plan,
+                                  vision_note_for_coder)
     plan = {"planner": "raw", "coder": "raw", "warnings": [], "mode": "direct"}
     # the post-load gate says the coder slot really runs without a projector:
     plan, _warns = effective_image_plan(plan, coder_slot_vision=False,
                                         has_description=True)
     assert plan["coder"] == "description"
-    # prompt build EXACTLY like the runner: note only when the plan says raw
+    # prompt build EXACTLY like the runner: the runner asks the STRICT helper
+    # (2026-10-17), so an unproven slot (None) stays silent too.
     base = _build_duo_coder_sys(_PromptCtx(), has_plan=True, has_subtasks=False,
                                 has_explore_ctx=False)
     sys_prompt = base
     if plan.get("planner") == "raw" and plan.get("coder") != "raw":
         sys_prompt += "[IMAGE NOTE]"  # planner-saw-it branch
-    elif plan.get("coder") == "raw":
-        sys_prompt += CODER_VISION_NOTE
-    assert CODER_VISION_NOTE not in sys_prompt
+    else:
+        sys_prompt += vision_note_for_coder(plan, False)
     assert "[VISION]" not in sys_prompt
 
-    # control: the SAME builder WITH a raw plan DOES carry the note
+    # control 1: confirmed projector on a raw plan DOES carry the note
     plan_raw = {"planner": "raw", "coder": "raw", "warnings": [], "mode": "direct"}
-    sys_raw = base
-    if plan_raw.get("planner") == "raw" and plan_raw.get("coder") != "raw":
-        sys_raw += "[IMAGE NOTE]"
-    elif plan_raw.get("coder") == "raw":
-        sys_raw += CODER_VISION_NOTE
-    assert CODER_VISION_NOTE in sys_raw
+    sys_raw = base + vision_note_for_coder(plan_raw, True)
+    assert "[VISION]" in sys_raw
+
+    # control 2: unproven vision (None) must not claim the model sees the image
+    sys_unknown = base + vision_note_for_coder(plan_raw, None)
+    assert "[VISION]" not in sys_unknown

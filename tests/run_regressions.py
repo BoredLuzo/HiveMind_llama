@@ -65,6 +65,7 @@ SUITES = [
     ("schema_fit_paths",          "tests/test_schema_fit_paths.py",             60),
     ("wedge_ctx",                 "tests/test_wedge_ctx.py",                    60),
     ("injection_budget",          "tests/test_injection_budget.py",             60),
+    ("vision_strict",             "tests/test_vision_strict.py",                60),
     ("env_check",                 "tests/test_env_check.py",                   120),
     ("tool_budgets",              "tests/test_tool_budgets.py",                 60),
     ("ctx_budget",                "tests/test_ctx_budget.py",                   60),

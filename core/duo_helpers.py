@@ -711,6 +711,22 @@ CODER_VISION_NOTE = (
     "details (layout, texts, colors, shapes) in your work.")
 
 
+def vision_note_for_coder(img_plan: dict, coder_slot_vision) -> str:
+    """The [VISION] note, but only when the coder slot is CONFIRMED to run
+    with its projector (slot.vision_active is True, set from
+    /props.modalities.vision after a load).
+
+    STRICT-VISION (2026-10-17, owner request "vision only when mmproj is
+    loaded"): False (projector missing) and None (unproven - slot not loaded
+    yet, /props unreachable) both keep the note out. A note that claims "you
+    can see it" while the projector is absent makes the model invent visual
+    details; saying nothing is the honest default. The post-load gate adds the
+    note once /props confirms vision."""
+    if (img_plan or {}).get("coder") != "raw":
+        return ""
+    return CODER_VISION_NOTE if coder_slot_vision is True else ""
+
+
 def effective_image_plan(plan, *, planner_slot_vision=None, coder_slot_vision=None,
                          has_description: bool = False):
     """Downgrade image-plan entries the LOADED server cannot honor (2026-10-04).

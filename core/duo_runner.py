@@ -140,7 +140,8 @@ from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_helpers import (
     build_image_desc_block, attach_images_to_last_user, resolve_image_plan,
-    count_image_parts, effective_image_plan, CODER_VISION_NOTE, build_steer_user_message as _build_steer_user_message,
+    count_image_parts, effective_image_plan, CODER_VISION_NOTE, vision_note_for_coder,
+    build_steer_user_message as _build_steer_user_message,
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
@@ -1836,14 +1837,15 @@ async def run_code_duo(ctx):
         # downgrade the plan BEFORE the notes/parts decide from it. No slot
         # loaded (fresh load below) trusts the plan - the post-load gate
         # re-checks against /props truth.
+        _cv_pre = None                 # unknown = no vision claim (strict rule)
         if _img_plan.get("coder") == "raw":
             try:
                 from backend.llama_server_manager import manager as _lsm_vgate
                 _cslot_pre = await _lsm_vgate._find_loaded(exec_mdl)
-                _cv = getattr(_cslot_pre, "vision_active", None) if _cslot_pre is not None else None
-                if _cv is False:
+                _cv_pre = getattr(_cslot_pre, "vision_active", None) if _cslot_pre is not None else None
+                if _cv_pre is False:
                     _img_plan, _vg_warns = effective_image_plan(
-                        _img_plan, coder_slot_vision=_cv,
+                        _img_plan, coder_slot_vision=_cv_pre,
                         has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
                     for _w in _vg_warns:
                         logger.warning("[DUO][VISION-GATE] %s", _w)
@@ -1859,7 +1861,13 @@ async def run_code_duo(ctx):
             # as a content part - acknowledge that so the model knows it can
             # reference what it sees instead of guessing from the plan text.
             # Kept as ONE constant so the post-load gate can retract it.
-            _duo_coder_sys += CODER_VISION_NOTE
+            # STRICT-VISION (2026-10-17): only when the slot is CONFIRMED to
+            # run with its projector. A slot that is not loaded yet (or whose
+            # /props read failed) must not produce a "you can see it" claim -
+            # the post-load gate adds the note once vision is confirmed.
+            _vn_pre = vision_note_for_coder(_img_plan, _cv_pre)
+            if _vn_pre:
+                _duo_coder_sys += _vn_pre
         # SAVED-PATH NOTE (2026-10-03): the original upload lives in the
         # workspace now - tell the coder once so it can reference/reuse it.
         _img_paths = getattr(ctx, "image_paths", None) or []
@@ -2363,9 +2371,25 @@ async def run_code_duo(ctx):
                                 for _w in _vg_warns2:
                                     logger.warning("[DUO][VISION-GATE] %s", _w)
                                     yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
-                            elif _cv2 is None:
-                                logger.info("[DUO][VISION-GATE] coder vision state UNKNOWN "
-                                            "(/props reports no modalities?) - trusting the plan")
+                            elif _cv2 is True:
+                                # STRICT-VISION (2026-10-17): the projector IS
+                                # loaded, so the claim is now proven. The
+                                # pre-prompt build could not know it (this slot
+                                # was loaded in this run) - add the note here.
+                                if _img_plan.get("coder") == "raw" \
+                                        and CODER_VISION_NOTE not in _duo_coder_sys:
+                                    _duo_coder_sys += CODER_VISION_NOTE
+                                    logger.info("[DUO][VISION-GATE] [VISION] note added "
+                                                "(projector confirmed by /props)")
+                            else:
+                                # None = unproven (/props unreachable or no
+                                # modalities field). Do not claim the model can
+                                # see the image.
+                                if CODER_VISION_NOTE in _duo_coder_sys:
+                                    _duo_coder_sys = _duo_coder_sys.replace(CODER_VISION_NOTE, "")
+                                    logger.warning("[DUO][VISION-GATE] coder vision state UNKNOWN "
+                                                   "(/props reports no modalities?) - [VISION] note "
+                                                   "not claimed (strict rule)")
                         except (ImportError, AttributeError, TypeError, ValueError) as _vg_err2:
                             logger.debug("[DUO][VISION-GATE] coder post-load check skipped: %s", _vg_err2)
                     if _subtasks:
