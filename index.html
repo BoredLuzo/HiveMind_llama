@@ -1393,15 +1393,6 @@
       </div>
       <div class="fld-hint">When the coder fails the same edit on one file 4x in a row, a fresh-context repair agent takes over that one edit (same model, clean window, max 2 per run). Ask for its log line "Wedge handoff" in the chat to see it work.</div>
       <div class="tgl-row">
-        <span class="tgl-text">Coder after run</span>
-        <select id="duo-coder-after-run-sel" onchange="postSettings({duo_coder_after_run:this.value})"
-          style="background:#10131a;border:1px solid rgba(32,176,160,.4);border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#20b0a0;width:150px;flex-shrink:0">
-          <option value="keep">keep loaded</option>
-          <option value="evict">unload after run</option>
-        </select>
-      </div>
-      <div class="fld-hint">What happens to the coder's model slot when a run ends. <b>keep loaded</b>: stays warm for the next prompt (the Coder TTL under Advanced decides when it goes). <b>unload after run</b>: the slot is released at the end of the run (also on abort), so the next prompt can load any model or mode.</div>
-      <div class="tgl-row">
           <span class="sl"></span>
         </label>
       </div>
@@ -1506,6 +1497,15 @@
         </label>
       </div>
       <div class="fld-hint">OFF = judge is not re-pinned after each answer &mdash; saves VRAM if judge is rarely used.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Coder after run</span>
+        <select id="duo-coder-after-run-sel" onchange="postSettings({duo_coder_after_run:this.value})"
+          style="background:#10131a;border:1px solid rgba(32,176,160,.4);border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#20b0a0;width:150px;flex-shrink:0">
+          <option value="keep">keep loaded</option>
+          <option value="evict">unload after run</option>
+        </select>
+      </div>
+      <div class="fld-hint">What happens to the coder's model slot when a run ends. <b>keep loaded</b>: the slot stays warm for the next prompt (the Coder TTL under Advanced decides when it is released). <b>unload after run</b>: the slot is released at the end of the run (also on abort), so the next prompt can load any model or mode without evicting something first.</div>
     </div>
 
     <!-- Smart Preload -->
