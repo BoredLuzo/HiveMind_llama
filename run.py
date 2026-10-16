@@ -37,7 +37,13 @@ try:
     _T0 = _time_mod.time()
     _faulthandler_stream = open(_DEATH_LOG_PATH, "a", encoding="utf-8")
     _fh.enable(file=_faulthandler_stream)
-    _fh.register(_faulthandler_stream)
+    # WINDOWS-FIX (2026-10-17, live): faulthandler.register() is POSIX-only.
+    # On Windows it raised AttributeError, the except below swallowed it and
+    # the WHOLE forensics block (heartbeat, signal handlers, atexit marker)
+    # never ran - every start logged "death forensics unavailable". Guard the
+    # POSIX-only call instead of losing the feature.
+    if hasattr(_fh, "register"):
+        _fh.register(_faulthandler_stream)
 
     def _log_death_signal(signum, frame):
         try:
