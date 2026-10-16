@@ -296,18 +296,24 @@ Configs tab or `/model_configs` API, and override base defaults at runtime.
 
 ## Download catalog
 
-`setup_models.bat` offers exactly these models (every repo is pinned — no
-fuzzy search):
+`setup_models.bat` offers these models (every repo is pinned — no fuzzy search).
+The same list lives in `deploy/fetch_models.py`; sizes are the download/VRAM
+figures from that file and only meant as a rough guide:
 
-| Model | Role | Download |
-|-------|------|----------|
-| `gemma-4:e4b-it-qat` (UD-Q4_K_XL) | allrounder / vision (+MTP drafter) | ~4.2 GB + 1 GB mmproj |
-| `gemma-4:e2b-it-qat` (UD-Q4_K_XL) | small allrounder / vision (+MTP drafter) | ~2.6 GB + 1 GB mmproj |
-| `qwen3.6:35b-a3b-ud` (UD-Q4_K_XL) | coder / planner (MoE) | ~22 GB |
-| `hermes3.6:...-final-mtp-apex-compact` | coder / hermes agent default (MoE, MTP) | ~18 GB |
-| `qwen3.5:4b-mtp` (Q4_K_M) | duo coder/planner default (MTP) | ~2.8 GB |
-| `qwen3.5:2b-mtp` (Q4_K_M) | refiner (MTP) | ~1.3 GB |
-| `lfm2.5:2.6b` (Q4_K_M) | subagent / judge (+DSpark drafter) | ~2 GB |
+| Model | Role | Rough size |
+|-------|------|------------|
+| `gemma-4:e4b-it-qat` (UD-Q4_K_XL) | all-rounder / vision (+ MTP drafter) | ~4.2 GB + mmproj |
+| `gemma-4:e2b-it-qat` (UD-Q4_K_XL) | small all-rounder / vision (+ MTP drafter) | ~2.6 GB + mmproj |
+| `gemma-4:e4b-uncensored-hauhaucs-aggressive` | uncensored all-rounder | ~5 GB |
+| `qwen3.6:35b-a3b-ud` | coder / planner (MoE) | ~20 GB |
+| `hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact` | coder / hermes agent (MoE + MTP) | ~18 GB |
+| `qwen3.5:9b-mtp` | heavy duo coder (MTP) | ~6 GB |
+| `qwen3.5:4b-mtp` | duo coder/planner default (MTP) | ~3.3 GB |
+| `qwen3.5:2b-mtp` | refiner (MTP) | ~1.3 GB |
+| `qwen3.5:0.8b-ud` | subagent-lite, smallest ladder tier | ~0.7 GB |
+| `lfm2.5:2.6b` | subagent / judge (+ DSpark drafter) | ~2 GB |
+| `minicpm5:2b-sharp` (Q6_K_XL) | light all-rounder, recommended tier | ~2.1 GB |
+| `minicpm5:2b-sharp-q4` (Q4_K_XL) | same model, smaller/weaker tier | ~1.5 GB |
 
 Other GGUFs on disk can be registered without downloading anything
 (setup_models.bat -> [R]) or added with a full config via [C].
@@ -323,7 +329,7 @@ template. Per-model overrides live in `model_configs/models/<tag>.json`.
 ## UI and control
 
 - Single-page UI, no build step, no framework. Live code display, VRAM
-  monitor, agent toggles, mode selection, SSE streaming (~56 event types).
+  monitor, agent toggles, mode selection, SSE streaming.
 - Ask-User pause + resume with configurable timeout, optional VRAM eviction
   during long pauses, countdown badge. Auto-answer in Until-Finished runs;
   hard-pause when the agent asks too often (>5/10min).
@@ -492,20 +498,21 @@ defaults. The important ones:
 | `duo_websearch_enabled` | false | web search as real tool calls in coding |
 | `searxng_host` | http://localhost:8888 | SearXNG instance URL |
 | `duo_runtime_profile` | balanced | fast / balanced / critical |
-| `duo_coder_fallback_model` | qwen3.5:4b-ud | VRAM fallback for the coder (empty = off) |
+| `duo_coder_fallback_model` | empty (off) | VRAM fallback for the coder |
 | `duo_partial_compression` | false | keep a byte-identical raw tail at compression (KV-cache reuse) |
 | `duo_compress_local_only` | false | skip the compression LLM summary, instant local fallback |
 | `duo_test_feedback_final` | true | auto-run tests before task_complete |
-| `duo_planner_max_tokens` | 8000 | planner output budget (0 = none) |
-| `duo_planner_thinking_budget` | 8000 | planner thinking budget (0 = none) |
 | `disable_thinking_in_planner` | false | force planner to skip thinking |
 | `model_capability_overrides` | {} | per-model capability overrides |
-| `ctx_overrides` | {} | per-role / per-model context overrides |
+| `ctx_overrides` | empty | per-role / per-model context overrides |
 | `duo_tool_sandbox` | true | Windows Job-Object tool sandbox |
 | `keep_awake_during_run` | true | system wake-lock during runs |
 | `desktop_notifications` | true | Windows toast notifications |
 
-Full list (generated): `docs/settings.md`, source of truth `settings.py`.
+Token budgets (tool schema, tool results, injected hints, read caps) are
+derived at run time from the model's context length; the planner output and
+thinking budgets are set in the UI's Advanced section. Full list (generated):
+`docs/settings.md`, source of truth `settings.py`.
 
 ## Updating llama.cpp
 
@@ -590,10 +597,12 @@ fully local alternative to cloud coding tools.
 
 ## Known limitations (v1)
 
-- ~27 tok/s on a mid-range GPU. Slower than API models, fine for unattended
-  runs.
-- Server restart loses in-memory state; pause/timeout/throttle state is not
-  fully persisted yet.
+- Local models are slower than hosted API models on the same hardware; that
+  is the trade for running everything on your own machine. Fine for
+  unattended runs, noticeable for interactive chat.
+- Chunked (Until-Finished) runs survive an engine restart: every completed
+  chunk is checkpointed and the run resumes at the next one. Pause, timeout
+  and throttle state is still not fully persisted.
 - No Docker sandbox; `run_bash` runs with filesystem trust (mitigated by the
   Job-Object sandbox).
 - No vector DB; codebase retrieval is static repo-map + optional LLM
