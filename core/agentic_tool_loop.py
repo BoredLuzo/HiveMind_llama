@@ -23,7 +23,13 @@ def _retract_vision_note_if_lost(msgs: list) -> list:
     round-level branch in post_with_retry is unit-testable: makes the FULL
     decision itself - parts flowing (N>0) keeps the note, N==0 REPLACES it
     with an explicit 'image is gone, don't invent' line. Non-string
-    content = untouched."""
+    content = untouched.
+
+    ONCE PER RUN (2026-10-17): the note is appended only if it is not already
+    in the message list. The earlier version appended it on EVERY round while
+    the image stayed out of the window - measured with the real helper:
+    5 rounds -> 5 identical notes, 995 extra chars, and it kept growing.
+    """
     try:
         if _count_image_parts(msgs) != 0:
             return msgs
@@ -31,10 +37,15 @@ def _retract_vision_note_if_lost(msgs: list) -> list:
         # in-place system replace killed the prompt-cache prefix for the rest
         # of the run.
         _sys0 = msgs[0]
-        if isinstance(_sys0, dict) and isinstance(_sys0.get("content"), str) \
-                and _CODER_VISION_NOTE in _sys0["content"]:
-            msgs.append({"role": "user",
-                         "content": _CODER_VISION_REPLACEMENT.strip()})
+        if not (isinstance(_sys0, dict) and isinstance(_sys0.get("content"), str)
+                and _CODER_VISION_NOTE in _sys0["content"]):
+            return msgs
+        _note = _CODER_VISION_REPLACEMENT.strip()
+        _marker = _note[:40]
+        for _m in msgs:
+            if isinstance(_m, dict) and _marker and _marker in str(_m.get("content") or ""):
+                return msgs          # already retracted in an earlier round
+        msgs.append({"role": "user", "content": _note})
     except (AttributeError, IndexError, TypeError):
         pass
     return msgs

@@ -104,6 +104,31 @@ check("vision retract leaves system byte-identical", _msgs2[0] == _before)
 check("vision retract appends correction note",
       len(_msgs2) == 3 and "NO LONGER" in str(_msgs2[-1].get("content", "")))
 
+# ONCE PER RUN (2026-10-17): the helper runs on EVERY round while the image
+# stays out of the window. The old version appended the note again each time
+# (measured: 5 rounds -> 5 notes, 995 chars). It must append at most once.
+_n_after_first = len(_msgs2)
+for _ in range(6):
+    _retract_vision_note_if_lost(_msgs2)
+check("vision retract is idempotent across rounds (no repeated append)",
+      len(_msgs2) == _n_after_first,
+      f" ({_n_after_first} -> {len(_msgs2)} messages)")
+_notes = [m for m in _msgs2
+          if m.get("role") == "user" and "NO LONGER" in str(m.get("content", ""))]
+check("exactly one vision-retract note in the list", len(_notes) == 1,
+      f" ({len(_notes)} found)")
+
+# a transcript that already carries the note from an earlier round must not
+# get a second one (e.g. after a reload of the persisted message list)
+_from_history = [{"role": "system", "content": "sys " + _CODER_VISION_NOTE},
+                 {"role": "user", "content": "q"},
+                 {"role": "user",
+                  "content": __import__("core.agentic_tool_loop",
+                                        fromlist=["x"])._CODER_VISION_REPLACEMENT.strip()}]
+_retract_vision_note_if_lost(_from_history)
+check("vision retract sees a note already in history", len(_from_history) == 3,
+      f" ({len(_from_history)} messages)")
+
 print()
 print(f"{'='*50}")
 print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
