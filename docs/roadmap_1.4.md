@@ -141,16 +141,20 @@ run in any order after 1.
 - **STT engine: whisper.cpp**, with the model file as the tier - the same release
   ships `whisper-cli`/`whisper-server` *and* `parakeet-cli`, so "support weak
   CPUs" is a model choice, not a second install. Measured on the owner's machine
-  (see `C:\Users\NtheP\Desktop\STTEngineTest\RESULTS.md`):
-  whisper `tiny` 205 MB / 0.6-0.95 s, `base` 317 MB / 1.2-1.4 s,
-  `small` 582 MB / 3.5-4.5 s, Parakeet TDT 0.6B v3 `q4_k` 552 MB / 1.4-1.6 s,
-  `q8_0` 794 MB / 1.8-1.9 s (per 17.6 s German / 13.6 s English clip).
-  English is the owner's main case: **Parakeet v3** is the accuracy pick
-  (LibriSpeech clean/other 1.49 %/4.73 % for v2 - it beats whisper-large-v3 and
-  large-v3-turbo on noisy speech at 4-8x the speed, and its transducer cost
-  tracks audio length, so it is predictable on weak CPUs); non-English falls
-  back to whisper `base`/`small`. English-only v2 is the alternative if German
-  accuracy proves weak in practice.
+  (`C:\Users\NtheP\Desktop\STTEngineTest\RESULTS.md`), 8 threads:
+  - **real human English, 73 LibriSpeech utterances / 481 s, micro-WER**:
+    parakeet v3 **q4_k 3.57 %** (RTFx 18.7, 552 MB), q8_0 3.65 % (10.6, 794 MB),
+    whisper small 7.30 % (4.1, 582 MB), base 9.91 % (14.1, 317 MB),
+    base.en 9.74 %, tiny 12.43 % (23.6, 205 MB), tiny.en 10.43 % (27.1).
+    Parakeet halves whisper-small's error rate while being 4.5x faster;
+    quantizing it q4_k costs nothing measurable.
+  - **default: Parakeet v3 q4_k** (English is the owner's main case);
+    other languages: whisper `base`/`small` by setting (language-routed, like the
+    production reference). Weak-CPU floor: whisper `tiny`/`tiny.en`, though
+    Parakeet q4_k is faster than base here - prefer it unless RAM is the limit.
+  - English-only v2 is the alternative if German accuracy proves weak in
+    practice; German real-world accuracy is still unmeasured (needs a human
+    sample, not TTS).
 - **Decode stays in Python**: both CLIs (miniaudio) fail on real Ogg/Opus, which
   is exactly what Telegram sends; `soundfile` (2 MB wheel, no ffmpeg) decodes it
   in ~15 ms with an identical transcript. Verified: whisper.cpp reads **only
