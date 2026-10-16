@@ -96,7 +96,18 @@ def _inject_retry_feedback(
     error_type: str,
     bad_content: str = "",
     tool_names: list | None = None,
+    model: str = "",
 ) -> None:
+    # HARNESS-STATS (2026-10-17): count what the model tripped over, per model.
+    # Measurement only - no branch depends on it (owner decision: no
+    # model-dependent cap; the tier drop stays window-based).
+    try:
+        from core.harness_stats import note as _hs_note
+        _hs_note(model, "unknown_tool" if error_type == "unknown_tool"
+                 else ("parse_error" if error_type == "parse_error" else "invalid_args"),
+                 detail=error_type)
+    except (ImportError, AttributeError, TypeError):
+        pass
     if bad_content:
         messages.append({"role": "assistant", "content": bad_content[:200]})
     if error_type == "parse_error":
@@ -400,6 +411,7 @@ class ToolLoop:
                         _tool_messages,
                         error_type="no_tool_call",
                         bad_content=_content_text or _content or "",
+                        model=getattr(self.cfg, "model", ""),
                     )
                     _feedback_injected_count += 1
                     state.fail_streak += 1
@@ -442,6 +454,7 @@ class ToolLoop:
                             error_type="unknown_tool",
                             bad_content=_name,
                             tool_names=sorted(_known_tool_names),
+                        model=getattr(self.cfg, "model", ""),
                         )
                         _feedback_injected_count += 1
                     state.tool_errors += 1
@@ -646,7 +659,8 @@ class ToolLoop:
                         _err_body = _resp.text[:300]
                         if "CallExpression" in _err_body:
                             if not _fdbk_injected_this_call:
-                                _inject_retry_feedback(payload["messages"], error_type="parse_error", bad_content="")
+                                _inject_retry_feedback(payload["messages"], error_type="parse_error", bad_content="",
+                                              model=getattr(self.cfg, "model", ""))
                                 _fdbk_injected_this_call = True
                             if self.cfg.thinking:
                                 self.cfg.thinking = False

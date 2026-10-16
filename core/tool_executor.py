@@ -457,6 +457,15 @@ async def execute_tool_round(
         _dresult = await _execute_one_tool(
             _dname, _dargs, _dargs_with_model, _i, _pre_results,
             trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws)
+        # HARNESS-STATS (2026-10-17): count invalid arguments per model. Pure
+        # measurement - no behaviour depends on it (owner: no model-dependent cap).
+        try:
+            from core.harness_stats import note as _hs_note
+            from tools.errors import tool_error_has_code as _hs_has
+            if _hs_has(_dresult, "INVALID_ARGUMENT"):
+                _hs_note(exec_model, "invalid_args", detail=str(_dname))
+        except (ImportError, AttributeError, TypeError):
+            pass
         # WEBSEARCH-BUDGET-STOP (2026-09-17): after 2 consecutive budget-
         # exhausted web_search calls the model still retries with different
         # queries — stop the run instead of burning rounds (live: 28 rounds,
@@ -502,6 +511,12 @@ async def execute_tool_round(
             if _should_break:
                 _logger.warning("[EXEC-LOOP-DIAG] loop_detected via on_tool_result hook (tool=%s)", _dname)
                 result.loop_detected = True
+                # HARNESS-STATS: the stuck hook fires on repeated identical calls.
+                try:
+                    from core.harness_stats import note as _hs_note2
+                    _hs_note2(exec_model, "repeat_call", detail=str(_dname))
+                except (ImportError, AttributeError, TypeError):
+                    pass
                 break
 
         if hooks.is_aborted(chat_id):
