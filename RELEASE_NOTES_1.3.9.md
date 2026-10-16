@@ -49,4 +49,13 @@ UNMEASURED — no performance claims.
   layout guard, rollback docs (52971da, c08611a). Batch logic tested
   against fake zips only, never executed against live/.
 - Test infra: UTF-8 suites without PYTHONUTF8 (ba28342), new suites
-  (105 total).
+  (106 total).
+
+## Known limitations (honest)
+- Without Git Bash installed, run_bash runs via powershell.exe and the
+  hint follows that fallback (c2a3e43) — but the installer neither
+  installs Git nor warns when Git Bash is missing (reported, open).
+- The installer import check + guided repair (tools/env_check.py,
+  346a39e) is only proven by the offline suite against artificially
+  broken packages in %TEMP% — it has NOT been exercised on a foreign
+  machine's fresh install.
