@@ -17,9 +17,8 @@ _INLINE_CODING_TOOLS = [
         "name": "read_file", "description": (
             "Read file content. ALWAYS call read_file before edit_file on existing files. "
             "Returns RAW content (no line-number prefixes) with a header showing the total/selected line range. "
-            "Files above the run's read budget are refused with a range hint; "
-            "use get_signatures first and start_line/end_line to read only the sections you need. "
-            "(Run-specific budget numbers are inserted when the run resolves its budgets.)"
+            "Files above the read budget are refused with a range hint; "
+            "use get_signatures first and start_line/end_line to read only the sections you need."
         ),
         "parameters": {"type": "object", "properties": {
             "path":       {"type": "string", "description": "Absolute or relative file path"},
@@ -118,7 +117,8 @@ _INLINE_CODING_TOOLS = [
             "error output names the shell that ran. On Linux/Mac it is bash. "
             "Only for what no dedicated tool covers: content search -> search_code, "
             "file names -> find_files, references -> find_references, git -> git_status, "
-            "installs -> install_package. Long-running services: use start_background — "
+            "installs -> install_package (each of these only if it is in your "
+            "tool list). Long-running services: use start_background — "
             "run_bash waits and times out.\n"
             "NEVER create or edit source files via run_bash — use write_file/edit_file "
             "(on Windows '>' writes UTF-16 and there are no heredocs). "

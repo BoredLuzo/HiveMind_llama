@@ -128,11 +128,21 @@ _SYSTEM_PROMPT = (
 
 
 def _tool_schemas() -> list[dict]:
-    """Filter the read-only tool OpenAI schemas from definitions.py."""
+    """Filter the read-only tool OpenAI schemas from definitions.py.
+
+    BUDGET-TEXTS (2026-10-17): the schemas state the caps the handlers actually
+    enforce (core.budgets.active(), i.e. the run's budgets or the same 16k
+    fallback the handlers use) instead of shipping the module placeholder text.
+    This set is small enough to fit every window, so no fit is applied."""
     try:
-        from tools.definitions import _INLINE_CODING_TOOLS
+        from tools.definitions import _INLINE_CODING_TOOLS, _apply_budget_texts
+        try:
+            from core.budgets import active as _b_active
+            _src = _apply_budget_texts(list(_INLINE_CODING_TOOLS), _b_active())
+        except (ImportError, AttributeError, TypeError):
+            _src = list(_INLINE_CODING_TOOLS)
         want = set(_ALLOWED_TOOLS)
-        return [t for t in _INLINE_CODING_TOOLS
+        return [t for t in _src
                 if t.get("function", {}).get("name") in want]
     except Exception:
         # Minimal-Fallback (OpenAI-Format)

@@ -1050,7 +1050,7 @@ async def execute_tool_round(
             else:
                 _logger.info("[READ-LADDER] skipped (recovery_saturated=True) consecutive=%d wide=%d",
                              _consecutive_reads, _wide_read_streak)
-            await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_ladder_n}x reads ohne Write — Hint injiziert]\n"})
+            await hooks.emit({"type": "token", "content": f"\n[Read-Ladder: {_ladder_n}x reads without a write — hint injected]\n"})
             trs.read_ladder_fired[0] = True
             trs.consecutive_reads[0] = 0
             trs.wide_read_streak[0] = 0

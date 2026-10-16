@@ -95,10 +95,19 @@ def result_from_verdict(text: str, changed: bool) -> dict:
 
 
 def _tool_schemas() -> list[dict]:
+    """The repair toolset with the caps the handlers actually enforce.
+
+    BUDGET-TEXTS (2026-10-17): same reason as in subagent_lite - the schemas
+    used to carry the module placeholder text instead of the budgets in force."""
     try:
-        from tools.definitions import _INLINE_CODING_TOOLS
+        from tools.definitions import _INLINE_CODING_TOOLS, _apply_budget_texts
+        try:
+            from core.budgets import active as _b_active
+            _src = _apply_budget_texts(list(_INLINE_CODING_TOOLS), _b_active())
+        except (ImportError, AttributeError, TypeError):
+            _src = list(_INLINE_CODING_TOOLS)
         want = set(_ALLOWED_TOOLS)
-        return [t for t in _INLINE_CODING_TOOLS
+        return [t for t in _src
                 if t.get("function", {}).get("name") in want]
     except Exception:
         return [{"type": "function", "function": {"name": n, "description": f"fix-agent tool: {n}",
