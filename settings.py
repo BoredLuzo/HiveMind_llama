@@ -299,6 +299,10 @@ DEFAULT_SETTINGS = {
     "git_default_branch":      "main",
     "git_commit_prefix":       "hivemind:",
     "git_auto_push":           False,
+    # GIT-TOOLS-GATE (2026-10-17): git_status/git_commit only ship in a mode's
+    # tool schema when git is set up. "auto" = one of git_repo_url /
+    # git_username / git_email / git_token is filled in; true/false force it.
+    "git_tools_enabled":       "auto",
 
     # ════════════════════════════════════════════════════════════════════════
     # J) WEBSEARCH & SEARXNG

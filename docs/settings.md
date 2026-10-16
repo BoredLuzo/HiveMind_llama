@@ -146,6 +146,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `git_email` | str | `""` | — |
 | `git_repo_url` | str | `""` | — |
 | `git_token` | str | `""` | — |
+| `git_tools_enabled` | str | `"auto"` | git_status/git_commit in the tool schema: auto = one of git_repo_url/git_username/git_email/git_token is set, true = always, false = never |
 | `git_username` | str | `""` | — |
 | `gpu_backend` | str | `""` | — |
 | `image_desc_full_pipeline` | bool | `False` | — |

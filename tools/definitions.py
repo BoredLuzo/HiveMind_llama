@@ -444,9 +444,49 @@ def _tool_names_for_mode(mode: str, include_websearch: bool = False) -> set[str]
     return allowed
 
 
+# ── GIT-TOOLS-GATE (2026-10-17) ─────────────────────────────────────────────
+# git_status/git_commit are only worth schema space when git is actually set up
+# for this install. They now follow the git credentials/toggles:
+#   settings git_tools_enabled: "auto" (default) | true | false
+#   "auto" = at least one of git_repo_url / git_username / git_email /
+#            git_token is set.
+# read-only "background"/research tools are deliberately NOT gated (they work
+# without any configured service).
+_GIT_TOOL_NAMES = ("git_status", "git_commit")
+_GIT_CREDENTIAL_KEYS = ("git_repo_url", "git_username", "git_email", "git_token")
+
+
+def git_tools_enabled(settings: dict | None = None) -> bool:
+    """True if the git tools should ship in a schema (see _GIT_TOOL_NAMES).
+
+    Unreadable/unavailable settings -> True (keep the previous behaviour: the
+    gate must never be the reason a tool silently vanishes on a settings
+    read error)."""
+    try:
+        if settings is None:
+            from settings import load_settings
+            settings = load_settings() or {}
+    except Exception:
+        return True
+    _raw = settings.get("git_tools_enabled", "auto")
+    if isinstance(_raw, bool):
+        return _raw                     # JSON true/false, not the string form
+    _mode = str(_raw or "auto").strip().lower()
+    if _mode in ("0", "false", "off", "no", "never"):
+        return False
+    if _mode in ("1", "true", "on", "yes", "always"):
+        return True
+    return any(str(settings.get(_k) or "").strip()
+               for _k in _GIT_CREDENTIAL_KEYS)
+
+
 def _filter_tools_for_mode(tools: list, mode: str, include_websearch: bool = False) -> list:
     allowed = _tool_names_for_mode(mode, include_websearch=include_websearch)
-    return [t for t in tools if t.get("function", {}).get("name") in allowed]
+    out = [t for t in tools if t.get("function", {}).get("name") in allowed]
+    if not git_tools_enabled():
+        out = [t for t in out
+               if t.get("function", {}).get("name") not in _GIT_TOOL_NAMES]
+    return out
 
 
 # ── TOOL-SCHEMA BUDGET FIT (2026-10-14) ────────────────────────────────────
