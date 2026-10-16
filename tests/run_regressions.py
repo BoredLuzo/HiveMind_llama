@@ -75,6 +75,7 @@ SUITES = [
     ("run_bash_drive_paths",       "tests/test_run_bash_drive_paths.py",      60),
     ("test_detection_fallback",   "tests/test_test_detection_fallback.py",   60),
     ("install_package_errors",    "tests/test_install_package_errors.py",    60),
+    ("harness_stats",             "tests/test_harness_stats.py",             60),
     ("injection_budget",          "tests/test_injection_budget.py",             60),
     ("vision_strict",             "tests/test_vision_strict.py",                60),
     ("env_check",                 "tests/test_env_check.py",                   120),
