@@ -50,12 +50,39 @@ class ModelSlot:
         # None = unknown (/props never fetched). Distinct from the REQUESTED
         # self._vision so the duo gate can catch a silently dropped projector.
         self.vision_active: Optional[bool] = None
+        # IN-USE GUARD (2026-10-17): count of in-flight rounds that are using
+        # this slot RIGHT NOW. The pre-flight eviction refuses to sacrifice a
+        # slot with in_flight > 0 even when the pin is already gone: a run
+        # unpins its coder when the run tears down, but the last coder POST can
+        # still be in flight - live run 17:57:36 killed exactly that slot for
+        # another role's load and the round died with ConnectError.
+        self.in_flight: int = 0
     def set_pinned(self, val: bool) -> None:
         # PIN EXPIRY (2026-10-02): set/clear the pin and stamp the time so
         # LRU eviction can reclaim pins older than 30 minutes.
         import time as _t
         self.pinned = bool(val)
         self.pinned_at = _t.time() if val else 0.0
+
+    def mark_in_flight(self) -> None:
+        """A round starts using this slot (see in_flight in __init__)."""
+        self.in_flight = int(getattr(self, "in_flight", 0)) + 1
+
+    def clear_in_flight(self) -> None:
+        self.in_flight = max(0, int(getattr(self, "in_flight", 0)) - 1)
+
+    @property
+    def evictable(self) -> bool:
+        """MAY the pre-flight/LRU path sacrifice this slot?
+
+        False for pinned slots (a run holds them) and for slots with an
+        in-flight round - killing those produces a ConnectError mid-round
+        instead of a clean "does not fit" refusal."""
+        if self.pinned:
+            return False
+        if int(getattr(self, "in_flight", 0)) > 0:
+            return False
+        return not getattr(self, "_loading", False)
 
 
     @property

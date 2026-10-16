@@ -5117,6 +5117,19 @@ async def run_code_duo(ctx):
                             workspace=_ws_str, run_id=(getattr(ctx, "chat_id", None) or getattr(ctx, "run_id", "") or ""),
                         )
                         _hb_interval = _read_hb_interval(ctx.settings)
+                        # IN-USE GUARD (2026-10-17, live): while this round is
+                        # running, the coder slot must be un-evictable even
+                        # after the run's pin is released - the pre-flight used
+                        # to kill exactly this slot for another role's load and
+                        # the round died with ConnectError.
+                        _inuse_slot = None
+                        try:
+                            from backend.llama_server_manager import manager as _lsm_inuse
+                            _inuse_slot = _lsm_inuse._find_loaded(exec_mdl)
+                            if _inuse_slot is not None:
+                                _inuse_slot.mark_in_flight()
+                        except (ImportError, AttributeError, TypeError):
+                            _inuse_slot = None
                         _post_task = asyncio.create_task(
                             _duo_loop.post_with_retry(_tool_payload, dtool_msgs=_dtool_msgs, ctx=ctx, _parts=_parts)
                         )
@@ -5165,6 +5178,11 @@ async def run_code_duo(ctx):
                             yield await ctx.emit({"type": "status",
                                 "content": f"⛔ Coder round failed ({type(_pt_exc).__name__}): {str(_pt_exc)[:140]}"})
                             ctx.phase_timer.skip("coder_loop")
+                            if _inuse_slot is not None:
+                                try:
+                                    _inuse_slot.clear_in_flight()
+                                except (AttributeError, TypeError):
+                                    pass
                             clear_graceful_stop(ctx.run_id)
                             _cleanup_pause_state(ctx.run_id)
                             if ctx.chat_id:
@@ -5178,6 +5196,11 @@ async def run_code_duo(ctx):
                             ))
                             return
                         # _duo_state mutated in-place by AgenticToolLoop — no sync needed
+                        if _inuse_slot is not None:
+                            try:
+                                _inuse_slot.clear_in_flight()
+                            except (AttributeError, TypeError):
+                                pass
                         _dport = _result["dport"]
                         _cached_coder_port = _duo_state.cached_port
                         _dr_msg = _result["dr_msg"]

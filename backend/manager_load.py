@@ -74,6 +74,36 @@ def _omit_mmproj_for(model: str, vision: bool = False) -> bool:
     return _hit
 
 
+def _pre_flight_evict_candidates(slots, exclude_slot) -> list:
+    """Slots the pre-flight MAY sacrifice, LRU-first - pure, so the guard rules
+    are testable without spawning a server.
+
+    IN-USE GUARD (2026-10-17, live): a pinned slot is untouchable, and so is a
+    slot with an in-flight round even when its pin is already gone. Live run
+    17:57:36: the coder's run had torn down (pin released) while its last coder
+    POST was still in flight; the pre-flight killed that very slot to load a
+    35B model for another role and the round died with ConnectError. A refused
+    load with a clear message is the correct outcome there, not a dead round.
+    """
+    _cands = [
+        s for s in slots
+        if s is not exclude_slot and s.is_running and _slot_evictable(s)
+    ]
+    return sorted(_cands, key=lambda s: float(getattr(s, "last_used", 0.0) or 0.0))
+
+
+def _slot_evictable(slot) -> bool:
+    """True when the pre-flight/LRU path may kill this slot. Uses
+    LlamaSlot.evictable when available; test doubles without it fall back to
+    the same three rules (not pinned, not loading, no round in flight)."""
+    _ev = getattr(slot, "evictable", None)
+    if _ev is not None:
+        return bool(_ev)
+    return (not getattr(slot, "pinned", False)
+            and not getattr(slot, "_loading", False)
+            and int(getattr(slot, "in_flight", 0) or 0) == 0)
+
+
 class LlamaLoadMixin:
 
     async def _adopt_or_kill_port(self, slot) -> str:
@@ -1523,14 +1553,26 @@ class LlamaLoadMixin:
                 _recovered = _fit.ok
             if not _recovered and not _fit.ok:
                 while not self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id).ok:
-                    _cands = [
-                        s for s in self._slots
-                        if s is not slot and s.is_running
-                        and not s.pinned and not getattr(s, "_loading", False)
-                    ]
+                    _cands = _pre_flight_evict_candidates(self._slots, slot)
                     if not _cands:
+                        # IN-USE GUARD (2026-10-17): refuse instead of killing a
+                        # pinned/in-flight slot. Name the blockers so the caller
+                        # can show "role X wants model Y, blocked by Z".
+                        _blockers = [
+                            f"{s.model or '?'}(slot {s.slot_id}"
+                            f"{', pinned' if s.pinned else ''}"
+                            f"{', in-flight' if int(getattr(s, 'in_flight', 0)) > 0 else ''}"
+                            f"{', loading' if getattr(s, '_loading', False) else ''})"
+                            for s in self._slots
+                            if s is not slot and s.is_running
+                        ]
+                        logger.warning(
+                            "[PRE-FLIGHT-REFUSE] %s @ctx=%d does not fit; not evicting "
+                            "in-use slots%s", model, num_ctx,
+                            (" - blocked by " + ", ".join(_blockers)) if _blockers else "",
+                        )
                         break
-                    _victim = min(_cands, key=lambda s: s.last_used)
+                    _victim = _cands[0]
                     self._metric_inc("evictions_total")
                     self._metric_inc("evictions_preflight")
                     logger.info(
