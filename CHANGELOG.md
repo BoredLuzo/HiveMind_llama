@@ -84,10 +84,10 @@ Tool-pipeline audit phases 4-7 (compression, injections, tool profiles, web):
 - bash-loop reinject menu is names-only (~300 instead of ~5.2k chars -
   the model already carries the full descriptions in its schema); the
   too-large-read signature outline dropped 200 -> 60 items
-- tool profiles: settings tool_profile = auto | full | compact. compact
-  keeps the essential 14 tools with one-line descriptions (5.9k instead
-  of 15.3k chars schema, ~1.5k tokens on the live coder); auto picks
-  compact for small models (qwen3.5:4b, lfm2.5:2.6b, ...)
+- tool descriptions are fitted to the schema budget instead of a
+  profile switch (see the budgets section): every tool has a priority,
+  core tools are always kept, non-core tools that do not fit even at the
+  minimal description level are dropped
 - web_fetch has its OWN call budget (webfetch_max_calls, default 20) -
   pure doc-fetching no longer drains the web_search budget
 - trafilatura extraction runs in a worker thread - a heavy page no
