@@ -105,11 +105,30 @@ def main():
           '"--cache-ram", str(int(CACHE_RAM_MIB))' in ml
           and '"--ctx-checkpoints", str(int(CTX_CHECKPOINTS))' in ml)
 
-    cfgs = sorted(p.name for p in (ROOT / "model_configs" / "models").glob(
-        "*minicpm-v-4.7*")) + sorted(p.name for p in
-        (ROOT / "model_configs" / "models").glob("*lfm2.5_24b*"))
-    check("model profiles present (minicpm-v-4.7 + lfm2.5_24b x2)",
-          len(cfgs) == 3, f" got {cfgs}")
+    # Registry round-trip: a model profile supplies the values the manager
+    # reads for caps/pins. Written as a throwaway profile - the check must
+    # not depend on any shipped model-specific config file. The probe name
+    # is MoE-looking ("a3b") on purpose: the pin has to beat the heuristic.
+    p = _reg.save_profile("caps-probe:35b-a3b", {
+        "model": "caps-probe:35b-a3b",
+        "moe": False,
+        "moe_cpu_experts": 7,
+    })
+    try:
+        _reg.refresh()
+        check("heuristic alone would call the probe MoE (baseline)",
+              _lc.is_moe_model("caps-probe:35b-a3b-x") is True)
+        check("profile supplies pin + expert count (moe=false, experts=7)",
+              _reg.get_moe_pin("caps-probe:35b-a3b") is False
+              and _reg.get_moe_cpu_experts("caps-probe:35b-a3b") == 7)
+        check("dense pin beats MoE-looking name",
+              _lc.is_moe_model("caps-probe:35b-a3b") is False)
+    finally:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        _reg.refresh()
 
     print()
     print(f"SUMMARY restored_caps_truth: {passed} passed, {failed} failed")
