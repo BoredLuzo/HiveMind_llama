@@ -5,11 +5,8 @@
 # Shell scripts need LF endings - CRLF breaks shebangs on Linux
 *.sh text eol=lf
 
-# RELEASE-SLIM (2026-10-16): developer-only content stays out of the
-# release zip (git archive). Verified before adding: no runtime code,
-# installer or updater reads or expects any of these paths (the only
-# in-zip reference was deploy/release_checks.bat -> tests/run_regressions,
-# a dev-side pre-release script - excluded alongside the tests).
+# Developer-only content stays out of the release zip (git archive).
+# Verified: no runtime code, installer or updater reads these paths.
 /tests/ export-ignore
 /deploy/release_checks.bat export-ignore
 /RELEASE_NOTES_1.3.9.md export-ignore
