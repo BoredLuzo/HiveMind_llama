@@ -47,7 +47,17 @@ command -v uv >/dev/null 2>&1 || {
   echo "  Installing uv (astral.sh)..."
   curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_PATH="/usr/local/bin" sh
 }
-command -v uv >/dev/null 2>&1 && uv --version
+# UV-PATH (2026-10-17): uv is installed to /usr/local/bin, which a normal
+# login shell has on PATH - but a sudo session with a hardened secure_path, a
+# container, or a shell that was already open before the install may not see
+# it. Do not fail silently (or half-installed): name the problem and the fix.
+if command -v uv >/dev/null 2>&1; then
+  uv --version
+else
+  echo "  [WARN] uv is installed but NOT on this shell's PATH."
+  echo "         Open a new shell (or: export PATH=\"\$PATH:/usr/local/bin\") and"
+  echo "         re-run this installer. Step [4/8] falls back to python3+pip now."
+fi
 
 echo "[3/8] Syncing installation to $INSTALL_DIR ..."
 if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then

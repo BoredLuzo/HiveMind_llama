@@ -80,7 +80,19 @@ if not defined UV_DIR (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 if not "%UV_DIR%"=="on_path" set "PATH=%PATH%;%UV_DIR%"
+if not "%UV_DIR%"=="on_path" set "UV_PATH_ADDED=1"
 echo   [uv] ok: %UV_DIR%
+REM UV-NEW-SHELL (2026-10-17): this PATH fix lives in THIS process only. A
+REM user who installed uv just now (winget / astral) has it in the registry
+REM PATH, but any OTHER terminal that was already open - and the one they
+REM open next from an old shortcut - may not see it yet, which is exactly the
+REM "uv is installed but not in PATH" report. Say it instead of letting them
+REM hit "uv is not recognized" later.
+if not "%UV_DIR%"=="on_path" (
+    echo   [uv] NOTE: uv was added to THIS window's PATH only.
+    echo   [uv] NOTE: open a NEW terminal before running uv yourself
+    echo   [uv] NOTE: ^(or log off/on^) so your shell sees the new PATH.
+)
 uv --version
 
 SET "UV_NO_DEV=1"
@@ -378,6 +390,13 @@ echo                 (docs\gateway_setup.md, off by default)
 echo.
 echo   IMPORTANT: Before the first run, set a workspace
 echo   in the UI (field "Workspace") - there is no default.
+if defined UV_PATH_ADDED (
+echo.
+echo   NOTE: uv was installed into %UV_DIR% and that folder was added to
+echo   NOTE: your PATH. If you want to run "uv" yourself in a terminal,
+echo   NOTE: open a NEW terminal first (this window has the PATH, others
+echo   NOTE: opened before the install may not).
+)
 echo  ==============================================================
 echo.
 echo  Press any key to continue...
