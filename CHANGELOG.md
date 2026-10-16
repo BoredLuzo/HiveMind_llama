@@ -65,7 +65,7 @@ Budgets redesign: no model-class staffels
   code); test_schema_truth now pins the schema text to the RESOLVED
   run budgets
 
-Tool-pipeline audit phases 4-7 (compression, injections, tool profiles, web):
+Compression, injections, tool profiles and web search:
 
 - compression without slot eviction: deterministic observation masking
   (stale tool outputs -> recall markers, the same machinery as the old
@@ -96,7 +96,7 @@ Tool-pipeline audit phases 4-7 (compression, injections, tool profiles, web):
   snapshot (capped 2000, explicit snapshot for the full page); evaluate
   is capped at 8000 like every other browser action
 
-Tool-pipeline performance audit, phases 0-3 (reviewed ordering:
+Tool-pipeline ordering and budgets:
 cache hygiene and measurement first):
 
 - measurement basis first: one phase="tools" telemetry row per round
@@ -172,7 +172,7 @@ MoE is now a question, not a name guess:
   and the hint shows whether the default is pinned, table-calibrated
   or name-autodetected
 
-Tool use and context, after the 1.3.9 tool-path review:
+Tool use and context:
 
 - the tool schema is fitted to the context window on EVERY tool path, not
   only in the duo coder: the direct tiers and the tool agent shipped the
@@ -324,7 +324,7 @@ Follow-up on the 1.3.3 showcase round:
 
 ## [1.3.3] - 2026-10-07
 
-Telegram gateway deep-audit round + showcase fixes (edited on the
+Telegram gateway hardening:
 branch, release cut at the end of the window):
 
 - takeover relay hardening: fazit on every end path, late-result relay
