@@ -7,6 +7,12 @@ LANGUAGE_RUNNERS: dict[str, dict] = {
     "python": {
         "extensions":    [".py"],
         "detect_files":  ["pyproject.toml", "setup.py", "requirements.txt"],
+        # DETECT-FALLBACK (2026-10-17, live): a plain folder with .py files and
+        # NO pyproject/setup/requirements was reported as "no test runner", so
+        # the verify gate stayed "untested" even after the coder wrote and ran a
+        # Python test file (owner: "the last test is still reported as
+        # untested"). Test-looking .py files are the marker that matters here.
+        "detect_files_fallback": ["test_*.py", "*_test.py", "tests/*.py"],
         "test_cmd":      "pytest -x -q 2>&1",
         "run_cmd":       "python {file}",
         "start_cmd":     None,
@@ -123,6 +129,16 @@ def detect_project_languages(workspace: str) -> list[str]:
                     break
             else:
                 if (ws / pattern).exists():
+                    found.append(lang)
+                    break
+    # DETECT-FALLBACK (2026-10-17): second pass for projects without a manifest.
+    # A folder whose only markers are test-looking files (test_*.py ...) still
+    # HAS a runner - without this the verify gate answers "no test runner
+    # detected" and the run stays "untested" (live owner report).
+    if not found:
+        for lang, cfg in LANGUAGE_RUNNERS.items():
+            for pattern in cfg.get("detect_files_fallback", []) or []:
+                if next(ws.glob(pattern), None):
                     found.append(lang)
                     break
     if "docker" in found:
