@@ -322,9 +322,21 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     return "[rm error]: " + "; ".join(_rm_errs)
                 return f"[exit 0 - removed: {', '.join(_rm_done)}]"
 
+            # POSIX-DRIVE-FIX (2026-10-17, live): the model writes `/c/Users/...`
+            # (what Git Bash shows on Windows). The old rewrite turned that into
+            # `C:\\Users\\...` - BACKSLASHES inside a bash command. bash strips
+            # them as escapes, so the path collapsed into garbage:
+            #   python3 C:\\Users\\user\\Desktop\\x.py
+            #     -> can't open file 'C:\\\\Users\\\\user\\\\Desktop\\\\x.py'
+            #     (live: "bash exiting", exit 2 on every absolute path, and the
+            #      model then looped on quoting/`C:` theories)
+            # Forward slashes are accepted by bash itself AND by native Windows
+            # binaries (python.exe/node.exe), so `C:/Users/...` is the only form
+            # that works on both sides. The lookbehind also refuses a slash in
+            # front (`a/b/c`, `http://x/c/y`) - those are not drive mounts.
             _cmd_unix_fixed = re.sub(
-                r'(?<![\w])/([a-zA-Z])/',
-                lambda _m: _m.group(1).upper() + ":\\\\",
+                r'(?<![\w/])/([a-zA-Z])/',
+                lambda _m: _m.group(1).upper() + ":/",
                 cmd)
             if _cmd_unix_fixed != cmd:
                 cmd = _cmd_unix_fixed
