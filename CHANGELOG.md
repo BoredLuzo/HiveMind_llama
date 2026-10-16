@@ -201,7 +201,7 @@ Tool use and context, after the 1.3.9 tool-path review:
 - wedge-handoff repair: the fix agent inherits the coder's context size
   (it used to reload the warm slot) and its output budget is configurable
   (duo_wedge_handoff_max_tokens)
-- **Coder after run** (Configs tab, duo_coder_after_run): keep leaves the coder warm for the next prompt (idle TTL decides), vict releases the slot at the end of the run - also on abort - so the next prompt can load any model or mode.
+- **Unload coder after run** (Configs tab toggle, duo_coder_after_run): keep leaves the coder warm for the next prompt (idle TTL decides), vict releases the slot at the end of the run - also on abort - so the next prompt can load any model or mode.
 
 ## [1.3.8] - 2026-10-11
 

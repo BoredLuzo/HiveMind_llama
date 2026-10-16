@@ -58,34 +58,43 @@ check("keep is a no-op (no evict call outside the evict branch)",
       'if str(ctx.settings.get("duo_coder_after_run", "keep")).strip().lower() == "evict"' in _src)
 
 # ── UI ──────────────────────────────────────────────────────────────────────
-check("index.html has the select", 'id="duo-coder-after-run-sel"' in _html)
-check("the select posts the real key", "postSettings({duo_coder_after_run:this.value})" in _html)
-check("both modes offered", '<option value="keep"' in _html and '<option value="evict"' in _html)
-# PLACEMENT (2026-10-17): first version sat inside #duo-ctx-body (display:none
-# until the "Advanced" chevron - invisible), then in the "Compression & Context
-# Fixes" card (wrong card, owner correction) - it belongs to model lifetime, so
-# it now lives in the "Keep-Alive / Pinning" card.
-_sel_i = _html.index("duo-coder-after-run-sel")
+# ON/OFF toggle (owner request 2026-10-17: "just make the coder thing an on/off
+# toggle"), in the Keep-Alive / Pinning card.
+check("index.html has the toggle", 'id="duo-coder-after-run-toggle"' in _html)
+check("the toggle posts the real key",
+      "postSettings({duo_coder_after_run: S.duoCoderAfterRun})" in _html)
+check("it is a checkbox switch, not a select",
+      '<input type="checkbox" id="duo-coder-after-run-toggle"' in _html
+      and "duo-coder-after-run-sel" not in _html)
+check("ON means evict", "this.checked ? 'evict' : 'keep'" in _html)
+_sel_i = _html.index("duo-coder-after-run-toggle")
 _ka_i = _html.index("Keep-Alive / Pinning")
 _ka_end = _html.index("Smart Preload <span")
 _comp_i = _html.index("Compression &amp; Context Fixes")
 _comp_end = _html.index("Learning Preset Mode")
 _ctxbody_i = _html.index('id="duo-ctx-body"')
-check("the select is in the Keep-Alive / Pinning card",
+check("the toggle is in the Keep-Alive / Pinning card",
       _ka_i < _sel_i < _ka_end)
-check("the select is NOT in the Compression & Context Fixes card",
+check("the toggle is NOT in the Compression & Context Fixes card",
       not (_comp_i < _sel_i < _comp_end))
 check("the collapsed Advanced body is a different, earlier block",
       _ctxbody_i < _sel_i)
-check("only one select exists", _html.count("duo-coder-after-run-sel") == 1)
-check("the select has its own explanatory hint",
+check("only one toggle exists", _html.count("duo-coder-after-run-toggle") == 1)
+check("the toggle has its own explanatory hint",
       _html.count("What happens to the coder's model slot when a run ends") == 1)
-check("the hint names the TTL as the release trigger for keep",
+check("the hint names the TTL as the release trigger for OFF",
       "the Coder TTL under Advanced decides when it is released" in _html)
+# the long-dead "Cache-friendly compression" row (setting removed 2026-09-09)
+# left an empty tgl-row plus a dangling hint in the card - the visible
+# separator the owner complained about.
+check("the orphaned compression hint is gone",
+      "Compress to summary + raw tail" not in _html)
+check("that card no longer has an empty toggle row",
+      '<div class="tgl-row">\n          <span class="sl"></span>' not in _html)
 check("app.js normalises the value",
       "S.duoCoderAfterRun = (String(s.duo_coder_after_run || 'keep').toLowerCase() === 'evict')" in _js)
-check("app.js syncs the select",
-      "_carEl.value = S.duoCoderAfterRun;" in _js)
+check("app.js syncs the checkbox",
+      "_syncFlagCheck('duo-coder-after-run-toggle', S.duoCoderAfterRun === 'evict');" in _js)
 import re                                                        # noqa: E402
 _m = re.search(r'app\.js\?v=(\d{8})-(\d+)', _html)
 check("cache buster bumped", _m is not None and (_m.group(1), int(_m.group(2))) >= ("20261017", 3),
