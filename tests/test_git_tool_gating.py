@@ -128,6 +128,14 @@ check("the select posts the real setting",
       "postSettings({git_tools_enabled:this.value})" in _html)
 check("all three modes are offered",
       all(f'<option value="{v}"' in _html for v in ("auto", "true", "false")))
+# PLACEMENT (2026-10-17): the select first sat inside #git-branch-options, which
+# is display:none until auto-commit is switched on - so it was invisible for
+# exactly the case it exists for (git tools without auto-commit). It now sits
+# above that block, directly under the Git Integration toggle.
+check("the select is OUTSIDE the collapsed branch block (always visible)",
+      _html.index("git-tools-mode-sel") < _html.index('id="git-branch-options"')
+      and _html.index("git-tools-mode-sel") > _html.index("duo-git-autocommit-toggle"))
+check("only one git-tools select exists", _html.count("git-tools-mode-sel") == 1)
 check("app.js normalises bool and string forms",
       "typeof s.git_tools_enabled === 'boolean'" in _js
       and "S.gitToolsEnabled = 'auto'" in _js)

@@ -61,9 +61,22 @@ check("keep is a no-op (no evict call outside the evict branch)",
 check("index.html has the select", 'id="duo-coder-after-run-sel"' in _html)
 check("the select posts the real key", "postSettings({duo_coder_after_run:this.value})" in _html)
 check("both modes offered", '<option value="keep"' in _html and '<option value="evict"' in _html)
-check("the select sits next to the TTL settings",
-      _html.index("duo-coder-after-run-sel") > _html.index("duo-coder-ttl")
-      and _html.index("duo-coder-after-run-sel") - _html.index("duo-coder-ttl") < 1600)
+# PLACEMENT (2026-10-17, owner report "I can't find the setting in the UI"): the
+# first version sat inside #duo-ctx-body, which is display:none until the
+# "Advanced" chevron is clicked - invisible in the Config tab. It now lives in
+# the always-visible Config card next to the Wedge handoff toggle.
+_sel_i = _html.index("duo-coder-after-run-sel")
+_wedge_i = _html.index("duo-wedge-handoff-toggle")
+_ctxbody_i = _html.index('id="duo-ctx-body"')
+check("the select is in the visible Config card (after the wedge toggle)",
+      _sel_i > _wedge_i)
+check("the collapsed Advanced body is a different, earlier block",
+      _ctxbody_i < _wedge_i < _sel_i)
+check("only one select exists", _html.count("duo-coder-after-run-sel") == 1)
+check("the TTL hint was not left attached to the new select",
+      "keep loaded = the coder stays warm" not in _html)
+check("the select has its own explanatory hint",
+      "What happens to the coder's model slot when a run ends" in _html)
 check("app.js normalises the value",
       "S.duoCoderAfterRun = (String(s.duo_coder_after_run || 'keep').toLowerCase() === 'evict')" in _js)
 check("app.js syncs the select",

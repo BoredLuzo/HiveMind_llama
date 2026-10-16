@@ -605,6 +605,18 @@
           <span class="sl"></span>
         </label>
       </div>
+      <div class="opt-row" style="margin-top:2px">
+        <div class="opt-row-left">
+          <span class="opt-name">Git tools</span>
+          <span class="opt-hint">git_status / git_commit in the tool list (auto = a git credential is set)</span>
+        </div>
+        <select id="git-tools-mode-sel" onchange="postSettings({git_tools_enabled:this.value})"
+          style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:120px;flex-shrink:0">
+          <option value="auto">auto</option>
+          <option value="true">always on</option>
+          <option value="false">off</option>
+        </select>
+      </div>
       <div id="git-branch-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(58,153,96,.25);margin-left:10px;margin-top:2px">
         <div class="opt-row">
           <div class="opt-row-left">
@@ -614,18 +626,6 @@
           <select id="git-branch-sel" onchange="postSettings({git_branch:this.value})"
             style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:120px;flex-shrink:0">
             <option value="">main</option>
-          </select>
-        </div>
-        <div class="opt-row">
-          <div class="opt-row-left">
-            <span class="opt-name">Git tools</span>
-            <span class="opt-hint">git_status / git_commit in the tool list (auto = a git credential is set)</span>
-          </div>
-          <select id="git-tools-mode-sel" onchange="postSettings({git_tools_enabled:this.value})"
-            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:120px;flex-shrink:0">
-            <option value="auto">auto</option>
-            <option value="true">always on</option>
-            <option value="false">off</option>
           </select>
         </div>
         <div id="git-status-line" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:2px 4px;line-height:1.5">
@@ -829,18 +829,6 @@
             <input type="number" min="0" step="30" id="duo-coder-ttl" value="0"
               style="width:76px;background:var(--bg2);border:1px solid rgba(32,176,160,.4);border-radius:4px;color:#20b0a0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
               onchange="var v=parseInt(this.value)||0;S.duoCoderTtl=v;postSettings({duo_coder_ttl_seconds:v})">
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#20b0a0;flex:1;font-weight:600">Coder after run</span>
-            <select id="duo-coder-after-run-sel" onchange="postSettings({duo_coder_after_run:this.value})"
-              style="width:132px;background:var(--bg2);border:1px solid rgba(32,176,160,.4);border-radius:4px;color:#20b0a0;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;padding:4px 6px;outline:none">
-              <option value="keep">keep loaded</option>
-              <option value="evict">unload (free VRAM)</option>
-            </select>
-          </div>
-          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
-            keep loaded = the coder stays warm for the next prompt (the TTL above decides when it goes).<br>
-            unload = the coder slot is released at the end of the run, so the next prompt can load any model/mode.
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
             Max. seconds for planner/coder response.<br>
@@ -1404,6 +1392,15 @@
         </label>
       </div>
       <div class="fld-hint">When the coder fails the same edit on one file 4x in a row, a fresh-context repair agent takes over that one edit (same model, clean window, max 2 per run). Ask for its log line "Wedge handoff" in the chat to see it work.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Coder after run</span>
+        <select id="duo-coder-after-run-sel" onchange="postSettings({duo_coder_after_run:this.value})"
+          style="background:#10131a;border:1px solid rgba(32,176,160,.4);border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#20b0a0;width:150px;flex-shrink:0">
+          <option value="keep">keep loaded</option>
+          <option value="evict">unload after run</option>
+        </select>
+      </div>
+      <div class="fld-hint">What happens to the coder's model slot when a run ends. <b>keep loaded</b>: stays warm for the next prompt (the Coder TTL under Advanced decides when it goes). <b>unload after run</b>: the slot is released at the end of the run (also on abort), so the next prompt can load any model or mode.</div>
       <div class="tgl-row">
           <span class="sl"></span>
         </label>
