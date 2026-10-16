@@ -1,0 +1,235 @@
+{#- ===========================================================================================
+    Sharp-MiniCPM chat template  --  MiniCPM5-2B, v1.0.0
+
+    This is MiniCPM5's OWN template with six defects repaired and the house terseness prompt
+    spliced in. It is not a port of another model's template: the control tokens (<|im_start|>,
+    <|im_end|>), the <think> convention and the XML <function>/<param> tool-call format are all
+    MiniCPM5's, untouched, because the model was trained on them.
+
+    Every fix below was reproduced against the stock template before being written; the
+    differential test in check_template.py names the regression for each one.
+
+      FIX 1  Assistant text after a <tool_sep> was SILENTLY DISCARDED. Stock builds the
+             interleaved content with `{% set %}` inside a `{% for %}`; Jinja2 scoping throws
+             those assignments away at the end of the loop, so `processed_content` reverted to
+             the text before the first separator and everything after it vanished. Rebuilt on a
+             namespace so the assignments survive.
+      FIX 2  Content BLOCKS (the list-of-parts form every OpenAI-shaped client can send) were
+             dropped to an empty string, so a user turn sent as [{"type":"text",...}] arrived at
+             the model completely blank. Text parts are now concatenated.
+      FIX 3  Tool RESULTS given as content blocks were dumped as raw JSON
+             ([{"type": "text", "text": "..."}]) into the prompt. Same extraction as FIX 2.
+      FIX 4  Non-string tool-call argument values rendered through Jinja's str(), so a nested
+             object reached the model as a PYTHON REPR -- {'a': 1, 'b': True} -- with single
+             quotes and True/False. Now serialised as JSON.
+      FIX 5  Stale reasoning was replayed for every historical assistant turn. Stock computes
+             `ns.last_query_index` for exactly this purpose and then never reads it -- dead code.
+             Reasoning is now kept only for assistant turns after the last user query.
+      FIX 6  CDATA wrapping did not escape a literal ']]>' inside a value, which terminates the
+             block early and corrupts the rest of the call. Split across two CDATA sections.
+
+    Additions (house convention, same as the Sharp-Spark build):
+      * A terseness instruction force-appended to the system prompt. Text is verbatim from
+        sharp-template v22.4.1 so terseness behaves comparably across the family.
+        Opt out with chat_template_kwargs={"terse": false}.
+      * `suppress_tool_instructions`: stand our tool block down when the runtime has injected its
+        own tool protocol, instead of giving the model two contradictory ones.
+
+    NOTE: stock has no canned "you are a helpful assistant" default, so the Sharp-Spark fix that
+    replaces such a default does not apply here -- there is nothing to replace.
+
+    ENGINE SUPPORT (verified, not assumed):
+      jinja2 (transformers)      OK
+      minja   (llama.cpp)        OK  -- checked via llama-server /apply-template
+      minijinja                  NO  -- its `tojson` rejects the `ensure_ascii` kwarg
+    `tojson(ensure_ascii=False)` is kept because STOCK uses it and because dropping it would
+    \u-escape CJK in tool descriptions and argument values -- a real cost on a bilingual model.
+    The two runtimes that actually serve this model both accept it. Anything driving the template
+    through minijinja needs a tojson shim; that is a tooling fix, not a template one.
+=========================================================================================== -#}
+{{- bos_token }}
+{#- ---- gather the leading system content (stock only ever looks at messages[0]) ---- -#}
+{%- set ns = namespace(sys='', last_query_index=-1) %}
+{%- if messages and messages[0].role == 'system' %}
+    {%- if messages[0].content is string %}
+        {%- set ns.sys = messages[0].content %}
+    {%- else %}
+        {%- for part in messages[0].content %}
+            {%- if part.type == 'text' %}{%- set ns.sys = ns.sys ~ part.text %}{%- endif %}
+        {%- endfor %}
+    {%- endif %}
+{%- endif %}
+{%- set _sc = ns.sys | trim %}
+
+{#- ---- terseness, force-appended (Additions) ---- -#}
+{%- if enable_thinking is defined and not enable_thinking %}
+    {%- set _terse_lead = 'Answer directly and concisely. Give the answer with only what it needs to be correct and usable.' %}
+{%- else %}
+    {%- set _terse_lead = 'Answer directly, after thinking. Lead with the answer, then only what it needs to be correct and usable.' %}
+{%- endif %}
+{%- set _terse_core %}
+Never: open with preamble or pleasantries; restate the question; add filler transitions; hedge with niceties; or repeat a point you've already made.
+Always: keep essential steps, caveats, uncertainties, and specifics — never drop correctness or a needed warning for brevity. Keep the final answer lean. Use the least structure that conveys it (plain prose when short; lists or code only when they earn their place). If genuinely uncertain, say so and explain why — never omit uncertainty for the sake of brevity.
+If a user request is genuinely ambiguous, ask a sharp question, don't guess.
+{%- endset %}
+{%- set _terse = _terse_lead ~ '\n' ~ (_terse_core | trim) %}
+{%- set _terse_on = terse if terse is defined else true %}
+{%- if _terse_on %}
+    {%- if _sc %}
+        {%- set _sc = _sc ~ '\n\n' ~ (_terse | trim) %}
+    {%- else %}
+        {%- set _sc = _terse | trim %}
+    {%- endif %}
+{%- endif %}
+
+{#- ---- tool block, unless the runtime already injected its own protocol ---- -#}
+{%- set _runtime_tool_protocol = (_sc and '[TOOL_REQUEST]' in _sc) %}
+{%- set _suppress_tools = suppress_tool_instructions if suppress_tool_instructions is defined else _runtime_tool_protocol %}
+{%- set _has_tools = tools is defined and tools and not _suppress_tools %}
+{%- if _has_tools %}
+    {%- set tool_definitions %}
+        {{- "# Tools\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+        {%- for tool in tools %}
+            {{- "\n" }}
+            {{- tool | tojson(ensure_ascii=False) }}
+        {%- endfor %}
+        {{- '\n</tools>\n\nTool usage guidelines:\n- You may call zero or more functions. If no function calls are needed, just answer normally and do not include any <function ... </function>.\n- When calling a function, return an XML object within <function ... </function> using:\n<function name="function-name"><param name="param-name">param-value</param></function>\n- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param>' }}
+    {%- endset %}
+    {{- '<|im_start|>system\n' }}
+    {%- if _sc %}
+        {%- if '<tool_def_sep>' in _sc %}
+            {{- _sc.replace('<tool_def_sep>', tool_definitions) }}
+        {%- else %}
+            {{- _sc + '\n\n' + (tool_definitions | trim) }}
+        {%- endif %}
+    {%- else %}
+        {{- tool_definitions | trim }}
+    {%- endif %}
+    {{- '<|im_end|>\n' }}
+{%- elif _sc %}
+    {{- '<|im_start|>system\n' + _sc + '<|im_end|>\n' }}
+{%- endif %}
+
+{#- FIX 5 -- find the last real user query; reasoning before it is stale and is dropped. This is
+    the index stock computes and never uses. A tool_response-only user turn is not a new query. -#}
+{%- for message in messages[::-1] %}
+    {%- set index = (messages|length - 1) - loop.index0 %}
+    {%- if ns.last_query_index < 0 and message.role == "user" and message.content is string
+           and not (message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
+        {%- set ns.last_query_index = index %}
+    {%- endif %}
+{%- endfor %}
+
+{%- for message in messages %}
+    {#- FIX 2/3 -- content blocks are flattened to their text instead of being dropped -#}
+    {%- set cns = namespace(text='') %}
+    {%- if message.content is string %}
+        {%- set cns.text = message.content %}
+    {%- elif message.content %}
+        {%- for part in message.content %}
+            {%- if part.type == 'text' %}{%- set cns.text = cns.text ~ part.text %}{%- endif %}
+        {%- endfor %}
+    {%- endif %}
+    {%- set content = cns.text %}
+
+    {%- if (message.role == "user") or (message.role == "system" and not loop.first) %}
+        {{- '<|im_start|>' + message.role + '\n' + content + '<|im_end|>' + '\n' }}
+    {%- elif message.role == "assistant" %}
+        {%- set reasoning_content = '' %}
+        {%- if message.reasoning_content is string %}
+            {%- set reasoning_content = message.reasoning_content %}
+        {%- elif message.reasoning is string %}
+            {%- set reasoning_content = message.reasoning %}
+        {%- elif message.thinking is string %}
+            {%- set reasoning_content = message.thinking %}
+        {%- elif '</think>' in content %}
+            {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+            {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+        {%- endif %}
+        {%- if loop.index0 < ns.last_query_index %}
+            {%- set reasoning_content = '' %}
+        {%- endif %}
+
+        {#- Render each tool call ONCE into a list, then place them. Stock duplicated this block
+            verbatim twice; one rendering keeps FIX 4 and FIX 6 from drifting apart.
+            No {% macro %} is used here on purpose -- only constructs stock itself relies on, so
+            the template stays portable across jinja2 / minja / minijinja. -#}
+        {%- set rns = namespace(calls=[]) %}
+        {%- for tc0 in (message.tool_calls or []) %}
+            {%- set tc = tc0 %}
+            {%- if tc0.function %}{%- set tc = tc0.function %}{%- endif %}
+            {%- set one %}
+                {{- '<function name="' ~ tc.name ~ '">' }}
+                {%- if tc.arguments %}
+                    {%- for pn, pv in tc.arguments.items() %}
+                        {{- '<param name="' ~ pn ~ '">' }}
+                        {%- if pv is string %}
+                            {%- if '<' in pv or '&' in pv or '\n' in pv %}
+                                {#- FIX 6 -- a literal ]]> would close the CDATA early; split it -#}
+                                {{- '<![CDATA[' ~ pv.replace(']]>', ']]]]><![CDATA[>') ~ ']]>' }}
+                            {%- else %}
+                                {{- pv }}
+                            {%- endif %}
+                        {%- else %}
+                            {#- FIX 4 -- JSON, not Jinja's str() of a Python object -#}
+                            {{- pv | tojson(ensure_ascii=False) }}
+                        {%- endif %}
+                        {{- '</param>' }}
+                    {%- endfor %}
+                {%- endif %}
+                {{- '</function>' }}
+            {%- endset %}
+            {%- set rns.calls = rns.calls + [one] %}
+        {%- endfor %}
+
+        {#- FIX 1 -- interleave at the <tool_sep> positions on a namespace, so the assignments
+            survive the loop and trailing content is no longer discarded. -#}
+        {%- set tns = namespace(out=content, done=0) %}
+        {%- if message.tool_calls %}
+            {%- set parts = content.split('<tool_sep>') %}
+            {%- set tns.out = parts[0] %}
+            {%- for i in range(1, parts|length) %}
+                {%- if (i - 1) < (rns.calls|length) %}
+                    {%- set tns.out = tns.out ~ rns.calls[i - 1] ~ parts[i] %}
+                    {%- set tns.done = i %}
+                {%- else %}
+                    {%- set tns.out = tns.out ~ parts[i] %}
+                {%- endif %}
+            {%- endfor %}
+            {%- for j in range(tns.done, rns.calls|length) %}
+                {%- if tns.out and not tns.out.endswith('\n') %}
+                    {%- set tns.out = tns.out ~ '\n' %}
+                {%- endif %}
+                {%- set tns.out = tns.out ~ rns.calls[j] %}
+            {%- endfor %}
+        {%- endif %}
+        {%- set content = tns.out %}
+
+        {%- if reasoning_content %}
+            {{- '<|im_start|>' + message.role + '\n<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
+        {%- elif '<think>' not in content and '</think>' not in content %}
+            {{- '<|im_start|>' + message.role + '\n<think>\n\n</think>\n\n' + content.lstrip('\n') }}
+        {%- else %}
+            {{- '<|im_start|>' + message.role + '\n' + content }}
+        {%- endif %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message.role == "tool" %}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<|im_start|>user' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' + content + '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- if enable_thinking is defined %}
+        {%- if enable_thinking is false %}
+            {{- '<think>\n\n</think>\n\n' }}
+        {%- elif enable_thinking is true %}
+            {{- '<think>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endif %}
