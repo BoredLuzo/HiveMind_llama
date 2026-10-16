@@ -172,6 +172,36 @@ MoE is now a question, not a name guess:
   and the hint shows whether the default is pinned, table-calibrated
   or name-autodetected
 
+Tool use and context, after the 1.3.9 tool-path review:
+
+- the tool schema is fitted to the context window on EVERY tool path, not
+  only in the duo coder: the direct tiers and the tool agent shipped the
+  full set (~14.6k chars) against an 8k window before. At 8k they now send
+  the tools that fit with the descriptions that fit; at 16k nothing changes
+- git_status and git_commit only appear when git is configured for this
+  install (git_tools_enabled: auto | true | false, auto = a git credential
+  is set). Tools that need no service stay where they are
+- a mistyped tool name used to be corrected with the first eight tool names
+  alphabetically - a list that contained none of read_file, write_file,
+  run_bash, run_tests or task_complete. The correction now names the most
+  important tools first and says how many exist
+- content masked or deduplicated out of the context is re-readable again:
+  the read guard was not released, so a fresh read answered "already read,
+  the content is in your context above" while it was gone
+- the "image left the window" note is appended once per run instead of on
+  every round
+- the read ladder ("exploring but not implementing") now fires for a model
+  that only reads - 8 files without a single write - and stays silent in
+  read-only modes and in the middle of normal multi-file exploration
+- chars-per-token is measured on the running server (/tokenize on the exact
+  tool schema) instead of assuming the 3.92 default; every cap in the run
+  derives from that measurement. Falls back to the per-model EMA
+- the injection budget is enforced instead of only logged, so hint text
+  cannot stack without a cap
+- wedge-handoff repair: the fix agent inherits the coder's context size
+  (it used to reload the warm slot) and its output budget is configurable
+  (duo_wedge_handoff_max_tokens)
+
 ## [1.3.8] - 2026-10-11
 
 Chunking and long-term-memory reliability:
