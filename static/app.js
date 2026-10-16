@@ -11676,9 +11676,24 @@ async function loadGitConfig(s) {
   S.gitToken = '';
   S.gitTokenSaved = !!s.git_token_saved;
   S.gitBranch = s.git_branch || 'main';
+  // GIT-TOOLS-GATE (2026-10-17): the git tools follow the credentials; this
+  // select is the explicit override (auto | true | false). JSON booleans and
+  // strings both occur, so normalise before syncing the select.
+  if (s.git_tools_enabled === undefined || s.git_tools_enabled === null) {
+    S.gitToolsEnabled = 'auto';
+  } else if (typeof s.git_tools_enabled === 'boolean') {
+    S.gitToolsEnabled = s.git_tools_enabled ? 'true' : 'false';
+  } else {
+    S.gitToolsEnabled = String(s.git_tools_enabled);
+  }
   // Sync toggles
   var duoToggle = document.getElementById('duo-git-autocommit-toggle');
   if (duoToggle) duoToggle.checked = S.duoGitAutocommit;
+  var _gtmEl = document.getElementById('git-tools-mode-sel');
+  if (_gtmEl) {
+    _gtmEl.value = ['auto', 'true', 'false'].indexOf(S.gitToolsEnabled) >= 0
+      ? S.gitToolsEnabled : 'auto';
+  }
   var cfgToggle = document.getElementById('git-autocommit-cfg-toggle');
   if (cfgToggle) cfgToggle.checked = S.duoGitAutocommit;
   var cpToggle = document.getElementById('git-checkpoints-cfg-toggle');

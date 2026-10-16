@@ -616,6 +616,18 @@
             <option value="">main</option>
           </select>
         </div>
+        <div class="opt-row">
+          <div class="opt-row-left">
+            <span class="opt-name">Git tools</span>
+            <span class="opt-hint">git_status / git_commit in the tool list (auto = a git credential is set)</span>
+          </div>
+          <select id="git-tools-mode-sel" onchange="postSettings({git_tools_enabled:this.value})"
+            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:120px;flex-shrink:0">
+            <option value="auto">auto</option>
+            <option value="true">always on</option>
+            <option value="false">off</option>
+          </select>
+        </div>
         <div id="git-status-line" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:2px 4px;line-height:1.5">
           <span id="git-auth-status">&#x26A0; No git configured</span>
         </div>
@@ -2016,6 +2028,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261017-01"></script>
+        <script src="/static/app.js?v=20261017-02"></script>
 </body>
 </html>

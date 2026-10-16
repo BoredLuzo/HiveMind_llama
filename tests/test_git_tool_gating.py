@@ -120,6 +120,26 @@ try:
 finally:
     builtins.__import__ = _real_import
 
+# ── (f) UI exposure (owner rule: settings belong in the frontend) ───────────
+_html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
+_js = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+check("index.html has the git-tools select", 'id="git-tools-mode-sel"' in _html)
+check("the select posts the real setting",
+      "postSettings({git_tools_enabled:this.value})" in _html)
+check("all three modes are offered",
+      all(f'<option value="{v}"' in _html for v in ("auto", "true", "false")))
+check("app.js normalises bool and string forms",
+      "typeof s.git_tools_enabled === 'boolean'" in _js
+      and "S.gitToolsEnabled = 'auto'" in _js)
+check("app.js syncs the select",
+      "_gtmEl.value = ['auto', 'true', 'false'].indexOf(S.gitToolsEnabled) >= 0" in _js)
+check("the Branch row was not displaced by the new one",
+      'id="git-branch-sel"' in _html and "opt-name\">Branch" in _html)
+import re as _re                                                   # noqa: E402
+_m = _re.search(r'app\.js\?v=(\d{8})-(\d+)', _html)
+check("app.js cache buster bumped", _m is not None and (_m.group(1), int(_m.group(2))) >= ("20261017", 2),
+      f" ({_m.group(0) if _m else '?'})")
+
 print()
 print(f"SUMMARY git_tool_gating: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
