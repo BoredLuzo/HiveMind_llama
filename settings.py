@@ -53,6 +53,13 @@ DEFAULT_SETTINGS = {
     "safe_profile_policy":     "default_8gb_v1",
     "safe_profile_matrix_file": "model_configs/safe_profile_matrix.json",
     "default_keep_alive":      "10m",
+    # DEBUG-DUMP (2026-10-16): request instrumentation. Off by default; when
+    # set, every model request is written to
+    # logs/telemetry/dump_<role>_<chatid>_<ts>.json exactly as sent
+    # (core/telemetry.py, role "planner" or "coder"). The key is listed here so
+    # the switch is discoverable and round-trips through settings.json instead
+    # of requiring a hand-edited file.
+    "debug_dump_request":      False,
     "smart_preload_keep_alive": "10m",
     "max_concurrent_models":   None,
     "allow_cpu_offload":       True,

@@ -21,6 +21,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `automap_pipeline_websearch_enabled` | bool | `False` | — |
 | `constraint_mode` | bool | `True` | — |
 | `ctx_overrides` | object | `{'default': None, 'roles': {}, 'models': {}}` | — |
+| `debug_dump_request` | bool | `False` | — | writes every model request as `logs/telemetry/dump_<role>_<chatid>_<ts>.json` |
 | `default_keep_alive` | str | `"10m"` | — |
 | `desktop_notifications` | bool | `True` | — |
 | `direct_tools_enabled` | bool | `True` | — |

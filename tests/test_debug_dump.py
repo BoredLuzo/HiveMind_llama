@@ -40,6 +40,23 @@ check("should_dump: True = on", _tel.should_dump({"debug_dump_request": True}) i
 check("should_dump: truthy string = on",
       _tel.should_dump({"debug_dump_request": "1"}) is True)
 
+# DISCOVERABILITY (2026-10-16): the switch was read but had no default, no doc
+# and no UI entry - it only worked on a hand-edited settings.json. The key must
+# stay in DEFAULT_SETTINGS (off) and in the settings documentation.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from settings import DEFAULT_SETTINGS as _DEF          # noqa: E402
+
+check("DEFAULT_SETTINGS carries debug_dump_request",
+      "debug_dump_request" in _DEF)
+check("debug_dump_request default is off",
+      _DEF.get("debug_dump_request") is False)
+check("defaults keep dumping off end-to-end",
+      _tel.should_dump(dict(_DEF)) is False)
+_doc = (Path(__file__).resolve().parent.parent / "docs" / "settings.md"
+        ).read_text(encoding="utf-8", errors="replace")
+check("docs/settings.md documents debug_dump_request",
+      "`debug_dump_request`" in _doc)
+
 _path = _tel.dump_request("coder", "chat-xyz.01", [{"role": "system", "content": "s"}],
                           [{"type": "function", "function": {"name": "read_file"}}])
 check("dump file written", bool(_path) and Path(_path).exists())
