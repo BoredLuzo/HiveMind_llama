@@ -72,6 +72,7 @@ SUITES = [
     ("coder_after_run",           "tests/test_coder_after_run.py",           60),
     ("inline_think_format",        "tests/test_inline_think_format.py",        60),
     ("installer_uv_path",         "tests/test_installer_uv_path.py",         60),
+    ("run_bash_drive_paths",       "tests/test_run_bash_drive_paths.py",      60),
     ("injection_budget",          "tests/test_injection_budget.py",             60),
     ("vision_strict",             "tests/test_vision_strict.py",                60),
     ("env_check",                 "tests/test_env_check.py",                   120),
