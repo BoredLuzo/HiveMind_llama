@@ -224,6 +224,10 @@ DEFAULT_SETTINGS = {
     "duo_soft_planner_wall_timeout_s": 300,
     "duo_planner_ttl_seconds": 0,    # 0 = auto (450s), >0 = Override
     "duo_coder_ttl_seconds":   0,    # 0 = auto (420s), >0 = Override
+    # CODER LIFETIME (2026-10-17): keep = the slot stays warm after the
+    # run (idle TTL decides), evict = release it at the run end so the next
+    # prompt can load any model/mode. Owner request.
+    "duo_coder_after_run":     "keep",
     "plan_tracker_classifier": "heuristic",
 
     # ════════════════════════════════════════════════════════════════════════

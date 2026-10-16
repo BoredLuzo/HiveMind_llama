@@ -219,3 +219,5 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 The following keys were previously only implicit read fallbacks ("hidden") and are now explicit in `DEFAULT_SETTINGS`:
 
 `duo_autolint_python_engine, duo_caps, duo_coder_model, duo_critic_model, duo_pyright_path, plan_tracker_classifier, read_guard_enabled`
+
+| `duo_coder_after_run` | `keep` | Coder slot lifetime after a run: `keep` (stays warm, the TTL decides) or `evict` (released at run end, also on abort). |

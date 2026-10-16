@@ -1108,6 +1108,11 @@ async function loadSettings() {
     // Planner / Coder TTL
     S.duoPlannerTtl = parseInt(s.duo_planner_ttl_seconds || 0) || 0;
     S.duoCoderTtl = parseInt(s.duo_coder_ttl_seconds || 0) || 0;
+    // CODER LIFETIME (2026-10-17): keep = warm after the run, evict = release
+    // the slot so the next prompt can load any model/mode.
+    S.duoCoderAfterRun = (String(s.duo_coder_after_run || 'keep').toLowerCase() === 'evict') ? 'evict' : 'keep';
+    var _carEl = document.getElementById('duo-coder-after-run-sel');
+    if (_carEl) _carEl.value = S.duoCoderAfterRun;
     var dpttlEl = document.getElementById('duo-planner-ttl');
     if (dpttlEl) dpttlEl.value = S.duoPlannerTtl;
     var dcttlEl = document.getElementById('duo-coder-ttl');

@@ -830,6 +830,18 @@
               style="width:76px;background:var(--bg2);border:1px solid rgba(32,176,160,.4);border-radius:4px;color:#20b0a0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
               onchange="var v=parseInt(this.value)||0;S.duoCoderTtl=v;postSettings({duo_coder_ttl_seconds:v})">
           </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#20b0a0;flex:1;font-weight:600">Coder after run</span>
+            <select id="duo-coder-after-run-sel" onchange="postSettings({duo_coder_after_run:this.value})"
+              style="width:132px;background:var(--bg2);border:1px solid rgba(32,176,160,.4);border-radius:4px;color:#20b0a0;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;padding:4px 6px;outline:none">
+              <option value="keep">keep loaded</option>
+              <option value="evict">unload (free VRAM)</option>
+            </select>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
+            keep loaded = the coder stays warm for the next prompt (the TTL above decides when it goes).<br>
+            unload = the coder slot is released at the end of the run, so the next prompt can load any model/mode.
+          </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
             Max. seconds for planner/coder response.<br>
             <span style="color:var(--txh)">0 = no separate timeout (server default)</span>
@@ -2028,6 +2040,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261017-02"></script>
+        <script src="/static/app.js?v=20261017-03"></script>
 </body>
 </html>

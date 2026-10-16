@@ -6874,6 +6874,19 @@ async def run_code_duo(ctx):
                     _lsm_unpin.unpin(_m)
         except Exception:
             pass
+        # CODER LIFETIME (2026-10-17, owner request): with
+        # duo_coder_after_run = "evict" the coder slot is released here - the
+        # next prompt can then load any model/mode without evicting something
+        # first. "keep" (default) leaves the slot warm; the idle TTL decides.
+        # This finally-block also runs on abort, so an aborted run releases the
+        # slot too.
+        try:
+            if str(ctx.settings.get("duo_coder_after_run", "keep")).strip().lower() == "evict" and exec_mdl:
+                from backend.llama_server_manager import manager as _lsm_car
+                await _lsm_car.evict(exec_mdl)
+                logger.info("[CODER-AFTER-RUN] coder slot evicted (duo_coder_after_run=evict)")
+        except (ImportError, AttributeError, TypeError, RuntimeError, OSError) as _car_err:
+            logger.debug("[CODER-AFTER-RUN] evict skipped: %s", _car_err)
         # Cleanup Pause/Resume State
         try:
             _rid = _run_id_global
