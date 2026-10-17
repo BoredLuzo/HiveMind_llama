@@ -127,6 +127,11 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   has a volume slider (`tts_volume`) that applies to read-aloud, the per-answer
   speaker and the sample.
 
+- **Read aloud no longer narrates the tool output**: the extractor strips tool
+  chips, websearch result blocks, tool-call rows, think blocks and code panels
+  before speaking, so a direct-mode answer is read as the answer - previously the
+  whole bubble (every search result included) went to the engine.
+
 ### Telegram output contract (2026-10-18)
 
 - **Choose what a phone run sends back**: `telegram_result_mode` = `both` (text

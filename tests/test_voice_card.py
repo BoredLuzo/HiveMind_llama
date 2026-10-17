@@ -279,6 +279,24 @@ check("every playback uses the volume helper",
 check("the helper applies the setting", "el.volume = Math.max(0, Math.min(1, v))" in app)
 check("the slider is filled from the settings", "_volInp.value = String(S.ttsVolume)" in app)
 
+
+# ── only the model text is spoken (owner report: direct mode read the
+#    websearch results out loud before the answer) ─────────────────────────
+check("there is a chrome-stripping extractor", "function _answerTextOnly" in app)
+_chrome = app[app.index("var _ANSWER_CHROME_SEL"):]
+_chrome = _chrome[:_chrome.index("].join")]
+_NEED = ("tool-call-chip", "tool-call-row", "tool-result-block", "tool-act",
+         "think-block", "duo-verdict", "critic-box", "amsg-foot", "status-txt",
+         "files-summary", "planner-think-block")
+check("every chrome class is stripped", all(n in _chrome for n in _NEED),
+      f" (missing: {[n for n in _NEED if n not in _chrome]})")
+check("code blocks are stripped too", "'pre'" in _chrome and "'code'" in _chrome)
+check("read-aloud uses the extractor", "_answerTextOnly(_lastBody)" in app)
+check("the speaker button uses it", "_answerTextOnly(_body)" in app)
+check("the reveal check uses it", "_answerTextOnly(body)" in app)
+check("the read is mounted so innerText works",
+      "position:absolute;left:-99999px" in app and "host.remove()" in app)
+
 print()
 print(f"SUMMARY voice_card: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

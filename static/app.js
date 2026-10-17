@@ -2043,6 +2043,44 @@ function _raTakeNext() {
   return null;
 }
 
+// The bubble body also carries tool chips, websearch result blocks, tool call
+// rows, the think block and code panels. Reading innerText of the whole body made
+// the assistant announce every search result before the answer (owner report,
+// direct mode). Clone, strip the chrome, read what is left - that is exactly the
+// model's final text.
+var _ANSWER_CHROME_SEL = [
+  '.tool-call-chip', '.tool-call-row', '.tool-result-block', '.tool-result-pre',
+  '.tool-act', '.tc-extra', '.tc-extra-pre', '.tc-pruned-notice',
+  '.think-block', '.think-body', '.planner-think-block',
+  '.amsg-foot', '.msg-speak', '.duo-verdict', '.critic-box', '.img-desc-box',
+  '.budget-bar', '.ctx-cut', '.files-summary', '.status-txt', '.pload',
+  'details', 'pre', 'code', '.pre-call-reasoning'
+].join(',');
+
+function _answerTextOnly(bodyEl) {
+  if (!bodyEl) return '';
+  var clone = bodyEl.cloneNode(true);
+  try {
+    clone.querySelectorAll(_ANSWER_CHROME_SEL).forEach(function (n) { n.remove(); });
+  } catch (e) { /* older builds: fall back to the plain text below */ }
+  // innerText needs layout, and a detached clone has none (Chrome/Firefox fall
+  // back to textContent, which loses paragraph breaks). Mount it off-screen for
+  // the read, then throw it away - no reflow the user can see.
+  var host = document.createElement('div');
+  host.style.cssText = 'position:absolute;left:-99999px;top:0;width:1px;' +
+                       'height:1px;overflow:hidden;visibility:hidden';
+  host.appendChild(clone);
+  document.body.appendChild(host);
+  var txt = '';
+  try {
+    txt = clone.innerText || clone.textContent || '';
+  } finally {
+    host.remove();
+  }
+  return String(txt).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+
 // One place that creates the audio element, so the volume setting applies to
 // every path (read aloud, the per-answer speaker, the sample button).
 function _ttsAudioFromBlob(blob) {
@@ -2133,7 +2171,7 @@ function _syncSpeakButtons() {
     if (!btn) return;
     var wrap = foot.closest('.ablock');
     var body = wrap ? wrap.querySelector('.abody') : null;
-    var hasText = !!(body && String(body.innerText || '').trim().length > 8);
+    var hasText = !!(body && _answerTextOnly(body).length > 8);
     btn.style.display = (hasText && S && S.ttsEnabled) ? '' : 'none';
   });
 }
@@ -4040,7 +4078,7 @@ function startAgent(name, model, role, isRepair) {
   _speakBtn.style.display = 'none';
   _speakBtn.onclick = function () {
     var _body = document.getElementById('ab-' + tid);
-    voiceSpeakText(_body ? _body.innerText : '', _speakBtn);
+    voiceSpeakText(_answerTextOnly(_body), _speakBtn);
   };
   _speakWrap.appendChild(_speakBtn);
 
@@ -6429,7 +6467,7 @@ async function sendMsg() {
     try {
       var _bodies = document.querySelectorAll('#chat .abody');
       var _lastBody = _bodies.length ? _bodies[_bodies.length - 1] : null;
-      var _answerTxt = _lastBody ? String(_lastBody.innerText || '').trim() : '';
+      var _answerTxt = _lastBody ? _answerTextOnly(_lastBody) : '';
       if (_answerTxt && _answerTxt.indexOf('[Run abgebrochen]') !== 0) {
         var _isDuo = ['code_duo', 'duo', 'autoagent'].indexOf(String(S.mode || '')) >= 0;
         _readAloud(_isDuo ? 'fazit' : 'direct', _answerTxt);
