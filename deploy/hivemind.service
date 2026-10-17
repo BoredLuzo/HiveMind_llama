@@ -15,6 +15,17 @@ TimeoutStopSec=30
 
 Environment=PYTHONUNBUFFERED=1
 
+# VOICE (1.4): the TTS sidecar runs `uvx pocket-tts serve` as THIS user, so uv
+# needs a writable HOME/cache and the gated model needs a Hugging Face home.
+# Without HOME, uv cannot decide where its cache lives and the first speech
+# request fails; without HF_HOME the model lands in an unpredictable place.
+Environment=HOME=/opt/hivemind
+Environment=UV_CACHE_DIR=/opt/hivemind/.cache/uv
+Environment=HF_HOME=/opt/hivemind/.cache/huggingface
+# The Pocket TTS model is gated. A nologin system user cannot run
+# `hf auth login`, so put the token here (or in a drop-in) if you want TTS:
+#Environment=HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxx
+
 # Backend: vulkan | cuda | cpu (default: vulkan). For CPU-only hosts uncomment:
 #Environment=HIVEMIND_GPU_BACKEND=cpu
 

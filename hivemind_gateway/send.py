@@ -17,6 +17,8 @@ async def send(api, owner_chat_id: str | int | None,
                new_text: str | None = None, message_id: int | None = None,
                document_bytes: bytes | None = None,
                filename: str | None = None,
+               voice_bytes: bytes | None = None,
+               voice_duration: int = 0,
                reply_to_message_id: int | None = None,
                parse_mode: str | None = None,
                reply_markup: dict | None = None) -> dict:
@@ -24,6 +26,7 @@ async def send(api, owner_chat_id: str | int | None,
       text          -> sendMessage
       new_text+id   -> editMessageText
       document+name -> sendDocument
+      voice+ogg    -> sendVoice (Opus only, that is what Telegram accepts)
     Raises PolicyViolation BEFORE any network call when chat_id is not
     the owner's (or the gateway is unpaired: owner unknown => nothing is
     ever sent)."""
@@ -53,6 +56,12 @@ async def send(api, owner_chat_id: str | int | None,
         if message_id is None:
             raise ValueError("edit requires message_id")
         return await api.edit_message_text(chat_id, message_id, new_text)
+    if voice_bytes is not None:
+        # a voice note is audio, nothing to redact - but the chat stays the
+        # owner's (checked above) and the bytes must already be Ogg/Opus.
+        return await api.send_voice(
+            chat_id, voice_bytes, duration_s=voice_duration,
+            reply_to_message_id=reply_to_message_id)
     if document_bytes is not None:
         return await api.send_document(
             chat_id, document_bytes, filename or "output.txt",

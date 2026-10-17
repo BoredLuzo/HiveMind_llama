@@ -98,7 +98,8 @@ check("stt codes map to hints", "STT_NO_ENGINE" in seg and "STT_EMPTY" in seg)
 check("the transcript keeps the text cap", "max_text_chars" in seg)
 check("the transcript is re-dispatched through start_owner_run",
       "await self.start_owner_run(voiced)" in seg)
-check("voice is only used when enabled", "self.cfg.voice_in" in main)
+check("voice is only used when enabled",
+      "_voice_in_enabled" in main and "telegram_voice_in" in main)
 check("disabled voice gets a clear message", "Voice notes are off" in main)
 
 # ── (e) opt-in defaults ────────────────────────────────────────────────────

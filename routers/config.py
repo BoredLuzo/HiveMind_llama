@@ -62,7 +62,16 @@ _UI_REV_PROTECTED_KEYS = {
 # vision_model.json (/vision/config), der Pipeline-Runner ist sequenziell.
 # Ein Preset darf diesen Zustand weder einfrieren noch zurueckspielen.
 _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
-                      "image_processing_mode", "vision_agent_mode"}
+                      "image_processing_mode", "vision_agent_mode",
+                      # VOICE (1.4): a run preset must never start or stop the
+                      # speech engine - voice on/off is a machine preference, not
+                      # part of a run configuration. Loading a preset used to flip
+                      # tts_enabled/stt_enabled and spawn the TTS sidecar.
+                      "tts_enabled", "tts_voice", "tts_speed",
+                      "tts_read_direct", "tts_read_agentic", "tts_read_ask",
+                      "tts_read_gate", "stt_enabled", "stt_model", "stt_language",
+                      "stt_preload", "stt_threads", "telegram_voice_in",
+                      "telegram_voice_out"}
 
 # PRESET-CTX-OVERLAY (2026-09-04): nur diese Keys darf der Client beim
 # Preset-Save explizit uebergeben (verhindert das Race zwischen debounced

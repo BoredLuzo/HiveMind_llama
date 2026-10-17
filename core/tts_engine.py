@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
 import shutil
 import socket
 import subprocess
@@ -73,7 +74,9 @@ _state: dict = {
     "voice": "",
     "started_at": 0.0,
     "last_used": 0.0,
-    "starts": 0,
+    "starts": 0,        # how often we started it (diagnostics only)
+    "failures": 0,      # consecutive failed starts (the restart budget)
+    "log": None,        # kept open by the child, closed on stop
 }
 _lock = threading.RLock()
 
@@ -117,7 +120,7 @@ def _free_port() -> int:
 
 
 def base_url() -> str:
-    env = (__import__("os").environ.get("HIVEMIND_TTS_URL") or "").strip()
+    env = (os.environ.get("HIVEMIND_TTS_URL") or "").strip()
     if env:
         return env.rstrip("/")
     port = _state.get("port") or 0
@@ -134,7 +137,13 @@ def stop(force: bool = False) -> None:
     """Stop the sidecar (idempotent). ``force`` skips the graceful path."""
     with _lock:
         proc = _state.get("proc")
-        _state.update({"proc": None, "port": 0, "voice": ""})
+        log = _state.get("log")
+        _state.update({"proc": None, "port": 0, "voice": "", "log": None})
+    if log is not None:
+        try:
+            log.close()
+        except OSError:
+            pass
     if proc is None:
         return
     try:
@@ -191,14 +200,14 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
             return base_url()
         # An explicit URL means the sidecar is managed elsewhere (tests, a manual
         # `uvx pocket-tts serve`, or a future shared instance).
-        env_url = (__import__("os").environ.get("HIVEMIND_TTS_URL") or "").strip()
+        env_url = (os.environ.get("HIVEMIND_TTS_URL") or "").strip()
         if env_url:
             url = env_url.rstrip("/")
             if _wait_healthy(url, 20.0, require_proc=False):
                 _state["last_used"] = time.time()
                 return url
             raise TtsError("TTS_FAILED", f"HIVEMIND_TTS_URL {url} is not answering /health")
-        if _state.get("starts", 0) >= 3:
+        if _state.get("failures", 0) >= 3:
             raise TtsError("TTS_FAILED",
                            "the TTS engine failed to start three times - see logs/")
         uvx = _uvx()
@@ -215,15 +224,18 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
                                     stdin=subprocess.DEVNULL)
         except OSError as exc:
             raise TtsError("TTS_FAILED", f"could not start uvx: {exc}") from exc
+        _state["log"] = log
         _state.update({"proc": proc, "port": port, "voice": voice,
                        "started_at": time.time(), "last_used": time.time(),
                        "starts": int(_state.get("starts", 0)) + 1})
         url = base_url()
     logger.info("[TTS] sidecar starting on %s (voice=%s, pid=%s)", url, voice, proc.pid)
     if not _wait_healthy(url, START_TIMEOUT_S):
+        _state["failures"] = int(_state.get("failures", 0)) + 1
         stop(force=True)
         raise TtsError("TTS_FAILED",
                        "the TTS engine did not answer /health in time - see logs/pocket_tts.log")
+    _state["failures"] = 0          # a healthy start clears the budget
     logger.info("[TTS] sidecar ready after %.1fs", time.time() - _state["started_at"])
     return url
 
@@ -247,7 +259,10 @@ def synthesize(text: str, settings: dict | None = None, *,
     voice = voice or resolve_voice(settings)
     spd = tts_audio.clamp_speed(speed if speed is not None else resolve_speed(settings))
 
-    timeout = float(settings.get("tts_timeout_s") or 120)
+    try:
+        timeout = float(settings.get("tts_timeout_s") or 120)
+    except (TypeError, ValueError):
+        timeout = 120.0
     try:
         with httpx.Client(timeout=httpx.Timeout(connect=5.0, read=timeout,
                                                 write=10.0, pool=5.0)) as client:
@@ -277,5 +292,6 @@ def status(settings: dict | None = None) -> dict:
         "uv": bool(shutil.which("uvx")),
         "voices": [{"key": k, "label": label, "note": note} for k, label, note in VOICES],
         "idle_stop_s": resolve_idle_stop(settings),
+        "max_chars": tts_audio.MAX_CHARS,
         "port": _state.get("port") or 0,
     }

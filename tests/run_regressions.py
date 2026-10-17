@@ -89,6 +89,8 @@ SUITES = [
     ("tts_engine",                "tests/test_tts_engine.py",                 90),
     ("tts_server",                "tests/test_tts_server.py",                 45),
     ("gateway_voice",             "tests/test_gateway_voice.py",              45),
+    ("gateway_voice_out",         "tests/test_gateway_voice_out.py",          30),
+    ("tool_registry_consistency",  "tests/test_tool_registry_consistency.py",  30),
     ("injection_budget",          "tests/test_injection_budget.py",             60),
     ("vision_strict",             "tests/test_vision_strict.py",                60),
     ("env_check",                 "tests/test_env_check.py",                   120),

@@ -63,7 +63,9 @@ check("headers carry duration/voice/speed",
       "X-HiveMind-Duration" in tseg and "X-HiveMind-Voice" in tseg
       and "X-HiveMind-Speed" in tseg)
 check("the sidecar is not started while disabled",
-      tseg.index("tts_enabled") < tseg.index("synthesize("))
+      tseg.index("tts_enabled") < tseg.index("tts_engine.synthesize"))
+check("the blocking work runs in a thread (no event-loop freeze)",
+      "asyncio.to_thread(" in tseg)
 
 # ── (c) settings ───────────────────────────────────────────────────────────
 for key, want in (("tts_enabled", "False"), ("tts_voice", '"cosette"'),
@@ -78,7 +80,11 @@ card = html.split('id="voice-card"', 1)[1].split("<!-- Smart Preload -->", 1)[0]
 for el in ("tts-enabled-toggle", "tts-options", "tts-status-line",
            "tts-voice-sel", "tts-speed-inp", "tts-sample-out"):
     check(f"card element {el}", f'id="{el}"' in card)
-check("cosette is the first voice option", '<option value="cosette"' in card)
+_vsel = card.split('id="tts-voice-sel"', 1)[1].split('</select>', 1)[0] \
+    if 'id="tts-voice-sel"' in card else ''
+check("the select is filled from /tts/voices (no duplicated list)",
+      'function _ttsFillVoices' in app and '(loading...)' in _vsel
+      and 'value="alba"' not in _vsel)
 check("speed is wired", "postSettings({tts_speed:" in card)
 check("voice is wired", "postSettings({tts_voice:this.value})" in card)
 check("the block is hidden by default", 'id="tts-options" class="tgl-sub" style="display:none"' in card)

@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261017-1">
+  <link rel="stylesheet" href="/static/style.css?v=20261017-4">
 </head>
 <body>
 <header>
@@ -1520,7 +1520,7 @@
     <!-- Voice (1.4): everything here is opt-in. Off by default means: no
          downloads, no processes, no microphone, no Telegram audio. -->
     <div class="cfg-card" id="voice-card">
-      <div class="cfg-card-title">Voice <span class="cfl-badge" style="color:var(--amber);border-color:rgba(255,193,7,.35)">BETA</span> <span class="fld-hint" style="display:inline;font-size:10px">off by default</span></div>
+      <div class="cfg-card-title">Voice <span class="cfl-badge" style="color:var(--amber);border-color:rgba(255,193,7,.35)">BETA</span></div>
       <div class="tgl-row">
         <span class="tgl-text">Speech to text</span>
         <label class="cfl-sw">
@@ -1529,7 +1529,7 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Turns a voice note (or the microphone test) into text with a local whisper.cpp / Parakeet model. CPU only, no cloud, English only in this version.</div>
+      <div class="fld-hint">Turns a voice note (or the microphone test) into text with a local whisper.cpp / Parakeet model. CPU only, no cloud, English only in this version. The engine is a one-time download (~420 MB) - from the installer, <code>deploy\setup_voice.bat</code>, or the button below when something is missing.</div>
       <div id="stt-options" class="tgl-sub" style="display:none">
         <div class="tgl-row" style="align-items:flex-start">
           <span class="tgl-text" style="max-width:150px">Engine &amp; model</span>
@@ -1598,11 +1598,11 @@
         <span class="tgl-text">Text to speech</span>
         <label class="cfl-sw">
           <input type="checkbox" id="tts-enabled-toggle"
-            onchange="S.ttsEnabled=this.checked;postSettings({tts_enabled:this.checked});_syncTtsCard();_ttsStatusRefresh();">
+            onchange="S.ttsEnabled=this.checked;postSettings({tts_enabled:this.checked});_syncTtsCard();_ttsStatusRefresh();if(this.checked)voiceWarmup();">
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Speaks answers with a local voice (Pocket TTS, CPU only). Runs in its own uv environment, so nothing is installed into HiveMind itself. Off = no speaker buttons, no process.</div>
+      <div class="fld-hint">Speaks answers out loud with a local voice (Pocket TTS, CPU only). Pick a voice and a speed below, then use the speaker button on any answer - or let Telegram send it as a voice note. Needs <code>uv</code> on PATH and a one-time <code>hf auth login</code> (gated model, see <code>docs\voice_setup.md</code>); the engine runs in its own isolated environment, so HiveMind's install stays untouched. The first request fetches ~200 MB into uv's cache, afterwards it stays warm and shuts down when idle.</div>
       <div id="tts-options" class="tgl-sub" style="display:none">
         <div class="tgl-row" style="align-items:flex-start">
           <span class="tgl-text" style="max-width:150px">Engine</span>
@@ -1614,13 +1614,9 @@
           <span class="tgl-text">Voice</span>
           <select id="tts-voice-sel" onchange="postSettings({tts_voice:this.value}); S.ttsVoice=this.value; _syncTtsCard();"
             style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:190px;flex-shrink:0">
-            <option value="cosette">Cosette - female, clear</option>
-            <option value="alba">Alba - female, reference</option>
-            <option value="anna">Anna - female, soft</option>
-            <option value="eve">Eve - female, bright</option>
-            <option value="jane">Jane - female, calm</option>
-            <option value="vera">Vera - female, warm</option>
-            <option value="bill_boerst">Bill Boerst - male, serious</option>
+            <!-- filled from GET /tts/voices: core/tts_engine.VOICES is the
+                 single list, this select must not carry its own copy -->
+            <option value="cosette">(loading...)</option>
           </select>
         </div>
         <div class="tgl-row">
@@ -1636,9 +1632,46 @@
             <div id="tts-sample-out" style="margin-top:5px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8f9bb3"></div>
           </div>
         </div>
-        <div class="fld-hint">Pocket TTS has no speed setting of its own; HiveMind shortens the audio (WSOLA) so the voice gets faster without sounding pitched up. 1.08x is the default.</div>
+        <div class="fld-hint">Pocket TTS has no speed setting of its own; HiveMind shortens the audio (WSOLA) so the voice gets faster without sounding pitched up. 1.08x is the default.</div>        <div class="tgl-row" style="margin-top:8px">
+          <span class="tgl-text">Read aloud</span>
+          <span class="fld-hint" style="display:inline;font-size:9px;padding:0">what the UI speaks by itself</span>
+        </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Direct mode: the whole answer</span>
+          <label class="cfl-sw">
+            <input type="checkbox" id="tts-read-direct-toggle"
+              onchange="S.ttsReadDirect=this.checked;postSettings({tts_read_direct:this.checked})">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Agentic runs: plan, then coder answer</span>
+          <label class="cfl-sw">
+            <input type="checkbox" id="tts-read-agentic-toggle"
+              onchange="S.ttsReadAgentic=this.checked;postSettings({tts_read_agentic:this.checked})">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Ask-user questions</span>
+          <label class="cfl-sw">
+            <input type="checkbox" id="tts-read-ask-toggle"
+              onchange="S.ttsReadAsk=this.checked;postSettings({tts_read_ask:this.checked})">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Defensive gate / approval cards</span>
+          <label class="cfl-sw">
+            <input type="checkbox" id="tts-read-gate-toggle"
+              onchange="S.ttsReadGate=this.checked;postSettings({tts_read_gate:this.checked})">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div class="fld-hint">Speech plays one item at a time and stops when you press Stop. Long answers are cut at a sentence boundary (600 characters, the engine's cap).</div>
+
       </div>
-      <div class="fld-hint" style="margin-top:6px">Telegram voice notes and spoken answers are separate, per-chat switches in the Telegram Gateway card.</div>
+      <div class="fld-hint" style="margin-top:6px">Telegram voice notes and spoken answers have their own switches in the Telegram Gateway card - they are greyed out until the matching feature above is on.</div>
     </div>
 
     <!-- Smart Preload -->
@@ -1878,6 +1911,24 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       </label>
     </div>
     <div class="fld-hint">Shows runs that you START HERE on your phone: progress, the final result, approval cards and steering. Your phone texts go INTO the running run (steering), they do not start a second one. Only ONE run is mirrored at a time. Needs the gateway running (paired). Phone-started runs always arrive on the phone regardless of this switch.</div>
+    <div class="tgl-row" style="margin-top:10px">
+      <span class="tgl-text">Voice notes in <em>(dictate runs)</em></span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="tg-voice-in-toggle"
+          onchange="S.tgVoiceIn=this.checked;postSettings({telegram_voice_in:this.checked})">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div class="fld-hint" id="tg-voice-in-hint">ON: a voice note from your phone is transcribed by HiveMind and runs exactly like typed text (same gates and approvals). Needs <b>Speech to text</b> enabled in the Voice card - the switch is greyed out otherwise.</div>
+    <div class="tgl-row">
+      <span class="tgl-text">Answers as voice notes</span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="tg-voice-out-toggle"
+          onchange="S.tgVoiceOut=this.checked;postSettings({telegram_voice_out:this.checked})">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div class="fld-hint" id="tg-voice-out-hint">ON: the final answer of a phone run is also sent as a voice note (cosette, the voice and speed from the Voice card). Needs <b>Text to speech</b> enabled - the switch is greyed out otherwise.</div>
     <div class="tgl-row" style="margin-top:6px">
       <span class="tgl-text">Restrict phone runs (web + text)</span>
       <label class="cfl-sw">
@@ -2170,6 +2221,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261017-10"></script>
+        <script src="/static/app.js?v=20261017-14"></script>
 </body>
 </html>

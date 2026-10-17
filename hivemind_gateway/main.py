@@ -353,14 +353,22 @@ class Gateway:
         await gw_send.send(self.api, self.owner_id, self.owner_id,
                            document_bytes=data, filename=filename)
 
+    async def send_voice(self, ogg: bytes, duration_s: int = 0) -> None:
+        """VOICE OUT (1.4): owner-only voice note via the central send()."""
+        await gw_send.send(self.api, self.owner_id, self.owner_id,
+                           voice_bytes=ogg, voice_duration=duration_s)
+
     # -- commands ---------------------------------------------------------
 
     async def handle_owner_update(self, p: gw_auth.ParsedUpdate) -> None:
         cmd = gw_commands.command_from_message(p)
         if cmd is None:
             if p.kind == "message" and p.voice_file_id:
-                # VOICE (1.4, opt-in): a voice note becomes the run prompt.
-                if self.cfg.voice_in:
+                # VOICE (1.4, opt-in): a voice note becomes the run prompt. The
+                # switch lives in the UI (engine setting) with gateway.toml as
+                # the fallback, so flipping it in the settings takes effect on
+                # the next voice note without a restart.
+                if await self._voice_in_enabled():
                     await self.handle_voice_note(p)
                     return
                 await self.reply(p.chat_id,
@@ -610,6 +618,21 @@ class Gateway:
             note = f"🔌 HiveMind unreachable: {exc}"
         await self.reply(p.chat_id, note,
                          reply_to_message_id=p.message_id)
+
+    async def _voice_in_enabled(self) -> bool:
+        """cfg.voice_in (gateway.toml) OR the engine's telegram_voice_in.
+
+        The UI switch lives in the Gateway card and is stored as an engine
+        setting, so flipping it takes effect on the next voice note without a
+        restart. The toml key stays as the offline fallback.
+        """
+        if self.cfg.voice_in:
+            return True
+        try:
+            s = await self.hive.settings()
+        except (HiveUnreachable, HTTPError, OSError):
+            return False
+        return bool((s or {}).get("telegram_voice_in", False))
 
     async def handle_voice_note(self, p: gw_auth.ParsedUpdate) -> None:
         """Download the voice note, transcribe it via the engine, run the text.

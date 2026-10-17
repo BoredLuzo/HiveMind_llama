@@ -279,6 +279,8 @@ DEFAULT_SETTINGS = {
     # Job resource limits (0 = unlimited) for run_bash/run_python/background.
     "duo_tool_sandbox_max_mem_mb": 4096,
     "duo_tool_sandbox_max_procs": 64,
+    # POSIX only (Linux/macOS): RLIMIT_CPU seconds per tool child. 0 = unset.
+    "duo_tool_sandbox_max_cpu_s": 0,
     "read_guard_enabled":      True,
     # WRITE-GUARD duo_full (2026-09-06): blocks write_file on existing files
     # never seen in this run (rollback lever like duo_error_rollup /
@@ -344,6 +346,18 @@ DEFAULT_SETTINGS = {
     "tts_speed":                 1.08,
     "tts_timeout_s":             120,
     "tts_idle_stop_s":           900,
+    # Telegram gateway voice (per bot, opt-in). The gateway reads these from the
+    # engine, so the UI switches actually drive it; the greying in the UI follows
+    # stt_enabled / tts_enabled (a voice note needs STT, a voice answer needs TTS).
+    # Read-aloud (frontend): what the UI speaks on its own when TTS is on.
+    # Direct = the whole answer; agentic = the plan first, then the coder's
+    # answer; ask/gate read the interactive cards. All default off.
+    "tts_read_direct":           False,
+    "tts_read_agentic":          False,
+    "tts_read_ask":              False,
+    "tts_read_gate":             False,
+    "telegram_voice_in":         False,
+    "telegram_voice_out":        False,
 
     # Only bing + duckduckgo answer reliably on stock SearXNG instances:
     # google sits CAPTCHA-suspended, wikipedia returns 0 under most language

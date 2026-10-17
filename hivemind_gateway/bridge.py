@@ -28,6 +28,7 @@ from httpx import HTTPError
 import asyncio
 from . import render
 from .hive_client import HiveUnreachable
+from .send import PolicyViolation
 from .telegram_api import TelegramApiError
 
 STOP_REASON_TEXT = {
@@ -718,6 +719,42 @@ class RunBridge:
                 self._clear_run()
         return final_note
 
+    async def _voice_out_enabled(self) -> bool:
+        """cfg.voice_out (gateway.toml) OR the engine's telegram_voice_out."""
+        if self.cfg.voice_out:
+            return True
+        try:
+            s = await self.hive.settings()
+        except (HiveUnreachable, HTTPError, OSError):
+            return False
+        return bool((s or {}).get("telegram_voice_out", False))
+
+    async def _maybe_voice_answer(self, answer: str) -> None:
+        """VOICE OUT (1.4, opt-in): send the final answer as a voice note.
+
+        Never blocks or fails the run: every error is logged as a note and the
+        text answer is already on its way/in the chat. The engine applies the
+        voice and speed from the settings (cosette, 1.08x by default) and caps
+        the text at 600 characters itself.
+        """
+        answer = (answer or "").strip()
+        if not answer:
+            return
+        if not await self._voice_out_enabled():
+            return
+        try:
+            ogg, code = await self.hive.tts(answer)
+        except (HiveUnreachable, HTTPError, OSError) as exc:
+            self._log_note(f"voice answer skipped: {exc}")
+            return
+        if not ogg:
+            self._log_note(f"voice answer skipped: {code or 'no audio'}")
+            return
+        try:
+            await self.ms.send_voice(ogg, 0)
+        except (PolicyViolation, HiveUnreachable, HTTPError, OSError) as exc:
+            self._log_note(f"voice answer send failed: {exc}")
+
     async def _finish(self, chat_id, q, parts, stop_reason, error_text,
                       denied, status_id) -> str:
         answer = "".join(parts).strip()
@@ -745,6 +782,10 @@ class RunBridge:
         else:
             for c in chunks:
                 await self._send_chunk(c)
+        # VOICE OUT: the clean answer (no ❌/⏹ decorations) as a voice note,
+        # only when the owner enabled it and the run produced text.
+        if stop_reason != "error" and answer:
+            await self._maybe_voice_answer(answer)
         try:
             await self._write_turn(
                 chat_id, {"role": "assistant", "content": text})

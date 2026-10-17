@@ -47,10 +47,13 @@ def synth_wav(seconds=3.0, sr=24000, f0=95.0) -> bytes:
 
 
 def f0_of(x, sr):
+    """Fundamental frequency via FFT autocorrelation (fast, same result)."""
     seg = x[: min(len(x), sr)]
     seg = seg - seg.mean()
-    ac = np.correlate(seg, seg, mode="full")[len(seg) - 1:]
-    lo, hi = sr // 400, sr // 70
+    n = 1 << (2 * len(seg) - 1).bit_length()
+    spec = np.fft.rfft(seg, n)
+    ac = np.fft.irfft(spec * np.conj(spec), n)[: len(seg)]
+    lo, hi = max(1, sr // 400), min(len(ac) - 1, sr // 70)
     lag = lo + int(np.argmax(ac[lo:hi]))
     return sr / lag
 

@@ -50,7 +50,11 @@ card = html.split('id="voice-card"', 1)[1].split("<!-- Smart Preload -->", 1)[0]
     if 'id="voice-card"' in html else ""
 check("the Voice card exists", bool(card))
 check("it is marked BETA", "BETA" in card)
-check("it says off by default", "off by default" in card)
+# the title no longer carries "off by default" (owner 2026-10-17); the hint
+# under each master switch makes the default visible instead
+check("the master switches still explain the default",
+      "OFF = one process per note" in card or "Off = no speaker buttons" in card
+      or "no speaker buttons" in card)
 check("it sits next to Keep-Alive", html.index('id="voice-card"') > html.index("Keep-Alive / Pinning"))
 for el in ("stt-enabled-toggle", "stt-model-sel", "stt-language-sel",
            "stt-preload-toggle", "stt-test-btn", "stt-download-btn",
@@ -160,10 +164,71 @@ check("the TTS toggle updates S before refreshing",
       "S.ttsEnabled=this.checked" in card)
 check("the stylesheet has a fresh cache buster",
       "style.css?v=20261017" in html)
-check("the mic button is a 40px red circle with a big glyph",
-      "font-size:19px" in _css and "border-radius:50%" in _css)
-check("turning TTS off stops playback",
-      "if (!on) { _voiceStopAudio(); }" in app)
+# owner (2026-10-17): same box as #send, NOT a circle
+check("the mic button has the send button's footprint",
+      "#mic-btn{" in _css and "border-radius:7px;width:40px;height:40px" in _css)
+check("the mic button is not a circle",
+      "border-radius:50%" not in _css.split("#mic-btn{")[1].split("}")[0])
+check("turning TTS off stops playback and the queue",
+      "if (!on) {" in app and "_voiceStopAudio();" in app
+      and "_readAloudQueue = [];" in app)
+
+
+# ── Telegram voice switches live in the Gateway card, greyed by Voice state ─
+check("the gateway card has the voice-in switch", 'id="tg-voice-in-toggle"' in html)
+check("the gateway card has the voice-out switch", 'id="tg-voice-out-toggle"' in html)
+check("voice-in writes the setting", "postSettings({telegram_voice_in:this.checked})" in html)
+check("voice-out writes the setting", "postSettings({telegram_voice_out:this.checked})" in html)
+check("the switches are greyed by the voice state",
+      "el.disabled = !on;" in app and "function _syncTgVoice" in app)
+check("the card title no longer says 'off by default'",
+      'BETA</span> <span class="fld-hint"' not in html)
+
+
+# ── READ ALOUD (1.4): four switches, four hooks, one queue ─────────────────
+check("read-aloud switches exist",
+      all('id="tts-read-%s-toggle"' % k in card
+          for k in ("direct", "agentic", "ask", "gate")))
+check("each switch writes its setting",
+      all("postSettings({tts_read_%s:this.checked})" % k in card
+          for k in ("direct", "agentic", "ask", "gate")))
+check("the switches load into S",
+      all(("S.ttsRead%s = s.tts_read_%s === true" % (n, k)) in app
+          for n, k in (("Direct", "direct"), ("Agentic", "agentic"),
+                       ("Ask", "ask"), ("Gate", "gate"))))
+check("speech is gated per surface", "function _readAloudWanted" in app)
+check("only while TTS is on", "if (!(S && S.ttsEnabled)) return false;" in app)
+check("the queue plays one item at a time", "function _readAloudNext" in app
+      and "_readAloudBusy" in app)
+check("long text is cut at a boundary", "lastIndexOf('. ')" in app and "600" in app)
+check("Stop kills the speech", "_readAloudStop" in app)
+
+# hooks
+check("the plan is spoken in agentic runs",
+      "READ ALOUD: the plan first (agentic)" in app
+      and "_readAloud('plan', _txt)" in app and "S._spokenPlanKey" in app)
+check("the run end speaks the answer",
+      "_readAloud(_isDuo ? 'fazit' : 'direct', _answerTxt)" in app)
+check("agentic detection uses the mode list",
+      "['code_duo', 'duo', 'autoagent']" in app)
+check("ask-user cards are spoken", "speak the question once" in app
+      and "'ask-user-card'" in app)
+check("approval cards are spoken", "what wants to run" in app
+      and "'approval-request-card'" in app)
+
+# search
+check("the search finds voice by English terms",
+      "Voice — Read aloud" in app and "read aloud" in app)
+check("and by German everyday words",
+      "vorlesen" in app and "diktieren" in app)
+check("speech to text is findable", "Voice — Speech to text" in app)
+check("telegram voice switches are findable",
+      "Telegram — Voice notes in" in app and "Telegram — Answers as voice notes" in app)
+
+# engine side
+s = (ROOT / "settings.py").read_text(encoding="utf-8", errors="replace")
+check("all four settings default to False",
+      all(('"tts_read_%s"' % k) in s for k in ("direct", "agentic", "ask", "gate")))
 
 print()
 print(f"SUMMARY voice_card: {passed} passed, {failed} failed")

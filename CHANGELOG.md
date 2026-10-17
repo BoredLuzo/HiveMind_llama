@@ -1,5 +1,118 @@
 # Changelog
 
+## [1.4.0] - 2026-10-17
+
+Voice, end to end: speak answers here, dictate runs from the phone, and hear the
+answer back. Everything is opt-in and nothing starts until you turn it on.
+
+### Added
+
+- **Text to speech (Pocket TTS, CPU only, off by default).** A Voice card block
+  with a master switch, seven shipped English voices (default `cosette`), a speed
+  control (`1.08` - Pocket TTS has no speed parameter, so HiveMind time-stretches
+  the audio with WSOLA and keeps the pitch), a "Play sample" button and an honest
+  engine status line. The speaker button on every answer reads that answer - it is
+  hidden unless TTS is on, reads the bubble at click time (works on a still
+  streaming answer) and never autoplays.
+- **The TTS engine is a supervised sidecar, not a dependency.** It starts through
+  `uvx` on the first request (isolated environment, PyTorch never enters
+  HiveMind's venv), answers `/health` when ready, is stopped at exit, and shuts
+  itself down after `tts_idle_stop_s` (default 900 s). Without `uvx` it fails with
+  a clear code instead of downloading 200 MB.
+- **Read aloud** (four switches in the Voice card): direct mode reads the whole
+  answer; agentic runs read the plan first and then the coder's answer; ask-user
+  questions and the defensive gate / approval cards can be spoken too. One item at
+  a time, stopped by Stop, long text cut at a sentence boundary.
+- **Telegram voice notes in** (`voice_in` / the switch in the Telegram card): the
+  note is downloaded (20 MB, 300 s caps), transcribed by the local engine and the
+  transcript runs exactly like typed text - same owner/private gates, same
+  approvals. Every `STT_*` code is translated into a sentence.
+- **Telegram answers as voice notes** (`voice_out` / the switch in the Telegram
+  card): the final answer is additionally sent as a voice note (`sendVoice`,
+  Ogg/Opus) through the same owner-only `send()` boundary. A TTS failure is a log
+  note, never a broken run.
+- **Installer voice step** (opt-in, four choices): speech to text only, both, text
+  to speech only, or skip - plus `deploy\setup_voice.bat [model] [--tts|--both]`
+  for later and `install_linux.sh --voice|--tts|--both`. Whatever you skip stays
+  one click away in the Voice card, and all three paths call the same fetch code.
+- **`GET /tts/status`, `GET /tts/voices`, `POST /tts`** (`format=wav|opus`,
+  `X-HiveMind-Duration/Voice/Speed` headers). The voice list is served from one
+  place; the UI builds its dropdown from it.
+- **Settings search** finds the new features by their everyday names (English and
+  German: `tts`, `vorlesen`, `read aloud`, `diktieren`, `microphone`, `voice note`,
+  `telegram voice`).
+
+### Fixed
+
+- **Every `/stt` request returned `STT_EMPTY`.** The temporary WAV was created
+  with `tempfile.mkstemp(...)` and the fd was never closed; on Windows the file
+  stayed open for writing, the parakeet/whisper child could not read it
+  ("failed to read audio data") and the endpoint reported "no speech". Soundfile
+  reads the same file happily, so the unit test was blind to it - the regression
+  test now requires the decoded WAV to be readable *and* deletable by a second
+  process.
+- **Speech blocked the whole UI.** `/tts` ran the sidecar start (20-30 s on the
+  first request) directly on the event loop: SSE, status polling and every other
+  request stalled. Synthesis, Opus encoding, audio decode and transcription now
+  run in a worker thread; `/tts/status` answers in ~20 ms during a synthesis.
+- **The TTS restart budget counted successful starts:** after three normal idle
+  shutdowns the fourth start refused to run ("failed to start three times"). Only
+  consecutive failures count now, and a healthy start clears the budget.
+- **The mic button rendered as a small white box** (the stylesheet still carried
+  an old cache-buster) and the "speech to text" sub-block stayed visible after
+  switching it off (the toggle did not update the in-memory setting). The button
+  now has the send button's footprint (40x40, 7 px radius, red, pulsing while
+  recording) and both master switches collapse their blocks immediately.
+- **Installer step numbering** said `[x/7]` for the first five steps and `[x/8]`
+  for the last three after the voice step was inserted.
+
+### Changed (tools, sandbox, Linux)
+
+- **Write tools that were never gated now ask**: `edit_ast`, `replace_lines` and
+  `patch_file` write files and were missing from the approval list - with phone
+  approvals on, the model could rewrite a file without a card. The policy (what is
+  gated and, more importantly, what is deliberately not) is now written next to
+  the list.
+- **The dispatcher refuses what the run does not offer**: a name outside every
+  mode's tool list (`patch_file`, a resurrected legacy handler) and a
+  machine-changing tool outside the current mode (a chat or read-only run calling
+  `write_file`/`run_bash`) are rejected before a handler runs.
+- **Malformed tool arguments are an error again** in the agentic loop: broken JSON
+  used to become "no arguments" and the tool ran with defaults (a `list_dir` on
+  the workspace root instead of the intended folder). The duo path already did
+  this; the agentic loop now matches.
+- **`start_background` goes through the destructive gate** like `run_bash` (it
+  runs the same kind of shell command and was only protected by the approval
+  switch).
+- **`search_code` runs without a shell**: the backends were shell strings built
+  from the model's pattern and path (`rg … "pattern" 2>nul`, `grep … | head -50`).
+  A read-only tool that runs without an approval prompt must not hand cmd a
+  string; every backend is an argument list now and the 50-line cap is applied in
+  Python.
+- **Linux gets per-tool limits**: Windows job objects have no twin on POSIX, so
+  the only limit was the service-wide `MemoryMax` - a runaway `run_python` could
+  take the whole server down. `RLIMIT_AS` / `RLIMIT_NPROC` / `RLIMIT_CPU` are
+  applied per child (same settings keys, `0` = off), and the unit now carries
+  `HOME`, `UV_CACHE_DIR` and `HF_HOME` for the speech sidecar.
+- **Linux installer**: no longer copies `settings.json`/`sessions`/`logs` from a
+  developer checkout into `/opt/hivemind`, runs its voice step as its own step
+  after llama.cpp, installs `requirements-voice.txt` when the extras are missing,
+  and pre-warms the TTS cache for the service user instead of root.
+
+### Notes
+
+- English only. Speech to text models: `parakeet-q4k` 396 MB (3.6 % micro-WER),
+  `base` 141 MB, `small` 465 MB, `tiny` 74 MB - pick by RAM, the installer prompts
+  once.
+- Warm TTS runs at 1.25-1.85x realtime (320 chars -> 19 s of audio in 10 s). The
+  first request after idle pays the sidecar start once. Text is capped at 600
+  characters per request.
+- Speech to text + text to speech cost ~1.4 GB of models and two uv caches, all
+  outside the release zip and the repository.
+- Chat push-to-talk (V2) is not in this release; the mic button appends a
+  transcript to the message box, and the read-aloud switches read answers,
+  the plan, the coder answer, ask-user questions and approval cards.
+
 ## [1.3.11] - 2026-10-17
 
 Web search that actually answers, a planner-briefing cap, and the voice work

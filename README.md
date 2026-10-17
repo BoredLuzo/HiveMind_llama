@@ -332,6 +332,37 @@ template. Per-model overrides live in `model_configs/models/<tag>.json`.
 - Windows toast notifications when runs stop or need input; wake-lock during
   runs (`keep_awake_during_run`).
 
+## Voice (optional, beta)
+
+Speech in and out, entirely local and off by default. Nothing is downloaded or
+started until you switch it on.
+
+- **Speech to text** (English only): a Telegram voice note or the UI microphone
+  becomes text. whisper.cpp/Parakeet on the CPU; you pick the tier - `parakeet-q4k`
+  (396 MB, 3.6 % WER) down to `tiny` (74 MB, weak CPUs).
+- **Text to speech**: answers spoken aloud with Pocket TTS (`cosette` by default,
+  speed `1.08x`). The model is gated, so a one-time `hf auth login` is needed; the
+  engine runs via `uvx`, so PyTorch never enters HiveMind's environment.
+- The installer asks once (speech to text / both / text to speech / skip) and
+  downloads what you picked. Skipping needs **no reinstall later**: the Voice card
+  or `deploy\setup_voice.bat` adds it whenever you want.
+
+**Audio models** (nothing is bundled - fetched on demand, CPU only, English):
+
+| Model | Size | Role | Notes |
+|---|---|---|---|
+| `parakeet-q4k` (default) | 396 MB | speech to text | 3.6 % micro-WER - best accuracy per byte |
+| `base` | 141 MB | speech to text | 9.9 % - light default for small machines |
+| `small` | 465 MB | speech to text | 7.3 % - slower, small gain |
+| `tiny` | 74 MB | speech to text | 12.4 % - weak CPUs |
+| Pocket TTS | ~200 MB + PyTorch in uv's cache | text to speech | voice `cosette`, speed `1.08x` |
+| whisper.cpp / parakeet.cpp | 21 MB | the STT binaries | `whisper-cli`, `whisper-server`, `parakeet-cli` |
+
+Voices: `cosette`, `alba`, `anna`, `eve`, `jane`, `vera`, `bill_boerst`. Speech to
+text lands in `<install>/stt/`, TTS in uv's and the Hugging Face cache - never in
+the repository, never in a release zip. Numbers and the Telegram switches:
+[docs/voice_setup.md](docs/voice_setup.md).
+
 ## Learning and memory
 
 - Soul engine: peer-rating-based personality evolution, injects learned traits

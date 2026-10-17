@@ -150,6 +150,12 @@ def _consume_web_search_budget() -> bool:
         _limit = int(_ws_settings.get("duo_websearch_max_calls", _WEBSEARCH_BUDGET_DEFAULT))
     except Exception:
         _limit = _WEBSEARCH_BUDGET_DEFAULT
+    # NO-CONTEXT (audit 2026-10-17): the counter lives in a ContextVar that the
+    # run sets up. Called WITHOUT that context (a unit test, a direct API call, a
+    # future scheduler) the fresh list below is per-call, so the budget can never
+    # trip - deliberate, and the reason a test can call the tool in a loop. Every
+    # real run goes through the context manager in core/duo_runner, so the limit
+    # applies there.
     _c = _web_search_count.get(None)
     if _c is None:
         _c = [0]
@@ -303,9 +309,37 @@ def _parse_approval_answer(text: str) -> str:
 
 # Everything that changes the project asks when the gate is on:
 # code/cmd execution, file writes and commits.
+# APPROVAL POLICY (audit 2026-10-17) - what asks the human, and what does not:
+#   GATED (card before the call, respects pre-decisions and "remember"):
+#     run_bash, run_python, install_package, start_background  - arbitrary code
+#     write_file, edit_file, write_file_append, edit_ast, replace_lines,
+#     patch_file                                             - file mutations
+#     git_commit                                             - shared history
+#   DELIBERATELY NOT GATED:
+#     read_file / search_code / list_dir / find_files / get_signatures /
+#       find_references / git_status  - read-only, no side effect
+#     undo_last                      - reverts to a state that already existed;
+#                                      asking again for the undo of an approved
+#                                      write was pure friction
+#     stop_background                - stops a process the model started itself
+#                                      (starting one needed the card already)
+#     remember                       - the assistant's own memory DB, not a
+#                                      workspace file
+#     task_complete                  - ends the run, writes nothing
+#     browser                        - navigates the local preview, contained by
+#                                      tools/browser.py (workspace check)
+#     ask_user / get_datetime        - dialog + clock
+#   When a new tool mutates the workspace, it belongs in the GATED list - the
+#   test tests/test_tool_registry_consistency.py fails if it is missed.
 _APPROVAL_TOOLS = frozenset({
     "run_bash", "run_python", "install_package", "start_background",
     "write_file", "edit_file", "write_file_append",
+    # AUDIT 2026-10-17: these three write files as well and were NOT gated, so
+    # with duo_action_approval_enabled=true the model could edit a file through
+    # edit_ast/replace_lines without ever showing a card. edit_ast and
+    # replace_lines ARE offered in duo_full (patch_file is legacy, kept here as
+    # belt-and-braces in case it is ever offered again).
+    "edit_ast", "replace_lines", "patch_file",
     "git_commit",
 })
 
@@ -1032,6 +1066,29 @@ _INLINE_TOOL_HANDLER_MAP = {
     "browser": _browser_tool,
 }
 
+
+# Every name ANY mode can offer (union over the mode allowlists + the web tools).
+# Used to reject handlers that no mode exposes any more. Built lazily so an
+# import cycle with tools.definitions cannot bite.
+_OFFERED_TOOL_NAMES_UNION: set = set()
+
+
+def _refresh_offered_tool_names() -> set:
+    global _OFFERED_TOOL_NAMES_UNION
+    try:
+        from tools.definitions import _TOOL_MODE_ALLOWLISTS
+        _u: set = set()
+        for _names in _TOOL_MODE_ALLOWLISTS.values():
+            _u |= set(_names or ())
+        _u |= {"web_search", "web_fetch"}
+        _OFFERED_TOOL_NAMES_UNION = _u
+    except (ImportError, AttributeError, TypeError):
+        pass
+    return _OFFERED_TOOL_NAMES_UNION
+
+
+_refresh_offered_tool_names()
+
 # ── 2.9 CENTRAL ENFORCEMENT FUNNEL (2026-08-24) ─────────────────────────────
 #
 # Regeln:
@@ -1039,6 +1096,36 @@ _INLINE_TOOL_HANDLER_MAP = {
 _dispatch_active_cv: _contextvars.ContextVar = _contextvars.ContextVar(
     "_dispatch_active", default=False
 )
+
+
+
+# MODE-STRICT WRITES (audit 2026-10-17): names that must be OFFERED by the
+# current mode before the dispatcher runs them. A chat/read-only run must not be
+# able to write or execute just because the model named the tool.
+_MODE_STRICT_NAMES = frozenset({
+    "write_file", "write_file_append", "edit_file", "edit_ast", "replace_lines",
+    "patch_file", "run_bash", "run_python", "install_package", "git_commit",
+    "start_background", "stop_background", "undo_last",
+})
+
+
+def _mode_blocks(name: str, tool_mode: str, include_websearch: bool) -> bool:
+    """True when the current mode does not offer a machine-changing tool."""
+    if name not in _MODE_STRICT_NAMES:
+        return False
+    try:
+        from tools.definitions import _TOOL_MODE_ALLOWLISTS, _tool_names_for_mode
+    except ImportError:
+        return False
+    if not tool_mode or tool_mode not in _TOOL_MODE_ALLOWLISTS:
+        return False        # unknown mode: do not invent a policy
+    if _dispatch_active_cv.get(False):
+        return False        # internal delegation inside an approved call
+    try:
+        allowed = _tool_names_for_mode(tool_mode, include_websearch=include_websearch)
+    except (TypeError, ValueError):
+        return False
+    return name not in allowed
 
 
 def _funnel_guard(name: str, fn):
@@ -1174,12 +1261,15 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
             _destructive = True
             _reason = f"run_python code matches a destructive pattern: '{_matched}'"
             _details = _code[:200]
-    elif name == "run_bash":
+    elif name in ("run_bash", "start_background"):
+        # AUDIT 2026-10-17: start_background runs the same kind of shell command
+        # as run_bash (and with the approval gate off it ran unchecked). Same
+        # destructive-pattern check, same model-facing refusal.
         _cmd = str(args.get("cmd", "") or args.get("command", ""))
         _matched = _is_destructive_bash(_cmd)
         if _matched:
             _destructive = True
-            _reason = f"run_bash command matches a destructive pattern: '{_matched}'"
+            _reason = f"{name} command matches a destructive pattern: '{_matched}'"
             _details = _cmd[:200]
 
     if not _destructive:
@@ -1423,6 +1513,31 @@ async def _run_inline_tool(
     # Phone restriction (2026-10-05 UI toggle telegram_phone_restricted):
     # ONE choke point for every mode/phase — anything outside the safe set
     # (read-only + web + dialog) is rejected before its handler exists.
+    # DEAD-NAME GUARD (audit 2026-10-17): a handler that exists but is offered by
+    # NO mode (today: patch_file) was still reachable in the duo path - the model
+    # only has to name it. Reject names outside every mode's allowlist, so a
+    # legacy handler can never be resurrected by a hallucinated call. Internal
+    # delegations (write_file -> edit_file) stay untouched: those names are
+    # offered.
+    if name and name not in _OFFERED_TOOL_NAMES_UNION:
+        import logging as _lg_dead_mod
+        _lg_dead = _lg_dead_mod.getLogger("hivemind.tools")
+        _lg_dead.warning("[TOOL-DEAD] '%s' is not offered by any tool mode - rejected",
+                         name)
+        return _tool_error_response(
+            "TOOL_NOT_FOUND",
+            f"Unknown tool '{name}'. Use one of the tools that are available in "
+            f"this run.",
+            tool=name, mode=str(tool_mode or ""))
+    if _mode_blocks(name, tool_mode, include_websearch):
+        import logging as _lg_mode_mod
+        _lg_mode_mod.getLogger("hivemind.tools").warning(
+            "[TOOL-MODE] '%s' is not offered by mode '%s' - rejected", name, tool_mode)
+        return _tool_error_response(
+            "TOOL_NOT_AVAILABLE_IN_MODE",
+            f"Tool '{name}' is not available in this run (mode '{tool_mode}'). "
+            f"Work with the tools that are available for this task.",
+            tool=name, mode=str(tool_mode or ""))
     if _tools_restricted_run.get() and name not in _PHONE_SAFE_TOOLS:
         return _tool_error_response(
             "PHONE_RESTRICTED",
@@ -1493,7 +1608,7 @@ async def _run_inline_tool(
                 tool=name,
                 mode=str(tool_mode or "") )
 
-        if name in ("run_bash", "run_python"):
+        if name in ("run_bash", "run_python", "start_background"):
             _gate_block = await _destructive_gate(name, args)
             if _gate_block is not None:
                 return _gate_block

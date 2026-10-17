@@ -9,18 +9,24 @@ echo  ^|    Full setup: Python, packages, GPU backend                ^|
 echo  +=============================================================+
 echo.
 echo  What this does (you will be asked before every step):
-echo    [1/7] Python            - set up python environment
-echo    [2/7] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
-echo    [3/7] llama.cpp backend - downloaded for the chosen backend
-echo    [4/7] Desktop shortcut  - optional, with the HiveMind icon
-echo    [5/7] Models            - downloaded into your chosen folder
-echo    [6/7] SearXNG           - optional web search (requires Docker)
-echo    [7/7] Telegram gateway  - optional: message HiveMind from
+echo    [1/8] Python            - set up python environment
+echo    [2/8] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
+echo    [3/8] llama.cpp backend - downloaded for the chosen backend
+echo    [4/8] Desktop shortcut  - optional, with the HiveMind icon
+echo    [5/8] Models            - downloaded into your chosen folder
+echo    [6/8] SearXNG           - optional web search (requires Docker)
+echo    [7/8] Voice             - optional speech to text / text to speech
+echo    [8/8] Telegram gateway  - optional: message HiveMind from
 echo                              your phone via your own bot
 echo                              (needs a @BotFather token, 2FA on)
 echo.
 
-choice /c YN /n /m "Install HiveMind now? [Y/N] "
+echo   [Y] full install    [N] abort    [O] only the optional parts
+echo       (SearXNG / Voice / Telegram - for an existing installation,
+echo        or to add them to one you installed a while ago)
+echo.
+choice /c YNO /n /m "Install HiveMind now? [Y/N/O] "
+if errorlevel 3 goto optionals_only
 if errorlevel 2 (
     echo.
     echo  Aborted - nothing was installed.
@@ -30,10 +36,10 @@ if errorlevel 2 (
 echo.
 
 REM ======================================================
-REM [1/7] Python
+REM [1/8] Python
 REM ======================================================
 echo  ==========================================================
-echo   [1/7] Setting up Python
+echo   [1/8] Setting up Python
 echo  ==========================================================
 echo.
 
@@ -183,10 +189,10 @@ echo  Press any key to continue... & pause >nul & exit /b 1
 :py_ok
 
 REM ======================================================
-REM [2/7] GPU backend (auto-detection)
+REM [2/8] GPU backend (auto-detection)
 REM ======================================================
 echo  ==========================================================
-echo   [2/7] GPU backend
+echo   [2/8] GPU backend
 echo  ==========================================================
 echo.
 echo   [V] Vulkan  - AMD / Intel GPUs
@@ -268,10 +274,10 @@ if errorlevel 1 (
 echo.
 
 REM ======================================================
-REM [3/7] llama.cpp backend
+REM [3/8] llama.cpp backend
 REM ======================================================
 echo  ==========================================================
-echo   [3/7] llama.cpp backend
+echo   [3/8] llama.cpp backend
 echo  ==========================================================
 echo.
 echo   Target: %~dp0llama\
@@ -312,13 +318,13 @@ if defined HAVE_LLAMA (
 echo.
 
 REM ======================================================
-REM [4/7] Desktop shortcut (optional, HiveMind icon)
+REM [4/8] Desktop shortcut (optional, HiveMind icon)
 REM SHORTCUT-FIRST (2026-09-12): asked BEFORE the long network steps,
 REM so a fresh install always gets the icon even if the user aborts
 REM during model downloads.
 REM ======================================================
 echo  ==========================================================
-echo   [4/7] Desktop shortcut
+echo   [4/8] Desktop shortcut
 echo  ==========================================================
 echo.
 echo   Creates "HiveMind.lnk" on the Desktop that starts
@@ -331,10 +337,10 @@ call create_shortcut.bat
 echo.
 
 REM ======================================================
-REM [5/7] Models
+REM [5/8] Models
 REM ======================================================
 echo  ==========================================================
-echo   [5/7] Models
+echo   [5/8] Models
 echo  ==========================================================
 echo.
 REM No folder prompt here - setup_models.bat asks ONCE (download target;
@@ -345,11 +351,11 @@ goto searxng_step
 :searxng_step
 
 REM ======================================================
-REM [6/7] SearXNG (optional)
+REM [6/8] SearXNG (optional)
 REM ======================================================
 echo.
 echo  ==========================================================
-echo   [6/7] SearXNG (web search, requires Docker Desktop)
+echo   [6/8] SearXNG (web search, requires Docker Desktop)
 echo  ==========================================================
 echo.
 where docker >nul 2>&1
@@ -365,7 +371,37 @@ if errorlevel 1 (
 echo.
 
 echo  ==========================================================
-echo   [7/7] Telegram gateway (optional)
+echo   [7/8] Voice (optional: speech to text / text to speech)
+echo  ==========================================================
+echo.
+echo   Local speech-to-text turns a Telegram voice note (or the
+echo   UI microphone) into text. Nothing is installed by default;
+echo   the engine + model are ~420 MB and CPU only (English only).
+echo.
+echo   This step is OPTIONAL and can be run at any time later -
+echo   NO reinstall needed, nothing else in the install changes:
+echo     - Settings -^> Voice -^> Download  (UI, with progress)
+echo     - or deploy\setup_voice.bat [model] [--tts^|--both]
+echo   Text-to-speech is separate and needs a one-time
+echo   "hf auth login" (gated model) - see docs\voice_setup.md.
+echo.
+echo   [1] Speech to text only              (~420 MB, English)
+echo   [2] Speech to text + text to speech  (adds ~200 MB PyTorch, needs hf login)
+echo   [3] Text to speech only              (~200 MB PyTorch, needs hf login)
+echo   [4] Skip (recommended if unsure) - add it later without reinstalling:
+echo       Settings -^> Voice, or deploy\setup_voice.bat
+echo.
+set "VOICE_PICK="
+set /p VOICE_PICK=Choose [1-4, default 4]: 
+if not defined VOICE_PICK set "VOICE_PICK=4"
+if "%VOICE_PICK%"=="1" call "%~dp0deploy\setup_voice.bat"
+if "%VOICE_PICK%"=="2" call "%~dp0deploy\setup_voice.bat" --both
+if "%VOICE_PICK%"=="3" call "%~dp0deploy\setup_voice.bat" --tts
+if "%VOICE_PICK%"=="4" echo   Skipped - add it later with no reinstall: Settings -^> Voice, or deploy\setup_voice.bat.
+echo.
+
+echo  ==========================================================
+echo   [8/8] Telegram gateway (optional)
 echo  ==========================================================
 echo.
 echo   Control HiveMind from your phone via your own Telegram bot.
@@ -387,6 +423,8 @@ echo   Start:        start_hivemind.bat
 echo   UI:           http://localhost:%HM_PORT%
 echo   Optional:     Telegram gateway - start_gateway.bat setup
 echo                 (docs\gateway_setup.md, off by default)
+echo   Optional:     Voice - deploy\setup_voice.bat [--tts^|--both]
+echo                 (no reinstall needed, or use Settings -^> Voice)
 echo.
 echo   IMPORTANT: Before the first run, set a workspace
 echo   in the UI (field "Workspace") - there is no default.
@@ -395,9 +433,49 @@ echo.
 echo   NOTE: uv was installed into %UV_DIR% and that folder was added to
 echo   NOTE: your PATH. If you want to run "uv" yourself in a terminal,
 echo   NOTE: open a NEW terminal first (this window has the PATH, others
-echo   NOTE: opened before the install may not).
+echo   NOTE: opened before the install may not see it.
 )
 echo  ==============================================================
 echo.
 echo  Press any key to continue...
 pause >nul
+exit /b 0
+
+REM ======================================================
+REM  OPTIONALS ONLY -- reached with [O] at the first prompt.
+REM  Jumps straight to step [6/8] and runs SearXNG, Voice and
+REM  the Telegram gateway. Python, GPU backend, llama.cpp and
+REM  the models are skipped: this is the "add a part later"
+REM  path, no reinstall and no re-download of anything big.
+REM  Written with labels instead of if-blocks on purpose -
+REM  parenthesised blocks choke on text that contains ")".
+REM ======================================================
+:optionals_only
+echo.
+echo  ==========================================================
+echo   Optional parts only
+echo  ==========================================================
+echo.
+echo   Skipping: Python, GPU backend, llama.cpp, models.
+echo   Running : SearXNG, Voice, Telegram gateway.
+echo.
+
+REM Ports are normally set by the full-install steps; restore them here so
+REM searxng.bat and the final summary do not get an empty value.
+if defined SEARXNG_PORT goto opt_have_sx_port
+set "SEARXNG_PORT=8888"
+:opt_have_sx_port
+if defined HM_PORT goto opt_have_port
+set "HM_PORT="
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$s = if (Test-Path settings.json) { Get-Content settings.json -Raw | ConvertFrom-Json } else { $null }; Write-Output $s.server_port"`) do set "HM_PORT=%%P"
+if not defined HM_PORT set "HM_PORT=8001"
+:opt_have_port
+
+if exist "%~dp0.venv\Scripts\python.exe" goto opt_have_venv
+echo   [NOTE] No Python environment in this folder. SearXNG works on its own,
+echo          but Voice and the Telegram gateway need the full install first
+echo          (step 1/8). Everything below will tell you if it is missing.
+echo.
+:opt_have_venv
+
+goto searxng_step

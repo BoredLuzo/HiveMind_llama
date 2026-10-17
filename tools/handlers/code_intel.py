@@ -170,50 +170,50 @@ async def _inline_tool_search_code(args: dict, workspace: Path, _workspace_lock:
     for _c in _strip_chars:
         _safe_path = _safe_path.replace(_c, '')
 
-    cmds = []
+    # ARGV, NOT SHELL (audit 2026-10-17): search_code is a READ-ONLY tool that
+    # runs without an approval prompt, so it must never hand a shell a string
+    # built from model input. The old shell form needed "2>nul" / "| head -50"
+    # and left %VAR% expansion on Windows open (cmd expands %NAME% even inside
+    # double quotes). Every backend is now an argument list and the line cap is
+    # applied here.
+    cmds: list[list[str]] = []
     if shutil.which("rg"):
-        if _is_win:
-            _rg_pat = pattern.replace('"', "").replace("'", "")
-            cmds.append(f'rg --no-heading -n "{_rg_pat}" "{_safe_path}" 2>nul')
-        else:
-            import shlex as _shlex
-            cmds.append(f"rg --no-heading -n {_shlex.quote(pattern)} {_shlex.quote(path)} 2>/dev/null | head -50")
+        cmds.append(["rg", "--no-heading", "-n", pattern, path])
     if _is_win:
         if not _HAS_REGEX_META.search(pattern):
             if _is_dir:
-                cmds.append(f'findstr /s /n /i "{_safe_pat}" "{_safe_path}\\*" 2>nul')
+                cmds.append(["findstr", "/s", "/n", "/i", _safe_pat,
+                             _safe_path.rstrip("\\") + "\\*"])
             else:
-                cmds.append(f'findstr /n /i "{_safe_pat}" "{_safe_path}" 2>nul')
+                cmds.append(["findstr", "/n", "/i", _safe_pat, _safe_path])
     else:
-        # SHELL-INJECTION FIX: shlex.quote() both pattern and path to prevent
-        # command injection via crafted filenames or search patterns.
-        import shlex as _shlex
-        _q_pat = _shlex.quote(_safe_pat)
-        _q_path = _shlex.quote(path)
         if _is_dir:
-            cmds.append(f"grep -rn {_q_pat} {_q_path} 2>/dev/null | head -50")
+            cmds.append(["grep", "-rn", _safe_pat, path])
         else:
-            cmds.append(f"grep -n {_q_pat} {_q_path} 2>/dev/null | head -50")
+            cmds.append(["grep", "-n", _safe_pat, path])
 
     _any_executed = False
+    _LINE_CAP = 50
 
-    async def _run_one(cmd: str):
+    async def _run_one(argv: list[str]):
         nonlocal _any_executed
         try:
-            r = await asyncio.create_subprocess_shell(
-                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            r = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
             out, _ = await asyncio.wait_for(r.communicate(), 10)
             _any_executed = True
-            result = out.decode(errors="replace").strip()
+            result = "\n".join(
+                out.decode(errors="replace").splitlines()[:_LINE_CAP]).strip()
             if result:
                 return result
         except Exception:
             pass
         return None
 
-    for _cmd in cmds:
-        _r = await _run_one(_cmd)
+    for _argv in cmds:
+        _r = await _run_one(_argv)
         if _r:
             return f"[search_code: {pattern}]\n{_r[:8000]}"
 

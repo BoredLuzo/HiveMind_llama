@@ -461,7 +461,35 @@ class ToolLoop:
                     _unknown_tool_abort = True
                     break
 
-                _args = _parse_tool_args(_fn.get("arguments", {}))
+                # 2.4 (audit 2026-10-17): parse_tool_args returns {} when the
+                # model emits broken JSON, so the tool ran with NO arguments -
+                # a list_dir scanned the workspace root instead of the intended
+                # folder, a write tool answered "missing path". The duo path has
+                # had this guard for a while (_args_parse_failed ->
+                # INVALID_JSON); the agentic loop had not. Same rule here: a
+                # non-empty string that parses to nothing is a parse error, not
+                # "no arguments".
+                _raw_args = _fn.get("arguments", {})
+                _args = _parse_tool_args(_raw_args)
+                if (isinstance(_raw_args, str) and _args == {}
+                        and _raw_args.strip() not in ("", "{}", "null", "none")):
+                    if _feedback_injected_count < _MAX_FEEDBACK_ROUNDS:
+                        _inject_retry_feedback(
+                            _tool_messages, error_type="parse_error",
+                            bad_content=_name,
+                            model=getattr(self.cfg, "model", ""),
+                        )
+                        _feedback_injected_count += 1
+                    state.tool_errors += 1
+                    _tool_messages.append({
+                        "role": "tool",
+                        "content": ("[TOOL_ERROR:INVALID_JSON] Tool arguments are "
+                                    "not valid JSON. Return one valid JSON object "
+                                    "for this tool call."),
+                        "tool_call_id": _tc.get("id", _name),
+                        "name": _name,
+                    })
+                    continue
 
                 state.tool_calls_made += 1
 

@@ -100,7 +100,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.3.11"
+HIVEMIND_VERSION = "1.4.0"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -2035,8 +2035,12 @@ async def tts_status():
 async def tts_voices():
     """The curated voices (the sidecar's catalog is bigger; this is the shipped set)."""
     from core import tts_engine
-    return JSONResponse({"default": tts_engine.DEFAULT_VOICE,
-                         "voices": tts_engine.status({})["voices"]})
+    return JSONResponse({
+        "default": tts_engine.DEFAULT_VOICE,
+        "max_chars": tts_engine.tts_audio.MAX_CHARS,
+        "voices": [{"key": k, "label": label, "note": note}
+                   for k, label, note in tts_engine.VOICES],
+    })
 
 
 @app.post("/tts")
@@ -2061,11 +2065,14 @@ async def tts_speak(request: Request):
                             status_code=400)
     fmt = str(body.get("format") or "wav").lower()
     try:
-        res = tts_engine.synthesize(text, settings,
-                                    voice=str(body.get("voice") or ""),
-                                    speed=body.get("speed"))
+        # THREAD (audit 2026-10-17): the first request starts the sidecar (up to
+        # ~20 s) - on the event loop that froze the whole UI, status polling
+        # included. Every blocking part moves into a worker thread.
+        res = await asyncio.to_thread(
+            tts_engine.synthesize, text, settings,
+            voice=str(body.get("voice") or ""), speed=body.get("speed"))
         if fmt == "opus":
-            payload = tts_audio.to_ogg_opus(res["wav"], 1.0)
+            payload = await asyncio.to_thread(tts_audio.to_ogg_opus, res["wav"], 1.0)
             media = "audio/ogg"
         else:
             payload = res["wav"]
@@ -2143,8 +2150,11 @@ async def stt_transcribe(request: Request):
     wav_path = None
     try:
         raw = await request.body()
-        wav_path, duration = stt_audio.to_wav16k(raw, max_seconds=max_seconds)
-        text = stt_engine.transcribe(wav_path, settings=settings)
+        # THREAD (audit 2026-10-17): decoding + the CLI/model run must not block
+        # the event loop (a long clip blocked SSE and every other request).
+        wav_path, duration = await asyncio.to_thread(
+            stt_audio.to_wav16k, raw, max_seconds=max_seconds)
+        text = await asyncio.to_thread(stt_engine.transcribe, wav_path, settings=settings)
         if not settings.get("stt_log_transcripts", False):
             _logger.info("[STT] transcribed %.1fs -> %d chars", duration, len(text))
         else:

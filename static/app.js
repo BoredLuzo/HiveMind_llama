@@ -1117,12 +1117,24 @@ async function loadSettings() {
     S.sttModel = String(s.stt_model || '');
     S.sttLanguage = String(s.stt_language || 'en');
     S.sttPreload = s.stt_preload === true;
+    // TTS (1.4): opt-in, same rule - nothing happens while it is off.
+    S.ttsEnabled = s.tts_enabled === true;
+    S.ttsVoice = String(s.tts_voice || 'cosette');
+    S.ttsSpeed = parseFloat(s.tts_speed || 1.08) || 1.08;
+    S.tgVoiceIn = s.telegram_voice_in === true;
+    S.tgVoiceOut = s.telegram_voice_out === true;
+    // Read-aloud (frontend): which surfaces speak on their own.
+    S.ttsReadDirect = s.tts_read_direct === true;
+    S.ttsReadAgentic = s.tts_read_agentic === true;
+    S.ttsReadAsk = s.tts_read_ask === true;
+    S.ttsReadGate = s.tts_read_gate === true;
     _syncFlagCheck('duo-coder-after-run-toggle', S.duoCoderAfterRun === 'evict');
     _syncFlagCheck('stt-enabled-toggle', S.sttEnabled);
     _syncFlagCheck('tts-enabled-toggle', S.ttsEnabled);
     if (typeof _syncTtsCard === 'function') _syncTtsCard();
     _syncFlagCheck('stt-preload-toggle', S.sttPreload);
     if (typeof _voiceCardRefresh === 'function') _voiceCardRefresh();
+    if (typeof _syncTgVoice === 'function') _syncTgVoice();
     var dpttlEl = document.getElementById('duo-planner-ttl');
     if (dpttlEl) dpttlEl.value = S.duoPlannerTtl;
     var dcttlEl = document.getElementById('duo-coder-ttl');
@@ -1597,8 +1609,14 @@ var _voicePollTimer = null;
 function _voiceStatusText(st) {
   if (!st) return 'status unavailable';
   if (st.error) return 'status error: ' + st.error;
-  if (!st.engine_installed) return 'engine not installed - download the binaries first';
-  if (!st.model_installed) return 'model missing: ' + (st.model_label || st.model);
+  if (!st.engine_installed) {
+    return 'engine not installed - use Download here, deploy\\setup_voice.bat, '
+           + 'or the installer';
+  }
+  if (!st.model_installed) {
+    return 'model missing: ' + (st.model_label || st.model)
+           + ' - use Download here or deploy\\setup_voice.bat';
+  }
   var bits = ['ready', st.model_label || st.model];
   if (st.threads) bits.push(st.threads + ' threads');
   if (st.warm) bits.push('warm');
@@ -1861,7 +1879,7 @@ async function voiceSpeakText(text, btn) {
   if (btn && btn.classList) btn.classList.add('playing');
   showStatus('Speaking...');
   try {
-    var blob = await _ttsFetchBlob(text.slice(0, 600), {});
+    var blob = await _ttsFetchBlob(text.slice(0, (S && S.ttsMaxChars) || 600), {});
     _voiceStopAudio();
     _ttsAudio = new Audio(URL.createObjectURL(blob));
     _ttsAudio.onended = function () { if (btn && btn.classList) btn.classList.remove('playing'); };
@@ -1894,19 +1912,153 @@ async function voicePlaySample() {
   }
 }
 
+
+// ── Telegram voice switches (1.4) ───────────────────────────────────────────
+// The switches live in the Gateway card but depend on the Voice card: a voice
+// note needs STT, a voice answer needs TTS. Both are greyed out while their
+// feature is off, and the hint says why.
+
+// ── READ ALOUD (1.4) ────────────────────────────────────────────────────────
+// The UI can speak things on its own: the whole answer in direct mode, the plan
+// and then the coder's answer in agentic runs, ask-user questions and the
+// approval/defensive-gate cards. Every surface has its own switch; nothing is
+// spoken while TTS is off, and speech never queues up behind older speech.
+var _readAloudQueue = [];
+var _readAloudBusy = false;
+
+function _readAloudWanted(kind) {
+  if (!(S && S.ttsEnabled)) return false;
+  if (kind === 'direct') return !!S.ttsReadDirect;
+  if (kind === 'plan' || kind === 'fazit') return !!S.ttsReadAgentic;
+  if (kind === 'ask') return !!S.ttsReadAsk;
+  if (kind === 'gate') return !!S.ttsReadGate;
+  return false;
+}
+
+function _readAloud(kind, text) {
+  if (!_readAloudWanted(kind)) return;
+  text = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  // cap before sending: the engine caps at 600 chars, a long answer should not
+  // be truncated mid-word by the server, so cut here at a sentence/word edge
+  var _cap = (S && S.ttsMaxChars) || 600;   // server truth: tts_audio.MAX_CHARS
+  if (text.length > _cap) {
+    var cut = text.slice(0, _cap);
+    var lastStop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+    text = (lastStop > _cap * 0.4 ? cut.slice(0, lastStop + 1)
+                                  : cut.slice(0, cut.lastIndexOf(' ') || _cap)).trim();
+  }
+  // Keep the kind with the text: a switch flipped off while items are queued
+  // must drop exactly those items; a mid-run flip ON takes the next event.
+  _readAloudQueue.push({kind: kind, text: text});
+  if (!_readAloudBusy) _readAloudNext();
+}
+
+function _readAloudNext() {
+  if (!_readAloudQueue.length) { _readAloudBusy = false; return; }
+  _readAloudBusy = true;
+  var _item = _readAloudQueue.shift();
+  var _kind = (_item && _item.kind) || 'direct';
+  var text = (_item && _item.text) || _item;
+  if (!_readAloudWanted(_kind)) { _readAloudNext(); return; }   // switched off meanwhile
+  _ttsFetchBlob(text, {}).then(function (blob) {
+    _voiceStopAudio();
+    _ttsAudio = new Audio(URL.createObjectURL(blob));
+    _ttsAudio.onended = function () { _readAloudNext(); };
+    _ttsAudio.onerror = function () { _readAloudNext(); };
+    return _ttsAudio.play();
+  }).catch(function (e) {
+    showStatus('Read aloud failed: ' + (e && e.message ? e.message : e));
+    _readAloudNext();
+  });
+}
+
+function _readAloudStop() {
+  _readAloudQueue = [];
+  _readAloudBusy = false;
+  _voiceStopAudio();
+}
+
+
+// Starting the sidecar takes 20-30 s on the first request. Doing that while the
+// owner is still setting up means the first real answer is already warm; this
+// runs in the background and its audio is thrown away.
+function voiceWarmup() {
+  if (!(S && S.ttsEnabled)) return;
+  fetch('/tts', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text: 'Ready.'})
+  }).then(function (r) {
+    if (r.ok) showStatus('Voice engine warm');
+  }).catch(function () { /* the next request reports the real error */ });
+}
+
+function _syncTgVoice() {
+  var inEl = document.getElementById('tg-voice-in-toggle');
+  var outEl = document.getElementById('tg-voice-out-toggle');
+  var sttOn = !!(S && S.sttEnabled);
+  var ttsOn = !!(S && S.ttsEnabled);
+  function _paint(el, on, checked) {
+    if (!el) return;
+    el.checked = !!checked;
+    el.disabled = !on;
+    var lab = el.closest('label');
+    if (lab) {
+      lab.style.opacity = on ? '' : '.4';
+      lab.style.pointerEvents = on ? '' : 'none';
+    }
+  }
+  _paint(inEl, sttOn, S && S.tgVoiceIn);
+  _paint(outEl, ttsOn, S && S.tgVoiceOut);
+}
+
+
+// The voice list comes from GET /tts/voices (core/tts_engine.VOICES) - one
+// source, so adding a voice never means editing HTML as well.
+var _ttsVoicesLoaded = false;
+
+function _ttsFillVoices(sel) {
+  if (!sel || _ttsVoicesLoaded) return;
+  fetch('/tts/voices', {cache: 'no-store'}).then(function (r) {
+    return r.json();
+  }).then(function (d) {
+    if (!d || !d.voices || !d.voices.length) return;
+    _ttsVoicesLoaded = true;
+    if (d.max_chars) S.ttsMaxChars = d.max_chars;
+    var keep = sel.value;
+    sel.textContent = '';
+    d.voices.forEach(function (v) {
+      var o = document.createElement('option');
+      o.value = v.key;
+      o.textContent = v.label + (v.note ? ' - ' + v.note : '');
+      sel.appendChild(o);
+    });
+    sel.value = (S && S.ttsVoice) || keep || d.default || '';
+  }).catch(function () { /* keep the placeholder, the card still works */ });
+}
+
 function _syncTtsCard() {
   var on = !!(S && S.ttsEnabled);
   var box = document.getElementById('tts-options');
   if (box) box.style.display = on ? 'block' : 'none';
-  if (!on) { _voiceStopAudio(); }
+  if (!on) {
+    // a mid-speech switch-off stops the clip AND everything queued
+    _voiceStopAudio();
+    _readAloudQueue = [];
+    _readAloudBusy = false;
+  }
   var btn = document.getElementById('tts-speak-all');
   if (btn) btn.style.display = on ? '' : 'none';
   var sel = document.getElementById('tts-voice-sel');
-  if (sel && S.ttsVoice && !sel.value) {
-    var matches = Array.prototype.filter.call(sel.options, function (o) {
-      return o.value === S.ttsVoice;
-    });
-    if (matches.length) sel.value = S.ttsVoice;
+  if (sel) {
+    _ttsFillVoices(sel);
+    if (S.ttsVoice && !sel.value) {
+      var matches = Array.prototype.filter.call(sel.options, function (o) {
+        return o.value === S.ttsVoice;
+      });
+      if (matches.length) sel.value = S.ttsVoice;
+    }
   }
   var spd = document.getElementById('tts-speed-inp');
   if (spd && !spd.value) spd.value = (S.ttsSpeed || 1.08);
@@ -1919,7 +2071,8 @@ async function _ttsStatusRefresh() {
     var r = await fetch('/tts/status', {cache: 'no-store'});
     var st = await r.json();
     if (line) {
-      if (!st.uv) {
+      if (st.max_chars) S.ttsMaxChars = st.max_chars;
+    if (!st.uv) {
         line.textContent = 'uv is missing - install it, then TTS works';
         line.style.color = '#f5c451';
       } else if (st.running) {
@@ -4171,6 +4324,22 @@ function _buildPlanMarkdown(text) {
 }
 
 function _renderPlanMarkdown() {
+  // READ ALOUD: the plan first (agentic). Both plan paths end here, and the
+  // guard makes sure a re-render never speaks the same plan twice.
+  (function () {
+    var _runKey = String(S.currentRunId || 'run');
+    if (S._spokenPlanKey === _runKey) return;
+    setTimeout(function () {
+      var _el = document.getElementById('planner-plan-content')
+             || document.getElementById('planner-plan-block');
+      if (!_el) return;
+      var _txt = String(_el.innerText || '').trim();
+      if (_txt.length > 40 && S._spokenPlanKey !== _runKey) {
+        S._spokenPlanKey = _runKey;
+        _readAloud('plan', _txt);
+      }
+    }, 80);
+  })();
   var _el = document.getElementById('planner-plan-content');
   if (!_el || _el._mdRendered) return;
   var _txt = (_el.textContent || '').trim();
@@ -5024,6 +5193,11 @@ function _apAutoBox(card, d) {
 }
 
 function _renderApprovalCard(d) {
+  // READ ALOUD: the defensive gate - what wants to run and why it is gated.
+  setTimeout(function () {
+    var _el = document.getElementById('approval-request-card');
+    if (_el) _readAloud('gate', _el.innerText);
+  }, 60);
   var _runId = d.run_id || S.currentRunId || '';
   var _apOld = document.getElementById('approval-request-card');
   // UPDATE-IN-PLACE (2026-09-18): the card is emitted twice per gated call
@@ -5121,6 +5295,13 @@ function _renderApprovalCard(d) {
 // answer is in flight, cleared on resume/done), different buttons: free
 // text answer back to the model, or "proceed autonomously".
 function _renderAskCard(d) {
+  // READ ALOUD: speak the question once the card is in the DOM (the payload
+  // field differs between the ask-user and the tool-approval events, the card
+  // text never does).
+  setTimeout(function () {
+    var _el = document.getElementById('ask-user-card');
+    if (_el) _readAloud('ask', _el.innerText);
+  }, 60);
   var _runId = d.run_id || S.currentRunId || '';
   var _old = document.getElementById('ask-user-card');
   if (_old) {
@@ -6084,6 +6265,17 @@ async function sendMsg() {
   } // end inner try/catch (fetch)
 
   } finally { // end outer try — covers automap + intent + fetch
+    // READ ALOUD at run end: direct reads the whole answer, an agentic run reads
+    // the coder's final answer (the plan was already spoken when it appeared).
+    try {
+      var _bodies = document.querySelectorAll('#chat .abody');
+      var _lastBody = _bodies.length ? _bodies[_bodies.length - 1] : null;
+      var _answerTxt = _lastBody ? String(_lastBody.innerText || '').trim() : '';
+      if (_answerTxt && _answerTxt.indexOf('[Run abgebrochen]') !== 0) {
+        var _isDuo = ['code_duo', 'duo', 'autoagent'].indexOf(String(S.mode || '')) >= 0;
+        _readAloud(_isDuo ? 'fazit' : 'direct', _answerTxt);
+      }
+    } catch (e) { /* never break the run for speech */ }
     S.streaming = false;
     _cleanupLoadTimers();
     S.currentRunId = null;
@@ -9526,6 +9718,7 @@ async function triggerSoulEvolution(force) {
 
 // -- Stop Stream -----------------------------------------------
 async function stopStream() {
+  if (typeof _readAloudStop === 'function') _readAloudStop();
   if (!S.currentRunId) return;
   // reset the pause state if the agent was blocked
   S.agentPaused = false;
@@ -12602,6 +12795,26 @@ function _updateDuoRoleStatus(elId, label, model) {
         _push(pid, t, b, 'Button');
       });
     });
+    // VOICE (1.4): the search must find the new features by their everyday
+    // names - the card scan only yields English labels, people type "vorlesen",
+    // "tts", "diktieren", "microphone", "voice note".
+    [['voice-card', 'Voice — Speech to text', null, 'Voice',
+      'speech to text stt dictate dictation microphone mic voice note transcribe whisper parakeet model tier download 3 s record test english'],
+     ['voice-card', 'Voice — Text to speech', null, 'Voice',
+      'text to speech tts speak read aloud vorlesen ausgeben stimme voice cosette speed pocket engine sample uvx'],
+     ['voice-card', 'Voice — Read aloud', null, 'Voice',
+      'read aloud vorlesen auto speak answer plan coder fazit ask question defensive gate approval card toggles'],
+     ['configs', 'Telegram — Voice notes in', null, 'Telegram voice',
+      'telegram voice note in dictation transcribe bot phone dictate'],
+     ['configs', 'Telegram — Answers as voice notes', null, 'Telegram voice',
+      'telegram voice out answer vorlesen voice note bot phone opus']].forEach(function(d) {
+      var card = document.getElementById(d[0]) ?
+        document.querySelector('.cfg-card:has(#' + d[0] + ')') : null;
+      var el = document.getElementById(d[0]);
+      if (el && el.closest) card = el.closest('.cfg-card') || card;
+      _push('configs', d[1], card || el, d[3], null, d[2] ? d[2] + ' ' + d[4] : d[4]);
+    });
+
     // TABS AS ENTRIES (2026-10-05, user: 'soul, tokens, chats etc sollen
     // auch in die suche') - the seven panels are searchable destinations
     // with curated keywords; the click lands on the tab itself.
