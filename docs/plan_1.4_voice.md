@@ -21,6 +21,40 @@ drop out of 1.4, the voice catalog is one language, and the per-voice licenses
 stay simple (Kyutai's English premade voices). The STT side never has to deal
 with the whisper server's translate-on-auto behaviour either.
 
+## 0d. Router idea (TinyDecide) - measured 2026-10-17
+
+Owner idea: a mini classification model that reads the transcript and picks
+mode/model/context. Candidate: [`TheREZOR/TinyDecide`](https://huggingface.co/TheREZOR/TinyDecide)
+(ELECTRA-small, 10.4M params, 6.2 MB 4-bit, Apache-2.0, zero-shot with
+plain-English questions at call time, Python engine needs **numpy only**).
+
+Measured here with the shipped python engine (3 questions per call, realistic
+HiveMind prompts):
+
+| aspect | result |
+|---|---|
+| latency | **~325 ms** for one question, ~375 ms for three (numpy engine; the model card's 1.1 s is an ESP32 number) |
+| mode routing | **7/12** plausible on our prompts, and the confidence is ~0.00-0.53 |
+| failure mode | long technical imperatives ("fix the failing test in app.js" -> *search*, conf 0.00; "run the test suite" -> *chat*) |
+| fits the model? | no: it is trained for short *everyday* messages (app routing, inbox triage, span extraction). Its own "Limits" section says two-step reasoning is near chance. |
+
+Conclusion: **not a drop-in router**. Plan for the router:
+1. **Rules first** (0 ms, deterministic, explainable): imperative coding verbs,
+   file paths / extensions, "site:" or URL -> research, pure question -> chat.
+2. **TinyDecide only in the ambiguous band** (rules unsure, short message,
+   `auto_route_tiny` on): one `choice` question, ~300 ms, and only a
+   *suggestion* - a confidence threshold plus the visible `[ROUTE]` line and the
+   usual fallback to the preset.
+3. If it is used seriously, **calibrate on our own runs** (chat history, chosen
+   presets in `token_stats.json`) - the model is zero-shot, so this is prompt/
+   threshold tuning first, fine-tuning only if that is not enough.
+4. Keep it opt-in (`router_enabled`, default off) and fetch the 6.2 MB files on
+   demand (`deploy/fetch_router.py`), same pattern as STT/TTS.
+
+Also worth using it for what it *is* good at: `noul`/`span` questions on short
+voice notes (e.g. "does this ask to change files?" showed 0.25-0.29 on coding
+prompts, i.e. weak; but "extract the time/path" style spans are its strength).
+
 ## 0c. TTS voice decision (2026-10-17)
 
 * **Voice: `cosette`** (owner, after listening to alba/anna/cosette/eve/jane/vera
