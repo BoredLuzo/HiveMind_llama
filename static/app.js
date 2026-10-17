@@ -1111,7 +1111,16 @@ async function loadSettings() {
     // CODER LIFETIME (2026-10-17): OFF = warm after the run (default), ON =
     // release the slot so the next prompt can load any model/mode.
     S.duoCoderAfterRun = (String(s.duo_coder_after_run || 'keep').toLowerCase() === 'evict') ? 'evict' : 'keep';
+    // VOICE (1.4): opt-in. Nothing runs while stt_enabled is off - the card
+    // only renders a status line and the controls stay inert.
+    S.sttEnabled = s.stt_enabled === true;
+    S.sttModel = String(s.stt_model || '');
+    S.sttLanguage = String(s.stt_language || 'en');
+    S.sttPreload = s.stt_preload === true;
     _syncFlagCheck('duo-coder-after-run-toggle', S.duoCoderAfterRun === 'evict');
+    _syncFlagCheck('stt-enabled-toggle', S.sttEnabled);
+    _syncFlagCheck('stt-preload-toggle', S.sttPreload);
+    if (typeof _voiceCardRefresh === 'function') _voiceCardRefresh();
     var dpttlEl = document.getElementById('duo-planner-ttl');
     if (dpttlEl) dpttlEl.value = S.duoPlannerTtl;
     var dcttlEl = document.getElementById('duo-coder-ttl');
@@ -1574,6 +1583,216 @@ function onDuoCoderModelChange(model) {
 }
 
 // COMPRESSION-MODELL + FIX-FLAGS (2026-09-07): UI-Schalter fuer Backend-Keys.
+
+// ── VOICE CARD (1.4) ─────────────────────────────────────────────────────────
+// Opt-in by design (owner decision): while stt_enabled is off this module only
+// renders nothing - no download, no microphone, no process. When it is on, the
+// card shows one honest status line (engine / model / ready / error) and a
+// Download button for whatever is missing, plus a 3 s microphone test that
+// posts to /stt and shows the transcript in place (never starts a run).
+var _voicePollTimer = null;
+
+function _voiceStatusText(st) {
+  if (!st) return 'status unavailable';
+  if (st.error) return 'status error: ' + st.error;
+  if (!st.engine_installed) return 'engine not installed - download the binaries first';
+  if (!st.model_installed) return 'model missing: ' + (st.model_label || st.model);
+  var bits = ['ready', st.model_label || st.model];
+  if (st.threads) bits.push(st.threads + ' threads');
+  if (st.warm) bits.push('warm');
+  return bits.join(' \u00b7 ');
+}
+
+function _voiceErrorText(j) {
+  if (!j) return 'no answer from the engine';
+  var map = {
+    STT_DISABLED: 'speech to text is off in the settings',
+    STT_NO_ENGINE: 'engine not installed - use Download',
+    STT_NO_MODEL: 'model not installed - use Download',
+    STT_NO_AUDIO_LIB: 'audio support missing: pip install -r requirements-voice.txt',
+    STT_DECODE_FAILED: 'the audio could not be decoded',
+    STT_TIMEOUT: 'the engine took too long',
+    STT_EMPTY: 'no speech detected',
+    STT_FAILED: 'the engine failed - see logs/',
+    STT_TRANSLATE_UNSUPPORTED: 'this model cannot translate'
+  };
+  var code = (j && j.code) || '';
+  return map[code] || (j.error || code || 'unknown error');
+}
+
+async function _voiceCardRefresh() {
+  var box = document.getElementById('stt-options');
+  var on = !!(S && S.sttEnabled);
+  if (box) box.style.display = on ? 'block' : 'none';
+  if (!on) {
+    if (_voicePollTimer) { clearInterval(_voicePollTimer); _voicePollTimer = null; }
+    return;
+  }
+  var line = document.getElementById('stt-status-line');
+  var dlRow = document.getElementById('stt-download-row');
+  var btn = document.getElementById('stt-download-btn');
+  var prog = document.getElementById('stt-progress');
+  var modelSel = document.getElementById('stt-model-sel');
+  var langSel = document.getElementById('stt-language-sel');
+  var thrSel = document.getElementById('stt-threads-sel');
+  var maxEl = document.getElementById('stt-max-seconds');
+  try {
+    var r = await fetch('/stt/status', {cache: 'no-store'});
+    var st = await r.json();
+    if (modelSel && st.available_models) {
+      var want = S.sttModel || st.model;
+      if (modelSel.options.length !== st.available_models.length) {
+        modelSel.innerHTML = '';
+        st.available_models.forEach(function (m) {
+          var o = document.createElement('option');
+          o.value = m.key;
+          o.textContent = m.label + ' - ' + Math.round(m.size_mb) + ' MB' +
+            (m.installed ? '' : ' (not installed)');
+          modelSel.appendChild(o);
+        });
+      }
+      if (want) modelSel.value = want;
+    }
+    if (langSel) langSel.value = st.language || 'en';
+    if (thrSel) thrSel.value = String(st.threads || 0);
+    if (maxEl && !maxEl.value) maxEl.value = 300;
+    var ready = !!(st.engine_installed && st.model_installed);
+    var fetching = !!(st.fetch && st.fetch.state === 'running');
+    if (line) {
+      line.textContent = fetching
+        ? ('downloading ' + Math.round(st.fetch.percent || 0) + ' %')
+        : _voiceStatusText(st);
+      line.style.color = ready ? '#6ee7a8' : '#f5c451';
+    }
+    if (dlRow) dlRow.style.display = (ready || fetching) ? 'none' : 'block';
+    if (btn) btn.textContent = st.engine_installed ? 'Download model' : 'Download engine + model';
+    if (prog) prog.textContent = '';
+    if (fetching && !_voicePollTimer) {
+      _voicePollTimer = setInterval(function () { _voiceCardRefresh(); }, 1500);
+    }
+    if (!fetching && _voicePollTimer) {
+      clearInterval(_voicePollTimer);
+      _voicePollTimer = null;
+    }
+  } catch (e) {
+    if (line) {
+      line.textContent = 'status unavailable (' + e.message + ')';
+      line.style.color = '#f5c451';
+    }
+  }
+}
+
+async function voiceFetchModel() {
+  var sel = document.getElementById('stt-model-sel');
+  var prog = document.getElementById('stt-progress');
+  var key = (sel && sel.value) || (S && S.sttModel) || '';
+  if (prog) prog.textContent = 'starting...';
+  try {
+    var r = await fetch('/stt/fetch', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model: key})
+    });
+    var j = await r.json();
+    if (j && j.code) {
+      if (prog) prog.textContent = _voiceErrorText(j);
+    }
+  } catch (e) {
+    if (prog) prog.textContent = 'download failed: ' + e.message;
+  }
+  _voiceCardRefresh();
+}
+
+// The browser records webm/opus (Chromium) or ogg/opus (Firefox); neither is
+// readable by the STT binaries, so decode + resample to 16 kHz mono WAV here.
+// That keeps python-multipart, ffmpeg and a webm decoder out of the stack.
+async function _voiceBlobToWav16k(blob) {
+  var buf = await blob.arrayBuffer();
+  var AC = window.AudioContext || window.webkitAudioContext;
+  var ctx = new AC();
+  var decoded;
+  try {
+    decoded = await ctx.decodeAudioData(buf.slice(0));
+  } finally {
+    try { ctx.close(); } catch (e) { /* older browsers */ }
+  }
+  var frames = Math.max(1, Math.round(decoded.duration * 16000));
+  var OffCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  var off = new OffCtx(1, frames, 16000);
+  var src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start(0);
+  var rendered = await off.startRendering();
+  var pcm = rendered.getChannelData(0);
+  var out = new ArrayBuffer(44 + pcm.length * 2);
+  var v = new DataView(out);
+  function wstr(off0, s) { for (var i = 0; i < s.length; i++) v.setUint8(off0 + i, s.charCodeAt(i)); }
+  wstr(0, 'RIFF');
+  v.setUint32(4, 36 + pcm.length * 2, true);
+  wstr(8, 'WAVE');
+  wstr(12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, 16000, true);
+  v.setUint32(28, 32000, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  wstr(36, 'data');
+  v.setUint32(40, pcm.length * 2, true);
+  for (var i = 0; i < pcm.length; i++) {
+    var s = Math.max(-1, Math.min(1, pcm[i]));
+    v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return new Blob([out], {type: 'audio/wav'});
+}
+
+async function voiceTestMic() {
+  var out = document.getElementById('stt-test-out');
+  if (!out) return;
+  out.style.color = '#8f9bb3';
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    out.textContent = 'this browser has no microphone API';
+    return;
+  }
+  var stream = null;
+  try {
+    out.textContent = 'requesting microphone...';
+    stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    var rec = new MediaRecorder(stream);
+    var chunks = [];
+    rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+    var stopped = new Promise(function (res) { rec.onstop = function () { res(); }; });
+    rec.start();
+    out.textContent = 'recording 3 s - speak now...';
+    await new Promise(function (res) { setTimeout(res, 3000); });
+    rec.stop();
+    await stopped;
+    var blob = new Blob(chunks, {type: (chunks[0] && chunks[0].type) || 'audio/webm'});
+    out.textContent = 'transcribing...';
+    var wav = await _voiceBlobToWav16k(blob);
+    var r = await fetch('/stt', {
+      method: 'POST',
+      headers: {'Content-Type': 'audio/wav'},
+      body: wav
+    });
+    var j = await r.json();
+    if (j && j.text) {
+      out.textContent = '\u201c' + j.text + '\u201d';
+      out.style.color = '#6ee7a8';
+    } else {
+      out.textContent = _voiceErrorText(j);
+      out.style.color = '#f5c451';
+    }
+  } catch (e) {
+    out.textContent = 'microphone test failed: ' + (e && e.message ? e.message : e);
+    out.style.color = '#f5c451';
+  } finally {
+    if (stream) stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) { /* gone */ } });
+  }
+}
+
 function _syncFlagCheck(id, on) {
   var e = document.getElementById(id);
   if (e) e.checked = !!on;

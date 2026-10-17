@@ -455,7 +455,39 @@ def status(settings: dict | None = None) -> dict:
             for k, v in MODELS.items()
         ],
         "root": str(stt_root()),
+        "fetch": fetch_state(),
     }
+
+
+FETCH_STATE_NAME = ".fetch_state.json"
+
+
+def fetch_state() -> dict:
+    """Progress of a running deploy/fetch_whisper.py (written by the script).
+
+    Never raises: a missing or half-written file simply means "idle". The card
+    polls this while a download runs, so it has to be cheap and total.
+    """
+    import json
+
+    p = stt_root() / FETCH_STATE_NAME
+    try:
+        with open(p, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        return {"state": "idle", "percent": 0.0, "model": "", "message": ""}
+    if not isinstance(raw, dict):
+        return {"state": "idle", "percent": 0.0, "model": "", "message": ""}
+    try:
+        pct = float(raw.get("percent") or 0.0)
+    except (TypeError, ValueError):
+        pct = 0.0
+    state = str(raw.get("state") or "idle").lower()
+    if state not in ("idle", "running", "done", "error"):
+        state = "idle"
+    return {"state": state, "percent": max(0.0, min(100.0, pct)),
+            "model": str(raw.get("model") or ""),
+            "message": str(raw.get("message") or "")}
 
 
 def _selftest() -> int:  # pragma: no cover - manual CLI

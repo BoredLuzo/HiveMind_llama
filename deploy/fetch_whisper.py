@@ -88,6 +88,21 @@ def pick_release(releases: list[dict], rx) -> tuple[dict, dict] | None:
     return best[1], best[2]
 
 
+def _progress(state: str, percent: float = 0.0, model: str = "",
+              message: str = "") -> None:
+    """Write the progress file the Voice card polls (best effort)."""
+    try:
+        path = stt_root() / ".fetch_state.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.part")
+        tmp.write_text(json.dumps({"state": state, "percent": round(percent, 1),
+                                   "model": model, "message": message}),
+                       encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
 def _http_json(url: str) -> dict:
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=60) as resp:
@@ -111,6 +126,7 @@ def _download(url: str, dest: Path, min_bytes: int = 0) -> bool:
                 got += len(chunk)
                 if total:
                     pct = 100.0 * got / total
+                    _progress("running", pct, dest.name)
                     print(f"\r  {dest.name}: {got / 1048576:6.1f} / "
                           f"{total / 1048576:6.1f} MB ({pct:5.1f} %)", end="")
                 elif got % (10 * 1048576) < 262144:
@@ -241,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return check()
 
+    _progress("running", 0.0, args.model or "")
     keys = [k.strip() for k in args.model.split(",") if k.strip()]
     if not keys or keys == ["all"]:
         keys = list(MODELS) if args.model == "all" else [resolve_model({})]
@@ -248,6 +265,8 @@ def main(argv: list[str] | None = None) -> int:
     good = install_models(keys, force=args.force) and good
     print()
     check()
+    _progress("done" if good else "error", 100.0, args.model or "",
+              "" if good else "download failed")
     return 0 if good else 1
 
 

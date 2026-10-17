@@ -2016,6 +2016,45 @@ async def stt_status():
         return JSONResponse({"enabled": False, "error": str(exc)[:200]}, status_code=200)
 
 
+@app.post("/stt/fetch")
+async def stt_fetch(request: Request):
+    """Start deploy/fetch_whisper.py for one model (binaries come with it)."""
+    import subprocess
+    import sys as _sys
+
+    from core import stt_engine
+
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        body = {}
+    key = str((body or {}).get("model") or "").strip() or stt_engine.resolve_model(load_settings())
+    if key not in stt_engine.MODELS:
+        return JSONResponse(stt_engine.SttError(
+            "STT_NO_MODEL", f"unknown model {key!r}").as_dict(), status_code=400)
+    if stt_engine.fetch_state().get("state") == "running":
+        return JSONResponse(stt_engine.SttError(
+            "STT_BUSY", "a download is already running").as_dict(), status_code=409)
+    script = Path(__file__).resolve().parent / "deploy" / "fetch_whisper.py"
+    if not script.is_file():
+        return JSONResponse(stt_engine.SttError(
+            "STT_NO_ENGINE", "deploy/fetch_whisper.py is missing").as_dict(),
+            status_code=400)
+    try:
+        subprocess.Popen([_sys.executable, str(script), "--model", key,
+                          "--backend", "blas"],
+                         cwd=str(script.parent.parent),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL)
+    except OSError as exc:
+        return JSONResponse(stt_engine.SttError(
+            "STT_FAILED", f"could not start the download: {exc}").as_dict(),
+            status_code=500)
+    _logger.info("[STT] download started for %s", key)
+    return JSONResponse({"started": True, "model": key,
+                         "fetch": stt_engine.fetch_state()}, status_code=202)
+
+
 @app.post("/stt")
 async def stt_transcribe(request: Request):
     """Transcribe one audio blob (raw body) -> {"text": ...} or {"code": ...}."""

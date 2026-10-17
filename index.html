@@ -1503,6 +1503,86 @@
       <div class="fld-hint">What happens to the coder's model slot when a run ends. <b>OFF</b>: the slot stays warm for the next prompt (the Coder TTL under Advanced decides when it is released). <b>ON</b>: the slot is released at the end of the run (also on abort), so the next prompt can load any model or mode without evicting something first.</div>
     </div>
 
+    <!-- Voice (1.4): everything here is opt-in. Off by default means: no
+         downloads, no processes, no microphone, no Telegram audio. -->
+    <div class="cfg-card" id="voice-card">
+      <div class="cfg-card-title">Voice <span class="cfl-badge" style="color:var(--amber);border-color:rgba(255,193,7,.35)">BETA</span> <span class="fld-hint" style="display:inline;font-size:10px">off by default</span></div>
+      <div class="tgl-row">
+        <span class="tgl-text">Speech to text</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="stt-enabled-toggle"
+            onchange="postSettings({stt_enabled:this.checked}); _voiceCardRefresh();">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Turns a voice note (or the microphone test) into text with a local whisper.cpp / Parakeet model. CPU only, no cloud, English only in this version.</div>
+      <div id="stt-options" class="tgl-sub" style="display:none">
+        <div class="tgl-row" style="align-items:flex-start">
+          <span class="tgl-text" style="max-width:150px">Engine &amp; model</span>
+          <div id="stt-status" style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.5;color:#8f9bb3">
+            <div id="stt-status-line">&mdash;</div>
+            <div id="stt-download-row" style="display:none;margin-top:4px">
+              <button id="stt-download-btn" onclick="voiceFetchModel()"
+                style="background:#1d2637;border:1px solid #2e3a4e;border-radius:4px;padding:3px 8px;color:#c8d4e4;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer">Download</button>
+              <span id="stt-progress" style="margin-left:8px"></span>
+            </div>
+          </div>
+        </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Model</span>
+          <select id="stt-model-sel" onchange="postSettings({stt_model:this.value}); _voiceCardRefresh();"
+            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:210px;flex-shrink:0"></select>
+        </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Language</span>
+          <select id="stt-language-sel" onchange="postSettings({stt_language:this.value})"
+            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:120px;flex-shrink:0">
+            <option value="en">English</option>
+          </select>
+        </div>
+        <div class="fld-hint">Only English is supported. Other languages are experimental (the engine can transcribe them, but nothing is tested or promised).</div>
+        <div class="tgl-row">
+          <span class="tgl-text">Keep engine warm <em>(preload)</em></span>
+          <label class="cfl-sw">
+            <input type="checkbox" id="stt-preload-toggle"
+              onchange="postSettings({stt_preload:this.checked})">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div class="fld-hint">ON = a whisper-server stays resident so the next voice note skips the model load (a few hundred ms). OFF = one process per note, nothing runs while idle.</div>
+        <div class="tgl-row" style="align-items:flex-start">
+          <span class="tgl-text" style="max-width:150px">Microphone test</span>
+          <div style="flex:1">
+            <button id="stt-test-btn" onclick="voiceTestMic()"
+              style="background:#1d2637;border:1px solid #2e3a4e;border-radius:4px;padding:3px 8px;color:#c8d4e4;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer">Record 3 s</button>
+            <div id="stt-test-out" style="margin-top:5px;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.5;color:#8f9bb3"></div>
+          </div>
+        </div>
+        <div class="fld-hint">Speak for three seconds; the transcript appears right here. This never starts a run.</div>
+        <details style="margin-top:6px">
+          <summary style="cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8f9bb3">Advanced</summary>
+          <div class="tgl-row" style="margin-top:4px">
+            <span class="tgl-text">Threads</span>
+            <select id="stt-threads-sel" onchange="postSettings({stt_threads:parseInt(this.value,10)||0})"
+              style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:120px;flex-shrink:0">
+              <option value="0">auto</option>
+              <option value="2">2</option>
+              <option value="4">4</option>
+              <option value="6">6</option>
+              <option value="8">8</option>
+            </select>
+          </div>
+          <div class="tgl-row">
+            <span class="tgl-text">Max length <em>(seconds)</em></span>
+            <input id="stt-max-seconds" type="number" min="10" max="900" step="10"
+              onchange="postSettings({stt_max_seconds:parseInt(this.value,10)||300})"
+              style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:80px;flex-shrink:0">
+          </div>
+        </details>
+      </div>
+      <div class="fld-hint" style="margin-top:6px">Telegram voice notes and spoken answers are separate, per-chat switches in the Telegram Gateway card.</div>
+    </div>
+
     <!-- Smart Preload -->
     <div class="cfg-card">
       <div class="cfg-card-title">Smart Preload <span class="cfl-badge" style="color:var(--green);border-color:rgba(58,153,96,.4)">VRAM</span></div>
@@ -2032,6 +2112,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261017-05"></script>
+        <script src="/static/app.js?v=20261017-06"></script>
 </body>
 </html>
