@@ -856,11 +856,22 @@ class RunBridge:
         # a real answer - an error or an empty result stays text, otherwise the
         # owner would get silence with no explanation.
         _mode = await self._result_mode() if stop_reason != "error" and answer else "both"
+        # a voice-only channel must still carry the SAFETY lines: auto-denied
+        # approvals and a stop reason that is not "completed" are information the
+        # owner cannot get anywhere else.
+        _safety_note = bool(notes) or (stop_reason or "completed") != "completed"
         if _mode == "voice":
             if stop_reason != "error" and answer:
                 await self._maybe_voice_answer(answer)
                 if not self._voice_sent:
                     await self._send_chunk(text)
+                elif _safety_note:
+                    _tail = "\n".join([n for n in notes] +
+                                       ([] if (stop_reason or "completed") == "completed"
+                                        else [STOP_REASON_TEXT.get(
+                                            stop_reason, f"⏹ Run finished ({stop_reason}).")]))
+                    if _tail.strip():
+                        await self._send_chunk(_tail.strip())
             else:
                 chunks = render.split_message(text)
                 if len(chunks) > FINAL_CHUNK_LIMIT:
@@ -1821,6 +1832,10 @@ class RunBridge:
             await self._maybe_voice_answer(_ans)
             if not self._voice_sent:
                 _mode = "both"          # no audio -> the text MUST still arrive
+            elif reason not in ("completed", ""):
+                # a non-completed mirror run keeps its status line even when the
+                # answer itself went out as audio
+                await self.ms.send_message(text)
         if _mode != "voice":
             _full = (_ans + "\n\n" + text) if _ans else text
             _chunks = render.split_message(_full)
