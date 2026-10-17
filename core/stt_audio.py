@@ -100,8 +100,14 @@ def to_wav16k(data: bytes | str | Path, *, max_seconds: int = DEFAULT_MAX_SECOND
                             samples.astype("float64")).astype("int16")
         duration = target / float(SAMPLE_RATE)
 
-    out = Path(tempfile.mkstemp(prefix="hivemind_stt_", suffix=".wav",
-                                dir=tmp_dir)[1])
+    # FD-CLOSE (2026-10-17, live finding): mkstemp keeps the file OPEN for
+    # writing. The CLI child then cannot read it - miniaudio reports "failed to
+    # read audio data" and every /stt request came back as STT_EMPTY. Soundfile
+    # reads the same file happily, so only a real CLI run exposes this.
+    _fd, _tmp_name = tempfile.mkstemp(prefix="hivemind_stt_", suffix=".wav",
+                                      dir=tmp_dir)
+    os.close(_fd)
+    out = Path(_tmp_name)
     with wave.open(str(out), "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)

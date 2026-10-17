@@ -165,6 +165,35 @@ try:
 finally:
     stt_audio.cleanup(opus_path)
 
+
+# REGRESSION (2026-10-17): the temp WAV must be readable by a second process.
+# mkstemp returns an open fd; leaving it open made the whisper/parakeet CLI
+# report "failed to read audio data" while soundfile read the same file fine.
+try:
+    import subprocess as _sub
+    import sys as _sys
+
+    _wav2, _dur2 = stt_audio.to_wav16k(raw_wav)
+    try:
+        _rc = _sub.run([_sys.executable, "-c",
+                        "import wave,sys;"
+                        "w=wave.open(sys.argv[1],'rb');print(w.getnframes())",
+                        str(_wav2)],
+                       capture_output=True, text=True, timeout=60)
+        check("another process can read the decoded WAV",
+              _rc.returncode == 0 and _rc.stdout.strip().isdigit(),
+              f" (rc={_rc.returncode})")
+        _del = _sub.run([_sys.executable, "-c",
+                         "import os,sys;os.unlink(sys.argv[1]);print('deleted')",
+                         str(_wav2)],
+                        capture_output=True, text=True, timeout=60)
+        check("the decoded WAV can be deleted while nothing holds it",
+              _del.returncode == 0, f" ({(_del.stderr or '')[:60]})")
+    finally:
+        stt_audio.cleanup(_wav2)
+except (OSError, ValueError) as _exc:
+    check("another process can read the decoded WAV", False, f" ({_exc})")
+
 print()
 print(f"SUMMARY stt_audio: {passed} passed, {failed} failed, {skipped} skipped")
 sys.exit(0 if failed == 0 else 1)
