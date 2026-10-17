@@ -64,17 +64,17 @@ logger = logging.getLogger("hivemind.websearch")
 
 _SEARXNG_HOST        = "http://localhost:8888"
 _SEARXNG_ENABLED     = False
-# ENGINE-SET (2026-09-18, live-tested): only bing + duckduckgo answer reliably
-# on stock SearXNG instances. google sits CAPTCHA-suspended (0 results forever),
-# wikipedia returns 0 under most language tags, and the github engine floods
-# the merged ranking with ~30 keyword-matched repos per query, burying the
-# authoritative docs pages. Users can still override via settings.
-_SEARXNG_ENGINES     = "bing,duckduckgo"
-# Language tags ("en", "en-US", ...) BREAK every engine on stock instances:
-# they return region-fallback garbage (google.fr login pages for a technical
-# query — live-tested 2026-09-18). "all" returns English results for English
-# queries, which is what the coder emits anyway.
-_SEARXNG_LANGUAGE    = "all"
+# ENGINE-SET (2026-10-17, replaces the 2026-09-18 pin): the old default pinned
+# "bing,duckduckgo", which on a German-market instance answered every English
+# query with German shop pages ("Nintendo 64 technical specifications" ->
+# nintendo.com/de-de, 24 rounds of retries) and hid the engines that do return
+# the right page. Empty = let SearXNG use every engine IT has enabled; the
+# shipped settings.yml enables ddg + bing + mojeek and disables the blocked ones.
+_SEARXNG_ENGINES     = ""
+# Language: "all" made the engines fall back to the instance's region. "en"
+# keeps English queries English (the coder writes English); a caller that wants
+# otherwise passes its own tag via configure().
+_SEARXNG_LANGUAGE    = "en"
 _MAX_RESULTS_DEFAULT = 5
 _FETCH_TIMEOUT       = 10.0
 _SEARCH_TIMEOUT      = 8.0

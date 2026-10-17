@@ -166,3 +166,10 @@ docs/gateway_security_audit_deep.md
 docs/gateway_status.md
 docs/plan_1.3.4.md
 docs/wp3_proposals.md
+
+# Voice runtime (fetched on demand, never part of the repo or a release zip)
+stt/
+tts-venv/
+voice_models/
+*.safetensors
+.fetch_state.json

@@ -131,6 +131,24 @@ check("stt_preload defaults to off", '"stt_preload":              False' in sett
 check("no telegram voice key in this card's settings",
       "telegram_voice" not in card)
 
+# ── V2: push-to-talk in the chat ───────────────────────────────────────────
+_css = (ROOT / "static" / "style.css").read_text(encoding="utf-8", errors="replace")
+check("the mic button sits left of send",
+      html.index('id="mic-btn"') < html.index('id="send"'))
+check("it is hidden until voice is on",
+      'id="mic-btn"' in html and 'style="display:none"' in html)
+check("it is a red circle", "#mic-btn{" in _css)
+check("recording state pulses", "_micPulse" in _css)
+check("the toggle records", "async function voiceToggleMic" in app
+      and "new MediaRecorder(_micStream)" in app)
+_mic_seg = (app.split("function _micInsertTranscript", 1)[1].split("\nfunction ", 1)[0]
+            if "function _micInsertTranscript" in app else "")
+check("the transcript is appended, not sent",
+      "_micInsertTranscript(j.text)" in app and "sendMsg()" not in _mic_seg)
+check("escape cancels a recording", "ev.key !== 'Escape'" in app)
+check("visibility follows stt_enabled",
+      "btn.style.display = (S && S.sttEnabled) ? 'flex' : 'none'" in app)
+
 print()
 print(f"SUMMARY voice_card: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

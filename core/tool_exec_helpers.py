@@ -1186,6 +1186,10 @@ class ToolRoundState:
     # WEBSEARCH-BUDGET-STOP (2026-09-17): consecutive budget-exhausted
     # web_search calls; >=2 stops the run (run-persistent ref).
     ws_budget_streak: list = field(default_factory=lambda: [0])
+    # WEBSEARCH-SOFT-STOP (2026-10-17): once the budget is gone the tool is
+    # switched OFF for this run instead of killing it (live: 24 rounds,
+    # loop_detected, 0 files written because web_search kept retrying).
+    ws_disabled: list = field(default_factory=lambda: [False])
     # TC-TEST-TRUTH (2026-10-14): last observed test outcome for this RUN
     # ("green" / "red" / "nosuite"), set from run_tests results (model-invoked
     # and auto-test). task_complete upgrades its "untested" build_status

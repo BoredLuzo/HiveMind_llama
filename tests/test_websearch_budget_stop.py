@@ -6,7 +6,8 @@ per-run budget was gone (every call -> WEBSEARCH_BUDGET_EXHAUSTED) before
 the generic wedge detector finally stopped the run. Under test:
 
   - 2 consecutive budget-exhausted web_search results stop the run
-    (result.loop_detected) via the run-persistent ws_budget_streak ref;
+    (result.loop_detected) only after the model ignored the disabled-tool
+  warnings repeatedly (>= 5 calls), via the run-persistent ws_budget_streak ref;
   - any other tool result resets the streak (model acted on feedback);
   - the streak survives ToolRoundState re-creation (list-ref passed in);
   - SearXNG default engines exclude dead engines (google = CAPTCHA-
@@ -70,11 +71,14 @@ def test_executor_budget_stop():
     hooks = ToolExecHooks(emit=_noop_emit, is_aborted=lambda cid: False, on_tool_result=None)
     streak_ref = [0]  # duo_runner passes the SAME ref into every round's trs
 
-    async def one_round(name, args, streak=streak_ref):
+    disabled_ref = [False]  # also run-persistent: duo_runner passes the same ref
+
+    async def one_round(name, args, streak=streak_ref, disabled=disabled_ref):
         trs = ToolRoundState(
             tool_ctx_lru=ToolContextLRU(default_ttl=3),
             duo_deadline_at=time.time() + 600,
             ws_budget_streak=streak,
+            ws_disabled=disabled,
         )
         return await execute_tool_round(
             tool_calls=[{"id": "c1", "function": {"name": name, "arguments": args}}],
@@ -102,13 +106,25 @@ def test_executor_budget_stop():
     check("stop: streak ref at 1", streak_ref[0] == 1, f"streak={streak_ref[0]}")
 
     r2 = asyncio.run(one_round("web_search", ws_args))
-    check("stop: 2nd budget fail -> loop_detected", r2.loop_detected)
+    # WEBSEARCH-SOFT-STOP (2026-10-17): the budget wall disables the tool for the
+    # rest of the run instead of killing it - a live run died as loop_detected
+    # after 24 rounds with zero files written. Only a model that keeps calling
+    # the disabled tool ends the run.
+    check("stop: 2nd budget fail -> still no abort", not r2.loop_detected)
     check("stop: streak ref at 2", streak_ref[0] == 2, f"streak={streak_ref[0]}")
+    r3 = asyncio.run(one_round("web_search", ws_args))
+    check("stop: 3rd call -> still no abort", not r3.loop_detected)
+    r4 = asyncio.run(one_round("web_search", ws_args))
+    check("stop: 4th call -> still no abort", not r4.loop_detected)
+    r5 = asyncio.run(one_round("web_search", ws_args))
+    check("stop: 5th call -> loop_detected (model ignored the warnings)",
+          r5.loop_detected)
 
     # Reset: another tool success in between gives the model room again
     _seed_budget_exhausted()
     fresh_ref = [0]
-    asyncio.run(one_round("web_search", ws_args, streak=fresh_ref))
+    asyncio.run(one_round("web_search", ws_args, streak=fresh_ref,
+                          disabled=[False]))
     read_args = _j.dumps({"path": "note.txt"})
     asyncio.run(one_round("read_file", read_args, streak=fresh_ref))
     check("reset: other tool success resets streak to 0", fresh_ref[0] == 0,
@@ -157,28 +173,30 @@ def test_no_results_hint():
     check("no-results: reformulation hint present", "Do NOT retry" in out, out[:200])
 
 
-# ── 3. Default engine set: reliable engines, safe params, domain cap ───────
+# ── 3. Default engine set: no pinned subset, safe params, domain cap ───────
 def test_default_engines():
     from settings import DEFAULT_SETTINGS
     import tools.websearch as wsm
 
+    # ENGINE-SET (2026-10-17): the old default pinned "bing,duckduckgo", which on
+    # a German-market instance answered every English query with German shop
+    # pages and hid the engines that return the right page. The default is now
+    # empty - SearXNG queries everything IT has enabled (the shipped
+    # settings.yml enables ddg/bing/mojeek and disables the blocked ones).
     for label, engines in (("settings.default", str(DEFAULT_SETTINGS.get("searxng_engines", ""))),
                            ("websearch.fallback", wsm._SEARXNG_ENGINES)):
         parts = [e.strip().lower() for e in engines.split(",") if e.strip()]
-        check(f"engines {label}: bing+duckduckgo aktiv",
-              {"bing", "duckduckgo"} <= set(parts), str(parts))
-        check(f"engines {label}: google removed (CAPTCHA-dead)", "google" not in parts, str(parts))
-        check(f"engines {label}: wikipedia removed (0 hits under almost any language tag)",
-              "wikipedia" not in parts, str(parts))
-        check(f"engines {label}: github removed (floods ranking with ~30 repos)",
-              "github" not in parts, str(parts))
+        check(f"engines {label}: no pinned subset", parts == [], str(parts))
+    for label, engines in (("settings.default", str(DEFAULT_SETTINGS.get("searxng_engines", ""))),
+                           ("websearch.fallback", wsm._SEARXNG_ENGINES)):
+        parts = [e.strip().lower() for e in engines.split(",") if e.strip()]
+        check(f"engines {label}: no blocked engine pinned", "google" not in parts, str(parts))
 
-    # Language tags ("en", "en-US", ...) break every engine on stock instances
-    # (region-fallback garbage, live-tested 2026-09-18).
+    # LANGUAGE (2026-10-17): "all" let the engines fall back to the instance
+    # region; English queries must stay English.
     for label, lang in (("settings.default", str(DEFAULT_SETTINGS.get("searxng_language", ""))),
                         ("websearch.fallback", wsm._SEARXNG_LANGUAGE)):
-        check(f"language {label}: all (no region tag -> no fallback-garbage results)",
-              lang == "all", lang)
+        check(f"language {label}: en (no region fallback)", lang == "en", lang)
 
     params = wsm._build_search_params("test query")
     check("params: safesearch=1 set", str(params.get("safesearch")) == "1", str(params))

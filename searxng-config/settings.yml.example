@@ -1,3 +1,5 @@
+use_default_settings: true
+
 general:
   debug: false
   instance_name: "HiveMind Search"
@@ -18,7 +20,7 @@ search:
   autocomplete: ""
   autocomplete_min: 4
   favicon_resolver: ""
-  default_lang: "auto"
+  default_lang: "en"
   ban_time_on_fail: 5
   max_ban_time_on_fail: 120
   formats:
@@ -67,6 +69,9 @@ ui:
 outgoing:
   request_timeout: 8.0
   max_request_timeout: 30.0
+  # SEARCHXNG-CONFIG-FIX: without a descriptive UA Wikimedia answers 403 and
+  # some engines return an empty result set with no error at all.
+  user_agent: "HiveMind/1.4 (local search; +https://github.com/BoredLuzo/HiveMind_llama)"
   useragent_suffix: ""
   pool_connections: 20
   pool_maxsize: 10
@@ -109,9 +114,16 @@ categories_as_tabs:
   social media:
 
 engines:
-  - name: google
-    engine: google
-    shortcut: g
+  # SEARCHXNG-CONFIG-FIX (2026-10-17), measured on the live instance:
+  #   google  -> "access denied" (bot-blocked), disabled
+  #   brave   -> "too many requests" every time, disabled
+  #   wikidata-> timeout every time, disabled
+  #   wikipedia -> handled by the upstream default entry (use_default_settings);
+  #                our own copy overrode it and returned 0 results, so it is gone
+  #   duckduckgo + mojeek -> bot-friendly general engines, added
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
     categories: general
 
   - name: bing
@@ -119,11 +131,28 @@ engines:
     shortcut: bi
     categories: general
 
-  - name: wikipedia
-    engine: wikipedia
-    shortcut: wp
-    base_url: 'https://{language}.wikipedia.org/'
+  - name: mojeek
+    engine: mojeek
+    shortcut: mj
     categories: general
+
+  - name: google
+    engine: google
+    shortcut: g
+    categories: general
+    disabled: true
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    categories: general
+    disabled: true
+
+  - name: wikidata
+    engine: wikidata
+    shortcut: wd
+    categories: general
+    disabled: true
 
   - name: github
     engine: github

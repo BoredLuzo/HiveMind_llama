@@ -179,9 +179,9 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `read_guard_enabled` | bool | `True` | — |
 | `safe_profile_matrix_file` | str | `"model_configs/safe_profile_matrix.json"` | — |
 | `safe_profile_policy` | str | `"default_8gb_v1"` | — |
-| `searxng_engines` | str | `"bing,duckduckgo"` | — |
+| `searxng_engines` | str | `""` | — | Empty = SearXNG queries every engine it has enabled. Pinning a subset (the old `"bing,duckduckgo"`) hid wikipedia and made English queries return German shop pages. |
 | `searxng_host` | str | `"http://localhost:8888"` | — |
-| `searxng_language` | str | `"all"` | — |
+| `searxng_language` | str | `"en"` | — | Language tag sent to the engines. `"all"` let them fall back to the instance region (German pages for English queries). |
 | `server_port` | int | `8001` | — |
 | `session_compress_threshold` | int | `20` | — |
 | `smart_preload_enabled` | bool | `True` | — |

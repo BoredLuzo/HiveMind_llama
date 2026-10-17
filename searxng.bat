@@ -176,6 +176,11 @@ if not exist "settings.yml" (
 echo.
 echo  [..] Generating secrets (compose + settings)...
 powershell -NoProfile -Command "$hex = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Max 16) }); foreach ($f in @('docker-compose.yml','settings.yml')) { $c=[System.IO.File]::ReadAllText($f); $c=$c -replace 'SEARXNG_SECRET=.*', ('SEARXNG_SECRET=' + $hex) -replace 'secret_key: \".*\"', ('secret_key: \"' + $hex + '\"'); [System.IO.File]::WriteAllText($f, $c) }"
+REM RENEW-VOLUMES (2026-10-17, live finding): the searxng image declares
+REM /etc/searxng as a VOLUME, so an existing anonymous volume shadows the
+REM settings.yml baked into the image and a rebuild changes NOTHING in the
+REM running container (it kept serving a config from days ago). Every
+REM 'up' therefore passes --renew-anon-volumes above.
 REM Adapt host port + SEARXNG_BASE_URL in docker-compose.yml
 powershell -NoProfile -Command "$p='%HM_PORT%'; $f='docker-compose.yml'; $c=[System.IO.File]::ReadAllText($f); $c=$c -replace '127\.0\.0\.1:\d+:8080', ('127.0.0.1:' + $p + ':8080') -replace 'SEARXNG_BASE_URL=http://localhost:\d+', ('SEARXNG_BASE_URL=http://localhost:' + $p); [System.IO.File]::WriteAllText($f, $c)"
 REM Point settings.json searxng_host at the new port. settings.py lives in the
@@ -185,7 +190,7 @@ pushd "%~dp0"
 popd
 echo.
 echo  [..] Building image + starting container (port %HM_PORT%)...
-docker compose -f docker-compose.yml up -d --build --force-recreate --renew-anon-volumes
+docker compose -f docker-compose.yml up -d --build --renew-anon-volumes --force-recreate --renew-anon-volumes --renew-anon-volumes
 if errorlevel 1 (
     echo.
     echo  [ERROR] docker compose failed. Is Docker Desktop running?
@@ -216,7 +221,7 @@ if not exist "settings.yml" (
 docker start hivemind-searxng >nul 2>&1
 if errorlevel 1 (
     echo  [INFO] Container does not exist - creating it...
-    docker compose -f docker-compose.yml up -d --build --force-recreate --renew-anon-volumes
+    docker compose -f docker-compose.yml up -d --build --renew-anon-volumes --force-recreate --renew-anon-volumes --renew-anon-volumes
     if errorlevel 1 (
         echo.
         echo  [ERROR] docker compose failed. Is Docker Desktop running?

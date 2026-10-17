@@ -43,6 +43,10 @@
       <textarea id="input" placeholder="Message..." rows="1"></textarea>
       <button id="pause-btn" onclick="handlePauseClick()" title="Pause"></button>
       <button id="stop-btn" onclick="handleStopClick()" title="Abort run">&#9632;</button>
+      <!-- VOICE (1.4): left of send, only rendered when Speech to text is on.
+           Hidden by default so a voice-off install looks exactly as before. -->
+      <button id="mic-btn" onclick="voiceToggleMic()" title="Dictate a message"
+        style="display:none">&#127908;</button>
       <button id="send" onclick="sendMsg()">&#8593;</button>
     </div>
   </div>
@@ -2112,6 +2116,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261017-06"></script>
+        <script src="/static/app.js?v=20261017-07"></script>
 </body>
 </html>

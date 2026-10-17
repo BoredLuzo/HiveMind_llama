@@ -1623,6 +1623,7 @@ function _voiceErrorText(j) {
 async function _voiceCardRefresh() {
   var box = document.getElementById('stt-options');
   var on = !!(S && S.sttEnabled);
+  if (typeof _syncMicBtn === 'function') _syncMicBtn();
   if (box) box.style.display = on ? 'block' : 'none';
   if (!on) {
     if (_voicePollTimer) { clearInterval(_voicePollTimer); _voicePollTimer = null; }
@@ -1792,6 +1793,106 @@ async function voiceTestMic() {
     if (stream) stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) { /* gone */ } });
   }
 }
+
+
+// ── V2: push-to-talk in the chat (1.4) ──────────────────────────────────────
+// The mic button lives left of send and only exists while Speech to text is on.
+// Click once to record, click again to stop: the transcript is APPENDED to the
+// message box (never sent automatically), so the user can still edit it.
+var _micRec = null;
+var _micStream = null;
+var _micChunks = [];
+
+function _syncMicBtn() {
+  var btn = document.getElementById('mic-btn');
+  if (!btn) return;
+  btn.style.display = (S && S.sttEnabled) ? 'flex' : 'none';
+}
+
+function _micInsertTranscript(text) {
+  var inp = document.getElementById('input');
+  if (!inp) return;
+  var cur = (inp.value || '').replace(/\s+$/, '');
+  inp.value = (cur ? cur + ' ' : '') + String(text || '').trim();
+  inp.focus();
+  try {
+    inp.dispatchEvent(new Event('input', {bubbles: true}));
+  } catch (e) { /* older browsers */ }
+}
+
+async function voiceToggleMic() {
+  var btn = document.getElementById('mic-btn');
+  if (!btn) return;
+  if (_micRec && _micRec.state === 'recording') {
+    try { _micRec.stop(); } catch (e) { showStatus('Could not stop the recording'); }
+    return;
+  }
+  if (!(S && S.sttEnabled)) {
+    showStatus('Voice is off - enable "Speech to text" in the settings first');
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showStatus('This browser has no microphone API');
+    return;
+  }
+  try {
+    _micStream = await navigator.mediaDevices.getUserMedia({audio: true});
+    _micChunks = [];
+    _micRec = new MediaRecorder(_micStream);
+    _micRec.ondataavailable = function (e) {
+      if (e.data && e.data.size) _micChunks.push(e.data);
+    };
+    _micRec.onstop = async function () {
+      btn.classList.remove('rec');
+      try {
+        _micStream.getTracks().forEach(function (tr) { tr.stop(); });
+      } catch (e) { /* tracks already gone */ }
+      var blob = new Blob(_micChunks,
+        {type: (_micChunks[0] && _micChunks[0].type) || 'audio/webm'});
+      if (!blob.size) { showStatus('Nothing was recorded'); return; }
+      showStatus('Transcribing...');
+      try {
+        var wav = await _voiceBlobToWav16k(blob);
+        var r = await fetch('/stt', {
+          method: 'POST',
+          headers: {'Content-Type': 'audio/wav'},
+          body: wav
+        });
+        var j = await r.json();
+        if (j && j.text) {
+          _micInsertTranscript(j.text);
+          showStatus('Transcript added to the message');
+        } else {
+          showStatus(_voiceErrorText(j));
+        }
+      } catch (e) {
+        showStatus('Transcription failed: ' + (e && e.message ? e.message : e));
+      }
+    };
+    _micRec.start();
+    btn.classList.add('rec');
+    showStatus('Recording - click the mic again to stop');
+  } catch (e) {
+    showStatus('Microphone unavailable: ' + (e && e.message ? e.message : e));
+  }
+}
+
+// Escape cancels a running recording without transcribing.
+document.addEventListener('keydown', function (ev) {
+  if (ev.key !== 'Escape') return;
+  if (_micRec && _micRec.state === 'recording') {
+    try {
+      _micRec.onstop = null;
+      _micRec.stop();
+    } catch (e) { /* nothing to stop */ }
+    var btn = document.getElementById('mic-btn');
+    if (btn) btn.classList.remove('rec');
+    try {
+      if (_micStream) _micStream.getTracks().forEach(function (tr) { tr.stop(); });
+    } catch (e) { /* already stopped */ }
+    showStatus('Recording cancelled');
+  }
+});
 
 function _syncFlagCheck(id, on) {
   var e = document.getElementById(id);

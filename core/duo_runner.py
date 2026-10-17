@@ -1819,6 +1819,7 @@ async def run_code_duo(ctx):
         _last_read_path = [""]         # READ-LADDER (path-reset)
         _read_ladder_fired = [False]   # READ-LADDER
         _ws_budget_streak = [0]        # WEBSEARCH-BUDGET-STOP
+        _ws_disabled = [False]         # WEBSEARCH-SOFT-STOP (run-persistent)
         _wedge_handoffs_used = [0]     # WEDGE-HANDOFF: per-run budget ref
         _wedge_escalated = False       # WEDGE-HANDOFF: run stopped via failed/exhausted handoff
         # VERIFY-GATE-OWNER (2026-09-09): own veto counter. The executor's
@@ -5578,6 +5579,7 @@ async def run_code_duo(ctx):
                                 last_read_path=_last_read_path,
                                 read_ladder_fired=_read_ladder_fired,
                                 ws_budget_streak=_ws_budget_streak,
+                                ws_disabled=_ws_disabled,
                             ),
                             tool_mode=_tool_mode,
                             duo_ws=_duo_ws,

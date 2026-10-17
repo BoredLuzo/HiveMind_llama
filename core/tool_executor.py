@@ -466,17 +466,40 @@ async def execute_tool_round(
                 _hs_note(exec_model, "invalid_args", detail=str(_dname))
         except (ImportError, AttributeError, TypeError):
             pass
-        # WEBSEARCH-BUDGET-STOP (2026-09-17): after 2 consecutive budget-
-        # exhausted web_search calls the model still retries with different
-        # queries — stop the run instead of burning rounds (live: 28 rounds,
-        # 0 files written, every call hit the budget wall).
+        # WEBSEARCH-SOFT-STOP (2026-10-17): the budget wall must not kill the run.
+        # Live finding: two exhausted calls set loop_detected and the run ended
+        # after 24 rounds with ZERO files written - the model had been told to
+        # stop and had nothing else queued. Now the first exhaustion turns
+        # web_search OFF for the rest of the run (cheap "disabled" result, no
+        # budget math, no search), and only a model that keeps calling the
+        # disabled tool four more times - ignoring two explicit warnings - ends
+        # the run as loop_detected.
         if "WEBSEARCH_BUDGET_EXHAUSTED" in str(_dresult):
+            _was_disabled = trs.ws_disabled[0]
             trs.ws_budget_streak[0] += 1
-            if trs.ws_budget_streak[0] >= 2:
+            trs.ws_disabled[0] = True
+            if _was_disabled and trs.ws_budget_streak[0] >= 5:
+                # the model ignored the disabled-tool answer four times
                 await hooks.emit({"type": "status",
-                    "content": "⛔ Web search budget is GONE for this run — do NOT call web_search again. Continue with your task using the information you already have."})
+                    "content": "⛔ web_search called again after being disabled - stopping the run."})
                 result.loop_detected = True
                 break
+            if not _was_disabled:
+                await hooks.emit({"type": "status",
+                    "content": "⛔ Web search is finished for this run (budget). Continue with your task and the context you already have."})
+            _dresult = ("[TOOL_DISABLED:WEBSEARCH_EXHAUSTED] web_search is disabled for "
+                        "the rest of this run: the per-run budget is spent. Do not call "
+                        "it again - write the code with what you have, or say which "
+                        "fact is missing in task_complete.")
+        elif _dname == "web_search" and trs.ws_disabled[0]:
+            trs.ws_budget_streak[0] += 1
+            if trs.ws_budget_streak[0] >= 5:
+                await hooks.emit({"type": "status",
+                    "content": "⛔ web_search called again after being disabled - stopping the run."})
+                result.loop_detected = True
+                break
+            _dresult = ("[TOOL_DISABLED:WEBSEARCH_EXHAUSTED] web_search is disabled for "
+                        "this run (budget spent, already told twice). Work without it.")
         else:
             trs.ws_budget_streak[0] = 0
         # TC-TEST-TRUTH (2026-10-14): remember what the run's own test runs
