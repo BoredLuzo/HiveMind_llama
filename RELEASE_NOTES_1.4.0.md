@@ -94,6 +94,5 @@ the optional parts.
 - Models: ~620 MB for speech to text, ~200 MB + PyTorch for text to speech - all
   outside the zip.
 
-Full detail: `CHANGELOG.md`. Setup: `docs/voice_setup.md`. Audits:
-`docs/audit_1.4_preview.md`, `docs/audit_tool_use.md`, `docs/audit_tool_registry.md`,
-`docs/audit_linux.md`.
+Full detail: `CHANGELOG.md`. Setup: `docs/voice_setup.md`. Licences and their
+obligations: `docs/voice_licenses.md`.

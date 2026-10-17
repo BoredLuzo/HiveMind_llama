@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Warm latency of the read-aloud chunks (what the browser waits for).
 
-Run against the running engine: python tools/bench_tts_latency.py
+Run against the running engine: python scripts/bench_tts_latency.py
 """
 from __future__ import annotations
 

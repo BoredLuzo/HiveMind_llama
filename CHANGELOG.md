@@ -8,10 +8,11 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
 ### Added
 
 - **Text to speech (Pocket TTS, CPU only, off by default).** A Voice card block
-  with a master switch, seven shipped English voices (default `cosette`), a speed
-  control (`1.08` - Pocket TTS has no speed parameter, so HiveMind time-stretches
-  the audio with WSOLA and keeps the pitch), a "Play sample" button and an honest
-  engine status line. The speaker button on every answer reads that answer - it is
+  with a master switch, seven shipped English voices (default `anna` - `cosette`
+  is a non-commercial recording, see `docs/voice_licenses.md`) a speed control
+  (`1.08` - Pocket TTS has no speed parameter, so HiveMind time-stretches the audio
+  with WSOLA and keeps the pitch), a "Play sample" button and an honest engine
+  status line. The speaker button on every answer reads that answer - it is
   hidden unless TTS is on, reads the bubble at click time (works on a still
   streaming answer) and never autoplays.
 - **The TTS engine is a supervised sidecar, not a dependency.** It starts through
@@ -119,6 +120,19 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   the first sound (the sidecar is pre-warmed on page load when TTS is on).
 - Turning the TTS master on now enables the two answer switches (direct + agentic)
   when none was set, so "voice on" actually speaks without a second visit.
+
+### Telegram output contract (2026-10-18)
+
+- **Choose what a phone run sends back**: `telegram_result_mode` = `both` (text
+  plus a voice note), `text`, or `voice` - the last one is a results-only channel
+  where the model-generated answer arrives as a voice note and nothing else. A
+  failed synthesis falls back to text; an error always stays text.
+- **`telegram_progress_msgs`** silences the status line and the tool-call lines.
+  Approval cards and the final result are unaffected - they are safety and result,
+  not progress.
+- **`tts_preload_run`** (Voice card) warms the speech engine when a run starts, so
+  a phone-only flow speaks in about a second instead of paying the cold start. The
+  gateway calls the new `POST /tts/preload` right after the user turn is written.
 
 ### Notes
 

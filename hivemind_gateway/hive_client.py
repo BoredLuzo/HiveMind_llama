@@ -112,6 +112,23 @@ class HiveClient:
         code = str((payload or {}).get("code") or f"http {r.status_code}")
         return "", code
 
+    async def warm_voice(self) -> bool:
+        """Ask the engine to start the TTS sidecar now (POST /tts/preload).
+
+        Returns False when the engine answers "not enabled" - the caller only
+        logs it. Never raises for a missing endpoint (older engine).
+        """
+        try:
+            r = await self._client.post("/tts/preload", json={}, timeout=30.0)
+        except httpx.HTTPError:
+            return False
+        if r.status_code == 200:
+            try:
+                return bool((r.json() or {}).get("warm"))
+            except ValueError:
+                return True
+        return False
+
     async def tts(self, text: str, voice: str = "", speed: float | None = None) -> tuple[bytes, str]:
         """Synthesise a voice note (Ogg/Opus). Returns (audio, error_code)."""
         body: dict = {"text": text, "format": "opus"}

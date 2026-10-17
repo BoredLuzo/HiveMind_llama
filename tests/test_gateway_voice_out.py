@@ -58,9 +58,27 @@ check("and from the engine setting", '.get("telegram_voice_out"' in bridge_src)
 check("the helpers exist",
       "async def _voice_out_enabled" in bridge_src
       and "async def _maybe_voice_answer" in bridge_src)
-check("the answer is spoken after the text is sent",
-      bridge_src.index("await self._maybe_voice_answer(answer)")
-      > bridge_src.index("for c in chunks:"))
+_fin = bridge_src[bridge_src.index("async def _finish"):]
+_end = _fin.find("    # -- busy heuristic")
+_fin = _fin[:_end] if _end > 0 else _fin[:4000]
+# RESULT-MODE (1.4.2): the order depends on the mode. "both" sends the text
+# chunks first and the voice note after them; "voice" speaks first and falls back
+# to text only when the synthesis failed.
+# _fin starts at the "voice" branch, which speaks FIRST by design; the text path
+# sits in the else-branch after it. So compare inside the whole _finish body.
+_fin_all = bridge_src[bridge_src.index("async def _finish"):]
+_fin_all = _fin_all[:_fin_all.find("    # -- busy heuristic")
+                    if _fin_all.find("    # -- busy heuristic") > 0 else 4000]
+_both_branch = _fin_all[_fin_all.index(
+    "else:\n            chunks = render.split_message"):]
+check("both: the text goes out before the voice note",
+      _both_branch.index("for c in chunks:")
+      < _both_branch.index("await self._maybe_voice_answer(answer)"))
+check("voice mode speaks first and falls back to text",
+      'if _mode == "voice"' in _fin and "if not self._voice_sent" in _fin)
+check("text mode never speaks", '_mode == "both"' in _fin)
+check("the mode is read from the engine setting",
+      "telegram_result_mode" in bridge_src)
 check("error runs are not spoken", 'stop_reason != "error" and answer' in bridge_src)
 check("a TTS failure is only a log note",
       "voice answer skipped" in bridge_src and "voice answer send failed" in bridge_src)
@@ -135,6 +153,33 @@ b, hive, ms = build(cfg_on, {})
 asyncio.run(b._maybe_voice_answer("a reasonably long answer " * 60))
 check("long answers are passed through (the engine caps at 600 chars)",
       len(hive.tts_calls[0]) > 600)
+
+
+# ── result mode + progress gate ───────────────────────────────────────────
+check("result mode accepts text/voice/both",
+      'mode in ("text", "voice", "both")' in bridge_src)
+check("progress messages have a gate", "_progress_ok" in bridge_src)
+check("the status line is gated, approvals are not",
+      "_progress_ok()" in bridge_src.split("async def _edit_status")[1][:400]
+      and "_progress_ok" not in bridge_src.split("async def _relay_own_approval")[1][:600])
+check("progress setting is read from the engine",
+      "telegram_progress_msgs" in bridge_src)
+
+
+# ── run-start preload (1.4.2) ─────────────────────────────────────────────
+check("the bridge warms the engine when a run starts",
+      "await self._preload_voice()" in bridge_src)
+check("the preload is best effort",
+      "voice preload skipped" in bridge_src)
+check("the preload skips a pure text result",
+      'if mode == "text" and not (s or {}).get("telegram_voice_out", False)' in bridge_src)
+client_src = (ROOT / "hivemind_gateway" / "hive_client.py").read_text(
+    encoding="utf-8", errors="replace")
+check("the client calls the preload endpoint", '"/tts/preload"' in client_src)
+server_src = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+check("the engine exposes it", '@app.post("/tts/preload")' in server_src)
+check("the endpoint does not block the loop",
+      "asyncio.to_thread(tts_engine.preload" in server_src)
 
 print()
 print(f"SUMMARY gateway_voice_out: {passed} passed, {failed} failed")

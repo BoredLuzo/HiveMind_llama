@@ -1123,6 +1123,9 @@ async function loadSettings() {
     S.ttsSpeed = parseFloat(s.tts_speed || 1.08) || 1.08;
     S.tgVoiceIn = s.telegram_voice_in === true;
     S.tgVoiceOut = s.telegram_voice_out === true;
+    S.tgResultMode = String(s.telegram_result_mode || 'both');
+    S.tgProgress = s.telegram_progress_msgs !== false;
+    S.ttsPreloadRun = s.tts_preload_run !== false;
     // Read-aloud (frontend): which surfaces speak on their own.
     S.ttsReadDirect = s.tts_read_direct === true;
     S.ttsReadAgentic = s.tts_read_agentic === true;
@@ -1137,6 +1140,10 @@ async function loadSettings() {
     if (typeof _voiceCardRefresh === 'function') _voiceCardRefresh();
     if (S.ttsEnabled && typeof voiceWarmup === 'function') setTimeout(voiceWarmup, 4000);
     if (typeof _syncTgVoice === 'function') _syncTgVoice();
+    var _rms = document.getElementById('tg-result-mode-sel');
+    if (_rms) _rms.value = S.tgResultMode || 'both';
+    _syncFlagCheck('tg-progress-toggle', S.tgProgress);
+    _syncFlagCheck('tts-preload-run-toggle', S.ttsPreloadRun);
     var dpttlEl = document.getElementById('duo-planner-ttl');
     if (dpttlEl) dpttlEl.value = S.duoPlannerTtl;
     var dcttlEl = document.getElementById('duo-coder-ttl');

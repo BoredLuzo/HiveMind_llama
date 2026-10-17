@@ -211,3 +211,9 @@ transcript runs exactly like typed text, with the same approval gate.
 enabled (`tts_enabled` in `settings.json`, Pocket TTS via uvx, voice cosette at
 1.08x). Both switches default to false, and both require the engine's audio
 dependencies (`pip install -r requirements-voice.txt`).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `telegram_result_mode` | `both` | How the final answer of a phone run arrives: `both` (text + voice note), `text`, or `voice` (results-only channel - the progress lines stay text; falls back to text if the engine is off or the synthesis fails). |
+| `telegram_progress_msgs` | `true` | OFF silences the status line and the tool-call lines. Approval cards and the final result still arrive - they are safety and result, not progress. |
+| `tts_preload_run` | `true` | Warm the speech engine when a run starts, so the first spoken sentence costs ~1 s instead of a cold start. Set by the Voice card. |

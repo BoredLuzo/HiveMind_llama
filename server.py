@@ -2045,6 +2045,26 @@ async def tts_voices():
     })
 
 
+@app.post("/tts/preload")
+async def tts_preload():
+    """Start the TTS sidecar ahead of the first sentence (tts_preload_run).
+
+    Called by the gateway when a phone run starts and by nothing else: the UI
+    warms on page load, a phone run has no page. Returns immediately when TTS is
+    off; the actual start runs in a thread so this endpoint never blocks.
+    """
+    try:
+        from core import tts_engine
+        settings = load_settings()
+    except (ImportError, OSError, ValueError) as exc:
+        return JSONResponse({"warm": False, "error": str(exc)[:200]}, status_code=200)
+    if not settings.get("tts_enabled", False):
+        return JSONResponse({"warm": False, "reason": "TTS_DISABLED"}, status_code=200)
+    warm = await asyncio.to_thread(tts_engine.preload, settings)
+    return JSONResponse({"warm": bool(warm),
+                         "running": tts_engine.is_running()}, status_code=200)
+
+
 @app.post("/tts")
 async def tts_speak(request: Request):
     """{"text": ..., "voice"?: ..., "speed"?: ..., "format"?: "wav"|"opus"} -> audio."""

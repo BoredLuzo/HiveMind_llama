@@ -1671,6 +1671,15 @@
           </label>
         </div>
         <div class="fld-hint">Speech plays one item at a time and stops when you press Stop. It starts with a short first clause (~1-2 s) and keeps going while the rest is synthesised; long answers are cut at a sentence boundary (600 characters, the engine's cap).</div>
+        <div class="tgl-row">
+          <span class="tgl-text">Pre-load the engine when a run starts</span>
+          <label class="cfl-sw">
+            <input type="checkbox" id="tts-preload-run-toggle"
+              onchange="S.ttsPreloadRun=this.checked;postSettings({tts_preload_run:this.checked})">
+            <span class="sl"></span>
+          </label>
+        </div>
+        <div class="fld-hint">ON: the engine is warmed the moment a run begins, so the first spoken sentence costs ~1 s instead of a 12 s cold start. Matters most for phone runs where nobody touched the PC.</div>
 
       </div>
       <div class="fld-hint" style="margin-top:6px">Telegram voice notes and spoken answers have their own switches in the Telegram Gateway card - they are greyed out until the matching feature above is on.</div>
@@ -1931,6 +1940,24 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       </label>
     </div>
     <div class="fld-hint" id="tg-voice-out-hint">ON: the final answer of a phone run is also sent as a voice note (cosette, the voice and speed from the Voice card). Needs <b>Text to speech</b> enabled - the switch is greyed out otherwise.</div>
+    <div class="fld">
+      <div class="fld-label">Final result arrives as</div>
+      <select id="tg-result-mode-sel" onchange="postSettings({telegram_result_mode:this.value})">
+        <option value="both">Text and voice note</option>
+        <option value="text">Text only</option>
+        <option value="voice">Voice note only (results-only channel)</option>
+      </select>
+    </div>
+    <div class="fld-hint">Applies to the final answer of a phone run. Tool calls and progress stay text - a pure results channel should still tell you it is working. "Voice note only" falls back to text when the engine is off or the synthesis fails.</div>
+    <div class="tgl-row">
+      <span class="tgl-text">Progress messages (status + tool calls)</span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="tg-progress-toggle"
+          onchange="S.tgProgress=this.checked;postSettings({telegram_progress_msgs:this.checked})">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div class="fld-hint">OFF = only the final result reaches the phone (approval cards still arrive - they are safety, not progress).</div>
     <div class="tgl-row" style="margin-top:6px">
       <span class="tgl-text">Restrict phone runs (web + text)</span>
       <label class="cfl-sw">
@@ -2223,6 +2250,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261018-02"></script>
+        <script src="/static/app.js?v=20261018-03"></script>
 </body>
 </html>

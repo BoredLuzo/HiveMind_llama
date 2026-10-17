@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Release-zip inventory: is every shipped entry needed?
 
-Run from the repo root: python tools/release_zip_report.py [path-to-zip]
+Run from the repo root: python scripts/release_zip_report.py [path-to-zip]
 
 Prints the file count and size per top-level directory, the biggest files, and
 the entries that look like development material (they should be export-ignore'd

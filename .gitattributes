@@ -19,5 +19,7 @@
 # the GitHub release body, uploaded from the repo) or the dev pre-commit hook.
 /docs/audit_*.md export-ignore
 /RELEASE_NOTES_*.md export-ignore
-/scripts/hooks/ export-ignore
+/scripts/ export-ignore
 /ruff.toml export-ignore
+/.gitignore export-ignore
+/.gitattributes export-ignore

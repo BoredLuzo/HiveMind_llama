@@ -215,6 +215,21 @@ check("the cache key carries voice and speed",
       any(abs(k[1] - 1.08) < 1e-6 for k in tts_engine._cache))
 
 
+
+# ── preload (run-start warming) ───────────────────────────────────────────
+check("preload exists", "def preload(" in code)
+check("preload does nothing while TTS is off", tts_engine.preload({}) is False)
+check("preload skips a text-only result", tts_engine.preload(
+    {"tts_enabled": True, "tts_preload_run": False}) is False)
+_saved = dict(tts_engine._state)
+try:
+    tts_engine._state.update({"proc": None, "port": 0})
+    _warm = tts_engine.preload({"tts_enabled": True, "tts_preload_run": True})
+finally:
+    tts_engine._state.update(_saved)
+check("preload is safe when the sidecar cannot start", isinstance(_warm, bool))
+
+
 server.shutdown()
 
 # ── keep-alive client (latency): one client, not one per request ──────────

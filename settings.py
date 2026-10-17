@@ -358,6 +358,16 @@ DEFAULT_SETTINGS = {
     "tts_read_gate":             False,
     "telegram_voice_in":         False,
     "telegram_voice_out":        False,
+    # What a phone run sends back (1.4.2). "both" = text + voice note, "text" =
+    # text only, "voice" = only the model-generated answer as a voice note (the
+    # progress lines stay text). telegram_progress_msgs turns the info lines off
+    # entirely for a pure "results only" channel.
+    "telegram_result_mode":      "both",
+    "telegram_progress_msgs":    True,
+    # Warm the TTS engine when a run starts instead of when the first chunk is
+    # ready - the sidecar then needs ~1 s per sentence instead of a 12 s cold
+    # start. Useful for phone runs where nobody touched the PC.
+    "tts_preload_run":           True,
 
     # Only bing + duckduckgo answer reliably on stock SearXNG instances:
     # google sits CAPTCHA-suspended, wikipedia returns 0 under most language

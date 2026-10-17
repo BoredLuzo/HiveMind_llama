@@ -303,6 +303,30 @@ def _client():
     return _http_client
 
 
+def preload(settings: dict | None = None) -> bool:
+    """Warm the sidecar ahead of the first request (``tts_preload_run``).
+
+    Cheap and safe to call at the start of every run: it returns immediately when
+    TTS is off, and the actual start is the same ``_start`` the first synthesis
+    would trigger - only earlier, so nobody waits 12 s for the first sentence.
+    Never raises.
+    """
+    settings = settings or {}
+    if not settings.get("tts_enabled", False):
+        return False
+    if not settings.get("tts_preload_run", True):
+        return False
+    if is_running():
+        _state["last_used"] = time.time()
+        return True
+    try:
+        _start(settings)
+        return True
+    except TtsError as exc:
+        logger.info("[TTS] preload skipped: %s", exc)
+        return False
+
+
 # ── synthesis ───────────────────────────────────────────────────────────────
 def synthesize(text: str, settings: dict | None = None, *,
                voice: str = "", speed: float | None = None) -> dict:

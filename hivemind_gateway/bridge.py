@@ -156,6 +156,14 @@ class RunBridge:
     async def _edit_status(self, message_id, text) -> None:
         if message_id is None:
             return
+        # PROGRESS-GATE (1.4.2): telegram_progress_msgs=false silences the info
+        # channel (the edited status line). Approval cards and the final answer
+        # never pass through here, so a muted channel can still ask and answer.
+        try:
+            if not await self._progress_ok():
+                return
+        except (HiveUnreachable, HTTPError, OSError):
+            pass
         try:
             await self.ms.edit_message(message_id, text)
         except TelegramApiError as exc:
@@ -203,6 +211,20 @@ class RunBridge:
     async def _fail(self, text: str) -> str:
         await self.ms.send_message(text)
         return text
+
+    async def _progress_ok(self) -> bool:
+        """telegram_progress_msgs=false silences the info channel.
+
+        Evaluated lazily and cached for a few seconds: the bridge emits progress
+        in tight loops and the settings call is an HTTP round trip.
+        """
+        now = time.monotonic()
+        cached = getattr(self, "_progress_cache", None)
+        if cached and now - cached[0] < 5.0:
+            return cached[1]
+        ok = await self._progress_msgs()
+        self._progress_cache = (now, ok)
+        return ok
 
     async def _send_chunk(self, plain: str) -> None:
         """Send one answer chunk as Telegram HTML (code fences render as
@@ -404,6 +426,8 @@ class RunBridge:
         mapping = await self._ensure_chat()
         chat_id = mapping["hive_chat_id"]
         await self._write_turn(chat_id, {"role": "user", "content": q})
+        # VOICE-PRELOAD (1.4.2): warm the engine now, not when the answer is done
+        await self._preload_voice()
 
         # persist BEFORE the stream: a crash here loses the update
         # (at-most-once), never runs it twice
@@ -628,6 +652,11 @@ class RunBridge:
                     line = self._tool_line(ev)
                     if not line:
                         continue
+                    try:
+                        if not await self._progress_ok():
+                            continue
+                    except (HiveUnreachable, HTTPError, OSError):
+                        pass
                     _seen = self._tool_relay_seen
                     if len(_seen) > 40:
                         _seen.clear()
@@ -719,6 +748,50 @@ class RunBridge:
                 self._clear_run()
         return final_note
 
+    async def _preload_voice(self) -> None:
+        """Warm the TTS sidecar at run start when the result may be a voice note.
+
+        This is what makes a phone-only flow work without touching the PC: the
+        engine is up before the answer arrives, so the first spoken sentence costs
+        ~1 s instead of a ~12 s sidecar start. Best effort - a failure only means
+        the first sentence is late, never that the run fails.
+        """
+        try:
+            s = await self.hive.settings()
+        except (HiveUnreachable, HTTPError, OSError):
+            return
+        if not (s or {}).get("tts_enabled", False):
+            return
+        mode = str((s or {}).get("telegram_result_mode") or "both").strip().lower()
+        if mode == "text" and not (s or {}).get("telegram_voice_out", False):
+            return
+        try:
+            await self.hive.warm_voice()
+        except (HiveUnreachable, HTTPError, OSError) as exc:
+            self._log_note(f"voice preload skipped: {exc}")
+
+    async def _result_mode(self) -> str:
+        """text | voice | both for the FINAL answer (telegram_result_mode).
+
+        "voice" is the pure results channel: the model-generated answer as a
+        voice note, the progress lines stay text (telegram_progress_msgs can drop
+        those too). Falls back to "both" when the setting is missing or invalid so
+        an old settings.json never silences a run.
+        """
+        try:
+            s = await self.hive.settings()
+        except (HiveUnreachable, HTTPError, OSError):
+            return "both"
+        mode = str((s or {}).get("telegram_result_mode") or "both").strip().lower()
+        return mode if mode in ("text", "voice", "both") else "both"
+
+    async def _progress_msgs(self) -> bool:
+        try:
+            s = await self.hive.settings()
+        except (HiveUnreachable, HTTPError, OSError):
+            return True
+        return bool((s or {}).get("telegram_progress_msgs", True))
+
     async def _voice_out_enabled(self) -> bool:
         """cfg.voice_out (gateway.toml) OR the engine's telegram_voice_out."""
         if self.cfg.voice_out:
@@ -728,6 +801,8 @@ class RunBridge:
         except (HiveUnreachable, HTTPError, OSError):
             return False
         return bool((s or {}).get("telegram_voice_out", False))
+
+    _voice_sent: bool = False
 
     async def _maybe_voice_answer(self, answer: str) -> None:
         """VOICE OUT (1.4, opt-in): send the final answer as a voice note.
@@ -740,6 +815,7 @@ class RunBridge:
         answer = (answer or "").strip()
         if not answer:
             return
+        self._voice_sent = False
         if not await self._voice_out_enabled():
             return
         try:
@@ -752,6 +828,7 @@ class RunBridge:
             return
         try:
             await self.ms.send_voice(ogg, 0)
+            self._voice_sent = True
         except (PolicyViolation, HiveUnreachable, HTTPError, OSError) as exc:
             self._log_note(f"voice answer send failed: {exc}")
 
@@ -775,17 +852,34 @@ class RunBridge:
         for n in notes:
             text += "\n" + n
 
-        chunks = render.split_message(text)
-        if len(chunks) > FINAL_CHUNK_LIMIT:
-            await self.ms.send_document(
-                text.encode("utf-8"), "result.txt")
+        # RESULT-MODE (1.4.2): text | voice | both. "voice" only makes sense for
+        # a real answer - an error or an empty result stays text, otherwise the
+        # owner would get silence with no explanation.
+        _mode = await self._result_mode() if stop_reason != "error" and answer else "both"
+        if _mode == "voice":
+            if stop_reason != "error" and answer:
+                await self._maybe_voice_answer(answer)
+                if not self._voice_sent:
+                    await self._send_chunk(text)
+            else:
+                chunks = render.split_message(text)
+                if len(chunks) > FINAL_CHUNK_LIMIT:
+                    await self.ms.send_document(text.encode("utf-8"), "result.txt")
+                else:
+                    for c in chunks:
+                        await self._send_chunk(c)
         else:
-            for c in chunks:
-                await self._send_chunk(c)
-        # VOICE OUT: the clean answer (no ❌/⏹ decorations) as a voice note,
-        # only when the owner enabled it and the run produced text.
-        if stop_reason != "error" and answer:
-            await self._maybe_voice_answer(answer)
+            chunks = render.split_message(text)
+            if len(chunks) > FINAL_CHUNK_LIMIT:
+                await self.ms.send_document(
+                    text.encode("utf-8"), "result.txt")
+            else:
+                for c in chunks:
+                    await self._send_chunk(c)
+            # VOICE OUT: the clean answer (no ❌/⏹ decorations) as a voice note,
+            # only when the mode includes voice and the run produced text.
+            if stop_reason != "error" and answer and _mode == "both":
+                await self._maybe_voice_answer(answer)
         try:
             await self._write_turn(
                 chat_id, {"role": "assistant", "content": text})

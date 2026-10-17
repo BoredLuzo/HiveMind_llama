@@ -364,10 +364,24 @@ but no longer the shipped default; `bill_boerst` is CC0. Speech to text lands in
 `<install>/stt/`, TTS in uv's and the Hugging Face cache - never in the repository,
 never in a release zip.
 
-License: Pocket TTS model **CC BY 4.0**, code MIT; voice recordings VCTK / Alba
-MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0). Speech to text:
-Whisper (Apache-2.0), Parakeet (CC BY 4.0), whisper.cpp (MIT). Full table and what
-it obliges: [docs/voice_licenses.md](docs/voice_licenses.md).
+**Licences of the audio stack.** HiveMind's own code is under this repo's licence;
+the engines and models are third-party and keep their terms:
+
+| Component | Licence | What it obliges |
+|---|---|---|
+| Pocket TTS model (`kyutai/pocket-tts`) | **CC BY 4.0**, gated | attribution; the gated terms forbid voice impersonation/cloning without consent and deceptive use |
+| `pocket-tts` code | MIT | keep the notice (it is installed, not vendored) |
+| Voice recordings (`kyutai/tts-voices`) | VCTK / Alba MacKenna **CC BY 4.0**, Voice-Zero **CC0**, Expresso **CC BY-NC 4.0** | attribution; Expresso is **non-commercial only** |
+| Whisper models | Apache-2.0 | notice |
+| Parakeet weights | **CC BY 4.0** | attribution |
+| whisper.cpp / parakeet binaries | MIT | notice |
+
+`anna` (default), `alba`, `eve`, `jane`, `vera` are CC BY 4.0; `bill_boerst` is
+CC0 - that combination is commercial-safe. `cosette` is the non-commercial
+Expresso recording: usable privately, not in a paid product. HiveMind does no
+voice cloning, never uploads a recording as a voice prompt, and throws away the
+user's own audio right after transcribing it. Full table, provenance and the
+zero-obligation setup: [docs/voice_licenses.md](docs/voice_licenses.md).
 
 Numbers and the Telegram switches: [docs/voice_setup.md](docs/voice_setup.md).
 

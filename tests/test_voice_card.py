@@ -258,6 +258,17 @@ check("the hint explains the optional tiers",
 check("the select marks uninstalled tiers",
       "not installed" in app and "installed" in app)
 
+
+# ── Telegram output contract + run-start preload (1.4.2) ─────────────────
+check("the Telegram card has a result-mode select", 'id="tg-result-mode-sel"' in html)
+check("result modes are text/voice/both",
+      all(('value="%s"' % m) in html for m in ("both", "text", "voice")))
+check("the card has a progress switch", 'id="tg-progress-toggle"' in html)
+check("the voice card has a preload switch", 'id="tts-preload-run-toggle"' in html)
+check("the controls are synced from the settings",
+      "S.tgResultMode" in app and "S.ttsPreloadRun" in app)
+check("the select is filled on load", "_rms.value = S.tgResultMode" in app)
+
 print()
 print(f"SUMMARY voice_card: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
