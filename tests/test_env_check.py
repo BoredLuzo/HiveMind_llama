@@ -71,9 +71,13 @@ def main():
     rc, out = run_env_check(
         ["--probe", "json,brokenpkg", "--repair", "--packages", "brokenpkg"],
         str(tmp))
-    check("broken + repair fails -> exit 1 + two user steps",
+    check("broken + repair fails -> exit 1 + the repair recipe",
           rc == 1 and "STILL BROKEN" in out and ".venv" in out
-          and "Python 3.12" in out, f" rc={rc}")
+          and "only-binary" in out and "Antivirus" in out, f" rc={rc}")
+    check("it diagnoses instead of guessing",
+          ("pydantic_core" in out or "pydantic" in out))
+    check("it does not advise an older interpreter than allowed",
+          "Python 3.12" not in out and "Python 3.13" not in out)
 
     # (4) Halbes Paket: Modul existiert als leere Datei, das Symbol fehlt
     # (ArgsKwargs-Fall: unknown location) -> exit 1

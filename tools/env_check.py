@@ -46,6 +46,51 @@ def probe_all(modules: list) -> tuple[str, str] | None:
     return None
 
 
+def diagnose() -> None:
+    """Print the facts that separate the three usual causes.
+
+    (a) a stale/mismatched pair (old pydantic-core next to a new pydantic),
+    (b) a broken/partial/quarantined .pyd (exists but zero bytes or unloadable),
+    (c) something shadowing the package earlier on sys.path.
+    """
+    import os
+    print(f"[ENV-CHECK] python {sys.version.split()[0]} ({sys.executable})")
+    for name in ("pydantic", "pydantic_core"):
+        try:
+            mod = importlib.import_module(name)
+            print(f"[ENV-CHECK]   {name}: {getattr(mod, '__version__', '?')} "
+                  f"at {getattr(mod, '__file__', '?')}")
+        except ImportError as exc:
+            print(f"[ENV-CHECK]   {name}: import failed ({exc})")
+    try:
+        import pydantic_core
+        _dir = os.path.dirname(getattr(pydantic_core, "__file__", "") or "")
+        for fn in sorted(os.listdir(_dir)):
+            if fn.startswith("_pydantic_core") or fn.startswith("pydantic_core"):
+                fp = os.path.join(_dir, fn)
+                try:
+                    st = os.stat(fp)
+                    print(f"[ENV-CHECK]   {fn}: {st.st_size} bytes")
+                except OSError:
+                    print(f"[ENV-CHECK]   {fn}: missing")
+    except (ImportError, OSError, ValueError):
+        pass
+    # shadowing: a pydantic_core package BEFORE the venv's site-packages?
+    import site
+    try:
+        sp = [p for p in site.getsitepackages() if p]
+    except AttributeError:
+        sp = []
+    for entry in sys.path:
+        if not entry or not os.path.isdir(entry):
+            continue
+        if os.path.isdir(os.path.join(entry, "pydantic_core")) and sp:
+            if not any(os.path.abspath(entry).startswith(os.path.abspath(s))
+                       for s in sp):
+                print(f"[ENV-CHECK]   WARNING: shadowing pydantic_core in {entry}")
+
+
+
 def repair(packages: list) -> tuple[bool, str]:
     """Try pip (plain venvs), fall back to uv (uv venvs ship without pip).
     Returns (ok, how). Never raises."""
@@ -56,13 +101,16 @@ def repair(packages: list) -> tuple[bool, str]:
         hasattr(sys, "base_prefix") and sys.base_prefix != sys.prefix)
     if in_venv and _run([sys.executable, "-m", "pip", "--version"]) == 0:
         tried.append("pip")
+        # --only-binary :all: : a source build needs Rust and can leave a
+        # half-written .pyd behind - exactly the incident this tool exists for.
+        # Without a wheel we want a LOUD failure, not a broken extension.
         if _run([sys.executable, "-m", "pip", "install", "--force-reinstall",
-                 "--no-cache-dir", *packages]) == 0:
+                 "--no-cache-dir", "--only-binary", ":all:", *packages]) == 0:
             return True, "pip"
     if _run(["uv", "--version"]) == 0:
         tried.append("uv")
         if _run(["uv", "pip", "install", "--python", sys.executable,
-                 "--reinstall", *packages]) == 0:
+                 "--reinstall", "--no-binary", ":none:", *packages]) == 0:
             return True, "uv"
     if not tried:
         return False, "neither pip nor uv available"
@@ -106,11 +154,19 @@ def main() -> int:
     if probe_all(modules) is None:
         print("[ENV-CHECK] OK after repair")
         return 0
-    print("[ENV-CHECK] STILL BROKEN after repair. Two steps:")
-    print("  1. Delete the folder .venv, then run install.bat again.")
-    print("  2. If it still fails, install Python 3.12 or 3.13 from python.org")
-    print("     and re-run install.bat (a broken build or antivirus quarantine")
-    print("     of the compiled modules is the usual cause).")
+    diagnose()
+    print("[ENV-CHECK] STILL BROKEN after repair. In this order:")
+    print("  1. Antivirus/quarantine: the compiled module may have been")
+    print("     removed right after install. Check the AV log, exclude the")
+    print("     install folder, then re-run start_hivemind.bat.")
+    print("  2. Reinstall the PAIR by hand (a mismatch between pydantic and")
+    print("     pydantic-core is the other usual cause; the versions must fit):")
+    print(f"     {sys.executable} -m pip install --force-reinstall --no-cache-dir "
+          "--only-binary :all: pydantic pydantic-core")
+    print("  3. Only if that fails: delete .venv and run install.bat again.")
+    print("  4. As a last resort install into a FRESH folder with install.bat -")
+    print("     the installer provisions its own interpreter and a clean venv,")
+    print("     which rules out a half-written package from an earlier attempt.")
     return 1
 
 

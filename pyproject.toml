@@ -9,6 +9,9 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.115",
+    # explicit floor: an old pydantic-core next to a new pydantic raises
+    # "cannot import name 'ArgsKwargs'" at import time
+    "pydantic>=2.11",
     "httpx>=0.27",
     "pywin32>=306 ; sys_platform == 'win32'",
     "rich>=13.7",
