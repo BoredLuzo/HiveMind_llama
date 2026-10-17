@@ -10,7 +10,7 @@ on, and no model or binary enters the release zip.
 ## Voice
 
 **Text to speech** - the Voice card gets a master switch, seven English voices
-(default `cosette`), a speed control and a "Play sample" button. Every answer
+(default `anna`; `cosette` is non-commercial), a speed control and a "Play sample" button. Every answer
 carries a speaker button (hidden while TTS is off, never autoplays). The engine is
 Pocket TTS in its own `uvx` environment: PyTorch never enters HiveMind's venv, the
 sidecar starts on the first request and stops itself after 15 idle minutes.

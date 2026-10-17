@@ -18,7 +18,8 @@ SPEED
 =====
 Pocket TTS has no speed parameter, so the factor is applied here (WSOLA in
 ``core.tts_audio``): measured 1.08x -> 5.48 s instead of 5.96 s with the pitch
-unchanged. The default voice is cosette (owner choice, 2026-10-17).
+unchanged. Shipped default voice: anna (CC BY 4.0). cosette stays selectable but is
+a non-commercial recording (Expresso, CC BY-NC 4.0) - see docs/voice_licenses.md.
 
 API of the sidecar (verified against pocket-tts 2026.10):
   GET  /health           -> {"status": "healthy"}

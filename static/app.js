@@ -1890,6 +1890,10 @@ function _ttsErrorText(j) {
 }
 
 async function voiceSpeakText(text, btn) {
+  // manual playback takes over the audio element: stop the read-aloud pump,
+  // otherwise its current clip is killed without an 'ended' event and the queue
+  // stops forever.
+  if (typeof _readAloudStop === 'function') _readAloudStop();
   text = String(text || '').trim();
   if (!text) { showStatus('Nothing to speak'); return; }
   if (!(S && S.ttsEnabled)) { showStatus('Text to speech is off in the settings'); return; }
@@ -1913,6 +1917,7 @@ async function voiceSpeakText(text, btn) {
 }
 
 async function voicePlaySample() {
+  if (typeof _readAloudStop === 'function') _readAloudStop();
   var sel = document.getElementById('tts-voice-sel');
   var out = document.getElementById('tts-sample-out');
   var voice = (sel && sel.value) || (S && S.ttsVoice) || '';
@@ -1994,6 +1999,16 @@ function _readAloud(kind, text) {
     }
   });
   if (_buf.trim()) _chunks.push(_buf.trim());
+  // a clause can be longer than the first-chunk limit (no punctuation at all, a
+  // pasted URL): cut it at the last space so the fast start still holds
+  if (_chunks.length && _chunks[0].length > 90) {
+    var _long = _chunks.shift();
+    var _cut = _long.lastIndexOf(' ', 90);
+    if (_cut < 30) _cut = 90;
+    _chunks.unshift(_long.slice(0, _cut).trim());
+    var _rest = _long.slice(_cut).trim();
+    if (_rest) _chunks.splice(1, 0, _rest);
+  }
   _chunks.forEach(function (c) { _readAloudQueue.push({kind: kind, text: c}); });
   if (!_readAloudBusy && !_raPending) {
     var _first = _raTakeNext();
@@ -2077,6 +2092,18 @@ function voiceEnableDefaults() {
   postSettings(patch);
 }
 
+
+// Reveal the speaker button as soon as a bubble has text. Called from the token
+// flush (throttled to 4/s) and at run end - before this it only ran inside
+// loadSettings, so the button never appeared during a live run.
+var _speakSyncAt = 0;
+function _speakSyncSoon() {
+  var now = Date.now();
+  if (now - _speakSyncAt < 250) return;
+  _speakSyncAt = now;
+  _syncSpeakButtons();
+}
+
 function _syncSpeakButtons() {
   document.querySelectorAll('#chat .amsg-foot').forEach(function (foot) {
     var btn = foot.querySelector('.msg-speak');
@@ -2137,10 +2164,11 @@ function _syncTtsCard() {
   var box = document.getElementById('tts-options');
   if (box) box.style.display = on ? 'block' : 'none';
   if (!on) {
-    // a mid-speech switch-off stops the clip AND everything queued
-    _voiceStopAudio();
-    _readAloudQueue = [];
-    _readAloudBusy = false;
+    // a mid-speech switch-off stops the clip, the queue AND the prefetched
+    // request. Leaving _raPending behind used to wedge the pump: after turning
+    // TTS back on, nothing ever started because the guard saw a pending fetch.
+    if (typeof _readAloudStop === 'function') _readAloudStop();
+    else { _voiceStopAudio(); _readAloudQueue = []; _readAloudBusy = false; }
   }
   var btn = document.getElementById('tts-speak-all');
   if (btn) btn.style.display = on ? '' : 'none';
@@ -4931,6 +4959,9 @@ function _flushTokenQueueSync() {
 function _tokenFlushLoop() {
   _tokenRafId = null;
   if (!S.curAgent) { _tokenQueue = []; return; }
+  // SPEAK-BUTTON-REVEAL (2026-10-18): the button became visible only via
+  // loadSettings, i.e. never during a run. Throttled to 4/s here.
+  if (typeof _speakSyncSoon === 'function') _speakSyncSoon();
   var body = document.getElementById('ab-' + S.curAgent.tid) || S.curAgent.body;
   if (!body) { _tokenQueue = []; return; }
 
@@ -6369,6 +6400,7 @@ async function sendMsg() {
   } // end inner try/catch (fetch)
 
   } finally { // end outer try — covers automap + intent + fetch
+    if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons();
     // READ ALOUD at run end: direct reads the whole answer, an agentic run reads
     // the coder's final answer (the plan was already spoken when it appeared).
     try {

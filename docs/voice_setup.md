@@ -49,7 +49,8 @@ PyTorch and fetch the model, but not accept the terms for you:
 
 1. `hf auth login` (once, with your Hugging Face account) and accept the terms on
    <https://huggingface.co/kyutai/pocket-tts>.
-2. *Settings → Voice → Text to speech*, pick a voice (default `cosette`) and a
+2. *Settings → Voice → Text to speech*, pick a voice (default `anna`; `cosette` is a
+   non-commercial recording, see [voice_licenses.md](voice_licenses.md)) and a
    speed (default `1.08`).
 3. The first request starts `uvx pocket-tts serve` in an isolated environment
    (PyTorch never enters HiveMind's venv) and takes a few seconds; afterwards it

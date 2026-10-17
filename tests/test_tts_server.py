@@ -68,7 +68,7 @@ check("the blocking work runs in a thread (no event-loop freeze)",
       "asyncio.to_thread(" in tseg)
 
 # ── (c) settings ───────────────────────────────────────────────────────────
-for key, want in (("tts_enabled", "False"), ("tts_voice", '"cosette"'),
+for key, want in (("tts_enabled", "False"), ("tts_voice", '"anna"'),
                   ("tts_speed", "1.08"), ("tts_timeout_s", "120"),
                   ("tts_idle_stop_s", "900")):
     line = next((l for l in settings.splitlines() if f'"{key}"' in l), "")

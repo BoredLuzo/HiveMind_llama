@@ -223,7 +223,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `workspace_force_ui` | bool | `True` | — |
 | `duo_coder_briefing_think_tokens` | int | `1500` | Duo card | Planner thinking is injected into the coder as a briefing only up to this many estimated tokens; above it the coder gets the pure plan (a planner that thinks 8-16k tokens would poison it). `0` = plan only, `-1` = always inject. |
 | `tts_enabled` | bool | `False` | Voice card | Text-to-speech master switch. Starts the Pocket TTS sidecar (isolated uv environment) on the first request; off = no process, no speaker buttons. |
-| `tts_voice` | str | `"cosette"` | Voice card | One of the shipped English voices (`cosette`, `alba`, `anna`, `eve`, `jane`, `vera`, `bill_boerst`). |
+| `tts_voice` | str | `"anna"` | Voice card | One of the shipped English voices (`anna` (default, CC BY 4.0), `alba`, `cosette` (CC BY-NC 4.0, non-commercial), `eve`, `jane`, `vera`, `bill_boerst`). |
 | `tts_speed` | float | `1.08` | Voice card | Playback speed 0.8-1.5. Pocket TTS has no speed parameter, so HiveMind time-stretches the audio (WSOLA, pitch preserved). |
 | `tts_timeout_s` | int | `120` | - | Hard limit per synthesis request. |
 | `tts_idle_stop_s` | int | `900` | - | The sidecar stops itself after this much idle time (it holds torch + the model in RAM while warm). |
