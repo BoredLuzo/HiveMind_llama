@@ -3871,8 +3871,17 @@ function _planStepDisplay(stepText) {
             : file ? ('Implement changes to ' + file)
             : s;
   if (title.length > 110) title = title.slice(0, 110) + '\u2026';
-  var full = _escHtml(s.length > 200 ? s.slice(0, 200) + '\u2026' : s).replace(/"/g, '&quot;');
-  return _mdInlinePlan(title) + ' <span class="pm-step-full" title="' + full + '">\u2139</span>';
+  // PLAN-STEP-CLEAN (2026-10-17, owner: "the open tasks look ass, especially the
+  // info glyph"): no inline marker on every row - the file is set as code and
+  // the full planner contract becomes the row's tooltip instead.
+  var _fmt = _mdInlinePlan(title);
+  if (file) {
+    var _fi = _fmt.indexOf(_escHtml(file));
+    if (_fi === 0) {
+      _fmt = '<code class="coder-inline-code">' + _escHtml(file) + '</code>' + _fmt.slice(_escHtml(file).length);
+    }
+  }
+  return _fmt;
 }
 
 function _buildPlanMarkdown(text) {
@@ -3891,9 +3900,20 @@ function _buildPlanMarkdown(text) {
     m = ln.match(/^\s*(#{1,3})\s+(.+)$/);
     if (m) { flushP(); out.push('<div class="pm-h pm-h' + m[1].length + '">' + _mdInlinePlan(m[2]) + '</div>'); continue; }
     m = ln.match(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/);
-    if (m) { flushP(); var chk = (m[1] === 'x' || m[1] === 'X') ? '\u2611' : '\u2610'; out.push('<div class="pm-li pm-task"><span class="pm-chk">' + chk + '</span>' + _mdInlinePlan(m[2]) + '</div>'); continue; }
+    if (m) {
+      flushP();
+      var _done = (m[1] === 'x' || m[1] === 'X');
+      out.push('<div class="pm-li pm-task' + (_done ? ' pm-task-done' : '') + '"><span class="pm-chk">' + (_done ? '\u2611' : '\u2610') + '</span>' + _mdInlinePlan(m[2]) + '</div>');
+      continue;
+    }
     m = ln.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (m) { flushP(); out.push('<div class="pm-li"><span class="pm-bul">\u2022</span>' + _planStepDisplay(m[1]) + '</div>'); continue; }
+    if (m) {
+      flushP();
+      // the raw planner contract stays available as a tooltip, not as an icon
+      var _fullRaw = _escHtml(String(m[1]).slice(0, 400)).replace(/"/g, '&quot;');
+      out.push('<div class="pm-li" title="' + _fullRaw + '"><span class="pm-bul">\u2022</span>' + _planStepDisplay(m[1]) + '</div>');
+      continue;
+    }
     m = ln.match(/^\s*[-*]\s+(.+)$/);
     if (m) { flushP(); out.push('<div class="pm-li"><span class="pm-bul">\u2022</span>' + _mdInlinePlan(m[1]) + '</div>'); continue; }
     if (!ln.trim()) { flushP(); continue; }

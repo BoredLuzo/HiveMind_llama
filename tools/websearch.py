@@ -172,6 +172,122 @@ def _cap_per_host(results: list, cap: int = 2) -> list:
     return _out
 
 
+
+# ── Wikipedia direct (2026-10-17) ───────────────────────────────────────────
+# Live finding: a run asked for "Nintendo 64 technical specifications ...
+# site:wikipedia.org" eight times, got shop/homepage links from the configured
+# engine every time (``site:`` is not honoured by it), and burned the whole
+# websearch budget. The instance's wikipedia engine also returns 0 results.
+# The MediaWiki search API needs no engine at all, so a ``site:wikipedia.org``
+# query - and any query where SearXNG returns nothing - goes there directly.
+
+_WIKI_SITE_RE = re.compile(r"site:\s*([a-z-]{2,3})\.wikipedia\.org", re.IGNORECASE)
+_WIKI_SITE_ANY = re.compile(r"site:\s*[a-z.-]*wikipedia\.org", re.IGNORECASE)
+_WIKI_UA = ("HiveMind/1.4 (local assistant; +"
+            "https://github.com/BoredLuzo/HiveMind_llama)")
+# Errors the fallback may swallow (httpx is optional at import time).
+_WIKI_ERR = ((_httpx.HTTPError, ValueError, KeyError, TypeError, OSError)
+             if _HAS_HTTPX else (ValueError, KeyError, TypeError, OSError))
+
+
+def _wiki_lang_and_terms(query: str) -> tuple[str, str, bool]:
+    """(lang, terms, had_site_operator) for the Wikipedia fallback."""
+    q = str(query or "")
+    m = _WIKI_SITE_RE.search(q)
+    lang = (m.group(1).lower() if m else "en")
+    if lang in ("www",):
+        lang = "en"
+    explicit = bool(_WIKI_SITE_ANY.search(q))
+    terms = _WIKI_SITE_ANY.sub(" ", q)
+    terms = re.sub(r"\s+", " ", terms).strip() or q.strip()
+    return lang, terms, explicit
+
+
+def _wiki_tokens(text: str) -> set:
+    s = re.sub(r"[^a-zA-Z0-9\u00c0-\u024f ]+", " ", str(text or "").lower())
+    return {w for w in s.split() if len(w) >= 2}
+
+
+def _wiki_rank(hits: list, terms: str) -> list:
+    """Prefer pages whose title matches the query words ("Nintendo 64" over
+    "List of file formats" for a query that starts with Nintendo 64)."""
+    qs = _wiki_tokens(terms)
+    if not qs:
+        return hits
+
+    def _score(h):
+        return len(_wiki_tokens(str(h.get("title") or "")) & qs)
+
+    return sorted(hits, key=_score, reverse=True)
+
+
+async def _wiki_direct(query: str, max_results: int) -> str:
+    """Search one Wikipedia via the MediaWiki API. Returns "" on failure."""
+    lang, terms, explicit = _wiki_lang_and_terms(query)
+    url = f"https://{lang}.wikipedia.org/w/api.php"
+    want = max(1, min(int(max_results or 5), 10))
+    toks = [w for w in re.findall(r"[^\s]+", terms) if w]
+    # Wikipedia search degrades with stuffed queries: "Nintendo 64 technical
+    # specifications RDP processor RAM memory" -> "List of file formats", while
+    # "Nintendo 64 technical" -> the console page. "MIPS R4300i clock speed"
+    # returns nothing at all, "MIPS R4300i" returns the CPU pages. So try the
+    # full query and progressively shorter prefixes, keep the set whose top hit
+    # actually matches the query words, and stop as soon as two words match.
+    attempts: list = []
+    for n in (len(toks), 4, 3, 2):
+        cand = " ".join(toks[:n]).strip()
+        if len(toks[:n]) >= 1 and cand and cand not in attempts:
+            attempts.append(cand)
+    qs = _wiki_tokens(terms)
+    best_hits: list = []
+    best_score = -1
+    for cand in attempts:
+        params = {"action": "query", "list": "search", "srsearch": cand,
+                  "srlimit": str(want), "format": "json", "utf8": "1"}
+        try:
+            # Wikimedia answers 403 to a request without a descriptive UA.
+            _client = await _get_client_async()
+            resp = await _client.get(
+                url, params=params,
+                headers={"Accept": "application/json", "User-Agent": _WIKI_UA},
+                timeout=_httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0))
+            resp.raise_for_status()
+            data = resp.json()
+        except _WIKI_ERR as _we:
+            logger.info("web_search: wikipedia fallback failed (%s)", _we)
+            return ""
+        hits = (data.get("query") or {}).get("search") or []
+        if not hits:
+            continue
+        ranked = _wiki_rank(hits, terms)
+        score = len(_wiki_tokens(str(ranked[0].get("title") or "")) & qs)
+        if score > best_score or (score == best_score and len(ranked) > len(best_hits)):
+            best_hits, best_score = ranked, score
+        if best_score >= 2:
+            break
+    hits = best_hits[:want]
+    if not hits:
+        return ""
+
+    from urllib.parse import quote as _q
+    lines = [f"Search results for: {query}",
+             (f"(source: {lang}.wikipedia.org, direct API search"
+              f"{'; site: operator was dropped' if explicit else ''})"), ""]
+    for i, h in enumerate(hits, 1):
+        title = str(h.get("title") or "").strip()
+        snippet = re.sub(r"<[^>]+>", "", str(h.get("snippet") or ""))
+        snippet = re.sub(r"\s+", " ", snippet).strip()
+        page = f"https://{lang}.wikipedia.org/wiki/{_q(title.replace(' ', '_'))}"
+        lines.append(f"[{i}] {title}")
+        lines.append(f"    URL: {page}")
+        if snippet:
+            lines.append(f"    {snippet[:300]}")
+        lines.append("")
+    first = f"https://{lang}.wikipedia.org/wiki/{_q(str(hits[0].get('title') or '').replace(' ', '_'))}"
+    lines.append(f'For full content: web_fetch("{first}")')
+    return "\n".join(lines).strip()
+
+
 async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str:
     if not _SEARXNG_ENABLED:
         return "[web_search: SearXNG disabled — enable it in settings or start SearXNG]"
@@ -184,6 +300,17 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
         if time.time() - _ts < _CACHE_TTL:
             logger.debug("web_search CACHE HIT: %r", query)
             return _cached
+
+    # A query that names Wikipedia is an encyclopedia lookup: the MediaWiki API
+    # answers it without any search engine, which is exactly the case that used
+    # to return shop/homepage links (see _wiki_direct above).
+    if (_WIKI_SITE_ANY.search(query or "")
+            or re.search(r"\bwikipedia\b", query or "", re.I)):
+        _wd = await _wiki_direct(query, max_results)
+        if _wd:
+            logger.info("web_search: answered %r from wikipedia direct", query[:80])
+            _SEARCH_CACHE[_cache_key] = (time.time(), _wd)
+            return _wd
 
     for _attempt in range(2):
         try:
@@ -223,6 +350,13 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
     results = data.get("results", [])
     results = _cap_per_host(results, cap=2)
     if not results:
+        # The configured engines return nothing for some topics (their wikipedia
+        # engine is down on the live instance). Try Wikipedia once before giving
+        # up - an encyclopedia hit beats "No results" for factual questions.
+        _wd = await _wiki_direct(query, max_results)
+        if _wd:
+            _SEARCH_CACHE[_cache_key] = (time.time(), _wd)
+            return _wd
         return (
             f"[web_search: No results for '{query}']\n"
             "Do NOT retry the same topic with reshuffled words. Either use a much more "
@@ -233,7 +367,7 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
     from datetime import datetime as _ws_dt
     _ws_today = _ws_dt.today().strftime("%Y-%m-%d")
     lines = [f"Search results for: {query}\n"
-             "(fetched today: {_ws_today}; pages may carry older "
+             f"(fetched today: {_ws_today}; pages may carry older "
              "copyright dates - that does not mean today is in the \n past)"]
     _first_url = None
     for i, r in enumerate(results[:max_results], 1):

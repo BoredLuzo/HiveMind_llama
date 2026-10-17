@@ -675,6 +675,42 @@ async def _handle_ask_user(_dname, _dargs, hooks, exec_model, cached_coder_port,
 
     # ── web_search dedup ──
 
+# NEAR-DUP-STOP (2026-10-17): two web_search queries whose token sets overlap
+# this much are the same search with reshuffled words ("... RDP processor RAM
+# memory site:wikipedia.org" vs "... RDP processor graphics memory
+# site:wikipedia.org"). A plain Jaccard >= 0.72 was too strict for the live case
+# (the two real variants scored 0.50), so containment and a shared 3-token
+# opener count as well. After _WS_DUP_STOP attempts the tool refuses to search
+# instead of burning the per-run websearch budget.
+_WS_DUP_JACCARD = 0.55
+_WS_DUP_CONTAIN = 0.70
+_WS_DUP_STOP = 3
+
+
+def _ws_is_near_dup(a: set, b: set) -> bool:
+    """Same search with reshuffled words? (see the constants above)"""
+    if not a or not b:
+        return False
+    inter = len(a & b)
+    union = len(a | b)
+    if union and inter / union >= _WS_DUP_JACCARD:
+        return True
+    if inter / max(1, min(len(a), len(b))) >= _WS_DUP_CONTAIN:
+        return True
+    # shared op ener ("nintendo 64 technical ...") is the same topic even when
+    # the tail differs a lot
+    return len(a & b) >= 3 and inter / max(1, len(a)) >= 0.5
+
+
+def _ws_tokens(query: str) -> set:
+    """Comparable token set for a search query (site: operators ignored)."""
+    import re as _re
+
+    q = _re.sub(r"\bsite:\S+", " ", str(query or "").lower())
+    q = _re.sub(r"[^a-z0-9\u00c0-\u024f]+", " ", q)
+    return {w for w in q.split() if len(w) > 2}
+
+
 async def _execute_one_tool(_dname, _dargs, _dargs_with_model, _i, _pre_results,
                               duo_seen_web_queries, workspace_lock, tool_mode, duo_ws) -> str:
     """S7: web_search dedup + tool execution (from execute_tool_round)."""
@@ -684,6 +720,34 @@ async def _execute_one_tool(_dname, _dargs, _dargs_with_model, _i, _pre_results,
         _ws_query_norm = str(_dargs.get("query", "")).strip().lower()
         if _ws_query_norm and _ws_query_norm in duo_seen_web_queries:
             return f"[web_search dedup: duplicate query skipped: {_ws_query_norm[:180]}]"
+        # NEAR-DUP-STOP (2026-10-17, live run): exact-string dedup let a model
+        # spend 24 rounds on "Nintendo 64 … site:wikipedia.org" with reshuffled
+        # words until the websearch budget was gone and the run died as
+        # loop_detected with zero files written. Queries whose token sets
+        # overlap that much are the same search: the first one is skipped, and
+        # after three of them the tool says stop instead of burning the budget.
+        _ws_toks = _ws_tokens(_ws_query_norm)
+        _ws_dups = 0
+        if _ws_toks:
+            for _seen_q in list(duo_seen_web_queries):
+                _seen_t = _ws_tokens(_seen_q)
+                if not _seen_t:
+                    continue
+                if _ws_is_near_dup(_ws_toks, _seen_t):
+                    _ws_dups += 1
+        if _ws_dups >= _WS_DUP_STOP:
+            logger.warning("[WS-NEAR-DUP] stopping after %d near-identical searches: %r",
+                           _ws_dups, _ws_query_norm[:120])
+            return (
+                "[TOOL_ERROR:WEBSEARCH_LOOP] "
+                f"{_ws_dups} previous searches covered this same topic with "
+                "near-identical wording and the results did not improve. STOP "
+                "searching now: answer with what you already have, and name the "
+                "open point in task_complete instead of trying another variant."
+            )
+        if _ws_dups >= 1:
+            logger.info("[WS-NEAR-DUP] near-duplicate search allowed (n=%d): %r",
+                        _ws_dups, _ws_query_norm[:120])
         if _ws_query_norm:
             duo_seen_web_queries.add(_ws_query_norm)
 
