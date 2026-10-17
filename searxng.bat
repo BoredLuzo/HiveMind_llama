@@ -1,5 +1,27 @@
 @echo off
 setlocal
+REM WORKDIR-FIX (2026-10-17): always run relative to the install folder, so a
+REM double-click, a shortcut or a call from another directory all behave the same.
+cd /d "%~dp0"
+
+REM INTERACTIVE (2026-10-17, live report "it just closed itself"): with no
+REM arguments the script is almost always double-clicked - the window must stay
+REM open at the END of every path, and it must never fail without a message
+REM (a dead Docker daemon used to print a raw docker error and exit instantly).
+set "ARG1=%~1"
+set "INTERACTIVE="
+if "%ARG1%"=="" set "INTERACTIVE=1"
+set "RC=0"
+
+if not exist "%~dp0searxng-config" (
+    echo.
+    echo  [ERROR] "searxng-config" is missing next to searxng.bat.
+    echo          Restore it from the release zip or the git checkout
+    echo          ^(docker-compose.yml.example + settings.yml.example^).
+    set "RC=1"
+    goto :finish
+)
+
 cd /d "%~dp0searxng-config"
 
 echo.
@@ -51,17 +73,22 @@ REM "external" points at an already-running SearXNG - no Docker required.
 REM It only writes settings.json (searxng_host). Runs BEFORE the docker check.
 if /i "%ACTION%"=="external" goto external
 
-where docker >nul 2>&1
+REM DAEMON-CHECK (2026-10-17): "docker" on PATH is not enough - Docker Desktop
+REM being stopped is the common case and produced a raw error + instant close.
+docker info >nul 2>&1
 if errorlevel 1 (
     echo.
-    echo  [ERROR] docker not found. Install and start Docker Desktop:
-    echo          https://www.docker.com/products/docker-desktop/
+    echo  [ERROR] Docker is not reachable - Docker Desktop is not running.
     echo.
-    echo  If you already run SearXNG somewhere else, use:
-    echo          searxng.bat external http://HOST:PORT
+    echo          Start Docker Desktop, wait for "Engine running", then run
+    echo          this script again.
     echo.
-    if "%ACTION%"=="status" exit /b 1
-    echo  Press any key to continue... & pause >nul & exit /b 1
+    echo          No Docker on this machine? Point HiveMind at an existing
+    echo          SearXNG instead:
+    echo              searxng.bat external http://HOST:PORT
+    echo.
+    set "RC=1"
+    goto :finish
 )
 
 if /i "%ACTION%"=="install" goto install
@@ -71,7 +98,8 @@ if /i "%ACTION%"=="restart" goto restart
 if /i "%ACTION%"=="status" goto status
 echo  Unknown action: %ACTION%
 echo.
-exit /b 1
+set "RC=1"
+goto :finish
 
 :external
 echo.
@@ -82,7 +110,8 @@ if "%HM_EXT%"=="" (
 if "%HM_EXT%"=="" (
     echo  [ERROR] No SearXNG URL given.
     echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
+    set "RC=1"
+    goto :finish
 )
 echo  Pointing HiveMind at: %HM_EXT%
 echo.
@@ -94,7 +123,8 @@ if errorlevel 1 (
     echo.
     echo  [ERROR] Could not write settings.json.
     echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
+    set "RC=1"
+    goto :finish
 )
 echo.
 echo  --------------------------------------------------------------
@@ -103,10 +133,8 @@ echo.
 echo   Restart HiveMind, then use the websearch "Check status"
 echo   button in the UI to verify the connection.
 echo  --------------------------------------------------------------
-echo.
-echo  Press any key to continue...
-pause >nul
-exit /b 0
+set "RC=0"
+goto :finish
 
 :install
 echo.
@@ -115,7 +143,8 @@ if errorlevel 2 (
     echo.
     echo  Aborted - nothing was changed.
     echo.
-    exit /b 0
+    set "RC=0"
+    goto :finish
 )
 echo.
 echo  Target folder: %~dp0searxng-config
@@ -130,7 +159,8 @@ if not exist "docker-compose.yml" (
         echo  [..] docker-compose.yml seeded from template.
     ) else (
         echo  [ERROR] docker-compose.yml.example missing - re-clone or restore it.
-        echo  Press any key to continue... & pause >nul & exit /b 1
+        set "RC=1"
+        goto :finish
     )
 )
 if not exist "settings.yml" (
@@ -139,7 +169,8 @@ if not exist "settings.yml" (
         echo  [..] settings.yml seeded from template.
     ) else (
         echo  [ERROR] settings.yml.example missing - re-clone or restore it.
-        echo  Press any key to continue... & pause >nul & exit /b 1
+        set "RC=1"
+        goto :finish
     )
 )
 echo.
@@ -159,7 +190,8 @@ if errorlevel 1 (
     echo.
     echo  [ERROR] docker compose failed. Is Docker Desktop running?
     echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
+    set "RC=1"
+    goto :finish
 )
 goto running
 
@@ -170,7 +202,8 @@ if errorlevel 2 (
     echo.
     echo  Aborted - container stays stopped.
     echo.
-    exit /b 0
+    set "RC=0"
+    goto :finish
 )
 echo.
 REM Seed gitignored runtime files from *.example templates if absent.
@@ -188,7 +221,8 @@ if errorlevel 1 (
         echo.
         echo  [ERROR] docker compose failed. Is Docker Desktop running?
         echo.
-        echo  Press any key to continue... & pause >nul & exit /b 1
+        set "RC=1"
+        goto :finish
     )
 )
 goto running
@@ -200,13 +234,15 @@ if errorlevel 2 (
     echo.
     echo  Aborted - container keeps running.
     echo.
-    exit /b 0
+    set "RC=0"
+    goto :finish
 )
 echo.
 docker stop hivemind-searxng >nul 2>&1
 if errorlevel 1 ( echo  [INFO] Container was not running. ) else ( echo  [OK] SearXNG stopped. )
 echo.
-exit /b 0
+set "RC=0"
+goto :finish
 
 :restart
 echo.
@@ -215,7 +251,8 @@ if errorlevel 2 (
     echo.
     echo  Aborted - nothing was restarted.
     echo.
-    exit /b 0
+    set "RC=0"
+    goto :finish
 )
 echo.
 docker restart hivemind-searxng >nul 2>&1
@@ -224,15 +261,29 @@ if errorlevel 1 (
     echo  [ERROR] docker restart failed - is the container created?
     echo          Run "searxng.bat install" first.
     echo.
-    echo  Press any key to continue... & pause >nul & exit /b 1
+    set "RC=1"
+    goto :finish
 )
 goto running
 
 :status
-docker ps --filter "name=hivemind-searxng" --format "{{.Names}}: {{.Status}}"
-if errorlevel 1 exit /b 1
+REM STATUS-TRUTH (2026-10-17): the old path printed the "[OK] running" box for a
+REM STOPPED container and exited silently when the daemon was down.
+docker ps -a --filter "name=hivemind-searxng" --format "{{.Names}}: {{.Status}}"
 docker inspect -f "{{.State.Running}}" hivemind-searxng >nul 2>&1
-if errorlevel 1 ( echo  [INFO] Container not created - run "searxng.bat install" ) & exit /b 0
+if errorlevel 1 (
+    echo.
+    echo  [INFO] Container not created yet - run "searxng.bat install"
+    set "RC=0"
+    goto :finish
+)
+set "RUNNING="
+for /f "usebackq delims=" %%R in (`docker inspect -f "{{.State.Running}}" hivemind-searxng`) do set "RUNNING=%%R"
+if /i "%RUNNING%"=="true" goto running
+echo.
+echo  [INFO] Container exists but is STOPPED - run "searxng.bat start".
+set "RC=0"
+goto :finish
 
 :running
 echo.
@@ -243,8 +294,15 @@ echo   Restart policy: unless-stopped - starts with Docker Desktop.
 echo   Port changed? Re-run "searxng.bat install %HM_PORT%" and restart
 echo   HiveMind (settings.json searxng_host was updated automatically).
 echo  --------------------------------------------------------------
-echo.
-echo  Press any key to continue...
-pause >nul
-exit /b 0
+set "RC=0"
+goto :finish
 
+:finish
+REM Keep the window open when the script was double-clicked (no arguments);
+REM a call from an open terminal keeps its normal exit code and returns.
+if defined INTERACTIVE (
+    echo.
+    echo  Press any key to close this window...
+    pause >nul
+)
+exit /b %RC%
