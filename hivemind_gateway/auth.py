@@ -41,6 +41,10 @@ class ParsedUpdate:
     is_forwarded: bool
     message_id: int | None    # for edits/replies
     callback_id: str | None
+    # VOICE (1.4): a voice note / audio file instead of text. text stays "" then.
+    voice_file_id: str | None = None
+    voice_duration: int = 0
+    voice_mime: str = ""
 
 
 def _from_of(payload: dict) -> dict | None:
@@ -70,6 +74,14 @@ def parse_update(raw: dict) -> ParsedUpdate | None:
             date = payload.get("date")
             message_id = payload.get("message_id")
         forwarded = any(k.startswith("forward_") for k in payload)
+        # voice notes (`voice`) and audio files (`audio`) carry the same shape
+        _media = payload.get("voice") or payload.get("audio")
+        _media = _media if isinstance(_media, dict) else {}
+        _file_id = _media.get("file_id") if isinstance(_media.get("file_id"), str) else None
+        try:
+            _dur = int(_media.get("duration") or 0)
+        except (TypeError, ValueError):
+            _dur = 0
         return ParsedUpdate(
             update_id=update_id,
             kind=kind,
@@ -81,6 +93,9 @@ def parse_update(raw: dict) -> ParsedUpdate | None:
             is_forwarded=forwarded,
             message_id=message_id if isinstance(message_id, int) else None,
             callback_id=payload.get("id") if kind == "callback_query" else None,
+            voice_file_id=_file_id,
+            voice_duration=max(0, _dur),
+            voice_mime=str(_media.get("mime_type") or ""),
         )
     return None
 

@@ -358,9 +358,18 @@ class Gateway:
     async def handle_owner_update(self, p: gw_auth.ParsedUpdate) -> None:
         cmd = gw_commands.command_from_message(p)
         if cmd is None:
+            if p.kind == "message" and p.voice_file_id:
+                # VOICE (1.4, opt-in): a voice note becomes the run prompt.
+                if self.cfg.voice_in:
+                    await self.handle_voice_note(p)
+                    return
+                await self.reply(p.chat_id,
+                                 "Voice notes are off. Enable 'voice_in' in "
+                                 "the gateway config to dictate runs.",
+                                 reply_to_message_id=p.message_id)
+                return
             if p.kind == "message" and not p.is_forwarded:
-                # non-text update (photo/document/voice/sticker): rejected
-                # with a note until WP5 (brief: SECURITY/Inputs)
+                # non-text update (photo/document/sticker): rejected with a note
                 await self.reply(p.chat_id,
                                  "Text only in this build (photos and "
                                  "steering arrive with WP5).",
@@ -601,6 +610,58 @@ class Gateway:
             note = f"🔌 HiveMind unreachable: {exc}"
         await self.reply(p.chat_id, note,
                          reply_to_message_id=p.message_id)
+
+    async def handle_voice_note(self, p: gw_auth.ParsedUpdate) -> None:
+        """Download the voice note, transcribe it via the engine, run the text.
+
+        Everything stays behind the owner/private/rate-limit gates that already
+        ran before this call; the transcript is treated exactly like typed text
+        (same length cap, same approval behaviour).
+        """
+        if p.voice_duration and p.voice_duration > self.cfg.voice_max_seconds:
+            await self.reply(p.chat_id,
+                             f"❌ Voice note too long ({p.voice_duration}s > "
+                             f"{self.cfg.voice_max_seconds}s).",
+                             reply_to_message_id=p.message_id)
+            return
+        try:
+            audio = await self.api.download_file(p.voice_file_id,
+                                                 max_bytes=self.cfg.voice_max_bytes)
+        except TelegramApiError as exc:
+            await self.reply(p.chat_id, f"❌ Could not download the voice note: {exc}",
+                             reply_to_message_id=p.message_id)
+            return
+        await self.reply(p.chat_id, "🎙 Transcribing...",
+                         reply_to_message_id=p.message_id)
+        text, code = await self.hive.stt(audio)
+        if not text:
+            hints = {
+                "STT_DISABLED": "speech-to-text is off in HiveMind's settings",
+                "STT_NO_ENGINE": "the STT engine is not installed (run deploy/fetch_whisper.py)",
+                "STT_NO_MODEL": "the STT model is not installed",
+                "STT_NO_AUDIO_LIB": "audio support is missing (pip install -r requirements-voice.txt)",
+                "STT_DECODE_FAILED": "the audio could not be decoded",
+                "STT_EMPTY": "no speech detected",
+                "STT_TIMEOUT": "transcription timed out",
+            }
+            await self.reply(p.chat_id,
+                             "❌ " + hints.get(code, f"transcription failed ({code})"),
+                             reply_to_message_id=p.message_id)
+            return
+        transcript = text.strip()
+        if len(transcript) > self.cfg.max_text_chars:
+            await self.reply(p.chat_id,
+                             f"❌ Transcript too long ({len(transcript)} > "
+                             f"{self.cfg.max_text_chars} characters).",
+                             reply_to_message_id=p.message_id)
+            return
+        # run it as if the owner had typed it - same gates, same approvals
+        voiced = gw_auth.ParsedUpdate(
+            update_id=p.update_id, kind=p.kind, from_id=p.from_id,
+            chat_id=p.chat_id, chat_type=p.chat_type,
+            text=transcript, date=p.date, is_forwarded=p.is_forwarded,
+            message_id=p.message_id, callback_id=p.callback_id)
+        await self.start_owner_run(voiced)
 
     async def start_owner_run(self, p: gw_auth.ParsedUpdate) -> None:
         """A plain owner text message = a run — unless a mirrored engine

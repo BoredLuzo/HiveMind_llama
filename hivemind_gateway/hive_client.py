@@ -91,6 +91,46 @@ class HiveClient:
         the same key)."""
         return await self._post_json("/settings", {key: value})
 
+    async def stt(self, audio: bytes) -> tuple[str, str]:
+        """Transcribe an audio blob. Returns (text, error_code).
+
+        The engine's POST /stt takes the RAW body, so no multipart here. Every
+        failure becomes a code the caller can translate (STT_DISABLED, ...).
+        """
+        try:
+            r = await self._client.post("/stt", content=audio,
+                                        headers={"Content-Type": "audio/ogg"})
+        except httpx.HTTPError as exc:
+            return "", f"transport: {type(exc).__name__}"
+        try:
+            payload = r.json()
+        except ValueError:
+            return "", f"http {r.status_code}"
+        if r.status_code == 200 and isinstance(payload, dict):
+            text = str(payload.get("text") or "").strip()
+            return (text, "") if text else ("", "STT_EMPTY")
+        code = str((payload or {}).get("code") or f"http {r.status_code}")
+        return "", code
+
+    async def tts(self, text: str, voice: str = "", speed: float | None = None) -> tuple[bytes, str]:
+        """Synthesise a voice note (Ogg/Opus). Returns (audio, error_code)."""
+        body: dict = {"text": text, "format": "opus"}
+        if voice:
+            body["voice"] = voice
+        if speed:
+            body["speed"] = speed
+        try:
+            r = await self._client.post("/tts", json=body, timeout=120.0)
+        except httpx.HTTPError as exc:
+            return b"", f"transport: {type(exc).__name__}"
+        if r.status_code == 200 and r.content:
+            return r.content, ""
+        try:
+            payload = r.json()
+        except ValueError:
+            payload = {}
+        return b"", str((payload or {}).get("code") or f"http {r.status_code}")
+
     async def heartbeat(self, pid: int, data: dict) -> None:
         """POST /gateway/heartbeat (P8-lite supervisor liveness, sent
         every mirror-loop tick). Fire-and-forget: an unreachable engine

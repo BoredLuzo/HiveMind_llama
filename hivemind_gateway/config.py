@@ -39,6 +39,13 @@ class GatewayConfig:
     update_max_age_s: int = 60          # replay window, message.date based
     long_poll_timeout_s: int = 25
     document_limit_chars: int = 200_000
+    # VOICE (1.4, opt-in): a Telegram voice note is transcribed by the engine's
+    # /stt endpoint and becomes the run prompt; answers can be sent back as a
+    # voice note via /tts. Both default off - the owner enables them per bot.
+    voice_in: bool = False
+    voice_out: bool = False
+    voice_max_seconds: int = 300
+    voice_max_bytes: int = 20 * 1024 * 1024     # Telegram bot download limit
 
     def validate(self) -> None:
         base = self.hive_base_url.rstrip("/").lower()

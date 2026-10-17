@@ -174,6 +174,56 @@ class TelegramApi:
         result = payload.get("result")
         return result if isinstance(result, dict) else {"result": result}
 
+    async def download_file(self, file_id: str, max_bytes: int = 20 * 1024 * 1024) -> bytes:
+        """getFile + GET the file URL. Size-capped, never logs the token."""
+        meta = await self.get_file(file_id)
+        result = meta.get("result") if isinstance(meta, dict) else None
+        path = (result or {}).get("file_path") if isinstance(result, dict) else None
+        if not path:
+            raise TelegramApiError("getFile", "no file_path in the result")
+        size = int((result or {}).get("file_size") or 0)
+        if size and size > max_bytes:
+            raise TelegramApiError("getFile", f"file too large ({size} bytes)")
+        c = await self._http()
+        try:
+            r = await c.get(self.file_url(path))
+        except httpx.HTTPError as _exc:
+            raise TelegramApiError("download", f"transport: {_exc}") from _exc
+        if r.status_code != 200:
+            raise TelegramApiError("download", f"HTTP {r.status_code}")
+        data = r.content
+        if len(data) > max_bytes:
+            raise TelegramApiError("download", f"file too large ({len(data)} bytes)")
+        return data
+
+    async def send_voice(self, chat_id: str | int, ogg_bytes: bytes,
+                         duration_s: int = 0,
+                         reply_to_message_id: int | None = None) -> dict:
+        """sendVoice - Telegram requires Ogg/Opus for voice notes."""
+        c = await self._http()
+        form: dict[str, Any] = {"chat_id": chat_id}
+        if duration_s:
+            form["duration"] = int(duration_s)
+        if reply_to_message_id is not None:
+            form["reply_parameters"] = {
+                "message_id": reply_to_message_id,
+                "allow_sending_without_reply": True}
+        files = {"voice": ("voice.ogg", ogg_bytes, "audio/ogg")}
+        try:
+            r = await c.post(f"{self._base}/sendVoice", data=form, files=files)
+        except httpx.HTTPError as _exc:
+            raise TelegramApiError("sendVoice", f"transport: {_exc}") from _exc
+        try:
+            payload = r.json()
+        except ValueError:
+            raise TelegramApiError(
+                "sendVoice", f"non-JSON HTTP {r.status_code}") from None
+        if not payload.get("ok"):
+            raise TelegramApiError(
+                "sendVoice", str(payload.get("description") or "error"))
+        result = payload.get("result")
+        return result if isinstance(result, dict) else {"result": result}
+
     def file_url(self, file_path: str) -> str:
         """Download URL for a getFile result (photos, WP5). Contains the
         token — never log it."""
