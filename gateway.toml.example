@@ -20,6 +20,16 @@ telegram_enabled = false
 # refuses to start against anything else.
 hive_base_url = "http://127.0.0.1:8001"
 
+# VOICE (1.4, opt-in)
+# voice_in  = a Telegram voice note is transcribed by HiveMind's /stt and the
+#             transcript runs exactly like typed text (same approvals).
+# voice_out = answers are sent back as a voice note (/tts -> Ogg/Opus, cosette
+#             at 1.08x). Both need the engine's voice feature enabled in
+#             settings (stt_enabled / tts_enabled) and their audio deps.
+voice_in = false
+voice_out = false
+voice_max_seconds = 300
+
 # APPROVAL GATE FORCE — true (default): every phone run carries
 # duo_action_approval_enabled=true, so shell/write/git calls from the
 # phone are auto-DENIED. Set false ONLY for assistant-style use where

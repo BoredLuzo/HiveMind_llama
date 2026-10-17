@@ -200,3 +200,14 @@ asks instead of continuing by itself.
   fixes it.
 - There is no "always allow" button, and there won't be. The gateway
   never loosens a safety rule.
+
+## Voice notes (opt-in, 1.4)
+
+`voice_in = true` in `gateway.toml` lets the bot accept voice notes: the note is
+downloaded (20 MB cap, 300 s cap), transcribed by HiveMind's `/stt` and the
+transcript runs exactly like typed text, with the same approval gate.
+
+`voice_out = true` sends answers back as a voice note. It needs HiveMind's TTS
+enabled (`tts_enabled` in `settings.json`, Pocket TTS via uvx, voice cosette at
+1.08x). Both switches default to false, and both require the engine's audio
+dependencies (`pip install -r requirements-voice.txt`).
