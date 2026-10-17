@@ -146,15 +146,20 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "write_file",
         "description": (
-            "Create a NEW file with complete plain content (no SEARCH/REPLACE "
-            "markers — that is edit_file). Existing files: use edit_file instead.\n"
-            "Stay within your WRITE RULES char target. If the call is cut off by "
-            "the output limit, the server keeps everything up to the last complete "
-            "line and tells you the line — continue with write_file_append."
+            "Create a file, or overwrite it completely, with plain content (no "
+            "SEARCH/REPLACE markers — that is edit_file). For a SMALL change inside "
+            "a big file prefer edit_file: a full overwrite needs the complete content.\n"
+            "Stay within your WRITE RULES char target. If the call is cut off by the "
+            "output limit, the server keeps everything up to the last complete line "
+            "and reports that line — continue with write_file_append.\n"
+            "An overwrite that would shrink a file drastically is refused once: pass "
+            "confirm_shrink=true only when the file is really supposed to get much "
+            "smaller (a rewrite/truncation)."
         ),
         "parameters": {"type": "object", "properties": {
             "path":    {"type": "string", "description": "File path"},
-            "content": {"type": "string", "maxLength": 20000, "description": "Complete file content (plain text, no markers)."}
+            "content": {"type": "string", "maxLength": 20000, "description": "Complete file content (plain text, no markers)."},
+            "confirm_shrink": {"type": "boolean", "description": "Set true to allow an overwrite that shrinks an existing file by a lot."}
         }, "required": ["path", "content"]}
     }},
     {"type": "function", "function": {

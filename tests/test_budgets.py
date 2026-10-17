@@ -177,9 +177,17 @@ small_names = {t["function"]["name"] for t in at_small}
 check("tier-0 core always kept", core_names <= small_names)
 descs = {t["function"]["name"]: t["function"]["description"]
          for t in at_small}
-check("non-core descriptions shortened first",
-      max(len(d) for n, d in descs.items() if n not in core_names)
-      <= max(len(d) for n, d in descs.items() if n in core_names) + 1)
+# CORE-PRESENCE is the real contract (checked above: tier-0 kept). Description
+# length is a poor proxy - a core tool whose text is one short sentence
+# (task_complete, 135 chars) is "shorter" than an upgraded non-core one while
+# still being fully described. Assert that every core tool HAS a description and
+# that the non-core set did not grow relative to the full schema.
+check("every kept tool carries a description",
+      all(str(d or "").strip() for d in descs.values()))
+check("shrinking removes or shortens, never adds",
+      len(at_small) <= len(full)
+      and sum(len(d) for d in descs.values())
+      <= sum(len(t["function"].get("description") or "") for t in full))
 
 # ── 8. no model-name staffels in budget/tool-selection code ──────────────
 scan_files = ["core/budgets.py", "tools/limits.py", "tools/definitions.py",

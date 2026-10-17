@@ -120,8 +120,13 @@ _wf = next(t["function"]["description"] for t in D._INLINE_CODING_TOOLS
            if t["function"]["name"] == "write_file")
 check("read_file states the read-before-edit rule",
       "ALWAYS call read_file before edit_file" in _rf)
-check("write_file routes existing files to edit_file",
-      "Existing files: use edit_file instead" in _wf)
+# the old wording ("Create a NEW file ... Existing files: use edit_file instead")
+# contradicted the handler, which overwrites with a shrink guard. The contract is
+# now: create OR overwrite completely, prefer edit_file for a small change.
+check("write_file explains create-or-overwrite",
+      "overwrite it completely" in _wf and "prefer edit_file" in _wf.lower())
+check("write_file documents the shrink escape hatch",
+      "confirm_shrink" in _wf)
 check("write_file explains the append fallback for truncated writes",
       "write_file_append" in _wf)
 

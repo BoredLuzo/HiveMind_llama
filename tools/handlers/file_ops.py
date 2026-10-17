@@ -469,7 +469,7 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
             tool="write_file")
     if not content.strip():
         return _tool_error_response(
-            "EDIT_FILE_EMPTY_EDITS",
+            "WRITE_FILE_EMPTY",
             "write_file requires non-empty content.",
             tool="write_file")
 
