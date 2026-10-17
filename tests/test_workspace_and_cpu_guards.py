@@ -114,10 +114,38 @@ check("a persisted chat workspace is used when the UI field is empty",
 _fb_ws3, _fb_src3 = fallback_for_invalid_request({}, None)
 check("with nothing configured the fallback is only the cwd",
       _fb_src3 == "cwd_fallback", f" ({_fb_src3})")
-check("a valid request is never re-routed",
+check("a valid explicit request is routed as a request, not re-routed",
       fallback_for_invalid_request is not None
-      and resolve_workspace({"workspace": str(ROOT)}, None, "",
+      and resolve_workspace({"workspace": str(ROOT.parent)}, None, "",
                             request_workspace=str(ROOT))[1] == "request")
+
+# ── 4. UI default vs explicit request (the actual ThinkPad trigger) ─────────
+# The web UI sends the global Workspace field with EVERY run
+# (static/app.js: `workspace: S.workspace || ''`). Treating that as an explicit
+# request is what broke the chat's own workspace and the stale-path case.
+_src_wsr = (ROOT / "utils" / "workspace_resolve.py").read_text(encoding="utf-8",
+                                                               errors="replace")
+check("the UI value is compared against the setting",
+      "_explicit_req = bool(_req) and _req != _ui_raw" in _src_wsr)
+check("a request identical to the UI setting is not explicit",
+      resolve_workspace({"workspace": str(ROOT)}, None, "",
+                        request_workspace=str(ROOT))[1] == "ui_setting")
+check("a chat workspace beats the UI value sent in the body",
+      resolve_workspace({"workspace": str(ROOT)}, {"workspace": str(ROOT.parent)},
+                        "", request_workspace=str(ROOT))[1] == "chat_ctx")
+check("a STALE UI value no longer empties the workspace",
+      resolve_workspace({"workspace": _bad}, None, "",
+                        request_workspace=_bad)[1] != "request_invalid")
+check("an explicit request still wins over the setting",
+      resolve_workspace({"workspace": _bad}, None, "",
+                        request_workspace=str(ROOT))[1] == "request")
+check("an explicit invalid request is still refused",
+      resolve_workspace({"workspace": str(ROOT)}, None, "",
+                        request_workspace=_bad)[1] == "request_invalid")
+check("the UI really sends the global field",
+      "workspace: S.workspace || ''" in
+      (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace"))
+
 check("chat_run gates the fallback on an interactive chat",
       '_ws_src == "request_invalid" and chat_id' in _src_cr)
 check("chat_run keeps auto-commit off in that case",

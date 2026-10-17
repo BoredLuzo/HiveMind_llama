@@ -99,15 +99,33 @@ def resolve_workspace(
     # ignored entirely and runs silently landed in "last used" (the
     # gravSandbox contamination: a stray API run committed 1186 files there).
     _req = str(request_workspace or "").strip()
-    if _req and _valid_dir(_req):
+    # UI-DEFAULT-IS-NOT-A-REQUEST (2026-10-17, ThinkPad regression on 1.3.9:
+    # "the model forgets the workspace, before that it worked"): the web UI sends
+    # the *global* Workspace field with EVERY run, so treating it as an explicit
+    # request made that field override a chat's own workspace and bypass the
+    # workspace_force_ui check - and a stale value (a folder that only exists on
+    # another machine) left the run with no workspace at all. A value identical to
+    # the UI setting carries no new information: fall through to the normal chain
+    # (task path > chat workspace > UI setting > last used). Only a value that
+    # DIFFERS from the setting is an explicit request (API callers, "run this in
+    # <dir>"), and only that keeps the strict behaviour below.
+    _ui_raw = str((settings or {}).get("workspace") or "").strip()
+    _explicit_req = bool(_req) and _req != _ui_raw
+    if _explicit_req and _valid_dir(_req):
         return str(Path(_req).resolve()), "request"
-    if _req:
+    if _explicit_req:
         logger.warning(
             "[WS-RESOLVE] request workspace '%s' does not exist or is not a "
             "directory - ignoring it (run will NOT auto-commit anywhere)",
             _req[:120],
         )
         return "", "request_invalid"
+    if _req:
+        logger.info(
+            "[WS-RESOLVE] /stream workspace equals the UI setting - treated as "
+            "the UI default, the normal chain decides (%s)",
+            _req[:120],
+        )
 
     _mode = str((settings or {}).get("mode") or "").strip().lower()
     _force = bool(settings.get("workspace_force_ui")) if force is None else bool(force)
