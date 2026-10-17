@@ -109,11 +109,20 @@ def _code(fn):
 
 
 check("disabled -> STT_DISABLED", _code(lambda: E.transcribe("x.wav", settings={})) == "STT_DISABLED")
-check("enabled without binaries -> STT_NO_ENGINE",
-      _code(lambda: E.transcribe("x.wav", settings={"stt_enabled": True,
-                                                    "stt_model": "tiny"})) == "STT_NO_ENGINE")
+_empty_root = Path(tempfile.mkdtemp())
+with mock.patch.object(E, "stt_root", return_value=_empty_root):
+    check("enabled without binaries -> STT_NO_ENGINE",
+          _code(lambda: E.transcribe("x.wav", settings={"stt_enabled": True,
+                                                        "stt_model": "tiny"})) == "STT_NO_ENGINE")
+
+import wave as _wave  # noqa: E402
 
 _fake_wav = Path(tempfile.mkstemp(suffix=".wav")[1])
+with _wave.open(str(_fake_wav), "wb") as _wf:
+    _wf.setnchannels(1)
+    _wf.setsampwidth(2)
+    _wf.setframerate(16000)
+    _wf.writeframes(b"\x00\x00" * 160)
 with mock.patch.object(E, "binary_path", return_value=Path(sys.executable)), \
      mock.patch.object(E, "model_path", return_value=Path(sys.executable)):
     with mock.patch.object(E.subprocess, "run",
@@ -149,6 +158,14 @@ check("no shell=True anywhere", "shell=True" not in src)
 check("preload has no server for parakeet",
       E.preload({"stt_enabled": True, "stt_model": "parakeet-q4k"}) is False)
 E.stop_warm()
+
+
+check("a non-WAV file is refused with a clear code",
+      _code(lambda: E.transcribe(Path(tempfile.mkstemp(suffix=".ogg")[1]),
+                                 settings={"stt_enabled": True, "stt_model": "tiny"})) == "STT_DECODE_FAILED")
+check("is_wav_file accepts a real WAV", E.is_wav_file(_fake_wav))
+check("is_wav_file rejects garbage",
+      not E.is_wav_file(Path(tempfile.mkstemp(suffix=".bin")[1])))
 
 print()
 print(f"SUMMARY stt_engine: {passed} passed, {failed} failed")

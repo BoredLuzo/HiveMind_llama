@@ -243,6 +243,17 @@ def is_blank_transcript(text: str) -> bool:
 
 
 # ── the engine ──────────────────────────────────────────────────────────────
+
+def is_wav_file(path) -> bool:
+    """True for a RIFF/WAVE file (cheap magic check, never raises)."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(12)
+    except OSError:
+        return False
+    return head[:4] == b"RIFF" and head[8:12] == b"WAVE"
+
+
 def build_argv(engine: str, exe: Path, model: Path, wav: Path, *, threads: int,
                language: str = "en") -> list[str]:
     """argv for one transcription (list form only - never a shell string)."""
@@ -282,6 +293,16 @@ def transcribe(wav_path: str | Path, *, settings: dict | None = None,
     wav = Path(wav_path)
     if not wav.is_file():
         raise SttError("STT_DECODE_FAILED", f"audio file not found: {wav.name}")
+    # WAV-ONLY (2026-10-17, e2e finding): both CLIs read WAV natively and nothing
+    # else without ffmpeg. Handed a real Ogg/Opus they fail *silently* (miniaudio
+    # yields no samples) and the run looked like "no speech detected". Say what
+    # is actually wrong: decode with core.stt_audio first.
+    if not is_wav_file(wav):
+        raise SttError(
+            "STT_DECODE_FAILED",
+            f"{wav.name} is not a WAV file - decode it with core.stt_audio first "
+            "(the CLI reads WAV only without ffmpeg)",
+        )
 
     argv = build_argv(m.engine, exe, mp, wav,
                       threads=resolve_threads(settings),

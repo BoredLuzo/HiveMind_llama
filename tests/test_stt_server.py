@@ -95,8 +95,10 @@ check("requirements.txt mentions the voice extra", "soundfile" in src("requireme
 check("pyproject has a voice extra",
       "voice = [" in src("pyproject.toml") and "soundfile>=0.13" in src("pyproject.toml"))
 fetch = src("deploy/fetch_whisper.py")
-check("the fetcher resolves the whisper.cpp release",
-      "api.github.com/repos/ggml-org/whisper.cpp/releases/latest" in fetch)
+check("the fetcher resolves the whisper.cpp release list",
+      "api.github.com/repos/ggml-org/whisper.cpp/releases" in fetch)
+check("the fetcher handles the b#### build tags, not only /latest",
+      "def pick_release" in fetch and "_build_number" in fetch)
 check("the fetcher downloads from the model repos",
       "huggingface.co/{repo}/resolve/main/{name}" in fetch)
 check("the fetcher supports cpu and blas", '"cpu"' in fetch and '"blas"' in fetch)

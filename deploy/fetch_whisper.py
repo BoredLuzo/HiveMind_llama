@@ -43,7 +43,7 @@ from core.stt_engine import (  # noqa: E402
     MODELS, binary_path, model_path, resolve_model, stt_root,
 )
 
-RELEASE_API = "https://api.github.com/repos/ggml-org/whisper.cpp/releases/latest"
+RELEASE_API = "https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=20"
 HF_BASE = "https://huggingface.co/{repo}/resolve/main/{name}"
 UA = {"User-Agent": "HiveMind-FetchWhisper"}
 
@@ -58,6 +58,34 @@ ASSETS = {
 }
 MIN_BINARY_BYTES = 1 * 1024 * 1024      # a whisper.cpp zip is 8-21 MB
 MIN_MODEL_BYTES = 50 * 1024 * 1024      # the smallest model is 74 MB
+
+
+def _build_number(tag: str) -> int:
+    """Build number from a release tag like ``b5454`` (0 when it has none)."""
+    m = re.match(r"^b(\d+)$", (tag or "").strip(), re.IGNORECASE)
+    return int(m.group(1)) if m else 0
+
+
+def pick_release(releases: list[dict], rx) -> tuple[dict, dict] | None:
+    """Release + asset for this platform, newest BUILD first.
+
+    ``/releases/latest`` is not enough: the newest tag (v1.9.x) carries no
+    binaries - the Windows/Linux assets hang off the ``b####`` build tags. So
+    scan the release list and take the highest build number that actually has a
+    matching asset.
+    """
+    best: tuple[int, dict, dict] | None = None
+    for rel in releases or []:
+        asset = next((a for a in (rel.get("assets") or [])
+                      if rx.match(a.get("name") or "")), None)
+        if not asset:
+            continue
+        build = _build_number(rel.get("tag_name") or "")
+        if best is None or build > best[0]:
+            best = (build, rel, asset)
+    if best is None:
+        return None
+    return best[1], best[2]
 
 
 def _http_json(url: str) -> dict:
@@ -108,15 +136,19 @@ def install_binaries(backend: str, force: bool = False) -> bool:
         return True
     rx = ASSETS.get((os_tag, backend)) or ASSETS.get((os_tag, "cpu"))
     try:
-        rel = _http_json(RELEASE_API)
+        releases = _http_json(RELEASE_API)
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        print(f"[ERROR] could not read the whisper.cpp release: {exc}")
+        print(f"[ERROR] could not read the whisper.cpp releases: {exc}")
         return False
-    asset = next((a for a in rel.get("assets") or [] if rx.match(a.get("name", ""))), None)
-    if not asset:
-        names = ", ".join(a.get("name", "?") for a in (rel.get("assets") or [])[:12])
-        print(f"[ERROR] no asset for {os_tag}/{backend}. Release has: {names}")
+    if isinstance(releases, dict):
+        releases = [releases]
+    picked = pick_release(releases, rx)
+    if not picked:
+        have = ", ".join(a.get("name", "?") for r in releases
+                         for a in (r.get("assets") or [])[:4])[:400]
+        print(f"[ERROR] no asset for {os_tag}/{backend}. Seen assets: {have}")
         return False
+    rel, asset = picked
     print(f"[..] {rel.get('tag_name')} -> {asset['name']}")
     with tempfile.TemporaryDirectory() as tmp:
         arc = Path(tmp) / asset["name"]
