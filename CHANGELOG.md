@@ -152,6 +152,18 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   a phone-only flow speaks in about a second instead of paying the cold start. The
   gateway calls the new `POST /tts/preload` right after the user turn is written.
 
+- **A broken Python environment is diagnosed instead of guessed.** A fresh
+  1.3.8 install on Python 3.14 reported `cannot import name 'ArgsKwargs' from
+  'pydantic_core._pydantic_core'`; the repair reinstalled the pair, pip said OK and
+  the import still failed, so the only advice left was "delete .venv". The
+  launcher's env check now prints the interpreter, the pydantic/core versions and
+  the compiled module's size, names a shadowing copy, reinstalls **wheels only**
+  (`--only-binary :all:` - a source build is how a half-written extension
+  happens), and then walks the real causes in order: antivirus quarantine, a
+  mismatched pair, a fresh venv, a fresh folder. `pydantic>=2.11` is now an
+  explicit dependency, because an old `pydantic_core` next to a new `pydantic` is
+  exactly what raises that error.
+
 ### Notes
 
 - English only. Speech to text models: `parakeet-q4k` 396 MB (3.6 % micro-WER),

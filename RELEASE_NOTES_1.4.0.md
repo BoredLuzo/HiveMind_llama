@@ -72,6 +72,13 @@ the optional parts.
 
 ## Also fixed
 
+- **A broken Python environment is diagnosed, not guessed.** A fresh install on
+  Python 3.14 hit `cannot import name 'ArgsKwargs' from
+  'pydantic_core._pydantic_core'`; the old repair reinstalled the pair, pip said OK
+  and the import still failed, leaving "delete .venv" as the only advice. The env
+  check now prints the interpreter, the pydantic/core versions and the compiled
+  module's size, reinstalls **wheels only** and then names the real causes in
+  order (antivirus quarantine, mismatched pair, fresh venv, fresh folder).
 - **Every `/stt` request returned "no speech"**: the temp WAV kept a leaked file
   descriptor open, so the transcript engine could not read it. Found on the first
   real request, fixed with a regression test (the decoded file must be readable
