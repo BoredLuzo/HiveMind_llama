@@ -26,6 +26,10 @@ dev = [
 ]
 
 [project.optional-dependencies]
+voice = [
+    "soundfile>=0.13",
+    "numpy>=2.0",
+]
 browser = [
     "playwright>=1.45",
 ]

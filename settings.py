@@ -317,6 +317,18 @@ DEFAULT_SETTINGS = {
     # J) WEBSEARCH & SEARXNG
     # ════════════════════════════════════════════════════════════════════════
     "searxng_host":            "http://localhost:8888",
+    # --- Voice: speech-to-text (1.4, English only) -----------------------
+    # Owner decisions 2026-10-17 (docs/plan_1.4_voice.md): English only, one
+    # CLI call per request, model tier chosen by RAM unless set explicitly.
+    "stt_enabled":              False,
+    "stt_model":                "",      # "" = RAM default (parakeet q4_k >= 8 GB)
+    "stt_language":             "en",    # 1.4 ships en only
+    "stt_threads":              0,        # 0 = min(4, cpu//2)
+    "stt_preload":              False,    # warm whisper-server (whisper models only)
+    "stt_max_seconds":          300,
+    "stt_timeout_s":            120,
+    "stt_log_transcripts":      False,
+
     # Only bing + duckduckgo answer reliably on stock SearXNG instances:
     # google sits CAPTCHA-suspended, wikipedia returns 0 under most language
     # tags, github floods the ranking with 30 keyword-matched repos per query.

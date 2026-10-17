@@ -1999,6 +1999,56 @@ async def health():
 # freshness + process-name check (recycled-pid guard). Loopback +
 # Host-allowlist trust only, same as every other engine endpoint.
 
+# ── Speech-to-text (1.4) ────────────────────────────────────────
+# English only in 1.4 (owner decision, docs/plan_1.4_voice.md). The audio is
+# the RAW REQUEST BODY, not a multipart upload: that keeps python-multipart out
+# of the dependency list and lets the browser POST a Blob directly.
+# Formats: anything libsndfile reads (WAV from the UI, Ogg/Opus from Telegram).
+# The Telegram path calls core.stt_engine directly instead of going over HTTP.
+
+@app.get("/stt/status")
+async def stt_status():
+    """What the Voice card shows: engine/model presence, tier, defaults."""
+    try:
+        from core import stt_engine
+        return stt_engine.status(load_settings())
+    except (ImportError, OSError, ValueError, TypeError, RuntimeError, KeyError) as exc:
+        return JSONResponse({"enabled": False, "error": str(exc)[:200]}, status_code=200)
+
+
+@app.post("/stt")
+async def stt_transcribe(request: Request):
+    """Transcribe one audio blob (raw body) -> {"text": ...} or {"code": ...}."""
+    from core import stt_audio, stt_engine
+
+    settings = load_settings()
+    if not settings.get("stt_enabled", False):
+        return JSONResponse(stt_engine.SttError(
+            "STT_DISABLED", "speech-to-text is disabled in the settings").as_dict(),
+            status_code=409)
+    try:
+        max_seconds = int(settings.get("stt_max_seconds") or
+                          stt_audio.DEFAULT_MAX_SECONDS)
+    except (TypeError, ValueError):
+        max_seconds = stt_audio.DEFAULT_MAX_SECONDS
+    wav_path = None
+    try:
+        raw = await request.body()
+        wav_path, duration = stt_audio.to_wav16k(raw, max_seconds=max_seconds)
+        text = stt_engine.transcribe(wav_path, settings=settings)
+        if not settings.get("stt_log_transcripts", False):
+            _logger.info("[STT] transcribed %.1fs -> %d chars", duration, len(text))
+        else:
+            _logger.info("[STT] transcript: %s", text[:400])
+        return JSONResponse({"text": text, "duration": round(duration, 2),
+                             "language": stt_engine.resolve_language(settings)})
+    except stt_engine.SttError as exc:
+        _logger.warning("[STT] %s", exc)
+        return JSONResponse(exc.as_dict(), status_code=400)
+    finally:
+        stt_audio.cleanup(wav_path)
+
+
 @app.post("/gateway/heartbeat", include_in_schema=False)
 async def gateway_heartbeat(req: Request):
     try:

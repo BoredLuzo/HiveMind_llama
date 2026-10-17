@@ -213,6 +213,14 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `websearch_auto_trigger` | bool | `True` | — |
 | `workspace` | str | `""` | — |
 | `workspace_force_ui` | bool | `True` | — |
+| `stt_enabled` | bool | `False` | Voice card | Speech-to-text master switch (English only in 1.4). Needs the whisper.cpp binaries: `python deploy/fetch_whisper.py`. |
+| `stt_model` | str | `""` | Voice card | Model tier. `""` = RAM default (parakeet q4_k on >= 8 GB, else whisper base). Keys: `parakeet-q4k`, `base`, `tiny`, `small`. |
+| `stt_language` | str | `"en"` | Voice card | 1.4 ships English only; any other value degrades to `en` (the whisper server would otherwise translate on its own). |
+| `stt_threads` | int | `0` | Voice card | Worker threads for the CLI. `0` = `min(4, cpu_count//2)`. |
+| `stt_preload` | bool | `False` | Voice card | Keep a warm `whisper-server` for whisper models (parakeet has no server and loads in well under a second). Falls back to the CLI when the warm path fails. |
+| `stt_max_seconds` | int | `300` | Voice card | Longest accepted audio; longer voice notes are refused with a clear message. The decoder also caps the byte size (20 MB, the Telegram download limit). |
+| `stt_timeout_s` | int | `120` | — | Hard per-request timeout; the child process is killed. |
+| `stt_log_transcripts` | bool | `False` | — | Write the transcript into `logs/`. Off by default: transcripts are content, not diagnostics. |
 
 ## Audit disclosure
 

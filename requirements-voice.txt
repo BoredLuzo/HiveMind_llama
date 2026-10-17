@@ -1,0 +1,13 @@
+# Optional voice dependencies (speech-to-text audio decode + TTS Opus encode).
+#
+#   python -m pip install -r requirements-voice.txt
+#
+# `soundfile` ships libsndfile inside its wheel (~2 MB) and covers the two
+# formats that matter: Ogg/Opus (what Telegram sends, what sendVoice requires)
+# and WAV (what the UI push-to-talk button records). numpy resamples to the
+# 16 kHz mono that whisper.cpp and parakeet.cpp want.
+#
+# Without these packages HiveMind still starts and runs: the Voice card reports
+# STT_NO_AUDIO_LIB with this install command instead of failing at import.
+soundfile>=0.13
+numpy>=2.0

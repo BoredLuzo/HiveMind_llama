@@ -1,8 +1,25 @@
 # 1.4 voice build plan — STT (whisper.cpp) + TTS (Pocket TTS)
 
-Status: **draft for owner sign-off** (2026-10-17). Nothing here is implemented yet
-except the measurements in `STTEngineTest/RESULTS.md`, which this plan is built
-on. Dev-only doc (export-ignored, never in a release zip).
+Status: **signed off 2026-10-17** (owner answers in §0a). V0 (STT core) is
+implemented: `deploy/fetch_whisper.py`, `core/stt_engine.py`, `core/stt_audio.py`,
+`POST /stt` + `GET /stt/status`, three suites. Everything else is still plan.
+Dev-only doc (export-ignored, never in a release zip).
+
+## 0a. Owner decisions (2026-10-17) — FINAL
+
+| # | Decision | Answer |
+|---|---|---|
+| 1 | STT tiers | **English only** in 1.4. Parakeet v3 q4_k is the default on a >= 8 GB machine, whisper base the light fallback below that. No German/multi-language promise in this release. |
+| 2 | Process model | Spawn-per-request, **plus a preload toggle** (`stt_preload`): a warm `whisper-server` for whisper models, a no-op for parakeet (it loads in < 1 s and has no server binary). |
+| 3 | UI push-to-talk | Browser-side WAV encoding, no new dependency. |
+| 4 | TTS runtime | `uvx pocket-tts serve` (isolated environment, PyTorch never enters HiveMind's venv). `tts-venv/` stays the documented fallback. |
+| 5 | Voices | **English only**; female voices first (several to pick from in-app), one serious male voice as the alternative; no cloning. |
+| 6 | Order | STT first (V0-V3), TTS (V4-V5) in the same release if it lands in time. |
+
+Consequences of "English only": the German TTS model and the 24-layer variants
+drop out of 1.4, the voice catalog is one language, and the per-voice licenses
+stay simple (Kyutai's English premade voices). The STT side never has to deal
+with the whisper server's translate-on-auto behaviour either.
 
 ## 0. Answers to the open questions first
 
@@ -192,13 +209,16 @@ supervisor code.
 
 ### 4.2 Voices and languages
 
-- Languages for 1.4: **English (default) and German**, one model config each
-  (`--language english`, `--language german`); the 24-layer variants stay a
-  setting for later.
-- Voices: curated default per language (`alba` for English, `juergen` for
-  German), plus a dropdown built from the engine's own catalog *for the selected
-  language* - so more voices cost settings, not code. `tts_voice` is the only
-  new voice setting.
+- Language for 1.4: **English only** (owner decision). One model config, one
+  voice catalog; the German config and the 24-layer variants stay a setting for
+  later.
+- Voices (owner: "sexy female voices, otherwise one serious male voice"): ship a
+  **female-first shortlist** - `alba` (the reference voice), `anna`, `cosette`,
+  `eve`, `jane`, `vera` - plus one serious male alternative (`bill_boerst` or
+  `jean`). The dropdown is fed from the engine catalog, so adding a voice later
+  is a settings change, not code; `tts_voice` is the only new voice setting.
+  **The pick must be made by ear**: V4 generates one sample per candidate and the
+  owner chooses - nothing is picked from a name alone.
 - Voice embedding export (`export-voice`) is done once per voice and cached as
   safetensors next to the model, so switching voices is a fast load, not a
   re-clone.
