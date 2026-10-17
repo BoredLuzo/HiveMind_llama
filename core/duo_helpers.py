@@ -711,6 +711,33 @@ CODER_VISION_NOTE = (
     "details (layout, texts, colors, shapes) in your work.")
 
 
+CPU_CTX_WARN_TOKENS = 32768
+
+
+def cpu_prefill_warning(ctx_tokens, backend: str = "") -> str:
+    """Warn when a CPU-only install is configured with a large context.
+
+    TIME-NOT-SIZE (2026-10-17, ThinkPad report "1500 s for one write_file with a
+    2B model"): without GPU offload every prompt token is processed on the CPU,
+    so n_ctx stops being a memory setting and becomes a *time* setting - the
+    first prompt alone can take many minutes and each re-prefill repeats it. The
+    failure looks like a hang, not like a wrong setting, so say it once with the
+    real number. Returns "" when there is nothing to warn about.
+    """
+    try:
+        _ctx = int(ctx_tokens or 0)
+    except (TypeError, ValueError):
+        return ""
+    if str(backend or "").strip().lower() != "cpu":
+        return ""
+    if _ctx <= CPU_CTX_WARN_TOKENS:
+        return ""
+    return (f"CPU inference with ctx={_ctx}: there is no GPU offload, so the "
+            f"first prompt alone can take many minutes and every re-prefill "
+            f"repeats it. 8k-16k is the practical range on a laptop CPU; raise "
+            f"it only when the model runs on a GPU.")
+
+
 def vision_note_for_coder(img_plan: dict, coder_slot_vision) -> str:
     """The [VISION] note, but only when the coder slot is CONFIRMED to run
     with its projector (slot.vision_active is True, set from

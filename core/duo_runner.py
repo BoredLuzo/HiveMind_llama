@@ -1374,6 +1374,20 @@ async def run_code_duo(ctx):
                 )
             except Exception:
                 pass
+            # CPU-CONTEXT-GUARD (2026-10-17, ThinkPad report "1500 s for one
+            # write_file with a 2B model"): on a CPU-only install the ctx setting
+            # is a *time* setting - the first prompt alone can take many minutes
+            # and every re-prefill repeats it. Say so once, with the number, so
+            # the fix (smaller ctx) is obvious instead of looking like a hang.
+            try:
+                from core.duo_helpers import cpu_prefill_warning as _cpu_warn
+                from backend.llama_config import GPU_BACKEND as _gpu_backend
+                _pw = _cpu_warn(_exec_ctx, _gpu_backend)
+                if _pw:
+                    logger.warning("[PERF-WARN] %s", _pw)
+                    yield await ctx.emit({"type": "status", "content": "⚠ " + _pw})
+            except (ImportError, AttributeError, TypeError, ValueError):
+                pass
             _runtime_profile = ctx.resolve_duo_runtime_profile(
                 None, important_task=False, until_finished=ctx.duo_config.until_finished,
             )

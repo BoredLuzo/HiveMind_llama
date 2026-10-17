@@ -343,7 +343,22 @@ async def run_stream(
         return
     # ENV-Sync: Subprozesse (run_bash/run_python/browser) + Fallback-Lesezugriffe
     _sync_env_workspace(_ws_str)
-    _save_last_ws(_ws_str)
+    # WS-FALLBACK-WARN (2026-10-17, ThinkPad report "the model forgets the
+    # workspace"): with nothing configured the resolver falls back to the
+    # process CWD (= the install folder) and the run then persists THAT as
+    # "last used" - so one accidental run pins the install directory as the
+    # workspace for every later run and the model keeps writing next to the
+    # app. Never persist a fallback, and say it out loud once per run.
+    if _ws_src == "cwd_fallback":
+        logger.warning(
+            "[WS-RESOLVE] no workspace configured - using the engine directory "
+            "%s. Set the 'Workspace' field in the UI (per chat) so files land "
+            "where you expect; this fallback is NOT saved as last-used.",
+            _ws_str,
+        )
+        _ws_commit_allowed = False
+    else:
+        _save_last_ws(_ws_str)
     logger.warning("[RUN-TRACE] workspace=%s (source=%s)", _ws_str, _ws_src)
 
     _exec_ctrl                = None  # duo_runner / pipeline_runner

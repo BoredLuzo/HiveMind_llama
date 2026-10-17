@@ -78,6 +78,7 @@ SUITES = [
     ("harness_stats",             "tests/test_harness_stats.py",             60),
     ("readme_currency",           "tests/test_readme_currency.py",           60),
     ("searxng_bat",                "tests/test_searxng_bat.py",               90),
+    ("workspace_cpu_guards",       "tests/test_workspace_and_cpu_guards.py",   30),
     ("injection_budget",          "tests/test_injection_budget.py",             60),
     ("vision_strict",             "tests/test_vision_strict.py",                60),
     ("env_check",                 "tests/test_env_check.py",                   120),
