@@ -216,7 +216,8 @@ from routers import vram_router
 from routers import websearch_router
 from routers import skills_router
 from routers import debug_router, models_router
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse
+from fastapi.responses import (HTMLResponse, StreamingResponse, JSONResponse,
+                            FileResponse, Response)
 
 _logger = logging.getLogger("hivemind.server")
 
@@ -2014,6 +2015,75 @@ async def stt_status():
         return stt_engine.status(load_settings())
     except (ImportError, OSError, ValueError, TypeError, RuntimeError, KeyError) as exc:
         return JSONResponse({"enabled": False, "error": str(exc)[:200]}, status_code=200)
+
+
+# ── Text-to-speech (1.4) ────────────────────────────────────────
+# Opt-in: nothing starts until tts_enabled is on. The sidecar is Pocket TTS in an
+# isolated uv environment (uvx), so PyTorch never enters HiveMind's venv.
+
+@app.get("/tts/status")
+async def tts_status():
+    """Voice card status: enabled, sidecar running, voice, speed, uv present."""
+    try:
+        from core import tts_engine
+        return tts_engine.status(load_settings())
+    except (ImportError, OSError, ValueError, TypeError, RuntimeError, KeyError) as exc:
+        return JSONResponse({"enabled": False, "error": str(exc)[:200]}, status_code=200)
+
+
+@app.get("/tts/voices")
+async def tts_voices():
+    """The curated voices (the sidecar's catalog is bigger; this is the shipped set)."""
+    from core import tts_engine
+    return JSONResponse({"default": tts_engine.DEFAULT_VOICE,
+                         "voices": tts_engine.status({})["voices"]})
+
+
+@app.post("/tts")
+async def tts_speak(request: Request):
+    """{"text": ..., "voice"?: ..., "speed"?: ..., "format"?: "wav"|"opus"} -> audio."""
+    from core import tts_audio, tts_engine
+
+    settings = load_settings()
+    if not settings.get("tts_enabled", False):
+        return JSONResponse(tts_engine.TtsError(
+            "TTS_DISABLED", "text-to-speech is disabled in the settings").as_dict(),
+            status_code=409)
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    text = str(body.get("text") or "").strip()
+    if not text:
+        return JSONResponse(tts_engine.TtsError("TTS_EMPTY", "nothing to say").as_dict(),
+                            status_code=400)
+    fmt = str(body.get("format") or "wav").lower()
+    try:
+        res = tts_engine.synthesize(text, settings,
+                                    voice=str(body.get("voice") or ""),
+                                    speed=body.get("speed"))
+        if fmt == "opus":
+            payload = tts_audio.to_ogg_opus(res["wav"], 1.0)
+            media = "audio/ogg"
+        else:
+            payload = res["wav"]
+            media = "audio/wav"
+    except tts_engine.TtsError as exc:
+        _logger.warning("[TTS] %s", exc)
+        return JSONResponse(exc.as_dict(), status_code=400)
+    except (ValueError, OSError, RuntimeError) as exc:
+        _logger.warning("[TTS] audio post-processing failed: %s", exc)
+        return JSONResponse(tts_engine.TtsError(
+            "TTS_FAILED", f"audio post-processing failed: {exc}").as_dict(),
+            status_code=500)
+    _logger.info("[TTS] %d chars -> %.1fs %s (%s, %sx)", len(text),
+                 res["duration"], fmt, res["voice"], res["speed"])
+    return Response(content=payload, media_type=media,
+                    headers={"X-HiveMind-Duration": str(res["duration"]),
+                             "X-HiveMind-Voice": res["voice"],
+                             "X-HiveMind-Speed": str(res["speed"])})
 
 
 @app.post("/stt/fetch")

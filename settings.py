@@ -335,6 +335,15 @@ DEFAULT_SETTINGS = {
     "stt_max_seconds":          300,
     "stt_timeout_s":            120,
     "stt_log_transcripts":      False,
+    # --- Voice: text-to-speech (1.4, English, Pocket TTS via uvx) --------
+    # Opt-in like STT: the sidecar (torch) only starts when tts_enabled is on.
+    # Cosette + 1.08x speed are the owner's picks (2026-10-17); Pocket TTS has
+    # no speed parameter, so the factor is applied by HiveMind (WSOLA).
+    "tts_enabled":               False,
+    "tts_voice":                 "cosette",
+    "tts_speed":                 1.08,
+    "tts_timeout_s":             120,
+    "tts_idle_stop_s":           900,
 
     # Only bing + duckduckgo answer reliably on stock SearXNG instances:
     # google sits CAPTCHA-suspended, wikipedia returns 0 under most language

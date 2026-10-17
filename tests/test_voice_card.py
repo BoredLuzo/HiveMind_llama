@@ -57,7 +57,10 @@ for el in ("stt-enabled-toggle", "stt-model-sel", "stt-language-sel",
            "stt-status-line", "stt-status", "stt-options", "stt-test-out",
            "stt-threads-sel", "stt-max-seconds", "stt-download-row"):
     check(f"element {el} present", f'id="{el}"' in card)
-check("no TTS rows yet (no dead controls)", "tts-enabled-toggle" not in card)
+# V4 shipped the TTS block: it must exist with every control wired (the
+# tts_server suite pins the details), and nothing may be a dead row.
+check("the TTS block is present", "tts-enabled-toggle" in card)
+check("the TTS block is wired", "postSettings({tts_enabled:this.checked})" in card)
 check("Telegram is not in this card (opt-in lives in the gateway)",
       "telegram_voice" not in card and "Telegram" in card)
 

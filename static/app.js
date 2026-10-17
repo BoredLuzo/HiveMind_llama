@@ -1119,6 +1119,8 @@ async function loadSettings() {
     S.sttPreload = s.stt_preload === true;
     _syncFlagCheck('duo-coder-after-run-toggle', S.duoCoderAfterRun === 'evict');
     _syncFlagCheck('stt-enabled-toggle', S.sttEnabled);
+    _syncFlagCheck('tts-enabled-toggle', S.ttsEnabled);
+    if (typeof _syncTtsCard === 'function') _syncTtsCard();
     _syncFlagCheck('stt-preload-toggle', S.sttPreload);
     if (typeof _voiceCardRefresh === 'function') _voiceCardRefresh();
     var dpttlEl = document.getElementById('duo-planner-ttl');
@@ -1802,6 +1804,136 @@ async function voiceTestMic() {
 var _micRec = null;
 var _micStream = null;
 var _micChunks = [];
+
+
+// ── V4: text to speech (1.4) ────────────────────────────────────────────────
+// Opt-in like STT: the speaker button and the TTS card only act while
+// tts_enabled is on. Audio is fetched as WAV, converted to speed 1.08 by the
+// engine (WSOLA), and played once - never autoplayed.
+var _ttsAudio = null;
+
+function _voiceStopAudio() {
+  if (_ttsAudio) {
+    try { _ttsAudio.pause(); } catch (e) { /* already stopped */ }
+    _ttsAudio = null;
+  }
+}
+
+async function _ttsFetchBlob(text, opts) {
+  var body = {text: text};
+  if (opts && opts.voice) body.voice = opts.voice;
+  if (opts && opts.speed) body.speed = opts.speed;
+  var r = await fetch('/tts', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) {
+    var j = null;
+    try { j = await r.json(); } catch (e) { j = null; }
+    throw new Error(_ttsErrorText(j));
+  }
+  return r.blob();
+}
+
+function _ttsErrorText(j) {
+  if (!j) return 'the TTS engine did not answer';
+  var map = {
+    TTS_DISABLED: 'text to speech is off in the settings',
+    TTS_NO_UV: 'uv is not installed - TTS needs uvx',
+    TTS_EMPTY: 'nothing to speak',
+    TTS_TIMEOUT: 'the engine took too long',
+    TTS_FAILED: 'the engine failed - see logs/pocket_tts.log'
+  };
+  var code = (j && j.code) || '';
+  return map[code] || (j.error || code || 'unknown TTS error');
+}
+
+async function voiceSpeakText(text, btn) {
+  text = String(text || '').trim();
+  if (!text) { showStatus('Nothing to speak'); return; }
+  if (!(S && S.ttsEnabled)) { showStatus('Text to speech is off in the settings'); return; }
+  if (_ttsAudio && btn && btn.classList && btn.classList.contains('playing')) {
+    _voiceStopAudio();
+    btn.classList.remove('playing');
+    return;
+  }
+  if (btn && btn.classList) btn.classList.add('playing');
+  showStatus('Speaking...');
+  try {
+    var blob = await _ttsFetchBlob(text.slice(0, 600), {});
+    _voiceStopAudio();
+    _ttsAudio = new Audio(URL.createObjectURL(blob));
+    _ttsAudio.onended = function () { if (btn && btn.classList) btn.classList.remove('playing'); };
+    await _ttsAudio.play();
+  } catch (e) {
+    if (btn && btn.classList) btn.classList.remove('playing');
+    showStatus('TTS failed: ' + (e && e.message ? e.message : e));
+  }
+}
+
+async function voicePlaySample() {
+  var sel = document.getElementById('tts-voice-sel');
+  var out = document.getElementById('tts-sample-out');
+  var voice = (sel && sel.value) || (S && S.ttsVoice) || '';
+  if (!(S && S.ttsEnabled)) {
+    if (out) out.textContent = 'Enable "Text to speech" first.';
+    return;
+  }
+  if (out) out.textContent = 'Rendering sample...';
+  try {
+    var blob = await _ttsFetchBlob(
+      'Hi, I am the HiveMind voice. This is how I sound when I read your results out loud.',
+      {voice: voice});
+    _voiceStopAudio();
+    _ttsAudio = new Audio(URL.createObjectURL(blob));
+    await _ttsAudio.play();
+    if (out) out.textContent = 'Playing ' + voice + ' at speed ' + (S.ttsSpeed || 1.08) + 'x';
+  } catch (e) {
+    if (out) out.textContent = 'Sample failed: ' + (e && e.message ? e.message : e);
+  }
+}
+
+function _syncTtsCard() {
+  var on = !!(S && S.ttsEnabled);
+  var box = document.getElementById('tts-options');
+  if (box) box.style.display = on ? 'block' : 'none';
+  var btn = document.getElementById('tts-speak-all');
+  if (btn) btn.style.display = on ? '' : 'none';
+  var sel = document.getElementById('tts-voice-sel');
+  if (sel && S.ttsVoice && !sel.value) {
+    var matches = Array.prototype.filter.call(sel.options, function (o) {
+      return o.value === S.ttsVoice;
+    });
+    if (matches.length) sel.value = S.ttsVoice;
+  }
+  var spd = document.getElementById('tts-speed-inp');
+  if (spd && !spd.value) spd.value = (S.ttsSpeed || 1.08);
+}
+
+async function _ttsStatusRefresh() {
+  if (!(S && S.ttsEnabled)) { _syncTtsCard(); return; }
+  var line = document.getElementById('tts-status-line');
+  try {
+    var r = await fetch('/tts/status', {cache: 'no-store'});
+    var st = await r.json();
+    if (line) {
+      if (!st.uv) {
+        line.textContent = 'uv is missing - install it, then TTS works';
+        line.style.color = '#f5c451';
+      } else if (st.running) {
+        line.textContent = 'ready \\u00b7 ' + st.voice + ' \\u00b7 ' + st.speed + 'x';
+        line.style.color = '#6ee7a8';
+      } else {
+        line.textContent = 'engine idle - starts on the first request (~2 s)';
+        line.style.color = '#f5c451';
+      }
+    }
+  } catch (e) {
+    if (line) { line.textContent = 'status unavailable (' + e.message + ')'; }
+  }
+  _syncTtsCard();
+}
 
 function _syncMicBtn() {
   var btn = document.getElementById('mic-btn');
@@ -3590,6 +3722,19 @@ function startAgent(name, model, role, isRepair) {
   }
   const atimer = document.createElement('span'); atimer.className = 'atimer'; atimer.id = tid;
   hdr.appendChild(atimer);
+  // VOICE (1.4): speak button per assistant message. Hidden until TTS is on; it
+  // reads the bubble body at click time, so it works on a still-streaming answer.
+  var _speakBtn = document.createElement('button');
+  _speakBtn.className = 'msg-speak';
+  _speakBtn.type = 'button';
+  _speakBtn.title = 'Speak this answer';
+  _speakBtn.textContent = '\uD83D\uDD0A';
+  _speakBtn.style.display = (typeof S !== 'undefined' && S.ttsEnabled) ? '' : 'none';
+  _speakBtn.onclick = function () {
+    var _body = document.getElementById('ab-' + tid);
+    voiceSpeakText(_body ? _body.innerText : '', _speakBtn);
+  };
+  hdr.appendChild(_speakBtn);
 
   // Loading indicator: after 2s without tokens "Model loading..." appears
   const _lh = document.createElement('span');

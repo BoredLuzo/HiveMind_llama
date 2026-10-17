@@ -1594,6 +1594,50 @@
           </div>
         </details>
       </div>
+      <div class="tgl-row">
+        <span class="tgl-text">Text to speech</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="tts-enabled-toggle"
+            onchange="postSettings({tts_enabled:this.checked}); _syncTtsCard(); _ttsStatusRefresh();">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Speaks answers with a local voice (Pocket TTS, CPU only). Runs in its own uv environment, so nothing is installed into HiveMind itself. Off = no speaker buttons, no process.</div>
+      <div id="tts-options" class="tgl-sub" style="display:none">
+        <div class="tgl-row" style="align-items:flex-start">
+          <span class="tgl-text" style="max-width:150px">Engine</span>
+          <div id="tts-status" style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.5;color:#8f9bb3">
+            <div id="tts-status-line">&mdash;</div>
+          </div>
+        </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Voice</span>
+          <select id="tts-voice-sel" onchange="postSettings({tts_voice:this.value}); S.ttsVoice=this.value; _syncTtsCard();"
+            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:190px;flex-shrink:0">
+            <option value="cosette">Cosette - female, clear</option>
+            <option value="alba">Alba - female, reference</option>
+            <option value="anna">Anna - female, soft</option>
+            <option value="eve">Eve - female, bright</option>
+            <option value="jane">Jane - female, calm</option>
+            <option value="vera">Vera - female, warm</option>
+            <option value="bill_boerst">Bill Boerst - male, serious</option>
+          </select>
+        </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Speed <em>(pitch stays the same)</em></span>
+          <input id="tts-speed-inp" type="number" min="0.8" max="1.5" step="0.02" value="1.08"
+            onchange="var v=parseFloat(this.value)||1.08; S.ttsSpeed=v; postSettings({tts_speed:v});"
+            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:80px;flex-shrink:0">
+        </div>
+        <div class="tgl-row" style="align-items:flex-start">
+          <span class="tgl-text" style="max-width:150px">Sample</span>
+          <div style="flex:1">
+            <button class="ibtn" onclick="voicePlaySample()" title="Play a sample with the selected voice">&#9654; Play sample</button>
+            <div id="tts-sample-out" style="margin-top:5px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8f9bb3"></div>
+          </div>
+        </div>
+        <div class="fld-hint">Pocket TTS has no speed setting of its own; HiveMind shortens the audio (WSOLA) so the voice gets faster without sounding pitched up. 1.08x is the default.</div>
+      </div>
       <div class="fld-hint" style="margin-top:6px">Telegram voice notes and spoken answers are separate, per-chat switches in the Telegram Gateway card.</div>
     </div>
 
@@ -2126,6 +2170,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261017-08"></script>
+        <script src="/static/app.js?v=20261017-09"></script>
 </body>
 </html>

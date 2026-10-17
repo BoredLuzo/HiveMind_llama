@@ -1389,3 +1389,10 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 #fs-overlay .fs-row.fs-sel{background:#223041;outline:1px solid rgba(240,176,64,.35)}
 #fs-overlay{animation:fs-in .12s ease-out}
 @keyframes fs-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+
+/* VOICE (1.4): per-answer speak button in the agent header. */
+.msg-speak{background:transparent;border:1px solid var(--b2);border-radius:5px;
+  color:var(--tx2);font-size:11px;line-height:1;padding:2px 5px;margin-left:6px;
+  cursor:pointer;flex-shrink:0}
+.msg-speak:hover{border-color:var(--amber);color:var(--amber)}
+.msg-speak.playing{border-color:var(--amber);color:var(--amber);animation:_micPulse 1.1s ease-in-out infinite}

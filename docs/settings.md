@@ -214,6 +214,11 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `workspace` | str | `""` | — |
 | `workspace_force_ui` | bool | `True` | — |
 | `duo_coder_briefing_think_tokens` | int | `1500` | Duo card | Planner thinking is injected into the coder as a briefing only up to this many estimated tokens; above it the coder gets the pure plan (a planner that thinks 8-16k tokens would poison it). `0` = plan only, `-1` = always inject. |
+| `tts_enabled` | bool | `False` | Voice card | Text-to-speech master switch. Starts the Pocket TTS sidecar (isolated uv environment) on the first request; off = no process, no speaker buttons. |
+| `tts_voice` | str | `"cosette"` | Voice card | One of the shipped English voices (`cosette`, `alba`, `anna`, `eve`, `jane`, `vera`, `bill_boerst`). |
+| `tts_speed` | float | `1.08` | Voice card | Playback speed 0.8-1.5. Pocket TTS has no speed parameter, so HiveMind time-stretches the audio (WSOLA, pitch preserved). |
+| `tts_timeout_s` | int | `120` | - | Hard limit per synthesis request. |
+| `tts_idle_stop_s` | int | `900` | - | The sidecar stops itself after this much idle time (it holds torch + the model in RAM while warm). |
 | `stt_enabled` | bool | `False` | Voice card | Speech-to-text master switch (English only in 1.4). Needs the whisper.cpp binaries: `python deploy/fetch_whisper.py`. |
 | `stt_model` | str | `""` | Voice card | Model tier. `""` = RAM default (parakeet q4_k on >= 8 GB, else whisper base). Keys: `parakeet-q4k`, `base`, `tiny`, `small`. |
 | `stt_language` | str | `"en"` | Voice card | Only **English is supported** in 1.4; another two-letter code is passed through as *experimental* (Whisper can transcribe other languages), anything that is not a code degrades to `en`. |
