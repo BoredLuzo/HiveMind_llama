@@ -112,10 +112,11 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
 - The per-answer speaker button moved from the header into a footer under the text
   and only appears once the answer has content - in the header it floated over an
   empty bubble and looked attached to the user's message.
-- **Read aloud starts ~8x sooner**: the text is queued sentence by sentence
-  instead of one 600-character request, so the first sentence is audible after
-  1-2 s instead of waiting for the whole answer to be synthesised. The sidecar is
-  also pre-warmed on page load when TTS is on.
+- **Read aloud starts ~7x sooner**: the text is queued in chunks (first one ~60
+  characters, then up to 240) instead of one 600-character request, the next chunk
+  is fetched while the current one plays, and the engine reuses one keep-alive HTTP
+  client. Measured warm: 49 characters -> 0.9 s, 98 -> 1.6 s, 320 -> 6.5 s before
+  the first sound (the sidecar is pre-warmed on page load when TTS is on).
 - Turning the TTS master on now enables the two answer switches (direct + agentic)
   when none was set, so "voice on" actually speaks without a second visit.
 
