@@ -21,6 +21,25 @@ drop out of 1.4, the voice catalog is one language, and the per-voice licenses
 stay simple (Kyutai's English premade voices). The STT side never has to deal
 with the whisper server's translate-on-auto behaviour either.
 
+## 0c. TTS voice decision (2026-10-17)
+
+* **Voice: `cosette`** (owner, after listening to alba/anna/cosette/eve/jane/vera
+  and bill_boerst). Female, English, the reference render is
+  `tts_samples/cosette.wav`.
+* **Pocket TTS has NO speed/tempo parameter** - verified in the CLI flags and in
+  `TTSModel.generate_audio` (only `max_tokens` / `frames_after_eos`). "Speak a bit
+  faster" is therefore a HiveMind post-process, not a model setting.
+* **Speed = WSOLA time-stretch** (waveform-similarity overlap-add, numpy only, no
+  new dependency): duration changes, pitch does not. Measured on cosette:
+  1.08x -> 5.53 s, 1.12x -> 5.33 s, 1.18x -> 5.06 s, all at F0 94.9 Hz, while a
+  naive resample at 1.12x shifts the pitch to 105.7 Hz (chipmunk) and is only
+  kept as a negative reference.
+* Setting `tts_speed` (default 1.12, range 0.8-1.5), applied after generation and
+  before the ogg/opus encode, with the same WSOLA code the samples were made
+  with. The speed factor belongs in the TTS card next to the voice.
+* Note for Telegram: the voice-note path re-encodes to Ogg/Opus anyway, so the
+  stretch costs no extra format step.
+
 ## 0b. Progress (2026-10-17)
 
 * **V0 done** - `deploy/fetch_whisper.py`, `core/stt_engine.py`, `core/stt_audio.py`,
