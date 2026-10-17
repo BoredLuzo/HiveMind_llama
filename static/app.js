@@ -1952,32 +1952,59 @@ function _readAloud(kind, text) {
   }
   // Keep the kind with the text: a switch flipped off while items are queued
   // must drop exactly those items; a mid-run flip ON takes the next event.
-  // SENTENCE STREAMING (2026-10-18): one request per sentence instead of one
-  // per answer. 320 characters took ~10 s to render before a single syllable was
-  // audible; the first sentence is ready in ~1-2 s and the rest follows while it
-  // plays. The queue already plays items back to back.
-  var _parts = text.match(/[^.!?\n]+[.!?]*[\s]*/g) || [text];
+  // PREFIX-FIRST + PREFETCH (2026-10-18): the very first chunk is deliberately
+  // small (a clause, <=90 chars) - it is the only one the listener waits for.
+  // Everything after it may be longer, because the next chunk is fetched while
+  // the previous one plays.
+  var _parts = text.match(/[^.!?;,\n]+[.!?;,]?[\s]*/g) || [text];
+  var _chunks = [];
   var _buf = '';
+  // MEASURED (2026-10-18, warm sidecar): a 71-character chunk needs ~1.9 s before
+  // it is audible, 146 chars ~3.9 s. The first chunk is therefore kept to ~60
+  // chars (~1.3 s); the model runs at ~1.3-1.9x realtime on CPU, so this is the
+  // floor without streaming the model output.
+  var _limit = 60;                     // first chunk: short, so audio starts fast
   _parts.forEach(function (p) {
-    if ((_buf + p).length > 240 && _buf) {
-      _readAloudQueue.push({kind: kind, text: _buf.trim()});
+    if ((_buf + p).length > _limit && _buf.trim()) {
+      _chunks.push(_buf.trim());
       _buf = p;
+      _limit = 240;                    // after the first, chunks may be bigger
     } else {
       _buf += p;
     }
   });
-  if (_buf.trim()) _readAloudQueue.push({kind: kind, text: _buf.trim()});
-  if (!_readAloudBusy) _readAloudNext();
+  if (_buf.trim()) _chunks.push(_buf.trim());
+  _chunks.forEach(function (c) { _readAloudQueue.push({kind: kind, text: c}); });
+  if (!_readAloudBusy && !_raPending) {
+    var _first = _raTakeNext();
+    if (_first) { _raPending = _raFetch(_first); _readAloudNext(); }
+  }
+}
+
+var _raPending = null;          // {kind, text, promise} already being fetched
+
+function _raFetch(item) {
+  return {kind: item.kind, text: item.text, promise: _ttsFetchBlob(item.text, {})};
+}
+
+function _raTakeNext() {
+  while (_readAloudQueue.length) {
+    var it = _readAloudQueue.shift();
+    if (_readAloudWanted(it.kind)) return it;
+  }
+  return null;
 }
 
 function _readAloudNext() {
-  if (!_readAloudQueue.length) { _readAloudBusy = false; return; }
+  var cur = _raPending;
+  _raPending = null;
+  if (!cur) { _readAloudBusy = false; return; }
   _readAloudBusy = true;
-  var _item = _readAloudQueue.shift();
-  var _kind = (_item && _item.kind) || 'direct';
-  var text = (_item && _item.text) || _item;
-  if (!_readAloudWanted(_kind)) { _readAloudNext(); return; }   // switched off meanwhile
-  _ttsFetchBlob(text, {}).then(function (blob) {
+  // PREFETCH: start the following chunk now, so playback continues without a
+  // synthesis pause. It runs while this one is audible.
+  var follow = _raTakeNext();
+  if (follow) _raPending = _raFetch(follow);
+  cur.promise.then(function (blob) {
     _voiceStopAudio();
     _ttsAudio = new Audio(URL.createObjectURL(blob));
     _ttsAudio.onended = function () { _readAloudNext(); };
@@ -1991,6 +2018,7 @@ function _readAloudNext() {
 
 function _readAloudStop() {
   _readAloudQueue = [];
+  _raPending = null;
   _readAloudBusy = false;
   _voiceStopAudio();
 }

@@ -231,6 +231,18 @@ s = (ROOT / "settings.py").read_text(encoding="utf-8", errors="replace")
 check("all four settings default to False",
       all(('"tts_read_%s"' % k) in s for k in ("direct", "agentic", "ask", "gate")))
 
+
+# ── READ-ALOUD LATENCY (2026-10-18) ───────────────────────────────────────
+check("the first chunk is short (prefix-first)", "_limit = 60;" in app)
+check("later chunks may be longer", "_limit = 240;" in app)
+check("the next chunk is prefetched while one plays",
+      "var follow = _raTakeNext();" in app and "_raPending = _raFetch(follow)" in app)
+check("playing a chunk consumes the prefetched one",
+      "var cur = _raPending;" in app)
+check("Stop clears the pending fetch", "_raPending = null;" in app)
+check("a chunk is fetched before the pump runs",
+      "_raPending = _raFetch(_first); _readAloudNext();" in app)
+
 print()
 print(f"SUMMARY voice_card: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

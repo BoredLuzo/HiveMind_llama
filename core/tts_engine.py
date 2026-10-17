@@ -98,6 +98,7 @@ _state: dict = {
     "log": None,        # kept open by the child, closed on stop
 }
 _lock = threading.RLock()
+_http_client = None
 
 
 # ── settings helpers ────────────────────────────────────────────────────────
@@ -259,6 +260,17 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
     return url
 
 
+def _client():
+    """One keep-alive httpx client for the sidecar (created lazily)."""
+    global _http_client
+    if _http_client is None:
+        import httpx
+        _http_client = httpx.Client(
+            timeout=httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=5.0),
+            limits=httpx.Limits(max_keepalive_connections=4, max_connections=8))
+    return _http_client
+
+
 # ── synthesis ───────────────────────────────────────────────────────────────
 def synthesize(text: str, settings: dict | None = None, *,
                voice: str = "", speed: float | None = None) -> dict:
@@ -283,12 +295,21 @@ def synthesize(text: str, settings: dict | None = None, *,
     except (TypeError, ValueError):
         timeout = 120.0
     try:
-        with httpx.Client(timeout=httpx.Timeout(connect=5.0, read=timeout,
-                                                write=10.0, pool=5.0)) as client:
-            resp = client.post(f"{url}/tts",
-                               data={"text": text, "voice_url": voice})
-            resp.raise_for_status()
-            wav = resp.content
+        # CLIENT-REUSE (2026-10-18): a fresh httpx.Client per request threw the
+        # connection away every time (20-50 ms on top of the model). The read-aloud
+        # asks for one sentence at a time now, so that overhead was a visible part
+        # of the delay before the first sound.
+        import httpx as _httpx_call
+        # the client is shared (keep-alive), but the TIMEOUT is per request: the
+        # settings value must still cut a hanging synthesis (test_tts_engine pins
+        # it with tts_timeout_s=1 against a slow stub).
+        resp = _client().post(
+            f"{url}/tts",
+            data={"text": text, "voice_url": voice},
+            timeout=_httpx_call.Timeout(connect=5.0, read=timeout,
+                                        write=10.0, pool=5.0))
+        resp.raise_for_status()
+        wav = resp.content
     except httpx.TimeoutException as exc:
         raise TtsError("TTS_TIMEOUT", f"the engine took longer than {timeout:.0f}s") from exc
     except httpx.HTTPError as exc:

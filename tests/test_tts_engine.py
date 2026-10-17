@@ -192,6 +192,12 @@ check("idle shutdown exists", "def _maybe_idle_stop" in code)
 check("no shell", "shell=True" not in code)
 
 server.shutdown()
+
+# ── keep-alive client (latency): one client, not one per request ──────────
+check("a single keep-alive client is reused", "def _client()" in code
+      and "_client().post(" in code)
+check("the client is created lazily", "_http_client = None" in code)
+
 print()
 print(f"SUMMARY tts_engine: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
