@@ -126,7 +126,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 > (`KILL_ON_JOB_CLOSE`); on Linux/macOS they are `RLIMIT_AS` / `RLIMIT_NPROC` /
 > `RLIMIT_CPU`, applied only when the value is above 0. `duo_tool_sandbox` itself
 > is Windows-only - the Linux service relies on its systemd `MemoryMax`/`TasksMax`
-> plus the optional rlimits (see `docs/audit_linux.md`).
+> plus the optional rlimits (details: `tools/sandbox.py`, `_posix_preexec`).
 
 | `duo_tree_scout_enabled` | bool | `True` | — |
 | `duo_tree_scout_max_depth` | int | `4` | — |
