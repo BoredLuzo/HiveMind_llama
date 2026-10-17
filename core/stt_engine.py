@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import platform
 import subprocess
 import sys
@@ -96,9 +97,13 @@ MODELS: dict[str, SttModel] = {
     ),
 }
 
-#: 1.4 is English-only (owner decision). Kept as a tuple so the endpoint and the
-#: resolver agree on what is accepted.
+#: **Officially supported** languages (owner decision 2026-10-17): English only.
+#: Other valid two-letter codes pass through as experimental - a later release may
+#: use Whisper's translation ("down the road, if it is good enough"), so the
+#: plumbing must not have to be rewritten for it. Verified: ``-l de`` transcribes
+#: German correctly; only the whisper *server* misbehaves when no language is set.
 LANGUAGES = ("en",)
+_LANG_RE = re.compile(r"^[a-z]{2}$")
 
 #: Fallback tiers by total system RAM (GB). Highest first.
 DEFAULT_BY_RAM = ((8, "parakeet-q4k"), (0, "base"))
@@ -191,11 +196,29 @@ def resolve_model(settings: dict | None = None) -> str:
 
 
 def resolve_language(settings: dict | None = None) -> str:
-    """Always ``en`` in 1.4 (owner decision); off-list values degrade to it."""
+    """Language code for the CLI: ``en`` unless a valid 2-letter code was set.
+
+    Only ``en`` is **officially** supported (docs + tests). A different valid code
+    is allowed through as *experimental* - the point is that a later release can
+    use Whisper's translation without rewriting this module - and anything that is
+    not a language code degrades to ``en``.
+    """
     want = str((settings or {}).get("stt_language") or "").strip().lower()
-    if want and want not in LANGUAGES:
-        logger.info("[STT] language %r is not shipped yet - using en", want)
+    if not want:
+        return "en"
+    if want in LANGUAGES:
+        return want
+    if _LANG_RE.match(want):
+        logger.info("[STT] language %r is experimental (English is the only "
+                    "supported one) - passing it to the engine", want)
+        return want
+    logger.info("[STT] %r is not a language code - using en", want)
     return "en"
+
+
+def resolve_translate(settings: dict | None = None) -> bool:
+    """Whisper translation into English (off by default, English target only)."""
+    return bool((settings or {}).get("stt_translate"))
 
 
 def resolve_threads(settings: dict | None = None) -> int:
@@ -255,12 +278,15 @@ def is_wav_file(path) -> bool:
 
 
 def build_argv(engine: str, exe: Path, model: Path, wav: Path, *, threads: int,
-               language: str = "en") -> list[str]:
+               language: str = "en", translate: bool = False) -> list[str]:
     """argv for one transcription (list form only - never a shell string)."""
     if engine == "parakeet-cli":
         return [str(exe), "-m", str(model), "-f", str(wav), "-t", str(threads)]
-    return [str(exe), "-m", str(model), "-f", str(wav), "-l", language,
+    argv = [str(exe), "-m", str(model), "-f", str(wav), "-l", language,
             "-t", str(threads), "-nt"]
+    if translate:
+        argv.append("--translate")
+    return argv
 
 
 def transcribe(wav_path: str | Path, *, settings: dict | None = None,
@@ -304,9 +330,17 @@ def transcribe(wav_path: str | Path, *, settings: dict | None = None,
             "(the CLI reads WAV only without ffmpeg)",
         )
 
+    _translate = resolve_translate(settings)
+    if _translate and m.engine != "whisper-cli":
+        raise SttError(
+            "STT_TRANSLATE_UNSUPPORTED",
+            f"{m.label} cannot translate - pick a whisper tier (base/tiny/small) or "
+            "turn stt_translate off",
+        )
     argv = build_argv(m.engine, exe, mp, wav,
                       threads=resolve_threads(settings),
-                      language=resolve_language(settings))
+                      language=resolve_language(settings),
+                      translate=_translate)
     try:
         proc = subprocess.run(argv, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=resolve_timeout(settings),

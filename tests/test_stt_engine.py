@@ -72,9 +72,14 @@ check("non-string tiers do not crash", E.resolve_model({"stt_model": None}) == _
 # ── (c) English only ────────────────────────────────────────────────────────
 check("languages shipped is en only", E.LANGUAGES == ("en",))
 check("default language is en", E.resolve_language({}) == "en")
-check("an off-list language degrades to en", E.resolve_language({"stt_language": "de"}) == "en")
-check("even 'auto' is not used (server translation trap)",
-      E.resolve_language({"stt_language": "auto"}) == "en")
+check("a two-letter code passes through as experimental",
+      E.resolve_language({"stt_language": "de"}) == "de")
+check("garbage is not a language and degrades to en",
+      E.resolve_language({"stt_language": "auto"}) == "en"
+      and E.resolve_language({"stt_language": "klingon"}) == "en")
+check("empty language means en", E.resolve_language({"stt_language": ""}) == "en")
+check("translation is off by default", E.resolve_translate({}) is False)
+check("translation is opt-in", E.resolve_translate({"stt_translate": True}) is True)
 
 # ── threads / timeout ───────────────────────────────────────────────────────
 _cpu = os.cpu_count() or 4
@@ -98,6 +103,11 @@ check("whisper argv pins the language", "-l" in argv_wh and "en" in argv_wh)
 check("whisper argv disables timestamps", "-nt" in argv_wh)
 check("argv is a list of strings",
       all(isinstance(a, str) for a in argv_pk + argv_wh))
+check("translate adds the whisper flag",
+      "--translate" in E.build_argv("whisper-cli", _p, _m, _w, threads=4, translate=True)
+      and "--translate" not in E.build_argv("whisper-cli", _p, _m, _w, threads=4))
+check("translate never reaches parakeet",
+      "--translate" not in E.build_argv("parakeet-cli", _p, _m, _w, threads=4, translate=True))
 
 # ── (e) failure codes ───────────────────────────────────────────────────────
 def _code(fn):

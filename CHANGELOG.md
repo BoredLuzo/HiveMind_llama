@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.3.10] - 2026-10-17
+
+Workspace regression fix, plus the first, disabled piece of the voice work.
+
+### Fixed
+
+- **Workspace regression (introduced in 1.3.9).** The web UI sends the global
+  *Workspace* field with every run, and 1.3.9 let that value beat every other
+  source. Consequences on a machine whose settings came from somewhere else: a
+  chat's own workspace was overridden (files landed in the wrong project), and a
+  path that only exists on another machine left the run with **no** workspace at
+  all - `write_file` had no root and the model looked like it had forgotten the
+  project. The UI value is now treated as the default it is; only a value that
+  *differs* from the setting counts as an explicit request.
+- A stale workspace value no longer ends a run empty-handed: the normal chain
+  (task path, chat workspace, UI setting, last used) decides, auto-commit stays
+  off, and the run says which directory it used.
+- A workspace fallback to the engine directory is no longer stored as "last
+  used" - one accidental run used to pin the install folder for every later run.
+- `searxng.bat` no longer closes silently: it probes the Docker **daemon**
+  (not just the CLI on PATH), explains a stopped Docker Desktop, keeps the
+  window open when double-clicked, and reports a stopped container instead of
+  "[OK] SearXNG is running". (This was already in the refreshed 1.3.9 asset; it
+  is part of the release now.)
+- A CPU-only install with a large context now says so (`[PERF-WARN]` with the
+  real number and the practical 8k-16k range) instead of looking like a hang.
+  This is the "one write_file took 25 minutes on a laptop" class of problem.
+
+### Added (off by default, no UI yet)
+
+- Speech-to-text groundwork, English only: `POST /stt` and `GET /stt/status`,
+  `deploy/fetch_whisper.py` to fetch the whisper.cpp / Parakeet binaries and
+  models, and the `stt_*` settings. Nothing runs until `stt_enabled` is turned
+  on, and the optional audio packages are only pulled in by
+  `requirements-voice.txt`. First step of the 1.4 voice work.
+
 ## [1.3.9] - 2026-10-15
 
 Chunk-resume verification run + resume durability:

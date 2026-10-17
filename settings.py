@@ -323,6 +323,7 @@ DEFAULT_SETTINGS = {
     "stt_enabled":              False,
     "stt_model":                "",      # "" = RAM default (parakeet q4_k >= 8 GB)
     "stt_language":             "en",    # 1.4 ships en only
+    "stt_translate":            False,   # whisper --translate (English target; whisper tiers only)
     "stt_threads":              0,        # 0 = min(4, cpu//2)
     "stt_preload":              False,    # warm whisper-server (whisper models only)
     "stt_max_seconds":          300,
