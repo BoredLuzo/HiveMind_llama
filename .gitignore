@@ -16,6 +16,10 @@ logs/
 *.incomplete
 *.lock
 
+# Speech-to-text runtime (binaries + models, fetched by
+# deploy/fetch_whisper.py - never committed, never packaged)
+stt/
+
 # Environment
 .env
 .venv/
