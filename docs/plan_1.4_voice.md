@@ -21,6 +21,20 @@ drop out of 1.4, the voice catalog is one language, and the per-voice licenses
 stay simple (Kyutai's English premade voices). The STT side never has to deal
 with the whisper server's translate-on-auto behaviour either.
 
+## 0b. Progress (2026-10-17)
+
+* **V0 done** - `deploy/fetch_whisper.py`, `core/stt_engine.py`, `core/stt_audio.py`,
+  `POST /stt` + `GET /stt/status`, three suites. Verified end to end with the real
+  binaries and models (parakeet q4_k 2.14 s for a 17.6 s German clip).
+* **V1 done** - the **Voice card** in the settings (opt-in, English, status line,
+  a download button with progress through `POST /stt/fetch`, and a 3 s microphone
+  test that posts WAV and never starts a run). `tests/test_voice_card.py`, 57
+  checks.
+* **Remaining**: V2 push-to-talk in the chat, V3 Telegram voice-in, V4/V5 TTS
+  (Pocket TTS through `uvx`, female-first voice shortlist, speaker button).
+* Telegram audio and spoken answers stay **separate opt-in switches** in the
+  Gateway card, per chat, off by default.
+
 ## 0. Answers to the open questions first
 
 **Does Parakeet run on AMD?** Yes — on the CPU. Every number in the STT spike was
