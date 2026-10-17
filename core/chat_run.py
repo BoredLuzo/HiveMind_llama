@@ -341,6 +341,39 @@ async def run_stream(
         yield await emit(_done_event(0.0, "blocked",
                                     summary=f"Workspace invalid: {str(_wfi.raw)[:120]}"))
         return
+    # REQUEST-INVALID-FALLBACK (2026-10-17, live ThinkPad regression "on 1.3.9
+    # the model forgets the workspace, it worked before"): 1.3.9 lets the
+    # /stream workspace parameter beat every other source (the gravSandbox
+    # incident). Correct for stray API runs - but when the UI keeps sending a
+    # path that no longer exists on THIS machine (another box's folder, a renamed
+    # or moved project), the run lost its workspace entirely: no root for
+    # write_file, and the model looked like it had forgotten the project. 1.3.8
+    # ignored the parameter, which is exactly why it used to work. Interactive
+    # sessions (a chat is in scope) now fall back to the normal chain WITHOUT
+    # auto-commit; stray API runs keep the strict empty-workspace behaviour.
+    if _ws_src == "request_invalid" and chat_id:
+        _ws_commit_allowed = False
+        try:
+            from utils.workspace_resolve import (
+                fallback_for_invalid_request as _fb_invalid,
+            )
+            _fb_ws, _fb_src = _fb_invalid(settings, _chat_ctx_ws, user_input)
+        except (ImportError, AttributeError, TypeError, ValueError):
+            _fb_ws, _fb_src = "", ""
+        if _fb_ws:
+            logger.warning(
+                "[WS-RESOLVE] request workspace %r is invalid on this machine - "
+                "continuing in %s (source=%s, auto-commit stays OFF; fix the "
+                "Workspace field in the UI to silence this)",
+                str(request_workspace)[:120], _fb_ws, _fb_src,
+            )
+            yield await emit({
+                "type": "status",
+                "content": ("\u26a0 The workspace from the request does not exist "
+                            f"on this machine - using {_fb_ws} instead "
+                            "(auto-commit is off)."),
+            })
+            _ws_str, _ws_src = _fb_ws, _fb_src
     # ENV-Sync: Subprozesse (run_bash/run_python/browser) + Fallback-Lesezugriffe
     _sync_env_workspace(_ws_str)
     # WS-FALLBACK-WARN (2026-10-17, ThinkPad report "the model forgets the

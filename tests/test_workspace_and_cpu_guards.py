@@ -19,6 +19,7 @@ write_file done, 1500 s for a write_file with a 2B model".
 
 Run: python tests/test_workspace_and_cpu_guards.py
 """
+import os
 import sys
 from pathlib import Path
 
@@ -84,10 +85,47 @@ check("real workspaces are still persisted",
       _src_cr.count("_save_last_ws(_ws_str)") == 1)
 
 # resolver contract: the fallback is the LAST resort and returns the flag
-from utils.workspace_resolve import resolve_workspace                   # noqa: E402
+from utils.workspace_resolve import (                                    # noqa: E402
+    fallback_for_invalid_request,
+    resolve_workspace,
+)
 _ws, _src = resolve_workspace({}, None, "")
 check("empty settings resolve to the cwd fallback",
       _src == "cwd_fallback", f" (source={_src})")
+
+# ── 3. invalid request workspace (the 1.3.9 ThinkPad regression) ─────────────
+# 1.3.9 made the /stream workspace parameter win over everything. When the UI
+# sends a path that does not exist on this machine, the run lost its workspace
+# entirely ("the model forgot the project", no write_file) while 1.3.8 ignored
+# the parameter and worked. Interactive sessions now fall back, without commit.
+_bad = os.path.join(os.sep, "definitely", "not", "here")
+_ws2, _src2 = resolve_workspace({}, None, "", request_workspace=_bad)
+check("an invalid request workspace is still flagged",
+      _ws2 == "" and _src2 == "request_invalid", f" ({_src2})")
+check("the resolver still refuses to guess (contract kept)",
+      resolve_workspace({"workspace": str(ROOT)}, None, "",
+                        request_workspace=_bad)[1] == "request_invalid")
+_fb_ws, _fb_src = fallback_for_invalid_request({"workspace": str(ROOT)}, None)
+check("an interactive session gets a usable fallback",
+      _fb_ws == str(ROOT) and _fb_src == "ui_setting", f" ({_fb_src})")
+_fb_ws2, _fb_src2 = fallback_for_invalid_request({}, {"workspace": str(ROOT)})
+check("a persisted chat workspace is used when the UI field is empty",
+      _fb_ws2 == str(ROOT) and _fb_src2 == "chat_ctx", f" ({_fb_src2})")
+_fb_ws3, _fb_src3 = fallback_for_invalid_request({}, None)
+check("with nothing configured the fallback is only the cwd",
+      _fb_src3 == "cwd_fallback", f" ({_fb_src3})")
+check("a valid request is never re-routed",
+      fallback_for_invalid_request is not None
+      and resolve_workspace({"workspace": str(ROOT)}, None, "",
+                            request_workspace=str(ROOT))[1] == "request")
+check("chat_run gates the fallback on an interactive chat",
+      '_ws_src == "request_invalid" and chat_id' in _src_cr)
+check("chat_run keeps auto-commit off in that case",
+      _src_cr.count("_ws_commit_allowed = False") >= 2)
+check("chat_run explains the fallback to the user",
+      "does not exist" in _src_cr and "using {_fb_ws} instead" in _src_cr)
+check("chat_run returns a code, not a bare exit",
+      "fallback_for_invalid_request as _fb_invalid" in _src_cr)
 print()
 print(f"SUMMARY workspace_and_cpu_guards: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

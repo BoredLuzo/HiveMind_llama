@@ -203,3 +203,26 @@ def commit_allowed_for(request_workspace: str, chat_ctx: dict | None) -> bool:
         return True
     cw = str(((chat_ctx or {}).get("workspace")) or "").strip()
     return bool(cw and _valid_dir(cw))
+
+def fallback_for_invalid_request(settings, chat_ctx, user_input: str = "") -> tuple[str, str]:
+    """Interactive fallback when the /stream workspace parameter is invalid.
+
+    REQUEST-INVALID-FALLBACK (2026-10-17, live ThinkPad regression): 1.3.9 lets
+    the request parameter beat every other source (gravSandbox fix). When the UI
+    keeps sending a path that does not exist on this machine - another box's
+    folder, a moved project - the run used to lose its workspace completely
+    (no root for write_file, the model looked like it forgot the project), while
+    1.3.8 ignored the parameter and therefore worked. This re-runs the normal
+    chain WITHOUT the request so an interactive session keeps a usable workspace.
+
+    The caller must keep auto-commit off (see chat_run): the safety property of
+    the gravSandbox fix is about committing, not about reading/writing.
+    Returns ("", "") when nothing usable is left.
+    """
+    try:
+        ws, src = resolve_workspace(settings, chat_ctx, user_input)
+    except WorkspaceForceInvalid:
+        return "", ""
+    if not ws or src == "request_invalid":
+        return "", ""
+    return ws, src
