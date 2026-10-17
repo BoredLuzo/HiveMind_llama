@@ -460,6 +460,16 @@
             onchange="S.duoPlannerMaxTokens=parseInt(this.value)||0;postSettings({duo_planner_max_tokens:S.duoPlannerMaxTokens})">
         </div>
 
+        <div class="opt-row" style="margin-top:4px">
+          <div class="opt-row-left">
+            <span class="opt-name">Coder briefing limit</span>
+            <span class="opt-hint">Planner thinking goes to the coder only up to this many tokens &middot; 0 = plan only &middot; -1 = always</span>
+          </div>
+          <input type="number" id="duo-briefing-think-inp" min="-1" step="500" value="1500"
+            style="width:90px;background:var(--bg);border:1px solid var(--b2);border-radius:3px;padding:3px 6px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px"
+            onchange="S.duoBriefingThink=parseInt(this.value);if(isNaN(S.duoBriefingThink))S.duoBriefingThink=1500;postSettings({duo_coder_briefing_think_tokens:S.duoBriefingThink})">
+        </div>
+
         <div class="opt-row" style="margin-top:4px" id="duo-thinking-per-chunk-wrap">
           <div class="opt-row-left">
             <span class="opt-name" id="tpc-label" style="opacity:.4">Per Chunk</span>
@@ -2116,6 +2126,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261017-07"></script>
+        <script src="/static/app.js?v=20261017-08"></script>
 </body>
 </html>

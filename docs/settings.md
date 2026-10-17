@@ -213,6 +213,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `websearch_auto_trigger` | bool | `True` | — |
 | `workspace` | str | `""` | — |
 | `workspace_force_ui` | bool | `True` | — |
+| `duo_coder_briefing_think_tokens` | int | `1500` | Duo card | Planner thinking is injected into the coder as a briefing only up to this many estimated tokens; above it the coder gets the pure plan (a planner that thinks 8-16k tokens would poison it). `0` = plan only, `-1` = always inject. |
 | `stt_enabled` | bool | `False` | Voice card | Speech-to-text master switch (English only in 1.4). Needs the whisper.cpp binaries: `python deploy/fetch_whisper.py`. |
 | `stt_model` | str | `""` | Voice card | Model tier. `""` = RAM default (parakeet q4_k on >= 8 GB, else whisper base). Keys: `parakeet-q4k`, `base`, `tiny`, `small`. |
 | `stt_language` | str | `"en"` | Voice card | Only **English is supported** in 1.4; another two-letter code is passed through as *experimental* (Whisper can transcribe other languages), anything that is not a code degrades to `en`. |

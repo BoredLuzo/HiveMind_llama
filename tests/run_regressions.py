@@ -84,6 +84,7 @@ SUITES = [
     ("stt_server",               "tests/test_stt_server.py",                 60),
     ("voice_card",               "tests/test_voice_card.py",                 45),
     ("websearch_quality",         "tests/test_websearch_quality.py",          60),
+    ("coder_briefing",            "tests/test_coder_briefing.py",             30),
     ("injection_budget",          "tests/test_injection_budget.py",             60),
     ("vision_strict",             "tests/test_vision_strict.py",                60),
     ("env_check",                 "tests/test_env_check.py",                   120),

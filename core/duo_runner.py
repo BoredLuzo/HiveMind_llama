@@ -517,6 +517,70 @@ def _inject_plan_into_coder_msgs(dtool_msgs, plan_result, *, chunking: bool, is_
     return False
 
 
+
+# ── CODER-BRIEFING-STAGE (2026-10-17, owner) ────────────────────────────────
+# The planner's thinking is injected into the coder as "[Plan Briefing —
+# IMPLEMENT THIS]". That is useful while the reasoning is SHORT and pure
+# poisoning when the planner thinks 8-16k tokens first: the coder then gets a
+# wall of speculation instead of a plan, on top of its own prompt.
+# Rule: estimate the thinking size in tokens (chars / measured cpt) and inject it
+# only up to duo_coder_briefing_think_tokens. Above that (or with 0) the coder
+# gets the pure plan text instead, plus one line saying the reasoning was
+# dropped. -1 restores the old "always inject" behaviour.
+BRIEFING_FULL = "full"
+BRIEFING_PLAN_ONLY = "plan-only"
+BRIEFING_OFF = "off"
+BRIEFING_MAX_TOKENS_DEFAULT = 1500
+
+
+def _briefing_limit_tokens(settings: dict | None = None) -> int:
+    try:
+        val = int((settings or {}).get("duo_coder_briefing_think_tokens",
+                                       BRIEFING_MAX_TOKENS_DEFAULT))
+    except (TypeError, ValueError):
+        val = BRIEFING_MAX_TOKENS_DEFAULT
+    return max(-1, min(200_000, val))
+
+
+def _est_tokens(text: str, model: str = "") -> int:
+    chars = len(str(text or ""))
+    if not chars:
+        return 0
+    try:
+        from core.budgets import cpt_for as _cpt_for
+        cpt = float(_cpt_for(model) or 0)
+    except (ImportError, AttributeError, TypeError, ValueError):
+        cpt = 0.0
+    if cpt <= 0:
+        cpt = 3.92
+    return int(chars / cpt)
+
+
+def coder_briefing_text(thinking: str, plan_content: str = "",
+                        subtasks: list | None = None,
+                        settings: dict | None = None,
+                        model: str = "") -> tuple[str, str, int]:
+    """(text_for_coder, mode, thinking_tokens) for the plan briefing.
+
+    mode is "full" (thinking injected), "plan-only" (thinking replaced by the
+    plan) or "off" (nothing to inject). Never raises.
+    """
+    think = str(thinking or "").strip()
+    if not think:
+        return "", BRIEFING_OFF, 0
+    tokens = _est_tokens(think, model)
+    limit = _briefing_limit_tokens(settings)
+    if limit < 0 or tokens <= limit:
+        return think, BRIEFING_FULL, tokens
+    plan = str(plan_content or "").strip()
+    if not plan and subtasks:
+        plan = "\n".join(f"- {str(s).strip()}" for s in subtasks if str(s).strip())
+    note = (f"[Planner reasoning dropped: ~{tokens} tokens is over the "
+            f"{limit}-token briefing limit - implement the PLAN, not the reasoning.]")
+    body = (plan + "\n\n" + note) if plan else note
+    return body, BRIEFING_PLAN_ONLY, tokens
+
+
 def _build_plan_anchor_text(subtasks: list, plan_tracker, plan_content: str = "") -> str:
     # FULL PLAN (2026-10-04, user decision: "600 zu wenig, der fertige Plan
     # soll als Ganzes durchgegeben werden"): the anchor is the ONLY part of
@@ -1014,6 +1078,7 @@ async def run_code_duo(ctx):
     try:
         _subtasks: list[str] = []
         _plan_thinking = ""
+        _plan_content_txt = ""
         _plan_result: "PlannerResult | None" = None
         _planner_used_fallback = False
         _planner_fallback_reason = ""
@@ -1491,6 +1556,7 @@ async def run_code_duo(ctx):
             # ── Port check ──────────────────────────────────────────────────────
             _plan_result: PlannerResult | None = None
             _plan_thinking = ""
+            _plan_content_txt = ""
             if _plan_port is None:
                 logger.warning("[Planner] No port available — skipping planner")
                 _planner_used_fallback = True
@@ -1605,6 +1671,7 @@ async def run_code_duo(ctx):
                     logger.error("[Planner] Exception: %s", _plan_exc, exc_info=True)
                     _subtasks = []
                     _plan_thinking = ""
+                    _plan_content_txt = ""
                     _planner_used_fallback = True
                     _planner_fallback_reason = "planner_exception"
                     _planner_parse_mode = "error"
@@ -1631,6 +1698,9 @@ async def run_code_duo(ctx):
                 if _plan_result is not None:
                     _subtasks = _plan_result.subtasks
                     _plan_thinking = _plan_result.thinking
+                    # CODER-BRIEFING-STAGE: the pure plan text, used instead of
+                    # the thinking when the reasoning is over the briefing limit.
+                    _plan_content_txt = str(getattr(_plan_result, "plan_content", "") or "")
                     # Merge fallback flags: pre-load fallback + planner-internal fallback
                     _planner_used_fallback = _plan_result.used_fallback or _planner_used_fallback
                     _planner_fallback_reason = _plan_result.fallback_reason or _planner_fallback_reason
@@ -2910,10 +2980,16 @@ async def run_code_duo(ctx):
                     # block with ✓/→/○ badges for chunk runs.
                     _coder_input = _exec_header + "\n" + _coder_input
                 elif _plan_thinking:
-                    _coder_input = (
-                        _exec_header + "\n" + _coder_input +
-                        f"\n\n[Plan Briefing — IMPLEMENT THIS]:\n{_plan_thinking}"
-                    )
+                    _brief_txt, _brief_mode, _brief_tok = coder_briefing_text(
+                        _plan_thinking, _plan_content_txt, None, ctx.settings, exec_mdl)
+                    logger.warning("[CODER-BRIEFING] mode=%s think_tokens=%d limit=%d",
+                                   _brief_mode, _brief_tok,
+                                   _briefing_limit_tokens(ctx.settings))
+                    if _brief_txt:
+                        _coder_input = (
+                            _exec_header + "\n" + _coder_input +
+                            f"\n\n[Plan Briefing — IMPLEMENT THIS]:\n{_brief_txt}"
+                        )
             elif _subtasks:
                 _exec_header = (
                     "[EXECUTION MODE — DO NOT CREATE YOUR OWN PLAN]\n"
@@ -2930,10 +3006,16 @@ async def run_code_duo(ctx):
                     "The briefing below is ALREADY DONE. Your ONLY job is to IMPLEMENT it.\n"
                     "Start with a tool call NOW. Do not restate or summarize it.\n"
                 )
-                _coder_input = (
-                    _exec_header + "\n" + _coder_input +
-                    f"\n\n[Plan Briefing — IMPLEMENT THIS]:\n{_plan_thinking}"
-                )
+                _brief_txt, _brief_mode, _brief_tok = coder_briefing_text(
+                    _plan_thinking, _plan_content_txt, _subtasks, ctx.settings, exec_mdl)
+                logger.warning("[CODER-BRIEFING] mode=%s think_tokens=%d limit=%d",
+                               _brief_mode, _brief_tok,
+                               _briefing_limit_tokens(ctx.settings))
+                if _brief_txt:
+                    _coder_input = (
+                        _exec_header + "\n" + _coder_input +
+                        f"\n\n[Plan Briefing — IMPLEMENT THIS]:\n{_brief_txt}"
+                    )
 
             _coder_skipped_images = False
             if _di == 0:
