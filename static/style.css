@@ -325,8 +325,9 @@ header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid #222a38;
 /* VOICE (1.4): the mic sits left of send. A red circle, only visible while
    Speech to text is enabled; a recording state pulses so it is obvious. */
 #mic-btn{background:#e5484d;border:none;border-radius:50%;width:40px;height:40px;
-  color:#fff;font-size:16px;cursor:pointer;align-items:center;justify-content:center;
-  transition:background .15s,transform .1s;flex-shrink:0;padding:0}
+  color:#fff;font-size:19px;line-height:1;cursor:pointer;align-items:center;
+  justify-content:center;transition:background .15s,transform .1s;flex-shrink:0;
+  padding:0 0 2px 0;box-shadow:0 0 0 1px rgba(229,72,77,.35)}
 #mic-btn:hover{background:#f2545b}
 #mic-btn:active{transform:scale(.94)}
 #mic-btn.rec{background:#ff3b30;animation:_micPulse 1.1s ease-in-out infinite}

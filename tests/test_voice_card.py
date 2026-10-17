@@ -152,6 +152,19 @@ check("escape cancels a recording", "ev.key !== 'Escape'" in app)
 check("visibility follows stt_enabled",
       "btn.style.display = (S && S.sttEnabled) ? 'flex' : 'none'" in app)
 
+
+# ── UI fix (2026-10-17): toggles must update S, stylesheet needs a buster ──
+check("the STT toggle updates S before refreshing",
+      "S.sttEnabled=this.checked" in card)
+check("the TTS toggle updates S before refreshing",
+      "S.ttsEnabled=this.checked" in card)
+check("the stylesheet has a fresh cache buster",
+      "style.css?v=20261017" in html)
+check("the mic button is a 40px red circle with a big glyph",
+      "font-size:19px" in _css and "border-radius:50%" in _css)
+check("turning TTS off stops playback",
+      "if (!on) { _voiceStopAudio(); }" in app)
+
 print()
 print(f"SUMMARY voice_card: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

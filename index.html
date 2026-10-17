@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261005-2">
+  <link rel="stylesheet" href="/static/style.css?v=20261017-1">
 </head>
 <body>
 <header>
@@ -45,7 +45,7 @@
       <button id="stop-btn" onclick="handleStopClick()" title="Abort run">&#9632;</button>
       <!-- VOICE (1.4): left of send, only rendered when Speech to text is on.
            Hidden by default so a voice-off install looks exactly as before. -->
-      <button id="mic-btn" onclick="voiceToggleMic()" title="Dictate a message"
+      <button id="mic-btn" onclick="voiceToggleMic()" title="Dictate a message (click to record, click to stop)"
         style="display:none">&#127908;</button>
       <button id="send" onclick="sendMsg()">&#8593;</button>
     </div>
@@ -1525,7 +1525,7 @@
         <span class="tgl-text">Speech to text</span>
         <label class="cfl-sw">
           <input type="checkbox" id="stt-enabled-toggle"
-            onchange="postSettings({stt_enabled:this.checked}); _voiceCardRefresh();">
+            onchange="S.sttEnabled=this.checked;postSettings({stt_enabled:this.checked});_voiceCardRefresh();">
           <span class="sl"></span>
         </label>
       </div>
@@ -1598,7 +1598,7 @@
         <span class="tgl-text">Text to speech</span>
         <label class="cfl-sw">
           <input type="checkbox" id="tts-enabled-toggle"
-            onchange="postSettings({tts_enabled:this.checked}); _syncTtsCard(); _ttsStatusRefresh();">
+            onchange="S.ttsEnabled=this.checked;postSettings({tts_enabled:this.checked});_syncTtsCard();_ttsStatusRefresh();">
           <span class="sl"></span>
         </label>
       </div>
@@ -2170,6 +2170,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261017-09"></script>
+        <script src="/static/app.js?v=20261017-10"></script>
 </body>
 </html>

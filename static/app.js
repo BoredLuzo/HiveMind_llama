@@ -1898,6 +1898,7 @@ function _syncTtsCard() {
   var on = !!(S && S.ttsEnabled);
   var box = document.getElementById('tts-options');
   if (box) box.style.display = on ? 'block' : 'none';
+  if (!on) { _voiceStopAudio(); }
   var btn = document.getElementById('tts-speak-all');
   if (btn) btn.style.display = on ? '' : 'none';
   var sel = document.getElementById('tts-voice-sel');
