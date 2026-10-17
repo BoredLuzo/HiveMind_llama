@@ -34,6 +34,30 @@ MAX_SPEED = 1.5
 MAX_CHARS = 600
 
 
+#: Target peak after normalisation. Pocket TTS returns speech at about -15.5
+#: dBFS peak / -30 dBFS RMS (measured 2026-10-18), i.e. 12-15 dB quieter than a
+#: normal speech file - audible as "why is it so quiet" on any speaker. Raising
+#: the peak to -1.5 dBFS leaves headroom for the resampling in the browser and
+#: makes the browser volume slider meaningful.
+TARGET_PEAK_DBFS = -1.5
+
+
+def normalize(samples: np.ndarray, target_dbfs: float = TARGET_PEAK_DBFS) -> np.ndarray:
+    """Peak-normalise to ``target_dbfs`` (silence stays untouched)."""
+    x = np.asarray(samples, dtype="float64")
+    if x.size == 0:
+        return x
+    peak = float(np.max(np.abs(x)))
+    if peak <= 1.0:                       # already a -1..1 float signal
+        peak *= 32768.0
+        x = x * 32768.0
+    if peak <= 1e-3:                      # silence / near-silence: no gain
+        return x
+    target = 32768.0 * (10.0 ** (target_dbfs / 20.0))
+    return np.clip(x * (target / peak), -32768, 32767)
+
+
+
 def clamp_speed(speed) -> float:
     try:
         val = float(speed)
@@ -113,13 +137,18 @@ def wsola(x: np.ndarray, speed: float) -> np.ndarray:
     return out
 
 
-def stretch_wav(wav_bytes: bytes, speed: float) -> bytes:
-    """Apply the speed factor to a WAV and return WAV bytes (16-bit mono)."""
+def stretch_wav(wav_bytes: bytes, speed: float, normalize_out: bool = True) -> bytes:
+    """Apply the speed factor to a WAV and return WAV bytes (16-bit mono).
+
+    ``normalize_out`` lifts the peak to TARGET_PEAK_DBFS: the sidecar's own level
+    is ~14 dB below a normal speech file.
+    """
     speed = clamp_speed(speed)
-    if abs(speed - 1.0) < 1e-3:
-        return wav_bytes
     samples, sr = wav_to_samples(wav_bytes)
-    return samples_to_wav(wsola(samples, speed), sr)
+    out = samples if abs(speed - 1.0) < 1e-3 else wsola(samples, speed)
+    if normalize_out:
+        out = normalize(out)
+    return samples_to_wav(out, sr)
 
 
 def to_ogg_opus(wav_bytes: bytes, speed: float = 1.0) -> bytes:

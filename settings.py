@@ -368,6 +368,11 @@ DEFAULT_SETTINGS = {
     # ready - the sidecar then needs ~1 s per sentence instead of a 12 s cold
     # start. Useful for phone runs where nobody touched the PC.
     "tts_preload_run":           True,
+    # Browser playback level (0..1). The engine already normalises the WAV to
+    # -1.5 dBFS peak, so this is the user's "how loud do I want it here" knob.
+    "tts_volume":                1.0,
+    # Server-side levelling of the sidecar output (measured -15.5 dBFS peak).
+    "tts_normalize":             True,
 
     # Only bing + duckduckgo answer reliably on stock SearXNG instances:
     # google sits CAPTCHA-suspended, wikipedia returns 0 under most language

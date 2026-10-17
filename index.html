@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261018-01">
+  <link rel="stylesheet" href="/static/style.css?v=20261018-02">
 </head>
 <body>
 <header>
@@ -1632,6 +1632,14 @@
             <button class="btn-sm" onclick="voicePlaySample()" title="Play a sample with the selected voice">&#9654;&nbsp;Play sample</button>
             <div id="tts-sample-out" style="margin-top:5px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8f9bb3"></div>
           </div>
+          </div>
+        <div class="tgl-row">
+          <span class="tgl-text">Volume</span>
+          <input id="tts-volume-inp" type="range" min="0" max="1" step="0.05" value="1"
+            oninput="S.ttsVolume=parseFloat(this.value); (document.getElementById('tts-volume-out')||{}).textContent=Math.round(this.value*100)+' %';"
+            onchange="postSettings({tts_volume:parseFloat(this.value)})"
+            style="width:150px;flex-shrink:0;accent-color:#e5a13a">
+          <span id="tts-volume-out" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8f9bb3;width:38px">100 %</span>
         </div>
         <div class="fld-hint">Pocket TTS has no speed setting of its own; HiveMind shortens the audio (WSOLA) so the voice gets faster without sounding pitched up. 1.08x is the default.</div>
         <div class="fld-hint" id="tts-attribution" style="font-size:9px;color:#6b7793">Voice: Kyutai Pocket TTS (model CC BY 4.0, code MIT) &middot; recordings: VCTK / Alba MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0, non-commercial) &middot; <code>docs\voice_licenses.md</code></div>        <div class="tgl-row" style="margin-top:8px">
@@ -2250,6 +2258,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261018-03"></script>
+        <script src="/static/app.js?v=20261018-04"></script>
 </body>
 </html>

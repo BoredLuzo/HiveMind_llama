@@ -1126,6 +1126,8 @@ async function loadSettings() {
     S.tgResultMode = String(s.telegram_result_mode || 'both');
     S.tgProgress = s.telegram_progress_msgs !== false;
     S.ttsPreloadRun = s.tts_preload_run !== false;
+    S.ttsVolume = (typeof s.tts_volume === 'number')
+      ? Math.max(0, Math.min(1, s.tts_volume)) : 1.0;
     // Read-aloud (frontend): which surfaces speak on their own.
     S.ttsReadDirect = s.tts_read_direct === true;
     S.ttsReadAgentic = s.tts_read_agentic === true;
@@ -1144,6 +1146,10 @@ async function loadSettings() {
     if (_rms) _rms.value = S.tgResultMode || 'both';
     _syncFlagCheck('tg-progress-toggle', S.tgProgress);
     _syncFlagCheck('tts-preload-run-toggle', S.ttsPreloadRun);
+    var _volInp = document.getElementById('tts-volume-inp');
+    if (_volInp) _volInp.value = String(S.ttsVolume);
+    var _volOut = document.getElementById('tts-volume-out');
+    if (_volOut) _volOut.textContent = Math.round((S.ttsVolume || 1) * 100) + ' %';
     var dpttlEl = document.getElementById('duo-planner-ttl');
     if (dpttlEl) dpttlEl.value = S.duoPlannerTtl;
     var dcttlEl = document.getElementById('duo-coder-ttl');
@@ -1914,7 +1920,7 @@ async function voiceSpeakText(text, btn) {
   try {
     var blob = await _ttsFetchBlob(text.slice(0, (S && S.ttsMaxChars) || 600), {});
     _voiceStopAudio();
-    _ttsAudio = new Audio(URL.createObjectURL(blob));
+    _ttsAudio = _ttsAudioFromBlob(blob);
     _ttsAudio.onended = function () { if (btn && btn.classList) btn.classList.remove('playing'); };
     await _ttsAudio.play();
   } catch (e) {
@@ -1938,7 +1944,7 @@ async function voicePlaySample() {
       'Hi, I am the HiveMind voice. This is how I sound when I read your results out loud.',
       {voice: voice});
     _voiceStopAudio();
-    _ttsAudio = new Audio(URL.createObjectURL(blob));
+    _ttsAudio = _ttsAudioFromBlob(blob);
     await _ttsAudio.play();
     if (out) out.textContent = 'Playing ' + voice + ' at speed ' + (S.ttsSpeed || 1.08) + 'x';
   } catch (e) {
@@ -2037,6 +2043,16 @@ function _raTakeNext() {
   return null;
 }
 
+// One place that creates the audio element, so the volume setting applies to
+// every path (read aloud, the per-answer speaker, the sample button).
+function _ttsAudioFromBlob(blob) {
+  var el = new Audio(URL.createObjectURL(blob));
+  var v = (S && typeof S.ttsVolume === 'number') ? S.ttsVolume : 1.0;
+  el.volume = Math.max(0, Math.min(1, v));
+  return el;
+}
+
+
 function _readAloudNext() {
   var cur = _raPending;
   _raPending = null;
@@ -2048,7 +2064,7 @@ function _readAloudNext() {
   if (follow) _raPending = _raFetch(follow);
   cur.promise.then(function (blob) {
     _voiceStopAudio();
-    _ttsAudio = new Audio(URL.createObjectURL(blob));
+    _ttsAudio = _ttsAudioFromBlob(blob);
     _ttsAudio.onended = function () { _readAloudNext(); };
     _ttsAudio.onerror = function () { _readAloudNext(); };
     return _ttsAudio.play();

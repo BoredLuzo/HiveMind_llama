@@ -82,8 +82,17 @@ samples, sr = tts_audio.wav_to_samples(wav)
 check("samples are mono float", samples.ndim == 1 and sr == 24000)
 
 # ── speed 1.0 is a no-op ───────────────────────────────────────────────────
-same = tts_audio.stretch_wav(wav, 1.0)
-check("speed 1.0 returns the same bytes", same == wav)
+same = tts_audio.stretch_wav(wav, 1.0, normalize_out=False)
+check("speed 1.0 returns the same bytes (normalisation off)", same == wav)
+normed = tts_audio.stretch_wav(wav, 1.0)
+_x, _sr = tts_audio.wav_to_samples(normed)
+check("normalisation lifts the peak to the target",
+      abs(np.max(np.abs(_x)) / 32768.0 - 10 ** (tts_audio.TARGET_PEAK_DBFS / 20.0)) < 0.02,
+      f" ({20 * np.log10(np.max(np.abs(_x)) / 32768.0):.2f} dBFS)")
+_quiet = tts_audio.samples_to_wav(np.zeros(2400), 24000)
+check("silence is not amplified",
+      np.max(np.abs(tts_audio.wav_to_samples(
+          tts_audio.stretch_wav(_quiet, 1.0))[0])) < 2)
 
 # ── the actual stretch ─────────────────────────────────────────────────────
 for speed in (1.08, 1.2):

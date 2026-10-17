@@ -121,6 +121,12 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
 - Turning the TTS master on now enables the two answer switches (direct + agentic)
   when none was set, so "voice on" actually speaks without a second visit.
 
+- **Volume control and a louder default**: the sidecar returns speech at about
+  -15.5 dBFS peak (measured), i.e. 12-15 dB quieter than a normal speech file. The
+  engine now levels every chunk to -1.5 dBFS (`tts_normalize`) and the Voice card
+  has a volume slider (`tts_volume`) that applies to read-aloud, the per-answer
+  speaker and the sample.
+
 ### Telegram output contract (2026-10-18)
 
 - **Choose what a phone run sends back**: `telegram_result_mode` = `both` (text

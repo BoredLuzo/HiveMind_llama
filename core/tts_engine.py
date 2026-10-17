@@ -378,7 +378,8 @@ def synthesize(text: str, settings: dict | None = None, *,
     if not tts_audio.looks_like_wav(wav):
         raise TtsError("TTS_FAILED", "the engine returned something that is not a WAV")
     _state["last_used"] = time.time()
-    stretched = tts_audio.stretch_wav(wav, spd)
+    stretched = tts_audio.stretch_wav(wav, spd, normalize_out=bool(settings.get(
+        "tts_normalize", True)))
     result = {"wav": stretched, "duration": tts_audio.duration_seconds(stretched),
               "voice": voice, "speed": spd}
     _cache_put(_key, result)

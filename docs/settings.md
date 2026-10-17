@@ -228,6 +228,8 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `tts_timeout_s` | int | `120` | - | Hard limit per synthesis request. |
 | `tts_idle_stop_s` | int | `900` | - | The sidecar stops itself after this much idle time (it holds torch + the model in RAM while warm). |
 | `tts_preload_run` | bool | `True` | Voice card | Warm the TTS engine when a run starts instead of at the first sentence - removes the ~12 s cold start for phone runs. |
+| `tts_volume` | float | `1.0` | Voice card | Browser playback level 0-1 for read-aloud, the speaker button and the sample. |
+| `tts_normalize` | bool | `True` | - | Level the sidecar output (it comes back at about -15.5 dBFS peak) to -1.5 dBFS so the volume slider has range. |
 | `stt_enabled` | bool | `False` | Voice card | Speech-to-text master switch (English only in 1.4). Needs the whisper.cpp binaries: `python deploy/fetch_whisper.py`. |
 | `stt_model` | str | `""` | Voice card | Model tier. `""` = RAM default (parakeet q4_k on >= 8 GB, else whisper base). Keys: `parakeet-q4k`, `base`, `tiny`, `small`. |
 | `stt_language` | str | `"en"` | Voice card | Only **English is supported** in 1.4; another two-letter code is passed through as *experimental* (Whisper can transcribe other languages), anything that is not a code degrades to `en`. |

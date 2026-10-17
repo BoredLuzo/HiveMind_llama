@@ -269,6 +269,16 @@ check("the controls are synced from the settings",
       "S.tgResultMode" in app and "S.ttsPreloadRun" in app)
 check("the select is filled on load", "_rms.value = S.tgResultMode" in app)
 
+
+# ── volume + normalisation (2026-10-18) ──────────────────────────────────
+check("the card has a volume slider", 'id="tts-volume-inp"' in card)
+check("the slider shows a percentage", 'id="tts-volume-out"' in card)
+check("the slider writes the setting", "postSettings({tts_volume:" in card)
+check("every playback uses the volume helper",
+      "function _ttsAudioFromBlob" in app and app.count("_ttsAudioFromBlob(blob)") >= 3)
+check("the helper applies the setting", "el.volume = Math.max(0, Math.min(1, v))" in app)
+check("the slider is filled from the settings", "_volInp.value = String(S.ttsVolume)" in app)
+
 print()
 print(f"SUMMARY voice_card: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
