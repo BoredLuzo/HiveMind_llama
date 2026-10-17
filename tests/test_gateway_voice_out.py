@@ -181,6 +181,24 @@ check("the engine exposes it", '@app.post("/tts/preload")' in server_src)
 check("the endpoint does not block the loop",
       "asyncio.to_thread(tts_engine.preload" in server_src)
 
+
+# ── the MIRROR path (runs started on the PC) also speaks (2026-10-18) ─────
+_mir = bridge_src[bridge_src.index("async def _mirror_fazit"):]
+_mir_end = _mir.find("    @staticmethod")
+_mir = _mir[:_mir_end] if _mir_end > 0 else _mir[:3000]
+check("the mirror path honours the result mode", "_result_mode()" in _mir)
+check("the mirror speaks the answer", "await self._maybe_voice_answer(_ans)" in _mir)
+check("the mirror falls back to text when silent",
+      "if not self._voice_sent:" in _mir)
+
+main_src = (ROOT / "hivemind_gateway" / "main.py").read_text(
+    encoding="utf-8", errors="replace")
+check("a restart warns about skipped messages",
+      "skipped the message(s)" in main_src
+      and "backlog dropped: starting at offset" in main_src)
+check("the warning only fires for a known owner",
+      "if gw.owner_id is not None:" in main_src.split("backlog dropped")[1][:600])
+
 print()
 print(f"SUMMARY gateway_voice_out: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

@@ -1811,15 +1811,28 @@ class RunBridge:
             reason, f"🏁 Mirror run finished ({reason}).")
         if reason == "completed":
             text = "🏁 Mirror run completed."
-        _full = (_ans + "\n\n" + text) if _ans else text
-        _chunks = render.split_message(_full)
-        if len(_chunks) > FINAL_CHUNK_LIMIT:
-            await self.ms.send_document(
-                _ans.encode("utf-8"), "mirror_result.txt")
-            await self.ms.send_message(text)
-        else:
-            for _c in _chunks:
-                await self.ms.send_message(_c)
+        # RESULT-MODE (1.4.2): the mirror path is what the phone gets when a run
+        # was started in the browser. It used to relay text only, so "answers as
+        # voice notes" never fired for a desktop run (owner report: paired, no
+        # audio). Same contract as _finish: both = text + voice, text = text only,
+        # voice = voice only (with a text fallback if the synthesis failed).
+        _mode = (await self._result_mode()) if _ans else "text"
+        if _mode == "voice":
+            await self._maybe_voice_answer(_ans)
+            if not self._voice_sent:
+                _mode = "both"          # no audio -> the text MUST still arrive
+        if _mode != "voice":
+            _full = (_ans + "\n\n" + text) if _ans else text
+            _chunks = render.split_message(_full)
+            if len(_chunks) > FINAL_CHUNK_LIMIT:
+                await self.ms.send_document(
+                    _ans.encode("utf-8"), "mirror_result.txt")
+                await self.ms.send_message(text)
+            else:
+                for _c in _chunks:
+                    await self.ms.send_message(_c)
+            if _mode == "both" and _ans:
+                await self._maybe_voice_answer(_ans)
         # PHONE-RUNS-IN-UI: persist the answer into the chat transcript
         # so the run exists in the UI, not only on the phone.
         _ho_chat = self._handed_over.pop(rid, None)

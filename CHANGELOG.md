@@ -132,6 +132,13 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   before speaking, so a direct-mode answer is read as the answer - previously the
   whole bubble (every search result included) went to the engine.
 
+- **Voice notes for mirrored runs**: a run started in the browser now sends the
+  voice note to the phone as well. The mirror path relayed text only, so "answers
+  as voice notes" never fired for anything but a phone-started run.
+- **A gateway restart no longer looks like a dead bot**: the replay protection
+  discards what arrived while it was offline; the owner now gets one short note
+  telling them to resend.
+
 ### Telegram output contract (2026-10-18)
 
 - **Choose what a phone run sends back**: `telegram_result_mode` = `both` (text

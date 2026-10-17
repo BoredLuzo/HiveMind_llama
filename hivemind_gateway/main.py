@@ -1091,6 +1091,20 @@ async def run() -> int:
         state.save()
         log.info("backlog dropped: starting at offset %s", state.offset)
 
+        # SILENT-LOSS FIX (2026-10-18): replay protection discards everything that
+        # arrived while the gateway was down - correct, but it looked like a dead
+        # bot (a voice note sent during a restart vanished without a word). One
+        # short note, only when the owner is already known.
+        if gw.owner_id is not None:
+            try:
+                await gw.reply(
+                    gw.owner_id,
+                    "\u26a0\ufe0f The gateway restarted and skipped the message(s) "
+                    "that arrived while it was offline (replay protection). "
+                    "Please send it again - text or voice.")
+            except (TelegramApiError, HiveUnreachable, HTTPError, OSError) as _bl:
+                log.info("backlog notice failed: %s", _bl)
+
     await recover_orphan_run(gw)
 
     mirror_task = asyncio.create_task(_mirror_loop(gw))
