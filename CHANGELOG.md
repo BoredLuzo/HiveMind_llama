@@ -1,5 +1,64 @@
 # Changelog
 
+## [1.3.11] - 2026-10-17
+
+Web search that actually answers, a planner-briefing cap, and the voice work
+from 1.4 (all off by default).
+
+### Fixed
+
+- **Web search returned the same junk for every query.** Four separate causes:
+  the shipped SearXNG config replaced every upstream default instead of merging
+  (so no outgoing User-Agent - Wikimedia answered 403 and the wikipedia engine
+  silently returned nothing), google was bot-blocked and poisoned general
+  queries, `bing` answered English queries with another region's pages, and the
+  tool itself pinned `engines="bing,duckduckgo"` + `language="all"`, overriding
+  whatever the instance had enabled.
+- **Rebuilding the SearXNG image changed nothing** in the running container: the
+  image declares `/etc/searxng` as a volume, so an old anonymous volume kept
+  shadowing the baked config. Every `compose up` in `searxng.bat` now passes
+  `--renew-anon-volumes`.
+- **A query that names Wikipedia is answered by the MediaWiki API directly**
+  (descriptive User-Agent, shorter-prefix retries, ranked by title overlap) when
+  the search engines return nothing useful - the case that used to return shop
+  homepages. An empty engine result falls back there too.
+- **A web-search budget wall no longer kills the run.** It used to set
+  `loop_detected` after two exhausted calls; a live run ended after 24 rounds
+  with zero files written. Now the first exhaustion disables `web_search` for the
+  rest of the run (the coder keeps working with its other tools) and only a model
+  that keeps calling the disabled tool four more times ends the run.
+- **Near-identical searches are recognised.** The dedup compared exact strings,
+  so "RDP processor RAM memory" and "RDP processor graphics memory" were
+  different searches. Token overlap (or three shared words) now counts, and the
+  third such attempt stops the topic with a clear instruction instead of burning
+  the budget.
+- The result header printed the literal `{_ws_today}` instead of the date.
+
+### Added
+
+- **Coder briefing limit** (`duo_coder_briefing_think_tokens`, default 1500): the
+  planner's thinking is injected into the coder as a briefing only up to that many
+  estimated tokens; above it the coder gets the pure plan - a planner that thinks
+  8-16k tokens before writing a plan otherwise poisons it. `0` = plan only,
+  `-1` = always inject (old behaviour). The decision is logged as
+  `[CODER-BRIEFING] mode=... think_tokens=... limit=...`.
+- **Speech to text (English only, off by default):** a Voice card in the settings
+  with an honest status line (engine / model / ready), a Download button with
+  progress for the whisper.cpp + Parakeet binaries and models, a 3 s microphone
+  test, model/language/preload/thread controls, and a red mic button left of send
+  that appends the transcript to the message box. Nothing runs until the switch
+  is turned on; the optional audio packages live in `requirements-voice.txt`.
+- `deploy/fetch_whisper.py` fetches the whisper.cpp release (whisper-cli,
+  whisper-server, parakeet-cli) and the model tiers.
+
+### Notes
+
+- Search engines enabled in the shipped config: duckduckgo, mojeek (general) plus
+  github/stackoverflow/pypi/npm/lib.rs/arxiv. google, bing, brave, wikidata are
+  disabled with the reason in the file.
+- Voice is English only in this release and has no chat push-to-talk beyond the
+  transcript button described above.
+
 ## [1.3.10] - 2026-10-17
 
 Workspace regression fix, plus the first, disabled piece of the voice work.

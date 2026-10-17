@@ -126,10 +126,14 @@ engines:
     shortcut: ddg
     categories: general
 
+  # bing disabled: measured 2026-10-17 it answers English queries with another
+  # region's pages ("Berlin population" -> Chinese Zhihu/Copilot posts), even
+  # with language=en. duckduckgo + mojeek are the general engines now.
   - name: bing
     engine: bing
     shortcut: bi
     categories: general
+    disabled: true
 
   - name: mojeek
     engine: mojeek
