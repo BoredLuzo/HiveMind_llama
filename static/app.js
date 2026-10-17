@@ -1131,9 +1131,11 @@ async function loadSettings() {
     _syncFlagCheck('duo-coder-after-run-toggle', S.duoCoderAfterRun === 'evict');
     _syncFlagCheck('stt-enabled-toggle', S.sttEnabled);
     _syncFlagCheck('tts-enabled-toggle', S.ttsEnabled);
+    if (typeof _syncSpeakButtons === 'function') _syncSpeakButtons();
     if (typeof _syncTtsCard === 'function') _syncTtsCard();
     _syncFlagCheck('stt-preload-toggle', S.sttPreload);
     if (typeof _voiceCardRefresh === 'function') _voiceCardRefresh();
+    if (S.ttsEnabled && typeof voiceWarmup === 'function') setTimeout(voiceWarmup, 4000);
     if (typeof _syncTgVoice === 'function') _syncTgVoice();
     var dpttlEl = document.getElementById('duo-planner-ttl');
     if (dpttlEl) dpttlEl.value = S.duoPlannerTtl;
@@ -1950,7 +1952,21 @@ function _readAloud(kind, text) {
   }
   // Keep the kind with the text: a switch flipped off while items are queued
   // must drop exactly those items; a mid-run flip ON takes the next event.
-  _readAloudQueue.push({kind: kind, text: text});
+  // SENTENCE STREAMING (2026-10-18): one request per sentence instead of one
+  // per answer. 320 characters took ~10 s to render before a single syllable was
+  // audible; the first sentence is ready in ~1-2 s and the rest follows while it
+  // plays. The queue already plays items back to back.
+  var _parts = text.match(/[^.!?\n]+[.!?]*[\s]*/g) || [text];
+  var _buf = '';
+  _parts.forEach(function (p) {
+    if ((_buf + p).length > 240 && _buf) {
+      _readAloudQueue.push({kind: kind, text: _buf.trim()});
+      _buf = p;
+    } else {
+      _buf += p;
+    }
+  });
+  if (_buf.trim()) _readAloudQueue.push({kind: kind, text: _buf.trim()});
   if (!_readAloudBusy) _readAloudNext();
 }
 
@@ -1992,6 +2008,36 @@ function voiceWarmup() {
   }).then(function (r) {
     if (r.ok) showStatus('Voice engine warm');
   }).catch(function () { /* the next request reports the real error */ });
+}
+
+
+// The speak button appears with the first text token (not on an empty bubble)
+// and only while TTS is enabled.
+
+// Turning the TTS master on should make the next answer audible without a second
+// visit to the card: if none of the read-aloud switches is set, enable the two
+// answer paths (direct + agentic). The switches are visible, so this is not a
+// hidden mode - and turning them off again is one click.
+function voiceEnableDefaults() {
+  if (!(S && S.ttsEnabled)) return;
+  if (S.ttsReadDirect || S.ttsReadAgentic) return;
+  S.ttsReadDirect = true;
+  S.ttsReadAgentic = true;
+  var patch = {tts_read_direct: true, tts_read_agentic: true};
+  _syncFlagCheck('tts-read-direct-toggle', true);
+  _syncFlagCheck('tts-read-agentic-toggle', true);
+  postSettings(patch);
+}
+
+function _syncSpeakButtons() {
+  document.querySelectorAll('#chat .amsg-foot').forEach(function (foot) {
+    var btn = foot.querySelector('.msg-speak');
+    if (!btn) return;
+    var wrap = foot.closest('.ablock');
+    var body = wrap ? wrap.querySelector('.abody') : null;
+    var hasText = !!(body && String(body.innerText || '').trim().length > 8);
+    btn.style.display = (hasText && S && S.ttsEnabled) ? '' : 'none';
+  });
 }
 
 function _syncTgVoice() {
@@ -3876,19 +3922,24 @@ function startAgent(name, model, role, isRepair) {
   }
   const atimer = document.createElement('span'); atimer.className = 'atimer'; atimer.id = tid;
   hdr.appendChild(atimer);
-  // VOICE (1.4): speak button per assistant message. Hidden until TTS is on; it
-  // reads the bubble body at click time, so it works on a still-streaming answer.
+  // VOICE (1.4): the speak button lives in a FOOTER under the answer, not in the
+  // header. In the header it floated top-right and, on an empty bubble, looked
+  // like a stray icon next to the user's message (owner screenshot). It also only
+  // appears once the bubble has text.
+  var _speakWrap = document.createElement('div');
+  _speakWrap.className = 'amsg-foot';
+  _speakWrap.id = 'foot-' + tid;
   var _speakBtn = document.createElement('button');
   _speakBtn.className = 'msg-speak';
   _speakBtn.type = 'button';
   _speakBtn.title = 'Speak this answer';
   _speakBtn.textContent = '\uD83D\uDD0A';
-  _speakBtn.style.display = (typeof S !== 'undefined' && S.ttsEnabled) ? '' : 'none';
+  _speakBtn.style.display = 'none';
   _speakBtn.onclick = function () {
     var _body = document.getElementById('ab-' + tid);
     voiceSpeakText(_body ? _body.innerText : '', _speakBtn);
   };
-  hdr.appendChild(_speakBtn);
+  _speakWrap.appendChild(_speakBtn);
 
   // Loading indicator: after 2s without tokens "Model loading..." appears
   const _lh = document.createElement('span');
@@ -3918,6 +3969,7 @@ function startAgent(name, model, role, isRepair) {
   const thinkBody = document.createElement('div'); thinkBody.className = 'think-body'; thinkBody.id = 'thb-' + tid;
   thinkBlock.appendChild(thinkHdr); thinkBlock.appendChild(thinkBody);
   wrap.appendChild(hdr); wrap.appendChild(thinkBlock); wrap.appendChild(body);
+  wrap.appendChild(_speakWrap);
   c.appendChild(wrap);
   S.curAgent = {body: body, tid: tid, name: name, lt: _lt};
   // THINK-BLOCK-FIX (2026-08-19): new agent → discard the old think-block reference.

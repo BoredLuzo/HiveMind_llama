@@ -99,6 +99,26 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   after llama.cpp, installs `requirements-voice.txt` when the extras are missing,
   and pre-warms the TTS cache for the service user instead of root.
 
+### Fixed (voice polish, 2026-10-18)
+
+- **License audit of the audio stack** (`docs/voice_licenses.md`): the Pocket TTS
+  model is CC BY 4.0, the code MIT, and the shipped voices come from four sources
+  with different terms. **`cosette` is Expresso = CC BY-NC 4.0 (non-commercial
+  only)**, so the shipped default is `anna` (CC BY 4.0) now; `cosette` stays
+  selectable and is labelled non-commercial. The Voice card prints the license per
+  voice and the attribution line, the README links the table.
+- The "Play sample" button wrapped onto two lines (it borrowed the 40x40 icon
+  button); it has its own text-button style now.
+- The per-answer speaker button moved from the header into a footer under the text
+  and only appears once the answer has content - in the header it floated over an
+  empty bubble and looked attached to the user's message.
+- **Read aloud starts ~8x sooner**: the text is queued sentence by sentence
+  instead of one 600-character request, so the first sentence is audible after
+  1-2 s instead of waiting for the whole answer to be synthesised. The sidecar is
+  also pre-warmed on page load when TTS is on.
+- Turning the TTS master on now enables the two answer switches (direct + agentic)
+  when none was set, so "voice on" actually speaks without a second visit.
+
 ### Notes
 
 - English only. Speech to text models: `parakeet-q4k` 396 MB (3.6 % micro-WER),

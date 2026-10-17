@@ -160,13 +160,25 @@ StubTTSCard.broken = False
 st = tts_engine.status(SET)
 for key in ("enabled", "running", "voice", "speed", "uv", "voices", "idle_stop_s"):
     check(f"status exposes {key}", key in st)
-check("default voice is cosette", tts_engine.DEFAULT_VOICE == "cosette")
+# The shipped default is a COMMERCIALLY USABLE voice (docs/voice_licenses.md):
+# cosette is Expresso = CC BY-NC 4.0 (non-commercial only), so it stays selectable
+# but is no longer the default.
+check("default voice is commercially usable",
+      tts_engine.DEFAULT_VOICE == "anna"
+      and dict((v[0], v[3]) for v in tts_engine.VOICES)[tts_engine.DEFAULT_VOICE]
+      == "cc-by-4.0")
+check("cosette is still there, labelled non-commercial",
+      dict((v[0], v[3]) for v in tts_engine.VOICES).get("cosette") == "cc-by-nc-4.0")
+check("the attribution mentions both obligation holders",
+      "CC BY 4.0" in tts_engine.ATTRIBUTION and "CC BY-NC" in tts_engine.ATTRIBUTION)
 check("voices list has the shipped set",
       {v[0] for v in tts_engine.VOICES} == {"cosette", "alba", "anna", "eve",
                                             "jane", "vera", "bill_boerst"})
 check("default speed is 1.08", tts_engine.DEFAULT_SPEED == 1.08)
-check("unknown voice falls back to cosette",
-      tts_engine.resolve_voice({"tts_voice": "nobody"}) == "cosette")
+check("unknown voice falls back to the default",
+      tts_engine.resolve_voice({"tts_voice": "nobody"}) == tts_engine.DEFAULT_VOICE)
+check("an explicitly chosen voice is honoured",
+      tts_engine.resolve_voice({"tts_voice": "cosette"}) == "cosette")
 check("status never raises with an empty settings dict",
       isinstance(tts_engine.status({}), dict))
 

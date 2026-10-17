@@ -40,17 +40,36 @@ from core import tts_audio
 
 logger = logging.getLogger(__name__)
 
-#: The English premade voices shipped with the model (owner picked cosette).
+#: The shipped voices: (key, label, note, license, source). The license column is
+#: the reason this table is the single source - see docs/voice_licenses.md.
+#:
+#:  cc0          public domain (no obligations)
+#:  cc-by-4.0    attribution required (commercial use allowed)
+#:  cc-by-nc-4.0 NON-COMMERCIAL ONLY - the recording may not be used in a paid
+#:                product; fine for private use, so it stays selectable
+#:
+#: Provenance comes from pocket_tts/utils/utils.py `_ORIGINS_OF_PREDEFINED_VOICES`
+#: (verified 2026-10-17 against the installed package, not from memory).
 VOICES = [
-    ("cosette", "Cosette", "female, clear"),
-    ("alba", "Alba", "female, reference voice"),
-    ("anna", "Anna", "female, soft"),
-    ("eve", "Eve", "female, bright"),
-    ("jane", "Jane", "female, calm"),
-    ("vera", "Vera", "female, warm"),
-    ("bill_boerst", "Bill Boerst", "male, serious"),
+    ("anna", "Anna", "female, soft", "cc-by-4.0", "VCTK p228 (CC BY 4.0)"),
+    ("cosette", "Cosette", "female, clear", "cc-by-nc-4.0",
+     "Expresso ex04 (CC BY-NC 4.0) - non-commercial only"),
+    ("alba", "Alba", "female, reference voice", "cc-by-4.0", "Alba MacKenna (CC BY 4.0)"),
+    ("eve", "Eve", "female, bright", "cc-by-4.0", "VCTK p361 (CC BY 4.0)"),
+    ("jane", "Jane", "female, calm", "cc-by-4.0", "VCTK p339 (CC BY 4.0)"),
+    ("vera", "Vera", "female, warm", "cc-by-4.0", "VCTK p229 (CC BY 4.0)"),
+    ("bill_boerst", "Bill Boerst", "male, serious", "cc0", "Voice-Zero/LibriVox (CC0)"),
 ]
-DEFAULT_VOICE = "cosette"
+#: The shipped default is a commercially usable voice. `cosette` stays available
+#: (and is what the owner's own settings pin), but a fresh install must not start
+#: on a non-commercial recording.
+DEFAULT_VOICE = "anna"
+
+#: Obligations that ship with the audio: model CC BY 4.0, code MIT, Most voices
+#: CC BY 4.0 (attribution) with one CC BY-NC (non-commercial). Shown in the UI.
+ATTRIBUTION = ("Voice: Kyutai Pocket TTS (model CC BY 4.0, code MIT) - "
+               "voice recordings: VCTK / Alba MacKenna (CC BY 4.0), "
+               "Voice-Zero (CC0), Expresso (CC BY-NC 4.0, non-commercial)")
 DEFAULT_SPEED = 1.08
 START_TIMEOUT_S = 180.0      # first start downloads nothing (uvx cache) but loads torch
 IDLE_STOP_S = 900.0
@@ -290,7 +309,9 @@ def status(settings: dict | None = None) -> dict:
         "voice": resolve_voice(settings),
         "speed": resolve_speed(settings),
         "uv": bool(shutil.which("uvx")),
-        "voices": [{"key": k, "label": label, "note": note} for k, label, note in VOICES],
+        "voices": [{"key": k, "label": label, "note": note, "license": lic,
+                    "source": src} for k, label, note, lic, src in VOICES],
+        "attribution": ATTRIBUTION,
         "idle_stop_s": resolve_idle_stop(settings),
         "max_chars": tts_audio.MAX_CHARS,
         "port": _state.get("port") or 0,

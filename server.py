@@ -2038,8 +2038,10 @@ async def tts_voices():
     return JSONResponse({
         "default": tts_engine.DEFAULT_VOICE,
         "max_chars": tts_engine.tts_audio.MAX_CHARS,
-        "voices": [{"key": k, "label": label, "note": note}
-                   for k, label, note in tts_engine.VOICES],
+        "attribution": tts_engine.ATTRIBUTION,
+        "voices": [{"key": k, "label": label, "note": note, "license": lic,
+                    "source": src}
+                   for k, label, note, lic, src in tts_engine.VOICES],
     })
 
 

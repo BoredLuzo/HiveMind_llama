@@ -358,10 +358,18 @@ started until you switch it on.
 | Pocket TTS | ~200 MB + PyTorch in uv's cache | text to speech | voice `cosette`, speed `1.08x` |
 | whisper.cpp / parakeet.cpp | 21 MB | the STT binaries | `whisper-cli`, `whisper-server`, `parakeet-cli` |
 
-Voices: `cosette`, `alba`, `anna`, `eve`, `jane`, `vera`, `bill_boerst`. Speech to
-text lands in `<install>/stt/`, TTS in uv's and the Hugging Face cache - never in
-the repository, never in a release zip. Numbers and the Telegram switches:
-[docs/voice_setup.md](docs/voice_setup.md).
+Voices: `anna` (default), `alba`, `cosette`, `eve`, `jane`, `vera`, `bill_boerst`.
+`cosette` is a **non-commercial** recording (Expresso, CC BY-NC 4.0) - available,
+but no longer the shipped default; `bill_boerst` is CC0. Speech to text lands in
+`<install>/stt/`, TTS in uv's and the Hugging Face cache - never in the repository,
+never in a release zip.
+
+License: Pocket TTS model **CC BY 4.0**, code MIT; voice recordings VCTK / Alba
+MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0). Speech to text:
+Whisper (Apache-2.0), Parakeet (CC BY 4.0), whisper.cpp (MIT). Full table and what
+it obliges: [docs/voice_licenses.md](docs/voice_licenses.md).
+
+Numbers and the Telegram switches: [docs/voice_setup.md](docs/voice_setup.md).
 
 ## Learning and memory
 

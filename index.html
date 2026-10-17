@@ -5,7 +5,7 @@
 <!-- PRE-EXPLORE-FIX v2 :: 2026-04-27 -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hivemind</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261017-4">
+  <link rel="stylesheet" href="/static/style.css?v=20261018-01">
 </head>
 <body>
 <header>
@@ -1598,7 +1598,7 @@
         <span class="tgl-text">Text to speech</span>
         <label class="cfl-sw">
           <input type="checkbox" id="tts-enabled-toggle"
-            onchange="S.ttsEnabled=this.checked;postSettings({tts_enabled:this.checked});_syncTtsCard();_ttsStatusRefresh();if(this.checked)voiceWarmup();">
+            onchange="S.ttsEnabled=this.checked;postSettings({tts_enabled:this.checked});_syncTtsCard();_ttsStatusRefresh();if(this.checked){voiceEnableDefaults();voiceWarmup();}">
           <span class="sl"></span>
         </label>
       </div>
@@ -1628,11 +1628,12 @@
         <div class="tgl-row" style="align-items:flex-start">
           <span class="tgl-text" style="max-width:150px">Sample</span>
           <div style="flex:1">
-            <button class="ibtn" onclick="voicePlaySample()" title="Play a sample with the selected voice">&#9654; Play sample</button>
+            <button class="btn-sm" onclick="voicePlaySample()" title="Play a sample with the selected voice">&#9654;&nbsp;Play sample</button>
             <div id="tts-sample-out" style="margin-top:5px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8f9bb3"></div>
           </div>
         </div>
-        <div class="fld-hint">Pocket TTS has no speed setting of its own; HiveMind shortens the audio (WSOLA) so the voice gets faster without sounding pitched up. 1.08x is the default.</div>        <div class="tgl-row" style="margin-top:8px">
+        <div class="fld-hint">Pocket TTS has no speed setting of its own; HiveMind shortens the audio (WSOLA) so the voice gets faster without sounding pitched up. 1.08x is the default.</div>
+        <div class="fld-hint" id="tts-attribution" style="font-size:9px;color:#6b7793">Voice: Kyutai Pocket TTS (model CC BY 4.0, code MIT) &middot; recordings: VCTK / Alba MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0, non-commercial) &middot; <code>docs\voice_licenses.md</code></div>        <div class="tgl-row" style="margin-top:8px">
           <span class="tgl-text">Read aloud</span>
           <span class="fld-hint" style="display:inline;font-size:9px;padding:0">what the UI speaks by itself</span>
         </div>
@@ -2221,6 +2222,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261017-14"></script>
+        <script src="/static/app.js?v=20261018-01"></script>
 </body>
 </html>
