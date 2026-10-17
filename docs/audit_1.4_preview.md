@@ -101,7 +101,7 @@ Fixed with `os.close(fd)` plus a regression test: the decoded WAV must be readab
 |---|---|---|---|
 | 3.1 | `1.08` as a literal in `settings.py`, `tts_engine.DEFAULT_SPEED`, `index.html`, `app.js`, docs | `settings.py` is the runtime truth, the others are fallbacks/defaults for a form field | optional: one `TTS_DEFAULT_SPEED` constant served via `/tts/status` |
 | 3.2 | `1500` for the briefing cap in `duo_runner` + `settings.py` | same pattern as every other default | none |
-| 3.3 | `docs/plan_1.4_voice.md` **is tracked and ships** in the release zip (`git archive HEAD`) | it is English, contains no secrets - but it is an internal design doc with owner decisions | keep public, or add it to the `.gitignore` group that already holds the other internal docs |
+| 3.3 | `docs/plan_1.4_voice.md` is tracked in git | **corrected 2026-10-17**: `.gitattributes` marks it `export-ignore`, so it does **not** ship in the release zip (`git archive` honours it - verified against the built 1.4.0 zip: 289 entries, no `plan_1.4_voice.md`, no `tests/`) | none |
 | 3.4 | Model tier names in `deploy/setup_voice.bat` | `fetch_whisper.py --model <key>` validates against `core/stt_engine.MODELS`, so a typo fails loudly instead of quietly | none |
 | 3.5 | `voice_max_bytes` 20 MB in `config.py` + as a default in `telegram_api.download_file` | the caller passes the config value; the parameter default is a guard for direct calls | none |
 | 3.6 | Read-aloud cap 600 chars | a 600-char answer is ~35 s of audio and ~19 s of generation (see 4) | optional: lower the read-aloud cap to ~350 chars, or add a "max read length" setting |
