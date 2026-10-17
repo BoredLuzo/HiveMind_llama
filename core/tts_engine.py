@@ -261,6 +261,37 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
     return url
 
 
+# SYNTH-CACHE (2026-10-18): keyed by (voice, speed, text). Repeated texts are
+# common (a re-read after Stop, the same short status line, the warm-up "Ready.")
+# and the model is the only expensive part. 16 entries of a few hundred KB.
+_CACHE_MAX = 16
+_cache: dict = {}
+_cache_order: list = []
+_cache_lock = threading.Lock()
+
+
+def _cache_get(key):
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit is not None:
+            try:
+                _cache_order.remove(key)
+            except ValueError:
+                pass
+            _cache_order.append(key)
+        return hit
+
+
+def _cache_put(key, value) -> None:
+    with _cache_lock:
+        _cache[key] = value
+        _cache_order.append(key)
+        while len(_cache_order) > _CACHE_MAX:
+            old = _cache_order.pop(0)
+            _cache.pop(old, None)
+
+
+
 def _client():
     """One keep-alive httpx client for the sidecar (created lazily)."""
     global _http_client
@@ -286,10 +317,15 @@ def synthesize(text: str, settings: dict | None = None, *,
         raise TtsError("TTS_EMPTY", "nothing to say")
     if len(text) > tts_audio.MAX_CHARS:
         text = text[:tts_audio.MAX_CHARS].rsplit(" ", 1)[0] + " ..."
-    _maybe_idle_stop(settings)
-    url = _start(settings, voice)
     voice = voice or resolve_voice(settings)
     spd = tts_audio.clamp_speed(speed if speed is not None else resolve_speed(settings))
+    _key = (voice, spd, text)
+    _hit = _cache_get(_key)
+    if _hit is not None:
+        _state["last_used"] = time.time()
+        return dict(_hit)
+    _maybe_idle_stop(settings)
+    url = _start(settings, voice)
 
     try:
         timeout = float(settings.get("tts_timeout_s") or 120)
@@ -319,8 +355,10 @@ def synthesize(text: str, settings: dict | None = None, *,
         raise TtsError("TTS_FAILED", "the engine returned something that is not a WAV")
     _state["last_used"] = time.time()
     stretched = tts_audio.stretch_wav(wav, spd)
-    return {"wav": stretched, "duration": tts_audio.duration_seconds(stretched),
-            "voice": voice, "speed": spd}
+    result = {"wav": stretched, "duration": tts_audio.duration_seconds(stretched),
+              "voice": voice, "speed": spd}
+    _cache_put(_key, result)
+    return dict(result)
 
 
 def status(settings: dict | None = None) -> dict:

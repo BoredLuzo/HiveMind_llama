@@ -191,12 +191,37 @@ check("the child is stopped at exit", "atexit.register" in code)
 check("idle shutdown exists", "def _maybe_idle_stop" in code)
 check("no shell", "shell=True" not in code)
 
+
+# ── synthesis cache (repeated texts are free) ─────────────────────────────
+check("the cache primitives exist", hasattr(tts_engine, "_cache_get")
+      and hasattr(tts_engine, "_cache_put"))
+tts_engine._cache_put(("anna", 1.08, "probe"), {"wav": b"RIFFprobe", "duration": 1.0,
+                                                "voice": "anna", "speed": 1.08})
+check("the cache returns what was stored",
+      tts_engine._cache_get(("anna", 1.08, "probe"))["wav"] == b"RIFFprobe")
+for _i in range(tts_engine._CACHE_MAX + 20):
+    tts_engine._cache_put(("anna", 1.08, "fill %d" % _i), {"wav": b"x"})
+check("the cache stays bounded", len(tts_engine._cache) <= tts_engine._CACHE_MAX,
+      f" ({len(tts_engine._cache)} entries)")
+
+# a cached text must not reach the sidecar at all
+_before = len(StubTTSCard.seen_voices)
+tts_engine._cache_put(("cosette", 1.08, "cached answer"), {
+    "wav": b"RIFFwarm", "duration": 2.0, "voice": "cosette", "speed": 1.08})
+_hit = tts_engine.synthesize("cached answer", SET)
+check("a cached text is served without the engine",
+      _hit["wav"] == b"RIFFwarm" and len(StubTTSCard.seen_voices) == _before)
+check("the cache key carries voice and speed",
+      any(abs(k[1] - 1.08) < 1e-6 for k in tts_engine._cache))
+
+
 server.shutdown()
 
 # ── keep-alive client (latency): one client, not one per request ──────────
 check("a single keep-alive client is reused", "def _client()" in code
       and "_client().post(" in code)
 check("the client is created lazily", "_http_client = None" in code)
+
 
 print()
 print(f"SUMMARY tts_engine: {passed} passed, {failed} failed")
