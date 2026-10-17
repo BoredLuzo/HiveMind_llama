@@ -141,7 +141,8 @@ run in any order after 1.
 - **STT engine: whisper.cpp**, with the model file as the tier - the same release
   ships `whisper-cli`/`whisper-server` *and* `parakeet-cli`, so "support weak
   CPUs" is a model choice, not a second install. Measured on the owner's machine
-  (`C:\Users\NtheP\Desktop\STTEngineTest\RESULTS.md`), 8 threads:
+  (measured on the owner's machine; the spike folder with models, binaries and
+  `RESULTS.md` sits next to the repo as `STTEngineTest`), 8 threads:
   - **real human English, 73 LibriSpeech utterances / 481 s, micro-WER**:
     parakeet v3 **q4_k 3.57 %** (RTFx 18.7, 552 MB), q8_0 3.65 % (10.6, 794 MB),
     whisper small 7.30 % (4.1, 582 MB), base 9.91 % (14.1, 317 MB),
