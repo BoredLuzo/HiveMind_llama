@@ -1599,7 +1599,7 @@
         <span class="tgl-text">Text to speech</span>
         <label class="cfl-sw">
           <input type="checkbox" id="tts-enabled-toggle"
-            onchange="S.ttsEnabled=this.checked;postSettings({tts_enabled:this.checked});_syncTtsCard();_ttsStatusRefresh();if(this.checked){voiceEnableDefaults();voiceWarmup();}">
+            onchange="S.ttsEnabled=this.checked;postSettings({tts_enabled:this.checked});_syncTtsCard();_ttsStatusRefresh();if(this.checked){voiceEnableDefaults();setTimeout(voiceWarmup,600);}">
           <span class="sl"></span>
         </label>
       </div>
