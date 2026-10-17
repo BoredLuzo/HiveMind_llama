@@ -1675,6 +1675,26 @@ async function _voiceCardRefresh() {
         });
       }
       if (want) modelSel.value = want;
+      // MODEL-HINT (2026-10-18): the dropdown lists the whole tier table, which
+      // reads as "why are these not downloaded?". Say it: one default is picked
+      // by RAM, the rest are optional and only fetched when you press Download.
+      var _mh = document.getElementById('stt-model-hint');
+      if (_mh) {
+        var _def = (st.available_models || []).filter(function (m) {
+          return m.key === st.model;
+        })[0] || {};
+        var _miss = (st.available_models || []).filter(function (m) {
+          return !m.installed;
+        }).length;
+        var _wer = _def.wer ? ' (' + (_def.wer * 100).toFixed(1) + ' % micro-WER)' : '';
+        _mh.textContent = 'Default for this machine: ' + (st.model_label || st.model)
+          + ' (' + Math.round(_def.size_mb || st.model_size_mb || 0) + ' MB' + _wer + ')'
+          + (st.ram_gb ? ', picked for ' + Math.round(st.ram_gb) + ' GB RAM' : '')
+          + ' - best English accuracy per byte, CPU only.'
+          + (_miss ? ' The other ' + _miss + ' tier' + (_miss > 1 ? 's are' : ' is')
+                     + ' optional: pick one and press Download; nothing is '
+                     + 'fetched before that.' : '');
+      }
     }
     if (langSel) langSel.value = st.language || 'en';
     if (thrSel) thrSel.value = String(st.threads || 0);
@@ -3192,6 +3212,10 @@ function _pruneToolCallRows(body, maxRows) {
 
 // -- New Chat ---------------------------------------------------
 async function newChat() {
+  // READ-ALOUD (2026-10-18): starting a new chat silenced nothing - the previous
+  // answer kept playing while the new chat was already empty. Stop the clip, the
+  // queue and the prefetched request here.
+  if (typeof _readAloudStop === 'function') _readAloudStop();
   await fetch('/memory/clear_session', {method:'POST'});
   _cleanupLoadTimers();
   if (window._plannerTickInterval) { clearInterval(window._plannerTickInterval); window._plannerTickInterval = null; }

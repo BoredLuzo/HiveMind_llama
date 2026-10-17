@@ -243,6 +243,21 @@ check("Stop clears the pending fetch", "_raPending = null;" in app)
 check("a chunk is fetched before the pump runs",
       "_raPending = _raFetch(_first); _readAloudNext();" in app)
 
+
+# ── NEW-CHAT-SILENCE + MODEL LIST EXPLANATION (2026-10-18) ───────────────
+_nc_body = app[app.index("async function newChat()"):]
+_nc_body = _nc_body[:_nc_body.index("await fetch('/memory/clear_session'")]
+check("a new chat stops the read-aloud",
+      "if (typeof _readAloudStop === 'function') _readAloudStop();" in _nc_body)
+check("the model list carries a hint element", 'id="stt-model-hint"' in card)
+check("the hint names the default, its size, WER and RAM",
+      "Default for this machine:" in app and "_def.wer" in app
+      and "picked for" in app)
+check("the hint explains the optional tiers",
+      "optional: pick one and press Download" in app)
+check("the select marks uninstalled tiers",
+      "not installed" in app and "installed" in app)
+
 print()
 print(f"SUMMARY voice_card: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
