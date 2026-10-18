@@ -5,6 +5,9 @@ no closure state is involved. Moving them keeps the 6,700-line function
 readable without touching its control flow.
 """
 from __future__ import annotations
+from pathlib import Path
+
+from core.duo._pre_explore import _explore_extract_files
 
 import asyncio, hashlib, json, logging, os, re, sys, time, uuid
 from context.chat import (
@@ -575,3 +578,42 @@ def _ld_setter(src_line: int = 0) -> None:
     import inspect as _insp
     logger.warning("[LD-SET] _loop_detected set at line %d (caller %d)",
                    src_line, _insp.currentframe().f_back.f_lineno)
+
+
+def loop_detect_file_snapshot(ws_str: str, explore_ctx, pre_explore_msgs, written_files, contracts_raw) -> dict | None:
+    try:
+        from hive_functions.chunking import (
+            build_file_signature as _bfs,
+            normalize_resume_candidate_path as _nrcp,
+        )
+        _cands: set = set()
+        for _wf in written_files or []:
+            _cands.add(str(_wf))
+        try:
+            _cands.update(
+                (_explore_extract_files(explore_ctx, pre_explore_msgs) or {}).keys()
+            )
+        except Exception:
+            pass
+        for _ct in (contracts_raw or []):
+            if not isinstance(_ct, dict):
+                continue
+            for _e in (_ct.get("exports") or []):
+                if isinstance(_e, dict):
+                    _p = str(_e.get("path") or _e.get("file") or "")
+                    if _p:
+                        _cands.add(_p)
+                elif isinstance(_e, str) and _e.strip():
+                    _cands.add(_e.strip())
+        _out: dict = {}
+        for _cp in _cands:
+            _np = _nrcp(_cp, Path(ws_str))
+            if not _np:
+                continue
+            _sig = _bfs(_np)
+            if _sig:
+                _out[_np] = _sig
+        return _out
+    except Exception as _ld_err:
+        logger.debug("[LOOP-DETECT] File snapshot failed: %s", _ld_err)
+        return None

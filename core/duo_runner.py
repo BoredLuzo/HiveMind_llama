@@ -251,6 +251,7 @@ _READONLY_CODER_NOTE = (
 # PREFLIGHT-EXTRACT (1.4.x): the module-level helpers live in core/duo/preflight.py
 # now. Re-exported here so existing imports (coder_briefing_text, ...) keep working.
 from core.duo.preflight import (  # noqa: F401
+    loop_detect_file_snapshot as _ld_file_snapshot,
     _apply_thinking_kwargs,
     _auto_commit_chunk,
     _await_with_hb,
@@ -5101,49 +5102,14 @@ async def run_code_duo(ctx):
                                 continue
                         # ── RUN-BASH-CHANGE-DETECTION (Problem 2) ─────────────
                         # _contracts_raw exports, normalized against _ws_str.
-                        def _loop_detect_file_snapshot():
-                            try:
-                                from hive_functions.chunking import (
-                                    build_file_signature as _bfs,
-                                    normalize_resume_candidate_path as _nrcp,
-                                )
-                                _cands: set = set()
-                                for _wf in _written_files or []:
-                                    _cands.add(str(_wf))
-                                try:
-                                    _cands.update(
-                                        (_explore_extract_files(_explore_ctx, _pre_explore_msgs) or {}).keys()
-                                    )
-                                except Exception:
-                                    pass
-                                for _ct in (_contracts_raw or []):
-                                    if not isinstance(_ct, dict):
-                                        continue
-                                    for _e in (_ct.get("exports") or []):
-                                        if isinstance(_e, dict):
-                                            _p = str(_e.get("path") or _e.get("file") or "")
-                                            if _p:
-                                                _cands.add(_p)
-                                        elif isinstance(_e, str) and _e.strip():
-                                            _cands.add(_e.strip())
-                                _out: dict = {}
-                                for _cp in _cands:
-                                    _np = _nrcp(_cp, Path(_ws_str))
-                                    if not _np:
-                                        continue
-                                    _sig = _bfs(_np)
-                                    if _sig:
-                                        _out[_np] = _sig
-                                return _out
-                            except Exception as _ld_err:
-                                logger.debug("[LOOP-DETECT] File snapshot failed: %s", _ld_err)
-                                return None
 
                         _round_bash_only = (
                             {tc.get("function", {}).get("name", "") for tc in (_dr_tcs or [])}
                             == {"run_bash"}
                         )
-                        _snap_before = (await asyncio.to_thread(_loop_detect_file_snapshot)) if _round_bash_only else None
+                        _snap_before = (await asyncio.to_thread(
+            _ld_file_snapshot, _ws_str, _explore_ctx, _pre_explore_msgs,
+            _written_files, _contracts_raw)) if _round_bash_only else None
                         # ── Execute all tool calls via shared executor ──
                         # CACHE-HORIZON (2026-09-04): everything < cache_horizon
                         # has already been sent (immutable prefix); everything
@@ -5474,7 +5440,9 @@ async def run_code_duo(ctx):
                         elif _round_tool_names & _WRITE_TOOLS:
                             _bash_changed = None
                             if _round_tool_names == {"run_bash"} and _snap_before is not None:
-                                _snap_after = await asyncio.to_thread(_loop_detect_file_snapshot)
+                                _snap_after = await asyncio.to_thread(
+            _ld_file_snapshot, _ws_str, _explore_ctx, _pre_explore_msgs,
+            _written_files, _contracts_raw)
                                 from hive_functions.chunking import compute_bash_changed
                                 _bash_changed = compute_bash_changed(_snap_before, _snap_after)
                             from hive_functions.chunking import resolve_explore_reset

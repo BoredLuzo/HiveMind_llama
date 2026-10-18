@@ -309,10 +309,15 @@ def test_diff_null_on_cache_fns():
 def test_source_structure():
     src = Path(__file__).parent.parent / "core" / "duo_runner.py"
     text = src.read_text(encoding="utf-8")
-    if "def _loop_detect_file_snapshot():" in text:
-        ok("D1: snapshot closure present in duo_runner")
+    # 1.4.x: the snapshot moved to core/duo/preflight.py (per-helper lift); the
+    # runner must still CALL it with the captured state passed explicitly.
+    _pf = (Path(__file__).parent.parent / "core" / "duo" / "preflight.py").read_text(
+        encoding="utf-8")
+    if ("def loop_detect_file_snapshot(" in _pf
+            and "_ld_file_snapshot, _ws_str, _explore_ctx" in text):
+        ok("D1: snapshot lives in preflight, called with its captures")
     else:
-        fail("D1: snapshot closure missing")
+        fail("D1: snapshot wiring missing")
     if "_round_bash_only" in text and '== {"run_bash"}' in text:
         ok("D2: run_bash-only detection before the tool execution")
     else:
