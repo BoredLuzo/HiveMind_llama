@@ -13043,7 +13043,13 @@ function _updateDuoRoleStatus(elId, label, model) {
      ['tg-result-mode-sel', 'Telegram — Result format', null, 'Telegram voice',
       'result mode ergebnis format text voice both nur sprache voice only results only answer'],
      ['tg-progress-toggle', 'Telegram — Progress messages', null, 'Telegram voice',
-      'progress status tool calls info messages stumm mute silent only result']].forEach(function(d) {
+      'progress status tool calls info messages stumm mute silent only result'],
+     // MCP has no card of its own (it is a launcher + a settings list), so the
+     // DOM scan cannot find it - without this entry "mcp" searched nothing.
+     ['configs', 'MCP server (external tools)', null, 'Backend',
+      'mcp model context protocol server external tools 8090 stdio http client hivemind tools'],
+     ['configs', 'External clients / API access', null, 'Backend',
+      'api openai compatible endpoint v1 chat completions external client integration rest']].forEach(function(d) {
       var card = document.getElementById(d[0]) ?
         document.querySelector('.cfg-card:has(#' + d[0] + ')') : null;
       var el = document.getElementById(d[0]);
