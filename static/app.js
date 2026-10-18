@@ -2598,6 +2598,9 @@ function renderAgentCards(agents) {
 
     const div = document.createElement('div');
     div.className = 'acard';
+    // PRESET-AGENT-OVERLAY (2026-10-18): the role id on the DOM node lets the
+    // preset save read the on-screen sliders per agent.
+    div.setAttribute('data-agent', key);
 
     // Header
     const hdr = document.createElement('div');
@@ -2613,6 +2616,7 @@ function renderAgentCards(agents) {
     modLbl.className = 'fl';
     div.appendChild(modLbl);
     const sel = document.createElement('select');
+    sel.setAttribute('data-agent-model', key);
     sel.dataset.agent = key;
 
     // registryModel = what is really running right now (from /automap/current)
@@ -3087,6 +3091,36 @@ async function savePreset() {
   await loadPresets();
 }
 
+// PRESET-AGENT-OVERLAY (2026-10-18): read the agent cards that are on screen so
+// a just-moved budget/temperature slider lands in the preset snapshot even when
+// its POST /settings/agent has not been flushed yet (the ctx fields already do
+// this with _duoCtxPayload).
+function _agentCardsPayload() {
+  var out = {};
+  document.querySelectorAll('.acard').forEach(function (card) {
+    var sel = card.querySelector('select[data-agent-model]')
+           || card.querySelector('select');
+    var role = card.getAttribute('data-agent')
+            || (sel && sel.getAttribute('data-agent')) || '';
+    if (!role || role === 'null') return;
+    var entry = {};
+    if (sel && sel.value) entry.model = sel.value;
+    var t = card.querySelector('input[type=range][data-temp="' + role + '"]');
+    if (t) entry.temperature = parseFloat(t.value);
+    var k = card.querySelector('input[type=range][data-tok="' + role + '"]');
+    if (k) entry.max_tokens = parseInt(k.value, 10);
+    var b = card.querySelector('input[type=range][data-budget="' + role + '"]');
+    if (b) entry.thinking_budget = parseInt(b.value || '0', 10);
+    var c = card.querySelector('input[type=range][data-ctx="' + role + '"]');
+    if (c) entry.ctx = parseInt(c.value || '0', 10);
+    var cb = card.querySelector('input[type=checkbox][data-agent="' + role + '"]');
+    if (cb) entry.thinking = cb.checked;
+    if (Object.keys(entry).length) out[role] = entry;
+  });
+  return out;
+}
+
+
 async function savePresetAs(name) {
   if (!name) return;
   // PRESET-CTX-FIX (2026-09-04): die Ctx-Werte leben in den DOM-Feldern und
@@ -3099,6 +3133,10 @@ async function savePresetAs(name) {
     if (_ctxCommit && typeof _ctxCommit.then === 'function') await _ctxCommit;
   } catch (e) { /* stillen Fehler ignorieren - Overlay-Body sichert den Wert */ }
   var body = _duoCtxPayload();
+  try {
+    var _agCards = _agentCardsPayload();
+    if (_agCards && Object.keys(_agCards).length) body.agents = _agCards;
+  } catch (e) { /* keep the server-side snapshot */ }
   await fetch('/presets/' + encodeURIComponent(name), {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
@@ -3141,10 +3179,12 @@ async function loadPreset(name) {
     // "planner off + chunking off" snapshot used to disable the planner phase
     // without any feedback.
     var _warnTxt = (d.warnings && d.warnings.length)
-      ? '\n\n⚠ ' + d.warnings.join('\n⚠ ') : '';
-    alert('Preset "' + name + '" loaded.\n'
-      + 'Planner: ' + (d.planner_enabled ? 'ON' : 'OFF') + (d.planner_model ? ' (' + d.planner_model + ')' : '') + '\n'
-      + 'Chunking: ' + (d.chunking ? 'ON' : 'OFF') + _warnTxt);
+      ? ' | ⚠ ' + d.warnings.join(' ⚠ ') : '';
+    // no alert(): it blocked the UI for a full click-through and felt like lag
+    showStatus('Preset "' + name + '" loaded - planner '
+      + (d.planner_enabled ? 'ON' : 'OFF')
+      + (d.planner_model ? ' (' + d.planner_model + ')' : '')
+      + ', chunking ' + (d.chunking ? 'ON' : 'OFF') + _warnTxt);
   } else {
     alert('Preset "' + name + '" could not be loaded' + (d && d.error ? ': ' + d.error : ''));
   }

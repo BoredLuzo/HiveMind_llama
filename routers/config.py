@@ -84,6 +84,39 @@ _PRESET_OVERLAY_KEYS = {
 }
 
 
+def _sync_pipeline_agents() -> int:
+    """Push settings["agents"] into the LIVE pipeline after a preset load.
+
+    The load used to touch settings only: the pipeline kept the old max_tokens /
+    model, so
+      * a run right after the load used the OLD budget (answers truncated), and
+      * the next preset save overlaid those stale pipeline values back into the
+        snapshot, silently storing the old budget ("speichert nicht komplett").
+    Returns the number of fields applied (0 without a pipeline, e.g. in tests).
+    """
+    pipeline = getattr(_state, "pipeline", None)
+    if not pipeline or not getattr(pipeline, "agents", None):
+        return 0
+    applied = 0
+    for role, cfg in (settings.get("agents") or {}).items():
+        ag = pipeline.agents.get(role)
+        if ag is None or not isinstance(cfg, dict):
+            continue
+        for field, cast in (("model", str), ("temperature", float),
+                            ("max_tokens", int), ("thinking_budget", int)):
+            if field not in cfg or cfg[field] is None:
+                continue
+            try:
+                setattr(ag, field, cast(cfg[field]))
+                applied += 1
+            except (TypeError, ValueError):
+                continue
+        if "thinking" in cfg:
+            ag.thinking = bool(cfg["thinking"])
+            applied += 1
+    return applied
+
+
 def _preset_snapshot(extra: dict | None = None) -> dict:
     snap = {}
     for key, value in settings.items():
@@ -107,6 +140,21 @@ def _preset_snapshot(extra: dict | None = None) -> dict:
             _entry["max_tokens"] = a.max_tokens
             _entry["thinking"] = bool(getattr(a, "thinking", False))
             _entry["thinking_budget"] = int(getattr(a, "thinking_budget", 0) or 0)
+    # AGENT OVERLAY (2026-10-18): the client sends the agent cards it has on
+    # screen; per role, only the known fields are taken. This closes the race
+    # between a card edit and the snapshot (the ctx fields had the same fix).
+    if isinstance(extra, dict) and isinstance(extra.get("agents"), dict):
+        for _role, _cfg in extra["agents"].items():
+            if not isinstance(_cfg, dict):
+                continue
+            _dst = _ag_snap.get(_role)
+            if not isinstance(_dst, dict):
+                _dst = {}
+            for _f in ("model", "temperature", "max_tokens", "thinking",
+                       "thinking_budget", "ctx"):
+                if _f in _cfg:
+                    _dst[_f] = copy.deepcopy(_cfg[_f])
+            _ag_snap[_role] = _dst
     snap["agents"] = _ag_snap
     snap["prompts"] = {}
     return snap
@@ -129,7 +177,23 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
         if isinstance(_agents_cfg, dict) and "agents" in _agents_cfg and isinstance(_agents_cfg["agents"], dict):
             _agents_cfg = _agents_cfg["agents"]
         if isinstance(_agents_cfg, dict) and _agents_cfg:
-            settings["agents"] = copy.deepcopy(_agents_cfg)
+            # MERGE, do not replace: fields the preset does not carry keep their
+            # current value, and roles it never heard of survive. Replacing the
+            # dict dropped max_tokens/thinking for older presets, which silently
+            # shrank the output budget and truncated long answers.
+            _cur = settings.get("agents")
+            if not isinstance(_cur, dict):
+                _cur = {}
+            _merged = copy.deepcopy(_cur)
+            for _role, _cfg in _agents_cfg.items():
+                if not isinstance(_cfg, dict):
+                    continue
+                _dst = _merged.get(_role)
+                if not isinstance(_dst, dict):
+                    _dst = {}
+                _dst.update(copy.deepcopy(_cfg))
+                _merged[_role] = _dst
+            settings["agents"] = _merged
     for key, value in p.items():
         if key in {"agents", "prompts", "active_preset"}:
             continue
@@ -615,6 +679,9 @@ async def load_preset_ep(name: str):
     _warns: list = []
     if not await _apply_preset_internal(name, warnings=_warns):
         return JSONResponse({"error": "Not found"}, status_code=404)
+    # the pipeline is what a run actually reads - refresh it, or the next run
+    # (and the next preset snapshot) keeps the pre-load budgets.
+    _synced = _sync_pipeline_agents()
     try:
         if _state.pipeline:
             judge_agent = _state.pipeline.agents.get("judge")
@@ -633,6 +700,7 @@ async def load_preset_ep(name: str):
         "planner_model": settings.get("duo_planner_model") or "",
         # PRESET-WORKSPACE-GUARD: surfaced in the load alert, not only in logs
         "warnings": _warns,
+        "pipeline_fields": _synced,
     }
 
 
