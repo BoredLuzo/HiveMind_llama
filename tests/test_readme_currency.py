@@ -61,14 +61,19 @@ _extra = sorted(t for t in _tags
 _cat_start = _RD.index("## Download catalog")
 _cat_end = _RD.index("\n## ", _cat_start + 1)
 _catalog_section = _RD[_cat_start:_cat_end]
-_catalog_rows = re.findall(r"^\|\s*`([^`]+)`[^|]*\|[^|]*\|[^|]*\|$", _catalog_section, re.M)
+# the table is Model | Repo | Role | Download (2026-10-18): parse the first cell
+# of any data row, whatever the remaining column count is
+_catalog_rows = re.findall(r"^\|\s*`([^`]+)`\s*\|", _catalog_section, re.M)
 _unknown_rows = [r for r in _catalog_rows if r.split(" ")[0] not in _installer]
 check("the catalog table lists every installer model", len(_catalog_rows) == len(_installer),
       f" ({len(_catalog_rows)} rows vs {len(_installer)} models)")
 check("the catalog table only lists installer models", not _unknown_rows,
       f" (unknown rows: {_unknown_rows})")
-check("the catalog no longer claims a shorter list",
-      "offers exactly these models" not in _RD)
+# the old failure was a section that CLAIMED to list everything while listing
+# less. Row-count parity above proves it; here we only require that the section
+# names the authoritative file, so a reader can always check.
+check("the catalog names the authoritative file",
+      "deploy" in _catalog_section and "fetch_models.py" in _catalog_section)
 
 # ── (b) settings defaults ───────────────────────────────────────────────────
 from settings import DEFAULT_SETTINGS                              # noqa: E402

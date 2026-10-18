@@ -8,7 +8,7 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   gemma-4:e4b-it          Q4_K_M        — Direct/Vision/Allrounder
   qwen3.6:35b-a3b-ud      UD-Q4_K_XL    — Coder/Planner (MoE, needs ~16GB RAM)
   qwen3.6:…-genesis-final-apex-compact     APEX-Compact  — Coder/Hermes agent (MoE+MTP)
-  ling-3.0-tiny           Q4_K_L        — Low-resource Coder (hybrid MoE 7.9B/1.3B)
+  (catalog is authoritative - this block lists only the highlights)
   lfm2.5:2.6b             Q4_K_M        — Subagent/Worker + Judge
   qwen3.5:0.8b-ud         UD-Q4_K_XL    — Subagent ladder (smallest tier)
   qwen3.5:2b              Q4_K_M        — Refiner
@@ -214,6 +214,11 @@ SPECS: list[dict] = [
         "desc": "Hermes3.6 Genesis Final MTP-APEX-Compact (Coder/Hermes agent, MoE+MTP, ~18GB download)",
         "repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-Final-GGUF",
         "file_regex": [
+            # repo renamed its files (verified 2026-10-18): the actual asset is
+            # "Hermes3.6-35B-A3B-Uncensored-Genesis-APEX-Compact.gguf" - the old
+            # pinned name matched nothing and the installer silently fetched no
+            # weights. Both spellings are accepted so a rename back still works.
+            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-(?:mtp-)?apex-compact\.gguf$",
             r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-final-mtp-apex-compact\.gguf$",
         ],
         # The pinned repo names its projector after the BASE family
@@ -222,7 +227,11 @@ SPECS: list[dict] = [
         # got no projector. Dest re-embeds family+size so the writer keys
         # it as hermes3.6:35b_mmproj instead of a qwen3.6 entry.
         "mmproj_regex": [
+            # actual projector in the repo today:
+            # "mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf"
+            r"(?i)^mmproj-hermes3\.6-35b-a3b-uncensored-genesis-f16\.gguf$",
             r"(?i)^mmproj-qwen3\.6-35b-a3b-uncensored-genesis-hermes-final-f16\.gguf$",
+            r"(?i)^mmproj-.*hermes.*f16\.gguf$",
         ],
         "mmproj_dest": "mmproj-hermes3.6-35b-genesis-final-f16.gguf",
     },

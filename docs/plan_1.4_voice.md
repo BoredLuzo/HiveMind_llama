@@ -276,7 +276,7 @@ supervisor code.
 
 ### 4.2 Voices and languages
 
-- Language for 1.4: **English only** (owner decision). One model config, one
+- Language for 1.4: **English only** (scope decision). One model config, one
   voice catalog; the German config and the 24-layer variants stay a setting for
   later.
 - Voices (owner: "sexy female voices, otherwise one serious male voice"): ship a

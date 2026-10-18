@@ -71,6 +71,28 @@ def main():
     else:
         fail("vision_agent_mode applied", repr(_s.get("vision_agent_mode")))
 
+
+    # ── 2026-10-18 policy: presets are FULL snapshots ─────────────────────
+    _voice_keys = {"tts_enabled", "tts_voice", "tts_speed", "tts_volume",
+                   "tts_normalize", "tts_preload_run", "tts_read_direct",
+                   "tts_read_agentic", "tts_read_ask", "tts_read_gate",
+                   "stt_enabled", "stt_model", "stt_language", "stt_preload",
+                   "stt_threads", "telegram_voice_in", "telegram_voice_out",
+                   "telegram_result_mode", "telegram_progress_msgs",
+                   "git_repo_url", "git_username", "git_email",
+                   "git_auto_push", "git_default_branch"}
+    _leaked = sorted(k for k in _voice_keys if k in rc._PRESET_NEVER_KEYS)
+    if not _leaked:
+        ok("voice/STT/telegram/git identity ARE part of a preset")
+    else:
+        fail("preset still excludes settings", str(_leaked))
+
+    for _secret in ("git_token", "models_dir", "_registry"):
+        if _secret in rc._PRESET_NEVER_KEYS:
+            ok(f"{_secret} never enters a preset")
+        else:
+            fail(f"{_secret} must stay excluded")
+
     # restore whatever the run had before
     _s["git_commit_prefix"] = _before_prefix
     if _had_img_mode:

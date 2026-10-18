@@ -13004,7 +13004,18 @@ function _updateDuoRoleStatus(elId, label, model) {
      ['configs', 'Telegram — Voice notes in', null, 'Telegram voice',
       'telegram voice note in dictation transcribe bot phone dictate'],
      ['configs', 'Telegram — Answers as voice notes', null, 'Telegram voice',
-      'telegram voice out answer vorlesen voice note bot phone opus']].forEach(function(d) {
+      'telegram voice out answer vorlesen voice note bot phone opus'],
+     // the 1.4.2 controls: the card scan only sees English labels, and these
+     // three live in rows a text scan does not reach (a slider, a select, a
+     // switch with a long label) - curated keywords keep them findable.
+     ['voice-card', 'Voice — Volume', null, 'Voice',
+      'volume lautstaerke lautstärke level loud quiet leise slider playback 0-100'],
+     ['voice-card', 'Voice — Preload the engine', null, 'Voice',
+      'preload vorladen warmup warm-up cold start sidecar engine run start first sentence latency'],
+     ['tg-result-mode-sel', 'Telegram — Result format', null, 'Telegram voice',
+      'result mode ergebnis format text voice both nur sprache voice only results only answer'],
+     ['tg-progress-toggle', 'Telegram — Progress messages', null, 'Telegram voice',
+      'progress status tool calls info messages stumm mute silent only result']].forEach(function(d) {
       var card = document.getElementById(d[0]) ?
         document.querySelector('.cfg-card:has(#' + d[0] + ')') : null;
       var el = document.getElementById(d[0]);

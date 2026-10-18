@@ -61,17 +61,18 @@ _UI_REV_PROTECTED_KEYS = {
 # keinen Backend-Leser - die eine Wahrheit fuer Preprocessing lebt in
 # vision_model.json (/vision/config), der Pipeline-Runner ist sequenziell.
 # Ein Preset darf diesen Zustand weder einfrieren noch zurueckspielen.
+# POLICY (2026-10-18, owner): a preset is a FULL settings snapshot - voice, STT,
+# Telegram voice and the git identity belong to it, so loading "phone + voice"
+# actually restores the phone + voice setup. Only two things are never stored:
+#   * secrets (git_token) - a preset file is shared/exported, a token in it is a
+#     leak;
+#   * machine paths (models_dir) - an absolute install path that a snapshot on
+#     another machine must not overwrite.
+# `_registry` is internal bookkeeping, and image_processing_mode /
+# vision_agent_mode have no backend reader (the truth lives in
+# vision_model.json via /vision/config).
 _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
-                      "image_processing_mode", "vision_agent_mode",
-                      # VOICE (1.4): a run preset must never start or stop the
-                      # speech engine - voice on/off is a machine preference, not
-                      # part of a run configuration. Loading a preset used to flip
-                      # tts_enabled/stt_enabled and spawn the TTS sidecar.
-                      "tts_enabled", "tts_voice", "tts_speed",
-                      "tts_read_direct", "tts_read_agentic", "tts_read_ask",
-                      "tts_read_gate", "stt_enabled", "stt_model", "stt_language",
-                      "stt_preload", "stt_threads", "telegram_voice_in",
-                      "telegram_voice_out"}
+                      "image_processing_mode", "vision_agent_mode"}
 
 # PRESET-CTX-OVERLAY (2026-09-04): nur diese Keys darf der Client beim
 # Preset-Save explizit uebergeben (verhindert das Race zwischen debounced

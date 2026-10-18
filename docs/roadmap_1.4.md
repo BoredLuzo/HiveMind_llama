@@ -1,6 +1,6 @@
 # HiveMind 1.4 candidate backlog
 
-Release targets (owner decision 2026-10-10): **1.4 = voice (TTS/STT)
+Release targets (scope decision for 1.4): **1.4 = voice (TTS/STT)
 plus a smart MCP update**. 1.5 candidates follow at the end (ComfyUI
 full-AI-stack integration).
 

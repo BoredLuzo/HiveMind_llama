@@ -289,35 +289,41 @@ Configs tab or `/model_configs` API, and override base defaults at runtime.
 
 ## Download catalog
 
-`setup_models.bat` offers these models (every repo is pinned — no fuzzy search).
-The same list lives in `deploy/fetch_models.py`; sizes are the download/VRAM
-figures from that file and only meant as a rough guide:
+`setup_models.bat` offers exactly these models (every repo is pinned - no fuzzy
+search). The list lives in `deploy/fetch_models.py`; the sizes below were measured
+on the Hub on 2026-10-18 and are the download figures for the GGUF plus its
+projector/drafter. A repo can rename or re-quantise a file, so
+`python deploy\fetch_models.py --list-only` is always the authoritative answer.
 
-| Model | Role | Rough size |
-|-------|------|------------|
-| `gemma-4:e4b-it-qat` (UD-Q4_K_XL) | all-rounder / vision (+ MTP drafter) | ~4.2 GB + mmproj |
-| `gemma-4:e2b-it-qat` (UD-Q4_K_XL) | small all-rounder / vision (+ MTP drafter) | ~2.6 GB + mmproj |
-| `gemma-4:e4b-uncensored-hauhaucs-aggressive` | uncensored all-rounder | ~5 GB |
-| `qwen3.6:35b-a3b-ud` | coder / planner (MoE) | ~20 GB |
-| `hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact` | coder / hermes agent (MoE + MTP) | ~18 GB |
-| `qwen3.5:9b-mtp` | heavy duo coder (MTP) | ~6 GB |
-| `qwen3.5:4b-mtp` | duo coder/planner default (MTP) | ~3.3 GB |
-| `qwen3.5:2b-mtp` | refiner (MTP) | ~1.3 GB |
-| `qwen3.5:0.8b-ud` | subagent-lite, smallest ladder tier | ~0.7 GB |
-| `lfm2.5:2.6b` | subagent / judge (+ DSpark drafter) | ~2 GB |
-| `minicpm5:2b-sharp` (Q6_K_XL) | light all-rounder, recommended tier | ~2.1 GB |
-| `minicpm5:2b-sharp-q4` (Q4_K_XL) | same model, smaller/weaker tier | ~1.5 GB |
+| Model | Repo | Role | Download |
+|-------|------|------|----------|
+| `gemma-4:e4b-it-qat` | unsloth/gemma-4-E4B-it-qat-GGUF | all-rounder / vision (+ MTP drafter) | 4.2 GB + 1.0 GB mmproj |
+| `gemma-4:e2b-it-qat` | unsloth/gemma-4-E2B-it-qat-GGUF | small all-rounder / vision (+ MTP drafter) | 2.6 GB + 1.0 GB mmproj |
+| `gemma-4:e4b-uncensored-hauhaucs-aggressive` | HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive | uncensored all-rounder | 5.4 GB + 1.0 GB mmproj |
+| `qwen3.6:35b-a3b-ud` | unsloth/Qwen3.6-35B-A3B-GGUF | coder / planner (MoE) | 22.4 GB + 0.9 GB mmproj |
+| `hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact` | LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-Final-GGUF | coder / hermes agent (MoE) | 17.4 GB + 0.9 GB mmproj |
+| `qwen3.5:9b-mtp` | unsloth/Qwen3.5-9B-MTP-GGUF | heavy duo coder (MTP) | 5.9 GB + 0.9 GB mmproj |
+| `qwen3.5:4b-mtp` | unsloth/Qwen3.5-4B-MTP-GGUF | duo coder/planner default (MTP) | 2.8 GB + 0.7 GB mmproj |
+| `qwen3.5:2b-mtp` | unsloth/Qwen3.5-2B-MTP-GGUF | refiner (MTP) | 1.3 GB + 0.7 GB mmproj |
+| `qwen3.5:0.8b-ud` | unsloth/Qwen3.5-0.8B-GGUF | subagent-lite, smallest ladder tier | 0.6 GB + 0.2 GB mmproj |
+| `lfm2.5:2.6b` | LiquidAI/LFM2.5-2.6B-GGUF | subagent / judge (+ DSpark drafter) | 1.7 GB + 0.2 GB drafter |
+| `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL) | 2.2 GB |
+| `minicpm5:2b-sharp-q4` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | same model, smaller/weaker tier (Q4_K_XL) | 1.6 GB |
 
-Other GGUFs on disk can be registered without downloading anything
-(setup_models.bat -> [R]) or added with a full config via [C].
+Text-only models (`minicpm5`, `lfm2.5`) download a single GGUF; the vision models
+pull their projector automatically, and `gemma-4` additionally gets a ~60 MB MTP
+drafter from the same repo.
+
+GGUFs already on disk can be registered without downloading anything
+(`setup_models.bat` -> `[R]`) or given a full config via `[C]`.
 
 Multimodal: gemma-4 has a built-in vision encoder; qwen3.5/3.6/hermes use an
-`mmproj` projector (auto-downloaded with the model). Non-multimodal models
-fall back to the vision-agent preprocessing path.
+`mmproj` projector (auto-downloaded with the model). Non-multimodal models fall
+back to the vision-agent preprocessing path.
 
 Chat templates: qwen3.5/3.6/hermes models launch with the bundled
-`model_configs/chat_template22.5.jinja`; gemma-4 uses its own built-in
-template. Per-model overrides live in `model_configs/models/<tag>.json`.
+`model_configs/chat_template22.5.jinja`; gemma-4 uses its own built-in template.
+Per-model overrides live in `model_configs/models/<tag>.json`.
 
 ## UI and control
 

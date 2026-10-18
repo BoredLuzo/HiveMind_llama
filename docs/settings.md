@@ -247,3 +247,28 @@ The following keys were previously only implicit read fallbacks ("hidden") and a
 `duo_autolint_python_engine, duo_caps, duo_coder_model, duo_critic_model, duo_pyright_path, plan_tracker_classifier, read_guard_enabled`
 
 | `duo_coder_after_run` | `keep` | Coder slot lifetime after a run: `keep` (stays warm, the TTL decides) or `evict` (released at run end, also on abort). |
+
+### Voice, images and the remaining knobs
+
+These were missing from the table above; defaults are from `settings.py`.
+
+| Setting | Type | Default | Card | Description |
+|---|---|---|---|---|
+| `tts_read_direct` | bool | `False` | Voice | Read direct-mode answers aloud. |
+| `tts_read_agentic` | bool | `False` | Voice | Read agentic answers (the fazit) aloud. |
+| `tts_read_ask` | bool | `False` | Voice | Read `ask_user` questions aloud. |
+| `tts_read_gate` | bool | `False` | Voice | Read approval cards aloud. |
+| `telegram_voice_in` | bool | `False` | Voice / gateway | Accept voice notes from the phone (transcribed, audio discarded). `voice_in` in `gateway.toml` is the fallback. |
+| `telegram_voice_out` | bool | `False` | Voice / gateway | Send the final answer back as a voice note. |
+| `telegram_result_mode` | str | `"both"` | Telegram | `both`, `text` or `voice` (results-only line; errors stay text). |
+| `telegram_progress_msgs` | bool | `True` | Telegram | OFF silences status + tool lines; approvals and the result still arrive. |
+| `run_bash_shell` | str | `"auto"` | - | Shell used by `run_bash` (`auto` picks pwsh/cmd or bash per platform). |
+| `duo_action_approval_timeout_s` | int | `0` | - | Auto-deny a pending approval card after this many seconds (`0` = wait forever). |
+| `vram_preflight_gate` | bool | `True` | - | Refuse a model load that the VRAM estimate says will not fit. |
+| `duo_mask_before_compress` | bool | `True` | - | Mask tool payloads before context compression (keeps the shape, drops the bulk). |
+| `session_history_budget_tokens` | int | `0` | - | Token budget for seeding chat history into a run (`0` = derive from ctx). |
+| `duo_image_mode` | str\|null | `None` | - | Image preprocessing mode for the pipeline (`None` = sequential default). |
+| `duo_image_to_planner` | bool | `False` | - | Hand attached images to the planner as well. |
+| `duo_image_to_coder` | bool | `False` | - | Hand attached images to the coder as well. |
+| `duo_coder_images_off` | bool | `False` | - | Never send images to the coder (text-only coder models). |
+| `image_uploads_persistent` | bool | `False` | - | Keep uploaded images on disk instead of memory (`sessions/`). |
