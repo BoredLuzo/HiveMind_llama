@@ -129,8 +129,14 @@ if out:
         plain = ""
         print(f"  .. plain live check skipped ({type(exc).__name__})")
     if plain:
-        check("the engine path still works and shows a real date",
-              re.search(r"fetched today: \d{4}-\d{2}-\d{2}", plain) is not None)
+        # A down SearXNG answers with a plain hint ("SearXNG not reachable ..."),
+        # not with an error - that used to fail the suite on a machine without
+        # the container. Only a real answer must carry the date header.
+        if "SearXNG not reachable" in plain or "not reachable" in plain:
+            print("  .. engine path skipped (SearXNG not reachable)")
+        else:
+            check("the engine path still works and shows a real date",
+                  re.search(r"fetched today: \d{4}-\d{2}-\d{2}", plain) is not None)
 else:
     print("  .. live check produced no output (SearXNG/network down) - source checks only")
 
