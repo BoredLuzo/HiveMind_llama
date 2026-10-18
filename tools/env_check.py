@@ -20,6 +20,7 @@ engine, no model, no slot.
 """
 import argparse
 import importlib
+import importlib.util
 import subprocess
 import sys
 
@@ -47,48 +48,79 @@ def probe_all(modules: list) -> tuple[str, str] | None:
 
 
 def diagnose() -> None:
-    """Print the facts that separate the three usual causes.
+    """Print the facts that separate the usual causes - without importing the
+    broken package (an import is exactly what fails, so the old version printed
+    nothing useful for pydantic_core):
 
     (a) a stale/mismatched pair (old pydantic-core next to a new pydantic),
-    (b) a broken/partial/quarantined .pyd (exists but zero bytes or unloadable),
-    (c) something shadowing the package earlier on sys.path.
+    (b) a broken/partial/quarantined extension (exists but tiny/unloadable),
+    (c) something shadowing the package (PYTHONPATH, a user site, a copy in the
+        install folder).
     """
     import os
+
     print(f"[ENV-CHECK] python {sys.version.split()[0]} ({sys.executable})")
+    for var in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"):
+        val = os.environ.get(var)
+        if val:
+            print(f"[ENV-CHECK]   {var}={val}  <-- can shadow the venv")
+
     for name in ("pydantic", "pydantic_core"):
         try:
-            mod = importlib.import_module(name)
-            print(f"[ENV-CHECK]   {name}: {getattr(mod, '__version__', '?')} "
-                  f"at {getattr(mod, '__file__', '?')}")
-        except ImportError as exc:
-            print(f"[ENV-CHECK]   {name}: import failed ({exc})")
-    try:
-        import pydantic_core
-        _dir = os.path.dirname(getattr(pydantic_core, "__file__", "") or "")
-        for fn in sorted(os.listdir(_dir)):
-            if fn.startswith("_pydantic_core") or fn.startswith("pydantic_core"):
-                fp = os.path.join(_dir, fn)
-                try:
-                    st = os.stat(fp)
-                    print(f"[ENV-CHECK]   {fn}: {st.st_size} bytes")
-                except OSError:
-                    print(f"[ENV-CHECK]   {fn}: missing")
-    except (ImportError, OSError, ValueError):
-        pass
-    # shadowing: a pydantic_core package BEFORE the venv's site-packages?
-    import site
-    try:
-        sp = [p for p in site.getsitepackages() if p]
-    except AttributeError:
-        sp = []
-    for entry in sys.path:
-        if not entry or not os.path.isdir(entry):
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError) as exc:
+            print(f"[ENV-CHECK]   {name}: not found ({exc})")
             continue
-        if os.path.isdir(os.path.join(entry, "pydantic_core")) and sp:
-            if not any(os.path.abspath(entry).startswith(os.path.abspath(s))
-                       for s in sp):
-                print(f"[ENV-CHECK]   WARNING: shadowing pydantic_core in {entry}")
+        if spec is None:
+            print(f"[ENV-CHECK]   {name}: not installed")
+            continue
+        where = spec.origin or (spec.submodule_search_locations or ["?"])[0]
+        print(f"[ENV-CHECK]   {name}: {where}")
 
+    # every directory that carries a pydantic_core, in sys.path ORDER - the first
+    # one wins, and a second copy is the classic shadowing cause
+    import site
+    found = [e for e in sys.path
+             if e and os.path.isdir(os.path.join(e, "pydantic_core"))]
+    for i, entry in enumerate(found):
+        mark = "used" if i == 0 else "SHADOWED"
+        print(f"[ENV-CHECK]   pydantic_core #{i + 1} [{mark}]: {entry}")
+
+    # the compiled module itself: a 0-byte or missing .pyd is a quarantine or a
+    # half-written install, and size is the only evidence that survives
+    for base in found:
+        pkg = os.path.join(base, "pydantic_core")
+        try:
+            entries = sorted(os.listdir(pkg))
+        except OSError:
+            continue
+        init = os.path.join(pkg, "__init__.py")
+        try:
+            init_size = os.stat(init).st_size
+        except OSError:
+            init_size = -1
+        if init_size <= 0:
+            # no (or empty) __init__.py -> Python treats the folder as a NAMESPACE
+            # package, the import resolves to "unknown location" and a symbol like
+            # ArgsKwargs can never be found. This is the quarantine/partial-install
+            # fingerprint, not a version mismatch.
+            print(f"[ENV-CHECK]   {pkg}: __init__.py missing or empty "
+                  f"({init_size} bytes) <-- namespace package, 'unknown location'")
+        pyds = [e for e in entries if e.startswith("_pydantic_core")]
+        if not pyds:
+            print(f"[ENV-CHECK]   {pkg}: NO compiled _pydantic_core*.pyd inside")
+        for fn in pyds:
+            try:
+                size = os.stat(os.path.join(pkg, fn)).st_size
+            except OSError:
+                size = -1
+            print(f"[ENV-CHECK]   {fn}: {size} bytes")
+
+    # a second pydantic_core outside the venv (user site) is worth naming even if
+    # it is not on sys.path right now
+    user_site = getattr(site, "getusersitepackages", lambda: "")()
+    if user_site and os.path.isdir(os.path.join(user_site, "pydantic_core")):
+        print(f"[ENV-CHECK]   also present in the USER site: {user_site}")
 
 
 def repair(packages: list) -> tuple[bool, str]:
@@ -107,6 +139,13 @@ def repair(packages: list) -> tuple[bool, str]:
         if _run([sys.executable, "-m", "pip", "install", "--force-reinstall",
                  "--no-cache-dir", "--only-binary", ":all:", *packages]) == 0:
             return True, "pip"
+        # ESCALATION (2026-10-18): --force-reinstall overwrites files but never
+        # removes an orphan left by another version. Uninstall first, then install
+        # again - the pair is reinstalled either way.
+        if _run([sys.executable, "-m", "pip", "uninstall", "-y", *packages]) == 0:
+            if _run([sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                     "--only-binary", ":all:", *packages]) == 0:
+                return True, "pip (uninstall + install)"
     if _run(["uv", "--version"]) == 0:
         tried.append("uv")
         if _run(["uv", "pip", "install", "--python", sys.executable,
@@ -156,7 +195,10 @@ def main() -> int:
         return 0
     diagnose()
     print("[ENV-CHECK] STILL BROKEN after repair. In this order:")
-    print("  1. Antivirus/quarantine: the compiled module may have been")
+    print("  1. Check the lines above: a 0-byte _pydantic_core*.pyd (antivirus")
+    print("     quarantine, half-written install) or a second 'pydantic_core'")
+    print("     marked SHADOWED (PYTHONPATH / user site) are the usual causes.")
+    print("  1b. Antivirus/quarantine: the compiled module may have been")
     print("     removed right after install. Check the AV log, exclude the")
     print("     install folder, then re-run start_hivemind.bat.")
     print("  2. Reinstall the PAIR by hand (a mismatch between pydantic and")
