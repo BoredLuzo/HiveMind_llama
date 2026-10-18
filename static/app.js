@@ -2183,6 +2183,31 @@ function _syncTgVoice() {
   }
   _paint(inEl, sttOn, S && S.tgVoiceIn);
   _paint(outEl, ttsOn, S && S.tgVoiceOut);
+  // RESULT-MODE (2026-10-18, owner): the result format belongs to the voice
+  // feature - with TTS off it must be greyed like the toggles, not sit there
+  // looking active. Same for the two hint lines.
+  var sel = document.getElementById('tg-result-mode-sel');
+  if (sel) {
+    sel.disabled = !ttsOn;
+    var fld = sel.closest('.fld') || sel.parentElement;
+    if (fld) {
+      fld.style.opacity = ttsOn ? '' : '.4';
+      fld.style.pointerEvents = ttsOn ? '' : 'none';
+    }
+  }
+  ['tg-voice-in-hint', 'tg-voice-out-hint', 'tg-result-hint'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var on = (id === 'tg-voice-in-hint') ? sttOn : ttsOn;
+    el.style.opacity = on ? '' : '.45';
+  });
+  var prog = document.getElementById('tg-progress-toggle');
+  if (prog) {
+    // progress messages are independent of voice, but the row only makes sense
+    // once the phone channel exists at all - keep it usable, just dim the label
+    var row = prog.closest('.tgl-row');
+    if (row) row.style.opacity = '';
+  }
 }
 
 

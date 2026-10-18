@@ -11,7 +11,7 @@ non-commercial and two models carry attribution obligations.
 | HiveMind's own voice code (`core/tts_*.py`, `core/stt_*.py`) | the repo's own license | none |
 | `pocket-tts` **code** (installed by `uvx`) | **MIT** (`kyutai-labs/pocket-tts`) | keep the copyright notice with substantial copies (we do not vendor it) |
 | **Pocket TTS model weights** (`kyutai/pocket-tts`) | **CC BY 4.0** | **attribution**, plus the gated "prohibited use" terms |
-| whisper models (`ggerganov/whisper.cpp` → `ggml-*.bin`) | Apache-2.0 (OpenAI Whisper) | attribution/notice |
+| whisper models (`ggerganov/whisper.cpp` → `ggml-*.bin`) | **MIT** (the HF repos for the ggml weights - incl. openai/whisper-* and Systran/faster-whisper-* - are tagged MIT) | notice |
 | whisper.cpp + parakeet binaries (`ggml-org/whisper.cpp`) | MIT | notice |
 | Parakeet weights (`ggml-org/parakeet-GGUF`) | repo says MIT, upstream `nvidia/parakeet-tdt-0.6b-v3` says **CC BY 4.0** | treat as **CC BY 4.0** (the stricter one) |
 | TinyDecide (decision-model candidate) | Apache-2.0 | notice |
@@ -25,6 +25,10 @@ has **no single license** - each folder has its own. Read out of the installed
 
 | Voice | Source file | License |
 |---|---|---|
+
+`kyutai/tts-voices` declares **no single licence** for the collection -
+each recording is governed by the dataset it came from, listed per file below.
+
 | `anna` (shipped default) | `vctk/p228_023_enhanced.wav` | CC BY 4.0 |
 | `alba` | `alba-mackenna/casual.wav` | CC BY 4.0 |
 | `eve` | `vctk/p361_023_enhanced.wav` | CC BY 4.0 |
