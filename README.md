@@ -602,25 +602,26 @@ Ctrl+Shift+R, check the server console output.
 
 ## Testing
 
-The regression suite is deterministic — no LLM, no running server, no models:
+The regression suite is deterministic - no LLM, no running server, no models:
 
 ```bat
 python tests\run_regressions.py
 ```
 
-It guards tool dispatch, context budgets, sandboxing, planner/coder wiring,
-the model registry, workspace guards and release integrity. New test:
+It guards tool dispatch, context budgets, sandboxing, planner/coder wiring, the
+model registry, workspace guards and release integrity. New test:
 `tests\test_<area>.py` (standalone script, exit 0/1), registered in
-`tests\run_regressions.py`. Before a release: suite + smoke test (start
-run.py, open the UI, check `/websearch/status`).
+`tests\run_regressions.py`. Before a release: suite + smoke test (start run.py,
+open the UI, check `/websearch/status`).
 
-Note: the test suite is dev-only and not part of minimal installs (the
-published tree contains only what is needed to run HiveMind).
+Note: the test suite is dev-only and not part of the release zip (the published
+tree contains only what is needed to run HiveMind).
 
-The repo ships a pre-commit hook (ruff F821/F811/F841 + fast tests) under
-`scripts/hooks/pre-commit`; activate it with `git config core.hooksPath
-scripts/hooks`. Without ruff in `.venv\Scripts\` (or on PATH) the hook skips
-linting with a notice.
+## Contributing
+
+Branches, the pre-commit hook and the release steps are in
+[CONTRIBUTING.md](CONTRIBUTING.md) - it belongs to the repository, not to the
+release zip (the zip is what users download).
 
 ## Use cases
 

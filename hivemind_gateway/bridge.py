@@ -494,7 +494,15 @@ class RunBridge:
                 f"{_model_line}\n"
                 f"approvals: {_appr_mode}\n"
                 f"workspace: {_ws_short}")
-            status = await self.ms.send_message("⏳ working …")
+            # STOP-BUTTON (2026-10-18, owner: "runs am handy scheisse zu
+            # canceln"): the progress message gets one tappable ⏹ instead of
+            # typing /stop. edit_message keeps the keyboard, so the button stays
+            # reachable for the whole run.
+            status = await self.ms.send_message(
+                "⏳ working …",
+                reply_markup={"inline_keyboard": [[
+                    {"text": "⏹ Stop", "callback_data": "stop:run"},
+                ]]})
             status_id = status.get("message_id")
         except (TelegramApiError, OSError) as exc:
             self._log_note(f"start note failed ({exc}) - run continues")
