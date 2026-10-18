@@ -397,6 +397,24 @@ def synthesize(text: str, settings: dict | None = None, *,
     return dict(result)
 
 
+def hf_token_set() -> bool:
+    """True when a Hugging Face token is available for the gated model download.
+
+    Checks the env vars the hub libraries read and the token file `hf auth login`
+    writes. The VALUE is never returned - only the fact, so the UI can point at
+    docs/huggingface_token.md instead of failing with a bare 401.
+    """
+    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        return True
+    home = os.environ.get("HF_HOME") or ""
+    cand = []
+    if home:
+        cand.append(os.path.join(home, "token"))
+    cand.append(os.path.join(os.path.expanduser("~"), ".cache",
+                             "huggingface", "token"))
+    return any(os.path.isfile(p) and os.path.getsize(p) > 8 for p in cand)
+
+
 def status(settings: dict | None = None) -> dict:
     settings = settings or {}
     return {
@@ -411,4 +429,7 @@ def status(settings: dict | None = None) -> dict:
         "idle_stop_s": resolve_idle_stop(settings),
         "max_chars": tts_audio.MAX_CHARS,
         "port": _state.get("port") or 0,
+        # gated model: without a token the first download fails with 401. The UI
+        # turns this into a pointer to docs/huggingface_token.md.
+        "hf_token": hf_token_set(),
     }

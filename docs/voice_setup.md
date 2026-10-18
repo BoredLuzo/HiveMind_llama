@@ -7,6 +7,9 @@ downloaded, started or recorded until you enable it.
 |---|---|---|
 | Audio codecs (`soundfile`, `numpy`) | ~20 MB wheels | **the installer** (`requirements.txt`), silently - also used by TTS for Ogg/Opus |
 | Speech-to-text engine + model | ~21 MB binaries + 74-465 MB model | **you choose**: the installer asks once, `deploy\setup_voice.bat` later, or the Download button in *Settings → Voice* |
+
+Full guide (accepting the gate, token types, `HF_TOKEN`, systemd,
+401/403 troubleshooting): [huggingface_token.md](huggingface_token.md).
 | Text-to-speech (Pocket TTS) | PyTorch CPU in `uv`'s own cache (~200 MB) + ~200 MB model | **you choose**: the installer can prepare it (opt-in), `deploy\setup_voice.bat --tts`, or it happens on the first request from the UI; needs a one-time `hf auth login` because the model is gated |
 
 The installer asks once, with four choices: speech to text only, both, text to

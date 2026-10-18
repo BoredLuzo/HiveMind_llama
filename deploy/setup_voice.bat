@@ -84,8 +84,11 @@ goto summary
 :tts_model_fail
 echo   [WARN] The model could not be fetched.
 echo          Most likely the Hugging Face terms are not accepted yet:
-echo            1. hf auth login
+echo            1. hf auth login          (needs huggingface_hub, see below)
 echo            2. open https://huggingface.co/kyutai/pocket-tts and accept
+echo          Full guide: docs\huggingface_token.md
+echo          Token in a shell with the hub CLI:
+echo            uvx --from huggingface_hub hf auth login
 echo          Afterwards the first request in the UI fetches the model.
 echo.
 goto summary

@@ -409,6 +409,15 @@ Attribution shown in the UI and in `GET /tts/status`:
 MacKenna (CC BY 4.0), Voice-Zero (CC0), Expresso (CC BY-NC 4.0, non-commercial)"*.
 Full provenance: [docs/voice_licenses.md](docs/voice_licenses.md).
 
+**Gated model - one-time token setup.** The Pocket TTS model lives behind a
+Hugging Face gate: accept the terms on
+[kyutai/pocket-tts](https://huggingface.co/kyutai/pocket-tts), create a
+**Read** token at <https://huggingface.co/settings/tokens> and either run
+`uvx --from huggingface_hub hf auth login` once or set `HF_TOKEN`. Step by step
+(Windows, Linux/systemd, background-user pitfalls, 401/403 troubleshooting):
+[docs/huggingface_token.md](docs/huggingface_token.md). Speech to text needs no
+token - whisper and parakeet are public repos.
+
 ## Learning and memory
 
 - Soul engine: peer-rating-based personality evolution, injects learned traits

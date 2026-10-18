@@ -420,7 +420,8 @@ echo   NO reinstall needed, nothing else in the install changes:
 echo     - Settings -^> Voice -^> Download  (UI, with progress)
 echo     - or deploy\setup_voice.bat [model] [--tts^|--both]
 echo   Text-to-speech is separate and needs a one-time
-echo   "hf auth login" (gated model) - see docs\voice_setup.md.
+echo   "hf auth login" (gated model) - see docs\voice_setup.md
+echo   token step by step: docs\huggingface_token.md
 echo.
 echo   [1] Speech to text only              (~420 MB, English)
 echo   [2] Speech to text + text to speech  (adds ~200 MB PyTorch, needs hf login)
