@@ -1,5 +1,6 @@
 """Pins for the 2026-10-18 audit fixes: lockfile, debug gate, log metadata."""
 import io
+import subprocess
 import sys
 from pathlib import Path
 
@@ -28,7 +29,12 @@ tool = (ROOT / "utils" / "tool.py").read_text(encoding="utf-8", errors="replace"
 attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8", errors="replace")
 
 # ── reproducibility ──────────────────────────────────────────────────────
-check("uv.lock is committed", (ROOT / "uv.lock").exists())
+# existence is not enough: .gitignore had `*.lock`, so `git add -A` skipped
+# the lockfile and `git archive` (the release zip) never saw it.
+_tracked = subprocess.run(["git", "ls-files", "uv.lock"], cwd=str(ROOT),
+                         capture_output=True, text=True).stdout.strip()
+check("uv.lock is tracked by git", _tracked.endswith("uv.lock"),
+      " (untracked -> it cannot ship)")
 check("install.bat syncs frozen", "--all-extras --frozen" in install)
 check("update.bat prefers the lock", "--frozen --all-extras" in update)
 check("linux installer syncs frozen", "--frozen" in linux)
