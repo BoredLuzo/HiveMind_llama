@@ -793,6 +793,7 @@ async def evict_model_handler(ctx, model: str) -> None:
 async def stuck_handler(tn, ta, tr, *, ctx, ws_str: str, total_tool_rounds: int,
                         read_counts: dict, last_write_round: int,
                         round_wrote_file: bool, ld_setter):
+    loop_detected = False  # set on the stuck branches, returned on every path
     if tn == "run_bash":
         ctx.exec_ctrl.transition(AgentState.VERIFY)
         # STUCK-SIGNATURE (2026-09-16): record the COMMAND
