@@ -273,7 +273,9 @@ DEFAULT_SETTINGS = {
     # I) GIT, SANDBOX & SYSTEM
     # ════════════════════════════════════════════════════════════════════════
     "duo_git_autocommit":      False,
-    "duo_git_checkpoints":     True,
+    # OFF (2026-10-18): a checkpoint is a real git commit in the user's repo.
+    # Opt-in; a bad write is still covered by undo_last + the write transaction.
+    "duo_git_checkpoints":     False,
     # run_python/background) via Windows Job Objects (KILL_ON_JOB_CLOSE) —
     "duo_tool_sandbox":        True,
     # Job resource limits (0 = unlimited) for run_bash/run_python/background.
@@ -425,12 +427,18 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # L) PRELOAD & PREFETCH
     # ════════════════════════════════════════════════════════════════════════
-    "smart_preload_enabled":   True,
+    # OFF by default (2026-10-18): prefetch/keep-warm loads the NEXT agent's
+    # model while the current one works - great on a big card, but on a tight
+    # VRAM budget it can evict the model that is actually answering. Opt in when
+    # the card has room.
+    "smart_preload_enabled":   False,
     "startup_preload_enabled": False,
     "startup_preload_analyst": False,
     "startup_preload_judge_in_agentic": False,
     "startup_preload_coder":   False,
-    "judge_prefetch_before_complexity": True,
+    # OFF (2026-10-18): warms the judge model before the routing decision - pure
+    # latency win on a big card, an eviction risk on a small one. Opt-in.
+    "judge_prefetch_before_complexity": False,
     "prefetch_agent_avgs":     {},
     "prefetch_lead_seconds":   8.0,
     "preload_workers_after_run": False,

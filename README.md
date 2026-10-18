@@ -283,9 +283,14 @@ vision projector.
 ### Per-agent and learned config
 
 Agent assignment via the UI Agents tab or `settings.json` (`agents` block:
-model, temperature, max_tokens, thinking, thinking_budget). Learned configs
-live in `model_configs/learned/<model>/<agent>.json`, managed in the UI
-Configs tab or `/model_configs` API, and override base defaults at runtime.
+model, temperature, max_tokens, thinking, thinking_budget).
+
+**Learned configs** are the pipeline's own tuning notes per model and agent:
+`model_configs/learned/<model>/<agent>.json` (temperature, max_tokens and friends
+that a run measured to work for that combination). They are created and edited in
+the UI Configs tab or via `/model_configs/learned/...`, and they **only apply when
+`learning_preset_mode` is on** - off by default, so a fresh install always uses the
+base config plus your agent settings. Deleting the folder resets the learning.
 
 ## Download catalog
 
@@ -427,7 +432,7 @@ Numbers and the Telegram switches: [docs/voice_setup.md](docs/voice_setup.md).
 - Windows 10/11 or Linux
 - Python 3.14 (auto-installed by the setup; older interpreters are refused by the dependency metadata in `pyproject.toml`)
 - uv (auto-installed)
-- 8 GB+ VRAM GPU recommended (AMD/Intel via Vulkan, NVIDIA via CUDA)
+- 8 GB+ VRAM GPU recommended (AMD/Intel via Vulkan, NVIDIA via CUDA). Smart Preload (model prefetch) is off by default - turn it on when the card has headroom
 - ~30 GB disk for the recommended model set
 - Git (optional, autocommit/diff integration)
 - Docker Desktop (optional, SearXNG web search)
@@ -533,7 +538,7 @@ made while it runs is lost on the next settings write.
 | `duo_chunking` | true | task decomposition into subtasks |
 | `duo_agentic_mode` | false | agentic (single-model) instead of duo |
 | `duo_git_autocommit` | false | auto-commit after each chunk |
-| `duo_git_checkpoints` | true | git checkpoint at chunk start |
+| `duo_git_checkpoints` | false | git commit at chunk start (writes to your repo - opt-in) |
 | `duo_websearch_enabled` | false | web search as real tool calls in coding |
 | `searxng_host` | http://localhost:8888 | SearXNG instance URL |
 | `duo_runtime_profile` | balanced | fast / balanced / critical |

@@ -907,7 +907,9 @@ async function loadSettings() {
     S.mode           = s.mode || 'automap';
     S.activePreset   = s.active_preset || '';
     S.constraintMode = s.constraint_mode !== false;
-    S.smartPreload   = s.smart_preload_enabled !== false;  // FIX: default true (was false)
+    // OPT-IN (2026-10-18): prefetch is a VRAM gamble on a tight budget, so the
+    // default is OFF and only an explicit true turns it on.
+    S.smartPreload   = s.smart_preload_enabled === true;
 
     _setPresetHeader();
     document.getElementById('iters-in').value = S.iters;
@@ -12623,7 +12625,7 @@ async function loadGitConfig(s) {
   var cfgToggle = document.getElementById('git-autocommit-cfg-toggle');
   if (cfgToggle) cfgToggle.checked = S.duoGitAutocommit;
   var cpToggle = document.getElementById('git-checkpoints-cfg-toggle');
-  if (cpToggle) cpToggle.checked = s.duo_git_checkpoints !== false;
+  if (cpToggle) cpToggle.checked = s.duo_git_checkpoints === true;
   // Fill inputs
   var repoInp = document.getElementById('git-repo-url');
   if (repoInp) repoInp.value = S.gitRepoUrl;

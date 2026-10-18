@@ -696,7 +696,7 @@ def _git_checkpoints_enabled(ctx) -> bool:
 
     try:
         from settings import load_settings as _ls
-        return bool((_ls() or {}).get("duo_git_checkpoints", True))
+        return bool((_ls() or {}).get("duo_git_checkpoints", False))
     except Exception:
         return True
 

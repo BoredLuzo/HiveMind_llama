@@ -40,7 +40,7 @@ _VRAM_STATUS_CACHE_TTL = 30.0
 async def get_prefetch_stats():
     avgs = settings.get("prefetch_agent_avgs", {})
     lead = float(settings.get("prefetch_lead_seconds", 8.0))
-    enabled = settings.get("smart_preload_enabled", True)
+    enabled = settings.get("smart_preload_enabled", False)
     agents_info = {}
     for agent_key in ["analyst", "refiner", "critic", "synthesizer"]:
         avg = avgs.get(agent_key, 0)

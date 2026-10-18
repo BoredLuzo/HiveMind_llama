@@ -402,7 +402,7 @@ async def run_stream(
     run_peer_ratings          = None
 
     use_learned   = settings.get("learning_preset_mode", False)
-    smart_preload = settings.get("smart_preload_enabled", True)
+    smart_preload = settings.get("smart_preload_enabled", False)
     # P1-2 FIX: cache VRAM budget ONCE per run — prevents mid-run setting changes
     # from causing VRAM overcommit — OOM — model crash. Previously parsed from
     # mutable settings dict 13+ times per run with inconsistent values possible.
@@ -577,7 +577,7 @@ async def run_stream(
         and force_complexity not in ("simple", "complex")
         and 10 < int(judge_bias) < 90
     )
-    if _can_need_judge and bool(settings.get("judge_prefetch_before_complexity", True)):
+    if _can_need_judge and bool(settings.get("judge_prefetch_before_complexity", False)):
         async def _prefetch_judge_once():
             try:
                 _judge_model = _registry.get("judge", "")

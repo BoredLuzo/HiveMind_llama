@@ -56,7 +56,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `duo_error_rollup` | bool | `True` | — |
 | `duo_evict_planner_on_coder` | bool | `True` | — |
 | `duo_git_autocommit` | bool | `False` | — |
-| `duo_git_checkpoints` | bool | `True` | — |
+| `duo_git_checkpoints` | bool | `False` | - | Commit the run's files at chunk start. Writes to your repository, so opt-in. |
 | `duo_install_max_calls` | int | `3` | — |
 | `duo_llm_slow_timeout_s` | int | `300` | — |
 | `duo_max_compressions` | int | `40` | — |
@@ -161,7 +161,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `image_desc_full_pipeline` | bool | `False` | — |
 | `intent_agent` | object | `{'enabled': False, 'model': 'qwen3.5:4b', 'temperature': ...` | — |
 | `judge_keepalive_enabled` | bool | `False` | — |
-| `judge_prefetch_before_complexity` | bool | `True` | — |
+| `judge_prefetch_before_complexity` | bool | `False` | - | Warm the judge model before the routing check. Latency win on a big card, an eviction risk on a small one. |
 | `keep_awake_during_run` | bool | `True` | — |
 | `learning_preset_mode` | bool | `False` | — |
 | `llama_cache_reuse` | int | `256` | — |
@@ -192,7 +192,7 @@ Auto-generated from `settings.py` (`DEFAULT_SETTINGS`) via `python deploy/gen_se
 | `searxng_language` | str | `"en"` | — | Language tag sent to the engines. `"all"` let them fall back to the instance region (German pages for English queries). |
 | `server_port` | int | `8001` | — |
 | `session_compress_threshold` | int | `20` | — |
-| `smart_preload_enabled` | bool | `True` | — |
+| `smart_preload_enabled` | bool | `False` | - | Prefetch: load the next agent's model while the current one works, and keep it warm (`smart_preload_keep_alive`). Off by default - on a tight VRAM budget the prefetched model can evict the one that is answering. |
 | `smart_preload_keep_alive` | str | `"10m"` | — |
 | `soul_evolve_agent` | object | `{'enabled': False, 'model': 'gemma-4:e4b-it-obliterated',...` | — |
 | `soul_skill_distillation` | bool | `True` | — |
