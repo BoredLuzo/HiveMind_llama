@@ -251,6 +251,8 @@ _READONLY_CODER_NOTE = (
 # PREFLIGHT-EXTRACT (1.4.x): the module-level helpers live in core/duo/preflight.py
 # now. Re-exported here so existing imports (coder_briefing_text, ...) keep working.
 from core.duo.preflight import (  # noqa: F401
+    unpin_duo_models as _unpin_duo_fn,
+    warm_workers_after_run as _warm_workers_fn,
     loop_detect_file_snapshot as _ld_file_snapshot,
     _apply_thinking_kwargs,
     _auto_commit_chunk,
@@ -6494,29 +6496,7 @@ async def run_code_duo(ctx):
             )
         _restore_ka = str(ctx.settings.get("smart_preload_keep_alive", "10m"))
         if _duo_pinned:
-            async def _unpin_duo(_pinned=_duo_pinned, _ka=_restore_ka):
-                async with httpx.AsyncClient(timeout=5.0) as _uc:
-                    for _um in _pinned:
-                        try:
-                            _unpin_ctx = ctx.get_num_ctx(_um)
-                            _unpin_payload: dict = {"model": _um, "keep_alive": _ka, "stream": False}
-                            # rnj-1:8b default=32768 → ~2GB extra KV-Cache → VRAM-Spike auf 8GB GPU
-                            if _unpin_ctx:
-                                _unpin_payload["options"] = {"num_ctx": _unpin_ctx, "num_predict": 0}
-                            await _bk_load(_um, keep_alive=_restore_ka, num_ctx=_unpin_ctx)
-                        except Exception as _err:
-                            if isinstance(_err, (
-                                GeneratorExit,
-                                asyncio.CancelledError,
-                                KeyboardInterrupt,
-                                SystemExit,
-                            )):
-                                raise
-                            logger.debug(
-                                "[DUO] Suppressed error at unpin keep-alive: %s",
-                                _err, exc_info=True
-                            )
-            asyncio.create_task(_unpin_duo())
+            asyncio.create_task(_unpin_duo_fn(ctx, _duo_pinned, _restore_ka))
 
         if _project_state is not None and ctx.chat_id:
             try:
@@ -6888,35 +6868,7 @@ async def run_code_duo(ctx):
     if bool(ctx.settings.get("preload_workers_after_run", False)):
         _wk_slots_run = _worker_slots or []
         if _wk_slots_run:
-            async def _warm_workers_after_run(_slots=list(_wk_slots_run), _coder_mdl=exec_mdl):
-                try:
-                    from backend.llama_server_manager import manager as _lsm_aw
-                    try:
-                        await _lsm_aw.evict(_coder_mdl)
-                    except Exception:
-                        pass
-                    for _wsk in _slots:
-                        try:
-                            await _lsm_aw.ensure_loaded(
-                                str(_wsk.get("model", "")),
-                                num_ctx=int(_wsk.get("num_ctx") or _wsk.get("ctx") or 16384),
-                                n_parallel=int(_wsk.get("n_parallel", 1) or 1),
-                            )
-                        except Exception as _err:
-                            if isinstance(_err, (
-                                GeneratorExit,
-                                asyncio.CancelledError,
-                                KeyboardInterrupt,
-                                SystemExit,
-                            )):
-                                raise
-                            logger.debug(
-                                "[DUO] Suppressed error at after-run worker warmup: %s",
-                                _err, exc_info=True
-                            )
-                except Exception:
-                    pass
-            asyncio.create_task(_warm_workers_after_run())
+            asyncio.create_task(_warm_workers_fn(list(_wk_slots_run), exec_mdl))
     asyncio.create_task(_refresh_judge_keepalive())
     # ── Insight Extractor: Post-loop structured learning ──────────────────
     # Fire-and-forget background task — extracts structured insights from the

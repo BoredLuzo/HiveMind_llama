@@ -92,16 +92,16 @@
     "except_pass": 2
   },
   "core/duo/preflight.py": {
-    "broad_except": 18,
-    "except_pass": 6
+    "broad_except": 22,
+    "except_pass": 8
   },
   "core/duo_helpers.py": {
     "broad_except": 9,
     "except_pass": 2
   },
   "core/duo_runner.py": {
-    "broad_except": 96,
-    "except_pass": 29
+    "broad_except": 92,
+    "except_pass": 27
   },
   "core/fix_agent.py": {
     "broad_except": 5,

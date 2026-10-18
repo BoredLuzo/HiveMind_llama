@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.duo._pre_explore import _explore_extract_files
+import httpx
+from vram.loader import _bk_load, _bk_evict, _get_loaded_models_set
 
 import asyncio, hashlib, json, logging, os, re, sys, time, uuid
 from context.chat import (
@@ -617,3 +619,57 @@ def loop_detect_file_snapshot(ws_str: str, explore_ctx, pre_explore_msgs, writte
     except Exception as _ld_err:
         logger.debug("[LOOP-DETECT] File snapshot failed: %s", _ld_err)
         return None
+
+
+async def warm_workers_after_run(slots: list, coder_mdl: str) -> None:
+    try:
+        from backend.llama_server_manager import manager as _lsm_aw
+        try:
+            await _lsm_aw.evict(coder_mdl)
+        except Exception:
+            pass
+        for _wsk in slots:
+            try:
+                await _lsm_aw.ensure_loaded(
+                    str(_wsk.get("model", "")),
+                    num_ctx=int(_wsk.get("num_ctx") or _wsk.get("ctx") or 16384),
+                    n_parallel=int(_wsk.get("n_parallel", 1) or 1),
+                )
+            except Exception as _err:
+                if isinstance(_err, (
+                    GeneratorExit,
+                    asyncio.CancelledError,
+                    KeyboardInterrupt,
+                    SystemExit,
+                )):
+                    raise
+                logger.debug(
+                    "[DUO] Suppressed error at after-run worker warmup: %s",
+                    _err, exc_info=True
+                )
+    except Exception:
+        pass
+
+
+async def unpin_duo_models(ctx, pinned: list, ka: str) -> None:
+    async with httpx.AsyncClient(timeout=5.0) as _uc:
+        for _um in pinned:
+            try:
+                _unpin_ctx = ctx.get_num_ctx(_um)
+                _unpin_payload: dict = {"model": _um, "keep_alive": ka, "stream": False}
+                # rnj-1:8b default=32768 → ~2GB extra KV-Cache → VRAM-Spike auf 8GB GPU
+                if _unpin_ctx:
+                    _unpin_payload["options"] = {"num_ctx": _unpin_ctx, "num_predict": 0}
+                await _bk_load(_um, keep_alive=ka, num_ctx=_unpin_ctx)
+            except Exception as _err:
+                if isinstance(_err, (
+                    GeneratorExit,
+                    asyncio.CancelledError,
+                    KeyboardInterrupt,
+                    SystemExit,
+                )):
+                    raise
+                logger.debug(
+                    "[DUO] Suppressed error at unpin keep-alive: %s",
+                    _err, exc_info=True
+                )
