@@ -2,8 +2,10 @@
 import asyncio
 import copy
 import sys
+from pathlib import Path
 
-sys.path.insert(0, r"C:\Users\NtheP\Desktop\HiveMind\repo_gateway")
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import routers.config as rc  # noqa: E402
