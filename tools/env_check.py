@@ -60,6 +60,9 @@ def diagnose() -> None:
     import os
 
     print(f"[ENV-CHECK] python {sys.version.split()[0]} ({sys.executable})")
+    # A uv-created venv has NO pip - the repair command must use uv then.
+    has_pip = _run([sys.executable, "-m", "pip", "--version"]) == 0
+    print(f"[ENV-CHECK]   pip in this venv: {'yes' if has_pip else 'NO (uv venv)'}")
     for var in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"):
         val = os.environ.get(var)
         if val:
@@ -106,6 +109,10 @@ def diagnose() -> None:
             # fingerprint, not a version mismatch.
             print(f"[ENV-CHECK]   {pkg}: __init__.py missing or empty "
                   f"({init_size} bytes) <-- namespace package, 'unknown location'")
+        ns_dir = os.path.join(pkg, "_pydantic_core")
+        if os.path.isdir(ns_dir):
+            print(f"[ENV-CHECK]   {ns_dir}: is a DIRECTORY <-- namespace package; "
+                  f"delete it, then reinstall pydantic-core")
         pyds = [e for e in entries if e.startswith("_pydantic_core")]
         if not pyds:
             print(f"[ENV-CHECK]   {pkg}: NO compiled _pydantic_core*.pyd inside")
@@ -121,6 +128,59 @@ def diagnose() -> None:
     user_site = getattr(site, "getusersitepackages", lambda: "")()
     if user_site and os.path.isdir(os.path.join(user_site, "pydantic_core")):
         print(f"[ENV-CHECK]   also present in the USER site: {user_site}")
+
+
+def _site_packages() -> list:
+    """Every site-packages dir of THIS interpreter (never anything else)."""
+    import site
+    import sysconfig
+    paths = []
+    for key in ("purelib", "platlib"):
+        try:
+            p = sysconfig.get_paths().get(key)
+        except (KeyError, OSError):
+            p = None
+        if p:
+            paths.append(p)
+    try:
+        paths.extend(site.getsitepackages())
+    except AttributeError:
+        pass
+    out = []
+    for p in paths:
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
+def _locked_files(packages: list) -> list:
+    """Compiled modules of these packages that the OS will not let us write.
+
+    A running HiveMind (engine or gateway) keeps `_pydantic_core*.pyd` mapped, so
+    a repair cannot replace it; uv/pip then leave a 0-byte file and an empty
+    namespace folder behind - the "unknown location" import error. Opening for
+    write is the cheapest reliable probe on Windows.
+    """
+    import os
+    locked = []
+    for sp in _site_packages():
+        for pkg in packages:
+            mod = pkg.replace("-", "_")
+            pkg_dir = os.path.join(sp, mod)
+            if not os.path.isdir(pkg_dir):
+                continue
+            for name in os.listdir(pkg_dir):
+                if not name.endswith((".pyd", ".so", ".dll")):
+                    continue
+                path = os.path.join(pkg_dir, name)
+                try:
+                    with open(path, "r+b"):
+                        pass
+                except PermissionError:
+                    locked.append(path)
+                except OSError:
+                    pass
+    return locked
 
 
 def repair(packages: list) -> tuple[bool, str]:
@@ -151,6 +211,13 @@ def repair(packages: list) -> tuple[bool, str]:
         if _run(["uv", "pip", "install", "--python", sys.executable,
                  "--reinstall", "--no-binary", ":none:", *packages]) == 0:
             return True, "uv"
+        # --reinstall overwrites but never deletes an orphaned file (a leftover
+        # .pyd, an empty namespace folder). Uninstall first, then install.
+        if _run(["uv", "pip", "uninstall", "--python", sys.executable,
+                 *packages]) == 0:
+            if _run(["uv", "pip", "install", "--python", sys.executable,
+                     "--no-binary", ":none:", *packages]) == 0:
+                return True, "uv (uninstall + install)"
     if not tried:
         return False, "neither pip nor uv available"
     return False, " and ".join(tried)
@@ -186,6 +253,15 @@ def main() -> int:
     if not args.repair:
         return 1
 
+    _locked = _locked_files(packages)
+    if _locked:
+        print("[ENV-CHECK] repair NOT attempted - these files are in use:")
+        for _p in _locked:
+            print(f"     {_p}")
+        print("     A running HiveMind (engine/gateway) holds them: replacing a")
+        print("     loaded DLL leaves a 0-byte .pyd and the unknown-location")
+        print("     import error. Quit HiveMind, then run this repair again.")
+        return 1
     print(f"[ENV-CHECK] attempting repair: reinstall {' '.join(packages)}")
     ok, how = repair(packages)
     if not ok:
@@ -193,6 +269,12 @@ def main() -> int:
     if probe_all(modules) is None:
         print("[ENV-CHECK] OK after repair")
         return 0
+    _mod, _err2 = probe_all(modules) or ("?", "?")
+    print(f"[ENV-CHECK] the reinstall SUCCEEDED but the import still fails ({_err2})")
+    print("     That is the signature of a file the installer could not replace:")
+    print("     a running HiveMind or an antivirus scanner holds it. Quit HiveMind,")
+    print("     then run the repair again (see step 3 below).")
+
     diagnose()
     print("[ENV-CHECK] STILL BROKEN after repair. In this order:")
     print("  1. Check the lines above: a 0-byte _pydantic_core*.pyd (antivirus")
@@ -203,10 +285,23 @@ def main() -> int:
     print("     install folder, then re-run start_hivemind.bat.")
     print("  2. Reinstall the PAIR by hand (a mismatch between pydantic and")
     print("     pydantic-core is the other usual cause; the versions must fit):")
-    print(f"     {sys.executable} -m pip install --force-reinstall --no-cache-dir "
+    if _run([sys.executable, "-m", "pip", "--version"]) == 0:
+        print(f"     {sys.executable} -m pip install --force-reinstall "
+              "--no-cache-dir --only-binary :all: pydantic pydantic-core")
+    else:
+        # uv venvs have no pip - `python -m pip` answers "No module named pip"
+        print(f"     uv pip install --python {sys.executable} --reinstall "
+              "--no-cache-dir --only-binary :all: pydantic pydantic-core")
+        print("     (this venv has no pip - it was created by uv)")
+    print("  3. Deterministic fix for a broken/partial pydantic_core (PowerShell):")
+    _sp = _site_packages()[0] if _site_packages() else "<venv>\\Lib\\site-packages"
+    print(f"     Remove-Item -Recurse -Force '{_sp}\\pydantic_core', "
+          f"'{_sp}\\pydantic'")
+    print(f"     Remove-Item -Force '{_sp}\\_pydantic_core*'")
+    print(f"     uv pip install --python {sys.executable} --no-cache-dir "
           "--only-binary :all: pydantic pydantic-core")
-    print("  3. Only if that fails: delete .venv and run install.bat again.")
-    print("  4. As a last resort install into a FRESH folder with install.bat -")
+    print("  4. Only if that fails: delete .venv and run install.bat again.")
+    print("  5. As a last resort install into a FRESH folder with install.bat -")
     print("     the installer provisions its own interpreter and a clean venv,")
     print("     which rules out a half-written package from an earlier attempt.")
     return 1
