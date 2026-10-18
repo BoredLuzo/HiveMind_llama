@@ -97,7 +97,14 @@ check("whitespace thinking counts as empty", mode == BRIEFING_OFF)
 
 # ── wiring ─────────────────────────────────────────────────────────────────
 src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
-check("both coder branches use the helper", src.count("coder_briefing_text(") >= 3)
+# 1.4.x: coder_briefing_text was moved to core/duo/preflight.py (pure move) and
+# is re-exported from duo_runner - the call sites must still be in the runner.
+_pf = (ROOT / "core" / "duo" / "preflight.py").read_text(encoding="utf-8", errors="replace")
+# 1.4.x: the definition lives in core/duo/preflight.py - the runner keeps the
+# two call sites (normal + agentic), the import and no third occurrence.
+check("both coder branches use the helper", src.count("coder_briefing_text(") >= 2)
+check("the helper is defined in preflight.py",
+      "def coder_briefing_text(" in _pf and "coder_briefing_text," in src)
 check("the decision is logged",
       "[CODER-BRIEFING] mode=%s think_tokens=%d limit=%d" in src)
 check("the plan text comes from PlannerResult.plan_content",

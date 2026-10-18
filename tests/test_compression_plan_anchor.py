@@ -235,13 +235,17 @@ def test_source_structure():
         ok("C5: dedicated 25% threshold for the plan anchor in validation")
     else:
         fail("C5: 25% threshold missing")
-    src_d = Path(__file__).parent.parent / "core" / "duo_runner.py"
-    text_d = src_d.read_text(encoding="utf-8")
+    # 1.4.x: _build_plan_anchor_text moved to preflight; the CALL SITES stay in
+    # run_code_duo, so both files matter here.
+    text_d = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(
+        encoding="utf-8")
+    text_pf = (Path(__file__).parent.parent / "core" / "duo" / "preflight.py").read_text(
+        encoding="utf-8")
     if "plan_anchor_text=_plan_anchor_text" in text_d and "plan_anchor=_plan_anchor_text" in text_d:
         ok("C6: duo_runner passes the anchor to compression AND validation")
     else:
         fail("C6: duo_runner wiring missing")
-    if "def _build_plan_anchor_text(subtasks: list, plan_tracker" in text_d:
+    if "def _build_plan_anchor_text(subtasks: list, plan_tracker" in text_pf:
         ok("C7: anchor building as an importable pure module function in duo_runner")
     else:
         fail("C7: module function missing")

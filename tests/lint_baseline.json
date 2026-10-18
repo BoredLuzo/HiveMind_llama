@@ -59,9 +59,17 @@
     "broad_except": 2,
     "except_pass": 1
   },
+  "context/resume.py": {
+    "broad_except": 1,
+    "except_pass": 0
+  },
   "core/agentic_tool_loop.py": {
     "broad_except": 14,
     "except_pass": 8
+  },
+  "core/budgets.py": {
+    "broad_except": 3,
+    "except_pass": 0
   },
   "core/chat_run.py": {
     "broad_except": 20,
@@ -83,13 +91,17 @@
     "broad_except": 8,
     "except_pass": 2
   },
+  "core/duo/preflight.py": {
+    "broad_except": 16,
+    "except_pass": 5
+  },
   "core/duo_helpers.py": {
     "broad_except": 9,
     "except_pass": 2
   },
   "core/duo_runner.py": {
-    "broad_except": 114,
-    "except_pass": 35
+    "broad_except": 98,
+    "except_pass": 30
   },
   "core/fix_agent.py": {
     "broad_except": 5,
@@ -115,6 +127,10 @@
     "broad_except": 7,
     "except_pass": 2
   },
+  "core/telemetry.py": {
+    "broad_except": 4,
+    "except_pass": 1
+  },
   "core/tool_exec_helpers.py": {
     "broad_except": 9,
     "except_pass": 3
@@ -122,10 +138,6 @@
   "core/tool_executor.py": {
     "broad_except": 12,
     "except_pass": 4
-  },
-  "core/telemetry.py": {
-    "broad_except": 4,
-    "except_pass": 1
   },
   "core/tool_loop.py": {
     "broad_except": 1,
@@ -399,6 +411,10 @@
     "broad_except": 1,
     "except_pass": 1
   },
+  "tools/handlers/_shared.py": {
+    "broad_except": 1,
+    "except_pass": 0
+  },
   "tools/handlers/code_intel.py": {
     "broad_except": 9,
     "except_pass": 1
@@ -462,17 +478,5 @@
   "vram/loader.py": {
     "broad_except": 5,
     "except_pass": 2
-  },
-  "tools/handlers/_shared.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "core/budgets.py": {
-    "except_pass": 0,
-    "broad_except": 3
-  },
-  "context/resume.py": {
-    "except_pass": 0,
-    "broad_except": 1
   }
 }

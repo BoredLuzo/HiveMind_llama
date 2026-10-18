@@ -259,8 +259,9 @@ def test_source_structure():
         ok("D1: compression.py contains the plan-reinject block")
     else:
         fail("D1: plan-reinject block missing in compression.py")
-    src_d = Path(__file__).parent.parent / "core" / "duo_runner.py"
-    text_d = src_d.read_text(encoding="utf-8")
+    # 1.4.x: the helper definitions moved to preflight, the calls did not.
+    text_d = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(
+        encoding="utf-8")
     if "_strip_stale_ctx_notices(_dtool_msgs)" in text_d:
         ok("D2: duo_runner calls _strip_stale_ctx_notices after compression")
     else:
@@ -269,7 +270,10 @@ def test_source_structure():
         ok("D3: call_sigs cleared after compression")
     else:
         fail("D3: call_sigs reset missing")
-    if "[PLAN-PIN - current subtask" in text_d:
+    # 1.4.x: the marker is spelled [COMPRESS-PLAN-PIN] in the runner; keep both
+    # spellings acceptable so the pin survives renames of the log line.
+    if ("[PLAN-PIN - current subtask" in text_d
+            or "[COMPRESS-PLAN-PIN]" in text_d):
         ok("D4: plan pin appended after compression")
     else:
         fail("D4: plan pin missing")

@@ -79,8 +79,16 @@ def main():
     # Source-Guards: der Prompt-Hint delegiert an die aufgeloeste Shell ...
     _dr = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(
         encoding="utf-8", errors="replace")
+    # 1.4.x: shell_os_hint moved to core/duo/preflight.py (pure move); the runner
+    # still passes _run_bash_shell_mode through.
+    _pf = (Path(__file__).parent.parent / "core" / "duo" / "preflight.py").read_text(
+        encoding="utf-8", errors="replace")
     check("duo_runner nutzt shell_os_hint + _run_bash_shell_mode",
-          "shell_os_hint" in _dr and "_run_bash_shell_mode" in _dr)
+          # shell_os_hint is DEFINED in tools/handlers/exec_tools.py and imported
+          # where the prompt is built (duo_runner or its preflight module);
+          # _run_bash_shell_mode stays a runner-local name.
+          ("shell_os_hint" in _dr or "shell_os_hint" in _pf)
+          and ("_run_bash_shell_mode" in _dr or "_run_bash_shell_mode" in _pf))
     check("duo_runner: hartes PS-ONLY-Kommando entfernt",
           "Use PowerShell syntax ONLY" not in _dr)
     # ... und das Schema beschreibt die Shell-Konditionalitaet wahrhaftig.
