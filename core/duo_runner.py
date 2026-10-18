@@ -251,6 +251,11 @@ _READONLY_CODER_NOTE = (
 # PREFLIGHT-EXTRACT (1.4.x): the module-level helpers live in core/duo/preflight.py
 # now. Re-exported here so existing imports (coder_briefing_text, ...) keep working.
 from core.duo.preflight import (  # noqa: F401
+    calib_est_tokens as _calib_tokens,
+    keepalive_vision as _keepalive_vision_fn,
+    emit_chunk_planner_heartbeat as _planner_hb_fn,
+    write_pre_loop_resume as _pre_loop_resume,
+    halt_with_resume as _halt_fn,
     unpin_duo_models as _unpin_duo_fn,
     warm_workers_after_run as _warm_workers_fn,
     loop_detect_file_snapshot as _ld_file_snapshot,
@@ -911,28 +916,9 @@ async def run_code_duo(ctx):
             # 30 heartbeats = 30s buffer; extras are silently dropped below.
             _planner_hb_queue: asyncio.Queue = asyncio.Queue(maxsize=30)
 
-            async def _emit_chunk_planner_heartbeat():
-                _elapsed = 0
-                await asyncio.sleep(1.0)
-                while not _planner_hb_stop.is_set() and not ctx.aborted():
-                    if _planner_hb_stop.is_set() or ctx.aborted():
-                        break
-                    _elapsed += 1
-                    try:
-                        # put_nowait: never blocks; raises QueueFull if maxsize
-                        # hit (slow consumer) — silently drop, keep looping.
-                        _planner_hb_queue.put_nowait({
-                            "type": "planner_thinking",
-                            "elapsed": _elapsed,
-                            "model": _planner_model,
-                        })
-                    except asyncio.QueueFull:
-                        pass  # consumer can't keep up — drop heartbeat
-                    except Exception:
-                        break
-                    await asyncio.sleep(1.0)
 
-            _planner_hb_task = asyncio.create_task(_emit_chunk_planner_heartbeat())
+            _planner_hb_task = asyncio.create_task(_planner_hb_fn(
+            ctx, _planner_hb_queue, _planner_hb_stop, _planner_model))
             if _use_thinking_planner and not _planner_supports_thinking:
                 yield await ctx.emit({
                     "type": "status",
@@ -1352,25 +1338,6 @@ async def run_code_duo(ctx):
         _coder_outputs = _cs.coder_outputs
 
         # Fortschritt). No-Overwrite-Guard wie im Safety-Net.
-        def _write_pre_loop_resume(halt_reason: str = "hard_stop"):
-            try:
-                if ctx.chat_id and not _load_resume_block(ctx.chat_id):
-                    _write_resume_block(
-                        chat_id=ctx.chat_id,
-                        workspace=_ws_str,
-                        chunks_total=1,
-                        chunks_done=_done_tasks,
-                        chunks_remaining=[{"title": ctx.user_input}],
-                        written_files=_written_files,
-                        last_summary=" | ".join(_done_tasks),
-                        plan_msgs=[],
-                        explore_ctx=_explore_ctx,
-                        halt_reason=halt_reason,
-                    )
-            except Exception as _rl_err:
-                if isinstance(_rl_err, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
-                    raise
-                logger.warning("[PRE-LOOP-RESUME] Write failed: %s", _rl_err)
         _total_tool_rounds: int = 0
         _max_tool_rounds: int = 0    # default before tool-round setup
         _lifetime_tool_rounds: int = 0
@@ -1870,7 +1837,7 @@ async def run_code_duo(ctx):
                                 _clear_pause_state(ctx.chat_id)
                             _cleanup_governor(ctx.chat_id or ctx.run_id)
                             _duo_hard_stop = True
-                            _write_pre_loop_resume()
+                            _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
                             ctx.duo_stop_reason = "hard_stop"
                             yield await ctx.emit(ctx.done_event(
                                 round(time.time() - ctx.t_total, 1),
@@ -1913,7 +1880,7 @@ async def run_code_duo(ctx):
                                 await asyncio.sleep(4.0)
                                 _coder_ctx_try = _next_ctx
                                 continue
-                            _write_pre_loop_resume()
+                            _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
                             break
                         except Exception as _cl_err:
                             if ctx.aborted():
@@ -1926,7 +1893,7 @@ async def run_code_duo(ctx):
                                     _clear_pause_state(ctx.chat_id)
                                 _cleanup_governor(ctx.chat_id or ctx.run_id)
                                 # to the in-loop abort) + done_event.
-                                _write_pre_loop_resume("aborted")
+                                _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, "aborted")
                                 ctx.duo_stop_reason = "aborted"
                                 yield await ctx.emit(ctx.done_event(
                                     round(time.time() - ctx.t_total, 1),
@@ -1953,7 +1920,7 @@ async def run_code_duo(ctx):
                                     if ctx.chat_id:
                                         _clear_pause_state(ctx.chat_id)
                                     _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                    _write_pre_loop_resume("aborted")
+                                    _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, "aborted")
                                     ctx.duo_stop_reason = "aborted"
                                     yield await ctx.emit(ctx.done_event(
                                         round(time.time() - ctx.t_total, 1),
@@ -1963,7 +1930,7 @@ async def run_code_duo(ctx):
                                     return
                     if not _coder_load_ok:
                         _duo_hard_stop = True
-                        _write_pre_loop_resume()
+                        _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
                         yield await ctx.emit({"type": "status",
                             "content": f"⛔ Coder ({exec_mdl.split(':')[0]}) could not be loaded — run aborted."})
                         ctx.phase_timer.skip("coder_loop")
@@ -2051,7 +2018,7 @@ async def run_code_duo(ctx):
                     _cleanup_governor(ctx.chat_id or ctx.run_id)
                     # AUDIT-FIX 2026-08-04: Evict-Exception + Load-Fail — hard_stop +
                     _duo_hard_stop = True
-                    _write_pre_loop_resume()
+                    _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
                     ctx.duo_stop_reason = "hard_stop"
                     yield await ctx.emit(ctx.done_event(
                         round(time.time() - ctx.t_total, 1),
@@ -2111,21 +2078,6 @@ async def run_code_duo(ctx):
         
         _accumulated_replan_bonus: int = 0
         _di = 0
-        def _halt_with_resume(halt_reason: str):
-            _rem_halt = [{"title": str(t)} for t in _loop_items[_di:]]
-            if ctx.chat_id and _rem_halt:
-                _write_resume_block(
-                    chat_id=ctx.chat_id,
-                    workspace=_ws_str,
-                    chunks_total=_n_items,
-                    chunks_done=_done_tasks,
-                    chunks_remaining=_rem_halt,
-                    written_files=_written_files,
-                    last_summary=" | ".join(_done_tasks),
-                    plan_msgs=[],
-                    explore_ctx=_explore_ctx,
-                    halt_reason=halt_reason,
-                )
         while _di < _n_items:
             if _subtasks and not bool(ctx.settings.get("duo_chunking", False)):
                 yield await ctx.emit({"type": "status",
@@ -2149,12 +2101,12 @@ async def run_code_duo(ctx):
             _file_changes: dict = {}  # path → {"op": str, "lines": int}
             if ctx.aborted():
                 ctx.exec_ctrl.abort(StopReason.USER_ABORTED)
-                _halt_with_resume("aborted")
+                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "aborted")
                 break
             # EXEC-CTRL-HALT-GUARD: ctx.exec_ctrl.abort() (e.g. MAX_TOOL_ROUNDS, STUCK_IN_LOOP)
             if (ctx.exec_ctrl.state == AgentState.HALTED
                     and ctx.exec_ctrl.stop_reason != StopReason.USER_ABORTED):
-                _halt_with_resume(
+                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, 
                     ctx.exec_ctrl.stop_reason.value if ctx.exec_ctrl.stop_reason else "halted"
                 )
                 break
@@ -2168,7 +2120,7 @@ async def run_code_duo(ctx):
                         "Ending with the best intermediate result."
                     ),
                 })
-                _halt_with_resume("timeout_guard")
+                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "timeout_guard")
                 break
 
             # ── Resume-abort check: stop button → save resume ─────────────────
@@ -2339,7 +2291,7 @@ async def run_code_duo(ctx):
                     # CHUNK-PERSIST (2026-10-11): write the resume block after every
                     # done chunk - a hard kill (power, crash, taskkill) previously lost
                     # all in-memory chunk progress and the resumed run repeated chunks.
-                    _halt_with_resume("chunk_checkpoint")
+                    _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
 
                     _cs.reset_test_retries()
                     if _subtask:
@@ -3686,13 +3638,6 @@ async def run_code_duo(ctx):
                             pass
                         return _sse
 
-                    def _calib_est_tokens(raw_est: int) -> int:
-                        """REAL-CALIBRATED (2026-09-20): scale the chars/4 estimate
-                        with the last measured prompt_tokens ratio — the raw
-                        estimate ran ~9% under the real prompt on some models."""
-                        if _coder_real_prompt_tokens[0] > 0 and _coder_est_at_real[0] > 0:
-                            return int(_coder_real_prompt_tokens[0] * (raw_est / max(1, _coder_est_at_real[0])))
-                        return raw_est
 
                     _tool_exec_hooks = ToolExecHooks(
                         emit=_coder_emit_fn,
@@ -3805,7 +3750,7 @@ async def run_code_duo(ctx):
                                     )
                             except Exception as _pin_err:
                                 logger.debug("[REPO-MAP-PIN] skipped: %s", _pin_err)
-                        _est_tokens = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
+                        _est_tokens = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
                         # GUARD-REAL-BASIS (2026-08-26): all guard decisions on the
                         # (evict/compress/90%/72%/notices) use the real
                         # prompt_tokens value of the last round, fallback to the
@@ -3960,7 +3905,7 @@ async def run_code_duo(ctx):
                             )
                             if _evicted_n > 0:
                                 _ctx_evictions += int(_evicted_n)
-                                _est_tokens = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
+                                _est_tokens = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
                                 # METER-FIX (2026-08-25): the real value is now
                                 # STALE (pre-eviction). Reset -> naechster
                                 # ctx_meter nutzt den frischen Schaetzer.
@@ -4003,7 +3948,7 @@ async def run_code_duo(ctx):
                                 )
                                 if _evicted_n > 0:
                                     _ctx_evictions += int(_evicted_n)
-                                    _est_tokens = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
+                                    _est_tokens = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
                                     # METER-FIX (2026-08-25): the real value is now
                                     # STALE (pre-eviction). Reset -> naechster
                                     # ctx_meter nutzt den frischen Schaetzer.
@@ -4043,7 +3988,7 @@ async def run_code_duo(ctx):
                                 logger.warning("[CTX-MASK] failed: %s", _mask_err)
                                 _mask_n = 0
                             if _mask_n > 0:
-                                _est_tokens = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
+                                _est_tokens = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
                                 _guard_tokens = max(
                                     int(_coder_real_prompt_tokens[0] or 0), int(_est_tokens))
                                 yield await ctx.emit({"type": "status",
@@ -4624,7 +4569,7 @@ async def run_code_duo(ctx):
                         # worst-case factor 1.35). Full budgets stay as long
                         # as there is room; near the compression threshold
                         # the output budget shrinks instead of overflowing.
-                        _est_now = _calib_est_tokens(_estimate_ctx_tokens(_dtool_msgs))
+                        _est_now = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
                         _max_tokens_round = _clamp_request_max_tokens(
                             est_tokens=int(_est_now),
                             ctx_tokens=int(_dtool_ctx),
@@ -5865,7 +5810,7 @@ async def run_code_duo(ctx):
                     # CHUNK-PERSIST (2026-10-14): the containment decision is
                     # final - the resume block must reflect it, or a hard kill
                     # re-runs the deliberately skipped chunk.
-                    _halt_with_resume("chunk_checkpoint")
+                    _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                     continue
                 yield await ctx.emit({"type": "status",
                     "content": "⏹ Tool budget exhausted — last chunk ended."})
@@ -5895,7 +5840,7 @@ async def run_code_duo(ctx):
                     )
                 except Exception:
                     pass
-                _halt_with_resume("wedge_escalated" if _wedge_escalated
+                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "wedge_escalated" if _wedge_escalated
                                   else ("timeout_guard" if _duo_timed_out else "loop_detected"))
                 break
 
@@ -5903,7 +5848,7 @@ async def run_code_duo(ctx):
 
             if _duo_timed_out:
                 final_verdict = final_verdict or "timeout_guard"
-                _halt_with_resume("timeout_guard")
+                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "timeout_guard")
                 break
 
             # ── SKIP-CHECK: Skip Critic (auto-approve current chunk) ──────
@@ -5925,7 +5870,7 @@ async def run_code_duo(ctx):
                     break
                 _di += 1
                 _cs.reset_test_retries()
-                _halt_with_resume("chunk_checkpoint")
+                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                 continue
 
             # ── Critic ─────────────────────────────────────────────────────
@@ -5990,7 +5935,7 @@ async def run_code_duo(ctx):
                     yield await ctx.emit({"type": "status", "content": _ac_out})
                 _di += 1
                 _cs.reset_test_retries()
-                _halt_with_resume("chunk_checkpoint")
+                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                 continue
 
             # HIGH-CONFIDENCE AUTO-APPROVE:
@@ -6021,7 +5966,7 @@ async def run_code_duo(ctx):
                     break
                 _di += 1
                 _cs.reset_test_retries()
-                _halt_with_resume("chunk_checkpoint")
+                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                 continue
             _critic_task_ref = _subtask if _subtask else ctx.user_input
             _content_label = "Code" if ctx.duo_config.coding_mode else "Answer"
@@ -6267,7 +6212,7 @@ async def run_code_duo(ctx):
                         "content": f"⏭ Auto-test skipped for chunk {_di+1}"})
                         _di += 1
                         _cs.reset_test_retries()
-                        _halt_with_resume("chunk_checkpoint")
+                        _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                         if _is_last:
                             break
                     elif _duo_test_feedback and _cs.has_written_files and not ctx.aborted():
@@ -6285,7 +6230,7 @@ async def run_code_duo(ctx):
                                 "content": f"\u2705 Tests passed ({_chunk_test_result.language})"})
                             _di += 1
                             _cs.reset_test_retries()
-                            _halt_with_resume("chunk_checkpoint")
+                            _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                             if _is_last:
                                 break
                         else:
@@ -6314,14 +6259,14 @@ async def run_code_duo(ctx):
                                 "content": f"\u26a0\ufe0f Chunk {_di+1}: test failures persist after {_cs.max_test_retries+1} attempts — note and continue"})
                                 _di += 1
                                 _cs.reset_test_retries()
-                                _halt_with_resume("chunk_checkpoint")
+                                _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                                 if _is_last:
                                     break
                     else:
                         # No auto-test or no files written — normal completion
                         _di += 1
                         _cs.reset_test_retries()
-                        _halt_with_resume("chunk_checkpoint")
+                        _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                         if _is_last:
                             break
                 else:
@@ -6896,10 +6841,4 @@ async def run_code_duo(ctx):
     # Keep the vision slot warm
     _vis_mdl = ctx.vision_cfg.get("model", "") if ctx.vision_cfg.get("enabled") else ""
     if _vis_mdl:
-        async def _keepalive_vision():
-            try:
-                from backend.llama_server_manager import manager as _kvm
-                await _kvm.touch_if_loaded(_vis_mdl)
-            except Exception:
-                pass
-        asyncio.create_task(_keepalive_vision())
+        asyncio.create_task(_keepalive_vision_fn(_vis_mdl))

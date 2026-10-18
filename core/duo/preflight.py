@@ -673,3 +673,80 @@ async def unpin_duo_models(ctx, pinned: list, ka: str) -> None:
                     "[DUO] Suppressed error at unpin keep-alive: %s",
                     _err, exc_info=True
                 )
+
+
+def calib_est_tokens(real_prompt_tokens: list, est_at_real: list, raw_est: int) -> int:
+    """REAL-CALIBRATED (2026-09-20): scale the chars/4 estimate
+    with the last measured prompt_tokens ratio — the raw
+    estimate ran ~9% under the real prompt on some models."""
+    if real_prompt_tokens[0] > 0 and est_at_real[0] > 0:
+        return int(real_prompt_tokens[0] * (raw_est / max(1, est_at_real[0])))
+    return raw_est
+
+
+async def keepalive_vision(vis_mdl: str) -> None:
+    try:
+        from backend.llama_server_manager import manager as _kvm
+        await _kvm.touch_if_loaded(vis_mdl)
+    except Exception:
+        pass
+
+
+async def emit_chunk_planner_heartbeat(ctx, hb_queue, hb_stop, planner_model: str) -> None:
+    _elapsed = 0
+    await asyncio.sleep(1.0)
+    while not hb_stop.is_set() and not ctx.aborted():
+        if hb_stop.is_set() or ctx.aborted():
+            break
+        _elapsed += 1
+        try:
+            # put_nowait: never blocks; raises QueueFull if maxsize
+            # hit (slow consumer) — silently drop, keep looping.
+            hb_queue.put_nowait({
+                "type": "planner_thinking",
+                "elapsed": _elapsed,
+                "model": planner_model,
+            })
+        except asyncio.QueueFull:
+            pass  # consumer can't keep up — drop heartbeat
+        except Exception:
+            break
+        await asyncio.sleep(1.0)
+
+
+def write_pre_loop_resume(ctx, ws_str: str, explore_ctx, done_tasks: list, written_files: list, halt_reason: str = "hard_stop") -> None:
+    try:
+        if ctx.chat_id and not _load_resume_block(ctx.chat_id):
+            _write_resume_block(
+                chat_id=ctx.chat_id,
+                workspace=ws_str,
+                chunks_total=1,
+                chunks_done=done_tasks,
+                chunks_remaining=[{"title": ctx.user_input}],
+                written_files=written_files,
+                last_summary=" | ".join(done_tasks),
+                plan_msgs=[],
+                explore_ctx=explore_ctx,
+                halt_reason=halt_reason,
+            )
+    except Exception as _rl_err:
+        if isinstance(_rl_err, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+            raise
+        logger.warning("[PRE-LOOP-RESUME] Write failed: %s", _rl_err)
+
+
+def halt_with_resume(ctx, ws_str: str, explore_ctx, done_tasks: list, written_files: list, di: int, loop_items: list, n_items: int, halt_reason: str) -> None:
+    _rem_halt = [{"title": str(t)} for t in loop_items[di:]]
+    if ctx.chat_id and _rem_halt:
+        _write_resume_block(
+            chat_id=ctx.chat_id,
+            workspace=ws_str,
+            chunks_total=n_items,
+            chunks_done=done_tasks,
+            chunks_remaining=_rem_halt,
+            written_files=written_files,
+            last_summary=" | ".join(done_tasks),
+            plan_msgs=[],
+            explore_ctx=explore_ctx,
+            halt_reason=halt_reason,
+        )

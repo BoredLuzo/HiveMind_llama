@@ -43,7 +43,7 @@ _src = (Path(__file__).resolve().parent.parent / "core" / "duo_runner.py").read_
 _lines = _src.splitlines()
 _inc = [i + 1 for i, l in enumerate(_lines) if l.strip() == "_di += 1"]
 _pers = [i + 1 for i, l in enumerate(_lines)
-         if "_halt_with_resume(" in l and "chunk_checkpoint" in l]
+         if ("_halt_fn(" in l or "_halt_with_resume(" in l) and "chunk_checkpoint" in l]
 check("chunk-advance sites exist (test not vacuous)", len(_inc) >= 8,
       f"({len(_inc)} sites)")
 _uncovered = [il for il in _inc if not any(0 < pl - il <= 6 for pl in _pers)]
