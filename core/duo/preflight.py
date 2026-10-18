@@ -750,3 +750,39 @@ def halt_with_resume(ctx, ws_str: str, explore_ctx, done_tasks: list, written_fi
             explore_ctx=explore_ctx,
             halt_reason=halt_reason,
         )
+
+
+async def plan_emit_fn(plan_event_q, event: dict) -> None:
+    await plan_event_q.put(event)
+
+
+def plan_aborted_fn(ctx) -> bool:
+    return ctx.aborted()
+
+
+async def plan_heartbeat_fn(plan_event_q, planner_hb_queue) -> None:
+    # Drain planner heartbeat queue into the event bridge
+    while not planner_hb_queue.empty():
+        try:
+            _hb = planner_hb_queue.get_nowait()
+            await plan_event_q.put(_hb)
+        except asyncio.QueueFull:
+            pass
+
+
+async def inloop_plan_emit_fn(inloop_event_q, event: dict) -> None:
+    try:
+        inloop_event_q.put_nowait(event)
+    except asyncio.QueueFull:
+        pass
+
+
+async def evict_model_handler(ctx, model: str) -> None:
+    if not ctx.duo_config.evict_on_pause:
+        return
+    try:
+        from backend.llama_server_manager import manager as _lsm_pause
+        await _lsm_pause.evict(model)
+        await ctx.emit({"type": "status", "content": "💤 Model unloaded from VRAM during pause."})
+    except Exception as _evict_err:
+        logger.warning(f"evict_on_pause failed: {_evict_err}")

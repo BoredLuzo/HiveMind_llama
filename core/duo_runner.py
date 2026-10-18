@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 import dataclasses
 import httpx
+from functools import partial
 
 logger = logging.getLogger("hivemind.duo")
 
@@ -251,6 +252,11 @@ _READONLY_CODER_NOTE = (
 # PREFLIGHT-EXTRACT (1.4.x): the module-level helpers live in core/duo/preflight.py
 # now. Re-exported here so existing imports (coder_briefing_text, ...) keep working.
 from core.duo.preflight import (  # noqa: F401
+    plan_emit_fn,
+    plan_aborted_fn,
+    plan_heartbeat_fn,
+    inloop_plan_emit_fn,
+    evict_model_handler,
     calib_est_tokens as _calib_tokens,
     keepalive_vision as _keepalive_vision_fn,
     emit_chunk_planner_heartbeat as _planner_hb_fn,
@@ -1048,20 +1054,8 @@ async def run_code_duo(ctx):
             # callback, and the main generator yields them from the queue.
             _plan_event_q: asyncio.Queue = asyncio.Queue(maxsize=100)
 
-            async def _plan_emit_fn(event: dict):
-                await _plan_event_q.put(event)
 
-            def _plan_aborted_fn():
-                return ctx.aborted()
 
-            async def _plan_heartbeat_fn():
-                # Drain planner heartbeat queue into the event bridge
-                while not _planner_hb_queue.empty():
-                    try:
-                        _hb = _planner_hb_queue.get_nowait()
-                        await _plan_event_q.put(_hb)
-                    except asyncio.QueueFull:
-                        pass
 
             # ── Port check ──────────────────────────────────────────────────────
             _plan_result: PlannerResult | None = None
@@ -1091,9 +1085,9 @@ async def run_code_duo(ctx):
                     planner_ctx=_plan_ctx_final,
                     websearch_available=ctx.settings.get("duo_websearch_enabled", False) and ctx.websearch_available,
                     settings=ctx.settings,
-                    aborted_fn=_plan_aborted_fn,
-                    emit_fn=_plan_emit_fn,
-                    heartbeat_fn=_plan_heartbeat_fn,
+                    aborted_fn=partial(plan_aborted_fn, ctx),
+                    emit_fn=partial(plan_emit_fn, _plan_event_q),
+                    heartbeat_fn=partial(plan_heartbeat_fn, _plan_event_q, _planner_hb_queue),
                 ))
 
                 # PLANNER-SKIP (2026-09-04): Skip during the planner aborts the
@@ -3005,11 +2999,6 @@ async def run_code_duo(ctx):
                         )
                         # Event-Bridge: run_inloop_planner emit_fn → asyncio.Queue → yield await ctx.emit
                         _inloop_event_q: asyncio.Queue = asyncio.Queue(maxsize=50)
-                        async def _inloop_plan_emit_fn(event: dict):
-                            try:
-                                _inloop_event_q.put_nowait(event)
-                            except asyncio.QueueFull:
-                                pass
                         try:
                             _inloop_plan_task = asyncio.create_task(
                                 run_inloop_planner(
@@ -3026,7 +3015,7 @@ async def run_code_duo(ctx):
                                     websearch_available=ctx.settings.get("duo_websearch_enabled", False) and ctx.websearch_available,
                                     settings=ctx.settings,
                                     aborted_fn=ctx.aborted,
-                                    emit_fn=_inloop_plan_emit_fn,
+                                    emit_fn=partial(inloop_plan_emit_fn, _inloop_event_q),
                                 )
                             )
                             # Yield events from the bridge while planner runs
@@ -3602,15 +3591,6 @@ async def run_code_duo(ctx):
                             if not _tcf_stuck3(tr, tn):
                                 ctx.exec_ctrl.reset_stuck_detection()
                         return False
-                    async def _evict_model_handler(model: str):
-                        if not ctx.duo_config.evict_on_pause:
-                            return
-                        try:
-                            from backend.llama_server_manager import manager as _lsm_pause
-                            await _lsm_pause.evict(model)
-                            await ctx.emit({"type": "status", "content": "💤 Model unloaded from VRAM during pause."})
-                        except Exception as _evict_err:
-                            logger.warning(f"evict_on_pause failed: {_evict_err}")
                     # ── Coder live streaming (2026-08-18) ──────────────────────
                     # never blocks (queue never fills up). Pattern like the planner bridge.
                     _coder_event_q: asyncio.Queue = asyncio.Queue(maxsize=20)
@@ -3644,7 +3624,7 @@ async def run_code_duo(ctx):
                         is_aborted=lambda cid: bool(ctx.is_aborted_chat(cid)),
                         on_tool_result=_stuck_handler,
                         remember_insight=ctx.memory.remember_repo_insight,
-                        evict_model=_evict_model_handler,
+                        evict_model=partial(evict_model_handler, ctx),
                     )
                     _round_budget0 = _max_tool_rounds
                     # +2 slots: the grace round plus one nudge-retry round; the
