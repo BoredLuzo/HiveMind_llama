@@ -21,7 +21,7 @@
   "sampling": {
     "thinking": {
       "temperature": 0.6,
-      "top_p": 1.0,
+      "top_p": 0.95,
       "top_k": 20,
       "min_p": 0.0,
       "presence_penalty": 0.0,
@@ -30,7 +30,7 @@
     },
     "non_thinking": {
       "temperature": 0.95,
-      "top_p": 1.0,
+      "top_p": 0.95,
       "top_k": 20,
       "min_p": 0.0,
       "presence_penalty": 0.0,
@@ -39,7 +39,7 @@
     },
     "sampling_thinking_code": {
       "temperature": 0.6,
-      "top_p": 1.0,
+      "top_p": 0.95,
       "top_k": 20,
       "min_p": 0.0,
       "presence_penalty": 0.0,
@@ -48,7 +48,7 @@
     },
     "sampling_thinking_code_precise": {
       "temperature": 0.6,
-      "top_p": 1.0,
+      "top_p": 0.95,
       "top_k": 20,
       "min_p": 0.0,
       "presence_penalty": 0.0,
@@ -57,7 +57,7 @@
     },
     "sampling_thinking_text": {
       "temperature": 0.95,
-      "top_p": 1.0,
+      "top_p": 0.95,
       "top_k": 20,
       "min_p": 0.0,
       "presence_penalty": 0.0,
@@ -66,7 +66,7 @@
     },
     "sampling_text": {
       "temperature": 0.95,
-      "top_p": 1.0,
+      "top_p": 0.95,
       "top_k": 20,
       "min_p": 0.0,
       "presence_penalty": 0.0,

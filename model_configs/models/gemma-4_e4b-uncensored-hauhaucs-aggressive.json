@@ -8,7 +8,7 @@
   "vision_preprocessing": true,
   "num_ctx": 8192,
   "num_ctx_analyst": null,
-  "num_ctx_duo_coder": null,
+  "num_ctx_duo_coder": 16384,
   "num_ctx_vision": null,
   "chat_template": null,
   "jinja": true,
@@ -18,5 +18,32 @@
   "mtp": false,
   "gpu_layers": 99,
   "mmproj_filename": "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf",
-  "vram_gb_override": 4.5
+  "vram_gb_override": 4.5,
+  "sampling": {
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    },
+    "non_thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    },
+    "sampling_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    },
+    "sampling_thinking_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    },
+    "sampling_thinking_code": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    }
+  }
 }

@@ -8,15 +8,42 @@
   "vision_preprocessing": true,
   "num_ctx": 4096,
   "num_ctx_analyst": null,
-  "num_ctx_duo_coder": null,
+  "num_ctx_duo_coder": 16384,
   "num_ctx_vision": 8192,
   "chat_template": null,
   "jinja": false,
   "reasoning": null,
   "distilled": false,
   "moe_cpu_experts": 0,
-  "mtp": false,
+  "mtp": true,
   "gpu_layers": null,
   "mmproj_filename": "mmproj-Gemma-4-E2B-BF16.gguf",
-  "vram_gb_override": 2.6
+  "vram_gb_override": 2.6,
+  "sampling": {
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    },
+    "non_thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    },
+    "sampling_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    },
+    "sampling_thinking_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    },
+    "sampling_thinking_code": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 64
+    }
+  }
 }
