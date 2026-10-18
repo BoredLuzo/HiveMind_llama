@@ -1,7 +1,17 @@
 # HiveMind
 
+[![release](https://img.shields.io/github/v/release/BoredLuzo/HiveMind_llama?label=release&color=2ea44f)](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/BoredLuzo/HiveMind_llama/total?label=downloads)](https://github.com/BoredLuzo/HiveMind_llama/releases)
+[![license](https://img.shields.io/badge/license-see%20LICENSE-blue)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.14-3776ab)](pyproject.toml)
+
 Local multi-agent coding assistant on top of llama.cpp. Runs on your own
 hardware, no cloud, no API keys, nothing leaves your machine.
+
+**Current release: 1.4.0 (2026-10-18)** - Windows installer and Linux script,
+voice in and out, hardened tool layer. Download:
+[`HiveMind_v1.4.0_release.zip`](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)
+| what changed: [CHANGELOG](CHANGELOG.md).
 
 Author: Luzo (BoredLuzo) | https://github.com/BoredLuzo
 
