@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.4.1] - 2026-10-18
+
+Follow-up to the project audit: reproducible installs, no dead switches, less
+information disclosure.
+
+### Added
+
+- **`deploy/gen_settings_docs.py`** - the generator `docs/settings.md` always
+  claimed to come from. It was never committed (it sat in `.gitignore`), so the
+  table had drifted to 204 of the then-236 keys. It is now in the repo,
+  regenerated (237 keys) and `--check` fails the suite when the doc is stale.
+
+### Fixed
+
+- **Reproducible installs**: `uv.lock` is committed (64 pinned packages) and both
+  installers sync from it (`uv sync --frozen`), so a release installs exactly the
+  versions it was tested with instead of whatever is newest that day. `.gitignore`
+  had a `*.lock` rule that silently kept the lockfile out of the zip.
+- **Dead switches removed**: `automap_code_duo_enabled`,
+  `automap_duo_pre_explore`, `automap_duo_parallel_preexplore`,
+  `automap_pipeline_websearch_enabled`, `duo_distilled_executor` and the per-role
+  `startup_preload_{analyst,coder,judge_in_agentic}` were read by nothing. The
+  Automap card now drives the real settings (`duo_pre_explore`,
+  `duo_parallel_preexplore`, `pipeline_websearch_enabled`), startup preload has
+  one honest switch, and the three per-role preload rows are gone.
+- **Debug API closed by default**: `/debug/tasks` (asyncio task stacks with file
+  paths), `/debug/models`, `/thinking/debug` and `/budget/debug` were mounted on an
+  unauthenticated loopback API. New `debug_api_enabled` (default off) gates the
+  whole router - verified: `/debug/tasks` answers 404.
+- **Write-truncation log no longer stores user code**: `logs/write_truncations.jsonl`
+  kept the full raw `write_file` call (up to 64 KB of generated file content per
+  entry, never rotated). It now records `path`, `raw_len`, `finish_reason` and
+  `json_complete` only - still enough to see that a call was cut off mid-JSON.
+
 ## [1.4.0] - 2026-10-17
 
 Voice, end to end: speak answers here, dictate runs from the phone, and hear the

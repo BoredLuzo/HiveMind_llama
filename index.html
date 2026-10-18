@@ -1451,37 +1451,7 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">Judge is preloaded at startup &mdash; no cold start.</div>
-      <div id="preload-judge-agentic-row" class="tgl-sub">
-        <div class="tgl-row">
-          <span class="tgl-text">Preload judge in agentic <em>(2.1GB VRAM)</em></span>
-          <label class="cfl-sw">
-            <input type="checkbox" id="startup-preload-judge-agentic-toggle"
-              onchange="postSettings({startup_preload_judge_in_agentic:this.checked})">
-            <span class="sl"></span>
-          </label>
-        </div>
-        <div class="fld-hint">OFF = judge is not loaded at startup when agentic is active &mdash; frees ~2GB for worker slots.</div>
-      </div>
-      <div id="preload-analyst-row" class="tgl-sub">
-        <div class="tgl-row">
-          <span class="tgl-text">Preload analyst <em>(if VRAM allows)</em></span>
-          <label class="cfl-sw">
-            <input type="checkbox" id="startup-preload-analyst-toggle" onchange="setStartupPreloadAnalyst(this.checked)">
-            <span class="sl"></span>
-          </label>
-        </div>
-        <div id="preload-analyst-hint" class="fld-hint">Only if judge + analyst &le; 85% VRAM budget.</div>
-      </div>
-      <div id="preload-coder-row" class="tgl-sub">
-        <div class="tgl-row">
-          <span class="tgl-text">Preload coder worker <em>(exec_mdl warm immediately)</em></span>
-          <label class="cfl-sw">
-            <input type="checkbox" id="startup-preload-coder-toggle" onchange="postSettings({startup_preload_coder:this.checked})">
-            <span class="sl"></span>
-          </label>
-        </div>
-        <div class="fld-hint">Loads the exec_mdl worker immediately at startup. Avoids cold-start delay on the first run.</div>
+      <div class="fld-hint">Warms the model the next run will use (planner/coder) at engine startup &mdash; avoids the cold start on the first run. Per-role preload switches were removed in 1.4.1: only this master switch is wired.</div>
       </div>
     </div>
 

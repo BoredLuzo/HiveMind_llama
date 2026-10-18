@@ -102,7 +102,6 @@ clean_release.bat
 AGENTS.md
 tools/sync_to_installs.py
 deploy/backup_data.py
-deploy/gen_settings_docs.py
 deploy/hivemind_windows.py
 
 # local smoke/bench artifacts (settings backups, SSE dumps) — never pushed

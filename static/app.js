@@ -467,13 +467,12 @@ function updateAutomapAdvancedInterlocks() {
 }
 
 function setAutomapCodeDuo(on) {
+  // 1.4.1: UI-only master switch. It used to persist automap_code_duo_enabled,
+  // which no engine code ever read, and to switch the dead automap twins off.
   S.automapCodeDuoEnabled = !!on;
-  postSettings({automap_code_duo_enabled: S.automapCodeDuoEnabled});
   if (!S.automapCodeDuoEnabled) {
-    postSettings({
-      automap_duo_pre_explore: false,
-      automap_duo_parallel_preexplore: false,
-    });
+    S.automapDuoPreExplore = false;
+    S.automapDuoParallelPreexplore = false;
   }
   updateAutomapAdvancedInterlocks();
   updateWebsearchHint();
@@ -481,11 +480,12 @@ function setAutomapCodeDuo(on) {
 
 function setAutomapDuoPreExplore(on) {
   S.automapDuoPreExplore = !!on;
-  postSettings({automap_duo_pre_explore: S.automapDuoPreExplore});
+  // 1.4.1: the engine reads duo_pre_explore (the automap_* twin was dead)
+  postSettings({duo_pre_explore: S.automapDuoPreExplore});
   if (!S.automapDuoPreExplore) {
     S.automapDuoParallelPreexplore = false;
     postSettings({
-      automap_duo_parallel_preexplore: false,
+      duo_parallel_preexplore: false,
     });
   }
   updateAutomapAdvancedInterlocks();
@@ -494,13 +494,13 @@ function setAutomapDuoPreExplore(on) {
 
 function setAutomapDuoParallel(on) {
   S.automapDuoParallelPreexplore = !!on;
-  postSettings({automap_duo_parallel_preexplore: S.automapDuoParallelPreexplore});
+  postSettings({duo_parallel_preexplore: S.automapDuoParallelPreexplore});
   updateAutomapAdvancedInterlocks();
 }
 
 function setAutomapPipelineWebsearch(on) {
   S.automapPipelineWebsearch = !!on;
-  postSettings({automap_pipeline_websearch_enabled: S.automapPipelineWebsearch});
+  postSettings({pipeline_websearch_enabled: S.automapPipelineWebsearch});
   updateWebsearchHint();
 }
 
@@ -1207,10 +1207,10 @@ async function loadSettings() {
     updatePassFilesButtons();
 
   // AutoMap Advanced
-  S.automapCodeDuoEnabled = s.automap_code_duo_enabled || false;
-  S.automapDuoPreExplore = s.automap_duo_pre_explore || false;
-  S.automapDuoParallelPreexplore = s.automap_duo_parallel_preexplore || false;
-  S.automapPipelineWebsearch = s.automap_pipeline_websearch_enabled || false;
+  S.automapCodeDuoEnabled = s.duo_pre_explore === true;  // 1.4.1: mirrors the real switch
+  S.automapDuoPreExplore = s.duo_pre_explore === true;
+  S.automapDuoParallelPreexplore = s.duo_parallel_preexplore === true;
+  S.automapPipelineWebsearch = s.pipeline_websearch_enabled === true;
   var _amCode = document.getElementById('automap-code-duo-toggle');
   if (_amCode) _amCode.checked = S.automapCodeDuoEnabled;
   var _amPre = document.getElementById('automap-duo-preexplore-toggle');
@@ -1253,12 +1253,6 @@ async function loadSettings() {
     var jkaEl = document.getElementById('judge-keepalive-toggle');
     if (jkaEl) jkaEl.checked = s.judge_keepalive_enabled === true;
     // Analyst Sub-Toggle
-    var saEl = document.getElementById('startup-preload-analyst-toggle');
-    if (saEl) saEl.checked = s.startup_preload_analyst === true;
-    var sjaEl = document.getElementById('startup-preload-judge-agentic-toggle');
-    if (sjaEl) sjaEl.checked = s.startup_preload_judge_in_agentic === true;
-    var scEl = document.getElementById('startup-preload-coder-toggle');
-    if (scEl) scEl.checked = s.startup_preload_coder === true;
     var pdEl = document.getElementById('pin-direct-toggle');
     if (pdEl) pdEl.checked = s.pin_direct_after_response === true;
     // Vision-Agent state
@@ -1300,8 +1294,6 @@ async function loadSettings() {
     updateDuoImageUI();
     populateVisionAgentModelSel();
     _updateVisionAgentModeUI(S.visionAgentMode);
-    var ar = document.getElementById('preload-analyst-row');
-    if (ar) ar.style.opacity = (s.startup_preload_enabled === true) ? '1' : '0.4';
     // Smart Preload Toggle + Prefetch-Lead Slider
     var spEl = document.getElementById('smart-preload-toggle');
     if (spEl) {
@@ -8933,29 +8925,7 @@ function setLearningMode(enabled) {
 function setStartupPreload(enabled) {
   var t1 = document.getElementById('startup-preload-toggle');
   if (t1) t1.checked = enabled;
-  // analyst sub-toggle shown/hidden depending on the main toggle
-  var ar = document.getElementById('preload-analyst-row');
-  if (ar) ar.style.opacity = enabled ? '1' : '0.4';
   postSettings({startup_preload_enabled: enabled});
-}
-
-function setStartupPreloadAnalyst(enabled) {
-  var t = document.getElementById('startup-preload-analyst-toggle');
-  if (t) t.checked = enabled;
-  postSettings({startup_preload_analyst: enabled});
-}
-
-async function preloadJudgeNow(btn) {
-  var orig = btn.textContent;
-  btn.disabled = true; btn.textContent = '...';
-  try {
-    var d = await fetch('/vram/preload_judge', {method:'POST'}).then(function(r){return r.json();});
-    btn.textContent = d.ok ? '✓' : '✗';
-    btn.style.color = d.ok ? '#3a9960' : '#b04040';
-    if (!_vramPending && _vramOpen) refreshVram();
-  } catch(e) { btn.textContent = '✗'; }
-  btn.disabled = false;
-  setTimeout(function(){ btn.textContent = orig; btn.style.color = '#e09030'; }, 2500);
 }
 
 function setSmartPreload(enabled) {

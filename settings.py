@@ -88,13 +88,15 @@ DEFAULT_SETTINGS = {
 
     # ════════════════════════════════════════════════════════════════════════
     # ════════════════════════════════════════════════════════════════════════
-    "duo_pair":                "focused",
     "duo_tool_rounds":         0,
     "duo_use_pipeline":        False,
     "duo_critic_tools":        False,
     "duo_chunking":            True,
     "duo_coding_mode":         True,
     "duo_pre_explore":         False,
+    # UI state only: remembers the Duo "pair" selector position. The same
+    # request also sets agents.duo_coder.model, which IS what the engine reads.
+    "duo_pair":                "focused",
     "until_finished":          False,
     "duo_runtime_profile":     "balanced",
     "duo_profile_speed_model": "",
@@ -258,7 +260,6 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     "duo_peer_ratings_agentic": False,
     "duo_tool_autopromote_max_rounds": 4,
-    "duo_distilled_executor":  False,
     "duo_test_feedback":       False,
     "duo_test_feedback_chunk": False,
     # TESTING-DEFAULT (2026-08-12): finaler Auto-Test standardmaessig aktiv —
@@ -439,9 +440,6 @@ DEFAULT_SETTINGS = {
     # the card has room.
     "smart_preload_enabled":   False,
     "startup_preload_enabled": False,
-    "startup_preload_analyst": False,
-    "startup_preload_judge_in_agentic": False,
-    "startup_preload_coder":   False,
     # OFF (2026-10-18): warms the judge model before the routing decision - pure
     # latency win on a big card, an eviction risk on a small one. Opt-in.
     "judge_prefetch_before_complexity": False,
@@ -453,10 +451,6 @@ DEFAULT_SETTINGS = {
     # M) AUTOMAP / ROUTING
     # ════════════════════════════════════════════════════════════════════════
     "automap_excluded":        [],
-    "automap_code_duo_enabled": False,
-    "automap_duo_pre_explore": False,
-    "automap_duo_parallel_preexplore": False,
-    "automap_pipeline_websearch_enabled": False,
     "model_capability_overrides": {},
 
     # ════════════════════════════════════════════════════════════════════════
