@@ -1,36 +1,5 @@
 # Changelog
 
-## [1.4.1] - 2026-10-18
-
-Patch release: the installer picked the wrong Python, and the audio licences are
-now spelled out completely.
-
-### Fixed
-
-- **Installer could build the venv on Python 3.15 and die.** `uv python install
-  3.14` failed when an unmanaged `python3.14.exe` existed in `~/.local\bin`; the
-  installer noted it and continued, uv then chose **3.15**, where `tree-sitter`
-  has no wheel - the source build needs MSVC and killed the install. The
-  interpreter is now pinned (`uv venv --python 3.14`, `uv sync --python 3.14`), a
-  `--force` retry replaces the foreign executable, a missing 3.14 stops with
-  instructions instead of falling back, and the finished venv is asserted to be
-  3.14. A leftover `.venv` without `python.exe` is cleared first (that used to
-  fail with "not a valid Python environment" on the second run).
-- **A stray line in `install.bat`** printed `Der Befehl "ERROR-every-second-run"
-  ...` at the start: an unterminated quote in a REM made the next line a command.
-- **Telegram card: the voice controls stayed active-looking with voice off.** The
-  result-format select and the hint lines are now greyed out and disabled together
-  with the voice-note toggles.
-
-### Docs
-
-- **Complete licence table for the audio stack** in the README: Pocket TTS model
-  (CC BY 4.0 + gate terms) and code (MIT), the voice recordings per dataset
-  (VCTK/Alba CC BY 4.0, Voice-Zero CC0, Expresso **CC BY-NC 4.0**), whisper models
-  (MIT), whisper.cpp/parakeet binaries and the parakeet GGUF (MIT, upstream
-  CC BY 4.0). Also states that no model is vendored - everything is downloaded at
-  first use.
-
 ## [1.4.0] - 2026-10-17
 
 Voice, end to end: speak answers here, dictate runs from the phone, and hear the
@@ -207,6 +176,27 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   mismatched pair, a fresh venv, a fresh folder. `pydantic>=2.11` is now an
   explicit dependency, because an old `pydantic_core` next to a new `pydantic` is
   exactly what raises that error.
+
+- **Installer: the venv is pinned to Python 3.14.** `uv python install
+  3.14` failed when an unmanaged `python3.14.exe` existed in `~/.local\bin`; the
+  installer noted it and continued, uv then chose **3.15**, where `tree-sitter`
+  has no wheel - the source build needs MSVC and killed the install. The
+  interpreter is now pinned (`uv venv --python 3.14`, `uv sync --python 3.14`), a
+  `--force` retry replaces the foreign executable, a missing 3.14 stops with
+  instructions instead of falling back, and the finished venv is asserted to be
+  3.14. A leftover `.venv` without `python.exe` is cleared first (that used to
+  fail with "not a valid Python environment" on the second run).
+- **A stray line in `install.bat`** printed `Der Befehl "ERROR-every-second-run"
+  ...` at the start: an unterminated quote in a REM made the next line a command.
+- **Telegram card: the voice controls grey out with voice off.** The
+  result-format select and the hint lines are now greyed out and disabled together
+  with the voice-note toggles.
+- **Complete licence table for the audio stack** in the README: Pocket TTS model
+  (CC BY 4.0 + gate terms) and code (MIT), the voice recordings per dataset
+  (VCTK/Alba CC BY 4.0, Voice-Zero CC0, Expresso **CC BY-NC 4.0**), whisper models
+  (MIT), whisper.cpp/parakeet binaries and the parakeet GGUF (MIT, upstream
+  CC BY 4.0). Also states that no model is vendored - everything is downloaded at
+  first use.
 
 ### Notes
 

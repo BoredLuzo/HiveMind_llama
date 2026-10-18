@@ -72,6 +72,20 @@ the optional parts.
 
 ## Also fixed
 
+- **The Windows installer pins its Python (3.14).** If `uv python install 3.14`
+  hits an unmanaged `python3.14.exe` it is retried with `--force`; without a usable
+  3.14 the installer stops with instructions instead of falling back - on 3.15 the
+  `tree-sitter` wheel is missing and the C build needs Visual Studio, which is how
+  a fresh install died. The finished venv is asserted to be 3.14 and a leftover
+  `.venv` without `python.exe` is cleared first.
+- **Complete licence table for the audio stack** in the README: Pocket TTS model
+  (CC BY 4.0, gated terms) and code (MIT), every voice with its source dataset
+  (VCTK/Alba CC BY 4.0, Voice-Zero CC0, Expresso **CC BY-NC 4.0**), whisper models
+  (MIT), whisper.cpp/parakeet binaries and the parakeet GGUF (MIT in that repo,
+  upstream weights CC BY 4.0). Nothing is vendored - models are downloaded on
+  first use.
+- **Telegram card:** with voice switched off, the result-format select and the
+  hint lines grey out and disable together with the voice-note toggles.
 - **Presets no longer reset your output budget.** A load used to replace the
   whole per-agent config, so a preset saved before a field existed wiped its
   `max_tokens` - answers were silently shortened. Loads now merge, the live
