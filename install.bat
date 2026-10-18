@@ -48,8 +48,8 @@ REM uv (fast Python package manager)
 REM UV-ROBUST (2026-10-14): detection is existence-based over ALL known
 REM install locations, and PATH changes are applied OUTSIDE parenthesized
 REM blocks (batch expands %VARS% at parse time inside a block, so the old
-REM in-block "set PATH + where uv" could never see a fresh install - the
- ERROR-every-second-run report).
+REM in-block "set PATH + where uv" could never see a fresh install
+REM (the ERROR-every-second-run report).
 REM ======================================================
 echo  ==========================================================
 echo   [uv] Setting up package manager
@@ -113,10 +113,17 @@ echo  ==========================================================
 echo.
 uv python install 3.14
 if errorlevel 1 (
-    echo   [NOTE] Managed Python install failed - uv will try an
-    echo          existing system Python in the next step.
-    echo.
+    REM A foreign python3.14.exe (e.g. a manual install in %USERPROFILE%\
+    REM .local\bin) blocks uv from placing its managed copy. --force takes
+    REM the name over; the interpreter version stays 3.14 either way.
+    echo   [python] retrying with --force (an unmanaged python3.14.exe exists)
+    uv python install 3.14 --force
 )
+REM Hard gate: without a usable 3.14 the next step would silently pick
+REM another interpreter (3.15 has no wheel for tree-sitter -> MSVC build
+REM -> the install died here on a fresh machine, 2026-10-18).
+uv python find 3.14 >nul 2>&1
+if errorlevel 1 goto python_missing
 echo.
 
 REM ======================================================
@@ -126,6 +133,12 @@ echo  ==========================================================
 echo   [venv] Setting up virtual environment
 echo  ==========================================================
 echo.
+if not exist "%~dp0.venv" goto venv_ok
+if exist "%~dp0.venv\Scripts\python.exe" goto venv_ok
+echo   [venv] removing a broken leftover .venv (no python.exe inside)
+rmdir /s /q "%~dp0.venv" >nul 2>&1
+:venv_ok
+
 REM SYNC-FLOW (2026-09-09): goto-based instead of parenthesized blocks - the
 REM paths involved (%~dp0, %PY%) break cmd's block parser when the install
 REM folder name contains parentheses (see PAREN-PATH-FIX below).
@@ -135,18 +148,38 @@ REM RELEASE-FALLBACK: older release zips ship requirements.txt only (pre-uv
 REM packaging). uv sync needs pyproject.toml and dies with "No pyproject.toml
 REM found" - fall back to a plain venv + requirements install.
 echo   [uv] pyproject.toml not found - using requirements.txt fallback.
-uv venv
+uv venv --python 3.14
 if errorlevel 1 goto uv_failed
 uv pip install --python "%~dp0.venv\Scripts\python.exe" -r requirements.txt
 if errorlevel 1 goto uv_failed
 goto uv_done
 
 :uv_sync_project
-uv sync --all-extras
+uv sync --all-extras --python 3.14
 if errorlevel 1 goto uv_failed
 
 :uv_done
 goto venv_py_check
+
+:python_missing
+echo.
+echo   [ERROR] No usable Python 3.14.
+echo   uv could not provision it. Two ways out:
+echo     1. Delete %USERPROFILE%\.local\bin\python3.14.exe (a foreign
+echo        copy blocks uv) and run install.bat again.
+echo     2. Install Python 3.14 from python.org, then run install.bat.
+echo.
+echo  Press any key to continue... & pause >nul & exit /b 1
+
+:python_wrong_in_venv
+echo.
+echo   [ERROR] The virtual environment was built with the wrong Python:
+for /f "usebackq delims=" %%V in (`"%~dp0.venv\Scripts\python.exe" -c "import sys;print(sys.version.split()[0])"`) do echo          found %%V
+echo   HiveMind needs 3.14 (compiled dependencies only ship wheels up to
+echo   that version). Fix: delete the .venv folder, then run install.bat
+echo   again - it now pins the interpreter instead of taking the newest.
+echo.
+echo  Press any key to continue... & pause >nul & exit /b 1
 
 :uv_failed
 echo.
@@ -156,6 +189,10 @@ echo.
 echo  Press any key to continue... & pause >nul & exit /b 1
 
 :venv_py_check
+REM The venv must be 3.14. A silent fallback (3.15) breaks compiled
+REM dependencies that only ship wheels up to 3.14.
+"%~dp0.venv\Scripts\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" >nul 2>&1
+if errorlevel 1 goto python_wrong_in_venv
 
 REM ======================================================
 REM [playwright] Chromium browser (for browser_tool)
