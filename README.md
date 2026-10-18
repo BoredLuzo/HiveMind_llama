@@ -419,7 +419,7 @@ Numbers and the Telegram switches: [docs/voice_setup.md](docs/voice_setup.md).
 ## Requirements
 
 - Windows 10/11 or Linux
-- Python 3.12+ (3.14 recommended, auto-installed by the setup)
+- Python 3.14 (auto-installed by the setup; older interpreters are refused by the dependency metadata in `pyproject.toml`)
 - uv (auto-installed)
 - 8 GB+ VRAM GPU recommended (AMD/Intel via Vulkan, NVIDIA via CUDA)
 - ~30 GB disk for the recommended model set
@@ -512,6 +512,10 @@ zip NEXT TO (not over) the installation and copy the files across.
 
 All settings live in `settings.json`, generated from the `settings.py`
 defaults. The important ones:
+
+Change them in the UI (or `POST /settings`): the running engine holds the
+authoritative copy and rewrites the file on the next save, so a hand edit
+made while it runs is lost on the next settings write.
 
 | Setting | Default | Description |
 |---------|---------|-------------|

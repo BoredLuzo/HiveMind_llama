@@ -862,21 +862,7 @@ async def process_update(gw: Gateway, raw: dict) -> None:
             # callback_data 'appr:<rid>:<1|2|3>'. Taps count toward the
             # rate limit (20/min is plenty); the toast answers via
             # answerCallbackQuery.
-            if p.text.startswith("stop"):
-                # STOP-BUTTON: identical to /stop (own run + mirror abort), only
-                # as one tap. Never rate-limited - the safety valve must work.
-                _note = await gw.bridge.stop()
-                _mirror_note = await gw.bridge.stop_mirror()
-                if _mirror_note:
-                    _note = (_mirror_note if _note == "No run active."
-                             else _note + "\n" + _mirror_note)
-                if p.callback_id:
-                    try:
-                        await gw.api.answer_callback_query(
-                            p.callback_id, text=_note[:190])
-                    except TelegramApiError as exc:
-                        log.warning("[STOP] toast failed: %s", exc)
-            elif p.text.startswith("appr:"):
+            if p.text.startswith("appr:"):
                 note = await gw.bridge.approval_callback(p.callback_id,
                                                          p.text)
                 if p.callback_id:
