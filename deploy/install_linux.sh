@@ -101,7 +101,7 @@ if command -v uv >/dev/null 2>&1 && [ -f pyproject.toml ]; then
   # Primary path: managed Python 3.14 + locked dependency sync (same flow as
   # the Windows installer).
   uv python install 3.14
-  uv sync --all-extras
+  uv sync --all-extras --frozen
 elif [ -f requirements.txt ]; then
   # Legacy fallback: system python3 + pip + requirements.txt.
   python3 -m venv "$INSTALL_DIR/.venv"

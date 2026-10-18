@@ -545,7 +545,7 @@ work for you.
 `update_backup_<version>\` and applies the new build over this folder.
 `settings.json`, `models.json`, `.venv\`, `llama\`, `logs\` and `sessions\` are
 never touched; new settings keys pick up their defaults on the next start, and
-`start_hivemind.bat` installs new Python packages on demand.
+`start_hivemind.bat` installs new Python packages on demand; the update itself syncs from `uv.lock`, so a release installs exactly the versions it was tested with.
 
 Rollback: copy the *contents* of `update_backup_<version>\` back over the folder.
 Once it runs, the backup can be deleted. Manual alternative: extract a release

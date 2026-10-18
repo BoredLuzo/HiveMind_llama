@@ -155,7 +155,10 @@ if errorlevel 1 goto uv_failed
 goto uv_done
 
 :uv_sync_project
-uv sync --all-extras --python 3.14
+REM --frozen (2026-10-18): without a lockfile every install resolved the
+REM newest package of the day - one machine got pydantic 2.14.1/2.50.1 and
+REM another a different pair. uv.lock ships with the zip and pins all 64.
+uv sync --all-extras --frozen --python 3.14
 if errorlevel 1 goto uv_failed
 
 :uv_done

@@ -365,7 +365,15 @@ for /f "usebackq delims=" %%U in (`where uv 2^>nul`) do (
 )
 if not defined UV_EXE if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_EXE=%USERPROFILE%\.local\bin\uv.exe"
 if defined UV_EXE (
-    "%UV_EXE%" pip install --python "%BASE%\.venv\Scripts\python.exe" -r "%BASE%\requirements.txt" --quiet
+    REM FROZEN (2026-10-18, audit): pyproject.toml + uv.lock install exactly
+    REM the versions this release was tested with - without a lockfile every
+    REM update resolved the newest package of the day. Older zips carry only
+    REM requirements.txt; then the pip path is the honest fallback.
+    if exist "%BASE%\uv.lock" if exist "%BASE%\pyproject.toml" (
+        "%UV_EXE%" sync --frozen --all-extras --python "%BASE%\.venv\Scripts\python.exe" --project "%BASE%" --quiet
+    ) else (
+        "%UV_EXE%" pip install --python "%BASE%\.venv\Scripts\python.exe" -r "%BASE%\requirements.txt" --quiet
+    )
     if errorlevel 1 (
         echo  [WARN] Dependency refresh failed. HiveMind may miss new imports.
         echo         Run: install.bat  ^(it repairs the venv^)

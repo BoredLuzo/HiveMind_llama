@@ -262,6 +262,7 @@ These were missing from the table above; defaults are from `settings.py`.
 | `telegram_voice_out` | bool | `False` | Voice / gateway | Send the final answer back as a voice note. |
 | `telegram_result_mode` | str | `"both"` | Telegram | `both`, `text` or `voice` (results-only line; errors stay text). |
 | `telegram_progress_msgs` | bool | `True` | Telegram | OFF silences status + tool lines; approvals and the result still arrive. |
+| `debug_api_enabled` | bool | `False` | - | Mount the debug endpoints (`/debug/tasks`, `/debug/models`, `/thinking/debug`, `/budget/debug`). Off by default - they expose task stacks and registry paths. |
 | `run_bash_shell` | str | `"auto"` | - | Shell used by `run_bash` (`auto` picks pwsh/cmd or bash per platform). |
 | `duo_action_approval_timeout_s` | int | `0` | - | Auto-deny a pending approval card after this many seconds (`0` = wait forever). |
 | `vram_preflight_gate` | bool | `True` | - | Refuse a model load that the VRAM estimate says will not fit. |

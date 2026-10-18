@@ -182,10 +182,25 @@ def record_truncation_fixture(tool: str, raw: str, *, model: str = "",
         from pathlib import Path as _P
         _path = _P(path) if path else (
             _P(__file__).resolve().parents[1] / "logs" / "write_truncations.jsonl")
+        # METADATA ONLY (2026-10-18, audit): this stored the RAW tool call - up to
+        # 64 KB of the user's generated file content - in an unrotated log file.
+        # Path, lengths and finish_reason are what the analysis needs; keeping the
+        # payload means keeping user code in logs for no benefit.
+        _raw_s = str(raw or "")
+        _path_hint = ""
+        try:
+            import json as _json_hint
+            _path_hint = str((_json_hint.loads(_raw_s) or {}).get("path") or "")[:260]
+        except (ValueError, TypeError, AttributeError):
+            import re as _re_hint
+            _m = _re_hint.search(r'"path"\s*:\s*"([^"]{1,260})"', _raw_s)
+            _path_hint = _m.group(1) if _m else ""
         entry = {"ts": _time.strftime("%Y-%m-%dT%H:%M:%S"),
                  "tool": str(tool), "model": str(model or ""),
                  "finish_reason": finish_reason,
-                 "raw_len": len(raw or ""), "raw": str(raw or "")[:64000]}
+                 "raw_len": len(_raw_s),
+                 "path": _path_hint,
+                 "json_complete": _raw_s.rstrip().endswith("}")}
         old: list = []
         if _path.exists():
             import json as _json_tr
