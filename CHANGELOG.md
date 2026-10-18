@@ -198,6 +198,11 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   CC BY 4.0). Also states that no model is vendored - everything is downloaded at
   first use.
 
+- **Env check without imports**: it reports the resolved paths, shadowing copies
+  (PYTHONPATH / user site), the compiled module's size and a missing __init__.py
+  (namespace package -> "unknown location"), and escalates the repair to
+  uninstall + install so orphaned files are actually removed.
+
 ### Notes
 
 - English only. Speech to text models: `parakeet-q4k` 396 MB (3.6 % micro-WER),
