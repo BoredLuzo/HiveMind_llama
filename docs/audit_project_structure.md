@@ -161,3 +161,33 @@ one is the difference between "careful changes" and "any change is a risk".
 
 None of this blocks 1.4.0. The runtime is healthy; the **change cost** is the
 problem, and it grows with every hotfix that lands in that one function.
+
+---
+
+## Punkt 5 - what was actually done (2026-10-18, commit `ddd8bc2`)
+
+The plan was "pull the helpers out of `run_code_duo`". The measurement changed the
+plan:
+
+- **15 nested helpers live inside the function**, and every one of them closes over
+  run state (`ctx`, `_ws_str`, `_written_files`, event queues, counters). **None**
+  can be lifted without being parameterised - that is the invasive change the
+  earlier attempts got wrong.
+- **21 module-level helpers** (505 lines) sat *next to* the function in the same
+  file. Those were a pure move:
+
+| | before | after |
+|---|---|---|
+| `core/duo_runner.py` | 7,464 lines | **6,782 lines** (-682) |
+| `core/duo/preflight.py` | - | **511 lines** |
+| `run_code_duo` | 6,709 lines | **unchanged** (AST-identical, 728,587 chars) |
+| moved bodies | - | **21/21 byte-identical** (AST compared against HEAD) |
+
+Verification: `run_code_duo`'s AST is identical; all 21 names are re-exported from
+`duo_runner`, so `from core.duo_runner import coder_briefing_text` still works; the
+suite is 147/147 and six source-scanning pins were repointed at the new file (call
+sites stay in `duo_runner`, definitions moved), and the silent-except baseline was
+transferred instead of lowered (same total debt, different file - 149 across both).
+
+**Not done, deliberately**: parameterising the nested closures. That is the real
+shrinking of the 6,700-line function and exactly where previous attempts broke.
