@@ -72,6 +72,13 @@ the optional parts.
 
 ## Also fixed
 
+- **Presets no longer reset your output budget.** A load used to replace the
+  whole per-agent config, so a preset saved before a field existed wiped its
+  `max_tokens` - answers were silently shortened. Loads now merge, the live
+  pipeline follows the load, and the save carries the cards on screen.
+- **Download catalog repaired.** The Hermes model pinned file names that the
+  upstream repo had renamed, so a fresh install fetched nothing; the README table
+  now names the real repos and the measured sizes.
 - **A broken Python environment is diagnosed, not guessed.** A fresh install on
   Python 3.14 hit `cannot import name 'ArgsKwargs' from
   'pydantic_core._pydantic_core'`; the old repair reinstalled the pair, pip said OK

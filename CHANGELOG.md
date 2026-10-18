@@ -139,6 +139,19 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   discards what arrived while it was offline; the owner now gets one short note
   telling them to resend.
 
+- **Presets are complete snapshots and loads are non-destructive.** Loading a
+  preset now MERGES the per-agent config instead of replacing the whole dict, so a
+  preset saved before a role or field existed can no longer wipe its
+  `max_tokens`/`thinking_budget` (the reported "output budget resets and answers
+  get cut"). The live pipeline is refreshed right after a load (it used to keep the
+  pre-load budgets, which the next save then stored back), the save carries the
+  agent cards that are on screen, and the load no longer blocks the UI with an
+  alert. A regression test asserts that a snapshot contains every persisted
+  setting (secrets and machine paths stay out).
+- **Download catalog fixed**: the Hermes entry pinned file names the upstream repo
+  had renamed, so a fresh install fetched neither weights nor projector. The
+  README table now lists the real repo and the measured download sizes.
+
 ### Telegram output contract (2026-10-18)
 
 - **Choose what a phone run sends back**: `telegram_result_mode` = `both` (text

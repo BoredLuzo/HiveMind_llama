@@ -146,6 +146,7 @@ SUITES = [
     ("presets_bom",            "tests/test_presets_bom.py",                     30),
     ("preset_never_keys",      "tests/test_preset_never_keys_apply.py",          30),
     ("preset_agent_merge",     "tests/test_preset_agent_merge.py",               30),
+    ("preset_snapshot",        "tests/test_preset_snapshot_complete.py",    30),
     ("browser_fileserve",      "tests/test_browser_fileserve.py",               30),
     ("partial_cut",            "tests/test_partial_cut.py",                     30),
     ("memory_routing",         "tests/test_memory_routing.py",                  30),
