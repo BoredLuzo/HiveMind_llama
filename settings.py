@@ -326,7 +326,7 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     "searxng_host":            "http://localhost:8888",
     # --- Voice: speech-to-text (1.4, English only) -----------------------
-    # Owner decisions 2026-10-17 (docs/plan_1.4_voice.md): English only, one
+    # Scope for 1.4 (docs/plan_1.4_voice.md): English only, one
     # CLI call per request, model tier chosen by RAM unless set explicitly.
     "stt_enabled":              False,
     "stt_model":                "",      # "" = RAM default (parakeet q4_k >= 8 GB)

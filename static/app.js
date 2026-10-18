@@ -2142,18 +2142,6 @@ function voiceWarmup() {
 // visit to the card: if none of the read-aloud switches is set, enable the two
 // answer paths (direct + agentic). The switches are visible, so this is not a
 // hidden mode - and turning them off again is one click.
-function voiceEnableDefaults() {
-  if (!(S && S.ttsEnabled)) return;
-  if (S.ttsReadDirect || S.ttsReadAgentic) return;
-  S.ttsReadDirect = true;
-  S.ttsReadAgentic = true;
-  var patch = {tts_read_direct: true, tts_read_agentic: true};
-  _syncFlagCheck('tts-read-direct-toggle', true);
-  _syncFlagCheck('tts-read-agentic-toggle', true);
-  postSettings(patch);
-}
-
-
 // Reveal the speaker button as soon as a bubble has text. Called from the token
 // flush (throttled to 4/s) and at run end - before this it only ran inside
 // loadSettings, so the button never appeared during a live run.

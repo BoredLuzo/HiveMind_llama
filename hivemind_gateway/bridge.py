@@ -1387,6 +1387,11 @@ class RunBridge:
             return  # our own run reports natively; do not double-mirror
         fresh = m["run_id"] != rid
         if fresh:
+            # VOICE-PRELOAD for mirrored runs: the phone gets a voice note for a
+            # desktop run too, so the sidecar must be warm BEFORE the answer is
+            # done (a cold start here cost 48 s on 2026-10-18).
+            await self._preload_voice()
+        if fresh:
             m.update({"run_id": rid, "after": int(j.get("n") or 0),
                       "status_msg_id": None, "last_status": "",
                       "approval_sig": None, "approval_decision_id": "",

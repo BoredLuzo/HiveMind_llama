@@ -1271,6 +1271,13 @@ async def vram_kill_all_ep():
 
 @app.post("/stream")
 async def stream(req: Request):
+    # KEEP-WARM (2026-10-18): a run whose answer may be spoken must not lose the
+    # sidecar to the idle timer mid-flight. touch() only refreshes the deadline.
+    try:
+        from core import tts_engine as _tts
+        _tts.touch()
+    except (ImportError, AttributeError):
+        pass
     # INTAKE HARDENING (2026-10-07, live log): one empty POST /stream body
     # blew up as a 500 ASGI traceback (req.json -> JSONDecodeError). A
     # malformed intake is a 4xx for the caller, not an engine crash.

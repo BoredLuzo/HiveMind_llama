@@ -303,6 +303,17 @@ def _client():
     return _http_client
 
 
+def touch() -> None:
+    """Refresh the idle deadline without starting anything.
+
+    Called at run start: the sidecar must not idle-stop in the middle of a run
+    whose answer will be spoken (live 2026-10-18: the idle check fired while a
+    mirrored run was finishing, so the voice note paid a 48 s cold start).
+    """
+    if _state.get("proc") is not None:
+        _state["last_used"] = time.time()
+
+
 def preload(settings: dict | None = None) -> bool:
     """Warm the sidecar ahead of the first request (``tts_preload_run``).
 
