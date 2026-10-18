@@ -111,14 +111,30 @@ if sys.platform == "win32":
     try:
         import win32api
         import win32job as _win32job
-    except ImportError:
-        # PYWIN32-HINT (2026-10-16): the bare "missing" gave the user no
-        # action. pywin32 is pinned for Windows (pyproject/requirements) -
-        # if the import fails in a Windows venv the install is incomplete:
-        # repair via install.bat or install the package explicitly.
-        print("[WARN] pywin32 missing - console-close will not kill "
-              "llama-servers. Fix: run install.bat again, or "
-              ".venv\\Scripts\\python.exe -m pip install pywin32")
+    except ImportError as _pw_exc:
+        # PYWIN32-HINT (2026-10-18): two different failures look identical here.
+        #   a) the package is not installed at all -> install it with UV (a uv
+        #      venv has no pip, so "-m pip install" answers "No module named pip")
+        #   b) the package IS installed but its DLLs are not registered ->
+        #      pywin32_postinstall fixes that.
+        # The hint names both, so nobody is sent to a command that cannot work.
+        _pw_have_pkg = False
+        try:
+            import importlib.util as _ilu
+            _pw_have_pkg = _ilu.find_spec("win32api") is not None
+        except (ImportError, ValueError):
+            _pw_have_pkg = False
+        print(f"[WARN] pywin32 not usable ({type(_pw_exc).__name__}: {_pw_exc})")
+        print("       console-close will not kill llama-servers; everything else runs.")
+        print("       Fix (uv venv - there is no pip inside):")
+        print("         uv pip install --python .venv\\Scripts\\python.exe pywin32")
+        if _pw_have_pkg:
+            print("       The package IS installed - then a file is blocked or the")
+            print("       bootstrap did not run. Reinstall it and check the")
+            print("       antivirus log:")
+            print("         uv pip install --python .venv\\Scripts\\python.exe "
+                  "--reinstall pywin32")
+        print("       Or simply re-run install.bat (it re-syncs the environment).")
     if _win32job is not None:
         try:
             _hjob = _win32job.CreateJobObject(None, "")

@@ -189,6 +189,8 @@ echo.
 echo  Press any key to continue... & pause >nul & exit /b 1
 
 :venv_py_check
+REM PYWIN32 (2026-10-18): the wheel registers itself through pywin32.pth +
+REM pywin32_system32/ - no postinstall step is needed or shipped in a uv venv.
 REM The venv must be 3.14. A silent fallback (3.15) breaks compiled
 REM dependencies that only ship wheels up to 3.14.
 "%~dp0.venv\Scripts\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 14) else 1)" >nul 2>&1
