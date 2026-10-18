@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.duo._pre_explore import _explore_extract_files
+from core.duo_helpers import read_loop_key
+from hive_functions.loop_machine import AgentState, StopReason
 import httpx
 from vram.loader import _bk_load, _bk_evict, _get_loaded_models_set
 
@@ -786,3 +788,82 @@ async def evict_model_handler(ctx, model: str) -> None:
         await ctx.emit({"type": "status", "content": "💤 Model unloaded from VRAM during pause."})
     except Exception as _evict_err:
         logger.warning(f"evict_on_pause failed: {_evict_err}")
+
+
+async def stuck_handler(tn, ta, tr, *, ctx, ws_str: str, total_tool_rounds: int,
+                        read_counts: dict, last_write_round: int,
+                        round_wrote_file: bool, ld_setter):
+    if tn == "run_bash":
+        ctx.exec_ctrl.transition(AgentState.VERIFY)
+        # STUCK-SIGNATURE (2026-09-16): record the COMMAND
+        # together with the result. Different verification
+        # commands all return "[run_bash: exit 0 — no output]"
+        # (successful checks are silent!) — result-only
+        # signatures flagged that as a stuck loop (live: 3
+        # different file checks killed the run).
+        ctx.exec_ctrl.record_output(
+            str(tr) + "\n[cmd] " + str((ta or {}).get("cmd", ""))[:200],
+            tool_name="run_bash",
+        )
+        if ctx.exec_ctrl.is_stuck():
+            await ctx.emit({"type": "token", "content": f"\n⚠ [Until-Finished] Same test output {ctx.exec_ctrl.max_repeats}× — no progress. Declaring blocker and stopping.\n"})
+            ld_setter(2604); loop_detected = True
+            ctx.exec_ctrl.abort(StopReason.STUCK_IN_LOOP)
+            return True, loop_detected, last_write_round, round_wrote_file
+    elif tn in ("patch_file", "edit_file"):
+        read_counts.clear()
+        last_write_round = total_tool_rounds
+        ctx.exec_ctrl.transition(AgentState.VERIFY)
+        # Failed/blocked edits (e.g. READ_REQUIRED) must not
+        # count as progress. 2x BLOCKED + 1x successful edit = "3x identical"
+        from tools.errors import tool_call_failed as _tcf_stuck
+        if not _tcf_stuck(tr, tn):
+            round_wrote_file = True
+            # — false-positive stop in chunk 4 with 2/8 chunks done.
+            ctx.exec_ctrl.reset_stuck_detection()
+        if ctx.exec_ctrl.is_stuck():
+            await ctx.emit({"type": "token", "content": f"\n⚠ [Until-Finished] Same {tn} on same file {ctx.exec_ctrl.max_repeats}× — no progress. Declaring blocker and stopping.\n"})
+            ld_setter(2623); loop_detected = True
+            ctx.exec_ctrl.abort(StopReason.STUCK_IN_LOOP)
+            return True, loop_detected, last_write_round, round_wrote_file
+    elif tn == "read_file":
+        _raw_fp = str(ta.get("path", "") or "")
+        fp = os.path.normcase(os.path.normpath(_raw_fp)).replace("\\", "/")
+        for _pfx in (
+            (os.path.normcase(os.path.normpath(ws_str or "")).replace("\\", "/") + "/"),
+            "/workspace/",
+            "./",
+        ):
+            if fp.startswith(_pfx):
+                fp = fp[len(_pfx):]
+                break
+        # blocked by the FILE_TOO_LARGE_NEED_RANGE guard against full reads;
+        # 4 chunk reads of the same file = false-positive read loop
+        # (coder 4m53s, loop_detected, written_files=0). New: range-aware
+        # key via read_loop_key — different ranges = progress,
+        _rk = read_loop_key(fp, ta.get("start_line"), ta.get("end_line"), tr)
+        if _rk is not None:
+            read_counts[_rk] = read_counts.get(_rk, 0) + 1
+            if read_counts[_rk] >= 4 and (total_tool_rounds - last_write_round) >= 4:
+                await ctx.emit({"type": "token",
+                    "content": f"\n⚠ [Until-Finished] Read {fp} {read_counts[_rk]}× without edits — read-loop detected. Stopping."})
+                loop_detected = True
+                ctx.exec_ctrl.abort(StopReason.STUCK_IN_LOOP)
+                return True, loop_detected, last_write_round, round_wrote_file
+    elif tn in ("write_file", "write_file_append", "replace_lines"):
+        read_counts.clear()
+        last_write_round = total_tool_rounds
+        # WRITE-PROGRESS-FIX (Run 14): like edit_file — a successful
+        from tools.errors import tool_call_failed as _tcf_stuck2
+        if not _tcf_stuck2(tr, tn):
+            round_wrote_file = True
+            ctx.exec_ctrl.reset_stuck_detection()
+    elif tn in ("find_files", "search_code", "list_dir"):
+        pass  # counted at round-level below
+    elif tn == "run_tests":
+        # 06:34): green verification = progress — invalidates
+        # calls in between get.
+        from tools.errors import tool_call_failed as _tcf_stuck3
+        if not _tcf_stuck3(tr, tn):
+            ctx.exec_ctrl.reset_stuck_detection()
+    return False, loop_detected, last_write_round, round_wrote_file

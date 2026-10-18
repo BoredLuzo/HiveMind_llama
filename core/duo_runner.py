@@ -252,6 +252,7 @@ _READONLY_CODER_NOTE = (
 # PREFLIGHT-EXTRACT (1.4.x): the module-level helpers live in core/duo/preflight.py
 # now. Re-exported here so existing imports (coder_briefing_text, ...) keep working.
 from core.duo.preflight import (  # noqa: F401
+    stuck_handler,
     plan_emit_fn,
     plan_aborted_fn,
     plan_heartbeat_fn,
@@ -3516,81 +3517,21 @@ async def run_code_duo(ctx):
                     _configure_governor(_run_id_global, until_finished=ctx.duo_config.until_finished, settings=ctx.settings)
                     # ── Build hooks for shared tool executor ──
                     async def _stuck_handler(tn, ta, tr):
-                        nonlocal _loop_detected, _read_counts, _last_write_round, _explore_only_rounds, _round_wrote_file
-                        if tn == "run_bash":
-                            ctx.exec_ctrl.transition(AgentState.VERIFY)
-                            # STUCK-SIGNATURE (2026-09-16): record the COMMAND
-                            # together with the result. Different verification
-                            # commands all return "[run_bash: exit 0 — no output]"
-                            # (successful checks are silent!) — result-only
-                            # signatures flagged that as a stuck loop (live: 3
-                            # different file checks killed the run).
-                            ctx.exec_ctrl.record_output(
-                                str(tr) + "\n[cmd] " + str((ta or {}).get("cmd", ""))[:200],
-                                tool_name="run_bash",
-                            )
-                            if ctx.exec_ctrl.is_stuck():
-                                await ctx.emit({"type": "token", "content": f"\n⚠ [Until-Finished] Same test output {ctx.exec_ctrl.max_repeats}× — no progress. Declaring blocker and stopping.\n"})
-                                _ld_setter(2604); _loop_detected = True
-                                ctx.exec_ctrl.abort(StopReason.STUCK_IN_LOOP)
-                                return True
-                        elif tn in ("patch_file", "edit_file"):
-                            _read_counts.clear()
-                            _last_write_round = _total_tool_rounds
-                            ctx.exec_ctrl.transition(AgentState.VERIFY)
-                            # Failed/blocked edits (e.g. READ_REQUIRED) must not
-                            # count as progress. 2x BLOCKED + 1x successful edit = "3x identical"
-                            from tools.errors import tool_call_failed as _tcf_stuck
-                            if not _tcf_stuck(tr, tn):
-                                _round_wrote_file = True
-                                # — false-positive stop in chunk 4 with 2/8 chunks done.
-                                ctx.exec_ctrl.reset_stuck_detection()
-                            if ctx.exec_ctrl.is_stuck():
-                                await ctx.emit({"type": "token", "content": f"\n⚠ [Until-Finished] Same {tn} on same file {ctx.exec_ctrl.max_repeats}× — no progress. Declaring blocker and stopping.\n"})
-                                _ld_setter(2623); _loop_detected = True
-                                ctx.exec_ctrl.abort(StopReason.STUCK_IN_LOOP)
-                                return True
-                        elif tn == "read_file":
-                            _raw_fp = str(ta.get("path", "") or "")
-                            fp = os.path.normcase(os.path.normpath(_raw_fp)).replace("\\", "/")
-                            for _pfx in (
-                                (os.path.normcase(os.path.normpath(_ws_str or "")).replace("\\", "/") + "/"),
-                                "/workspace/",
-                                "./",
-                            ):
-                                if fp.startswith(_pfx):
-                                    fp = fp[len(_pfx):]
-                                    break
-                            # blocked by the FILE_TOO_LARGE_NEED_RANGE guard against full reads;
-                            # 4 chunk reads of the same file = false-positive read loop
-                            # (coder 4m53s, loop_detected, written_files=0). New: range-aware
-                            # key via read_loop_key — different ranges = progress,
-                            _rk = read_loop_key(fp, ta.get("start_line"), ta.get("end_line"), tr)
-                            if _rk is not None:
-                                _read_counts[_rk] = _read_counts.get(_rk, 0) + 1
-                                if _read_counts[_rk] >= 4 and (_total_tool_rounds - _last_write_round) >= 4:
-                                    await ctx.emit({"type": "token",
-                                        "content": f"\n⚠ [Until-Finished] Read {fp} {_read_counts[_rk]}× without edits — read-loop detected. Stopping."})
-                                    _loop_detected = True
-                                    ctx.exec_ctrl.abort(StopReason.STUCK_IN_LOOP)
-                                    return True
-                        elif tn in ("write_file", "write_file_append", "replace_lines"):
-                            _read_counts.clear()
-                            _last_write_round = _total_tool_rounds
-                            # WRITE-PROGRESS-FIX (Run 14): like edit_file — a successful
-                            from tools.errors import tool_call_failed as _tcf_stuck2
-                            if not _tcf_stuck2(tr, tn):
-                                _round_wrote_file = True
-                                ctx.exec_ctrl.reset_stuck_detection()
-                        elif tn in ("find_files", "search_code", "list_dir"):
-                            pass  # counted at round-level below
-                        elif tn == "run_tests":
-                            # 06:34): green verification = progress — invalidates
-                            # calls in between get.
-                            from tools.errors import tool_call_failed as _tcf_stuck3
-                            if not _tcf_stuck3(tr, tn):
-                                ctx.exec_ctrl.reset_stuck_detection()
-                        return False
+                        # 1.4.x: the body lives in core/duo/preflight.py. Scalars come
+                        # back as a tuple (a closure cannot rebind them from outside);
+                        # _read_counts is the same dict, so its in-place edits stand.
+                        nonlocal _loop_detected, _last_write_round, _round_wrote_file
+                        _handled, _ld, _lwr, _rwf = await stuck_handler(
+                            tn, ta, tr,
+                            ctx=ctx, ws_str=_ws_str,
+                            total_tool_rounds=_total_tool_rounds,
+                            read_counts=_read_counts,
+                            last_write_round=_last_write_round,
+                            round_wrote_file=_round_wrote_file,
+                            ld_setter=_ld_setter,
+                        )
+                        _loop_detected, _last_write_round, _round_wrote_file = _ld, _lwr, _rwf
+                        return _handled
                     # ── Coder live streaming (2026-08-18) ──────────────────────
                     # never blocks (queue never fills up). Pattern like the planner bridge.
                     _coder_event_q: asyncio.Queue = asyncio.Queue(maxsize=20)

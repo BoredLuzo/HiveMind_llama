@@ -18,6 +18,7 @@ Run: python tests/test_stuck_bash_reset_threshold.py
 Exit 0 = all pass, Exit 1 = failures.
 """
 import asyncio
+import re
 import sys
 from pathlib import Path
 
@@ -84,10 +85,13 @@ def test_reset_between_calls():
 
 def test_run_tests_reset_wired():
     """W1: run_tests success resets the stuck history (like writes)."""
-    src = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    src = (Path(__file__).parent.parent / "core" / "duo" / "preflight.py").read_text(encoding="utf-8")
     _start = src.find('if tn == "run_bash":')
     assert _start > 0, "run_bash branch missing in _stuck_handler"
-    _seg = src[_start:src.find("async def _evict_model_handler", _start)]
+    # the run_tests branch comes after read_file - slice to the end of the
+    # handler (next top-level def), not to the edit branch.
+    _end = re.search(r"\n(?:async )?def ", src[_start + 1:])
+    _seg = src[_start:_start + 1 + (_end.start() if _end else len(src))]
     assert '"run_tests"' in _seg, "run_tests branch missing in _stuck_handler"
     assert "reset_stuck_detection()" in _seg, "run_tests reset missing"
     assert "tool_call_failed" in _seg, "run_tests error guard missing"
@@ -96,7 +100,7 @@ def test_run_tests_reset_wired():
 
 def test_stuck_message_dynamic():
     """W2: the stuck message uses max_repeats instead of a hard '3x'."""
-    src = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    src = (Path(__file__).parent.parent / "core" / "duo" / "preflight.py").read_text(encoding="utf-8")
     for needle in ('"Same test output 3', '"Same {tn} on same file 3'):
         if needle in src:
             fail(f"W2: hard '3x' message still present: {needle}")

@@ -35,7 +35,7 @@ def fail(name, msg=""):
 async def test_stuck_edit_failed_guard_wired():
     """Fix: der edit_file-Zweig des _stuck_handler recordet nur erfolgreiche Edits
     bzw. invalidiert die Stuck-Historie bei erfolgreichem Write (Run 14)."""
-    src = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    src = (Path(__file__).parent.parent / "core" / "duo" / "preflight.py").read_text(encoding="utf-8")
     _start = src.find("elif tn in (\"patch_file\", \"edit_file\"):")
     assert _start > 0, "edit_file-Stuck-Zweig fehlt"
     _seg = src[_start:src.find("elif tn == \"read_file\":", _start)]
@@ -112,7 +112,7 @@ async def test_read_skip_not_loop_counted():
     read_loop_key (duo_helpers.py), which is called in the read_file branch.
     Semantics unchanged: [SKIP: -> None -> not counted.
     """
-    src = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    src = (Path(__file__).parent.parent / "core" / "duo" / "preflight.py").read_text(encoding="utf-8")
     _start = src.find('elif tn == "read_file":')
     assert _start > 0, "read_file-Stuck-Zweig fehlt"
     _seg = src[_start:src.find('elif tn in ("write_file"', _start)]

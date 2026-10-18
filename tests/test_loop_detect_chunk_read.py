@@ -121,7 +121,8 @@ def test_true_loops():
 
 
 def test_source_structure():
-    dr = Path(__file__).parent.parent / "core" / "duo_runner.py"
+    # 1.4.x: the read-loop branch moved with the handler into preflight
+    dr = Path(__file__).parent.parent / "core" / "duo" / "preflight.py"
     text = dr.read_text(encoding="utf-8")
     if "read_loop_key(fp, ta.get(\"start_line\"), ta.get(\"end_line\"), tr)" in text:
         ok("S1: duo_runner uses read_loop_key in the read_file branch")
@@ -131,7 +132,7 @@ def test_source_structure():
         fail("S2: old path-only key still present")
     else:
         ok("S2: old path-only key replaced")
-    if "read_loop_key," in text:
+    if ("import read_loop_key" in text) or ("read_loop_key," in text):
         ok("S3: read_loop_key imported")
     else:
         fail("S3: import missing")
