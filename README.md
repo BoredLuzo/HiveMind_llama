@@ -15,7 +15,6 @@ voice in and out, hardened tool layer. Download:
 
 Author: Luzo (BoredLuzo) | https://github.com/BoredLuzo
 
-Model profiles can ship a DSpark speculative-decoding drafter (per-model draft budget, measured tuning table) - see [docs/dspark_drafter.md](docs/dspark_drafter.md).
 
 ## What it is
 
