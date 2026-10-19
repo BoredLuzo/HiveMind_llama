@@ -164,8 +164,11 @@ def test_write_models_json_pins():
     for fname in ("Qwen3.5-4B-Q4_K_M.gguf", "gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf",
                   "mtp-gemma-4-E4B-it.gguf"):
         (tmp / fname).write_bytes(b"x" * 64)
-    fm.write_models_json(tmp)
-    m = json.loads((ROOT / "models.json").read_text(encoding="utf-8"))
+    # ISOLATED (2026-10-19): writing the app's models.json from a test polluted the
+    # repo, and a deploy sync then overwrote the LIVE model index with temp paths.
+    out = tmp / "models.json"
+    fm.write_models_json(tmp, out=out)
+    m = json.loads(out.read_text(encoding="utf-8"))
     bad = []
     if not m.get("qwen3.5:4b-mtp", "").endswith("Qwen3.5-4B-Q4_K_M.gguf"):
         bad.append("qwen3.5:4b-mtp pin fehlt")

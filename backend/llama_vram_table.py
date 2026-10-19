@@ -121,6 +121,14 @@ _MOE_TABLE: dict[str, dict] = {
         "measured_bytes_per_token": 20480,
         "calibrated_n_cpu_moe":     35,
     },
+    # Same architecture class as minicpm-v-4.7:35b above; the mix quant keeps its
+    # tag with dashes (the filename is MiniCPM-V-4_7-...), so the dot form never
+    # matched and the pre-flight asked for the whole 14.4 GB on the GPU.
+    "minicpm-v-4-7:35b-a3b-mix": {
+        "active_gpu_gb":            4.64,
+        "measured_bytes_per_token": 20480,
+        "calibrated_n_cpu_moe":     35,
+    },
     # LFM2.5-24B-A2B (lfm2moe, 64x1.4B: 2 dense + 38 MoE blocks). Measured
     # 2026-10-14 (-lv 5 fit projection @c4096, f16 KV): n-cpu-moe 24 ->
     # 6051 MiB, 1289 MiB left free, fit "no changes needed". (23 missed the

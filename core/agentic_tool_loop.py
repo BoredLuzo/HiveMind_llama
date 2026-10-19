@@ -6,6 +6,7 @@ import httpx
 
 from core.tool_loop import ToolLoop, ToolLoopConfig, _build_tool_call_grammar, _grammar_compatible, _USE_GBNF_GRAMMAR
 from core.agentic_duo_state import DuoRoundState
+from utils.messages import normalize_system_messages
 from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, CODER_VISION_NOTE as _CODER_VISION_NOTE
 
 # NOTE REPLACEMENT (2026-10-04): removing the note only
@@ -79,6 +80,10 @@ class AgenticToolLoop(ToolLoop):
         Calls ctx.emit() for status/token events.
         Raises RuntimeError if all attempts fail.
         """
+        # strict templates reject a system message after the first turn
+        if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
+            payload = {**payload,
+                       "messages": normalize_system_messages(payload["messages"])}
         result = {
             "dr_msg": None, "dr_content_parts": [], "dr_thinking_parts": [],
             "dr_tool_calls_acc": {}, "dport": self.round_state.current_port,

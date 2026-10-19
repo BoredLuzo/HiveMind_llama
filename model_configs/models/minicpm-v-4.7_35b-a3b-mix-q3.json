@@ -1,0 +1,65 @@
+{
+  "model": "minicpm-v-4-7:35b-a3b-mix",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 8192,
+  "num_ctx_analyst": 16384,
+  "num_ctx_duo_coder": 16384,
+  "num_ctx_vision": 8192,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 35,
+  "mtp": false,
+  "gpu_layers": null,
+  "mmproj_filename": null,
+  "vram_gb_override": null,
+  "dspark_draft_filename": "dspark-MiniCPM-V-4_7-35B-A3B-Q8_0.gguf",
+  "dspark_draft_n_max": 2,
+  "sampling": {
+    "sampling_text": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 100,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.03
+    },
+    "sampling_thinking_text": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 100,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.03
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 100,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.03
+    },
+    "thinking": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 100,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.03
+    },
+    "non_thinking": {
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 100,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.03
+    }
+  }
+}

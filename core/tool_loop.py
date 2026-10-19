@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Unified tool-loop base class for all agent modes."""
 from __future__ import annotations
+from utils.messages import normalize_system_messages
 import asyncio
 import json
 import json as _json_tc
@@ -334,7 +335,7 @@ class ToolLoop:
             from backend.llama_client import _convert_messages as _msgs_to_parts
             _payload = {
                 "model": self.cfg.model,
-                "messages": _msgs_to_parts(_tool_messages),
+                "messages": normalize_system_messages(_msgs_to_parts(_tool_messages)),
                 "tools": _tools_payload,
                 "stream": self.cfg.stream,
                 # INCLUDE-USAGE (2026-10-10): b11456 ships the usage+timings

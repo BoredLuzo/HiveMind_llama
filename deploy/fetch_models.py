@@ -427,7 +427,7 @@ def _record_known_filename(gguf_name: str, tag: str) -> None:
     except OSError as e:
         print(f"    [WARNING] could not update gguf_filename_tags.json: {e}")
 
-def write_models_json(models_dir: Path) -> int:
+def write_models_json(models_dir: Path, out: Path | None = None) -> int:
     """Populate models.json from all GGUFs in the folder."""
     from backend.llama_models import _parse_gguf_filename  # noqa: E402
     from backend.llama_models import _known_filename_tags  # noqa: E402
@@ -487,7 +487,7 @@ def write_models_json(models_dir: Path) -> int:
                 _size = _sm.group(1).replace(".", "") + "b"
                 mapping[f"{family}:{_size}_mmproj"] = str(g)
 
-    out = ROOT / "models.json"
+    out = out or (ROOT / "models.json")   # out= lets callers (tests, deploys) pick the target
     # SORTED + STABLE (2026-10-03): scan order used to leak into the file
     # (untracked pin/temp entries landed between runs). Sorted keys keep
     # diffs comparable across updates, and a full rewrite here is also the

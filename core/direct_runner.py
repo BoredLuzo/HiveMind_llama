@@ -8,6 +8,7 @@ from learning.peer_ratings import run_peer_ratings
 from vram.loader import _refresh_judge_keepalive
 from routing.model_picker import _pick_direct_model
 from vram.loader import _bk_pin
+from utils.messages import normalize_system_messages
 
 _direct_log = logging.getLogger("hivemind.direct_runner")
 
@@ -197,7 +198,9 @@ async def _direct_websearch_tool_round(ctx, model: str, msgs: list, num_ctx: int
         _direct_log.warning("[Direct-WS] model load failed: %s", _e)
         return events, msgs, False
 
-    _msgs = list(msgs)
+    # strict templates (MiniCPM-V 4.7) reject a system message after the
+    # first turn - HiveMind appends no-think/nudge notes as system messages
+    _msgs = normalize_system_messages(list(msgs))
     _any = False
     for _round in range(max_rounds):
         _payload = {
