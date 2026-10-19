@@ -191,3 +191,29 @@ transferred instead of lowered (same total debt, different file - 149 across bot
 
 **Not done, deliberately**: parameterising the nested closures. That is the real
 shrinking of the 6,700-line function and exactly where previous attempts broke.
+
+---
+
+## Verify gate (2026-10-19, commit `de953b2`)
+
+A gate already existed (`[VERIFY-GATE]`, `_verify_mutation_serial` vs
+`_verify_last_ok_serial`), so the audit finding was not "build one" but "it lies
+in one case": after the **first** veto the next `task_complete` was accepted
+silently, and `_verify_warned` limited the reminder to once per run. A model that
+retried immediately looked exactly like a verified run - the benchmark case
+(failing self-test, "correct" claim).
+
+What changed:
+
+- the decision is now a tested pure function
+  (`core/duo/preflight.py::completion_verdict`): `ok` / `veto` / `unverified`,
+- `veto` still blocks once and asks for a test run (unchanged),
+- `unverified` is still accepted (an unattended run must not wedge) but it is
+  **marked**: a status event to the user, a `[VERIFY-GATE] run ended unverified`
+  log line with the serial counters, and the run no longer claims a clean finish.
+
+Coverage: 5 verdict cases + 4 wiring pins (`tests/test_verify_gate.py`), suite
+149/149. Live check: a normal run still ends `completed` through
+`write_file -> run_bash -> task_complete`; the veto path is not reproducible with
+a model that verifies voluntarily, so it stays unit-tested rather than
+live-tested.
