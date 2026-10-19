@@ -95,6 +95,38 @@ Same run, same flags, only the prompt language changed:
 The drafter is only as good as its hit rate, and that is content-dependent. When
 you compare numbers with someone else, compare the same prompt.
 
+### The trap: a profile without `dspark_draft_n_max` inherits 10
+
+`DSPARK_DRAFT_N_MAX` defaults to **10** when a profile names a drafter but no
+budget. MiniCPM-V 4.7 35B-A3B AD-Q4 (18.7 GB, ctx 8192, experts in RAM), same
+flags, only the budget differs:
+
+| `--spec-draft-n-max` | decode | acceptance |
+|---|---|---|
+| **10** (inherited default) | **14.1 tok/s** | 19 % |
+| 2 | **28.1 tok/s** | 60 % |
+| 4 | 25.7 tok/s | 41 % |
+
+That is a factor of two, lost silently. Every profile that names a
+`dspark_draft_filename` should set `dspark_draft_n_max` as well - 2 is the value
+that held up in every measurement so far.
+
+### MTP beats an external drafter
+
+Same task, same 8 GB card, same ctx (63488), two models:
+
+| | MiniCPM-V 4.7 AD-Q4 + DSpark (n-max 10) | Hermes 35B-A3B + MTP (draft-max 2) |
+|---|---|---|
+| decode (median) | 19.8 tok/s | **33.0 tok/s** |
+| draft acceptance | 21 % | **90 %** |
+| coder phase | 18m36s | **7m39s** |
+| tokens produced | 16,414 | 20,192 |
+
+MTP proposes with the model's own trained heads, so 90 % of the drafts are
+accepted; an external drafter has to guess and tops out around 60 % here. If raw
+speed on a MoE is the goal, a model with an MTP head is the better lever than any
+drafter tuning.
+
 ### Practical default
 
 - MoE whose experts live in RAM: `dspark_draft_n_max: 2` pays off (+30-50 %).
