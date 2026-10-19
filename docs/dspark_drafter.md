@@ -61,6 +61,40 @@ That model is fast and compute-bound at 83 tok/s; the drafter's per-step cost is
 larger than what two accepted tokens save, and the extra 650 MB costs VRAM. Kept
 opt-in for it.
 
+### Placement and context decide how much of it you keep
+
+Same model, same drafter (n-max 2), decode rate from the server timings, English
+prompt, RX 6600, `--n-cpu-moe` = experts left in RAM (35 = all of them):
+
+| context | n-cpu-moe | decode | acceptance | note |
+|---|---|---|---|---|
+| 4096 | 35 | 25.9 tok/s | 61 % | safe baseline |
+| 4096 | 32 | 27.0 tok/s | 61 % | 3 expert layers on the GPU |
+| **4096** | **29** | **27.1 tok/s** | 58 % | 6 layers on the GPU - best here |
+| 4096 | 26 | 22.3 tok/s | 59 % | 9 layers: VRAM over, collapses |
+| 8192 | 29 | 24.1 tok/s (app path) | 43 % | KV eats the headroom again |
+| 17408 | 29 | 15.8 tok/s (app path) | 21 % | too much KV, spills |
+
+Two rules follow:
+
+- moving ~6 expert layers to the GPU gives about +5 % - but only while the KV cache
+  stays small. With a 17 k context the same setting is *slower* than leaving every
+  expert in RAM, because the GPU has no room left and falls back to shared memory.
+- `--ubatch-size 128` instead of 256 is neutral (27.2 vs 27.1 tok/s): the reduced
+  compute buffer does not translate into throughput.
+
+### Acceptance depends on the text, not just the model
+
+Same run, same flags, only the prompt language changed:
+
+| prompt | acceptance | decode |
+|---|---|---|
+| English how-to prose | 43-61 % | 24-27 tok/s |
+| German how-to prose | 19-21 % | ~17 tok/s |
+
+The drafter is only as good as its hit rate, and that is content-dependent. When
+you compare numbers with someone else, compare the same prompt.
+
 ### Practical default
 
 - MoE whose experts live in RAM: `dspark_draft_n_max: 2` pays off (+30-50 %).
