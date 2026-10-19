@@ -1273,11 +1273,27 @@ class LlamaLoadMixin:
             )
 
         # ── DSpark external drafter (Speculative-Decoding Sidecar) ──────────
+        # OFF-SWITCH (2026-10-19): HIVEMIND_DSPARK_SPEC=0 disables the drafter
+        # for every model without touching any profile. Measured with Sharp-
+        # MiniCPM5-2B Q4 + this drafter on an AMD iGPU (Vulkan, uma, 4 threads,
+        # the ThinkPad class): target alone 16.7 tok/s, DSpark n-max 2 11.7
+        # (52% acceptance), n-max 4 8.0, n-max 7 6.6, drafter pinned to the GPU
+        # 10.5. Slower at every setting, so it stays opt-in.
         _draft_fn = None
+        _draft_nmax = None
         try:
             from .llama_config import _try_registry_dspark_draft as _reg_dd2
             _draft_fn = _reg_dd2(_strip_alias(model))
+            # Per-model draft budget from the profile (dspark_draft_n_max); the
+            # field used to be ignored and everything ran with the global default.
+            from model_configs.models_registry import (
+                get_dspark_draft_n_max as _reg_nmax,
+            )
+            _draft_nmax = _reg_nmax(_strip_alias(model))
         except Exception:
+            _draft_fn = None
+            _draft_nmax = None
+        if os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off"):
             _draft_fn = None
         if _draft_fn:
             _draft_path = None
@@ -1312,15 +1328,17 @@ class LlamaLoadMixin:
                         f"{DSPARK_MIN_BUILD}+) — skipping the drafter."
                     )
                 else:
+                    if not _draft_nmax:
+                        _draft_nmax = DSPARK_DRAFT_N_MAX
                     cmd += [
                         "--spec-type", DSPARK_SPEC_TYPE,
                         "--model-draft", str(_draft_path),
-                        "--spec-draft-n-max", str(DSPARK_DRAFT_N_MAX),
+                        "--spec-draft-n-max", str(_draft_nmax),
                         "--spec-draft-n-min", str(DSPARK_DRAFT_N_MIN),
                     ]
                     logger.info(
                         "DSpark active: %s → drafter %s (n-max=%d, n-min=%d)",
-                        model, _draft_path.name, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN,
+                        model, _draft_path.name, _draft_nmax, DSPARK_DRAFT_N_MIN,
                     )
 
         # ── Jinja-Chat-Template ───────────────────────────────────────────────

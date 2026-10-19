@@ -194,6 +194,17 @@ SPECS: list[dict] = [
         "extra_files": [
             {"path": "chat_template.jinja", "dest": "model_configs/sharp_minicpm5_chat_template.jinja"},
         ],
+        # DSpark speculative-decoding drafter (openbmb, 324M / ~650MB, arch
+        # "dflash"). Sidecar GGUF: never registered as a model (write_models_json
+        # and llama_models exclude every *dspark* name). The model config
+        # (minicpm5_2b-sharp.json) points at this exact filename.
+        "sidecar": [
+            {
+                "repo": "openbmb/MiniCPM5-2B-DSpark-GGUF",
+                "path": "MiniCPM5-2.6B-DSpark.gguf",
+                "note": "DSpark spec-dec drafter (~650MB)",
+            },
+        ],
     },
     {
         "key": "minicpm5:2b-sharp-q4",
@@ -206,6 +217,14 @@ SPECS: list[dict] = [
         "mmproj_regex": [],
         "extra_files": [
             {"path": "chat_template.jinja", "dest": "model_configs/sharp_minicpm5_chat_template.jinja"},
+        ],
+        # Same drafter for the Q4 tier — one tag, one profile, one sidecar.
+        "sidecar": [
+            {
+                "repo": "openbmb/MiniCPM5-2B-DSpark-GGUF",
+                "path": "MiniCPM5-2.6B-DSpark.gguf",
+                "note": "DSpark spec-dec drafter (~650MB)",
+            },
         ],
     },
     {
@@ -590,6 +609,25 @@ def main() -> int:
             except Exception as e:
                 print(f"    [WARNING] Extra file download failed ({e})")
 
+        # SIDECARS before the "already present" skip (2026-10-19): a re-run with
+        # --only-missing used to skip the whole spec as soon as the main GGUF
+        # existed, so a drafter added later (DSpark) never reached existing
+        # installs. Same self-healing rule as extra_files: idempotent, keyed on
+        # the sidecar filename.
+        for _sc in (spec.get("sidecar") or []):
+            _sc_name = Path(_sc["path"]).name.lower()
+            if args.only_missing and _sc_name in local_files:
+                print(f"    Sidecar present: {Path(_sc['path']).name} — skipping (--only-missing)")
+                continue
+            if args.list_only:
+                print(f"    Would download (sidecar): {_sc['path']} [{_sc.get('note', '')}]")
+                continue
+            try:
+                if download_file(_sc["repo"], {"path": _sc["path"], "size": 0}, mdir, args.yes):
+                    local_files[_sc_name] = mdir / Path(_sc["path"]).name
+            except Exception as e:
+                print(f"    [WARNING] Sidecar download failed ({e})")
+
         # Already present?
         have = [n for n in local_files if re.search(spec["file_regex"][0], n)]
         if args.only_missing and have:
@@ -697,20 +735,6 @@ def main() -> int:
                         else:
                             _src.rename(_dstp)
                     local_files[_mm_dest.lower()] = _dstp
-
-        for _sc in (spec.get("sidecar") or []):
-            _sc_name = Path(_sc["path"]).name.lower()
-            if args.only_missing and _sc_name in local_files:
-                print(f"    Sidecar present: {Path(_sc['path']).name} — skipping (--only-missing)")
-                continue
-            if args.list_only:
-                print(f"    Would download (sidecar): {_sc['path']} [{_sc.get('note', '')}]")
-                continue
-            try:
-                if download_file(_sc["repo"], {"path": _sc["path"], "size": 0}, mdir, args.yes):
-                    local_files[_sc_name] = mdir / Path(_sc["path"]).name
-            except Exception as e:
-                print(f"    [WARNING] Sidecar download failed ({e})")
 
     if args.list_only:
         return 0

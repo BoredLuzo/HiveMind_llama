@@ -248,6 +248,23 @@ def get_dspark_draft(model_name: str) -> str | None:
     return str(v).strip() if v else None
 
 
+def get_dspark_draft_n_max(model_name: str) -> int | None:
+    """Per-model draft budget for DSpark. None = use the engine default.
+
+    The field existed in sharp-minicpm5_2b.json but nothing read it, so every
+    DSpark model ran with the global default (10) no matter what the profile
+    said. 1...DSPARK_BLOCK is the useful range; anything <= 0 is ignored.
+    """
+    v = get_profile(model_name).get("dspark_draft_n_max")
+    if v is None:
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
 def get_moe_pin(model_name: str) -> bool | None:
     """MOE-PIN (2026-10-14): explicit "moe": true/false from the model's own
     profile — the user's answer to "is this a MoE?" — or None when unset

@@ -43,8 +43,40 @@ here:
 - The verify gate marks a completion accepted after one veto as unverified and
   reports it instead of silently passing.
 
+## DSpark drafter (opt-in)
+
+The installer now fetches `openbmb/MiniCPM5-2B-DSpark-GGUF`
+(`MiniCPM5-2.6B-DSpark.gguf`, ~650 MB) for the Sharp-MiniCPM5-2B specs, also on
+a re-run with `--only-missing`. It is not registered as a model and it is **not
+enabled by default** - measured on an AMD iGPU (Vulkan, uma, 4 threads - the
+ThinkPad class):
+
+| config | tok/s | acceptance |
+|---|---|---|
+| target alone | **16.7** | - |
+| DSpark n-max 2 | 11.7 | 52% |
+| DSpark n-max 4 | 8.0 | 33% |
+| DSpark n-max 7 | 6.6 | 22% |
+| DSpark n-max 2, drafter pinned to GPU | 10.5 | 52% |
+
+So the drafter costs more than the accepted tokens save. If you want to try it
+on your own machine, add to the model profile in `model_configs/models/`:
+
+```json
+"dspark_draft_filename": "MiniCPM5-2.6B-DSpark.gguf",
+"dspark_draft_n_max": 2
+```
+
+`HIVEMIND_DSPARK_SPEC=0` switches it off again without touching the profile.
+`dspark_draft_n_max` is honoured now; before, every DSpark model silently used
+the global default of 10.
+
 ## Upgrading
 
 Run `update.bat` (or `install.bat` for a fresh install). `settings.json`,
 models, sessions and logs are not touched. If you are on 1.4.1 with the broken
 sidebar, the update is enough - no reinstall, no config reset.
+
+This build replaces the first 1.4.2 asset (same tag): the sidebar fix and the
+prefetch endpoint are unchanged, the installer and the DSpark wiring are added.
+
