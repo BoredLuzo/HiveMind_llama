@@ -23,32 +23,50 @@ The model profile (`model_configs/models/<tag>.json`) carries the keys:
 - Needs a llama.cpp build with `--spec-type draft-dspark`; the loader warns and
   skips the drafter when the installed build lacks it.
 
-## Measured: it does not pay off for Sharp-MiniCPM5-2B
+## Measured: it depends on what the model is bound by
 
-Sharp-MiniCPM5-2B (Q6_K_XL) + `MiniCPM5-2.6B-DSpark.gguf`, decode rate from the
-server's own timings, same prompt, 400 tokens, temperature 0:
+### A MoE with experts in RAM - a large win
+
+MiniCPM-V 4.7 35B-A3B (mix_q3gud_im, 14.4 GiB) + `dspark-MiniCPM-V-4_7-35B-A3B-Q8_0.gguf`,
+`--n-cpu-moe 35` (all experts in RAM), ctx 4096, 8 threads, RX 6600. Decode rate
+from the server's own timings, 260 tokens, temperature 0:
+
+| drafter | decode | vs off | draft acceptance |
+|---|---|---|---|
+| off | 21.0 tok/s | - | - |
+| **n-max 2** | **31.3 tok/s** | **+49 %** | 61 % |
+| n-max 4 | 28.0 tok/s | +33 % | 43 % |
+| n-max 7 | 21.2 tok/s | +1 % | 27 % |
+
+Why it works here: with the experts in RAM, every token is limited by the memory
+bandwidth needed to gather ~3 B active parameters. A verified draft token reuses
+the expert weights that were already read for its draft - so accepted tokens are
+close to free, and n-max 2 with 61 % acceptance turns one RAM pass into ~1.5
+tokens. Above n-max 2 the hit rate drops faster than the proposal length grows.
+
+The same effect explains why a smaller context helps: at ctx 8192 the same model
+measured 16.5 tok/s instead of 21.0 without a drafter (bigger KV and compute
+buffers leave less room, and the extra prefill work dominates).
+
+### A small dense model - no win
+
+Sharp-MiniCPM5-2B (Q6_K_XL, 2.2 GB) + `MiniCPM5-2.6B-DSpark.gguf`, iGPU and dGPU:
 
 | Hardware | no drafter | n-max 2 | n-max 4 | n-max 6 |
 |---|---|---|---|---|
 | RX 6600 8 GB (Vulkan, dGPU) | **83.1 tok/s** | 85.1 (+2 %) | 64.7 (-22 %) | 55.2 (-34 %) |
 | Radeon iGPU (ThinkPad E15, Vulkan) | 14.1 tok/s | 10.6 | 7.7 | - |
 
-Draft acceptance on the dGPU: 52 % at n-max 2, 32 % at 4, 22 % at 6, with a mean
-proposal length of ~2 tokens.
+That model is fast and compute-bound at 83 tok/s; the drafter's per-step cost is
+larger than what two accepted tokens save, and the extra 650 MB costs VRAM. Kept
+opt-in for it.
 
-Reading:
+### Practical default
 
-- at n-max 2 the dGPU result is **within noise** (+2 %), everything above that is
-  clearly worse - rejected proposals and the extra 650 MB cost more than the two
-  accepted tokens save,
-- the target is a 2 B model at 83 tok/s: there is not enough decode time per token
-  for the drafter to amortise its per-step cost,
-- on an iGPU it is worse everywhere (less bandwidth to share).
-
-So the drafter is opt-in, and for this model pair **off is the honest default**.
-It is worth a try when the target gets bigger or slower (a larger model, a longer
-context with slower decode) - then the same two accepted tokens save much more
-wall time.
+- MoE whose experts live in RAM: `dspark_draft_n_max: 2` pays off (+30-50 %).
+- Small dense model: leave the drafter off, or expect noise.
+- Always measure per model: acceptance is printed as
+  `draft acceptance = 0.61 (142 accepted / 234 generated)` in the llama-server log.
 
 ## Why the drafter is not registered as a model
 
