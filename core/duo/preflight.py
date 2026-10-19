@@ -868,3 +868,19 @@ async def stuck_handler(tn, ta, tr, *, ctx, ws_str: str, total_tool_rounds: int,
         if not _tcf_stuck3(tr, tn):
             ctx.exec_ctrl.reset_stuck_detection()
     return False, loop_detected, last_write_round, round_wrote_file
+
+def completion_verdict(*, mutation_serial: int, last_ok_serial: int,
+                       has_written_files: bool, vetoes: int) -> str:
+    """Decide what a task_complete call means for this run.
+
+    "ok"         - nothing to verify (no write since the last green test)
+    "veto"       - block once and ask for a test run (the model gets one chance)
+    "unverified" - accept, but mark the result as unverified. The early design
+                   accepted the second call silently, so a model that retried
+                   without verifying looked exactly like a verified run
+                   (benchmark T1: failing self-test, "correct" claim).
+    """
+    needs_verify = mutation_serial > last_ok_serial and bool(has_written_files)
+    if not needs_verify:
+        return "ok"
+    return "veto" if vetoes < 1 else "unverified"

@@ -252,6 +252,7 @@ _READONLY_CODER_NOTE = (
 # PREFLIGHT-EXTRACT (1.4.x): the module-level helpers live in core/duo/preflight.py
 # now. Re-exported here so existing imports (coder_briefing_text, ...) keep working.
 from core.duo.preflight import (  # noqa: F401
+    completion_verdict,
     stuck_handler,
     plan_emit_fn,
     plan_aborted_fn,
@@ -1383,6 +1384,7 @@ async def run_code_duo(ctx):
         # skipping verification entirely after 3 in-loop blocks.
         _verify_gate_blocks = 0
         _verify_warned = False
+        _completion_unverified = False   # completion accepted without a green test
         # laufen via asyncio.gather (tool_executor _PARALLEL_SAFE) in Child-Tasks
         # bliebe _files_read_in_run im Parent None (Compression-Removal + SKIP-
         try:
@@ -5216,19 +5218,21 @@ async def run_code_duo(ctx):
                         if _exec_result.task_complete_called:
                             # Verify-Gate (Agentic-Mode): ensure run_bash ran after last write
                             if ctx.duo_config.agentic_mode:
-                                _needs_verify = (
-                                    _verify_mutation_serial > _verify_last_ok_serial
-                                    and bool(_written_files)
-                                    and not _verify_warned
+                                _verdict = completion_verdict(
+                                    mutation_serial=_verify_mutation_serial,
+                                    last_ok_serial=_verify_last_ok_serial,
+                                    has_written_files=bool(_written_files),
+                                    vetoes=_verify_gate_blocks if _verify_warned else 0,
                                 )
-                                if _needs_verify and _verify_gate_blocks >= 1:
+                                if _verdict == "unverified":
                                     _verify_gate_blocks += 1
+                                    _completion_unverified = True
                                     logger.warning(
                                         "[VERIFY-GATE] task_complete accepted after %d vetoes "
-                                        "(verification not possible in this environment)",
+                                        "WITHOUT a green test run — result marked unverified",
                                         _verify_gate_blocks,
                                     )
-                                elif _needs_verify:
+                                elif _verdict == "veto":
                                     _exec_result.task_complete_called = False
                                     _verify_gate_blocks += 1
                                     _verify_warned = True
@@ -5262,6 +5266,24 @@ async def run_code_duo(ctx):
                                     logger.warning(
                                         "[TASK_COMPLETE VERIFY] %d file(s) claimed but missing: %s",
                                         len(_missing), _missing[:10],
+                                    )
+                                if _completion_unverified:
+                                    # make the unverified completion visible instead of
+                                    # letting it read like a verified one
+                                    try:
+                                        await ctx.emit({"type": "status", "content": (
+                                            "⚠ Completed without a green test run after the "
+                                            "last write — treat this result as unverified."
+                                        )})
+                                    except Exception as _uv_err:
+                                        logger.debug(
+                                            "[VERIFY-GATE] unverified status emit failed: %s", _uv_err
+                                        )
+                                    logger.warning(
+                                        "[VERIFY-GATE] run ended unverified "
+                                        "(written_files=%d, last_ok_serial=%d, mutation_serial=%d)",
+                                        len(_written_files or []), _verify_last_ok_serial,
+                                        _verify_mutation_serial,
                                     )
                                 _grace_round_active = False
                                 break
