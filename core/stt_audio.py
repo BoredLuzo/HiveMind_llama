@@ -22,6 +22,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import secrets
 import tempfile
 import wave
 from pathlib import Path
@@ -104,8 +105,19 @@ def to_wav16k(data: bytes | str | Path, *, max_seconds: int = DEFAULT_MAX_SECOND
     # writing. The CLI child then cannot read it - miniaudio reports "failed to
     # read audio data" and every /stt request came back as STT_EMPTY. Soundfile
     # reads the same file happily, so only a real CLI run exposes this.
-    _fd, _tmp_name = tempfile.mkstemp(prefix="hivemind_stt_", suffix=".wav",
-                                      dir=tmp_dir)
+    # BOUNDED (2026-10-19, same trap as write_file): tempfile.mkstemp retries
+    # PermissionError up to TMP_MAX - a locked-down %TEMP% hung the STT request.
+    _fd = _tmp_name = None
+    for _ in range(16):
+        _cand = Path(tmp_dir) / f"hivemind_stt_{secrets.token_hex(8)}.wav"
+        try:
+            _fd = os.open(str(_cand), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            _tmp_name = str(_cand)
+            break
+        except FileExistsError:
+            continue
+    if _fd is None:
+        raise OSError("could not create the STT temp file")
     os.close(_fd)
     out = Path(_tmp_name)
     with wave.open(str(out), "wb") as wf:

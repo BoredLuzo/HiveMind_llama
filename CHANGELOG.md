@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.4.3] - 2026-10-19
+
+### Fixed
+
+- **write_file could hang forever on a folder the engine may not write into.**
+  The atomic write used `tempfile.mkstemp(dir=<target>)`. CPython treats
+  `PermissionError` there as a name collision while `os.access(dir, W_OK)` says
+  the folder is writable - and on Windows that check reads the read-only
+  *attribute*, not the ACL, so it is nearly always true. In a sandboxed/ACL-locked
+  workspace the call looped up to `TMP_MAX` (2**31-1) at 100 % CPU: the coder
+  called `write_file`, the UI sat on "Processing context..." for eleven minutes,
+  and the file was never created. All seven atomic write paths now create the temp
+  file through `_mkstemp_bounded()` (`O_CREAT|O_EXCL`, at most 16 names, a real
+  permission error propagates on the first try), and `write_file` answers the model
+  with `WRITE_FILE_PERMISSION` naming the sandbox/ACL cause instead of spinning.
+- **Same trap in the STT temp WAV** (`core/stt_audio.py`): a locked-down `%TEMP%`
+  could hang a transcription. It now creates the file the same bounded way.
+- Settings panel nesting (regressed in 1.4.1, fixed in 1.4.2) and the gated
+  `/prefetch/stats` route stay as they are; nothing else changed.
+
+### Note
+
+Start HiveMind by double-clicking `start_hivemind.bat`, not from inside an
+agent's restricted terminal - otherwise the engine inherits a write sandbox that
+only covers the HiveMind folder.
+
 ## [1.4.2] - 2026-10-19
 
 Hotfix for 1.4.1: the settings sidebar came up broken and the Prefetch card had

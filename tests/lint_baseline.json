@@ -395,6 +395,10 @@
     "broad_except": 1,
     "except_pass": 0
   },
+  "tests/test_write_hang_bounded.py": {
+    "broad_except": 1,
+    "except_pass": 0
+  },
   "tools/background.py": {
     "broad_except": 8,
     "except_pass": 6

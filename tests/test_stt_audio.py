@@ -79,7 +79,13 @@ check("size cap is the Telegram download limit", stt_audio.MAX_BYTES == 20 * 102
 check("target sample rate is 16 kHz", stt_audio.SAMPLE_RATE == 16000)
 _src = (Path(__file__).resolve().parent.parent / "core" / "stt_audio.py").read_text(encoding="utf-8")
 check("no external process at all (so no ffmpeg, no shell)", "subprocess" not in _src)
-check("temp files come from tempfile", "tempfile.mkstemp" in _src)
+# tempfile.mkstemp retries PermissionError up to TMP_MAX while os.access() says
+# the folder is writable (it checks the attribute, not the ACL on Windows) - that
+# hung a write_file for 11 minutes. The temp WAV is created with O_CREAT|O_EXCL.
+check("temp WAV uses a bounded open (no tempfile.mkstemp call)",
+      "tempfile.mkstemp(" not in _src
+      and "os.O_CREAT | os.O_EXCL" in _src
+      and "secrets.token_hex" in _src)
 check("nothing is written into the workspace", "HIVEMIND_WORKSPACE" not in _src)
 check("cleanup is a no-op on None", stt_audio.cleanup(None) is None)
 check("cleanup swallows a missing file", stt_audio.cleanup(os.path.join(os.sep, "nope.wav")) is None)

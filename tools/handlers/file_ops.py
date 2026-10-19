@@ -32,19 +32,36 @@ def _recheck_workspace_before_replace(p, workspace_lock, tool_name):
     from utils.file import _inline_check_workspace as _c
     return _c(p, workspace_lock, tool_name)
 
-def _atomic_write_text(p: Path, text: str) -> None:
-    p.parent.mkdir(parents=True, exist_ok=True)
-    _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
-    try:
-        with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-            _f.write(text)
-        os.replace(_tmp_path, str(p))
-    except Exception:
+_MAX_TMP_TRIES = 16
+
+
+def _mkstemp_bounded(parent: Path, suffix: str = ".tmp"):
+    """Create a unique temp file in ``parent`` - bounded, never retries a denial.
+
+    ``tempfile.mkstemp`` retries ``PermissionError`` up to ``TMP_MAX`` (2**31-1 on
+    Windows) while ``os.access(parent, os.W_OK)`` says the folder is writable - and
+    on Windows that check looks at the read-only attribute, not the ACL, so it is
+    nearly always True. A process that may not write into the folder (AppContainer
+    sandbox, ACL, locked-down drive) therefore spun forever: the write_file hang of
+    2026-10-19 (11 minutes, 100 % CPU, no file on disk).
+
+    This is the same creation semantics without the internal loop: at most 16
+    names, a real ``PermissionError`` on the first attempt propagates immediately.
+    """
+    import secrets as _secrets
+    last: Exception | None = None
+    for _ in range(16):
+        path = parent / f"hm-{_secrets.token_hex(8)}{suffix}"
+        flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
         try:
-            os.unlink(_tmp_path)
-        except Exception:
-            pass
-        raise
+            return os.open(str(path), flags, 0o600), path
+        except FileExistsError as exc:      # collision: try another name
+            last = exc
+            continue
+        # PermissionError (and anything else) propagates: not a collision.
+    raise last if last else OSError("could not create a temporary file")
 
 
 def _read_binary_error(p) -> str:
@@ -328,7 +345,7 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
                     new_content = _patched.replace("\n", "\r\n") if _has_crlf else _patched
 
                     def _write_fuzzy_patch() -> None:
-                        _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+                        _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
                         try:
                             with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                                 _f.write(new_content)
@@ -372,7 +389,7 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
             if _p2_result is not None:
                 _nc_p2 = _p2_result.replace("\n", "\r\n") if _has_crlf else _p2_result
                 def _write_p2_patch() -> None:
-                    _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+                    _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
                     try:
                         with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                             _f.write(_nc_p2)
@@ -407,7 +424,7 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
         new_content = _patched.replace("\n", "\r\n") if _has_crlf else _patched
 
         def _write_patch_result() -> None:
-            _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+            _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
             try:
                 with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                     _f.write(new_content)
@@ -509,7 +526,7 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
 
     def _write_now() -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
-        _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+        _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
         try:
             with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                 _f.write(content)
@@ -526,7 +543,20 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
 
         return _chk  # T6: containment re-check BEFORE any byte is written
 
-    await asyncio.to_thread(_write_now)
+    try:
+        await asyncio.to_thread(_write_now)
+    except PermissionError:
+        # SANDBOX/ACL (2026-10-19): the process may not write into this folder
+        # (AppContainer sandbox, ACL, read-only mount). Before, tempfile.mkstemp
+        # retried this forever - an 11-minute hang at 100 % CPU with no file.
+        return _tool_error_response(
+            "WRITE_FILE_PERMISSION",
+            f"Cannot write '{p}': the engine process has no write permission for "
+            f"'{p.parent}'. This is an environment restriction, not a path typo - "
+            "choose a workspace inside a writable folder (e.g. under the HiveMind "
+            "directory or your user profile) or start HiveMind outside the "
+            "restricting terminal/sandbox.",
+            tool="write_file")
     _lint = await _auto_lint_result(p, workspace)
     _lines = content.count("\n") + 1
     try:
@@ -649,7 +679,7 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             final = working.replace("\n", "\r\n") if _has_crlf else working
 
             def _write_fuzzy() -> None:
-                _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+                _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
                 try:
                     with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                         _f.write(final)
@@ -749,7 +779,7 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
     final = working.replace("\n", "\r\n") if _has_crlf else working
 
     def _write_exact() -> None:
-        _tmp_fd, _tmp_path = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
+        _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
         try:
             with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
                 _f.write(final)
