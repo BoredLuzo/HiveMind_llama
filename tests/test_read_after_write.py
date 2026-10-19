@@ -50,11 +50,18 @@ def main():
           f" cap={cap} file={len(FULL)}")
 
     async def _run():
-        return await asyncio.gather(
-            _inline_tool_write_file({"path": "big.py", "content": FULL}, ws, str(ws)),
+        # DETERMINISTIC (2026-10-19): the write used to race the two reads inside
+        # asyncio.gather, so the reads sometimes hit a file that was not on disk
+        # yet and got FILE_READ_FAILED - a flaky suite, not a product bug (the
+        # executor only prefetches read-only tools in parallel, write_file is
+        # not one of them). This test is about the cap, so await the write first.
+        wr = await _inline_tool_write_file({"path": "big.py", "content": FULL},
+                                           ws, str(ws))
+        rd_full, rd_range = await asyncio.gather(
             _inline_tool_read_file({"path": "big.py"}, ws, str(ws)),
-            _inline_tool_read_file({"path": "big.py", "start_line": 1, "end_line": 99999},
-                                   ws, str(ws)))
+            _inline_tool_read_file({"path": "big.py", "start_line": 1,
+                                    "end_line": 99999}, ws, str(ws)))
+        return wr, rd_full, rd_range
 
     wr, rd_full, rd_range = asyncio.run(_run())
 
