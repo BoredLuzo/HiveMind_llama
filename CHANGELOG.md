@@ -20,21 +20,20 @@ lost its endpoint. It also folds in the internal work that was already on
   off. The Prefetch card loads the stats on every panel open, so the route now
   lives in the always-mounted core router. No user-facing setting to change.
 
-### DSpark drafter (opt-in)
+### DSpark drafter (Sharp-MiniCPM)
 
 - **Ships with the installer**: the two Sharp-MiniCPM5-2B specs download
   `openbmb/MiniCPM5-2B-DSpark-GGUF` (`MiniCPM5-2.6B-DSpark.gguf`, ~650 MB) as a
   sidecar — never registered as a model. Sidecars are now checked *before* the
   `--only-missing` skip, so an existing install gets the drafter on a re-run.
+- **Enabled for the Sharp-MiniCPM profiles**: `model_configs/models/`
+  `minicpm5_2b-sharp.json` carries `dspark_draft_filename` + `dspark_draft_n_max: 2`.
+  Measured with the app's own llama flags (AMD Radeon iGPU, Vulkan0, 16 threads):
+  target alone 14.1 tok/s, DSpark n-max 2 10.6 (49% acceptance), n-max 4 7.7
+  (34%) — slower on this laptop class. `HIVEMIND_DSPARK_SPEC=0` turns the
+  drafter off machine-wide without editing a profile.
 - **`dspark_draft_n_max` is honoured**: the profile field existed but nothing
   read it; every DSpark model ran with the global default (10).
-- **`HIVEMIND_DSPARK_SPEC=0`** switches the drafter off for the whole machine.
-- **Not enabled by default**: measured with Sharp-MiniCPM5-2B Q4 on an AMD iGPU
-  (Vulkan, uma, 4 threads — the ThinkPad class), the target alone ran at
-  16.7 tok/s; with the drafter 11.7 (n-max 2, 52% acceptance), 8.0 (n-max 4),
-  6.6 (n-max 7), 10.5 with the drafter pinned to the GPU. To opt in, add
-  `"dspark_draft_filename": "MiniCPM5-2.6B-DSpark.gguf"` plus
-  `"dspark_draft_n_max": 2` to the model profile (`model_configs/models/`).
 
 ### Internal
 
