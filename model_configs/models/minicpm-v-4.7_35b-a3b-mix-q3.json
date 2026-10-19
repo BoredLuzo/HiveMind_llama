@@ -6,9 +6,9 @@
     "tool_call": true
   },
   "vision_preprocessing": false,
-  "num_ctx": 8192,
-  "num_ctx_analyst": 16384,
-  "num_ctx_duo_coder": 16384,
+  "num_ctx": 4096,
+  "num_ctx_analyst": 8192,
+  "num_ctx_duo_coder": 8192,
   "num_ctx_vision": 8192,
   "jinja": true,
   "reasoning": "on",
@@ -55,6 +55,14 @@
     },
     "non_thinking": {
       "temperature": 0.7,
+      "top_p": 0.95,
+      "top_k": 100,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.03
+    },
+    "sampling_thinking_code_precise": {
+      "temperature": 0.3,
       "top_p": 0.95,
       "top_k": 100,
       "min_p": 0.0,

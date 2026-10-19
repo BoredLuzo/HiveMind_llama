@@ -1227,6 +1227,24 @@ class LlamaLoadMixin:
                     f"MoE offloading active: {_moe_count} experts on CPU "
                     f"({_moe_model_key})"
                 )
+                # THREADS-MOE (2026-10-19): experts in RAM make decode a
+                # memory-bound CPU gather; the logical-thread default
+                # oversubscribes an SMT CPU (measured 12.6 vs 16.5 tok/s at
+                # 16 vs 8 threads on an 8c/16t Ryzen). Cap at physical cores.
+                try:
+                    from .llama_config import physical_cores as _phys_cores
+                    _phys = _phys_cores()
+                except Exception:
+                    _phys = None
+                if _phys and _phys < _def_threads:
+                    for _tflag in ("--threads", "--threads-batch"):
+                        if _tflag in cmd:
+                            _ti = cmd.index(_tflag)
+                            cmd[_ti + 1] = str(_phys)
+                    logger.info(
+                        "MoE threads: %d -> %d (physical cores, experts on CPU)",
+                        _def_threads, _phys,
+                    )
                 # MoE-spezifische Optimierungen
                 cmd += ["--no-warmup"]
                 if not type(self)._load_mode_supported and MLOCK_MODEL:

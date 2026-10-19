@@ -368,3 +368,52 @@ BINARY_MIN_BUILD: dict[str, int] = {
 # ── Windows-Vulkan mlock/mmap-Regression (b10300+) ───────────────────────────
 #   --mlock (or --load-mode mlock) → GGML_ASSERT(addr) failed in
 NO_MMAP_MIN_BUILD = 10300
+
+# ── Physical cores (2026-10-19) ──────────────────────────────────────────────
+# MoE decode with experts in RAM is memory-bound; on an SMT CPU the logical count
+# oversubscribes the physical pipelines (measured: 16 threads 12.6 tok/s vs 8
+# threads 16.5 tok/s on an 8c/16t Ryzen). Cached - one query per process.
+_PHYS_CORES: int | None = None
+
+
+def physical_cores() -> int | None:
+    """Physical core count, or None when it cannot be determined."""
+    global _PHYS_CORES
+    if _PHYS_CORES is not None:
+        return _PHYS_CORES or None
+    import os as _os
+    import re as _re
+    import subprocess as _sp
+    try:
+        if _os.name == "nt":
+            _cnf = getattr(_sp, "CREATE_NO_WINDOW", 0)
+            r = _sp.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance Win32_Processor | Measure-Object -Property "
+                 "NumberOfCores -Sum).Sum"],
+                capture_output=True, text=True, timeout=8,
+                encoding="utf-8", errors="replace", creationflags=_cnf,
+            )
+            _n = int((r.stdout or "").strip() or 0)
+        else:
+            try:
+                r = _sp.run(["sysctl", "-n", "hw.physicalcpu"], capture_output=True,
+                            text=True, timeout=5)
+                _n = int((r.stdout or "").strip() or 0)
+            except Exception:
+                with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as _f:
+                    _pairs = set()
+                    _phys_id = _core_id = None
+                    for _ln in _f:
+                        if _ln.startswith("physical id"):
+                            _phys_id = _ln.split(":")[1].strip()
+                        elif _ln.startswith("core id"):
+                            _core_id = _ln.split(":")[1].strip()
+                        elif not _ln.strip() and _phys_id and _core_id:
+                            _pairs.add((_phys_id, _core_id))
+                            _phys_id = _core_id = None
+                    _n = len(_pairs)
+    except Exception:
+        _n = 0
+    _PHYS_CORES = _n if 0 < _n < 1024 else 0
+    return _PHYS_CORES or None

@@ -8,7 +8,7 @@
     "except_pass": 0
   },
   "backend/llama_config.py": {
-    "broad_except": 9,
+    "broad_except": 11,
     "except_pass": 4
   },
   "backend/llama_manager_utils.py": {
@@ -36,7 +36,7 @@
     "except_pass": 5
   },
   "backend/manager_load.py": {
-    "broad_except": 38,
+    "broad_except": 39,
     "except_pass": 15
   },
   "backend/manager_prefetch.py": {
