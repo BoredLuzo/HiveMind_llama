@@ -35,6 +35,42 @@ def _recheck_workspace_before_replace(p, workspace_lock, tool_name):
 _MAX_TMP_TRIES = 16
 
 
+def _write_error_code(exc: BaseException) -> str | None:
+    """Classify an OS error from the atomic write into a tool error code.
+
+    Linux: EROFS (read-only mount), EACCES/EPERM (Permissions), ENOSPC (disk
+    full), ENOENT/ENOTDIR (parent vanished). Windows: PermissionError covers
+    EACCES and the sharing violations (WinError 32), which is what an ACL or a
+    locked-down sandbox produces. Anything else returns None so the caller
+    re-raises - a real bug must not be dressed up as a permission problem.
+    """
+    import errno as _errno
+    if isinstance(exc, PermissionError):
+        return "WRITE_FILE_PERMISSION"
+    _eno = getattr(exc, "errno", None)
+    if _eno == getattr(_errno, "EROFS", None):
+        return "WRITE_FILE_READ_ONLY"
+    if _eno == getattr(_errno, "ENOSPC", None):
+        return "WRITE_FILE_NO_SPACE"
+    if _eno in (getattr(_errno, "ENOENT", None), getattr(_errno, "ENOTDIR", None)):
+        return "WRITE_FILE_NO_DIR"
+    return None
+
+
+_WRITE_ERROR_TEXT = {
+    "WRITE_FILE_PERMISSION": (
+        "the engine process has no write permission for '{parent}'. This is an "
+        "environment restriction, not a path typo - choose a workspace inside a "
+        "writable folder or start HiveMind outside the restricting sandbox"),
+    "WRITE_FILE_READ_ONLY": (
+        "'{parent}' is on a read-only filesystem - pick a writable workspace"),
+    "WRITE_FILE_NO_SPACE": (
+        "'{parent}' has no space left - free some disk and retry"),
+    "WRITE_FILE_NO_DIR": (
+        "the folder '{parent}' does not exist (or a path component is a file) - "
+        "create it first or pick another path"),
+}
+
 def _mkstemp_bounded(parent: Path, suffix: str = ".tmp"):
     """Create a unique temp file in ``parent`` - bounded, never retries a denial.
 
@@ -545,17 +581,19 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
 
     try:
         await asyncio.to_thread(_write_now)
-    except PermissionError:
-        # SANDBOX/ACL (2026-10-19): the process may not write into this folder
-        # (AppContainer sandbox, ACL, read-only mount). Before, tempfile.mkstemp
-        # retried this forever - an 11-minute hang at 100 % CPU with no file.
+    except OSError as _werr:
+        # SANDBOX/ACL/RO-FS (2026-10-19): the process may not write into this
+        # folder. Before, tempfile.mkstemp retried a Windows denial up to TMP_MAX -
+        # an 11-minute hang at 100 % CPU with no file. The four realistic causes
+        # (permission, read-only mount, no space, missing parent) get their own
+        # message; anything else re-raises so a real bug stays visible.
+        _wcode = _write_error_code(_werr)
+        if not _wcode:
+            raise
         return _tool_error_response(
-            "WRITE_FILE_PERMISSION",
-            f"Cannot write '{p}': the engine process has no write permission for "
-            f"'{p.parent}'. This is an environment restriction, not a path typo - "
-            "choose a workspace inside a writable folder (e.g. under the HiveMind "
-            "directory or your user profile) or start HiveMind outside the "
-            "restricting terminal/sandbox.",
+            _wcode,
+            "Cannot write '{p}': ".format(p=p)
+            + _WRITE_ERROR_TEXT[_wcode].format(parent=p.parent),
             tool="write_file")
     _lint = await _auto_lint_result(p, workspace)
     _lines = content.count("\n") + 1

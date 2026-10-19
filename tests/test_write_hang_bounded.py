@@ -73,6 +73,38 @@ check("the atomic writes use the bounded helper",
       src.count("_mkstemp_bounded(") >= 7, f"({src.count('_mkstemp_bounded(')})")
 check("no raw tempfile.mkstemp call is left", "tempfile.mkstemp(" not in src)
 
+
+# ── error mapping: the Linux cases must not surface as a tool crash ──────
+import errno as _errno  # noqa: E402
+
+from tools.handlers.file_ops import _write_error_code  # noqa: E402
+
+check("EACCES -> WRITE_FILE_PERMISSION",
+      _write_error_code(PermissionError(13, "denied")) == "WRITE_FILE_PERMISSION")
+check("EROFS -> WRITE_FILE_READ_ONLY (the Linux sandbox case)",
+      _write_error_code(OSError(_errno.EROFS, "ro")) == "WRITE_FILE_READ_ONLY")
+check("ENOSPC -> WRITE_FILE_NO_SPACE",
+      _write_error_code(OSError(_errno.ENOSPC, "full")) == "WRITE_FILE_NO_SPACE")
+check("ENOENT -> WRITE_FILE_NO_DIR",
+      _write_error_code(OSError(_errno.ENOENT, "gone")) == "WRITE_FILE_NO_DIR")
+check("an unrelated OSError is not dressed up as permission",
+      _write_error_code(OSError(_errno.EIO, "io")) is None)
+
+# ── the write flags match tempfile.mkstemp exactly (no behaviour drift) ──
+import tempfile as _tf  # noqa: E402
+
+_flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
+if hasattr(os, "O_BINARY"):
+    _flags |= os.O_BINARY
+check("open flags identical to tempfile.mkstemp",
+      _flags == _tf._bin_openflags, f"({_flags} vs {_tf._bin_openflags})")
+
+with tempfile.TemporaryDirectory() as td:
+    fd, p = _mkstemp_bounded(Path(td), ".tmp")
+    check("temp fd is not inherited by child processes", not os.get_inheritable(fd))
+    os.close(fd)
+    p.unlink()
+
 print()
 print(f"SUMMARY write_hang: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
