@@ -329,3 +329,22 @@ async def internal_tool_exec(req: Request):
             },
             status_code=500,
         )
+
+
+@router.get("/prefetch/stats")
+async def prefetch_stats():
+    """Prefetch telemetry for the settings panel.
+
+    Lives here rather than in the gated debug router: the Prefetch card loads
+    it every time the panel opens, so it has to stay reachable while
+    debug_api_enabled is False. It exposes only the running averages the UI
+    already shows - no internals.
+    """
+    avgs = settings.get("prefetch_agent_avgs", {}) or {}
+    return {
+        "prefetch_lead_seconds": float(settings.get("prefetch_lead_seconds", 8.0) or 8.0),
+        "agent_avgs": [
+            {"agent": agent, "avg_elapsed_s": float(v.get("elapsed", 0) if isinstance(v, dict) else v), "prefetch_fires_at": v.get("fires_at", 0) if isinstance(v, dict) else 0}
+            for agent, v in avgs.items()
+        ],
+    }

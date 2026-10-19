@@ -50,18 +50,6 @@ async def debug_tasks():
     return {"tasks": out}
 
 
-@router.get("/prefetch/stats")
-async def prefetch_stats():
-    avgs = settings.get("prefetch_agent_avgs", {}) or {}
-    return {
-        "prefetch_lead_seconds": float(settings.get("prefetch_lead_seconds", 8.0) or 8.0),
-        "agent_avgs": [
-            {"agent": agent, "avg_elapsed_s": float(v.get("elapsed", 0) if isinstance(v, dict) else v), "prefetch_fires_at": v.get("fires_at", 0) if isinstance(v, dict) else 0}
-            for agent, v in avgs.items()
-        ],
-    }
-
-
 @router.get("/debug/models")
 async def debug_models():
     _BASE = Path(__file__).parent.parent

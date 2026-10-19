@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.4.2] - 2026-10-19
+
+Hotfix for 1.4.1: the settings sidebar came up broken and the Prefetch card had
+lost its endpoint. It also folds in the internal work that was already on
+`main` after the 1.4.1 tag.
+
+### Fixed
+
+- **Broken sidebar in 1.4.1**: an extra `</div>` (left over from removing the
+  per-role preload rows) closed the Configs panel right after the "Startup
+  Preload" card. Everything below it — Keep-Alive, Voice, Smart Preload, Model
+  Config, Energy, Git, Telegram — rendered outside any panel, so those cards
+  stayed visible under *every* tab and could not be scrolled. Memory, Soul,
+  Models and Chats fell out of `#sidebar` into `<body>` and their tabs went
+  blank. One line removed; the panel nesting matches 1.4.0 again.
+- **`/prefetch/stats` returned 404**: the endpoint lived in the debug router,
+  which is gated behind `debug_api_enabled` since 1.4.1 — and that defaults to
+  off. The Prefetch card loads the stats on every panel open, so the route now
+  lives in the always-mounted core router. No user-facing setting to change.
+
+### Internal
+
+- `core/duo_runner.py`: the 21 module-level helpers and the stable callbacks
+  moved into `core/duo/preflight.py` (pure move, AST-verified, re-exported).
+- Stuck handler: `loop_detected` is initialized before the extracted handler
+  runs — the `UnboundLocalError` aborted every run after the first tool call.
+- Verify gate: a completion accepted after one veto is now marked unverified
+  and reported instead of silently passing.
+
 ## [1.4.1] - 2026-10-18
 
 Follow-up to the project audit: reproducible installs, no dead switches, less
