@@ -10,6 +10,14 @@ import re
 
 from .contracts import logger
 
+# MODUL-GLOBALS (2026-10-20): diese drei Namen wurden in Funktionen per `global`
+# benutzt, aber nie auf Modulebene angelegt - jedes Lesen warf NameError und die
+# LLM-gestuetzte Pre-Explore lief 30 Versuche in den Fehler.
+_llm_client: "httpx.AsyncClient | None" = None
+_llm_client_lock: "asyncio.Lock | None" = None
+_pre_explore_usage: dict = {"completion_tokens": 0, "prompt_tokens": 0, "cached_tokens": 0}
+
+
 async def _get_llm_client() -> httpx.AsyncClient:
     global _llm_client, _llm_client_lock
     if _llm_client_lock is None:

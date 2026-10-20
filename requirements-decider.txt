@@ -1,0 +1,6 @@
+# Optional: routing decider (GLiNER2.5 encoder on CPU, no VRAM).
+# Not part of the normal install - the encoder is opt-in.
+#   pip install -r requirements-decider.txt
+#   python deploy/fetch_decider.py
+# Without these, routing_decider stays "off" and the LLM judge decides.
+gliner2[local]>=0.2.0

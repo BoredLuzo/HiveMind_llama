@@ -381,6 +381,11 @@ async def _phase_pre_explore_cache(ctx, state: dict):
     _resume_data = state.get("_resume_data")
     _explore_ctx = state.get("_explore_ctx", "") or ""
     _pre_explore_msgs = list(state.get("_pre_explore_msgs") or [])
+    # PRE-EXPLORE-PREINIT (2026-10-20): _xparallel_results wird weiter unten nur
+    # in bestimmten Zweigen gesetzt; jeder Fehlerpfad (z.B. VRAM pre-flight)
+    # lief danach in ein UnboundLocalError beim state.update und riss den
+    # ganzen Run mit. Deshalb hier vorab initialisieren.
+    _xparallel_results: list = []
     _contracts_raw = state.get("_contracts_raw") or []
     _plan_tracker = state.get("_plan_tracker")
     _touched_paths = state.get("_touched_paths") or set()

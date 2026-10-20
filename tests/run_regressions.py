@@ -143,6 +143,8 @@ SUITES = [
     ("lint",                   "tests/test_lint.py",                            60),
     ("no_new_silent_excepts",  "tests/test_no_new_silent_excepts.py",           60),
     ("compress_local_only",    "tests/test_compress_local_only.py",             60),
+    ("pre_explore_globals",  "tests/test_pre_explore_globals.py",     25),
+    ("pre_explore_gather",   "tests/test_pre_explore_gather.py",      20),
     ("routing_decider",     "tests/test_routing_decider.py",         15),
     ("token_stats",          "tests/test_token_stats_by_model.py",       15),
     ("write_hang",            "tests/test_write_hang_bounded.py",       20),

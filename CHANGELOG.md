@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.4.5] - 2026-10-20
+
+### Fixed
+
+- **LLM pre-explore could never run: three module globals were missing.**
+  `hive_functions/pre_explore/llm.py` used `global _llm_client, _llm_client_lock,
+  _pre_explore_usage` but never defined them at module level, so the first read
+  raised `NameError: name '_llm_client_lock' is not defined`. Every pre-explore
+  LLM call burned 30 retries and ended in `LLM FAILED after 30 attempts` - the
+  whole exploration silently never happened. The names are defined now, and a
+  test walks the AST of every pre-explore module to make sure a `global`
+  statement always has a matching module-level definition.
+- **Parallel pre-explore crashed on `asyncio.gather`.** `runner.py` wrapped the
+  gather in `asyncio.create_task()`, which requires a coroutine - `gather()`
+  returns a future, so the step failed with `a coroutine was expected, got
+  <_GatheringFuture pending>`. It uses `ensure_future` now.
+- **A pre-explore failure can no longer take the run down.** `_xparallel_results`
+  was only bound on some paths, so an early error (for example a failed VRAM
+  pre-flight check for the explorer model) ended in `UnboundLocalError` at
+  `state.update`. The variable is pre-initialised, and the pre-explore phase is
+  wrapped: it logs the full traceback, tells the user, and continues with the
+  static repo map instead of aborting.
+
+### Added
+
+- **Opt-in downloader for the routing decider.** The release zip still ships no
+  weights; `deploy/fetch_decider.py` fetches `fastino/GLiNER2.5-Decide` into
+  `models/decider/` and prints the two settings to use. The Python dependency
+  (`gliner2` + torch) stays out of the normal install and lives in
+  `requirements-decider.txt`. Without both, `routing_decider` stays off and the
+  LLM judge decides as before.
+
 ## [1.4.4] - 2026-10-20
 
 ### Added

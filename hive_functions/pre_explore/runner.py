@@ -108,7 +108,9 @@ async def run_pre_explore(
         )
         tasks.append(task)
 
-    _gather_task = asyncio.create_task(asyncio.gather(*tasks, return_exceptions=True))
+    # GATHER-FIX (2026-10-20): gather() liefert ein Future, create_task() will
+    # eine Coroutine -> TypeError, die parallele Exploration lief nie.
+    _gather_task = asyncio.ensure_future(asyncio.gather(*tasks, return_exceptions=True))
     _last_live_emit = 0.0
     while not _gather_task.done():
         await asyncio.sleep(0.5)

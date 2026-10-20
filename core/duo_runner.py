@@ -1,5 +1,6 @@
 from __future__ import annotations
-import asyncio, hashlib, json, logging, os, re, sys, time, uuid
+import asyncio
+import traceback, hashlib, json, logging, os, re, sys, time, uuid
 from datetime import datetime
 from pathlib import Path
 import dataclasses
@@ -445,8 +446,24 @@ async def run_code_duo(ctx):
                         len(_project_state.build_history))
         _current_project_state.set(_project_state)
 
-    async for _ev in _phase_pre_explore(ctx, state):
-        yield _ev
+    # PRE-EXPLORE-GUARD (2026-10-20): ein Fehler in der Exploration hat bisher
+    # den kompletten Run abgebrochen. Die statische Repo-Map ist ohnehin schon
+    # der Fallback, wenn LLM-Pre-Explore aus ist - also hier genauso behandeln:
+    # loggen, dem Nutzer sagen, ohne Exploration weitermachen.
+    try:
+        async for _ev in _phase_pre_explore(ctx, state):
+            yield _ev
+    except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+        raise
+    except (RuntimeError, ValueError, TypeError, KeyError, LookupError, OSError,
+            asyncio.TimeoutError, UnboundLocalError, NameError) as _pre_exc:
+        logger.error("[PRE-EXPLORE-FAILED] %s: %s\n%s",
+                     type(_pre_exc).__name__, _pre_exc, traceback.format_exc())
+        yield await ctx.emit({
+            "type": "status",
+            "content": f"⚠ Pre-Explore failed ({type(_pre_exc).__name__}) - "
+                       f"continuing with the static repo map only",
+        })
     _ws_str = state["_ws_str"]
     _explore_ctx = state.get("_explore_ctx", "")
     _tree_ctx = state.get("_tree_ctx", "")
