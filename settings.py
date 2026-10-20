@@ -102,6 +102,26 @@ DEFAULT_SETTINGS = {
     "duo_profile_speed_model": "",
     "duo_profile_quality_model": "",
     "duo_agentic_mode":        False,
+    # ── ROUTING (2026-10-20): zwei unabhaengige Entscheider, beide schaltbar ──
+    # Der LLM-Judge kostet einen Modell-Load in den VRAM (60 s + Verdraengung)
+    # und liefert Text, der geparst werden muss. Der Decider ist ein Encoder
+    # (GLiNER2.5, CPU, ~0.5-1.2 s, kein VRAM) und optional installiert
+    # (pip install hivemind[decider]). Jeder der beiden laesst sich einzeln
+    # abschalten; "shadow" rechnet mit und loggt, entscheidet aber nicht.
+    #   off | shadow | on
+    "routing_decider":          "off",
+    "routing_judge":            "on",
+    # Wer entscheidet, ob ein Planner gebraucht wird?
+    #   auto    = Decider, wenn er laeuft, sonst Judge (spart den GPU-Hit)
+    #   decider | judge = fest
+    #   always | never  = Planner immer / nie
+    "routing_planner":          "auto",
+    "routing_decider_model":    "fastino/GLiNER2.5-Decide",
+    # Unter dieser Konfidenz geht die Route an den Judge (falls aktiv), sonst Regeln.
+    "routing_decider_threshold": 0.85,
+    # Nur fuer die Pipeline relevant: der Decider waehlt nie pipeline, damit
+    # ein Sachtext nicht vier LLM-Calls ausloest.
+    "routing_pipeline_allowed": False,
     "duo_agentic_thinking":    False,
     "_thinking_before_chunking": None,  # persisted user-preference before chunking forced thinking ON
     # Explizit in DEFAULT_SETTINGS aufgedeckte Automatik-/Override-Keys

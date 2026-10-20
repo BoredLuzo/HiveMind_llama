@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.4.4] - 2026-10-20
 
 ### Added
 
@@ -40,6 +40,22 @@
 - **Roles that were configured but never ran are not counted.** The critic
   appeared in 70 duo records without a single critic round, which made the model
   list report runs that never happened.
+
+- **The stream handler no longer swallows error tracebacks.** It logged
+  `logger.exception` from a different block than the `except`, so every
+  `/stream` failure printed `NoneType: None` and the cause was unreadable. The
+  traceback is now captured where the exception happens and logged with it.
+- **Routing groundwork (opt-in, inert by default).** `routing/decider.py` adds a
+  resolver with three independent switches - `routing_decider` (a CPU encoder,
+  GLiNER2.5, no VRAM), `routing_judge` (the existing LLM judge) and
+  `routing_planner` - each `off | shadow | on`. Defaults reproduce today's
+  behaviour exactly (`decider=off, judge=on, planner=auto`); an existing
+  `settings.json` without the keys is resolved through `DEFAULT_SETTINGS`, so a
+  missing key never silently disables the judge. The encoder is an optional
+  dependency: without `gliner2` the resolver logs one warning and falls back to
+  the judge. The decider can only pick `direct` or `agentic` - it never selects
+  the pipeline route. A missing dependency, a timeout or a broken judge falls
+  back instead of failing the run.
 
 ## [1.4.3] - 2026-10-19
 

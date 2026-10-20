@@ -21,6 +21,7 @@ from core.state import (
 import json
 import copy
 import logging
+import traceback
 import sys
 import os
 import time
@@ -100,7 +101,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.4.3"
+HIVEMIND_VERSION = "1.4.4"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -1598,6 +1599,10 @@ async def stream(req: Request):
                     await _q.put(("aborted", None))
                 else:
                     _state["error"] = _se
+                    # TRACEBACK-KEEP (2026-10-20): der Handler loggt in einem
+                    # anderen Block, deshalb war der Traceback bisher weg
+                    # ("NoneType: None") und jeder Fehler unauffindbar.
+                    _state["error_tb"] = traceback.format_exc()
                     if _state["jr_reg"] is not None:
                         _state["jr_reg"]["aborted"] = True
                         _state["jr_reg"]["done"] = True
@@ -1634,7 +1639,9 @@ async def stream(req: Request):
                     break
                 elif _kind == "error":
                     _se = _payload
-                    logger.exception("/stream unhandled error: mode=%s duo_agentic=%s pre_explore=%s", mode, duo_agentic_mode, duo_pre_explore)
+                    logger.error("/stream unhandled error: mode=%s duo_agentic=%s pre_explore=%s\n%s",
+                                 mode, duo_agentic_mode, duo_pre_explore,
+                                 _state.get("error_tb") or "(no traceback captured)")
                     if _state["jr_reg"] is not None:
                         _state["jr_reg"]["aborted"] = True
                         _state["jr_reg"]["done"] = True

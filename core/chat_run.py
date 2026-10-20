@@ -37,6 +37,7 @@ from context.chat_util import (
 )
 from context.compression import SESSION_COMPRESS_THRESHOLD
 from infra.phase_timer import PhaseTimer
+from routing import decider as _routing_decider
 from infra.token_stats import _estimate_tokens_from_content
 from utils.math import percentile_float as _percentile_float
 from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
@@ -162,6 +163,43 @@ async def run_stream(
         duo_config.chunking, chat_id, force_complexity, duo_config.until_finished,
         duo_config.coding_mode,
     )
+
+    async def _decide_route(text: str):
+        """Route/Planner ueber den Resolver; der Judge laeuft nur, wenn er gefragt wird."""
+        _judge_enabled = _routing_decider.normalise_mode(
+            _run_settings.get("routing_judge")) != "off"
+
+        async def _judge_async(_text: str):
+            _level = await _check_complexity_with_bias(_text, judge_bias)
+            return _level, 0.0
+
+        try:
+            _d = await _routing_decider.decide_async(
+                _run_settings, text,
+                forced_complexity=force_complexity,
+                judge_call_async=_judge_async if _judge_enabled else None,
+            )
+        except (RuntimeError, ValueError, TypeError, KeyError, LookupError, OSError,
+                ImportError, AttributeError, NameError, UnboundLocalError) as _exc:
+            # nie stumm: Traceback ins Log, dann das bisherige Verhalten
+            logger.exception("[DECIDER] routing failed (%s: %s) - falling back to the judge",
+                             type(_exc).__name__, _exc)
+            _level = await _check_complexity_with_bias(text, judge_bias)
+            _d = _routing_decider.Decision(
+                route=("agentic" if _level in ("complex", "code_duo") else "direct"),
+                planner=(_level in ("complex", "code_duo")),
+                source="judge-fallback", reason=f"judge level={_level}",
+            )
+        try:
+            _d.details["judge_verdict"] = dict(getattr(_state.pipeline, "_last_judge_verdict", {}) or {})
+        except (AttributeError, TypeError):
+            _d.details["judge_verdict"] = {}
+        if _d.route == "agentic":
+            duo_config.planner = bool(_d.planner)
+        logger.warning(
+            "[DECIDER] route=%s planner=%s source=%s conf=%.2f escalated=%s latency=%.0fms",
+            _d.route, _d.planner, _d.source, _d.confidence, _d.escalated, _d.latency_ms)
+        return _d
 
     _run_settings = dict(settings)
     if model_overrides:
@@ -1308,9 +1346,10 @@ async def run_stream(
                 _complexity_source = "shortcut"
             else:
                 yield await emit({"type": "status", "content": "Automap: checking complexity..."})
-                complexity = await _check_complexity_with_bias(user_input, judge_bias)
-                _judge_verdict = getattr(_state.pipeline, "_last_judge_verdict", {})
-                _complexity_source = "judge"
+                _decision = await _decide_route(user_input)
+                complexity = _routing_decider.complexity_for(_decision)
+                _judge_verdict = dict(_decision.details.get('judge_verdict') or {})
+                _complexity_source = _decision.source
     else:
         if images and not _prepro_success:
             complexity = "simple"
@@ -1324,10 +1363,10 @@ async def run_stream(
                 _complexity_source = "shortcut"
             else:
                 yield await emit({"type": "status", "content": "Assessing complexity..."})
-                complexity = await _check_complexity_with_bias(user_input, judge_bias)
-                _judge_verdict = getattr(_state.pipeline, "_last_judge_verdict", {})
-                _complexity_source = "judge"
-
+                _decision = await _decide_route(user_input)
+                complexity = _routing_decider.complexity_for(_decision)
+                _judge_verdict = dict(_decision.details.get('judge_verdict') or {})
+                _complexity_source = _decision.source
     _judge_route    = _judge_verdict.get("route", "")           # "direct"|"tool"|"pipeline"|""
     _judge_tasktype = _judge_verdict.get("task_type", "") or _task_type
     _judge_toolsize = _judge_verdict.get("tool_model", "small")  # "small"|"large"

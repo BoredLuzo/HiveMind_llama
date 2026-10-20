@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**237 settings keys.**
+**243 settings keys.**
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -185,6 +185,12 @@ its comment) in `settings.py`, then re-run the generator.
 | `prefetch_lead_seconds` | float | `8.0` |  |
 | `preload_workers_after_run` | bool | `False` |  |
 | `read_guard_enabled` | bool | `True` |  |
+| `routing_decider` | str | `off` |  |
+| `routing_decider_model` | str | `fastino/GLiNER2.5-Decide` |  |
+| `routing_decider_threshold` | float | `0.85` |  |
+| `routing_judge` | str | `on` |  |
+| `routing_pipeline_allowed` | bool | `False` |  |
+| `routing_planner` | str | `auto` |  |
 | `run_bash_shell` | str | `auto` |  |
 | `safe_profile_matrix_file` | str | `model_configs/safe_profile_matrix.json` |  |
 | `safe_profile_policy` | str | `default_8gb_v1` |  |
