@@ -143,6 +143,7 @@ SUITES = [
     ("lint",                   "tests/test_lint.py",                            60),
     ("no_new_silent_excepts",  "tests/test_no_new_silent_excepts.py",           60),
     ("compress_local_only",    "tests/test_compress_local_only.py",             60),
+    ("token_stats",          "tests/test_token_stats_by_model.py",       15),
     ("write_hang",            "tests/test_write_hang_bounded.py",       20),
     ("verify_gate",           "tests/test_verify_gate.py",               15),
     ("stuck_handler",         "tests/test_stuck_handler_callable.py",        20),

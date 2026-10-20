@@ -19,6 +19,7 @@ Pins:
 
 Run: python tests/test_voice_card.py
 """
+import re
 import sys
 from pathlib import Path
 
@@ -163,8 +164,9 @@ check("the STT toggle updates S before refreshing",
 check("the TTS toggle updates S before refreshing",
       "S.ttsEnabled=this.checked" in card)
 check("the stylesheet has a fresh cache buster",
-      "style.css?v=20261018" in html)
-check("the script has a fresh cache buster", "app.js?v=20261018" in html)
+      re.search(r"style\.css\?v=\d{8}-\d{2}", html) is not None)
+check("the script has a fresh cache buster",
+      re.search(r"app\.js\?v=\d{8}-\d{2}", html) is not None)
 # owner (2026-10-17): same box as #send, NOT a circle
 check("the mic button has the send button's footprint",
       "#mic-btn{" in _css and "border-radius:7px;width:40px;height:40px" in _css)

@@ -207,6 +207,9 @@ async def get_token_stats(days: int = 30):
     daily = stats.get("daily", {})
     sorted_days = sorted(daily.keys(), reverse=True)[:days]
     limited_daily = {d: daily[d] for d in sorted_days}
+    # Measured decode rates from the llama-server logs (deploy/backfill_speeds.py):
+    # they let the model list show a speed even for records without phase timing.
+    _speeds = (stats.get("speeds") or {})
     return {
         "total_tokens": stats.get("total_tokens", 0),
         "total_runs": stats.get("total_runs", 0),
@@ -214,6 +217,13 @@ async def get_token_stats(days: int = 30):
         "total_cached_tokens": stats.get("total_cached_tokens", 0),
         "total_requests": stats.get("total_requests", 0),
         "daily": limited_daily,
+        # METRICS-EXPAND (2026-10-19): comparison per model+role, total and per day
+        # ("Daily overview" rows can switch the table between total and one day)
+        "by_model": _ts.aggregate_by_model(limited_daily, speeds=_speeds),
+        "by_model_by_day": {d: _ts.aggregate_by_model(limited_daily, day=d, speeds=_speeds)
+                            for d in sorted_days},
+        # which routes actually ran (code_duo / direct / pipeline)
+        "by_mode": _ts.aggregate_by_mode(limited_daily),
     }
 
 

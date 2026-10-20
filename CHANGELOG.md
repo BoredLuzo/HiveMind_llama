@@ -1,5 +1,46 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Token statistics now answer "which model, how fast, how stable" instead of
+  only "how many tokens".** Each run records the phase durations
+  (`phases_ms`) and both the requested and the resolved mode, and
+  `/soul/token-stats` returns three aggregations: `by_model` (per model *and*
+  role: coder, planner, critic, pre-explore, direct — plus the pipeline stages
+  analyst, refiner, synthesizer, vision), `by_model_by_day`, and `by_mode`
+  (which route actually ran: `code_duo`, `direct`, `pipeline`).
+  The Soul panel renders a compact model list (speed · crash-free) and a mode
+  list; clicking a model filters the run list below to the runs that model
+  touched.
+- **Real decode-speed fallback from the llama-server logs.**
+  `deploy/backfill_speeds.py` parses `eval time … tokens per second` out of
+  `logs/llama_server_*.log`, maps the GGUF file name to a model tag via
+  `models.json` and stores a median per model in `token_stats.json`. Records
+  without phase timing show that measured rate (marked `~`) instead of nothing.
+- **Pipeline runs are measurable now.** The pipeline runner reported no usage at
+  all: `requests 0`, `prompt_tokens 0`, no phase data, and its token count was a
+  characters/3 guess. `chat_stream` gained an opt-in `usage_out` (default off, so
+  direct and duo paths are untouched) and the run wrapper around
+  `pipeline_chat_stream` reports every stage as `usage_meta` + `run_meta`, with
+  its own PhaseTimer bucket. A pipeline run now records e.g.
+  `requests 4`, `prompt_tokens 4205`, `phases {analyst 1100, refiner 133,
+  critic 600, synthesizer 172}` and the matching `phases_ms`.
+
+### Fixed
+
+- **`/static/*` no longer hides a deploy behind the browser cache.** The
+  `?v=` token only changed when someone remembered to bump it; a middleware now
+  sends `Cache-Control: no-cache, must-revalidate`, so a normal reload is
+  enough.
+- **User stops no longer count as failures.** `crash-free` is
+  `completed / (runs − abort − graceful_stop)`: stopping a run yourself says
+  nothing about the model.
+- **Roles that were configured but never ran are not counted.** The critic
+  appeared in 70 duo records without a single critic round, which made the model
+  list report runs that never happened.
+
 ## [1.4.3] - 2026-10-19
 
 ### Fixed

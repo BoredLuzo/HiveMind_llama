@@ -224,7 +224,8 @@ class LlamaClient:
                           max_tokens: int = 600, ctx: int = CONTEXT_SIZE_DEFAULT,
                           think: bool | None = None, no_cache: bool = False,
                           thinking_budget: int | None = None,
-                          split_thinking: bool = False) -> AsyncIterator[str | tuple[str, str]]:
+                          split_thinking: bool = False,
+                          usage_out: dict | None = None) -> AsyncIterator[str | tuple[str, str]]:
 
 
         req_id = self._req_id("stream")
@@ -259,6 +260,10 @@ class LlamaClient:
         payload = _build_payload(messages, temperature, max_tokens, stream=True,
                                  cache_prompt=not no_cache, thinking=think,
                                  thinking_budget=thinking_budget)
+        # USAGE-REPORT (2026-10-20): nur wenn der Aufrufer es anfordert, damit
+        # bestehende Pfade (direct, duo) unveraendert bleiben.
+        if usage_out is not None:
+            payload["stream_options"] = {"include_usage": True}
         max_attempts = 45
         _yielded_any = False
         for attempt in range(max_attempts):
@@ -317,6 +322,13 @@ class LlamaClient:
                             line = line[6:]
                         try:
                             chunk = json.loads(line)
+                            if usage_out is not None:
+                                _u = chunk.get("usage")
+                                if isinstance(_u, dict) and _u:
+                                    usage_out.update(_u)
+                                _t = chunk.get("timings")
+                                if isinstance(_t, dict) and _t:
+                                    usage_out["timings"] = _t
                             delta = (chunk.get("choices") or [{}])[0].get("delta", {})
                             _content = delta.get("content", "")
                             # AGENT-THINKING: Reasoning-Felder getrennt erfassen

@@ -335,6 +335,16 @@ app.middleware("http")(_csrf_origin_guard)
 
 _static_dir = THIS_FILE.parent / "static"
 if _static_dir.is_dir():
+    # STATIC-NO-CACHE (2026-10-20): every UI deploy was invisible until a manual
+    # Ctrl+F5 - the browser kept app.js from cache (the ?v= token only changes
+    # when someone remembers to bump it). Revalidate instead: the 304 is cheap.
+    @app.middleware("http")
+    async def _static_no_cache(request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
     app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 memory   = Memory(THIS_FILE.parent / "memory.json")  # FIX: persistent
 # Ensure object identity: core.state.settings and server.py must use the SAME
@@ -595,7 +605,8 @@ async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: in
                                 think: bool | None = None,
                                 thinking_budget: int | None = None,
                                 split_thinking: bool = False,
-                                no_cache: bool = False):
+                                no_cache: bool = False,
+                                usage_out: dict | None = None):
 
 
     if force_ctx:
@@ -616,7 +627,7 @@ async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: in
     async for tok in pipeline.ollama.chat_stream(model, msgs, temp, max_tok, ctx=effective_ctx,
                                                   think=think, thinking_budget=thinking_budget,
                                                   split_thinking=split_thinking,
-                                                  no_cache=no_cache):
+                                                  no_cache=no_cache, usage_out=usage_out):
         yield tok
 
 

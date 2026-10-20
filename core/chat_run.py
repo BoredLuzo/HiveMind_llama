@@ -154,6 +154,7 @@ async def run_stream(
     if duo_config is None:
         duo_config = DuoConfig()
 
+    _ui_mode_entry = mode   # MODE-TRACKING: `mode` wird spaeter ueberschrieben
     logger.warning(
         "[RUN-ENTRY] mode=%s agentic=%s pre_explore=%s planner=%s chunking=%s "
         "chat_id=%s force=%s until_finished=%s coding_mode=%s",
@@ -184,6 +185,16 @@ async def run_stream(
     if str(_run_settings.get("source") or "") == "telegram":
         from tools.runner import _phone_source_run as _ps_cv
         _ps_cv.set(True)
+
+    def _pt_key_for_phase(phase: str) -> str:
+        """Phase -> PhaseTimer-Schluessel (Pipeline-Stages haben eigene Toepfe)."""
+        return {
+            "coder": "coder_loop", "planner": "soft_planner",
+            "pre_explore": "pre_explore", "critic": "coder_loop",
+            "analyst": "pipeline_analyst", "refiner": "pipeline_refiner",
+            "synthesizer": "pipeline_synthesizer", "vision": "pipeline_vision",
+            "pipeline_critic": "pipeline_critic",
+        }.get(str(phase or ""), "coder_loop")
 
     # Per-run token estimate accumulator - incremented by emit() on content events
     _run_token_estimate: int = 0
@@ -222,15 +233,66 @@ async def run_stream(
                     )
             except Exception:
                 pass
-            _pt_key = {
-                "coder": "coder_loop", "planner": "soft_planner",
-                "pre_explore": "pre_explore", "critic": "coder_loop",
-            }.get(_ph, "coder_loop")
+            _pt_key = str(data.get("timer_key") or _pt_key_for_phase(_ph))
             _phase_timer.add_real(_pt_key, int(data["completion_tokens"]), float(data.get("gen_ms") or 0.0))
         if data.get("type") == "run_meta" and isinstance(data.get("models"), dict):
             _run_models.update(data["models"])
             return ""
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def _pipeline_timer_key(phase: str) -> str:
+        """Eigener PhaseTimer-Topf je Pipeline-Stage (critic kollidiert sonst mit duo)."""
+        return "pipeline_" + str(phase or "pipeline")
+
+    def _phase_from_role(role) -> str:
+        """agent_role -> Phase: analyst | refiner | critic | synthesizer | vision | pipeline"""
+        _r = str(role or "").strip().lower()
+        if _r in ("vision_agent", "vision", "va"):
+            return "vision"
+        for _known in ("analyst", "refiner", "critic", "synthesizer"):
+            if _r.startswith(_known):
+                return _known
+        return "pipeline"
+
+    async def _pipeline_stream_tracked(model, msgs, temp, max_tok, phase=None, **kw):
+        """PIPELINE-METRICS (2026-10-20): eine Stage = ein LLM-Call.
+
+        Phase kommt aus `agent_role` (die pipeline_runner ohnehin mitschickt),
+        damit der Aufrufer nichts aendern muss. Misst Generierungszeit, holt die
+        echten usage-Zahlen (stream_options.include_usage) und meldet das Modell
+        der Stage als run_meta - daraus baut der Collector Phasen, Zeiten und die
+        Modellzuordnung wie bei den anderen Modi.
+        """
+        phase = phase or _phase_from_role(kw.get("agent_role"))
+        if phase == "critic":
+            phase = "critic"   # Anzeige-Phase; Timer-Topf setzt der Wrapper unten
+        if model:
+            await emit({"type": "run_meta", "models": {phase: str(model)}})
+        _usage: dict = {}
+        _t0 = time.perf_counter()
+        _t_first = None
+        async for tok in _pipeline_chat_stream(model, msgs, temp, max_tok,
+                                               usage_out=_usage, **kw):
+            if _t_first is None:
+                _t_first = time.perf_counter()
+            yield tok
+        _end = time.perf_counter()
+        _gen_ms = max(0.0, (_end - (_t_first if _t_first is not None else _t0)) * 1000.0)
+        _ct = int(_usage.get("completion_tokens") or 0)
+        _pt = int(_usage.get("prompt_tokens") or 0)
+        _det = _usage.get("prompt_tokens_details") or {}
+        _tim = _usage.get("timings") or {}
+        _ca = int((_det.get("cached_tokens") if isinstance(_det, dict) else 0)
+                  or _usage.get("cached_tokens") or 0
+                  or (_tim.get("cache_n") if isinstance(_tim, dict) else 0) or 0)
+        if _ct > 0:
+            await emit({"type": "usage_meta", "phase": phase,
+                        "timer_key": _pipeline_timer_key(phase),
+                        "completion_tokens": _ct, "prompt_tokens": _pt,
+                        "cached_tokens": _ca, "gen_ms": _gen_ms})
+        else:
+            # Server ohne usage-Block: Zeit wenigstens als Phase verbuchen
+            _phase_timer.add_real(_pipeline_timer_key(phase), 0, _gen_ms)
 
     def _stop_reason_bucket(stop_reason: str) -> str:
         return _bucket_stop_reason(stop_reason)
@@ -249,15 +311,48 @@ async def run_stream(
         _record_ok = stop_reason in ("completed", "loop_detected", "timeout", "hard_stop", "graceful_stop", "aborted")
         if _record_ok and _tokens_to_record > 0:
             _phases = dict(_run_real_tokens_by_phase)
+            _phases_ms: dict = {}
             try:
                 _snap = _phase_timer.snapshot()
-                for _pname, _skey in (("pre_explore", "pre_explore"), ("planner", "soft_planner"), ("coder", "coder_loop")):
+                _PIPELINE_PHASES = (("analyst", "pipeline_analyst"),
+                                    ("refiner", "pipeline_refiner"),
+                                    ("critic", "pipeline_critic"),
+                                    ("synthesizer", "pipeline_synthesizer"),
+                                    ("vision", "pipeline_vision"))
+                for _pname, _skey in (("pre_explore", "pre_explore"),
+                                      ("planner", "soft_planner"),
+                                      ("coder", "coder_loop")) + _PIPELINE_PHASES:
+                    _ent = _snap.get(_skey) or {}
+                    # Pipeline-Stages kennen nur die reine Generierungszeit
+                    # (add_real fuellt gen_s, kein start/end) -> als Dauer nutzen
+                    _ds = _ent.get("duration_s")
+                    if _ds is None:
+                        _ds = _ent.get("gen_s")
+                    if _ds:
+                        _phases_ms[_pname] = int(round(float(_ds) * 1000))
+                for _pname, _skey in (("pre_explore", "pre_explore"), ("planner", "soft_planner"),
+                                      ("coder", "coder_loop")) + _PIPELINE_PHASES:
                     if not _phases.get(_pname):
                         _ot = (_snap.get(_skey) or {}).get("output_tokens", 0)
                         if _ot:
                             _phases[_pname] = int(_ot)
             except Exception:
                 pass
+            # a chat/direct run knows its model only through the registry
+            _direct_model_for_stats: dict = {}
+            if not _run_models:
+                try:
+                    from core.state import registry_get as _rg_stats
+                    _rm_stats = _rg_stats("direct") or _rg_stats("analyst") or ""
+                    if _rm_stats:
+                        _direct_model_for_stats = {"direct": _rm_stats}
+                except (ImportError, AttributeError, LookupError):
+                    _direct_model_for_stats = {}
+            # resolved route: the orchestrator dispatches on `complexity`
+            _route_for_stats = (
+                "code_duo" if str(complexity or "") == "code_duo"
+                else ("direct" if str(complexity or "") in ("trivial", "simple") else "pipeline")
+            )
             threading.Thread(
                 target=_record_run,
                 args=({
@@ -266,13 +361,22 @@ async def run_stream(
                     "elapsed_s": float(elapsed),
                     "stop_reason": str(stop_reason),
                     "phases": _phases,
-                    "models": _run_models,
+                    # DIRECT/CHAT (2026-10-20): only the duo runner emits
+                    # run_meta, so a plain chat run recorded no model at all and
+                    # never showed up in the per-model stats.
+                    "models": _run_models or _direct_model_for_stats,
                     # TOKEN-TRACKER 1.1.0: input/cache dimension
                     "prompt_tokens": _prompt_total,
                     "cached_tokens": _cached_total,
                     "requests": _run_requests,
                     "phases_prompt": dict(_run_prompt_by_phase),
                     "phases_cached": dict(_run_cached_by_phase),
+                    # METRICS-EXPAND (2026-10-19)
+                    "phases_ms": _phases_ms,
+                    # MODE-TRACKING (2026-10-20): what actually ran, not just what
+                    # the UI requested - pipeline/direct/code_duo are the routes.
+                    "mode": _route_for_stats,
+                    "ui_mode": str(_ui_mode_entry or ""),
                 },),
                 daemon=True,
             ).start()
@@ -1458,7 +1562,7 @@ async def run_stream(
             unregister_abort=_unregister_abort,
             unregister_step_skip=_unregister_step_skip,
             schedule_prefetch=_schedule_prefetch,
-            pipeline_chat_stream=_pipeline_chat_stream,
+            pipeline_chat_stream=_pipeline_stream_tracked,
             get_loaded_models_set=_get_loaded_models_set,
             smart_preload_if_needed=smart_preload_if_needed,
             clear_step_skip=lambda *a: _clear_step_skip(run_id),
