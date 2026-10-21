@@ -1,21 +1,21 @@
-"""Routing-Decider (optional, CPU) — Schaltplan fuer Route und Planner.
+"""Routing decider (optional, CPU) — switch plan for route and planner.
 
-Warum: der LLM-Judge kostet einen Modell-Load in den VRAM (60 s + Verdraengung)
-und ist als Text-Parser fehleranfaellig. Ein Encoder-Klassifikator (GLiNER2.5)
-entscheidet dieselbe Frage in ~0.5-1.2 s auf der CPU, ohne VRAM. Beide sollen
-einzeln schaltbar bleiben - dieses Modul kapselt NUR die Entscheidungslogik und
-die optionale Encoder-Anbindung; der Judge bleibt, wo er ist.
+Why: the LLM judge costs a model load in VRAM (60 s + eviction) and is
+fragile as a text parser. An encoder classifier (GLiNER2.5) answers the
+same question in ~0.5-1.2 s on CPU, without VRAM. Both stay individually
+switchable - this module encapsulates ONLY the decision logic and the
+optional encoder hookup; the judge stays where it is.
 
-Schalter (settings):
-    routing_decider   off | shadow | on     Encoder entscheidet die Route
-    routing_judge     off | shadow | on     LLM-Judge entscheidet die Route
+Switches (settings):
+    routing_decider   off | shadow | on     the encoder decides the route
+    routing_judge     off | shadow | on     the LLM judge decides the route
     routing_planner   auto | heuristic | decider | judge | always | never
-                      (auto = heuristic - der Encoder kann den Planner nicht)
-    routing_decider_threshold   float >= 0.5   unter dieser Konfidenz eskalieren
-    routing_decider_model       HF-Checkpoint (Default: English GLiNER2.5-Decide)
+                      (auto = heuristic - the encoder cannot plan)
+    routing_decider_threshold   float >= 0.5   escalate below this confidence
+    routing_decider_model       HF checkpoint (default: English GLiNER2.5-Decide)
 
-Praeedenz im Resolver:
-    expliziter Modus / force_complexity  >  Decider  >  Judge  >  Regeln
+Precedence in the resolver:
+    explicit mode / force_complexity  >  Decider  >  Judge  >  rules
 """
 from __future__ import annotations
 
@@ -86,11 +86,15 @@ def _planner_from(settings: dict) -> str:
 def _threshold_from(settings: dict) -> float:
     raw = (settings or {}).get("routing_decider_threshold")
     if raw is None or str(raw).strip() == "":
-        raw = _default("routing_decider_threshold", 0.85)
+        raw = _default("routing_decider_threshold", 0.55)
     try:
         return float(raw)
     except (TypeError, ValueError):
-        return 0.85
+        # THRESHOLD-ALIGN (2026-10-16): the fallback must match the shipped
+        # default in settings.py (0.55). The old 0.85 literal predated the
+        # score recalibration and, on a settings import failure, silently
+        # flipped the router back to escalate-almost-everything.
+        return 0.55
 
 
 def _model_from(settings: dict) -> str:
@@ -103,7 +107,7 @@ def _model_from(settings: dict) -> str:
 
 @dataclass
 class Decision:
-    """Ergebnis einer Routing-Entscheidung."""
+    """Result of a routing decision."""
     route: str = "direct"                 # direct | agentic
     planner: bool = False
     source: str = "rule"                  # rule | decider | judge

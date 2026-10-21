@@ -68,7 +68,7 @@ def _tag_map(models_json: Path | None = None) -> dict[str, str]:
 
 
 def collect(log_dir: Path = LOG_DIR) -> dict[str, list[float]]:
-    """Rückgabe: {model_stem: [tok/s, ...]} - nur echte Dekodierraten."""
+    """Returns {model_stem: [tok/s, ...]} - real decode rates only."""
     samples: dict[str, list[float]] = {}
     for logfile in sorted(log_dir.glob("llama_server_*.log")):
         tag = _model_tag(logfile)
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         return 0
     speeds = write_speeds(samples, Path(args.stats))
-    print(f"geschrieben: {len(speeds)} Einträge in {args.stats}")
+    print(f"wrote {len(speeds)} entries to {args.stats}")
     return 0
 
 
