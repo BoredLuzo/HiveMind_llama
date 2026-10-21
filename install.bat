@@ -438,9 +438,42 @@ echo  ==========================================================
 echo   [6/9] Models
 echo  ==========================================================
 echo.
+REM SKIP-PROMPT (2026-10-16): every optional step asks first - Models was
+REM the only one that dropped you straight into the menu.
+choice /c YN /n /m "Set up / register models now? [Y/N] "
+if errorlevel 2 (
+    echo   Skipped - run setup_models.bat anytime.
+    goto decider_model_step
+)
 REM No folder prompt here - setup_models.bat asks ONCE (download target;
 REM existing GGUFs in that folder get registered automatically).
 call setup_models.bat
+
+REM [6b] Routing decider model (optional pre-download) -----------------------
+REM OPT-IN MODEL (2026-10-16): the decider is OFF by default; when enabled
+REM later, the engine downloads fastino/GLiNER2.5-Decide (~1-2 GB) from the
+REM Hugging Face hub on first use. Pre-warming here makes that first enable
+REM %  instant. Skippable like every other optional; a failure here never
+REM %  aborts the install.
+:decider_model_step
+echo.
+echo   Routing decider (optional): a small CPU classifier that picks
+echo   direct answer vs. code run. OFF by default - enable it later in
+echo   Settings -^> Routing. When enabled without this pre-download, the
+echo   model (~1-2 GB) is pulled from Hugging Face on first use.
+choice /c YN /n /m "Pre-download the decider model now? [Y/N] "
+if errorlevel 2 (
+    echo   Skipped - downloads automatically on first use.
+    goto searxng_step
+)
+uv pip install --python "%PY%" huggingface_hub --quiet
+"%PY%" -c "from huggingface_hub import snapshot_download; snapshot_download('fastino/GLiNER2.5-Decide')"
+if not errorlevel 1 (
+    echo   Decider model cached - enabling the decider later is instant.
+) else (
+    echo   [NOTE] Pre-download failed (offline or hub client missing).
+    echo          The model downloads automatically on first use.
+)
 goto searxng_step
 
 :searxng_step
