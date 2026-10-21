@@ -73,6 +73,7 @@ model_configs/learning_logs/
 model_configs/learned/
 context/projects/
 context/last_workspace.json
+context/decider_cache.json
 custom_prompts/
 memory.json
 soul.json

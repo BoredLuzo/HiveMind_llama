@@ -20,11 +20,13 @@ Precedence in the resolver:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 logger = logging.getLogger("hivemind.routing")
 
@@ -335,13 +337,26 @@ class EncoderBackend:
 
 
 class DecisionCache:
-    """Kleine LRU: identische Prompts kosten keine Inferenz (Testlaeufe!)."""
+    """Kleine LRU: identische Prompts kosten keine Inferenz (Testlaeufe!).
 
-    def __init__(self, size: int = 512) -> None:
+    PERSISTENT (2026-10-22): mit `path` ueberlebt der Cache Engine-Restarts -
+    ohne ihn routet der erste Run nach einem Restart ungebuffert. Lesen und
+    Schreiben sind best-effort: jede IO-Stoerung degradiert auf In-Memory,
+    nie ein Routing-Fehler. Eintraege altern per TTL (Standard 7 Tage -
+    Aenderungen an Matchern/Kalibrierung machen alte Entscheidungen
+    unguenstig; der Key deckt nur Settings-Aenderungen ab).
+    """
+
+    def __init__(self, size: int = 512, path: "Path | str | None" = None,
+                 ttl_s: int = 7 * 86400) -> None:
         self.size = size
-        self._data: dict[str, Decision] = {}
-        self._order: list[str] = []
+        self.path = Path(path) if path else None
+        self.ttl_s = int(ttl_s)
+        self._data: dict = {}
+        self._ts: dict = {}
+        self._order: list = []
         self._lock = threading.Lock()
+        self._loaded = False
 
     @staticmethod
     def key(text: str, model: str, settings: dict | None = None) -> str:
@@ -356,21 +371,79 @@ class DecisionCache:
         raw = f"{model}\x00{_extra}\x00{_norm}"
         return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()
 
+    def _load_locked(self) -> None:
+        """Disk -> Memory (einmal pro Prozess). Best-effort."""
+        self._loaded = True
+        if self.path is None:
+            return
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            entries = raw.get("entries") or {}
+            now = time.time()
+            for key, rec in entries.items():
+                if int(rec.get("ts") or 0) + self.ttl_s < now:
+                    continue
+                self._data[key] = Decision(**(rec.get("decision") or {}))
+                self._ts[key] = float(rec.get("ts") or 0)
+                self._order.append(key)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError) as exc:
+            logger.debug("[DECIDER] cache load failed: %s", exc)
+            self._data, self._ts, self._order = {}, {}, []
+
+    def _save_locked(self) -> None:
+        if self.path is None:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            entries = {}
+            for key in self._order:
+                d = self._data.get(key)
+                if d is None:
+                    continue
+                dec = d.to_dict()
+                try:
+                    json.dumps(dec)
+                except (TypeError, ValueError):
+                    dec.pop("details", None)
+                entries[key] = {"decision": dec, "ts": self._ts.get(key, time.time())}
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"version": 1, "entries": entries},
+                                      ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self.path)
+        except (OSError, TypeError, ValueError) as exc:
+            logger.debug("[DECIDER] cache save failed: %s", exc)
+
     def get(self, key: str) -> Decision | None:
         with self._lock:
+            if not self._loaded:
+                self._load_locked()
             hit = self._data.get(key)
-            if hit is not None:
+            if hit is None:
+                return None
+            if self._ts.get(key, 0) + self.ttl_s < time.time():
+                self._data.pop(key, None)
+                self._ts.pop(key, None)
                 self._order.remove(key)
-                self._order.append(key)
+                return None
+            self._order.remove(key)
+            self._order.append(key)
             return hit
 
     def put(self, key: str, value: Decision) -> None:
         with self._lock:
+            if not self._loaded:
+                self._load_locked()
             if key not in self._data:
                 self._order.append(key)
             self._data[key] = value
+            self._ts[key] = time.time()
             while len(self._order) > self.size:
-                self._data.pop(self._order.pop(0), None)
+                _old = self._order.pop(0)
+                self._data.pop(_old, None)
+                self._ts.pop(_old, None)
+            self._save_locked()
 
 
 # ── Resolver: die einzige Stelle, die aus Schaltern eine Route macht ──────
@@ -579,7 +652,8 @@ def complexity_for(decision: Decision) -> str:
     return "code_duo" if decision.route == "agentic" else "simple"
 
 
-_CACHE = DecisionCache()
+_CACHE = DecisionCache(
+    path=Path(__file__).resolve().parent.parent / "context" / "decider_cache.json")
 _BACKEND: EncoderBackend | None = None
 _BACKEND_LOCK = threading.Lock()
 
