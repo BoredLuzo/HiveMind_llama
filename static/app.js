@@ -426,7 +426,7 @@ function updateChatToolsBadge() {
 
 // MODUS-BESCHREIBUNG (2026-08-31): Ein-Zeilen-Text unter den Mode-Buttons.
 var _MODE_DESC = {
-  auto:      'Auto \u2014 Judge routes by complexity. Tool requests run in the Direct chat loop (when Chat Tools on).',
+  auto:      'Auto \u2014 the decider picks direct or agentic (see Routing below). Tool requests run in the Direct chat loop (when Chat Tools on).',
   simple:    'Chat (Direct) \u2014 fast single-model chat. Chat Tools (read/python/web) available.',
   pipeline:  'Pipeline \u2014 multi-agent: Analyst \u2192 Refiner \u2192 Critic \u2192 Synthesizer.',
   automap:   'AutoMap \u2014 Judge picks a model per task type.',
