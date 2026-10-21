@@ -79,10 +79,21 @@ check("routing status line exists", 'id="routing-status"' in HTML)
 
 check("js has setRouting", "function setRouting(" in JS)
 check("js has renderRoutingStatus", "function renderRoutingStatus(" in JS)
-check("status names the decider", "decider (encoder, CPU)" in JS)
-check("status names the planner source", "planner: <b>" in JS)
+check("status names the decider", "encoder on CPU" in JS)
+check("plan step is labelled as such, not as a model", "Plan step" in HTML)
+check("plan step options read as decisions",
+      all(x in HTML for x in ("auto: local heuristic", "encoder decides",
+                              "judge decides", "always plan", "never plan")))
+check("plan step hint points at the model location",
+      "The planning model itself is set in Agents" in HTML)
+check("routing card has no em dashes left",
+      "&mdash;" not in HTML[HTML.index('id="routing-card"'):HTML.index('id="routing-status"')])
+check("status line separates route and plan step",
+      "Route: <b>" in JS and "Plan step: <b>" in JS)
+check("status names the plan step source", "Plan step: <b>" in JS)
 check("status shows the threshold", "threshold ' + thr.toFixed(2)" in JS)
-check("status warns when a fixed mode bypasses routing", "bypasses the routing" in JS)
+check("status warns when a fixed mode skips the card",
+      "skips this card entirely" in JS)
 check("loadSettings fills the three selects",
       "routing-decider-sel" in JS and "routing-judge-sel" in JS and "routing-planner-sel" in JS)
 check("settings keys are persisted", "patch[key] = value" in JS and "postSettings(patch)" in JS)

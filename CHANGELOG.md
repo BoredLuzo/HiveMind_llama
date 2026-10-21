@@ -50,7 +50,9 @@
   orange number inputs. The planner row only shows when "Planner = Coder" is
   off.
 - The routing card sits under MODE in the Agents tab and only appears while
-  the mode is `auto`: three selects (decider / judge / planner) and a live line: `Auto -> decider (encoder, CPU) · planner:
+  the mode is `auto`: decider, judge and the plan step. The plan row is called
+  "Plan step" and says that the planning MODEL lives in Agents, because the
+  old "Planner" label read like a model choice. Live line: `Auto -> decider (encoder, CPU) · planner:
   heuristic (free) · threshold 0.55`, plus a warning when a fixed mode
   bypasses the routing entirely.
 

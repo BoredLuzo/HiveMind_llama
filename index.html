@@ -76,7 +76,7 @@
   <div class="panel on" id="p-agents">
     <div class="sec">Mode</div>
     <div class="mode-btns" id="mode-btns-row">
-      <div class="mbtn on" data-mode="auto" onclick="setMode('auto',this)" title="Auto — the decider picks direct or agentic; tool requests run in the Direct chat loop (when Chat Tools on)">Auto</div>
+      <div class="mbtn on" data-mode="auto" onclick="setMode('auto',this)" title="Auto: the decider picks direct or agentic; tool requests run in the Direct chat loop (when Chat Tools on)">Auto</div>
       <div class="mbtn" data-mode="simple" onclick="setMode('simple',this)" title="Chat (Direct) — fast single-model chat. Chat Tools (read/python/web) available when enabled">Chat</div>
       <div class="mbtn" data-mode="pipeline" onclick="setMode('pipeline',this)" title="Pipeline — Analyst → Refiner → Critic → Synthesizer (multi-agent)">Pipeline</div>
       <div class="mbtn" data-mode="automap" onclick="setMode('automap',this)" style="color:var(--blue);border-color:rgba(72,120,192,.4)" title="AutoMap — judge picks a model per task type">AutoMap</div>
@@ -90,39 +90,41 @@
       <!-- ROUTING (2026-10-21): wer entscheidet, wenn der Modus "auto" ist -->
       <div id="routing-card" class="ctx-card mode-routing">
         <div class="ctx-card-head">
-          <span class="ctx-card-title">Routing &mdash; who decides</span>
+          <span class="ctx-card-title">Routing: who decides</span>
           <span class="ctx-card-sub">only in auto</span>
         </div>
         <div class="ctx-row">
           <span class="ctx-label">Decider</span>
           <select id="routing-decider-sel" class="rt-select"
             onchange="setRouting('routing_decider', this.value)">
-            <option value="off">off &mdash; keyword rules</option>
-            <option value="shadow">shadow &mdash; log only</option>
-            <option value="on">on &mdash; decides</option>
+            <option value="off">off: keyword rules</option>
+            <option value="shadow">shadow: log only</option>
+            <option value="on">on: decides</option>
           </select>
         </div>
         <div class="ctx-row">
           <span class="ctx-label">Judge</span>
           <select id="routing-judge-sel" class="rt-select"
             onchange="setRouting('routing_judge', this.value)">
-            <option value="off">off &mdash; no LLM judge</option>
-            <option value="shadow">shadow &mdash; log only</option>
-            <option value="on">on &mdash; LLM decides</option>
+            <option value="off">off: no LLM judge</option>
+            <option value="shadow">shadow: log only</option>
+            <option value="on">on: LLM decides</option>
           </select>
         </div>
         <div class="ctx-row">
-          <span class="ctx-label">Planner</span>
+          <span class="ctx-label">Plan step</span>
           <select id="routing-planner-sel" class="rt-select"
+            title="Whether an agentic run plans first. The planning MODEL is set in Agents, not here."
             onchange="setRouting('routing_planner', this.value)">
-            <option value="auto">auto &mdash; heuristic</option>
-            <option value="heuristic">heuristic</option>
-            <option value="decider">decider</option>
-            <option value="judge">judge</option>
-            <option value="always">always</option>
-            <option value="never">never</option>
+            <option value="auto">auto: local heuristic</option>
+            <option value="heuristic">heuristic only</option>
+            <option value="decider">encoder decides</option>
+            <option value="judge">judge decides</option>
+            <option value="always">always plan</option>
+            <option value="never">never plan</option>
           </select>
         </div>
+        <div class="ctx-hint">Whether an agentic run gets a plan first. The planning model itself is set in Agents.</div>
         <div id="routing-status" class="ctx-hint rt-status"></div>
       </div>
     </div>

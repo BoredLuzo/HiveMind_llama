@@ -10716,10 +10716,10 @@ function renderRoutingStatus() {
 
   var who;
   if (dec === 'on') {
-    who = 'decider (encoder, CPU) - confident decisions are final';
-    if (jud === 'on') who += '; unsure ones go to the judge';
-    else if (jud === 'shadow') who += '; unsure ones fall back to keyword rules (judge only logs)';
-    else who += '; unsure ones fall back to keyword rules';
+    who = 'decider (encoder on CPU) decides; confident calls are final';
+    if (jud === 'on') who += '; unsure calls go to the judge';
+    else if (jud === 'shadow') who += '; unsure calls fall back to keyword rules (judge only logs)';
+    else who += '; unsure calls fall back to keyword rules';
   } else if (dec === 'shadow') {
     who = 'keyword rules - the decider only logs what it would pick';
   } else {
@@ -10727,14 +10727,14 @@ function renderRoutingStatus() {
                           : 'LLM judge';
   }
   var plnLabel = {
-    auto: 'heuristic (free)', heuristic: 'heuristic (free)', decider: 'encoder',
-    judge: 'judge', always: 'always', never: 'never'
+    auto: 'local heuristic', heuristic: 'local heuristic', decider: 'encoder decides',
+    judge: 'judge decides', always: 'always', never: 'never'
   }[pln] || pln;
 
-  var line = 'Auto &rarr; <b>' + who + '</b> &middot; planner: <b>' + plnLabel + '</b>';
-  line += ' &middot; threshold ' + thr.toFixed(2);
+  var line = 'Route: <b>' + who + '</b><br>Plan step: <b>' + plnLabel + '</b>';
+  line += ' &middot; decider threshold ' + thr.toFixed(2);
   if (mode && mode !== 'auto') {
-    line += ' &middot; <span class="rt-warn">mode "' + mode + '" bypasses the routing</span>';
+    line += '<br><span class="rt-warn">Mode "' + mode + '" skips this card entirely.</span>';
   }
   box.innerHTML = line;
 }

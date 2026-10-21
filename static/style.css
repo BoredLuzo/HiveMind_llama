@@ -1510,3 +1510,5 @@ textarea.fld-input{resize:vertical;line-height:1.5}
    needs a little more air than in the config column. */
 .mode-routing { margin: 2px 0 10px; }
 .mode-routing .ctx-row { padding: 3px 0; }
+.rt-status b { color: #dbe4ef; font-weight: 600; }
+.rt-status br + br { display: none; }
