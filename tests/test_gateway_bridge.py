@@ -426,7 +426,7 @@ async def t_mode():
     check("set mode travels in stream BODY",
           br.hive.stream_bodies[-1]["mode"] == "simple")
     check("mode persisted", st.data["mode"] == "simple")
-    check("status shows mode", "simple" in br.status_text())
+    check("status shows mode", "simple" in await br.status_text())
     # invalid rejected, mode unchanged
     out = br.mode_text("nuclear")
     check("invalid mode rejected", "Unknown mode" in out
@@ -786,14 +786,34 @@ async def t_audit_fixes():
           br.hive.stream_bodies[-1]["overrides"].get(
               "duo_action_approval_enabled") is True)
     check("G1: /status states the forced gate",
-          "phone runs gated" in br.status_text())
+          "phone runs gated" in await br.status_text())
     # version-skew detection: an engine WITHOUT the gateway_overrides
     # marker must downgrade /status instead of promising the invariant
     br.ms.engine_gate_support = False
     check("G1: /status WARNS against old engines",
-          "INACTIVE" in br.status_text()
-          and "duo_action_approval_enabled" in br.status_text())
+          "INACTIVE" in await br.status_text()
+          and "duo_action_approval_enabled" in await br.status_text())
     br.ms.engine_gate_support = True
+
+    # ACTIVE-RUN VISIBILITY (2026-10-16): a UI/engine run the gateway did
+    # NOT start shows in /status (live: agentic coder run in the browser,
+    # /status said "active run: none").
+    br.hive.journal_body = {"active": True, "run_id": "ui-run-abc123",
+                            "done": False, "aborted": False}
+    _st_ui = await br.status_text()
+    check("status: active UI run surfaces",
+          "engine run (UI): ui-run-abc123" in _st_ui
+          and "active run: none" in _st_ui)
+    br.hive.journal_body = {"active": False}
+    _st_idle = await br.status_text()
+    check("status: idle engine -> plain none, no engine line",
+          "active run: none" in _st_idle and "engine run (UI)" not in _st_idle)
+    br.hive.offline = True
+    _st_off = await br.status_text()
+    check("status: engine unreachable -> says unknown",
+          "unknown (engine unreachable)" in _st_off)
+    br.hive.offline = False
+    br.hive.journal_body = {"active": False}
 
     # G2: the phone decision echoes decision_id + tool of the relayed
     # card; a duplicate route is answered honestly
@@ -864,7 +884,7 @@ async def t_audit_fixes():
               "phone_restricted") is True)
     br_r.ms.phone_restricted = True
     check("restrict: /status shows it",
-          "web + text only" in br_r.status_text())
+          "web + text only" in await br_r.status_text())
     # explicit OFF: only an explicit false unlocks phone runs
     hive_u = FakeHive(_run_events())
     hive_u.settings_body = {"telegram_phone_restricted": False}

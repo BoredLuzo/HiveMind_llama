@@ -1059,7 +1059,7 @@ class RunBridge:
         self.state.save()
         return f"🆕 New HiveMind chat: {title} ({mapping['hive_chat_id']})."
 
-    def status_text(self) -> str:
+    async def status_text(self) -> str:
         run = self.state.data.get("active_run") or {}
         mapping = self._tg_chat() or {}
         mode = self.state.data.get("mode") or "engine default"
@@ -1079,6 +1079,27 @@ class RunBridge:
         else:
             gate_line = ("⚠️ gate enforcement INACTIVE - engine too old; "
                          "switch on duo_action_approval_enabled in the UI")
+        # ACTIVE-RUN VISIBILITY (2026-10-16, live report): /status showed
+        # "active run: none" while an agentic coder run was active in the
+        # UI - the gateway state only tracks PHONE runs. Ask the engine
+        # journal (unscoped = most recently active run) so a UI run shows
+        # too; when it IS the phone run, no extra line.
+        own = str(run.get("run_id") or "")
+        engine_extra = ""
+        try:
+            j = await self.hive.journal()
+        except (HiveUnreachable, OSError, ValueError):
+            engine_extra = "engine run: unknown (engine unreachable)"
+        else:
+            _jid = str((j or {}).get("run_id") or "")
+            if _jid and (j or {}).get("active") \
+                    and not (j or {}).get("done") \
+                    and not (j or {}).get("aborted") \
+                    and _jid != own:
+                engine_extra = f"engine run (UI): {_jid[:18]}…"
+        active_txt = f"active run: {own}" if own else "active run: none"
+        if engine_extra:
+            active_txt += "\n" + engine_extra
         return (
             "📡 Gateway status\n"
             "\n"
@@ -1095,7 +1116,7 @@ class RunBridge:
             f"{gate_line}\n"
             f"engine: {getattr(self.ms, 'engine_version', '?')}\n"
             "\n"
-            f"active run: {run.get('run_id') or 'none'}")
+            f"{active_txt}")
 
     def toggle_verbose(self) -> str:
         self.verbose = not self.verbose
