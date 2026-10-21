@@ -340,15 +340,18 @@ REM (trash, reversible). Belt-and-suspenders: a user-data exclude list
 REM keeps settings.json/models.json/etc. out of the prune even if some
 REM future release zip accidentally shipped them.
 set "PRUNED=0"
-if exist "%BASE%\update_manifest_installed.txt" (
-    for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$base='%BASE%'; $ex='%EXROOT%'; $trash='%BASE%\update_removed_%TAGNUM%'; $protFiles = 'settings.json','models.json','vision_model.json','presets.json','memory.json','routing_weights.json','gateway.toml','gateway_state.json','gateway_state.json.corrupt','gateway.disabled','gateway.lock','gateway_audit.jsonl','gateway_state.tmp'; $protDirs = 'sessions','context','logs','custom_prompts','.hive_uploads','learning','learning_logs','.venv','llama'; $old = Get-Content '%BASE%\update_manifest_installed.txt' -ErrorAction SilentlyContinue | Where-Object { $_ -and ($protFiles -notcontains $_) -and -not ($_.StartsWith('gateway_audit.jsonl.')) -and ($protDirs -notcontains $_.Split('\')[0]) -and ((Get-Item -LiteralPath (Join-Path $base $_) -ErrorAction SilentlyContinue) -is [System.IO.FileInfo]) }; $n = 0; foreach ($f in $old) { if (-not (Test-Path -LiteralPath (Join-Path $ex $f))) { $src = Join-Path $base $f; $dst = Join-Path $trash $f; $d = Split-Path $dst -Parent; if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }; Move-Item -Force -LiteralPath $src -Destination $dst; $n++ }; if (-not (Test-Path $trash)) { New-Item -ItemType Directory -Path $trash -Force | Out-Null }; Get-ChildItem -LiteralPath $ex -Recurse -File | ForEach-Object { $_.FullName.Substring($ex.Length + 1) } | Set-Content -LiteralPath '%BASE%\update_manifest_installed.txt' -Encoding UTF8; Write-Output $n"`) do set "PRUNED=%%P"
-    if not "%PRUNED%"=="0" (
-        echo  Pruned          : %PRUNED% removed release file^(s^) moved to update_removed_%TAGNUM%\
-    )
-) else (
-    echo  Manifest        : first manifest-managed update - nothing to prune.
-    powershell -NoProfile -Command "$ex='%EXROOT%'; Get-ChildItem -LiteralPath $ex -Recurse -File | ForEach-Object { $_.FullName.Substring($ex.Length + 1) } | Set-Content -LiteralPath '%BASE%\update_manifest_installed.txt' -Encoding UTF8"
+set "HAD_MANIFEST=0"
+if exist "%BASE%\update_manifest_installed.txt" set "HAD_MANIFEST=1"
+REM PRUNE-SCRIPT (2026-10-16): the old inline powershell -Command broke in
+REM %  cmd quoting (parse error on the live box - prune AND manifest rewrite
+REM %  silently skipped). The logic ships as deploy\update_prune.ps1 and is
+REM %  testable against a fake tree; it prints the pruned count for the batch.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\update_prune.ps1" -Base "%BASE%" -Ex "%EXROOT%" -Trash "%BASE%\update_removed_%TAGNUM%" -Manifest "%BASE%\update_manifest_installed.txt" > "%TMPDIR%\prune_count.txt" 2>&1
+for /f "usebackq delims=" %%P in (`type "%TMPDIR%\prune_count.txt" 2^>nul`) do set "PRUNED=%%P"
+if "%HAD_MANIFEST%"=="1" if not "%PRUNED%"=="0" (
+    echo  Pruned          : %PRUNED% removed release file^(s^) moved to update_removed_%TAGNUM%\
 )
+if "%HAD_MANIFEST%"=="0" echo  Manifest        : first manifest-managed update - nothing to prune.
 if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
 
 REM -- 9b. Refresh Python dependencies (.venv) -------------------------------
