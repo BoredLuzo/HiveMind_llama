@@ -51,6 +51,12 @@
   `routing_pipeline_allowed` setting; `mcp_servers` is marked reserved.
 - `deploy/recommend_models.py`: suggests a start config from the detected
   VRAM/RAM plus the measured tok/s per model.
+- Model catalog: `spark-x2.6:4b` pinned to `XHToken/Spark-X2.6-4B-GGUF`
+  (replaces the Spark-X2.5 entries) and `lfm2.5:24b-a2b` pinned to
+  `LiquidAI/LFM2.5-24B-A2B-GGUF` with its DSpark drafter sidecar
+  (`LFM2.5-24B-A2B-DSpark-F16.gguf`, 0.6 GB). Both have profiles and automap
+  entries; `tests/test_model_catalog.py` pins repo, filename and drafter so a
+  renamed asset cannot silently download nothing again.
 - `model_configs/models/spark-x2.6_4b.json` for Spark-X2.6 (4B, Q4_K_M).
 - Docs: profile-naming example clarified, roadmap corrections (no
   `deploy/fetch_tts.py`, `core/sidecar.py` not built, `RESULTS.md` not shipped).

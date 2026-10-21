@@ -10,6 +10,8 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   qwen3.6:…-genesis-final-apex-compact     APEX-Compact  — Coder/Hermes agent (MoE+MTP)
   (catalog is authoritative - this block lists only the highlights)
   lfm2.5:2.6b             Q4_K_M        — Subagent/Worker + Judge
+  lfm2.5:24b-a2b          Q4_K_M        — Coder/Writer (MoE, + DSpark drafter)
+  spark-x2.6:4b           Q4_K_M        — Judge/direct helper (dense 4B)
   qwen3.5:0.8b-ud         UD-Q4_K_XL    — Subagent ladder (smallest tier)
   qwen3.5:2b              Q4_K_M        — Refiner
   qwen3.5:4b-mtp          Q4_K_M        — Analyst/Critic/Synthesizer/Speed/Fallback
@@ -144,6 +146,47 @@ SPECS: list[dict] = [
                 "repo": "LiquidAI/LFM2.5-2.6B-DSpark-GGUF",
                 "path": "LFM2.5-2.6B-DSpark-Q4_K_M.gguf",
                 "note": "DSpark spec-dec drafter (Q4_K_M, ~190MB)",
+            },
+        ],
+    },
+    # ── Spark-X2.6 4B (XHToken, 2026-10) ──────────────────────────────────
+    # Dense 4B, Apache-2.0, embedded chat template (jinja), thinking via the
+    # template's enable_thinking switch. Replaces the Spark-X2.5 profiles
+    # (4B/1.7B): same family, newer weights, one pinned repo. Sampling lives
+    # in model_configs/models/spark-x2.6_4b.json (temp 1.0 / top_p 0.95 /
+    # top_k off, no penalties) - matching the model card.
+    {
+        "key": "spark-x2.6:4b",
+        "tag": "spark-x2.6:4b",
+        "desc": "Spark-X2.6 4B Q4_K_M (dense, fast judge/direct helper, ~3GB)",
+        "repo": "XHToken/Spark-X2.6-4B-GGUF",
+        "file_regex": [
+            r"(?i)^spark-x2\.6-4b-q4_k_m\.gguf$",
+        ],
+        "mmproj_regex": [],
+    },
+    # ── LFM2.5 24B-A2B (LiquidAI, 2026-10) ───────────────────────────────
+    # MoE 24B total / ~2B active. Q4_K_M is 13.5 GB, so on an 8 GB card the
+    # experts live in RAM (moe_cpu_experts in the profile). Ships with the
+    # DSpark drafter: a 0.62 GB sidecar that llama.cpp uses as --model-draft
+    # with --spec-type draft-dspark (DSPARK_MIN_BUILD in llama_config.py).
+    {
+        "key": "lfm2.5:24b-a2b",
+        "tag": "lfm2.5:24b-a2b",
+        "desc": "LFM2.5 24B-A2B Q4_K_M (MoE 24B/2B active, strong writer, ~13.5GB)",
+        "repo": "LiquidAI/LFM2.5-24B-A2B-GGUF",
+        "file_regex": [
+            r"(?i)^lfm2\.5-24b-a2b-q4_k_m\.gguf$",
+        ],
+        "mmproj_regex": [],
+        # DSpark speculative-decoding drafter (F16, 0.62 GB) - never
+        # registered as a model (dspark exclusion in write_models_json /
+        # llama_models). The profile points at this exact filename.
+        "sidecar": [
+            {
+                "repo": "LiquidAI/LFM2.5-24B-A2B-DSpark-GGUF",
+                "path": "LFM2.5-24B-A2B-DSpark-F16.gguf",
+                "note": "DSpark spec-dec drafter (F16, ~620MB)",
             },
         ],
     },

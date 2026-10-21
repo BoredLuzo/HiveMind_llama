@@ -326,12 +326,15 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `qwen3.5:2b-mtp` | unsloth/Qwen3.5-2B-MTP-GGUF | refiner (MTP) | 1.3 GB + 0.7 GB mmproj |
 | `qwen3.5:0.8b-ud` | unsloth/Qwen3.5-0.8B-GGUF | subagent-lite, smallest ladder tier | 0.6 GB + 0.2 GB mmproj |
 | `lfm2.5:2.6b` | LiquidAI/LFM2.5-2.6B-GGUF | subagent / judge (+ DSpark drafter) | 1.7 GB + 0.2 GB drafter |
+| `lfm2.5:24b-a2b` | LiquidAI/LFM2.5-24B-A2B-GGUF | coder / writer (MoE 24B/2B active, + DSpark drafter) | 13.5 GB + 0.6 GB drafter |
+| `spark-x2.6:4b` | XHToken/Spark-X2.6-4B-GGUF | fast judge / direct helper (dense 4B) | 3.0 GB |
 | `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL) | 2.2 GB |
 | `minicpm5:2b-sharp-q4` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | same model, smaller/weaker tier (Q4_K_XL) | 1.6 GB |
 
-Text-only models (`minicpm5`, `lfm2.5`) download a single GGUF; the vision models
-pull their projector automatically, and `gemma-4` additionally gets a ~60 MB MTP
-drafter from the same repo.
+Text-only models (`minicpm5`, `lfm2.5`, `spark-x2.6`) download a single GGUF; the
+vision models pull their projector automatically, and `gemma-4` additionally gets a
+~60 MB MTP drafter from the same repo. `lfm2.5` (2.6B and 24B-A2B) ships a DSpark
+spec-dec drafter as a sidecar - it is never registered as a model.
 
 GGUFs already on disk can be registered without downloading anything
 (`setup_models.bat` -> `[R]`) or given a full config via `[C]`.

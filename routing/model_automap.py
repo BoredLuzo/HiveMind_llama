@@ -29,8 +29,11 @@ MODEL_PROFILES: dict[str, dict] = {
     # MiniCPM5-2B (openbmb): LlamaForCausalLM, thinking via template
     # (enable_thinking), XML-style tool calls handled by --jinja.
     "minicpm5":    {"thinking": True, "vision": False, "tool_call": True},
-    # Spark-X2.5 (XHToken, 2026-09): hybrid SWA, 1M ctx, thinking default on,
-    # structured <tool_call>/<arg_key> format. Verified live via b10872 smoke test.
+    # Spark-X2.6 (XHToken, 2026-10): replaces the X2.5 line (4B/1.7B).
+    # Dense 4B, Apache-2.0, thinking via the template's enable_thinking,
+    # structured <tool_call> output handled by --jinja. The X2.5 keys stay as
+    # aliases so existing installs keep working.
+    "spark-x2.6":      {"thinking": True, "vision": False, "tool_call": True},
     "spark-x2.5":      {"thinking": True, "vision": False, "tool_call": True},
     "spark-x2.5-4b":   {"thinking": True, "vision": False, "tool_call": True},
     "spark-x2.5-1.7b": {"thinking": True, "vision": False, "tool_call": True},
