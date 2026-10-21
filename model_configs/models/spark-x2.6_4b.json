@@ -70,5 +70,5 @@
    "repetition_penalty": 1.0
   }
  },
- "_notes": "Spark-X2.6-4B (XHToken, Apache-2.0, arch spark2_5). Sampling per model card: temp 1.0, top_p 0.95, top_k -1 (disabled = 0 in llama.cpp), no penalties. Thinking is controlled by the chat template variable enable_thinking (none|low|high); HiveMind drives it via the thinking/thinking_budget fields. 4B dense -> no MoE offload, no MTP/DSpark drafter, no vision projector. ctx 16384 is a compromise for 8 GB VRAM; the model supports up to 1048576."
+ "_notes": "Spark-X2.6-4B (XHToken, Apache-2.0, arch spark2_5). Sampling per model card: temp 1.0, top_p 0.95, top_k -1 (disabled = 0 in llama.cpp), repetition 1.0, presence/frequency 0 - identical for thinking and non-thinking. Thinking is on by default in the chat template; HiveMind drives it via --reasoning on plus chat_template_kwargs.enable_thinking per request. Tool calls need no external parser here: with --jinja the embedded template emits OpenAI tool_calls (verified live on b11456: get_weather {\"city\":\"Hefei\"}, finish_reason=tool_calls) - the card's --tool-call-parser spark25 is for SGLang/vLLM only. 4B dense -> no MoE offload, no MTP/DSpark drafter, no vision projector. ctx 16384 is the 8 GB compromise; the model itself supports up to 1048576 (raise num_ctx on bigger cards)."
 }

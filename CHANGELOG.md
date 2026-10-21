@@ -57,7 +57,11 @@
   (`LFM2.5-24B-A2B-DSpark-F16.gguf`, 0.6 GB). Both have profiles and automap
   entries; `tests/test_model_catalog.py` pins repo, filename and drafter so a
   renamed asset cannot silently download nothing again.
-- `model_configs/models/spark-x2.6_4b.json` for Spark-X2.6 (4B, Q4_K_M).
+- `model_configs/models/spark-x2.6_4b.json` for Spark-X2.6 (4B, Q4_K_M): sampling
+  per model card, thinking on by default (`spark-x2.6` joined the reasoning
+  bases), tool calls verified live through the embedded template
+  (`tool_calls` + `finish_reason=tool_calls` on b11456) - no external
+  `spark25` parser needed on llama.cpp.
 - Docs: profile-naming example clarified, roadmap corrections (no
   `deploy/fetch_tts.py`, `core/sidecar.py` not built, `RESULTS.md` not shipped).
 

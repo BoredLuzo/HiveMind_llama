@@ -52,7 +52,10 @@ _JINJA_BASES = {"qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder
 # thinking_budget greifen. Fallback when the registry sets no "reasoning".
 # NOTE: "lfm2.5" stays OUT on purpose — the small LFM models are
 # non-thinking; the 24B opts in per-model via registry reasoning:"on".
-_REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes", "minicpm-v", "minicpm-v-4.7"}
+_REASONING_ON_BASES = {"qwen3.6", "hermes3.6", "hermes", "minicpm-v", "minicpm-v-4.7",
+                         # Spark-X2.x: the chat template enables thinking by default
+                         # (model card); per-request off via enable_thinking.
+                         "spark-x2.6", "spark-x2.5"}
 
 
 def _omit_mmproj_for(model: str, vision: bool = False) -> bool:

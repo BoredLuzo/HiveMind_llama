@@ -98,6 +98,25 @@ amap = (ROOT / "routing" / "model_automap.py").read_text(encoding="utf-8", error
 check("automap knows spark-x2.6", '"spark-x2.6"' in amap)
 check("automap still knows the X2.5 aliases", '"spark-x2.5"' in amap)
 
+
+# ── Spark: Karte vs. Profil (verifiziert live auf b11456) ───────────────
+ml = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+check("spark thinks by default (reasoning base)",
+      '"spark-x2.6"' in ml.split("_REASONING_ON_BASES", 1)[1][:400])
+prof_spark = json.loads((ROOT / "model_configs" / "models" / "spark-x2.6_4b.json")
+                        .read_text(encoding="utf-8"))
+_card = {"temperature": 1.0, "top_p": 0.95, "top_k": 0,
+         "presence_penalty": 0.0, "repetition_penalty": 1.0}
+for variant in ("thinking", "non_thinking", "sampling_text"):
+    got = {k: prof_spark["sampling"][variant].get(k) for k in _card}
+    check(f"spark {variant} sampling matches the card", got == _card, f"({got})")
+check("spark profile documents the verified tool-call path",
+      "finish_reason=tool_calls" in prof_spark.get("_notes", ""))
+check("spark profile is not a MoE/vision model",
+      int(prof_spark.get("moe_cpu_experts") or 0) == 0
+      and prof_spark.get("mmproj_filename") is None
+      and prof_spark.get("capabilities", {}).get("vision") is False)
+
 print()
 print(f"SUMMARY model_catalog: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
