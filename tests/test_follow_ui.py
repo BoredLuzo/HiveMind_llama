@@ -74,10 +74,10 @@ check("the switch is persisted", st.data.get("follow_ui") is False)
 br.set_follow_ui(True)
 
 # ── 2. Ziel-Chat: der frischeste UI-Chat, [TG] ignoriert ────────────────
-br, _ = _bridge([_chat("old", "Ältere Frage", 90),
+br, _ = _bridge([_chat("old", "Older question", 90),
                  _chat("new", "Agentic run", 5),
                  _chat("tg", "[TG] Telegram 2026-10-21 12:00", 1),
-                 _chat("empty", "leer", 1, msgs=0)])
+                 _chat("empty", "(no text)", 1, msgs=0)])
 target = asyncio.run(br._ui_chat_target())
 check("newest non-TG chat wins", target == "new", f"({target})")
 

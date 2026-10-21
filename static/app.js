@@ -5279,8 +5279,8 @@ function doneAgent(elapsed) {
       // tool calls goes through _createThinkBlock() and was the only path that
       // never got the fence formatting. The main streaming block did get it
       // (_renderThinkCodeBlocks above), so the very same reasoning looked raw
-      // inside the coder's expanded tool-call flow (owner report: "beim
-      // streaming gut formatiert, als aufgeklappter toolcall scheiße").
+      // inside the coder's expanded tool-call flow (owner report: "fine
+      // while streaming, broken once the tool call expands").
       var _tbb = _tb.querySelector('.think-body');
       if (_tbb && _tbb.textContent.trim()) {
         _renderThinkCodeBlocks(_tbb);
