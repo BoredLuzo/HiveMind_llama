@@ -1157,7 +1157,12 @@ async function loadSettings() {
     var _rjSel = document.getElementById('routing-judge-sel');
     if (_rjSel) _rjSel.value = S.routingJudge;
     var _rpSel = document.getElementById('routing-planner-sel');
-    if (_rpSel) _rpSel.value = S.routingPlanner;
+    // The UI offers three choices (always / decider / never). Older settings can
+    // still hold auto|heuristic|judge - show the closest option and keep the
+    // stored value visible in the status line instead of silently rewriting it.
+    var _plnThree = {always: 1, decider: 1, never: 1};
+    S.routingPlannerLegacy = _plnThree[S.routingPlanner] ? '' : S.routingPlanner;
+    if (_rpSel) _rpSel.value = _plnThree[S.routingPlanner] ? S.routingPlanner : 'decider';
     renderRoutingStatus();
     _syncFlagCheck('duo-coder-after-run-toggle', S.duoCoderAfterRun === 'evict');
     _syncFlagCheck('stt-enabled-toggle', S.sttEnabled);
@@ -9478,7 +9483,10 @@ async function loadSkills() {
   try {
     const res = await fetch('/soul/skills');
     const skills = await res.json();
-    const container = document.getElementById('skills-list');
+    // SOUL tab: own list element. It used to share the id with the Agents
+  // card, so whichever loaded last overwrote the other view.
+  const container = document.getElementById('skills-list-soul')
+    || document.getElementById('skills-list');
 
     if (!skills.length) {
       container.innerHTML = '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:#7a8fa8;padding:8px">No skills available. Enable Skill Writing to generate skills.</div>';
@@ -9497,7 +9505,8 @@ async function loadSkills() {
       '</div>';
     }).join('');
   } catch(e) {
-    const container = document.getElementById('skills-list');
+    const container = document.getElementById('skills-list-soul')
+      || document.getElementById('skills-list');
     if (container) container.innerHTML = '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:#c05050;padding:8px">Error loading: ' + esc(e.message) + '</div>';
   }
 }
@@ -10727,9 +10736,13 @@ function renderRoutingStatus() {
                           : 'LLM judge';
   }
   var plnLabel = {
-    auto: 'local heuristic', heuristic: 'local heuristic', decider: 'encoder decides',
-    judge: 'judge decides', always: 'always', never: 'never'
+    always: 'always plan', decider: 'decider decides', never: 'never plan',
+    // legacy values still resolve, they are just not offered any more
+    auto: 'heuristic (free)', heuristic: 'heuristic (free)', judge: 'judge decides'
   }[pln] || pln;
+  if (S.routingPlannerLegacy) {
+    plnLabel += ' <span class="rt-warn">(stored: ' + S.routingPlannerLegacy + ')</span>';
+  }
 
   var line = 'Route: <b>' + who + '</b><br>Plan step: <b>' + plnLabel + '</b>';
   line += ' &middot; decider threshold ' + thr.toFixed(2);

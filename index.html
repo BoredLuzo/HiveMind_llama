@@ -116,12 +116,9 @@
           <select id="routing-planner-sel" class="rt-select"
             title="Whether an agentic run plans first. The planning MODEL is set in Agents, not here."
             onchange="setRouting('routing_planner', this.value)">
-            <option value="auto">auto: local heuristic</option>
-            <option value="heuristic">heuristic only</option>
-            <option value="decider">encoder decides</option>
-            <option value="judge">judge decides</option>
-            <option value="always">always plan</option>
-            <option value="never">never plan</option>
+            <option value="always">Always plan</option>
+            <option value="decider">Decider decides</option>
+            <option value="never">Never plan</option>
           </select>
         </div>
         <div class="ctx-hint">Whether an agentic run gets a plan first. The planning model itself is set in Agents.</div>
@@ -2110,7 +2107,8 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 
     <!-- Skills -->
     <div id="soul-tab-skills" class="soul-tab-content" style="display:none">
-      <div id="skills-list" style="padding:8px 0"></div>
+      <!-- zweite Liste: eigene id, sonst greift getElementById immer die erste -->
+      <div id="skills-list-soul" style="padding:8px 0"></div>
     </div>
 
     <!-- Insights -->

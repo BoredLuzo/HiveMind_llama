@@ -201,17 +201,6 @@ def load_automap() -> dict:
     return _automap_data
 
 
-def save_automap(data: dict) -> None:
-    """Save automap data to disk."""
-    global _automap_data
-    _automap_data = data
-    try:
-        with open(_automap_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.warning("automap.json save failed: %s", e)
-
-
 def get_automap(query: str = "", available: list | None = None, *,
                 has_images: bool = False, task_type_override: str = "",
                 base_path: str = "", vram_budget_gb: float = 0.0) -> dict:
@@ -458,13 +447,6 @@ def is_valid_preprocessing_model(model: str) -> bool:
         pass
     base = model.split(":")[0]
     return base in _VISION_PREPROCESSING_ALLOWLIST
-
-
-def auto_resolve_model(task_type: str = "", settings: dict = None) -> str:
-    """Auto-resolve model name based on task type and settings."""
-    if settings:
-        return settings.get("model", "")
-    return ""
 
 
 def get_model_capabilities(model_name: str) -> dict:

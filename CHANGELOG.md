@@ -49,6 +49,9 @@
   fields with a `tok` unit and a muted VRAM estimate instead of a stack of
   orange number inputs. The planner row only shows when "Planner = Coder" is
   off.
+- The plan step offers three choices only: always plan, decider decides, never
+  plan. Older values (`auto`, `heuristic`, `judge`) still resolve and stay
+  visible in the status line instead of being rewritten silently.
 - The routing card sits under MODE in the Agents tab and only appears while
   the mode is `auto`: decider, judge and the plan step. The plan row is called
   "Plan step" and says that the planning MODEL lives in Agents, because the

@@ -73,8 +73,14 @@ for sel in ("routing-decider-sel", "routing-judge-sel", "routing-planner-sel"):
     check(f"select {sel}", f'id="{sel}"' in HTML)
 for opt in ('value="off"', 'value="shadow"', 'value="on"'):
     check(f"decider/judge option {opt}", HTML.count(opt) >= 2, f"({HTML.count(opt)})")
-for pl in ("auto", "heuristic", "decider", "judge", "always", "never"):
-    check(f"planner option {pl}", f'<option value="{pl}"' in HTML)
+for pl in ("always", "decider", "never"):
+    check(f"plan step option {pl}", f'<option value="{pl}"' in HTML)
+_pln_block = HTML[HTML.index('id="routing-planner-sel"'):
+                 HTML.index("</select>", HTML.index('id="routing-planner-sel"'))]
+for gone in ("auto", "heuristic", "judge"):
+    check(f"plan step no longer offers {gone}", f'<option value="{gone}"' not in _pln_block)
+check("the select offers exactly three choices",
+      HTML[HTML.index('id="routing-planner-sel"'):HTML.index("</select>", HTML.index('id="routing-planner-sel"'))].count("<option") == 3)
 check("routing status line exists", 'id="routing-status"' in HTML)
 
 check("js has setRouting", "function setRouting(" in JS)
@@ -82,8 +88,9 @@ check("js has renderRoutingStatus", "function renderRoutingStatus(" in JS)
 check("status names the decider", "encoder on CPU" in JS)
 check("plan step is labelled as such, not as a model", "Plan step" in HTML)
 check("plan step options read as decisions",
-      all(x in HTML for x in ("auto: local heuristic", "encoder decides",
-                              "judge decides", "always plan", "never plan")))
+      all(x in HTML for x in ("Always plan", "Decider decides", "Never plan")))
+check("legacy planner values stay visible instead of being rewritten",
+      "routingPlannerLegacy" in JS)
 check("plan step hint points at the model location",
       "The planning model itself is set in Agents" in HTML)
 check("routing card has no em dashes left",
