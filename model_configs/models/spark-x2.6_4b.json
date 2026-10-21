@@ -1,0 +1,74 @@
+{
+ "model": "spark-x2.6:4b",
+ "capabilities": {
+  "thinking": true,
+  "vision": false,
+  "tool_call": true
+ },
+ "vision_preprocessing": false,
+ "num_ctx": 16384,
+ "num_ctx_analyst": 16384,
+ "num_ctx_duo_coder": 16384,
+ "num_ctx_vision": 8192,
+ "jinja": true,
+ "reasoning": "on",
+ "distilled": false,
+ "moe_cpu_experts": 0,
+ "mtp": false,
+ "gpu_layers": null,
+ "mmproj_filename": null,
+ "vram_gb_override": null,
+ "dspark_draft_filename": null,
+ "dspark_draft_n_max": 0,
+ "sampling": {
+  "sampling_text": {
+   "temperature": 1.0,
+   "top_p": 0.95,
+   "top_k": 0,
+   "min_p": 0.0,
+   "presence_penalty": 0.0,
+   "repetition_penalty": 1.0
+  },
+  "sampling_thinking_text": {
+   "temperature": 1.0,
+   "top_p": 0.95,
+   "top_k": 0,
+   "min_p": 0.0,
+   "presence_penalty": 0.0,
+   "repetition_penalty": 1.0
+  },
+  "sampling_thinking_code": {
+   "temperature": 0.7,
+   "top_p": 0.95,
+   "top_k": 0,
+   "min_p": 0.0,
+   "presence_penalty": 0.0,
+   "repetition_penalty": 1.0
+  },
+  "thinking": {
+   "temperature": 1.0,
+   "top_p": 0.95,
+   "top_k": 0,
+   "min_p": 0.0,
+   "presence_penalty": 0.0,
+   "repetition_penalty": 1.0
+  },
+  "non_thinking": {
+   "temperature": 1.0,
+   "top_p": 0.95,
+   "top_k": 0,
+   "min_p": 0.0,
+   "presence_penalty": 0.0,
+   "repetition_penalty": 1.0
+  },
+  "sampling_thinking_code_precise": {
+   "temperature": 0.3,
+   "top_p": 0.95,
+   "top_k": 0,
+   "min_p": 0.0,
+   "presence_penalty": 0.0,
+   "repetition_penalty": 1.0
+  }
+ },
+ "_notes": "Spark-X2.6-4B (XHToken, Apache-2.0, arch spark2_5). Sampling per model card: temp 1.0, top_p 0.95, top_k -1 (disabled = 0 in llama.cpp), no penalties. Thinking is controlled by the chat template variable enable_thinking (none|low|high); HiveMind drives it via the thinking/thinking_budget fields. 4B dense -> no MoE offload, no MTP/DSpark drafter, no vision projector. ctx 16384 is a compromise for 8 GB VRAM; the model supports up to 1048576."
+}

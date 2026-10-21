@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import threading
 import tempfile
 import time
 from pathlib import Path
@@ -61,6 +62,13 @@ MCP_SHARED_INCLUDE_WEBSEARCH = os.environ.get("MCP_SHARED_INCLUDE_WEBSEARCH", "1
 MCP_SHARED_TOOL_URL = f"{HIVEMIND_URL}/internal/tool/exec"
 
 MCP_HTTP_BIND = os.environ.get("MCP_HTTP_BIND", "127.0.0.1").strip() or "127.0.0.1"
+# HARDENING (2026-10-21): Grenzen, die vorher fehlten
+MCP_MAX_HEADER_BYTES = max(4096, int(os.environ.get("MCP_MAX_HEADER_BYTES", str(32 * 1024))))
+MCP_MAX_CONCURRENCY = max(1, int(os.environ.get("MCP_MAX_CONCURRENCY", "8")))
+MCP_MAX_BATCH = max(1, int(os.environ.get("MCP_MAX_BATCH", "16")))
+# Zeitlimit fuer einen einzelnen Request (Tool-Laufzeit). 0 = aus.
+MCP_REQUEST_TIMEOUT_S = float(os.environ.get("MCP_REQUEST_TIMEOUT_S", "300") or 300)
+_HTTP_SEM = asyncio.Semaphore(MCP_MAX_CONCURRENCY)
 MCP_HTTP_TOKEN = os.environ.get("MCP_HTTP_TOKEN", "").strip()
 
 
@@ -275,28 +283,43 @@ async def _router_model_classify(text: str) -> str | None:
 
 # ── Hilfsfunktionen ────────────────────────────────────────────────────────────
 
+class ToolPathError(ValueError):
+    """Pfad liegt ausserhalb des Workspace oder ist unbrauchbar."""
+
+    def __init__(self, message: str, *, path: str = "") -> None:
+        super().__init__(message)
+        self.path = path
+
+
 def _resolve_path(path: str) -> Path:
+    """Pfad innerhalb des Workspace aufloesen - sonst ToolPathError.
+
+    SECURITY (Audit 2026-10-21): frueher wurde ein Pfad ausserhalb des Workspace
+    still auf WORKSPACE/<dateiname> umgeschrieben. Das war gefaehrlich *und*
+    verwirrend: das Tool schrieb irgendwohin, ohne dass der Aufrufer es merkte.
+    Jetzt bricht der Aufruf mit einem klaren Fehler ab.
     """
-    Resolve path safely within WORKSPACE.
-    SECURITY: Path-traversal prevention — all paths must land within WORKSPACE.
-    Even explicitly absolute paths outside WORKSPACE are rejected to prevent
-    unintended writes to system directories.
-    """
-    p = Path(path.strip().strip("'\""))
+    raw = str(path or "").strip().strip("'\"")
+    if not raw:
+        raise ToolPathError("empty path", path=raw)
+    if "\x00" in raw:
+        raise ToolPathError("path contains a NUL byte", path=raw)
+    p = Path(raw)
     if not p.is_absolute():
         p = WORKSPACE / p
-    resolved = p.resolve()
-    
-    # Security FIX: STRICT workspace containment check
-    # Rejects any path (absolute or relative) that escapes WORKSPACE
+    try:
+        resolved = p.resolve()
+    except (OSError, RuntimeError) as exc:     # Symlink-Loop, kaputte Pfade
+        raise ToolPathError(f"cannot resolve path: {exc}", path=raw) from exc
     try:
         resolved.relative_to(WORKSPACE.resolve())
-        return resolved
     except ValueError:
-        # Path escapes WORKSPACE — fall back to making it relative within workspace
-        # This prevents attacks like write_file("C:\Windows\System32\malware.exe")
-        fallback = WORKSPACE / p.name
-        return fallback.resolve()
+        # Absolut ODER per .. aus dem Workspace heraus -> hart ablehnen
+        raise ToolPathError(
+            f"path is outside the workspace ({resolved.name} not inside {WORKSPACE.name})",
+            path=raw,
+        ) from None
+    return resolved
 
 
 def _decode(data: bytes) -> str:
@@ -376,7 +399,33 @@ async def _try_shared_tool_exec(tool_name: str, args: dict) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {str(e)[:220]}"
 
 
-async def _dispatch_tool(tool_name: str, args: dict, local_handler=None) -> str:
+def _audit_tool_call(tool_name: str, transport: str, *, ok: bool,
+                     reason: str = "", elapsed_s: float = 0.0,
+                     result_bytes: int = 0) -> None:
+    """Eine Zeile pro Tool-Aufruf - bei einer IDE-Anbindung die einzige Spur."""
+    try:
+        print(
+            f"[MCP-CALL] transport={transport} tool={tool_name or '?'} "
+            f"ok={bool(ok)} elapsed={elapsed_s:.2f}s bytes={int(result_bytes)}"
+            + (f" denied_reason={reason[:120]}" if reason else ""),
+            file=sys.stderr,
+            flush=True,
+        )
+    except (OSError, ValueError):
+        pass
+
+
+async def _dispatch_tool(tool_name: str, args: dict, local_handler=None,
+                         transport: str = "stdio") -> str:
+    """Zentraler Pfad fuer Tools, die nicht direkt aus tools/call kommen.
+
+    HARDENING (2026-10-21): hier fehlte die Tier-Pruefung komplett - ein
+    Write-Tool war ueber den Routing-Pfad ohne MCP_ALLOW_WRITE erreichbar.
+    """
+    allowed, reason = _tool_allowed(tool_name, transport)
+    if not allowed:
+        _audit_tool_call(tool_name, transport, ok=False, reason=reason)
+        return _tool_error_response("TOOL_NOT_ALLOWED", reason, tool=tool_name)
     if tool_name in _MCP_SHARED_TOOL_NAMES:
         if not MCP_SHARED_TOOL_ENABLED:
             return _tool_error_response(
@@ -1244,13 +1293,20 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
         return ok({"tools": visible})
 
     if method == "tools/call":
-        params    = req.get("params", {})
+        params = req.get("params", {})
+        if not isinstance(params, dict):
+            return err(-32602, "params must be an object")
         tool_name = params.get("name", "")
         args      = params.get("arguments", {})
+        if not isinstance(args, dict):
+            return err(-32602, "arguments must be an object")
+        if not isinstance(tool_name, str) or not tool_name:
+            return err(-32602, "tool name missing")
         if tool_name not in TOOL_FNS:
             return err(-32601, f"Unknown tool: {tool_name}")
         allowed, reason = _tool_allowed(tool_name, transport)
         if not allowed:
+            _audit_tool_call(tool_name, transport, ok=False, reason=reason)
             return err(-32001, f"TOOL_NOT_ALLOWED: {reason}")
         t0 = time.time()
         is_error = False
@@ -1268,6 +1324,14 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
                 )
             else:
                 result = await TOOL_FNS[tool_name](args)
+        except ToolPathError as e:
+            is_error = True
+            err_meta = {"code": "PATH_OUTSIDE_WORKSPACE",
+                        "message": str(e)[:240], "tool": tool_name,
+                        "path": str(getattr(e, "path", ""))[:200], "retryable": False}
+            result = _tool_error_response(err_meta["code"], err_meta["message"],
+                                          tool=tool_name, retryable=False,
+                                          details={"path": err_meta["path"]})
         except Exception as e:
             is_error = True
             err_meta = {
@@ -1284,6 +1348,10 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
                 err_meta = parsed
             elif _looks_like_error_text(str(result)):
                 is_error = True
+        _audit_tool_call(tool_name, transport, ok=not is_error,
+                         reason=(err_meta or {}).get("code", "") if is_error else "",
+                         elapsed_s=time.time() - t0,
+                         result_bytes=len(str(result).encode("utf-8", "replace")))
         return ok({
             "content": [{"type": "text", "text": str(result)}],
             "isError": is_error,
@@ -1326,16 +1394,21 @@ async def _find_router_model():
 
 def _make_stdio_notifier():
     """Progress notifier for stdio (server -> client notifications)."""
+    lock = threading.Lock()
+
     def _notify(params: dict):
+        # HARDENING: Progress und Antworten teilen sich stdout - ohne Lock
+        # koennen zwei Schreiber eine Zeile vermischen und der Client bricht ab.
         try:
             _out = (json.dumps(
                 {"jsonrpc": "2.0", "method": "notifications/progress", "params": params},
                 ensure_ascii=False,
             ) + "\n").encode("utf-8")
-            sys.stdout.buffer.write(_out)
-            sys.stdout.buffer.flush()
-        except Exception:
-            pass
+            with lock:
+                sys.stdout.buffer.write(_out)
+                sys.stdout.buffer.flush()
+        except (OSError, ValueError) as exc:
+            print(f"[MCP-stdio] notify failed: {exc}", file=sys.stderr)
     return _notify
 
 
@@ -1358,11 +1431,19 @@ async def _stdio_loop():
             line = await loop.run_in_executor(None, _readline)
             if not line:
                 break
-            buf += line.decode("utf-8", errors="replace")
-            if len(buf) > _buf_max:
-                print(f"[MCP-stdio] Buffer overflow ({len(buf)} bytes) — reset", file=sys.stderr)
+            text = line.decode("utf-8", errors="replace")
+            if len(text) > _buf_max:
+                # HARDENING: eine zu lange Zeile wird verworfen und beantwortet -
+                # frueher wurde der Puffer komplett resettet (Request verloren).
+                print(f"[MCP-stdio] request line too long ({len(text)} bytes) - dropped",
+                      file=sys.stderr)
+                _bad = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+                    "code": -32600, "message": f"request too large (max {_buf_max} bytes)"}})
+                await loop.run_in_executor(None, _writeline,
+                                           (_bad + "\n").encode("utf-8"))
                 buf = ""
                 continue
+            buf += text
             try:
                 req = json.loads(buf.strip())
                 buf = ""
@@ -1388,6 +1469,14 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 if not chunk:
                     break
                 raw += chunk
+                if len(raw) > MCP_MAX_HEADER_BYTES:
+                    print(f"[MCP-HTTP] header block too large ({len(raw)} bytes) - closing",
+                          file=sys.stderr)
+                    writer.write(b"HTTP/1.1 431 Request Header Fields Too Large\r\n"
+                                 b"Content-Length: 0\r\n\r\n")
+                    await writer.drain()
+                    writer.close()
+                    return
         except asyncio.TimeoutError:
             writer.close()
             return
@@ -1439,7 +1528,11 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             await writer.drain(); writer.close(); return
 
         if method == "POST" and path == "/mcp":
-            content_length = int(headers.get("content-length", len(body_part)))
+            try:
+                content_length = int(headers.get("content-length", len(body_part)) or 0)
+            except (TypeError, ValueError):
+                writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain(); writer.close(); return
             if content_length < 0 or content_length > MCP_MAX_BODY_BYTES:
                 resp_body = json.dumps({
                     "jsonrpc": "2.0",
@@ -1478,11 +1571,31 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 )
                 await writer.drain(); writer.close(); return
 
+            async def _run_one(item):
+                try:
+                    if MCP_REQUEST_TIMEOUT_S > 0:
+                        return await asyncio.wait_for(handle_request(item, "http"),
+                                                      timeout=MCP_REQUEST_TIMEOUT_S)
+                    return await handle_request(item, "http")
+                except asyncio.TimeoutError:
+                    rid = item.get("id") if isinstance(item, dict) else None
+                    return {"jsonrpc": "2.0", "id": rid,
+                            "error": {"code": -32000,
+                                      "message": f"request timed out after {MCP_REQUEST_TIMEOUT_S:.0f}s"}}
+
             if isinstance(req, list):
-                resps = [r for r in [await handle_request(x, "http") for x in req] if r is not None]
-                resp_body = json.dumps(resps, ensure_ascii=False).encode()
+                if len(req) > MCP_MAX_BATCH:
+                    resp_body = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+                        "code": -32600,
+                        "message": f"batch too large ({len(req)} > {MCP_MAX_BATCH})",
+                    }}).encode()
+                else:
+                    async with _HTTP_SEM:
+                        resps = [r for r in [await _run_one(x) for x in req] if r is not None]
+                    resp_body = json.dumps(resps, ensure_ascii=False).encode()
             else:
-                resp = await handle_request(req, "http")
+                async with _HTTP_SEM:
+                    resp = await _run_one(req)
                 if resp is None:
                     writer.write(f"HTTP/1.1 202 Accepted\r\n{cors}Content-Length: 0\r\n\r\n".encode())
                     await writer.drain(); writer.close(); return

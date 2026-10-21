@@ -83,6 +83,8 @@ def _record_run(run_record: dict) -> None:
             "phases_ms": dict(run_record.get("phases_ms") or {}),
             "ui_mode": str(run_record.get("ui_mode") or ""),
             "mode": str(run_record.get("mode") or ""),
+            # EDITOR-CONTEXT (2026-10-21): did an IDE feed this run, and how much
+            "editor": (dict(run_record.get("editor")) if isinstance(run_record.get("editor"), dict) else None),
         }
         day_entry.setdefault("run_list", []).append(_run)
         if len(day_entry["run_list"]) > 500:

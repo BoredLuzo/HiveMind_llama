@@ -157,7 +157,36 @@ enc = FakeEncoder("agentic", 0.99, planner="yes")
 cost["n"] = 0
 d = D.resolve(settings(routing_decider="on", routing_judge="on"), CODE, encoder=enc, judge_call=judge3)
 check("planner=auto keeps the GPU quiet when the decider runs",
-      cost["n"] == 0 and d.planner is True, f"(judge calls {cost['n']})")
+      cost["n"] == 0, f"(judge calls {cost['n']})")
+check("planner=auto uses the local heuristic (single-file fix -> no plan)",
+      d.planner is False, f"(planner={d.planner})")
+
+# Heuristik liefert die richtigen Antworten fuer die typischen Faelle
+for _text, _want in (
+    ("compile a complete path tracer in Rust, multi-file", True),
+    ("rename the variable foo to bar in main.rs", False),
+    ("fix the typo recieve in README.md", False),
+    ("the game stutters when spawning enemies and collisions jump around", True),
+    ("change the default port from 8000 to 8080 in config.py", False),
+):
+    check(f"heuristic planner: {_text[:40]}", D.heuristic_planner(_text) is _want,
+          f"(got {D.heuristic_planner(_text)}, want {_want})")
+
+
+# ── shadow must not silence the judge ────────────────────────────────────
+# Live-Fund (2026-10-20): in shadow mode war die Judge-Frage "schon beantwortet",
+# weil der Encoder eine sichere Route lieferte - der Judge lief nicht, die
+# Entscheidung fiel auf die Regeln zurueck (source=rule).
+seen_shadow = {"n": 0}
+def judge_shadow(text):
+    seen_shadow["n"] += 1
+    return "complex", 0.0
+enc = FakeEncoder("agentic", 0.99)
+d = D.resolve(settings(routing_decider="shadow", routing_judge="on"), CODE,
+              encoder=enc, judge_call=judge_shadow)
+check("shadow: judge still decides (not the rules)",
+      d.source == "judge" and seen_shadow["n"] == 1,
+      f"({d.source}, judge calls {seen_shadow['n']})")
 
 print()
 print(f"SUMMARY routing_decider: {passed} passed, {failed} failed")

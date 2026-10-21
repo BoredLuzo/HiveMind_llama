@@ -174,7 +174,7 @@ class RunBridge:
 
     # -- the run -----------------------------------------------------------
 
-    async def start_text_run(self, q: str) -> str:
+    async def start_text_run(self, q: str, from_voice: bool = False) -> str:
         """Returns the final chat note (for tests); sends everything to the
         phone itself. Never raises to the caller. httpx.HTTPError is
         caught as belt-and-braces - hive_client normally wraps transport
@@ -188,7 +188,7 @@ class RunBridge:
             return ("⏳ A run is already active - /stop aborts it.")
         async with self._run_lock:
             try:
-                return await self._start_text_run_inner(q)
+                return await self._start_text_run_inner(q, from_voice=from_voice)
             except (HiveUnreachable, HTTPError, OSError) as exc:
                 self._clear_run()
                 return await self._fail(f"🔌 HiveMind unreachable "
@@ -406,7 +406,7 @@ class RunBridge:
         except (ValueError, TypeError):
             return False
 
-    async def _start_text_run_inner(self, q: str) -> str:
+    async def _start_text_run_inner(self, q: str, from_voice: bool = False) -> str:
         if self.state.data.get("active_run"):
             if self._active_run_fresh_unconfirmed():
                 # fresh starting window (POST /stream sent, run_id not yet
@@ -465,8 +465,17 @@ class RunBridge:
         _ov_model = (self.state.data.get("run_overrides") or {}).get("model")
         _eff = _sel or (_s.get("mode") if isinstance(_s, dict) else "") \
             or "auto"
+        if from_voice and not _sel:
+            # the engine decides the route for a spoken note
+            _eff = "auto"
         _eff_label = f"{_eff} (phone override)" if _sel else _eff
-        if _eff in ("simple", "chat", "direct"):
+        if from_voice and not _sel:
+            _eff_label = "auto (HiveMind decides)"
+        if from_voice and not _sel and not _ov_model:
+            _model_line = ("model: follows the route "
+                           f"(direct: {_direct_mdl or 'engine default'} / "
+                           f"agentic: {_coder_mdl or 'engine default'})")
+        elif _eff in ("simple", "chat", "direct"):
             _model_line = f"model: {_ov_model or _direct_mdl or 'engine default'}"
         elif _ov_model:
             _model_line = f"model: {_ov_model} (planner + coder)"
@@ -539,6 +548,19 @@ class RunBridge:
                 # composite: engine mode "auto" + the agentic body flag
                 stream_mode = "auto"
                 ov["duo_agentic_mode"] = True
+            elif from_voice and not sel_mode:
+                # VOICE-DECIDER (2026-10-21): a spoken note carries no mode.
+                # Without this it ran as settings["mode"] (code_duo) - so
+                # "what time is it" started a coder run. "auto" lets the
+                # engine's decider pick the route, and the route picks the
+                # model (direct -> direct model, agentic -> planner/coder).
+                stream_mode = "auto"
+                ov["source"] = "telegram-voice"
+                # The engine short-circuits mode="auto" to code_duo whenever
+                # settings["duo_agentic_mode"] is true (chat_run.py:1322).
+                # An explicit False keeps the decider in charge for a spoken
+                # note without touching the owner's saved preference.
+                ov["duo_agentic_mode"] = False
             async for ev in self.hive.stream(q, chat_id,
                                              mode=stream_mode,
                                              overrides=ov):

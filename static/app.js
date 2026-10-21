@@ -10645,6 +10645,28 @@ function togglePlannerUseCoderCtx(on) {
   updateCtxScopeHint();
 }
 
+// CONTEXT-SLOT (2026-10-20): die Context-Felder leben in der Advanced-Leiste,
+// gehoeren aber sichtbar in die Code/Agentic-Karte. Wir merken uns den
+// Ursprungsplatz einmalig und schieben sie bei Bedarf hin und zurueck.
+function _ctxMoveTo(wrap, target) {
+  if (!wrap || !target) return;
+  if (!wrap.dataset.ctxOrigin) {
+    S._ctxOrig = S._ctxOrig || {};
+    S._ctxOrig[wrap.id] = {parent: wrap.parentNode, next: wrap.nextSibling};
+    wrap.dataset.ctxOrigin = '1';
+  }
+  if (wrap.parentNode !== target) target.appendChild(wrap);
+}
+
+function _ctxRestore(wrap) {
+  if (!wrap) return;
+  var orig = (S._ctxOrig || {})[wrap.id];
+  if (!orig || !orig.parent) return;
+  if (wrap.parentNode !== orig.parent) {
+    try { orig.parent.insertBefore(wrap, orig.next || null); } catch (e) { orig.parent.appendChild(wrap); }
+  }
+}
+
 function updateCtxScopeHint() {
   var agWrap = document.getElementById('wrapper-ctx-agentic');
   var noWrap = document.getElementById('wrapper-ctx-normal');
@@ -10668,11 +10690,22 @@ function updateCtxScopeHint() {
   var isUF = S.duoUntilFinished;
   var plannerUseCoder = S.duoPlannerUseCoderCtx !== false; // default true
   
+  var _slot = document.getElementById('code-ctx-slot');
+  if (!isAgentic) {
+    _ctxRestore(agWrap);
+    if (plTog) _ctxRestore(plTog);
+    if (plWrap) _ctxRestore(plWrap);
+  }
   if (isAgentic) {
-    // agentic mode: coder + planner
+    // agentic mode: coder + planner - direkt in der Code/Agentic-Karte
     agWrap.style.display = 'block';
     if (plTog) plTog.style.display = 'block';
     if (plWrap) plWrap.style.display = 'block';
+    if (_slot) {
+      _ctxMoveTo(agWrap, _slot);
+      if (plTog) _ctxMoveTo(plTog, _slot);
+      if (plWrap) _ctxMoveTo(plWrap, _slot);
+    }
     
     var coderCtx = _ctxNum('duo-ctx-agentic', 16384);
     var plannerCtx = plannerUseCoder ? coderCtx : _ctxNum('duo-ctx-planner', 16384);

@@ -446,6 +446,16 @@ def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ct
             sys_prompt = sys_prompt.rstrip() + "\n\n" + _env_line
     except Exception:
         pass
+    # EDITOR CONTEXT (2026-10-21): open file/selection from the IDE. Appended
+    # last so the runtime line stays adjacent to the rest of the environment
+    # info; prefix-cache-safe because it is built once per run.
+    try:
+        from infra import editor_context as _ec_mod
+        _ec_block = _ec_mod.context_block_for(getattr(ctx, "workspace", "") or None)
+        if _ec_block:
+            sys_prompt = sys_prompt.rstrip() + "\n\n" + _ec_block
+    except (ImportError, AttributeError, TypeError, ValueError):
+        pass
     return sys_prompt
 
 

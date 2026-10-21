@@ -29,25 +29,6 @@ async def _get_llm_client() -> httpx.AsyncClient:
                 timeout=httpx.Timeout(connect=5.0, read=300.0, write=5.0, pool=2.0),
             )
         return _llm_client
-
-
-def _fallback_explore_prompt(label, workspace, paths, tree_ctx=""):
-    path_list = "\n".join(f"  {i+1}. {p}" for i, p in enumerate(paths))
-    tree_hint = "\nWorkspace tree provided. Use read_file DIRECTLY.\n" if tree_ctx else ""
-    return (
-        f"Explore partition '{label}' in {workspace}.\n{tree_hint}"
-        f"Read ALL files below. Then write CONTRACT in TOML:\n\nFiles:\n{path_list}\n\n"
-        "```toml\n[contract]\n"
-        f'partition = "{label}"\n'
-        'entry_points = ["main.py"]\nfiles_read = ["..."]\nexports = ["..."]\n'
-        'imports_needed = ["..."]\ntouched_by_task = true/false\n'
-        "complexity_score = 0.0-1.0\n"
-        'hint = "key insight"\n\n'
-        '[[plan]]\nstep = 1\nfile = "..."\naction = "..."\n```\n'
-        "IMPORTANT: Read ALL files before writing CONTRACT.\n"
-    )
-
-
 def _needs_no_think(model_name: str) -> bool:
 
 

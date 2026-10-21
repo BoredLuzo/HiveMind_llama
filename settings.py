@@ -117,11 +117,10 @@ DEFAULT_SETTINGS = {
     #   always | never  = Planner immer / nie
     "routing_planner":          "auto",
     "routing_decider_model":    "fastino/GLiNER2.5-Decide",
-    # Unter dieser Konfidenz geht die Route an den Judge (falls aktiv), sonst Regeln.
-    "routing_decider_threshold": 0.85,
-    # Nur fuer die Pipeline relevant: der Decider waehlt nie pipeline, damit
-    # ein Sachtext nicht vier LLM-Calls ausloest.
-    "routing_pipeline_allowed": False,
+    # Unter dieser Konfidenz wird die Entscheidung als unsicher markiert (und geht
+    # an den Judge, falls aktiv). Kalibriert auf die Multi-Label-Aktions-Labels:
+    # Treffer lagen bei 0,49-0,92 (Median 0,72) - 0,85 haette fast alles eskaliert.
+    "routing_decider_threshold": 0.55,
     "duo_agentic_thinking":    False,
     "_thinking_before_chunking": None,  # persisted user-preference before chunking forced thinking ON
     # Explizit in DEFAULT_SETTINGS aufgedeckte Automatik-/Override-Keys
@@ -552,6 +551,9 @@ DEFAULT_SETTINGS = {
     #   {"name": "...", "command": "npx", "args": ["-y", "@playwright/mcp@latest"]}   (stdio)
     #   {"name": "...", "url": "http://localhost:9000/mcp"}                            (streamable HTTP)
     # as additional tools.
+    # RESERVED (2026-10-21): config for MCP *clients* HiveMind may call
+    # (e.g. an IDE exposing editor context). Nothing reads it yet; kept so
+    # preset snapshots stay stable until the client lands.
     "mcp_servers":             [],
     "soul_evolve_agent": {
         "enabled":     False,

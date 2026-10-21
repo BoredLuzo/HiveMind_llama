@@ -38,6 +38,7 @@ from context.chat_util import (
 from context.compression import SESSION_COMPRESS_THRESHOLD
 from infra.phase_timer import PhaseTimer
 from routing import decider as _routing_decider
+from infra import editor_context as _editor_ctx
 from infra.token_stats import _estimate_tokens_from_content
 from utils.math import percentile_float as _percentile_float
 from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
@@ -156,6 +157,17 @@ async def run_stream(
         duo_config = DuoConfig()
 
     _ui_mode_entry = mode   # MODE-TRACKING: `mode` wird spaeter ueberschrieben
+    # EDITOR CONTEXT (2026-10-21): what the IDE has open right now. The block
+    # itself goes into the prompts (chat_util / duo_helpers); here we only keep
+    # the summary for the run record.
+    _editor_meta = _editor_ctx.context_meta_for()
+    if _editor_meta:
+        logger.info("[EDITOR-CONTEXT] run carries editor context: file=%s "
+                    "selection=%d chars diagnostics=%d age=%.0fs",
+                    _editor_meta.get("file") or "-",
+                    int(_editor_meta.get("selection_chars") or 0),
+                    int(_editor_meta.get("diagnostics") or 0),
+                    float(_editor_meta.get("age_s") or 0))
     logger.warning(
         "[RUN-ENTRY] mode=%s agentic=%s pre_explore=%s planner=%s chunking=%s "
         "chat_id=%s force=%s until_finished=%s coding_mode=%s",
@@ -415,6 +427,8 @@ async def run_stream(
                     # the UI requested - pipeline/direct/code_duo are the routes.
                     "mode": _route_for_stats,
                     "ui_mode": str(_ui_mode_entry or ""),
+                    # EDITOR-CONTEXT (2026-10-21)
+                    "editor": _editor_meta,
                 },),
                 daemon=True,
             ).start()
@@ -1336,12 +1350,17 @@ async def run_stream(
         else:
             _word_count = len(user_input.split())
             _va_wants_pipeline = (settings.get("vision_agent_enabled", False) and bool(images))
-            if _prepro_success and _word_count <= 12 and _task_type in (
-                    "general", "creative", "factual", "reasoning") and not _va_wants_pipeline:
+            _decider_active = _routing_decider.normalise_mode(
+                _run_settings.get("routing_decider")) != "off"
+            if (not _decider_active and _prepro_success and _word_count <= 12
+                    and _task_type in ("general", "creative", "factual", "reasoning")
+                    and not _va_wants_pipeline):
                 complexity = "simple"
                 _complexity_source = "shortcut"
                 _effective_task_type = "factual"
-            elif not _prepro_success and _task_type in ("general", "creative") and _word_count <= 6 and not _va_wants_pipeline:
+            elif (not _decider_active and not _prepro_success
+                    and _task_type in ("general", "creative") and _word_count <= 6
+                    and not _va_wants_pipeline):
                 complexity = "trivial"
                 _complexity_source = "shortcut"
             else:
@@ -1358,7 +1377,10 @@ async def run_stream(
         else:
             _word_count = len(user_input.split())
             _va_wants_pipeline = (settings.get("vision_agent_enabled", False) and bool(images))
-            if _task_type in ("general", "creative") and _word_count <= 10 and not _va_wants_pipeline:
+            _decider_active = _routing_decider.normalise_mode(
+                _run_settings.get("routing_decider")) != "off"
+            if (not _decider_active and _task_type in ("general", "creative")
+                    and _word_count <= 10 and not _va_wants_pipeline):
                 complexity = "trivial"
                 _complexity_source = "shortcut"
             else:

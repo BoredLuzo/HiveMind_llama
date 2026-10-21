@@ -1,4 +1,59 @@
 # Changelog
+## [1.4.6] - 2026-10-21
+
+### Routing decider (no GPU judge needed)
+
+- One decision engine (`decide_from_signals`) for both the sync and the async
+  path - the precedence logic used to exist twice.
+- The encoder now classifies **concrete actions** (`asks_a_question`,
+  `write_new_file`, `edit_existing_code`, `debug_a_problem`, ...) instead of
+  abstract `direct|agentic`: 14/14 on the probe set vs 9-10/14, ~630 ms per
+  decision (one forward pass for route + planner).
+- The plan decision is a local heuristic (no model, 11/12 on the probe set);
+  `routing_planner` gained `heuristic` as a value and `auto` now means it.
+- Threshold calibrated to the new score range (0.55, was 0.85 - that escalated
+  almost everything); `latency_ms` reports inference time, not model load.
+- Fixed: `shadow` mode no longer silences the judge; the short-prompt shortcut
+  no longer bypasses the decider (a 9-word code task used to run as chat).
+
+### IDE integration
+
+- New `POST/GET/DELETE /context/editor`: an IDE reports the open file,
+  selection and diagnostics (per workspace, 300 s TTL, 4k char selection cap).
+- The block reaches the prompts (direct/pipeline via `_make_messages`, agentic
+  via the duo coder prompt) and the run record only keeps a summary
+  (`file`, `selection_chars`, `diagnostics`) - never the code.
+- MCP server hardened: paths outside the workspace are rejected
+  (`PATH_OUTSIDE_WORKSPACE`) instead of silently rewritten; the governance tiers
+  are enforced on every dispatch path; header (32 KB), body (2 MB), concurrency
+  (8), batch (16) and request-timeout (300 s) limits; stdio answers an oversized
+  line instead of dropping it; per-call audit line (`[MCP-CALL] ...`).
+- `/internal/tool/exec` (the endpoint MCP and IDEs proxy into) got a loopback
+  host guard and requires `HIVEMIND_INTERNAL_TOKEN` for exec tools; read/write
+  stay available, the workspace lock is server-side.
+- Docs: `docs/mcp.md` (both directions, tiers, limits, env reference).
+
+### Telegram
+
+- `/help` is generated from the command spec, so every command is listed
+  (22 instead of the curated subset) and ships an inline keyboard: tapping a
+  command runs it - it never starts a run.
+- A command that needs a value asks first; the next message is the value,
+  `stop` cancels.
+- Voice notes now go through the decider: `mode=auto` plus an explicit
+  `duo_agentic_mode=false`, so a spoken note is not forced into a coder run.
+
+### Cleanup
+
+- Removed dead code (`_maybe_add_until_finished_block`,
+  `reset_read_guard_after_compression`, `_fallback_explore_prompt`,
+  `wait_approval_decision`, `reset_to_base_configs`) and the never-read
+  `routing_pipeline_allowed` setting; `mcp_servers` is marked reserved.
+- `deploy/recommend_models.py`: suggests a start config from the detected
+  VRAM/RAM plus the measured tok/s per model.
+- `model_configs/models/spark-x2.6_4b.json` for Spark-X2.6 (4B, Q4_K_M).
+- Docs: profile-naming example clarified, roadmap corrections (no
+  `deploy/fetch_tts.py`, `core/sidecar.py` not built, `RESULTS.md` not shipped).
 
 ## [1.4.5] - 2026-10-20
 

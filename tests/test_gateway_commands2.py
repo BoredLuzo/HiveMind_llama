@@ -104,7 +104,7 @@ class FakeHive:
 class FakeBridge(RunBridge):
     """Bridge stub: records requested runs, sends nothing."""
 
-    async def start_text_run(self, q):
+    async def start_text_run(self, q, **kwargs):   # from_voice=... is new
         if not hasattr(self, "runs"):
             self.runs = []
         self.runs.append(q)

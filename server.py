@@ -101,7 +101,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.4.5"
+HIVEMIND_VERSION = "1.4.6"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -179,18 +179,6 @@ from tools.websearch import (
 )
 
 _state._safe_web_search = _safe_web_search
-
-
-def _maybe_add_until_finished_block(base_prompt: str, until_finished: bool) -> str:
-    """Appends the Until-Finished instruction block to the coder prompt when active."""
-    if not until_finished:
-        return base_prompt
-    return base_prompt + UNTIL_FINISHED_BLOCK
-
-
-
-
-
 # ─── Parallel Pre-Explore ───────────────────────────────────────────────────────
 async def _bk_tags() -> list[str]:
     """All available models."""
@@ -208,6 +196,7 @@ from fastapi.staticfiles import StaticFiles
 from routers import automap_router
 from routers import chats_router
 from routers import config_router
+from routers import context_router
 from routers import core_router
 from routers import git_router
 from routers import learning_router
@@ -246,7 +235,6 @@ from hive_functions.prompts import (
     VISION_PREPROCESS_PROMPT,
     build_partition_explore_prompt,
     EXPLORE_CODEBASE_PROMPT,
-    UNTIL_FINISHED_BLOCK,
     DUO_CRITIC_TOOLS_SYSTEM,
 )
 
@@ -993,12 +981,6 @@ def apply_learned_configs_for_run():
             pipeline.agents[agent_key].temperature = float(cfg["temperature"])
         if "max_tokens" in cfg:
             pipeline.agents[agent_key].max_tokens  = int(cfg["max_tokens"])
-
-def reset_to_base_configs():
-    """Resets pipeline agents to settings.json values when learning mode is off."""
-    apply_settings_to_pipeline(settings)
-
-
 def get_effective_prompt_with_override(agent_key, preset_name, use_learned):
     if use_learned:
         model_name = registry_get(agent_key)
@@ -2404,6 +2386,7 @@ async def gateway_stop():
 app.include_router(automap_router)
 app.include_router(chats_router)
 app.include_router(config_router)
+app.include_router(context_router)
 app.include_router(core_router)
 # DEBUG-GATE (2026-10-18): the debug endpoints leak internals (asyncio task
 # stacks, registry paths) on an unauthenticated API - mount them only when

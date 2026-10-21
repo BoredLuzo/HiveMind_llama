@@ -1,4 +1,5 @@
 """Core API-Router — Abort, Resume, Tool-Exec."""
+import time as _time
 import logging
 import os
 from pathlib import Path
@@ -259,6 +260,42 @@ async def approval_decide(run_id: str, req: Request):
     return {"routed": "preview", "run_id": run_id}
 
 
+# ── INTERNAL-EXEC-HARDENING (2026-10-21) ─────────────────────────────────
+# Der Endpunkt ist der Weg, den MCP/IDE nehmen. Shell-Rechte duerfen dort nicht
+# allein am Fehlen eines Tokens haengen.
+_INTERNAL_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+_INTERNAL_EXEC_TOOLS = {"run_bash", "shell", "run_python"}
+
+
+def _internal_host_allowed(host_header: str) -> bool:
+    """Loopback-only (wie der MCP-HTTP-Guard), um DNS-Rebinding zu blocken."""
+    h = str(host_header or "").strip().lower()
+    if not h:
+        return True          # HTTP/1.0-Clients ohne Host: kein Rebinding-Vektor
+    if h.startswith("["):
+        host = h.split("]", 1)[0].lstrip("[")
+    elif h.count(":") > 1:
+        host = h
+    else:
+        host = h.rsplit(":", 1)[0] if ":" in h else h
+    allowed = set(_INTERNAL_LOOPBACK_HOSTS)
+    for extra in os.environ.get("MCP_HTTP_EXTRA_HOSTS", "").split(","):
+        extra = extra.strip().lower()
+        if extra:
+            allowed.add(extra)
+    return host in allowed
+
+
+def _internal_exec_allowed(tool_name: str) -> tuple[bool, str]:
+    """Exec-Tools nur mit konfiguriertem Shared-Secret."""
+    if str(tool_name or "") not in _INTERNAL_EXEC_TOOLS:
+        return True, ""
+    if os.environ.get("HIVEMIND_INTERNAL_TOKEN", "").strip():
+        return True, ""      # Token wurde im Handler bereits geprueft
+    return False, ("exec tools are disabled over HTTP without HIVEMIND_INTERNAL_TOKEN "
+                   "(read/write tools stay available)")
+
+
 @router.post("/internal/tool/exec")
 async def internal_tool_exec(req: Request):
     try:
@@ -273,6 +310,16 @@ async def internal_tool_exec(req: Request):
     args = body.get("args", {})
     if not isinstance(args, dict):
         return JSONResponse({"ok": False, "error": "args must be an object"}, status_code=400)
+
+    _t_start = _time.time()
+    if not _internal_host_allowed(req.headers.get("host", "")):
+        logger.warning("[INTERNAL-EXEC] rejected: non-loopback Host %r (tool=%s)",
+                        req.headers.get("host", ""), name)
+        return JSONResponse({"ok": False, "error": "Host not allowed"}, status_code=403)
+    _exec_ok, _exec_reason = _internal_exec_allowed(name)
+    if not _exec_ok:
+        logger.warning("[INTERNAL-EXEC] rejected: tool=%s reason=%s", name, _exec_reason)
+        return JSONResponse({"ok": False, "error": _exec_reason}, status_code=403)
 
     tool_mode = str(body.get("tool_mode", "mcp_agent") or "mcp_agent")
     include_websearch = bool(body.get(
@@ -313,6 +360,9 @@ async def internal_tool_exec(req: Request):
         finally:
             _ext_cv.reset(_ext_token)
         terr = _parse_tool_error(result)
+        logger.info("[INTERNAL-EXEC] tool=%s ok=%s elapsed=%.2fs bytes=%d",
+                     name, terr is None, _time.time() - _t_start,
+                     len(str(result).encode("utf-8", "replace")))
         return {"ok": terr is None, "result": result, "tool_error": terr}
     except Exception as e:
         return JSONResponse(

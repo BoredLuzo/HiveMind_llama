@@ -333,9 +333,11 @@ class Gateway:
     # -- outbound (always via send()) ------------------------------------
 
     async def reply(self, chat_id: str | int, text: str,
-                    reply_to_message_id: int | None = None) -> None:
+                    reply_to_message_id: int | None = None,
+                    reply_markup: dict | None = None) -> None:
         await gw_send.send(self.api, self.owner_id, chat_id, text=text,
-                           reply_to_message_id=reply_to_message_id)
+                           reply_to_message_id=reply_to_message_id,
+                           reply_markup=reply_markup)
 
     # -- messenger interface for the bridge (owner-addressed by policy) --
 
@@ -360,7 +362,91 @@ class Gateway:
 
     # -- commands ---------------------------------------------------------
 
-    async def handle_owner_update(self, p: gw_auth.ParsedUpdate) -> None:
+    # ── pending command (ask-back for missing values, 2026-10-21) ──────
+    def _pending_clear(self) -> None:
+        self._pending_cmd = None
+
+    def _pending_get(self) -> dict | None:
+        """Active pending command or None (expires after 5 minutes)."""
+        pend = getattr(self, "_pending_cmd", None)
+        if not pend:
+            return None
+        if time.time() - float(pend.get("ts") or 0) > 300:
+            self._pending_cmd = None
+            return None
+        return pend
+
+    async def _ask_command_arg(self, p, name: str) -> None:
+        """Ask for the missing value instead of running with an empty one."""
+        self._pending_cmd = {"name": name, "ts": time.time()}
+        await self.reply(
+            p.chat_id, gw_commands.param_hint(name),
+            reply_to_message_id=p.message_id,
+            reply_markup={"inline_keyboard": [[
+                {"text": "✖ Cancel", "callback_data": "cmdcancel"}]]},
+        )
+
+    async def _dispatch_named(self, p, name: str, arg: str = "") -> None:
+        """Run a command by name through the normal typed-command path."""
+        text = f"/{name}" + (f" {arg}" if arg else "")
+        synth = gw_auth.ParsedUpdate(
+            update_id=p.update_id, kind="message", from_id=p.from_id,
+            chat_id=p.chat_id, chat_type=p.chat_type, text=text,
+            date=p.date, is_forwarded=False, message_id=p.message_id,
+            callback_id=None)
+        await self.handle_owner_update(synth, _internal=True)
+
+    async def handle_command_callback(self, p) -> None:
+        """A tap on a /help button: dispatch as a command, never as a prompt."""
+        data = str(p.text or "")
+        if data == "cmdcancel":
+            self._pending_clear()
+            if p.callback_id:
+                try:
+                    await self.api.answer_callback_query(p.callback_id,
+                                                         text="Cancelled")
+                except TelegramApiError as exc:
+                    log.warning("[HELP] toast failed: %s", exc)
+            return
+        name = data.split(":", 1)[1].strip().lower() if ":" in data else ""
+        if name not in gw_commands.COMMAND_WHITELIST:
+            log.info("[HELP] unknown command callback %r", data)
+            return
+        if p.callback_id:
+            try:
+                await self.api.answer_callback_query(p.callback_id,
+                                                     text=f"/{name}")
+            except TelegramApiError as exc:
+                log.warning("[HELP] toast failed: %s", exc)
+        if name == "help":
+            await self.reply(p.chat_id, gw_commands.HELP_TEXT,
+                             reply_markup=gw_commands.help_keyboard())
+            return
+        await self._dispatch_named(p, name, "")
+
+    async def _run_pending_as_arg(self, p) -> bool:
+        """Pending command + a plain message = the value. True if consumed."""
+        pend = self._pending_get()
+        if not pend or p is None or p.kind != "message":
+            return False
+        if p.is_forwarded or p.voice_file_id:
+            return False
+        value = str(p.text or "").strip()
+        if not value or value.startswith("/"):
+            return False
+        self._pending_clear()
+        if gw_commands.is_cancel(value):
+            await self.reply(p.chat_id, "🛑 Cancelled.",
+                             reply_to_message_id=p.message_id)
+            return True
+        await self._dispatch_named(p, str(pend["name"]), value)
+        return True
+
+
+    async def handle_owner_update(self, p: gw_auth.ParsedUpdate,
+                                  _internal: bool = False) -> None:
+        if not _internal and await self._run_pending_as_arg(p):
+            return
         cmd = gw_commands.command_from_message(p)
         if cmd is None:
             if p.kind == "message" and p.voice_file_id:
@@ -384,6 +470,10 @@ class Gateway:
                                  reply_to_message_id=p.message_id)
             return
         name, arg = cmd
+        if not arg and gw_commands.wants_arg_first(name):
+            # ASK-BACK (2026-10-21): never run a command that needs a value
+            # with an empty one - ask, then take the value as the next message.
+            return await self._ask_command_arg(p, name)
         if name == "pair":
             await self.cmd_pair(p, arg)
         elif name == "start":
@@ -393,7 +483,8 @@ class Gateway:
                              reply_to_message_id=p.message_id)
         elif name == "help":
             await self.reply(p.chat_id, gw_commands.HELP_TEXT,
-                             reply_to_message_id=p.message_id)
+                             reply_to_message_id=p.message_id,
+                             reply_markup=gw_commands.help_keyboard())
         elif name == "new":
             await self._owner_bridge_call(p, self.bridge.new_chat())
         elif name == "shutdown":
@@ -684,6 +775,12 @@ class Gateway:
             chat_id=p.chat_id, chat_type=p.chat_type,
             text=transcript, date=p.date, is_forwarded=p.is_forwarded,
             message_id=p.message_id, callback_id=p.callback_id)
+        # VOICE-DECIDER (2026-10-21): mark the run as spoken, so the bridge can
+        # let the engine decide mode + model instead of the configured default.
+        try:
+            voiced.from_voice = True
+        except AttributeError:      # slots/frozen dataclass: harmless
+            pass
         await self.start_owner_run(voiced)
 
     async def start_owner_run(self, p: gw_auth.ParsedUpdate) -> None:
@@ -722,7 +819,8 @@ class Gateway:
         # then always resolved via the fail-closed timeout, never the
         # owner). Commands/intercepts above stay synchronous on purpose.
         async def _own_run_task() -> None:
-            note = await self.bridge.start_text_run(q)
+            note = await self.bridge.start_text_run(
+                q, from_voice=bool(getattr(p, "from_voice", False)))
             if note and note.startswith(("⏳", "🔌", "❌")):
                 await self.reply(p.chat_id, note,
                                  reply_to_message_id=p.message_id)
@@ -862,7 +960,10 @@ async def process_update(gw: Gateway, raw: dict) -> None:
             # callback_data 'appr:<rid>:<1|2|3>'. Taps count toward the
             # rate limit (20/min is plenty); the toast answers via
             # answerCallbackQuery.
-            if p.text.startswith("appr:"):
+            if p.text.startswith("cmd:") or p.text == "cmdcancel":
+                # /help buttons: a tap runs the COMMAND, never a prompt
+                await gw.handle_command_callback(p)
+            elif p.text.startswith("appr:"):
                 note = await gw.bridge.approval_callback(p.callback_id,
                                                          p.text)
                 if p.callback_id:

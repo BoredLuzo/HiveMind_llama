@@ -272,8 +272,11 @@ Field notes:
 
 The wizard writes every field, so hand-editing is only needed for the ones above.
 
-A config named after the base only (e.g. `qwen3.5.json`) applies to all tags
-of that base; `qwen3.5_9b-ud.json` applies to that exact tag.
+A config named after the base only (example name: `gemma-4.json`) applies to
+all tags of that base; the exact-tag form (example: `gemma-4_e4b-it.json`)
+applies to that one tag. Both example names are conventions, not shipped
+files - a profile exists once you add the model; `model_configs/models/`
+holds the ones that do.
 
 ### models.json
 
@@ -455,7 +458,7 @@ token - whisper and parakeet are public repos.
 ## API
 
 - OpenAI-compatible `/v1/chat/completions` (agent tool-loop mode).
-- MCP server (Model Context Protocol, `infra/mcp_server.py`), stdio + HTTP on
+- MCP server (Model Context Protocol, `infra/mcp_server.py`), stdio + HTTP on - see [docs/mcp.md](docs/mcp.md) for the tiers, limits and the editor-context endpoint.
   port 8090 (`start_mcp.bat`), tiered read/write/exec permissions.
 - `/automap/*` for routing profiles, `/model_configs/*` for base/learned/
   effective configs and learning logs.

@@ -2,6 +2,7 @@
 from routers.chats import router as chats_router
 from routers.core import router as core_router
 from routers.config import router as config_router
+from routers.context import router as context_router
 from routers.git import router as git_router
 from routers.soul import router as soul_router
 from routers.learning import router as learning_router

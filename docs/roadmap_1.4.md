@@ -142,7 +142,8 @@ run in any order after 1.
   ships `whisper-cli`/`whisper-server` *and* `parakeet-cli`, so "support weak
   CPUs" is a model choice, not a second install. Measured on the owner's machine
   (measured on the owner's machine; the spike folder with models, binaries and
-  `RESULTS.md` sits next to the repo as `STTEngineTest`), 8 threads:
+  `RESULTS.md` (measurement notes, **not shipped**) sits next to the repo as
+  `STTEngineTest`), 8 threads:
   - **real human English, 73 LibriSpeech utterances / 481 s, micro-WER**:
     parakeet v3 **q4_k 3.57 %** (RTFx 18.7, 552 MB), q8_0 3.65 % (10.6, 794 MB),
     whisper small 7.30 % (4.1, 582 MB), base 9.91 % (14.1, 317 MB),
@@ -179,11 +180,14 @@ run in any order after 1.
 
 ### Phase 1 - sidecar supervisor + TTS
 
-1. `core/sidecar.py`: generic supervised child process (spawn, port probe,
+1. `core/sidecar.py` (**not built** - the supervision lives in `core/tts_engine.py`
+   today): generic supervised child process (spawn, port probe,
    health endpoint, restart with backoff, RAM budget, shutdown with the engine,
    no orphan on crash). Property-tested without real processes.
-2. `deploy/fetch_tts.py` + docs: pocket-tts (gated HF repo, CC-BY-4.0, accept
-   the terms once); `uvx pocket-tts serve` documented as the manual path.
+2. ~~`deploy/fetch_tts.py`~~ **shipped differently:** there is no download
+   script - `core/tts_engine.py` starts `uvx pocket-tts serve` on demand and
+   the gated HF model is pulled by that command (accept the terms once).
+   `deploy/setup_voice.bat` prepares the environment.
 3. Engine API: `POST /tts` (text, voice, speed -> audio bytes), `GET /tts/voices`,
    caching per `(text, voice)`, hard caps on text length and response size.
 4. Surfaces: speaker button on assistant messages (on demand, never autoplay),

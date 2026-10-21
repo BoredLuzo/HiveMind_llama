@@ -4,74 +4,92 @@ Commands are parsed ONLY from the owner's own user messages - the auth
 layer guarantees that; this module only knows the whitelist and the
 syntax. Forwarded messages never yield a command (brief: replay /
 backlog).
+
+2026-10-21: COMMAND_SPEC is now the single source of truth. The whitelist,
+the /help text and the /help keyboard are all generated from it, so a new
+command cannot ship without appearing in the help (test_gateway_command_flow
+asserts that). Commands marked `requires_arg` ask back instead of running
+with an empty value.
 """
 from __future__ import annotations
 
-# /steer arrives with WP5; /get stays optional and OFF (WP6).
-COMMAND_WHITELIST = {
-    "start": "welcome + state",
-    "pair": "bind the owner (one-time code from the console)",
-    "new": "start a fresh HiveMind chat",
-    "stop": "abort the running run",
-    "shutdown": "shut down the PC (two-step confirm, owner-only)",
-    "purge": "evict ALL models from VRAM (free the GPU)",
-    "restrict": "phone runs restricted to web+reading+chat (on|off)",
-    "cron": "scheduled agent runs (add|list|del|run)",
-    "status": "current run/status",
-    "verbose": "toggle verbose output",
-    "mode": "show/set the phone-side run mode (auto|chat|pipeline|automap|off)",
-    "models": "list available models (numbered)",
-    "setmodel": "select a model by number, then answer the ctx questions",
-    "cancel": "clear model/ctx overrides for phone runs",
-    "workspace": "show/set the workspace for phone runs",
-    "tools": "show/set the direct chat tools level for phone runs (on|off)",
-    "gate": "show/set approvals (ask|deny|off|on|off-global: on/off = engine-wide toggle, works mid-run)",
-    "ctx": "show/set the context for duo runs (number | off)",
-    "preset": "load a preset globally (number from the preset list)",
-    "planner": "separate planner model for duo runs (number | off)",
-    "lock": "lock the gateway until the PC unlocks it (WP6)",
-    "help": "list commands",
+# group -> title shown in /help
+GROUPS = (
+    ("run", "RUN MODES"),
+    ("steer", "STEERING"),
+    ("model", "MODEL & CONTEXT"),
+    ("env", "WORKSPACE, TOOLS & APPROVALS"),
+    ("sched", "SCHEDULE"),
+    ("power", "POWER"),
+)
+
+# name -> {usage, desc, group, requires_arg}
+COMMAND_SPEC: dict[str, dict] = {
+    "start":    {"usage": "/start", "group": "run",
+                 "desc": "welcome + state"},
+    "help":     {"usage": "/help", "group": "run",
+                 "desc": "this list (tap a command to use it)"},
+    "mode":     {"usage": "/mode <auto|agentic|chat|pipeline|automap|off>", "group": "run",
+                 "desc": "run mode for phone runs (bare = list modes)",
+                 "extra": ("/mode auto - duo agent, CAN create/edit files",
+                           "/mode agentic - duo + agentic loop (thorough, slower)",
+                           "/mode chat - quick talk + web only, NO file tools")},
+    "new":      {"usage": "/new", "group": "steer",
+                 "desc": "start a fresh HiveMind chat"},
+    "stop":     {"usage": "/stop", "group": "steer",
+                 "desc": "abort the active run (ALWAYS works)"},
+    "status":   {"usage": "/status", "group": "steer",
+                 "desc": "chat, workspace, mode, model, engine"},
+    "verbose":  {"usage": "/verbose", "group": "steer",
+                 "desc": "toggle detailed status updates"},
+    "models":   {"usage": "/models", "group": "model",
+                 "desc": "list available models (numbered)"},
+    "setmodel": {"usage": "/setModel <number>", "group": "model",
+                 "desc": "pick a model by number, then answer the ctx question",
+                 "requires_arg": True},
+    "cancel":   {"usage": "/cancel", "group": "model",
+                 "desc": "clear model/ctx overrides for phone runs"},
+    "ctx":      {"usage": "/ctx <number|off>", "group": "model",
+                 "desc": "context size for duo runs",
+                 "requires_arg": True},
+    "planner":  {"usage": "/planner <number|off>", "group": "model",
+                 "desc": "separate planner model for duo runs",
+                 "requires_arg": True},
+    "preset":   {"usage": "/preset <number>", "group": "model",
+                 "desc": "load a preset globally (number from the list)",
+                 "requires_arg": True},
+    "workspace": {"usage": "/workspace <path>", "group": "env",
+                  "desc": "working folder for phone runs (must exist)",
+                  "requires_arg": True},
+    "tools":    {"usage": "/tools <on|off>", "group": "env",
+                 "desc": "direct-chat tools for simple runs"},
+    "restrict": {"usage": "/restrict <on|off>", "group": "env",
+                 "desc": "phone runs restricted to web+reading+chat"},
+    "gate":     {"usage": "/gate <on|off|ask|deny>", "group": "env",
+                 "desc": "approvals (bare = show the current policy)",
+                 "extra": ("/gate on|off - approvals ON/OFF (live, mid-run;",
+                           "phone-started runs stay gated)",
+                           "/gate ask|deny - phone-run policy nuance")},
+    "cron":     {"usage": "/cron <add|list|del|run> ...", "group": "sched",
+                 "desc": "scheduled agent runs"},
+    "purge":    {"usage": "/purge", "group": "power",
+                 "desc": "evict ALL models from VRAM (free the GPU)"},
+    "shutdown": {"usage": "/shutdown [seconds]", "group": "power",
+                 "desc": "PC shutdown, two-step confirm"},
+    "lock":     {"usage": "/lock", "group": "power",
+                 "desc": "lock the gateway until the PC unlocks it"},
+    "pair":     {"usage": "/pair <code>", "group": "env",
+                 "desc": "bind the owner (one-time code from the console)",
+                 "requires_arg": True},
 }
 
-# /help: a real instruction list, not just the whitelist dump. Owner-facing
-# quick start + the safety contract in two lines. Static on purpose: the
-# behavior it describes is the tested invariant, not a config value.
-HELP_TEXT = (
-    "📖 HiveMind - quick guide\n"
-    "\n"
-    "Send any text = start a run.\n"
-    "\n"
-    "- RUN MODES -\n"
-    "/mode auto - duo agent, CAN create/edit files\n"
-    "/mode agentic - duo + agentic loop (thorough, slower)\n"
-    "/mode chat - quick talk + web only, NO file tools\n"
-    "/mode pipeline · /mode automap · /mode off\n"
-    "Bare /mode lists what each mode does.\n"
-    "\n"
-    "- STEERING -\n"
-    "/stop - abort the active run (ALWAYS works)\n"
-    "/status - chat, workspace, mode, model, engine\n"
-    "/new - fresh chat\n"
-    "/verbose - toggle detailed status updates\n"
-    "\n"
-    "- MODEL & CONTEXT -\n"
-    "/models - list models (numbered)\n"
-    "/setModel <no> - pick a model + context size\n"
-    "(applies to auto/agentic AND simple runs)\n"
-    "\n"
-    "- WORKSPACE, TOOLS & APPROVALS -\n"
-    "/workspace <path> - working folder (must exist)\n"
-    "/tools on|off - direct-chat tools for simple runs\n"
-    "/restrict on|off - phone-run tool restriction\n"
-    "/gate - show approval settings\n"
-    "/gate on|off - approvals ON/OFF (live, mid-run; phone-started runs stay gated)\n"
-    "/gate ask|deny|off - phone-run policy nuance\n"
-    "/cron - scheduled agent runs (add/list/del/run)\n"
-    "\n"
-    "- POWER -\n"
-    "/purge - evict ALL models from VRAM (frees the GPU)\n"
-    "/shutdown [s] - PC shutdown, two-step confirm\n"
-    "(optional seconds buffer, e.g. /shutdown 600)\n"
+# name -> description (kept for backwards compatibility with callers/tests)
+COMMAND_WHITELIST: dict[str, str] = {k: v["desc"] for k, v in COMMAND_SPEC.items()}
+
+# Words that cancel a pending command prompt.
+CANCEL_WORDS = frozenset({"stop", "cancel", "abort", "abbrechen", "abbruch"})
+
+_EXTRA = (
     "\n"
     "- APPROVALS & QUESTIONS -\n"
     "🛡 Approval card: the full command is shown.\n"
@@ -82,11 +100,60 @@ HELP_TEXT = (
     "\n"
     "- SAFETY -\n"
     "• Phone runs are restricted by default (web +\n"
-    "reading + chat; no shell/writes/git). The UI toggle\n"
-    "'Restrict phone runs' unlocks approval-gated actions.\n"
+    "reading + chat; no shell/writes/git).\n"
     "• Mirrored PC runs send approval cards here.\n"
     "• Only your Telegram account, private chat only.\n"
 )
+
+
+def _build_help() -> str:
+    out = [
+        "📖 HiveMind - quick guide",
+        "",
+        "Send any text = start a run.",
+        "Tap a command below to run it; commands that need a",
+        "value ask first (just send the value as the next message,",
+        "or 'stop' to cancel).",
+        "",
+    ]
+    for key, title in GROUPS:
+        rows = [(name, spec) for name, spec in COMMAND_SPEC.items()
+                if spec.get("group") == key]
+        if not rows:
+            continue
+        out.append(f"- {title} -")
+        for _, spec in rows:
+            out.append(f"{spec['usage']} - {spec['desc']}")
+            for extra in spec.get("extra", ()):
+                out.append(f"  {extra}")
+        out.append("")
+    return "\n".join(out) + _EXTRA
+
+
+HELP_TEXT = _build_help()
+
+
+def help_keyboard() -> dict:
+    """Inline keyboard: one button per command (2 per row) + a cancel row.
+
+    callback_data stays well under Telegram's 64-byte limit.
+    """
+    buttons = [{"text": spec["usage"].split(" ")[0],
+                "callback_data": f"cmd:{name}"}
+               for name, spec in COMMAND_SPEC.items()]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    return {"inline_keyboard": rows}
+
+
+def param_hint(name: str) -> str:
+    """Ask-back text for a command that needs a value."""
+    spec = COMMAND_SPEC.get(name) or {}
+    usage = spec.get("usage") or f"/{name}"
+    return (
+        f"⚙️ {usage}\n\n"
+        "Send the value as the next message (e.g. 5), or reply "
+        "'stop' to cancel."
+    )
 
 
 def parse_command(text: str) -> tuple[str, str] | None:
@@ -108,3 +175,13 @@ def command_from_message(p) -> tuple[str, str] | None:
     if p is None or p.is_forwarded:
         return None
     return parse_command(p.text)
+
+
+def wants_arg_first(name: str) -> bool:
+    """True when /name without a value should ask instead of executing."""
+    spec = COMMAND_SPEC.get(name) or {}
+    return bool(spec.get("requires_arg"))
+
+
+def is_cancel(text: str) -> bool:
+    return str(text or "").strip().lower() in CANCEL_WORDS

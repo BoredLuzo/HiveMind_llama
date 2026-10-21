@@ -92,17 +92,6 @@ def _write_guard_enabled() -> bool:
         return bool(_ws_settings.get("duo_write_guard_enabled", True))
     except Exception:
         return True
-
-
-def reset_read_guard_after_compression():
-
-
-    import logging as _logging
-    _logging.getLogger("hivemind.tools").debug(
-        "[READ-GUARD] Compression: Read-Guard-Sets behalten (Keep statt Clear — False-Positive-Fix)"
-    )
-
-
 # DROPPED → Loop). ContextVar propagiert in asyncio.create_task-Child-Tasks.
 _write_budget_cv: _contextvars.ContextVar = _contextvars.ContextVar(
     "_write_budget_cv", default=None
@@ -441,77 +430,6 @@ def _norm_write_path(args: dict) -> str:
         return os.path.normpath(str((args or {}).get("path", ""))).lower()
     except (OSError, TypeError, ValueError):
         return ""
-
-
-async def wait_approval_decision(run_id, name: str, preview: str, emit) -> tuple[str, str]:
-    """PRE-GENERATION WAIT (2026-09-18): called from the generation loop the
-    moment a gated call's NAME is recognized (before any content generates).
-    Pauses the run, shows the card, waits abort-aware for the decision.
-    Returns (decision, note): "once" | "repo" | "deny" | "input"."""
-    import logging as _appr_log
-    _lg = _appr_log.getLogger("hivemind.tools")
-    _lg.warning("[APPROVAL-WAIT] entered run=%r tool=%s", str(run_id), name)
-    scope = str(run_id or "")
-    if not scope:
-        import logging as _empty_log
-        _empty_log.getLogger("hivemind.tools").warning(
-            "[APPROVAL] wait: empty run scope — denying immediately (would loop)")
-        return ("deny", "")
-    _preview = (preview or "").strip() or "(content not generated yet, approval requested before generation)"
-    _lg.warning("[APPROVAL] pre-generation hold run=%s tool=%s (waiting for user decision)", scope, name)
-    _pending_approvals[scope] = {"tool": name, "preview": _preview}
-    try:
-        await emit({"type": "approval_request",
-                    "run_id": scope, "tool": name, "preview": _preview})
-        await emit({"type": "status",
-                    "content": f"Approval needed — {name} is on hold, waiting for your decision…"})
-    except Exception:
-        pass
-    try:
-        from infra.notify import notify_agent_needs_input
-        notify_agent_needs_input(scope, f"Approval needed: {name}")
-    except Exception:
-        pass
-
-    from infra import run_control as _rc
-    question = f"APPROVAL NEEDED: the agent wants to run {name}."
-    await _rc.initiate_pause(scope, question)
-    # ABORT-AWARE WAIT: wake on /abort/{run_id} (browser closed) instead of
-    # sleeping for the full timeout while the run sits disconnected.
-    import asyncio as _aio
-    _pause_ev = _rc._pause_events.get(scope)
-    _abort_ev = _rc._run_abort_registry.get(scope)
-    if _pause_ev is not None and _abort_ev is not None:
-        _wait_t = _aio.ensure_future(_pause_ev.wait())
-        _abort_t = _aio.ensure_future(_abort_ev.wait())
-        _done, _still = await _aio.wait(
-            {_wait_t, _abort_t}, timeout=3600, return_when=_aio.FIRST_COMPLETED)
-        for _t in _still:
-            _t.cancel()
-        _aborted = _abort_t in _done and _wait_t not in _done
-        answer = "" if _aborted else _rc._user_answers.pop(scope, "")
-        _rc.cleanup_pause(scope)
-    else:
-        _aborted = False
-        answer = await _rc.wait_for_resume(scope, timeout_s=3600)
-    _pending_approvals.pop(scope, None)
-    try:
-        await emit({"type": "agent_resumed"})
-    except Exception:
-        pass
-    if _aborted:
-        _lg.warning("[APPROVAL] run aborted during pre-generation hold (browser closed)")
-        return ("deny", "")
-    _note = ""
-    if "|" in str(answer):
-        answer, _note = str(answer).split("|", 1)
-        _note = _note.strip()
-    decision = _parse_approval_answer(answer)
-    _lg.warning("[APPROVAL] pre-generation decision=%s run=%s tool=%s note=%r",
-                decision, scope, name, _note[:80])
-    return (decision, _note)
-
-
 def _approval_gate_on() -> bool:
     """Gate state for THIS run: a per-run force (Telegram phone runs, G1)
     wins; otherwise the global toggle decides."""
