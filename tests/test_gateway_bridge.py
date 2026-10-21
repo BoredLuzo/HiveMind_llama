@@ -78,6 +78,10 @@ class FakeHive:
         return {"ok": True, "id": self.chat["id"], "rev": 1,
                 "chat": dict(self.chat, created_at="2026-10-05T12:00:00")}
 
+    async def get_chats(self):
+        # FOLLOW-UI (2026-10-21): empty list = no UI chat to continue
+        return []
+
     async def get_chat(self, chat_id):
         return FakeResponse(200, dict(self.chat))
 

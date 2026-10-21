@@ -440,6 +440,15 @@ def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ct
                      + (f"Workspace root: {_ws_root.replace(chr(92), '/')} — "
                         if _ws_root else "")
                      + "use relative paths in tool calls.")
+        # SHELL-TOOLS (2026-10-21): models are trained on GNU coreutils and
+        # write grep/sed/awk/find. Say plainly whether this box has them.
+        try:
+            from infra import shell_env as _shell_env
+            _sh = _shell_env.runtime_hint()
+            if _sh:
+                _env_line += " " + _sh
+        except (ImportError, AttributeError, TypeError):
+            pass
         # core marker, not the whole line: a custom prompt may already carry
         # the same info in a slightly different wording
         if "RUNTIME: This machine is Windows" not in sys_prompt:

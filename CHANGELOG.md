@@ -1,4 +1,50 @@
-# Changelog
+## [1.4.7] - 2026-10-21
+
+### Installer
+
+- `install.bat` offers Microsoft Core Utils as a new optional step [4/9]. It
+  detects an existing install (`where grep`), asks before installing and runs
+  `winget install --id Microsoft.CoreUtils`. Every outcome (already there,
+  winget missing, install failed, skipped) continues the install; nothing
+  aborts. Without them the coder prompt points at the built-in tools, with them
+  the model can use `grep`, `sed`, `awk`, `find` as it was trained.
+- The remaining steps are renumbered to 9.
+
+### Windows shell awareness
+
+- The coder prompt now states whether this Windows box has POSIX tools. Models
+  are trained on GNU coreutils and write `grep`, `sed`, `awk`, `head`, `find`;
+  without them those calls fail. With Microsoft Core Utils installed
+  (`winget install Microsoft.CoreUtils`) the prompt says so and the model can
+  use them as it was trained. Without them it names the built-in tools
+  (`search_code`, `read_file`, `find_files`) and the PowerShell cmdlets instead
+  of guessing.
+- `tools/env_check.py` reports the coreutils state and the install command.
+
+### Telegram
+
+- The browser owns the run mode. A phone `/mode` override only survives while
+  the engine mode is unchanged; switching modes in the UI makes Telegram follow
+  the frontend again instead of running the old override forever.
+- New `/follow on|off` (default on): a phone message continues the chat the
+  browser used last while it is fresh (one hour). A run started in the UI can
+  be continued with a plain "go" from the phone. Off, the phone keeps its own
+  `[TG]` chat.
+
+### Fixes
+
+- The post-run hooks (insight extractor, skill distiller) no longer pick
+  `agents.judge.model` as their worker. They used to load the judge at ctx 4096
+  after every run and evicted the still-warm coder to make room, so the next
+  run paid a full coder load. They reuse whatever model is already loaded and
+  only fall back to refiner, analyst, judge in that order.
+- Text to speech: when the sidecar answers 200 without audio, the engine now
+  reports `TTS_ENGINE_BROKEN` with the sidecar log hint, retries once with the
+  shipped default voice and then holds a five minute cooldown instead of paying
+  a synthesis round trip for every sentence. The read-aloud prefetch keeps a
+  no-op catch, so a superseded fetch can no longer surface as
+  `Uncaught (in promise)`, and a broken engine clears the queue.
+
 ## [1.4.6] - 2026-10-21
 
 ### Routing decider (no GPU judge needed)
@@ -61,6 +107,12 @@
 
 ### Fixes
 
+- The post-run hooks (insight extractor, skill distiller) no longer take
+  `agents.judge.model` as their worker. They used to load the judge at ctx 4096
+  after every run and evicted the still-warm coder to make room, so the next
+  run paid a full coder load. They now reuse whatever model is already loaded
+  and only fall back to refiner, analyst, judge in that order.
+
 - In `auto` mode the persisted `duo_agentic_mode` no longer hijacks the route:
   a stored agentic flag (a preset sets it) used to send every auto run straight
   to code_duo, before the decider was asked. A simple question ended up in a
@@ -84,6 +136,16 @@
 - The read-aloud prefetch keeps a no-op catch, so a superseded fetch can no
   longer surface as `Uncaught (in promise)`, and a broken engine clears the
   queue instead of retrying the rest of the answer.
+
+### Telegram follows the frontend
+
+- The mode you pick in the browser is now the default for phone runs. A
+  `/mode` override from the phone only survives while the engine mode is
+  unchanged; as soon as the UI switches modes, Telegram follows it again.
+- New `/follow on|off` (default on): a phone message continues the chat the
+  browser used last while it is fresh (one hour), so a run started in the UI
+  can be continued with a plain "go" from the phone. Off, the phone keeps its
+  own `[TG]` chat as before.
 
 ### Cleanup
 

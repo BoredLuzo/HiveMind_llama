@@ -60,6 +60,21 @@ def diagnose() -> None:
     import os
 
     print(f"[ENV-CHECK] python {sys.version.split()[0]} ({sys.executable})")
+    # SHELL-TOOLS (2026-10-21): models write grep/sed/awk/find; Windows has
+    # none of them unless Microsoft Core Utils is installed.
+    try:
+        from infra import shell_env as _shell_env
+        _sh = _shell_env.summary()
+        if _sh.get("platform") == "win32":
+            state = "yes" if _sh.get("coreutils") else "NO"
+            print(f"[ENV-CHECK]   POSIX coreutils: {state}"
+                  + ("" if _sh.get("coreutils")
+                     else f"  (install: {_sh.get('install')})"))
+            if not _sh.get("coreutils"):
+                print("[ENV-CHECK]   missing: "
+                      + ", ".join(_sh.get("missing") or [])[:120])
+    except (ImportError, AttributeError, TypeError):
+        pass
     # A uv-created venv has NO pip - the repair command must use uv then.
     has_pip = _run([sys.executable, "-m", "pip", "--version"]) == 0
     print(f"[ENV-CHECK]   pip in this venv: {'yes' if has_pip else 'NO (uv venv)'}")
@@ -223,6 +238,24 @@ def repair(packages: list) -> tuple[bool, str]:
     return False, " and ".join(tried)
 
 
+def _print_shell_tools() -> None:
+    """Always show whether the POSIX tools exist (Windows agents need them)."""
+    try:
+        from infra import shell_env as _shell_env
+        _sh = _shell_env.summary()
+    except (ImportError, AttributeError, TypeError):
+        return
+    if _sh.get("platform") != "win32":
+        return
+    if _sh.get("coreutils"):
+        print("[ENV-CHECK] POSIX coreutils: yes (grep/sed/awk/find available)")
+        return
+    print(f"[ENV-CHECK] POSIX coreutils: NO  (install: {_sh.get('install')})")
+    print("[ENV-CHECK]   missing: " + ", ".join(_sh.get("missing") or [])[:120])
+    print("[ENV-CHECK]   models write grep/sed/head; without these they fail - "
+          "the coder prompt says so and points at the built-in tools.")
+
+
 def main() -> int:
     # The batch runs us with cwd = install root; probes must resolve from
     # there (script dir is sys.path[0] otherwise).
@@ -243,6 +276,7 @@ def main() -> int:
         print("[ENV-CHECK] no probe modules given")
         return 2
 
+    _print_shell_tools()
     fail = probe_all(modules)
     if fail is None:
         print(f"[ENV-CHECK] OK: {' '.join(modules)} import cleanly")

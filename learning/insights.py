@@ -52,6 +52,24 @@ def _available_ram_gb() -> float | None:
         return None
 
 
+def _post_run_worker_model() -> str:
+    """Model for the post-run hooks (insight extractor, skill distiller).
+
+    Priority (2026-10-21): an ALREADY LOADED model first. These hooks used to
+    take `agents.judge.model` unconditionally, so after every run the judge was
+    loaded at ctx 4096 and the still-warm coder got evicted - the next run then
+    paid a full coder load. Role ladder now ends with the judge.
+    """
+    warm = _loaded_model_name()
+    if warm:
+        return warm
+    for _role in ("refiner", "analyst", "judge"):
+        _m = _registry_get(_role) if _registry_get else ""
+        if _m:
+            return _m
+    return ""
+
+
 def _loaded_model_name() -> str | None:
     """Erstes aktuell geladenes llama-Modell (kein neuer Load noetig)."""
     try:
@@ -140,8 +158,8 @@ async def _run_insight_extractor(
         f"Issues: {_issues_str}\n"
     )
 
-    # Use the smallest model available (judge or analyst) for low VRAM impact
-    _extractor_model = _registry_get("judge") or _registry_get("analyst") or _registry_get("refiner")
+    # POST-RUN-WORKER (2026-10-21): warm model first, judge only as last resort
+    _extractor_model = _post_run_worker_model()
     if not _extractor_model:
         return
     # POST-RUN-GUARD: bei knappem RAM das bereits geladene (warme) Modell
@@ -283,7 +301,8 @@ async def _run_skill_distillation(workspace: str):
     if not _candidates:
         return
 
-    _distiller_model = _registry_get("judge") or _registry_get("analyst") or _registry_get("refiner")
+    # POST-RUN-WORKER (2026-10-21): see _post_run_worker_model
+    _distiller_model = _post_run_worker_model()
     if not _distiller_model:
         return
     # POST-RUN-GUARD: bei knappem RAM das bereits geladene (warme) Modell

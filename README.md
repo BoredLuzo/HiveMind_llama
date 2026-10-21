@@ -475,6 +475,12 @@ token - whisper and parakeet are public repos.
 - ~30 GB disk for the recommended model set
 - Git (optional, autocommit/diff integration)
 - Docker Desktop (optional, SearXNG web search)
+- Windows Core Utils (optional but recommended): `winget install Microsoft.CoreUtils`.
+  Models are trained on GNU coreutils and write `grep`, `sed`, `awk`, `head`,
+  `find`; without them those commands fail on Windows. HiveMind detects the
+  situation and tells the coder either way (in the prompt) or points it at the
+  built-in tools (`search_code`, `read_file`, `find_files`). Check with
+  `python tools/env_check.py`.
 
 ## Installation (Windows)
 

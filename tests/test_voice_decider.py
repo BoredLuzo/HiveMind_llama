@@ -73,6 +73,10 @@ class _Hive:
                               "agents": {"direct": {"model": "direct-m"},
                                          "duo_coder": {"model": "coder-m"}}}
 
+    async def get_chats(self):
+        # FOLLOW-UI (2026-10-21): the bridge asks for the chat list now
+        return []
+
     async def get_chat(self, chat_id):
         return _Resp(200, dict(self.chat))
 

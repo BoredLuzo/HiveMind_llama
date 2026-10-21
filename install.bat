@@ -9,14 +9,15 @@ echo  ^|    Full setup: Python, packages, GPU backend                ^|
 echo  +=============================================================+
 echo.
 echo  What this does (you will be asked before every step):
-echo    [1/8] Python            - set up python environment
-echo    [2/8] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
-echo    [3/8] llama.cpp backend - downloaded for the chosen backend
-echo    [4/8] Desktop shortcut  - optional, with the HiveMind icon
-echo    [5/8] Models            - downloaded into your chosen folder
-echo    [6/8] SearXNG           - optional web search (requires Docker)
-echo    [7/8] Voice             - optional speech to text / text to speech
-echo    [8/8] Telegram gateway  - optional: message HiveMind from
+echo    [1/9] Python            - set up python environment
+echo    [2/9] GPU backend       - CUDA (NVIDIA) or Vulkan (AMD/Intel)
+echo    [3/9] llama.cpp backend - downloaded for the chosen backend
+echo    [4/9] Windows tools     - optional POSIX tools (grep/sed/find)
+echo    [5/9] Desktop shortcut  - optional, with the HiveMind icon
+echo    [6/9] Models            - downloaded into your chosen folder
+echo    [7/9] SearXNG           - optional web search (requires Docker)
+echo    [8/9] Voice             - optional speech to text / text to speech
+echo    [9/9] Telegram gateway  - optional: message HiveMind from
 echo                              your phone via your own bot
 echo                              (needs a @BotFather token, 2FA on)
 echo.
@@ -36,10 +37,10 @@ if errorlevel 2 (
 echo.
 
 REM ======================================================
-REM [1/8] Python
+REM [1/9] Python
 REM ======================================================
 echo  ==========================================================
-echo   [1/8] Setting up Python
+echo   [1/9] Setting up Python
 echo  ==========================================================
 echo.
 
@@ -231,10 +232,10 @@ echo  Press any key to continue... & pause >nul & exit /b 1
 :py_ok
 
 REM ======================================================
-REM [2/8] GPU backend (auto-detection)
+REM [2/9] GPU backend (auto-detection)
 REM ======================================================
 echo  ==========================================================
-echo   [2/8] GPU backend
+echo   [2/9] GPU backend
 echo  ==========================================================
 echo.
 echo   [V] Vulkan  - AMD / Intel GPUs
@@ -316,10 +317,10 @@ if errorlevel 1 (
 echo.
 
 REM ======================================================
-REM [3/8] llama.cpp backend
+REM [3/9] llama.cpp backend
 REM ======================================================
 echo  ==========================================================
-echo   [3/8] llama.cpp backend
+echo   [3/9] llama.cpp backend
 echo  ==========================================================
 echo.
 echo   Target: %~dp0llama\
@@ -360,13 +361,65 @@ if defined HAVE_LLAMA (
 echo.
 
 REM ======================================================
-REM [4/8] Desktop shortcut (optional, HiveMind icon)
+REM [4/9] Windows tools (optional: POSIX tools for the agent)
+REM Models are trained on GNU coreutils and write grep/sed/awk/find.
+REM Microsoft Core Utils are the official port. Optional, never fatal:
+REM without them the coder prompt points at the built-in tools.
+REM ======================================================
+echo  ==========================================================
+echo   [4/9] Windows tools (optional)
+echo  ==========================================================
+echo.
+echo   Coding models are trained on Linux and write things like
+echo     grep -rn "foo" src/
+echo     head -50 build.log
+echo   On Windows those commands do not exist. Microsoft Core Utils
+echo   are the official port and make them work.
+echo.
+set "HAVE_COREUTILS="
+where grep >nul 2>&1
+if not errorlevel 1 set "HAVE_COREUTILS=1"
+if not defined HAVE_COREUTILS goto coreutils_ask
+echo   [OK] POSIX tools are already available - nothing to do.
+goto coreutils_done
+:coreutils_ask
+set "HAVE_WINGET="
+where winget >nul 2>&1
+if not errorlevel 1 set "HAVE_WINGET=1"
+if not defined HAVE_WINGET goto coreutils_nowinget
+echo   Install Microsoft Core Utils now (~5 MB, from the Microsoft Store)?
+choice /c YN /n /m "Install Core Utils? [Y/N] "
+if errorlevel 2 goto coreutils_skipped
+echo.
+winget install --id Microsoft.CoreUtils -e --silent --accept-package-agreements --accept-source-agreements
+where grep >nul 2>&1
+if errorlevel 1 goto coreutils_failed
+echo.
+echo   [OK] Core Utils installed. The agent can use grep/sed/awk/find now.
+goto coreutils_done
+:coreutils_failed
+echo.
+echo   [NOTE] The install did not complete. Nothing is broken:
+echo   HiveMind tells the coder to use its own tools instead.
+echo   Retry later with:  winget install Microsoft.CoreUtils
+goto coreutils_done
+:coreutils_nowinget
+echo   [NOTE] winget is not available, so Core Utils cannot be installed
+echo   automatically. HiveMind works without them.
+echo   Manual: https://learn.microsoft.com/en-us/windows/core-utils/overview
+goto coreutils_done
+:coreutils_skipped
+echo   Skipped - add it later with: winget install Microsoft.CoreUtils
+:coreutils_done
+echo.
+
+REM [5/9] Desktop shortcut (optional, HiveMind icon)
 REM SHORTCUT-FIRST (2026-09-12): asked BEFORE the long network steps,
 REM so a fresh install always gets the icon even if the user aborts
 REM during model downloads.
 REM ======================================================
 echo  ==========================================================
-echo   [4/8] Desktop shortcut
+echo   [5/9] Desktop shortcut
 echo  ==========================================================
 echo.
 echo   Creates "HiveMind.lnk" on the Desktop that starts
@@ -379,10 +432,10 @@ call create_shortcut.bat
 echo.
 
 REM ======================================================
-REM [5/8] Models
+REM [6/9] Models
 REM ======================================================
 echo  ==========================================================
-echo   [5/8] Models
+echo   [6/9] Models
 echo  ==========================================================
 echo.
 REM No folder prompt here - setup_models.bat asks ONCE (download target;
@@ -393,11 +446,11 @@ goto searxng_step
 :searxng_step
 
 REM ======================================================
-REM [6/8] SearXNG (optional)
+REM [7/9] SearXNG (optional)
 REM ======================================================
 echo.
 echo  ==========================================================
-echo   [6/8] SearXNG (web search, requires Docker Desktop)
+echo   [7/9] SearXNG (web search, requires Docker Desktop)
 echo  ==========================================================
 echo.
 where docker >nul 2>&1
@@ -413,7 +466,7 @@ if errorlevel 1 (
 echo.
 
 echo  ==========================================================
-echo   [7/8] Voice (optional: speech to text / text to speech)
+echo   [8/9] Voice (optional: speech to text / text to speech)
 echo  ==========================================================
 echo.
 echo   Local speech-to-text turns a Telegram voice note (or the
@@ -444,7 +497,7 @@ if "%VOICE_PICK%"=="4" echo   Skipped - add it later with no reinstall: Settings
 echo.
 
 echo  ==========================================================
-echo   [8/8] Telegram gateway (optional)
+echo   [9/9] Telegram gateway (optional)
 echo  ==========================================================
 echo.
 echo   Control HiveMind from your phone via your own Telegram bot.
@@ -486,7 +539,7 @@ exit /b 0
 
 REM ======================================================
 REM  OPTIONALS ONLY -- reached with [O] at the first prompt.
-REM  Jumps straight to step [6/8] and runs SearXNG, Voice and
+REM  Jumps straight to step [7/9] and runs SearXNG, Voice and
 REM  the Telegram gateway. Python, GPU backend, llama.cpp and
 REM  the models are skipped: this is the "add a part later"
 REM  path, no reinstall and no re-download of anything big.

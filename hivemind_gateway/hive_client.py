@@ -181,6 +181,15 @@ class HiveClient:
         means server-wins, adopt r.json()."""
         return await self._put_json(f"/chats/{chat_id}", fields)
 
+    async def get_chats(self) -> list:
+        """Chat-Liste des Engines (id, title, updated_at, msg_count ...)."""
+        r = await self._get("/chats")
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            data = data.get("chats") or []
+        return data if isinstance(data, list) else []
+
     async def get_chat(self, chat_id: str) -> httpx.Response:
         return await self._get(f"/chats/{chat_id}")
 

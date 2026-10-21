@@ -111,7 +111,59 @@ class RunBridge:
     def _tg_chat(self) -> dict | None:
         return self.state.data.get("tg_chat")
 
+# ── FOLLOW-UI (2026-10-21) ────────────────────────────────────────────
+    # Telegram used to write into its own "[TG]" chat forever, so an agentic
+    # run started in the browser could not be continued from the phone. With
+    # follow_ui (default on) a phone message continues the chat the UI used
+    # last, as long as that chat is fresh.
+    FOLLOW_UI_MAX_AGE_S = 3600.0
+
+    def follow_ui_enabled(self) -> bool:
+        return bool(self.state.data.get("follow_ui", True))
+
+    def set_follow_ui(self, on: bool) -> None:
+        self.state.data["follow_ui"] = bool(on)
+        self.state.save()
+
+    async def _ui_chat_target(self) -> str:
+        """id of the newest non-[TG] chat that is still fresh, else ''."""
+        if not self.follow_ui_enabled():
+            return ""
+        try:
+            chats = await self.hive.get_chats()
+        except (HiveUnreachable, OSError, ValueError):
+            return ""
+        import datetime as _dt
+        now = _dt.datetime.now()
+        best: tuple[float, str] = (0.0, "")
+        for ch in chats or []:
+            if not isinstance(ch, dict):
+                continue
+            cid = str(ch.get("id") or "")
+            title = str(ch.get("title") or "")
+            if not cid or title.startswith("[TG]"):
+                continue
+            if int(ch.get("msg_count") or 0) < 1:
+                continue
+            stamp = str(ch.get("updated_at") or ch.get("created_at") or "")
+            try:
+                when = _dt.datetime.fromisoformat(stamp)
+            except (TypeError, ValueError):
+                continue
+            age = (now - when).total_seconds()
+            if age < 0 or age > self.FOLLOW_UI_MAX_AGE_S:
+                continue
+            if when.timestamp() > best[0]:
+                best = (when.timestamp(), cid)
+        return best[1]
+
     async def _ensure_chat(self) -> dict:
+        # FOLLOW-UI: continue the chat the browser used last
+        _ui = await self._ui_chat_target()
+        if _ui:
+            mapping = {"hive_chat_id": _ui, "created_at": "", "followed": True}
+            self.state.data["followed_chat"] = _ui
+            return mapping
         mapping = self._tg_chat()
         if mapping and mapping.get("hive_chat_id"):
             return mapping
@@ -449,7 +501,6 @@ class RunBridge:
         _ws = (self._tg_chat() or {}).get("workspace") or "engine default"
         _ws_short = (_ws.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
                      if _ws != "engine default" else _ws)
-        _sel = self.state.data.get("mode") or ""
         _restricted = True
         _s: dict = {}
         try:
@@ -457,18 +508,26 @@ class RunBridge:
             _restricted = bool(_s.get("telegram_phone_restricted", True))
         except (HiveUnreachable, OSError, ValueError):
             pass  # engine offline: the run fails anyway, stay restricted
+        # MODE-SOURCE (2026-10-21): the frontend mode is the default; a phone
+        # override only survives while the engine mode is unchanged.
+        _eff_mode, _mode_src = self.effective_phone_mode(_s)
+        _sel = self.state.data.get("mode") or ""
+        if _sel and not self.state.data.get("mode_engine_seen"):
+            # first run after /mode: remember the engine baseline
+            self.state.data["mode_engine_seen"] = str(
+                (_s or {}).get("mode") or "")
+            self.state.save()
         _appr_mode = self._effective_approval_mode(_s)
         _agents = (_s.get("agents") or {}) if isinstance(_s, dict) else {}
         _coder_mdl = (_agents.get("duo_coder") or {}).get("model") or ""
         _planner_mdl = _s.get("duo_planner_model") or _coder_mdl
         _direct_mdl = (_agents.get("direct") or {}).get("model") or ""
         _ov_model = (self.state.data.get("run_overrides") or {}).get("model")
-        _eff = _sel or (_s.get("mode") if isinstance(_s, dict) else "") \
-            or "auto"
+        _eff = _eff_mode
         if from_voice and not _sel:
             # the engine decides the route for a spoken note
             _eff = "auto"
-        _eff_label = f"{_eff} (phone override)" if _sel else _eff
+        _eff_label = f"{_eff} (phone override)" if _mode_src == "phone" else _eff
         if from_voice and not _sel:
             _eff_label = "auto (HiveMind decides)"
         if from_voice and not _sel and not _ov_model:
@@ -542,7 +601,7 @@ class RunBridge:
                 # P9 (2026-10-05): the phone model selection now applies
                 # to simple/direct runs too (engine lifts direct_model).
                 ov["direct_model"] = _ov_model
-            sel_mode = _sel
+            sel_mode = _eff_mode if _mode_src == "phone" else ""
             stream_mode = sel_mode
             if sel_mode == "agentic":
                 # composite: engine mode "auto" + an EXPLICIT agentic request.
@@ -1046,6 +1105,25 @@ class RunBridge:
 
     # -- /mode: telegram-side run mode (stream BODY field, never settings)
 
+    def effective_phone_mode(self, engine_settings: dict) -> tuple[str, str]:
+        """(mode, source) for a phone run.
+
+        The UI owns the default: a `/mode` override only survives while the
+        engine mode is unchanged since it was set. Changing the mode in the
+        browser therefore flips Telegram back to the frontend mode.
+        """
+        override = str(self.state.data.get("mode") or "").strip()
+        engine_mode = str((engine_settings or {}).get("mode") or "").strip()
+        seen = str(self.state.data.get("mode_engine_seen") or "")
+        if override:
+            if engine_mode and seen and engine_mode != seen:
+                self.state.data["mode"] = ""
+                self.state.data["mode_engine_seen"] = ""
+                self.state.save()
+                return (engine_mode, "frontend")
+            return (override, "phone")
+        return (engine_mode or "auto", "frontend")
+
     def mode_text(self, arg: str) -> str:
         """/mode            -> current mode + per-mode explanations
         /mode <name>      -> set for TELEGRAM runs only
@@ -1065,6 +1143,7 @@ class RunBridge:
                     "keeps its own mode.")
         if arg in ("off", "aus", "default"):
             self.state.data["mode"] = ""
+            self.state.data["mode_engine_seen"] = ""
             self.state.save()
             return ("Mode (Telegram): engine default\n\n"
                     "Runs now follow the engine settings again.")
@@ -1073,6 +1152,9 @@ class RunBridge:
             return ("❌ Unknown mode.\n\n" + listing +
                     "\n\nSet with /mode <name> or /mode off.")
         self.state.data["mode"] = name
+        # baseline is filled on the next run (we do not fetch settings here);
+        # effective_phone_mode() clears the override once the UI changes modes
+        self.state.data["mode_engine_seen"] = ""
         self.state.save()
         why = ("File-capable - use this for tasks."
                if name != "simple" else

@@ -686,6 +686,22 @@ class Gateway:
         elif name == "mode":
             await self.reply(p.chat_id, self.bridge.mode_text(arg),
                              reply_to_message_id=p.message_id)
+        elif name == "follow":
+            a = (arg or "").strip().lower()
+            if a in ("on", "an", "1", "true"):
+                self.bridge.set_follow_ui(True)
+            elif a in ("off", "aus", "0", "false"):
+                self.bridge.set_follow_ui(False)
+            state = "on" if self.bridge.follow_ui_enabled() else "off"
+            extra = ("" if a in ("on", "an", "1", "true", "off", "aus", "0", "false")
+                     else " (unchanged)")
+            await self.reply(
+                p.chat_id,
+                f"Follow UI chat: {state}{extra}\n\n"
+                "on = a phone message continues the chat the browser used last "
+                "(while it is fresh).\noff = the phone writes into its own "
+                "[TG] chat.\nSwitch with /follow on|off.",
+                reply_to_message_id=p.message_id)
         elif name == "models":
             await self._owner_bridge_call(p, self.bridge.models_text())
         elif name == "setmodel":
