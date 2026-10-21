@@ -107,12 +107,6 @@
 
 ### Fixes
 
-- The post-run hooks (insight extractor, skill distiller) no longer take
-  `agents.judge.model` as their worker. They used to load the judge at ctx 4096
-  after every run and evicted the still-warm coder to make room, so the next
-  run paid a full coder load. They now reuse whatever model is already loaded
-  and only fall back to refiner, analyst, judge in that order.
-
 - In `auto` mode the persisted `duo_agentic_mode` no longer hijacks the route:
   a stored agentic flag (a preset sets it) used to send every auto run straight
   to code_duo, before the decider was asked. A simple question ended up in a
