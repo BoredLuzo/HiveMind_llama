@@ -1505,3 +1505,8 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 }
 .rt-status b { color: #cdd6e3; font-weight: 600; }
 .rt-status .rt-warn { color: #d08a4a; }
+
+/* In the Agents tab the routing card sits right under the mode row, so it
+   needs a little more air than in the config column. */
+.mode-routing { margin: 2px 0 10px; }
+.mode-routing .ctx-row { padding: 3px 0; }

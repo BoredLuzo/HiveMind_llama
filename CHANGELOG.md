@@ -49,8 +49,8 @@
   fields with a `tok` unit and a muted VRAM estimate instead of a stack of
   orange number inputs. The planner row only shows when "Planner = Coder" is
   off.
-- New "Routing - who decides" card with three selects (decider / judge /
-  planner) and a live line: `Auto -> decider (encoder, CPU) · planner:
+- The routing card sits under MODE in the Agents tab and only appears while
+  the mode is `auto`: three selects (decider / judge / planner) and a live line: `Auto -> decider (encoder, CPU) · planner:
   heuristic (free) · threshold 0.55`, plus a warning when a fixed mode
   bypasses the routing entirely.
 

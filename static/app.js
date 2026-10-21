@@ -432,9 +432,20 @@ var _MODE_DESC = {
   automap:   'AutoMap \u2014 Judge picks a model per task type.',
   code_duo:  'Code-Duo \u2014 iterative coder+critic loop, 2 models in parallel in VRAM.',
 };
+// ROUTING (2026-10-21): the routing card lives under MODE in the Agents tab.
+// It only matters while the mode is "auto", so it is hidden otherwise.
+function updateRoutingVisibility() {
+  var box = document.getElementById('mode-routing');
+  if (!box) return;
+  var on = (S.mode === 'auto');
+  box.style.display = on ? 'block' : 'none';
+  if (on) renderRoutingStatus();
+}
+
 function updateModeDesc() {
   var el = document.getElementById('mode-desc');
   if (el) el.textContent = _MODE_DESC[S.mode] || '';
+  updateRoutingVisibility();
 }
 
 function updateAutomapAdvancedVisibility() {

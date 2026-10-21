@@ -83,6 +83,49 @@
       <div class="mbtn" data-mode="code_duo" onclick="setMode('code_duo',this)" style="color:#20b0a0;border-color:rgba(32,176,160,.35)" title="Code-Duo — iterative coder+critic loop, 2 models in parallel in VRAM">&#8644; Code-Duo</div>
     </div>
     <div id="mode-desc" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin:-4px 0 9px;line-height:1.5"></div>
+    <!-- ROUTING (2026-10-21): wer entscheidet, wenn der Modus "auto" ist.
+         Steht bewusst hier unter MODE und nicht in den Configs: die
+         Frage "wer routet?" gehoert zur Moduswahl. -->
+    <div id="mode-routing" style="display:none">
+      <!-- ROUTING (2026-10-21): wer entscheidet, wenn der Modus "auto" ist -->
+      <div id="routing-card" class="ctx-card mode-routing">
+        <div class="ctx-card-head">
+          <span class="ctx-card-title">Routing &mdash; who decides</span>
+          <span class="ctx-card-sub">only in auto</span>
+        </div>
+        <div class="ctx-row">
+          <span class="ctx-label">Decider</span>
+          <select id="routing-decider-sel" class="rt-select"
+            onchange="setRouting('routing_decider', this.value)">
+            <option value="off">off &mdash; keyword rules</option>
+            <option value="shadow">shadow &mdash; log only</option>
+            <option value="on">on &mdash; decides</option>
+          </select>
+        </div>
+        <div class="ctx-row">
+          <span class="ctx-label">Judge</span>
+          <select id="routing-judge-sel" class="rt-select"
+            onchange="setRouting('routing_judge', this.value)">
+            <option value="off">off &mdash; no LLM judge</option>
+            <option value="shadow">shadow &mdash; log only</option>
+            <option value="on">on &mdash; LLM decides</option>
+          </select>
+        </div>
+        <div class="ctx-row">
+          <span class="ctx-label">Planner</span>
+          <select id="routing-planner-sel" class="rt-select"
+            onchange="setRouting('routing_planner', this.value)">
+            <option value="auto">auto &mdash; heuristic</option>
+            <option value="heuristic">heuristic</option>
+            <option value="decider">decider</option>
+            <option value="judge">judge</option>
+            <option value="always">always</option>
+            <option value="never">never</option>
+          </select>
+        </div>
+        <div id="routing-status" class="ctx-hint rt-status"></div>
+      </div>
+    </div>
 
     <!-- Chat Tools (Direct/Auto) — only visible in simple/auto (2026-09-01).
          Works in auto/simple; in Code-Duo/Pipeline/Map the respective
@@ -280,7 +323,6 @@
 
     </div>
 
-
     <!-- Agentic Optionen -->
     <div id="dmo-agent-opts" style="display:none;min-width:0;width:100%;box-sizing:border-box">
 
@@ -436,44 +478,6 @@
              nicht in die Advanced-Leiste. Wird im Agentic-Modus befuellt. -->
         <div id="code-ctx-slot" style="margin-top:10px;padding-top:10px;border-top:1px solid #1a2430"></div>
 
-        <!-- ROUTING (2026-10-21): wer entscheidet, wenn der Modus "auto" ist -->
-        <div id="routing-card" class="ctx-card" style="margin-top:10px">
-          <div class="ctx-card-head">
-            <span class="ctx-card-title">Routing &mdash; who decides</span>
-            <span class="ctx-card-sub">only in auto</span>
-          </div>
-          <div class="ctx-row">
-            <span class="ctx-label">Decider</span>
-            <select id="routing-decider-sel" class="rt-select"
-              onchange="setRouting('routing_decider', this.value)">
-              <option value="off">off &mdash; keyword rules</option>
-              <option value="shadow">shadow &mdash; log only</option>
-              <option value="on">on &mdash; decides</option>
-            </select>
-          </div>
-          <div class="ctx-row">
-            <span class="ctx-label">Judge</span>
-            <select id="routing-judge-sel" class="rt-select"
-              onchange="setRouting('routing_judge', this.value)">
-              <option value="off">off &mdash; no LLM judge</option>
-              <option value="shadow">shadow &mdash; log only</option>
-              <option value="on">on &mdash; LLM decides</option>
-            </select>
-          </div>
-          <div class="ctx-row">
-            <span class="ctx-label">Planner</span>
-            <select id="routing-planner-sel" class="rt-select"
-              onchange="setRouting('routing_planner', this.value)">
-              <option value="auto">auto &mdash; heuristic</option>
-              <option value="heuristic">heuristic</option>
-              <option value="decider">decider</option>
-              <option value="judge">judge</option>
-              <option value="always">always</option>
-              <option value="never">never</option>
-            </select>
-          </div>
-          <div id="routing-status" class="ctx-hint rt-status"></div>
-        </div>
 
       </div>
 
@@ -899,7 +903,6 @@
           </div>
         </div>
 
-
         <!-- Pre-Explore / Planner Overrides -->
         <div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#4a8a9a;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Pre-Explore &amp; Planner</div>
@@ -1114,7 +1117,6 @@
         </div>
       </div>
     </div>
-
 
     <!-- Complexity Force Override -->
     <div class="force-section">

@@ -59,6 +59,16 @@ check("planner row follows the toggle",
 
 # ── 4. Routing-Block: drei Schalter + Live-Zeile ────────────────────────
 check("routing card exists", 'id="routing-card"' in HTML)
+check("routing card sits in the Agents panel under MODE",
+      HTML.index('id="mode-btns-row"') < HTML.index('id="mode-routing"')
+      < HTML.index('id="chat-tools-section"'), "(position)")
+check("routing card is hidden outside auto",
+      'id="mode-routing" style="display:none"' in HTML)
+check("js ties the card to the auto mode",
+      "function updateRoutingVisibility" in JS and "S.mode === 'auto'" in JS)
+check("mode switch refreshes the routing card", "updateRoutingVisibility();" in JS)
+check("routing card no longer sits in the configs column",
+      HTML.count('id="routing-card"') == 1)
 for sel in ("routing-decider-sel", "routing-judge-sel", "routing-planner-sel"):
     check(f"select {sel}", f'id="{sel}"' in HTML)
 for opt in ('value="off"', 'value="shadow"', 'value="on"'):
