@@ -54,7 +54,9 @@
 - Model catalog: `spark-x2.6:4b` pinned to `XHToken/Spark-X2.6-4B-GGUF`
   (replaces the Spark-X2.5 entries) and `lfm2.5:24b-a2b` pinned to
   `LiquidAI/LFM2.5-24B-A2B-GGUF` with its DSpark drafter sidecar
-  (`LFM2.5-24B-A2B-DSpark-F16.gguf`, 0.6 GB). Both have profiles and automap
+  (`LFM2.5-24B-A2B-DSpark-F16.gguf`, 0.6 GB). The profile carries the
+  calibrated `moe_cpu_experts` (24, measured 6051 MiB @c4096) so the VRAM
+  pre-flight and the loader agree: 5.91 GB @4k, 6.54 GB @32k on an 8 GB card. Both have profiles and automap
   entries; `tests/test_model_catalog.py` pins repo, filename and drafter so a
   renamed asset cannot silently download nothing again.
 - `model_configs/models/spark-x2.6_4b.json` for Spark-X2.6 (4B, Q4_K_M): sampling

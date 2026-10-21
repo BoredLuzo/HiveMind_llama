@@ -1195,8 +1195,12 @@ class LlamaLoadMixin:
             _moe_count = 0
 
         # ── VRAM calibration guard (soft) ──
-        _cal_key = _strip_alias(model).strip().lower()
-        _cal_cfg = _MOE_TABLE.get(_cal_key) or _MOE_TABLE.get(_cal_key.replace("-ud", ""))
+        # Prefix-aware (2026-10-21): the table keys carry no tag suffixes, so an
+        # exact lookup silently skipped every "-a2b"/"-ud"/finetune tag. Use the
+        # same resolution vram_of_moe uses, or the estimate and the loader drift
+        # apart without a warning.
+        from .llama_vram_table import moe_cfg_for as _moe_cfg_for
+        _cal_cfg = _moe_cfg_for(_strip_alias(model).strip().lower())
         if _cal_cfg and "calibrated_n_cpu_moe" in _cal_cfg and _cal_cfg["calibrated_n_cpu_moe"] != _moe_count:
             logger.warning(
                 f"[VRAM-CALIBRATION] {model}: --n-cpu-moe={_moe_count} deviates from the calibrated value "

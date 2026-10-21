@@ -129,7 +129,9 @@ _MOE_TABLE: dict[str, dict] = {
         "measured_bytes_per_token": 20480,
         "calibrated_n_cpu_moe":     35,
     },
-    # LFM2.5-24B-A2B (lfm2moe, 64x1.4B: 2 dense + 38 MoE blocks). Measured
+    # LFM2.5-24B-A2B (lfm2moe, 64x1.4B: 2 dense + 38 MoE blocks). The catalog
+    # tag is `lfm2.5:24b-a2b` - the prefix match below maps it onto this row,
+    # and the profile carries the calibrated 24. Measured
     # 2026-10-14 (-lv 5 fit projection @c4096, f16 KV): n-cpu-moe 24 ->
     # 6051 MiB, 1289 MiB left free, fit "no changes needed". (23 missed the
     # 1024-free target by 58 MiB, 20 projected 7347/7341 — fit aborts on

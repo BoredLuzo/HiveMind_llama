@@ -83,8 +83,11 @@ if lfm:
         check("profile points at the drafter filename",
               p.get("dspark_draft_filename") == "LFM2.5-24B-A2B-DSpark-F16.gguf",
               f"({p.get('dspark_draft_filename')})")
-        check("profile offloads the experts to CPU",
-              int(p.get("moe_cpu_experts") or 0) == 64, f"({p.get('moe_cpu_experts')})")
+        from backend.llama_vram_table import moe_cfg_for as _moe_cfg
+        _cal = (_moe_cfg("lfm2.5:24b-a2b") or {}).get("calibrated_n_cpu_moe")
+        check("profile offloads exactly the calibrated expert count",
+              int(p.get("moe_cpu_experts") or 0) == int(_cal or -1),
+              f"(profile {p.get('moe_cpu_experts')} vs calibrated {_cal})")
         check("profile marks the model as MoE", p.get("moe") is True)
         check("profile is not a thinking model (LFM family)", p.get("capabilities", {}).get("thinking") is False)
 
