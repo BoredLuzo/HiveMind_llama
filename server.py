@@ -318,9 +318,12 @@ app      = FastAPI()
 # allow RCE via /internal/tool/exec. Non-browser clients (curl, httpx, MCP,
 # CLI) send no Origin header and stay unaffected.
 
-from infra.security import _csrf_origin_host, _csrf_origin_guard
+from infra.security import _csrf_origin_host, _csrf_origin_guard, _external_bind_guard
 
 app.middleware("http")(_csrf_origin_guard)
+# EXTERNAL-BIND GUARD (2026-10-21): active only when run.py resolved a
+# non-loopback HIVEMIND_HOST - remote clients need the internal token.
+app.middleware("http")(_external_bind_guard)
 
 _static_dir = THIS_FILE.parent / "static"
 if _static_dir.is_dir():

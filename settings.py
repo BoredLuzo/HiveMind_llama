@@ -511,6 +511,11 @@ DEFAULT_SETTINGS = {
     # remember EXACTLY this call for the CURRENT CHAT (writes per file,
     # commands 1:1 per exact arguments — anything new or a new chat asks
     # again). The toggle applies mid-run.
+    # RISK-NOTE (2026-10-21, audit): False = write/exec tools run WITHOUT
+    # approval out of the box. Mitigations ship (destructive gate,
+    # workspace confinement, loopback-only bind + external-bind token
+    # guard) - keep this False only on machines where that layer is
+    # enough, and flip to True for exposed or shared setups.
     "duo_action_approval_enabled": False,
     # Auto-DENY an unanswered approval card after N seconds (0 = off,
     # attended runs wait as before). With N > 0 and nobody at the desk the
