@@ -152,7 +152,10 @@ def extract_features(text: str) -> dict:
         "has_path": bool(re.search(r"([a-z]:[\\/]|\.{0,2}/[\w.-]+/|[\w-]+/[\w.-]+)", lower)),
         "has_line_ref": bool(re.search(r"\b(line|zeile|ln)\s*\d+|\bline\s+\d+", lower)),
         "code_fence": "```" in body,
-        # Wortstaemme statt exakter Woerter: "stutters", "crashes", "renames" ...
+        # LANG-MATCH (2026-10-16, deliberate exception to the English-only
+        # matcher rule in live/AGENTS.md): this install is driven with German
+        # input and dropping the German stems regressed classification.
+        # Word stems, not exact words: "stutters", "crashes", "renames" ...
         "bug_words": bool(re.search(r"\b(bug|crash|error|exception|stack ?trace|fail|broken|stutter|glitch|traceback|keyerror|np\.?exception)\w*", lower)),
         "build_words": bool(re.search(r"\b(create|build|make|add|implement|write|refactor|rename|fix|change|patch|generate|erstelle|baue|implementiere|schreib|ändere|aendere|repariere)\w*", lower)),
         # mehrere Aufgaben in einem Satz ("add X and fix Y")

@@ -144,6 +144,18 @@ check("P4: empty/unknown -> []", parse_errors("All tests passed.\n") == []
 check("P5: no double parse of python frame line",
       parse_errors(tb(1, "z"))[0].message == "z")
 
+# ── RESOLVED-CAP (2026-10-16): very long runs must not grow resolved ──
+from core.error_rollup import _Active
+
+_st = RollupState()
+for _i in range(80):
+    _item = ErrorItem(error_type=f"E{_i}", message=f"unique-error-{_i}")
+    _st.active[_item.signature] = _Active(
+        item=_item, first_seen=_i, attempts=1, reopened_of=None)
+_st.mark_all_fixed()
+check("resolved capped at 64", len(_st.resolved) <= 64,
+      f" got {len(_st.resolved)}")
+
 print()
 print("=" * 50)
 print(f"  {passed} passed, {failed} failed  (total {passed + failed})")

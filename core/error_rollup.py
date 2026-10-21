@@ -150,7 +150,6 @@ class RollupState:
         self.round: int = 0
         self.active: dict = {}      # signature -> _Active
         self.resolved: dict = {}    # signature -> fixed_at_round (historical)
-        # TODO: cap `resolved` size for very long runs (e.g. keep last N fixed).
 
     def on_message_history_compressed(self) -> None:
         """Message-history compression must NOT touch runtime state (no-op).
@@ -172,9 +171,18 @@ class RollupState:
         out = []
         for sig in list(self.active):
             a = self.active.pop(sig)
-            self.resolved[sig] = r
+            self._remember_resolved(sig, r)
             out.append((sig, a.item, r))
         return out
+
+    def _remember_resolved(self, sig: str, round_no: int) -> None:
+        """Record a fix; keep only the most recent ones (the reopen link
+        only matters for recent history - very long runs could otherwise
+        grow this dict without bound)."""
+        self.resolved[sig] = round_no
+        if len(self.resolved) > _RESOLVED_CAP:
+            for _old in list(self.resolved)[: len(self.resolved) - _RESOLVED_CAP]:
+                self.resolved.pop(_old, None)
 
     def ingest(self, items: list) -> dict:
         """Feed the parsed errors of one failing round.
@@ -230,7 +238,7 @@ class RollupState:
         for sig in list(self.active):
             if sig not in present:
                 a = self.active.pop(sig)
-                self.resolved[sig] = r
+                self._remember_resolved(sig, r)
                 fixed.append((sig, a.item, r))
 
         changed = any(e["status"] in ("persistent", "reopened") for e in entries) or bool(fixed)
@@ -267,7 +275,8 @@ def render_rollup(res: dict, sort_key=lambda e: (e["item"].error_type, e["item"]
 
 _states: dict = {}
 _states_lock = threading.RLock()
-_STATE_CAP = 32  # TODO: prune strategy for very long-lived server processes.
+_STATE_CAP = 32  # pruned FIFO in get_run_state (oldest keys drop first)
+_RESOLVED_CAP = 64  # RESOLVED-CAP (2026-10-16): keep the most recent fixes
 
 
 def get_run_state(run_id: str) -> RollupState:

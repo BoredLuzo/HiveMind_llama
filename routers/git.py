@@ -27,6 +27,18 @@ def _get_git_config() -> dict:
     return cfg
 
 
+def _ws_default() -> str:
+    """Fallback workspace when no explicit override arrives (2026-10-16):
+    the UI-configured project first (settings.workspace), the run-scoped
+    env second - the same order as the workspace resolver and
+    routers/core.py. The old env-first order could point the git panel at
+    a stale/parallel run's directory while the UI showed another project."""
+    ws_cfg = str(settings.get("workspace") or "").strip()
+    if ws_cfg:
+        return ws_cfg
+    return str(os.environ.get("HIVEMIND_WORKSPACE", ".") or ".")
+
+
 def _validate_git_repo(ws_override: str | None = None) -> tuple[bool, str, list[str]]:
     # WORKSPACE-PARAM (2026-09-22): the panel validates the PROJECT the user
     # selected, not the server env (HIVEMIND_WORKSPACE is run-scoped and
@@ -35,7 +47,7 @@ def _validate_git_repo(ws_override: str | None = None) -> tuple[bool, str, list[
     if ws_override:
         ws = str(Path(ws_override).resolve())
     else:
-        ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+        ws = str(Path(_ws_default()).resolve())
     if not ws:
         return False, "", []
     try:
@@ -88,7 +100,7 @@ def _ws_from_query(request: Request) -> str | None:
 def _resolve_ws(ws_override: str | None) -> str:
     if ws_override:
         return str(Path(ws_override).resolve())
-    return str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+    return str(Path(_ws_default()).resolve())
 
 
 @router.get("/status")
@@ -230,7 +242,7 @@ async def git_init_ep(request: Request):
     if _ws_cand and Path(_ws_cand).is_dir():
         ws = str(Path(_ws_cand).resolve())
     else:
-        ws = str(Path(os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve())
+        ws = str(Path(_ws_default()).resolve())
     if not ws:
         return {"ok": False, "error": "No workspace configured"}
 

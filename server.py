@@ -1738,8 +1738,13 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
     _CODING_TOOLS = _get_inline_tools(include_websearch=_OPENAI_WS_ENABLED, mode="openai_agent")
     # H-audit: derive the lock like /internal/tool/exec does - ignoring the
     # configured workspace let agent tools run against the install dir.
+    # WS-ORDER (2026-10-16): the UI-configured project wins over the
+    # run-scoped env - the same order as the workspace resolver and
+    # routers/core.py. The old env-first order pointed the v1 endpoint at
+    # a stale/parallel run's directory while the UI showed another project.
     _OPENAI_WORKSPACE_LOCK = str(Path(
-        os.environ.get("HIVEMIND_WORKSPACE") or (settings.get("workspace") or ".")
+        (settings.get("workspace") or "").strip()
+        or os.environ.get("HIVEMIND_WORKSPACE") or "."
     ).resolve())
 
     async def _execute_tool(name: str, args: dict, *, model_for_limits: str) -> str:

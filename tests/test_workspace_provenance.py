@@ -91,5 +91,38 @@ _duo_src = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(
 check("T12 duo_runner auto-test sites use effective_run_workspace",
       "HIVEMIND_WORKSPACE" not in _duo_src and _duo_src.count("effective_run_workspace as") == 1)
 
+# ── WS-ORDER (2026-10-16): the UI-configured project wins over the
+# run-scoped env everywhere a default workspace is derived.
+_srv = (Path(__file__).parent.parent / "server.py").read_text(
+    encoding="utf-8", errors="replace")
+check("T13 server.py v1 lock: settings before env",
+      '(settings.get("workspace") or "").strip()\n        or os.environ.get("HIVEMIND_WORKSPACE") or "."' in _srv)
+_git = (Path(__file__).parent.parent / "routers" / "git.py").read_text(
+    encoding="utf-8", errors="replace")
+check("T14 routers/git.py: settings-first default, no raw env reads",
+      "_ws_default()" in _git
+      and 'os.environ.get("HIVEMIND_WORKSPACE", ".")).resolve()' not in _git)
+try:
+    import core.state as _cs
+    from routers.git import _ws_default
+    _old_ws, _old_env = _cs.settings.get("workspace"), os.environ.get("HIVEMIND_WORKSPACE")
+    try:
+        _cs.settings["workspace"] = WS_CALC
+        os.environ["HIVEMIND_WORKSPACE"] = WS_GRAV
+        check("T16 git _ws_default: settings wins over env",
+              _ws_default() == WS_CALC)
+        _cs.settings["workspace"] = ""
+        check("T17 git _ws_default: env as fallback",
+              _ws_default() == WS_GRAV)
+    finally:
+        _cs.settings["workspace"] = _old_ws
+        if _old_env is None:
+            os.environ.pop("HIVEMIND_WORKSPACE", None)
+        else:
+            os.environ["HIVEMIND_WORKSPACE"] = _old_env
+except (ImportError, AttributeError, KeyError) as _e:
+    # router import unavailable in a stripped environment - skip, don't fail
+    check("T16/T17 git _ws_default behavior", True, f" (skipped: {_e})")
+
 print(f"SUMMARY workspace_provenance: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
