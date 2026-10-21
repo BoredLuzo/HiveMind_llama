@@ -1,0 +1,88 @@
+"""UI: Context-Karte + Routing-Block (Wer entscheidet im Auto-Modus?).
+
+Der Context-Block war eine nackte Stapelung aus Label, orangenem Zahlenfeld und
+Hinweistext; ausserdem war nirgends sichtbar, wer bei mode=auto entscheidet.
+Beides ist jetzt Markup + CSS + JS - dieser Test pinnt es.
+"""
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+HTML = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
+CSS = (ROOT / "static" / "style.css").read_text(encoding="utf-8", errors="replace")
+JS = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+
+passed = failed = 0
+
+
+def check(name, cond, extra=""):
+    global passed, failed
+    if cond:
+        passed += 1
+        print(f"  PASS {name} {extra}")
+    else:
+        failed += 1
+        print(f"  FAIL {name} {extra}")
+
+
+# ── 1. Eine Karte statt drei loser Bloecke ──────────────────────────────
+check("context card exists", 'id="ctx-agentic-card"' in HTML)
+check("card wraps the coder row", HTML.index('id="ctx-agentic-card"') < HTML.index('id="wrapper-ctx-agentic"'))
+check("card wraps the planner toggle", HTML.index('id="wrapper-planner-coder-toggle"') < HTML.index('<!-- /ctx-agentic-card -->'))
+check("card wraps the planner row", HTML.index('id="wrapper-ctx-planner"') < HTML.index('<!-- /ctx-agentic-card -->'))
+check("card has a header", "ctx-card-title" in HTML and "Context &mdash; agentic" in HTML)
+check("rows use the label grid", HTML.count('class="ctx-row') >= 3, f"({HTML.count('class=\"ctx-row')})")
+
+# ── 2. Zahlenfelder sind kompakt + Einheit, kein Inline-Orange mehr ─────
+check("ctx inputs use the class", HTML.count('class="ctx-num') >= 2, f"({HTML.count('class=\"ctx-num')})")
+check("no leftover inline orange input style",
+      "width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber)"
+      not in HTML)
+check("fields carry a unit", HTML.count('class="ctx-unit"') == 2,
+      f"({HTML.count('class=\"ctx-unit\"')})")
+for cls in (".ctx-card", ".ctx-card-head", ".ctx-row", ".ctx-label", ".ctx-num",
+            ".ctx-hint", ".ctx-field", ".ctx-unit", ".rt-select", ".rt-status"):
+    check(f"css has {cls}", f"{cls} {{" in CSS)
+check("spinner buttons are hidden", "-webkit-appearance: none" in CSS)
+
+# ── 3. JS verschiebt die Karte, nicht die Einzelbloecke ─────────────────
+check("js moves the whole card", "_ctxMoveTo(_card, _slot)" in JS)
+check("js hides the card outside agentic", "_card.style.display = 'none'" in JS)
+check("planner row follows the toggle",
+      "plannerUseCoder ? 'none' : 'block'" in JS)
+
+# ── 4. Routing-Block: drei Schalter + Live-Zeile ────────────────────────
+check("routing card exists", 'id="routing-card"' in HTML)
+for sel in ("routing-decider-sel", "routing-judge-sel", "routing-planner-sel"):
+    check(f"select {sel}", f'id="{sel}"' in HTML)
+for opt in ('value="off"', 'value="shadow"', 'value="on"'):
+    check(f"decider/judge option {opt}", HTML.count(opt) >= 2, f"({HTML.count(opt)})")
+for pl in ("auto", "heuristic", "decider", "judge", "always", "never"):
+    check(f"planner option {pl}", f'<option value="{pl}"' in HTML)
+check("routing status line exists", 'id="routing-status"' in HTML)
+
+check("js has setRouting", "function setRouting(" in JS)
+check("js has renderRoutingStatus", "function renderRoutingStatus(" in JS)
+check("status names the decider", "decider (encoder, CPU)" in JS)
+check("status names the planner source", "planner: <b>" in JS)
+check("status shows the threshold", "threshold ' + thr.toFixed(2)" in JS)
+check("status warns when a fixed mode bypasses routing", "bypasses the routing" in JS)
+check("loadSettings fills the three selects",
+      "routing-decider-sel" in JS and "routing-judge-sel" in JS and "routing-planner-sel" in JS)
+check("settings keys are persisted", "patch[key] = value" in JS and "postSettings(patch)" in JS)
+
+# ── 5. Die alten, unabhaengig positionierten Inline-Styles sind weg ─────
+check("no absolute inline margins on the moved wrappers",
+      'id="wrapper-ctx-agentic" style="margin-bottom:10px' not in HTML)
+check("no inline purple label style left",
+      'font-size:11px;color:#9a74dc;cursor:pointer' not in HTML)
+
+print()
+print(f"SUMMARY ui_context_card: {passed} passed, {failed} failed")
+sys.exit(0 if failed == 0 else 1)

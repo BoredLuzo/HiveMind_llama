@@ -1412,3 +1412,96 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 .amsg-foot{display:flex;justify-content:flex-end;align-items:center;gap:6px;
   min-height:0;margin-top:2px}
 .amsg-foot:empty{display:none}
+
+/* ── CONTEXT / ROUTING CARDS (2026-10-21) ──────────────────────────────
+   The context fields used to be a bare stack of labels and orange number
+   inputs. One card, a label column, compact fields with a unit. */
+.ctx-card {
+  background: #0e1319;
+  border: 1px solid #1d2836;
+  border-radius: 8px;
+  padding: 10px 12px 8px;
+}
+.ctx-card-head {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 8px;
+}
+.ctx-card-title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9.5px; letter-spacing: .10em; text-transform: uppercase;
+  color: #7f8ea6; font-weight: 600;
+}
+.ctx-card-sub {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px; color: #4d5b70; margin-left: auto;
+}
+.ctx-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 0;
+}
+.ctx-row + .ctx-hint { margin-top: 0; }
+.ctx-row-toggle { padding-top: 8px; border-top: 1px solid #16202c; margin-top: 6px; }
+.ctx-label {
+  flex: 1; min-width: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px; color: #cdd6e3;
+}
+.ctx-label-plan { color: #b79ae4; }
+.ctx-num {
+  width: 88px; flex-shrink: 0;
+  background: #0a0e13;
+  border: 1px solid #22303f;
+  border-radius: 5px;
+  color: #dbe4ef;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  padding: 3px 6px;
+  text-align: right;
+  transition: border-color .12s, box-shadow .12s;
+  -moz-appearance: textfield;
+}
+.ctx-num::-webkit-outer-spin-button,
+.ctx-num::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ctx-field {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+}
+.ctx-unit {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px; color: #55637a; letter-spacing: .04em;
+}
+.ctx-num:hover { border-color: #2c3d50; }
+.ctx-num:focus {
+  outline: none;
+  border-color: var(--amber, #e5a13a);
+  box-shadow: 0 0 0 2px rgba(229, 161, 58, .12);
+}
+.ctx-num:disabled { opacity: .45; }
+.ctx-num-plan:focus {
+  border-color: #9a74dc;
+  box-shadow: 0 0 0 2px rgba(154, 116, 220, .14);
+}
+.ctx-hint {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px; line-height: 1.5; color: #6a7789;
+  padding: 0 0 6px;
+}
+.ctx-est { display: block; color: #b98a3c; font-size: 9.5px; }
+.ctx-est-plan { color: #9a74dc; }
+.rt-select {
+  width: 150px; flex-shrink: 0;
+  background: #0a0e13;
+  border: 1px solid #22303f;
+  border-radius: 5px;
+  color: #cdd6e3;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  padding: 3px 4px;
+}
+.rt-select:focus { outline: none; border-color: var(--amber, #e5a13a); }
+.rt-status {
+  border-top: 1px solid #16202c;
+  margin-top: 6px; padding-top: 7px;
+  color: #8b98ab;
+}
+.rt-status b { color: #cdd6e3; font-weight: 600; }
+.rt-status .rt-warn { color: #d08a4a; }

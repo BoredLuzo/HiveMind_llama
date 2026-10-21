@@ -43,6 +43,17 @@
 - Voice notes now go through the decider: `mode=auto` plus an explicit
   `duo_agentic_mode=false`, so a spoken note is not forced into a coder run.
 
+### UI
+
+- The agentic context block is a card now: header, label column, compact
+  fields with a `tok` unit and a muted VRAM estimate instead of a stack of
+  orange number inputs. The planner row only shows when "Planner = Coder" is
+  off.
+- New "Routing - who decides" card with three selects (decider / judge /
+  planner) and a live line: `Auto -> decider (encoder, CPU) · planner:
+  heuristic (free) · threshold 0.55`, plus a warning when a fixed mode
+  bypasses the routing entirely.
+
 ### Cleanup
 
 - Removed dead code (`_maybe_add_until_finished_block`,

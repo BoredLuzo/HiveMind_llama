@@ -1135,6 +1135,19 @@ async function loadSettings() {
     S.ttsReadAgentic = s.tts_read_agentic === true;
     S.ttsReadAsk = s.tts_read_ask === true;
     S.ttsReadGate = s.tts_read_gate === true;
+    // ROUTING (2026-10-21): wer entscheidet im auto-Modus
+    S.routingDecider = s.routing_decider || 'off';
+    S.routingJudge = s.routing_judge || 'on';
+    S.routingPlanner = s.routing_planner || 'auto';
+    S.routingThreshold = (typeof s.routing_decider_threshold === 'number')
+      ? s.routing_decider_threshold : 0.55;
+    var _rdSel = document.getElementById('routing-decider-sel');
+    if (_rdSel) _rdSel.value = S.routingDecider;
+    var _rjSel = document.getElementById('routing-judge-sel');
+    if (_rjSel) _rjSel.value = S.routingJudge;
+    var _rpSel = document.getElementById('routing-planner-sel');
+    if (_rpSel) _rpSel.value = S.routingPlanner;
+    renderRoutingStatus();
     _syncFlagCheck('duo-coder-after-run-toggle', S.duoCoderAfterRun === 'evict');
     _syncFlagCheck('stt-enabled-toggle', S.sttEnabled);
     _syncFlagCheck('tts-enabled-toggle', S.ttsEnabled);
@@ -10667,6 +10680,54 @@ function _ctxRestore(wrap) {
   }
 }
 
+// ── ROUTING (2026-10-21) ────────────────────────────────────────────────
+// Until now nothing in the UI said WHO picks the route when the mode is
+// "auto". These three selects plus a live line make it explicit.
+function setRouting(key, value) {
+  if (!key) return;
+  var patch = {};
+  patch[key] = value;
+  postSettings(patch);
+  if (key === 'routing_decider') S.routingDecider = value;
+  if (key === 'routing_judge') S.routingJudge = value;
+  if (key === 'routing_planner') S.routingPlanner = value;
+  renderRoutingStatus();
+}
+
+function renderRoutingStatus() {
+  var box = document.getElementById('routing-status');
+  if (!box) return;
+  var dec = S.routingDecider || 'off';
+  var jud = S.routingJudge || 'on';
+  var pln = S.routingPlanner || 'auto';
+  var thr = (typeof S.routingThreshold === 'number') ? S.routingThreshold : 0.55;
+  var mode = (S.mode || 'auto');
+
+  var who;
+  if (dec === 'on') {
+    who = 'decider (encoder, CPU) - confident decisions are final';
+    if (jud === 'on') who += '; unsure ones go to the judge';
+    else if (jud === 'shadow') who += '; unsure ones fall back to keyword rules (judge only logs)';
+    else who += '; unsure ones fall back to keyword rules';
+  } else if (dec === 'shadow') {
+    who = 'keyword rules - the decider only logs what it would pick';
+  } else {
+    who = (jud === 'off') ? 'keyword rules (decider and judge are off)'
+                          : 'LLM judge';
+  }
+  var plnLabel = {
+    auto: 'heuristic (free)', heuristic: 'heuristic (free)', decider: 'encoder',
+    judge: 'judge', always: 'always', never: 'never'
+  }[pln] || pln;
+
+  var line = 'Auto &rarr; <b>' + who + '</b> &middot; planner: <b>' + plnLabel + '</b>';
+  line += ' &middot; threshold ' + thr.toFixed(2);
+  if (mode && mode !== 'auto') {
+    line += ' &middot; <span class="rt-warn">mode "' + mode + '" bypasses the routing</span>';
+  }
+  box.innerHTML = line;
+}
+
 function updateCtxScopeHint() {
   var agWrap = document.getElementById('wrapper-ctx-agentic');
   var noWrap = document.getElementById('wrapper-ctx-normal');
@@ -10692,20 +10753,19 @@ function updateCtxScopeHint() {
   
   var _slot = document.getElementById('code-ctx-slot');
   if (!isAgentic) {
+    if (_card) { _ctxRestore(_card); _card.style.display = 'none'; }
     _ctxRestore(agWrap);
     if (plTog) _ctxRestore(plTog);
     if (plWrap) _ctxRestore(plWrap);
   }
+  var _card = document.getElementById('ctx-agentic-card');
   if (isAgentic) {
-    // agentic mode: coder + planner - direkt in der Code/Agentic-Karte
+    // agentic mode: eine Karte mit Kopfzeile, nicht drei lose Bloecke
+    if (_card) _card.style.display = 'block';
     agWrap.style.display = 'block';
     if (plTog) plTog.style.display = 'block';
-    if (plWrap) plWrap.style.display = 'block';
-    if (_slot) {
-      _ctxMoveTo(agWrap, _slot);
-      if (plTog) _ctxMoveTo(plTog, _slot);
-      if (plWrap) _ctxMoveTo(plWrap, _slot);
-    }
+    if (plWrap) plWrap.style.display = plannerUseCoder ? 'none' : 'block';
+    if (_slot && _card) _ctxMoveTo(_card, _slot);
     
     var coderCtx = _ctxNum('duo-ctx-agentic', 16384);
     var plannerCtx = plannerUseCoder ? coderCtx : _ctxNum('duo-ctx-planner', 16384);

@@ -436,6 +436,45 @@
              nicht in die Advanced-Leiste. Wird im Agentic-Modus befuellt. -->
         <div id="code-ctx-slot" style="margin-top:10px;padding-top:10px;border-top:1px solid #1a2430"></div>
 
+        <!-- ROUTING (2026-10-21): wer entscheidet, wenn der Modus "auto" ist -->
+        <div id="routing-card" class="ctx-card" style="margin-top:10px">
+          <div class="ctx-card-head">
+            <span class="ctx-card-title">Routing &mdash; who decides</span>
+            <span class="ctx-card-sub">only in auto</span>
+          </div>
+          <div class="ctx-row">
+            <span class="ctx-label">Decider</span>
+            <select id="routing-decider-sel" class="rt-select"
+              onchange="setRouting('routing_decider', this.value)">
+              <option value="off">off &mdash; keyword rules</option>
+              <option value="shadow">shadow &mdash; log only</option>
+              <option value="on">on &mdash; decides</option>
+            </select>
+          </div>
+          <div class="ctx-row">
+            <span class="ctx-label">Judge</span>
+            <select id="routing-judge-sel" class="rt-select"
+              onchange="setRouting('routing_judge', this.value)">
+              <option value="off">off &mdash; no LLM judge</option>
+              <option value="shadow">shadow &mdash; log only</option>
+              <option value="on">on &mdash; LLM decides</option>
+            </select>
+          </div>
+          <div class="ctx-row">
+            <span class="ctx-label">Planner</span>
+            <select id="routing-planner-sel" class="rt-select"
+              onchange="setRouting('routing_planner', this.value)">
+              <option value="auto">auto &mdash; heuristic</option>
+              <option value="heuristic">heuristic</option>
+              <option value="decider">decider</option>
+              <option value="judge">judge</option>
+              <option value="always">always</option>
+              <option value="never">never</option>
+            </select>
+          </div>
+          <div id="routing-status" class="ctx-hint rt-status"></div>
+        </div>
+
       </div>
 
       <!-- ── Thinking ──────────────────────────────── -->
@@ -699,7 +738,7 @@
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Max Tool-Calls (Explore)</span>
             <input type="number" min="4" max="999" step="1" id="duo-preexplore-max-tools"
-              style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              class="ctx-num"
               onchange="S.duoPreExploreMaxTools=parseInt(this.value)||20;postSettings({duo_pre_explore_max_tools:S.duoPreExploreMaxTools})">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
@@ -710,53 +749,59 @@
 
         <div id="duo-ctx-scope-hint" style="margin-bottom:10px;padding:8px;background:rgba(239,108,0,0.1);border-left:3px solid var(--amber);color:var(--amber);font-size:12px;font-family:'IBM Plex Mono',monospace;display:none;"></div>
 
-        <!-- Ctx Agentic (Coder) -->
-        <div id="wrapper-ctx-agentic" style="margin-bottom:10px; display:none;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
-            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Context Coder (Agentic)</span>
-            <input type="number" min="1024" step="1024" id="duo-ctx-agentic" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
-              style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
-              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxAgentic=v;postSettings({duo_coder_ctx_agentic:v});setDuoSubMode(S.duoAgenticMode?'agentic':'critic');updateCtxScopeHint();refreshVram();_vramEstimate(S.duoCoderModel,v,'vram-est-agentic')">
+        <!-- Ctx Agentic (Coder) - eine Karte, drei Zeilen (2026-10-21) -->
+        <div id="ctx-agentic-card" class="ctx-card" style="display:none">
+          <div class="ctx-card-head">
+            <span class="ctx-card-title">Context &mdash; agentic</span>
+            <span class="ctx-card-sub">tokens per call</span>
           </div>
-          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
-            Applies to coder (agentic/solo + until-finished).<br>
-            <span id="vram-est-agentic" style="color:var(--amber);font-size:9px"></span>
+        <div id="wrapper-ctx-agentic" style="display:none">
+          <div class="ctx-row">
+            <span class="ctx-label">Coder context</span>
+            <span class="ctx-field"><input type="number" min="1024" step="1024" id="duo-ctx-agentic" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
+              class="ctx-num"
+              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxAgentic=v;postSettings({duo_coder_ctx_agentic:v});setDuoSubMode(S.duoAgenticMode?'agentic':'critic');updateCtxScopeHint();refreshVram();_vramEstimate(S.duoCoderModel,v,'vram-est-agentic')"><span class="ctx-unit">tok</span></span>
+          </div>
+          <div class="ctx-hint">
+            Agentic / solo runs and until-finished.
+            <span id="vram-est-agentic" class="ctx-est"></span>
           </div>
         </div>
 
         <!-- Planner = Coder Toggle (nur Agentic) -->
-        <div id="wrapper-planner-coder-toggle" style="margin-bottom:4px; display:none;">
-          <div style="display:flex;align-items:center;gap:6px">
+        <div id="wrapper-planner-coder-toggle" style="display:none;">
+          <div class="ctx-row ctx-row-toggle">
+            <span class="ctx-label ctx-label-plan">Planner = Coder</span>
             <label class="cfl-sw" style="margin:0">
               <input type="checkbox" id="duo-planner-use-coder-ctx" checked
                 onchange="togglePlannerUseCoderCtx(this.checked)">
               <span class="sl"></span>
             </label>
-            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#9a74dc;cursor:pointer" onclick="var cb=document.getElementById('duo-planner-use-coder-ctx');cb.checked=!cb.checked;togglePlannerUseCoderCtx(cb.checked)">Planner = Coder (same context)</span>
           </div>
+          <div class="ctx-hint">Both calls share one context &mdash; no second window in VRAM.</div>
         </div>
 
         <!-- Ctx Planner (separat) -->
-        <div id="wrapper-ctx-planner" style="margin-bottom:10px; display:none;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
-            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a74dc;flex:1;font-weight:600">Context Planner</span>
-            <input type="number" min="1024" step="1024" id="duo-ctx-planner" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
-              style="width:76px;background:var(--bg2);border:1px solid rgba(136,88,192,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
-              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxPlanner=v;postSettings({duo_planner_ctx_target:v});refreshVram();_vramEstimate(S.duoPlannerModel,v,'vram-est-planner')">
+        <div id="wrapper-ctx-planner" style="display:none;">
+          <div class="ctx-row">
+            <span class="ctx-label ctx-label-plan">Planner context</span>
+            <span class="ctx-field"><input type="number" min="1024" step="1024" id="duo-ctx-planner" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
+              class="ctx-num"
+              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxPlanner=v;postSettings({duo_planner_ctx_target:v});refreshVram();_vramEstimate(S.duoPlannerModel,v,'vram-est-planner')"><span class="ctx-unit">tok</span></span>
           </div>
-          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
-            <span id="vram-est-planner" style="color:#b090e0;font-size:9px"></span><br>
-            num_ctx for the planner call (separate override).<br>
-            <span style="color:var(--tx2)">No cap - UI value passed through directly.</span>
+          <div class="ctx-hint">
+            Separate num_ctx for the planner call &mdash; passed through uncapped.
+            <span id="vram-est-planner" class="ctx-est ctx-est-plan"></span>
           </div>
         </div>
+        </div><!-- /ctx-agentic-card -->
 
         <!-- Ctx Duo Normal -->
         <div id="wrapper-ctx-normal" style="margin-bottom:10px; display:none;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Context (Coder + Critic Dual)</span>
             <input type="number" min="1024" step="1024" id="duo-ctx-normal" value="8192" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
-              style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              class="ctx-num"
               onchange="postSettings({duo_coder_ctx_normal:parseInputAsOptionalInt(this.value,8192)});S.duoCtxNormal=parseInputAsOptionalInt(this.value,8192);updateCtxScopeHint();refreshVram()">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
@@ -770,7 +815,7 @@
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#e08840;flex:1;font-weight:600">Context Critic</span>
             <input type="number" min="1024" step="1024" id="duo-ctx-critic" value="8192"
-              style="width:76px;background:var(--bg2);border:1px solid rgba(224,136,64,.4);border-radius:4px;color:#e0a060;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              class="ctx-num"
               onchange="var v=parseInputAsOptionalInt(this.value,8192);S.duoCtxCritic=v;postSettings({duo_critic_ctx:v});updateCtxScopeHint();refreshVram()">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
@@ -823,7 +868,7 @@
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Read Timeout (s)</span>
             <input type="number" min="60" max="600" step="30" id="duo-read-timeout" value="300"
-              style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              class="ctx-num"
               onchange="postSettings({duo_read_timeout:parseInt(this.value)||300})">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
@@ -839,13 +884,13 @@
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#9a74dc;flex:1;font-weight:600">Planner TTL (s)</span>
             <input type="number" min="0" step="30" id="duo-planner-ttl" value="0"
-              style="width:76px;background:var(--bg2);border:1px solid rgba(136,88,192,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              class="ctx-num"
               onchange="var v=parseInt(this.value)||0;S.duoPlannerTtl=v;postSettings({duo_planner_ttl_seconds:v})">
           </div>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#20b0a0;flex:1;font-weight:600">Coder TTL (s)</span>
             <input type="number" min="0" step="30" id="duo-coder-ttl" value="0"
-              style="width:76px;background:var(--bg2);border:1px solid rgba(32,176,160,.4);border-radius:4px;color:#20b0a0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              class="ctx-num"
               onchange="var v=parseInt(this.value)||0;S.duoCoderTtl=v;postSettings({duo_coder_ttl_seconds:v})">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
@@ -864,7 +909,7 @@
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
               <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Max Files / Partition</span>
               <input type="number" min="2" max="60" step="1" id="duo-partition-max-files" value="30"
-                style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+                class="ctx-num"
                 onchange="S.duoPartitionMaxFiles=parseInt(this.value)||30;postSettings({duo_partition_max_files:S.duoPartitionMaxFiles})">
             </div>
             <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
@@ -878,7 +923,7 @@
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
               <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Static Map Char Budget</span>
               <input type="number" min="0" max="100000" step="500" id="duo-static-map-chars" value="0"
-                style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+                class="ctx-num"
                 onchange="postSettings({duo_static_map_chars:parseInt(this.value)||0})">
             </div>
             <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
@@ -893,7 +938,7 @@
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
               <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Coder Explore Window (chars)</span>
               <input type="number" min="0" max="100000" step="1000" id="duo-coder-explore-chars" value="0"
-                style="width:76px;background:var(--bg2);border:1px solid var(--b2);border-radius:4px;color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+                class="ctx-num"
                 onchange="postSettings({duo_coder_explore_chars:parseInt(this.value)||0})">
             </div>
             <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
