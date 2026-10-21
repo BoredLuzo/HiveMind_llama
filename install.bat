@@ -459,20 +459,29 @@ REM %  aborts the install.
 echo.
 echo   Routing decider (optional): a small CPU classifier that picks
 echo   direct answer vs. code run. OFF by default - enable it later in
-echo   Settings -^> Routing. When enabled without this pre-download, the
-echo   model (~1-2 GB) is pulled from Hugging Face on first use.
-choice /c YN /n /m "Pre-download the decider model now? [Y/N] "
+echo   Settings -^> Routing. It needs the gliner2 package + CPU torch
+echo   (~2.5 GB env) plus the model (~1-2 GB, Hugging Face).
+choice /c YN /n /m "Install the decider environment + model now? [Y/N] "
 if errorlevel 2 (
-    echo   Skipped - downloads automatically on first use.
+    echo   Skipped - install later with: uv pip install --python
+    echo   .venv\Scripts\python.exe gliner2 torch huggingface_hub
     goto searxng_step
 )
-uv pip install --python "%PY%" huggingface_hub --quiet
+REM DECIDER-ENV (2026-10-21, audit): the model weights alone are useless
+REM %  without the gliner2 package and CPU torch - the first version of this
+REM %  step downloaded only the weights and the decider still fell back to
+REM %  rules. CPU wheel index keeps torch lean (~200 MB instead of the CUDA
+REM %  monolith); failures degrade gracefully (rules fallback at runtime).
+uv pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu torch --quiet
+if errorlevel 1 uv pip install --python "%PY%" torch --quiet
+uv pip install --python "%PY%" gliner2 transformers huggingface_hub --quiet
 "%PY%" -c "from huggingface_hub import snapshot_download; snapshot_download('fastino/GLiNER2.5-Decide')"
 if not errorlevel 1 (
-    echo   Decider model cached - enabling the decider later is instant.
+    echo   Decider environment + model ready - enabling the decider later
+    echo   is instant (Settings -^> Routing -^> Decider: on).
 ) else (
-    echo   [NOTE] Pre-download failed (offline or hub client missing).
-    echo          The model downloads automatically on first use.
+    echo   [NOTE] Pre-download failed (offline or wheel missing).
+    echo          The engine falls back to keyword rules until installed.
 )
 goto searxng_step
 
