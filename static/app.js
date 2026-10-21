@@ -4913,10 +4913,15 @@ function _tgPanelStream(st) {
   var body = document.getElementById('code-panel-body');
   var now = Date.now();
   var doRender = (now - _tgPanelLastRender) >= _TG_PANEL_RENDER_MS;
+  // PER-CARD PENDING KEY (2026-10-21, live: two parallel write_file calls —
+  // both streams wrote into ONE shared pending tab, call #1's tab stuck in
+  // 'generation' while call #2 took the channel over): every card gets its
+  // own pending key derived from the tool-call index.
+  var _pkey = _TG_PENDING_KEY + '#' + (st.idx != null ? st.idx : 0);
   // FOLLOW KEY: the file this card currently streams into (real path, or
   // the pending tab until the path parses out of the buffer).
-  var _fkey = st.path || ((_cpFiles[_TG_PENDING_KEY] || st.buf.length > 0) ? _TG_PENDING_KEY : '');
-  if (st.path && _cpFiles[_TG_PENDING_KEY]) _tgPendingRekey(st.path);
+  var _fkey = st.path || ((_cpFiles[_pkey] || st.buf.length > 0) ? _pkey : '');
+  if (st.path && _cpFiles[_pkey]) _tgPendingRekey(st.path, _pkey);
   // ENTRY FIRST (2026-09-21): register the file before the follow switch —
   // a first tick must be able to create AND show the tab in one pass.
   if (st.path) {
@@ -4928,10 +4933,10 @@ function _tgPanelStream(st) {
       st.pathWarned = true;
       console.warn('[tool-gen] path not parsed, streaming under pending tab. buf head:', st.buf.slice(0, 160));
     }
-    _cpAddOrUpdateFile(_TG_PENDING_KEY, txt, op, doRender ? 'plain' : false);
-    if (_cpFiles[_TG_PENDING_KEY]) {
-      _cpFiles[_TG_PENDING_KEY].tab.title = 'streaming (file name pending)';
-      var pn = _cpFiles[_TG_PENDING_KEY].tab.querySelector('.cp-name');
+    _cpAddOrUpdateFile(_pkey, txt, op, doRender ? 'plain' : false);
+    if (_cpFiles[_pkey]) {
+      _cpFiles[_pkey].tab.title = 'streaming (file name pending)';
+      var pn = _cpFiles[_pkey].tab.querySelector('.cp-name');
       if (pn) pn.textContent = 'streaming\u2026';
     }
   }
@@ -4946,24 +4951,34 @@ function _tgPanelStream(st) {
   }
 }
 
-function _tgPendingRekey(realPath) {
-  // Move the pending stream tab to the real file path once known.
-  var pend = _cpFiles[_TG_PENDING_KEY];
+function _tgPendingRekey(realPath, pkey) {
+  // Move a card's pending stream tab to the real file path once known.
+  var _k = pkey || _TG_PENDING_KEY;
+  var pend = _cpFiles[_k];
   if (!pend) return;
   var content = pend.content, op = pend.op;
-  delete _cpFiles[_TG_PENDING_KEY];
+  delete _cpFiles[_k];
   pend.tab.remove();
-  if (_cpActive === _TG_PENDING_KEY) _cpActive = null;
+  if (_cpActive === _k) _cpActive = null;
   _cpAddOrUpdateFile(realPath, content, op, 'plain');
 }
 
-function _tgPanelDropPending() {
-  var pend = _cpFiles[_TG_PENDING_KEY];
-  if (pend) {
-    delete _cpFiles[_TG_PENDING_KEY];
-    pend.tab.remove();
-    if (_cpActive === _TG_PENDING_KEY) _cpActive = null;
+function _tgEachPendingKey(fn) {
+  // Every per-card pending tab (keys '_TG_PENDING_KEY#<idx>').
+  for (var k in _cpFiles) {
+    if (k.indexOf(_TG_PENDING_KEY) === 0) fn(k);
   }
+}
+
+function _tgPanelDropPending() {
+  _tgEachPendingKey(function (_k) {
+    var pend = _cpFiles[_k];
+    if (pend) {
+      delete _cpFiles[_k];
+      pend.tab.remove();
+      if (_cpActive === _k) _cpActive = null;
+    }
+  });
 }
 
 function _tgPanelFlush() {
@@ -4984,10 +4999,11 @@ function _tgPanelFlush() {
     if (txt == null) continue;
     var op = (st.tool === 'edit_file') ? 'edit' : (st.tool === 'write_file_append' ? 'append' : 'write');
     if (st.path) {
-      if (_cpFiles[_TG_PENDING_KEY]) _tgPendingRekey(st.path);
+      var _pk = _TG_PENDING_KEY + '#' + (st.idx != null ? st.idx : 0);
+      if (_cpFiles[_pk]) _tgPendingRekey(st.path, _pk);
       _cpAddOrUpdateFile(st.path, txt, op, 'plain');
     } else {
-      _cpAddOrUpdateFile(_TG_PENDING_KEY, txt, op, 'plain');
+      _cpAddOrUpdateFile(_TG_PENDING_KEY + '#' + (st.idx != null ? st.idx : 0), txt, op, 'plain');
     }
   }
 }
@@ -5048,8 +5064,9 @@ function _toolGenStream(d) {
       // edit streamed under the pending tab while the panel showed the old
       // EDITED view).
       chip.addEventListener('click', function() {
+        var _own = _TG_PENDING_KEY + '#' + idx;
         var _k = (st && st.path) ? st.path
-               : ((_cpFiles[_TG_PENDING_KEY]) ? _TG_PENDING_KEY : '');
+               : ((_cpFiles[_own]) ? _own : '');
         toggleCodePanel(true);
         if (_k && _cpFiles[_k]) {
           _cpFiles[_k].view = 'file';
@@ -5059,7 +5076,7 @@ function _toolGenStream(d) {
       row.appendChild(chip);
       body.appendChild(row);
       scrollBtmIfNearBottom(60);
-      st = _tgCards[idx] = { row: row, chip: chip, buf: '', path: '', tool: d.name || '' };
+      st = _tgCards[idx] = { row: row, chip: chip, buf: '', path: '', tool: d.name || '', idx: idx };
     }
     st.buf += (d.content || '');
     if (d.name && st.tool !== d.name) {
