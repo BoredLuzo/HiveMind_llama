@@ -135,7 +135,7 @@
       <span class="cfl-label" style="flex:1">&#x1F527; Chat Tools enabled</span>
       <label class="cfl-sw" style="margin:0">
         <input type="checkbox" id="direct-tools-toggle"
-          onchange="S.directToolsEnabled=this.checked;postSettings({direct_tools_enabled:S.directToolsEnabled});updateDirectToolsHint();updateChatToolsBadge();updateComposerToolStatus()">
+          onchange="S.directToolsEnabled=this.checked;postSettings({direct_tools_enabled:S.directToolsEnabled});updateDirectToolsHint();updateChatToolsBadge()">
         <span class="sl"></span>
       </label>
     </div>
@@ -157,7 +157,7 @@
         <input type="range" id="direct-tools-rounds" min="1" max="300" step="1" value="12"
           style="flex:1;accent-color:#60a0e0"
           oninput="document.getElementById('direct-tools-rounds-v').textContent=this.value"
-          onchange="S.directToolsRounds=parseInt(this.value);postSettings({direct_tools_max_rounds:S.directToolsRounds});updateComposerToolStatus()">
+          onchange="S.directToolsRounds=parseInt(this.value);postSettings({direct_tools_max_rounds:S.directToolsRounds})">
         <span id="direct-tools-rounds-v" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#60a0e0;min-width:14px;text-align:right">12</span>
       </div>
       <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-top:6px;line-height:1.5">
@@ -1618,7 +1618,7 @@
         <span class="tgl-text">Text to speech</span>
         <label class="cfl-sw">
           <input type="checkbox" id="tts-enabled-toggle"
-            onchange="S.ttsEnabled=this.checked;postSettings({tts_enabled:this.checked});_syncTtsCard();_ttsStatusRefresh();if(this.checked){voiceEnableDefaults();setTimeout(voiceWarmup,600);}">
+            onchange="S.ttsEnabled=this.checked;postSettings({tts_enabled:this.checked});_syncTtsCard();_ttsStatusRefresh();if(this.checked){setTimeout(voiceWarmup,600);}">
           <span class="sl"></span>
         </label>
       </div>

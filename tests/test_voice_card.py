@@ -299,6 +299,20 @@ check("the reveal check uses it", "_answerTextOnly(body)" in app)
 check("the read is mounted so innerText works",
       "position:absolute;left:-99999px" in app and "host.remove()" in app)
 
+# ── DEAD-CALL GUARD (2026-10-16 frontend error) ─────────────────────────
+# 7d3fbc9 removed voiceEnableDefaults() as dead auto-enable but left the
+# caller in the tts-enabled onchange -> ReferenceError on every toggle
+# (live screenshot). The opt-in design stays: no auto-enable, the call is
+# gone, voiceWarmup still runs.
+check("removed voiceEnableDefaults is not referenced anywhere",
+      "voiceEnableDefaults" not in html and "voiceEnableDefaults" not in app)
+check("tts enable still warms up the voice",
+      "setTimeout(voiceWarmup,600)" in html)
+# Same bug class (b8bad7b removed the composer tool status element but kept
+# two callers in the direct-tools handlers -> ReferenceError on toggle).
+check("removed updateComposerToolStatus is not referenced anywhere",
+      "updateComposerToolStatus" not in html and "updateComposerToolStatus" not in app)
+
 print()
 print(f"SUMMARY voice_card: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
