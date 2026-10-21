@@ -73,7 +73,7 @@
   row, the routing selects and the plan step. Multi-word aliases now expand to
   a list of terms instead of one phrase that could never match.
 
-### Fixes (dev)
+### Fixes
 
 - Text to speech no longer fails silently per sentence: when the sidecar
   answers 200 without audio (pocket-tts raised `string keys in translate table
