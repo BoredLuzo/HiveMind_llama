@@ -2614,7 +2614,9 @@ function updateAgenticHint() {
   if (toolActive) {
     hint.className = 'ui-hint';
     hint.innerHTML = '✓ <b>Agentic:</b> Coder explores, implements and tests on its own '
-      + '(explore → patch_file → run_bash → fix).';
+      + '(explore → patch_file → run_bash → fix).'
+      + '<br><span style="color:#7a8fa8">In Auto mode the routing card decides whether a run '
+      + 'goes agentic; this switch only shapes the loop once it does.</span>';
     hint.style.display = 'block';
   } else {
     hint.style.display = 'none';
@@ -13261,6 +13263,34 @@ function _updateDuoRoleStatus(elId, label, model) {
       if (!w) return;
       var lbl = w.querySelector('span');
       _push('agents', d[1], lbl || w, 'Duo ctx', null, d[2] + ' ctx context vram');
+    });
+    // VOICE + ROUTING (2026-10-21): "tts"/"stt" appear in no label (the card is
+    // "Voice", the rows are "Read aloud"/"Speed"), so the DOM scan can never
+    // find them. Explicit entries with the acronym in the search terms.
+    [['tts-enabled-toggle', 'Voice output (TTS)', 'voice tts text to speech output enabled'],
+     ['tts-voice-sel', 'TTS voice', 'voice tts voice model speaker'],
+     ['tts-read-direct-toggle', 'Read aloud: direct answers (TTS)', 'tts read aloud speak direct chat'],
+     ['tts-read-agentic-toggle', 'Read aloud: agentic runs (TTS)', 'tts read aloud speak agentic plan'],
+     ['tts-read-ask-toggle', 'Read aloud: agent questions (TTS)', 'tts read aloud speak ask question'],
+     ['tts-read-gate-toggle', 'Read aloud: approval cards (TTS)', 'tts read aloud speak gate approval'],
+     ['tts-speed-inp', 'TTS speed', 'tts speed voice rate'],
+     ['tts-volume-inp', 'TTS volume', 'tts volume loudness voice'],
+     ['stt-enabled-toggle', 'Voice input (STT)', 'voice stt speech to text input transcribe'],
+     ['stt-model-sel', 'STT model', 'voice stt whisper model transcribe'],
+     ['stt-language-sel', 'STT language', 'voice stt language transcribe'],
+     ['stt-threads-sel', 'STT threads', 'voice stt threads cpu transcribe'],
+     ['stt-preload-toggle', 'STT preload', 'voice stt preload warm transcribe'],
+     ['stt-max-seconds', 'STT max seconds', 'voice stt length limit transcribe'],
+     ['mode-btns-row', 'Mode: Auto / Chat / Pipeline / AutoMap / Code-Duo', 'mode auto chat pipeline automap code_duo routing'],
+     ['routing-card', 'Routing: who decides in auto', 'routing auto decider judge plan step'],
+     ['routing-decider-sel', 'Routing: decider', 'routing decider encoder on off shadow'],
+     ['routing-judge-sel', 'Routing: judge', 'routing judge llm on off shadow'],
+     ['routing-planner-sel', 'Routing: plan step', 'routing plan step planner always decider never'],
+     ['routing-status', 'Routing: current choice', 'routing status current who decides']
+    ].forEach(function(d) {
+      var el = document.getElementById(d[0]);
+      if (!el) return;
+      _push('agents', d[1], el, 'Voice / Routing', null, d[2]);
     });
     // VRAM PRE-FLIGHT GATE (2026-10-11): guaranteed findability - the
     // llama backend panel uses inline styles (no .tgl-row markup), so the

@@ -22,7 +22,18 @@
     bild: 'image',
     foto: 'image',
     vram: 'vram',
-    bot: 'telegram'
+    bot: 'telegram',
+    // Voice: the panel is called "Voice", the controls say "Read aloud" -
+    // nobody types that, everybody types the acronym.
+    // lists of single terms: the matcher is a substring test per term, a whole
+    // phrase in one string would never hit a label
+    tts: ['voice', 'read aloud', 'speak'],
+    stt: ['voice', 'transcribe', 'dictation'],
+    sprache: ['voice'],
+    stimme: ['voice'],
+    routing: ['decider', 'judge', 'plan step', 'route'],
+    auto: ['mode', 'routing'],
+    modus: ['mode']
   };
 
   function expandTerms(q, aliases) {
@@ -31,10 +42,13 @@
     var terms = [q];
     var map = aliases || ALIASES;
     Object.keys(map).forEach(function(a) {
-      if (q === a || q.indexOf(a) >= 0) {
-        var t = map[a];
-        if (terms.indexOf(t) < 0) terms.push(t);
-      }
+      if (q !== a && q.indexOf(a) < 0) return;
+      var val = map[a];
+      var list = Array.isArray(val) ? val : [val];
+      list.forEach(function(t) {
+        t = String(t || '').toLowerCase().trim();
+        if (t && terms.indexOf(t) < 0) terms.push(t);
+      });
     });
     return terms;
   }

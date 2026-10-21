@@ -59,6 +59,20 @@
   heuristic (free) · threshold 0.55`, plus a warning when a fixed mode
   bypasses the routing entirely.
 
+### Fixes
+
+- In `auto` mode the persisted `duo_agentic_mode` no longer hijacks the route:
+  a stored agentic flag (a preset sets it) used to send every auto run straight
+  to code_duo, before the decider was asked. A simple question ended up in a
+  coder run. Now the flag only forces agentic when the decider is off; an
+  explicit request travels as `agentic_force` (the Telegram `/mode agentic`
+  sends it), so an intentional agentic run still works.
+- The feature search finds voice and routing: "tts", "stt", "routing", "auto"
+  and their German twins expand to the real labels, and explicit index entries
+  cover the Voice card (TTS/STT toggles, voice, speed, volume) plus the mode
+  row, the routing selects and the plan step. Multi-word aliases now expand to
+  a list of terms instead of one phrase that could never match.
+
 ### Cleanup
 
 - Removed dead code (`_maybe_add_until_finished_block`,

@@ -1472,8 +1472,14 @@ async def stream(req: Request):
         body.get("critical_task", False),
     ))
 
+    # AGENTIC-FORCE (2026-10-21): explicit "run agentic" from the gateway. The
+    # persisted duo_agentic_mode no longer hijacks mode="auto" while the decider
+    # is on, so an explicit request needs its own channel.
+    _agentic_force = _as_bool(body.get("agentic_force", False))
+
     _stream_gen = run_stream(q, images, mode, int(iters), preset, bool(cmode),
                    force_complexity=force_complexity,
+                   agentic_force=_agentic_force,
                    skip_agents=skip_agents,
                    judge_bias=judge_bias,
                    chat_id=chat_id,

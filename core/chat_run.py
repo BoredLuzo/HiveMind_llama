@@ -96,6 +96,7 @@ async def run_stream(
     duo_config: DuoConfig | None = None,
     model_overrides: dict | None = None,
     request_workspace: str = "",
+    agentic_force: bool = False,
 ):
     # Lazy server import (avoids an import cycle; server is loaded at runtime).
     from server import (
@@ -1319,7 +1320,14 @@ async def run_stream(
     logger.warning("[RUN-TRACE] vor mode-decision")
     logger.warning("[AGENTIC-RULE] mode=%s agentic=%s use_pipeline=%s force=%s",
                    mode, duo_config.agentic_mode, duo_config.use_pipeline, force_complexity)
-    if duo_config.agentic_mode and mode in ("auto", "automap"):
+    # AUTO-DECIDER (2026-10-21): the persisted agentic flag must not hijack
+    # mode="auto" while the decider is on - that is how a simple question
+    # started a coder run. An explicit request (gateway /mode agentic, body
+    # field agentic_force) still forces agentic.
+    _decider_on = _routing_decider.normalise_mode(
+        (model_overrides or {}).get("routing_decider") or settings.get("routing_decider")
+    ) != "off"
+    if duo_config.agentic_mode and mode in ("auto", "automap") and (agentic_force or not _decider_on):
         complexity = "code_duo"
         _complexity_source = "agentic"
         yield await emit({"type": "status",

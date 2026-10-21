@@ -545,9 +545,12 @@ class RunBridge:
             sel_mode = _sel
             stream_mode = sel_mode
             if sel_mode == "agentic":
-                # composite: engine mode "auto" + the agentic body flag
+                # composite: engine mode "auto" + an EXPLICIT agentic request.
+                # duo_agentic_mode alone is no longer enough (the decider owns
+                # mode=auto), so the run carries agentic_force.
                 stream_mode = "auto"
                 ov["duo_agentic_mode"] = True
+                ov["agentic_force"] = True
             elif from_voice and not sel_mode:
                 # VOICE-DECIDER (2026-10-21): a spoken note carries no mode.
                 # Without this it ran as settings["mode"] (code_duo) - so
