@@ -1919,9 +1919,13 @@ function _ttsErrorText(j) {
     TTS_NO_UV: 'uv is not installed - TTS needs uvx',
     TTS_EMPTY: 'nothing to speak',
     TTS_TIMEOUT: 'the engine took too long',
+    TTS_ENGINE_BROKEN: 'the voice engine produced no audio (voice config or sidecar log)',
     TTS_FAILED: 'the engine failed - see logs/pocket_tts.log'
   };
   var code = (j && j.code) || '';
+  // TTS_ENGINE_BROKEN carries a precise reason from the server (log hint
+  // included), so show that instead of the generic mapping.
+  if (code === 'TTS_ENGINE_BROKEN' && j && j.error) return j.error;
   return map[code] || (j.error || code || 'unknown TTS error');
 }
 
@@ -2055,7 +2059,12 @@ function _readAloud(kind, text) {
 var _raPending = null;          // {kind, text, promise} already being fetched
 
 function _raFetch(item) {
-  return {kind: item.kind, text: item.text, promise: _ttsFetchBlob(item.text, {})};
+  var p = _ttsFetchBlob(item.text, {});
+  // A prefetch that is superseded (stop, new message, queue reset) is never
+  // consumed by _readAloudNext. Without this no-op catch its rejection
+  // surfaced as "Uncaught (in promise)" in the console.
+  p.catch(function () {});
+  return {kind: item.kind, text: item.text, promise: p};
 }
 
 function _raTakeNext() {
@@ -2130,7 +2139,16 @@ function _readAloudNext() {
     _ttsAudio.onerror = function () { _readAloudNext(); };
     return _ttsAudio.play();
   }).catch(function (e) {
-    showStatus('Read aloud failed: ' + (e && e.message ? e.message : e));
+    var msg = (e && e.message ? e.message : String(e));
+    showStatus('Read aloud failed: ' + msg);
+    // A broken engine fails for every sentence; retrying the rest of the queue
+    // just burns a synthesis round trip each time, so drop the queue and say so.
+    if (/voice engine|no audio|translate table/i.test(msg)) {
+      _readAloudQueue.length = 0;
+      _raPending = null;
+      _readAloudBusy = false;
+      return;
+    }
     _readAloudNext();
   });
 }

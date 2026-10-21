@@ -76,6 +76,52 @@ START_TIMEOUT_S = 180.0      # first start downloads nothing (uvx cache) but loa
 IDLE_STOP_S = 900.0
 
 
+# ── ENGINE-BROKEN (2026-10-21) ──────────────────────────────────────────
+# pocket-tts 4.0.0 raised inside prepare_text_prompt for the voice config that
+# ships with the HF voice repo ("string keys in translate table must be of
+# length 1"). The sidecar still answered 200 with an empty body, so HiveMind
+# saw "not a WAV" and the UI retried per sentence, every time paying the
+# synthesis round trip.
+BROKEN_COOLDOWN_S = 300.0
+_LOG_TAIL_LINES = 80
+
+
+def _engine_log_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "logs" / "pocket_tts.log"
+
+
+def _engine_failure_hint() -> str:
+    """Last error line from the sidecar log, shortened for the UI."""
+    try:
+        path = _engine_log_path()
+        if not path.exists():
+            return ""
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            tail = fh.readlines()[-_LOG_TAIL_LINES:]
+    except OSError:
+        return ""
+    for line in reversed(tail):
+        low = line.lower()
+        if "translate table" in low:
+            return ("the voice config is incompatible with the installed "
+                    "pocket-tts (translate table)")
+        if line.startswith(("ValueError:", "RuntimeError:", "TypeError:")):
+            return line.strip()[:160]
+        if "Error" in line and ":" in line:
+            return line.strip()[:160]
+    return ""
+
+
+def _mark_broken(reason: str) -> None:
+    _state["broken_until"] = time.time() + BROKEN_COOLDOWN_S
+    _state["broken_reason"] = reason[:200]
+
+
+def _broken_remaining() -> float:
+    until = float(_state.get("broken_until") or 0.0)
+    return max(0.0, until - time.time())
+
+
 class TtsError(RuntimeError):
     """A text-to-speech failure with a stable, user-facing code."""
 
@@ -97,6 +143,8 @@ _state: dict = {
     "starts": 0,        # how often we started it (diagnostics only)
     "failures": 0,      # consecutive failed starts (the restart budget)
     "log": None,        # kept open by the child, closed on stop
+    "broken_until": 0.0,  # ENGINE-BROKEN cooldown (see _mark_broken)
+    "broken_reason": "",
 }
 _lock = threading.RLock()
 _http_client = None
@@ -340,13 +388,20 @@ def preload(settings: dict | None = None) -> bool:
 
 # ── synthesis ───────────────────────────────────────────────────────────────
 def synthesize(text: str, settings: dict | None = None, *,
-               voice: str = "", speed: float | None = None) -> dict:
+               voice: str = "", speed: float | None = None,
+               _allow_fallback: bool = True) -> dict:
     """Text -> {"wav": bytes, "duration": float, "voice": ..., "speed": ...}."""
     import httpx
 
     settings = settings or {}
     if not settings.get("tts_enabled", False):
         raise TtsError("TTS_DISABLED", "text-to-speech is disabled in the settings")
+    _cool = _broken_remaining()
+    if _cool > 0:
+        raise TtsError(
+            "TTS_ENGINE_BROKEN",
+            f"{_state.get('broken_reason') or 'the voice engine failed'} "
+            f"(retrying in {int(_cool)}s)")
     text = (text or "").strip()
     if not text:
         raise TtsError("TTS_EMPTY", "nothing to say")
@@ -387,7 +442,24 @@ def synthesize(text: str, settings: dict | None = None, *,
     except httpx.HTTPError as exc:
         raise TtsError("TTS_FAILED", f"engine error: {type(exc).__name__}") from exc
     if not tts_audio.looks_like_wav(wav):
-        raise TtsError("TTS_FAILED", "the engine returned something that is not a WAV")
+        # ENGINE-BROKEN (2026-10-21): the sidecar answered 200 without audio.
+        # One retry with the shipped default voice, because the usual cause is
+        # a single voice config (not the engine itself).
+        _hint = _engine_failure_hint()
+        if _allow_fallback and voice != DEFAULT_VOICE:
+            logger.warning("[TTS] voice %s produced no audio (%s) - retrying with %s",
+                           voice, _hint or "no log hint", DEFAULT_VOICE)
+            try:
+                return synthesize(text, settings, voice=DEFAULT_VOICE,
+                                  speed=speed, _allow_fallback=False)
+            except TtsError as exc:
+                _mark_broken(f"{exc.message} {('· ' + _hint) if _hint else ''}".strip())
+                raise TtsError("TTS_ENGINE_BROKEN",
+                               f"{exc.message} {('· ' + _hint) if _hint else ''}".strip()) from exc
+        _reason = ("the voice engine produced no audio"
+                   + (f": {_hint}" if _hint else ""))
+        _mark_broken(_reason)
+        raise TtsError("TTS_ENGINE_BROKEN", _reason)
     _state["last_used"] = time.time()
     stretched = tts_audio.stretch_wav(wav, spd, normalize_out=bool(settings.get(
         "tts_normalize", True)))

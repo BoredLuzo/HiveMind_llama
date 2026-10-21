@@ -144,6 +144,7 @@ SUITES = [
     ("no_new_silent_excepts",  "tests/test_no_new_silent_excepts.py",           60),
     ("compress_local_only",    "tests/test_compress_local_only.py",             60),
     ("pre_explore_globals",  "tests/test_pre_explore_globals.py",     25),
+    ("tts_broken_engine",    "tests/test_tts_broken_engine.py",       30),
     ("feature_search_coverage", "tests/test_feature_search_coverage.py",    40),
     ("ui_context_card",     "tests/test_ui_context_card.py",         20),
     ("vram_guard_lfm",      "tests/test_vram_guard_lfm.py",          20),

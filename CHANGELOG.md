@@ -73,6 +73,18 @@
   row, the routing selects and the plan step. Multi-word aliases now expand to
   a list of terms instead of one phrase that could never match.
 
+### Fixes (dev)
+
+- Text to speech no longer fails silently per sentence: when the sidecar
+  answers 200 without audio (pocket-tts raised `string keys in translate table
+  must be of length 1` for the fetched voice config), the engine classifies it
+  as `TTS_ENGINE_BROKEN`, retries once with the shipped default voice, and then
+  holds a five minute cooldown instead of paying a synthesis round trip for
+  every sentence. The error carries the sidecar log hint.
+- The read-aloud prefetch keeps a no-op catch, so a superseded fetch can no
+  longer surface as `Uncaught (in promise)`, and a broken engine clears the
+  queue instead of retrying the rest of the answer.
+
 ### Cleanup
 
 - Removed dead code (`_maybe_add_until_finished_block`,
