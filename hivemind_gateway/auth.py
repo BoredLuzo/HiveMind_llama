@@ -45,6 +45,13 @@ class ParsedUpdate:
     voice_file_id: str | None = None
     voice_duration: int = 0
     voice_mime: str = ""
+    # VOICE-DECIDER (2026-10-22): True when this message is a transcribed
+    # spoken note - the bridge then routes it via the engine decider
+    # (mode auto, duo_agentic_mode off) instead of the configured default.
+    # Was MISSING before: handle_voice_note's `voiced.from_voice = True`
+    # raised FrozenInstanceError on this frozen dataclass and the swallow
+    # left it False forever - spoken notes ran as settings["mode"].
+    from_voice: bool = False
 
 
 def _from_of(payload: dict) -> dict | None:

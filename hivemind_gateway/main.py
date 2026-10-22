@@ -795,17 +795,18 @@ class Gateway:
                              reply_to_message_id=p.message_id)
             return
         # run it as if the owner had typed it - same gates, same approvals
+        # VOICE-DECIDER (2026-10-21/22): mark the run as spoken, so the bridge
+        # lets the engine decide mode + model instead of the configured
+        # default. The flag lives ON the dataclass now (the old
+        # `voiced.from_voice = True` raised FrozenInstanceError on the frozen
+        # dataclass and was silently swallowed - the flag never reached the
+        # bridge and every spoken note ran as settings["mode"]).
         voiced = gw_auth.ParsedUpdate(
             update_id=p.update_id, kind=p.kind, from_id=p.from_id,
             chat_id=p.chat_id, chat_type=p.chat_type,
             text=transcript, date=p.date, is_forwarded=p.is_forwarded,
-            message_id=p.message_id, callback_id=p.callback_id)
-        # VOICE-DECIDER (2026-10-21): mark the run as spoken, so the bridge can
-        # let the engine decide mode + model instead of the configured default.
-        try:
-            voiced.from_voice = True
-        except AttributeError:      # slots/frozen dataclass: harmless
-            pass
+            message_id=p.message_id, callback_id=p.callback_id,
+            from_voice=True)
         await self.start_owner_run(voiced)
 
     async def start_owner_run(self, p: gw_auth.ParsedUpdate) -> None:

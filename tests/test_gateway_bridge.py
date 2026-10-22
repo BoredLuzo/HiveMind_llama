@@ -795,6 +795,18 @@ async def t_audit_fixes():
           and "duo_action_approval_enabled" in await br.status_text())
     br.ms.engine_gate_support = True
 
+    # VOICE-DECIDER (2026-10-22): from_voice=True carries mode auto +
+    # duo_agentic_mode False so the engine decider routes a spoken note
+    # instead of the configured default mode.
+    _res_fv = await br.start_text_run("wie wird das wetter", from_voice=True)
+    _body_fv = br.hive.stream_bodies[-1]
+    check("from_voice: stream mode auto", _body_fv["mode"] == "auto")
+    check("from_voice: duo_agentic_mode False override",
+          _body_fv["overrides"].get("duo_agentic_mode") is False)
+    check("from_voice: tagged as telegram-voice",
+          _body_fv["overrides"].get("source") == "telegram-voice")
+    check("from_voice: answered", _res_fv is not None)
+
     # ACTIVE-RUN VISIBILITY (2026-10-16): a UI/engine run the gateway did
     # NOT start shows in /status (live: agentic coder run in the browser,
     # /status said "active run: none").

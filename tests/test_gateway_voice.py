@@ -67,6 +67,7 @@ plain = {"update_id": 8, "message": {"text": "hello", "from": {"id": 1},
                                      "message_id": 5, "date": 1_700_000_000}}
 p3 = gw_auth.parse_update(plain)
 check("a plain text message has no voice id", p3.voice_file_id is None and p3.text == "hello")
+check("from_voice defaults to False on parse", p3.from_voice is False and p.from_voice is False)
 check("ParsedUpdate keeps its old fields", all(
     hasattr(p3, f) for f in ("update_id", "kind", "from_id", "chat_id", "chat_type",
                              "text", "date", "is_forwarded", "message_id",
@@ -90,6 +91,10 @@ check("tts has a longer timeout", "timeout=120.0" in client)
 # ── (d) the handler ────────────────────────────────────────────────────────
 main = read("hivemind_gateway/main.py")
 seg = main.split("async def handle_voice_note", 1)[1].split("async def start_owner_run", 1)[0]
+_dead_assign = [l for l in seg.splitlines()
+                if ".from_voice = True" in l and not l.strip().startswith("#")]
+check("the spoken flag is set ON the dataclass, no dead assignment",
+      "from_voice=True)" in seg and not _dead_assign)
 check("the length cap is enforced", "voice_max_seconds" in seg)
 check("the byte cap is enforced", "voice_max_bytes" in seg)
 check("download errors are answered", "Could not download the voice note" in seg)
