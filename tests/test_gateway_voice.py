@@ -96,7 +96,7 @@ seg = main.split("async def handle_voice_note", 1)[1].split("async def start_own
 # INNER result (the file object) — the old code looked for a nested
 # "result" inside it and every voice download failed before fetching. ──────
 import httpx as _httpx
-from hivemind_gateway.telegram_api import TelegramApi as _RealApi
+from hivemind_gateway.telegram_api import TelegramApi as _RealApi, TelegramApiError
 import asyncio as _aio
 
 
@@ -155,7 +155,7 @@ _api2 = _make_api(_tr2)
 try:
     _aio.run(_api2.download_file("f1"))
     check("getFile without file_path raises", False)
-except Exception as exc:
+except TelegramApiError as exc:
     check("getFile without file_path raises TelegramApiError",
           "no file_path" in str(exc))
 
