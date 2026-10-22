@@ -1,3 +1,45 @@
+## [1.4.8] - 2026-10-22
+
+### Voice over Telegram (end-to-end verified live)
+
+- A voice note now runs the full chain: transcription -> decider ->
+  run. The from_voice flag was dead code since 1.4.6 (frozen-dataclass
+  assignment silently failed) - spoken notes always ran as
+  settings[mode] instead of letting the decider route them.
+- to_wav16k defaulted to tmp_dir=None: every voice note 500ed at
+  Path(None) before the audio was decoded. Defaults to %TEMP% now.
+- Voice answers verified live: 30 s opus delivered for the Stuttgart
+  question.
+
+### Decider
+
+- /decider <on|off|shadow> over Telegram (bare = status incl. model).
+  OFF unloads the encoder model (~1.8 GB RAM) immediately via the new
+  settings-react hook; ON loads it lazily at the next decision.
+- DecisionCache survives engine restarts (context/decider_cache.json,
+  7-day TTL, best-effort IO).
+- German input: routing matchers carry German stems deliberately
+  (documented exception).
+
+### Security
+
+- External-bind guard: a non-loopback HIVEMIND_HOST bind requires
+  HIVEMIND_INTERNAL_TOKEN from non-local clients (the API can write
+  files and execute commands). Loopback unaffected.
+- settings.py: risk note on duo_action_approval_enabled=False.
+
+### Updater / Installer
+
+- Prune logic extracted to deploy/update_prune.ps1 (the inline
+  PowerShell broke in cmd quoting - prune and manifest rewrite were
+  silently skipped; hit live on 2026-10-22).
+- Installer: Models step skippable; optional decider environment
+  (gliner2 + torch CPU + transformers + model weights).
+- frontend: parallel write_file streams get per-card pending tabs (the
+  "stuck in generation" hang); dead voiceEnableDefaults /
+  updateComposerToolStatus calls removed.
+
+
 ## [1.4.7] - 2026-10-21
 
 ### Installer
