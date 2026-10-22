@@ -1280,17 +1280,17 @@ async def run() -> int:
                 state.set_offset(uid + 1)
                 if state.mark_seen(uid):
                     state.save()
+                    # POLL-CONTAINMENT (2026-10-22): broadened to Exception.
+                    # The narrow list let unlisted types (RuntimeError,
+                    # IndexError, JSON decode) kill the POLL TASK while the
+                    # process stayed alive - the gateway then consumed
+                    # updates silently and replied to nothing (live: voice
+                    # note after a /help produced zero reaction, 22.10.).
+                    # A dead poll is strictly worse than a logged failure:
+                    # log loudly and keep polling.
                     try:
                         await process_update(gw, raw)
-                    except (TelegramApiError, HiveUnreachable, HTTPError,
-                            OSError, ValueError, PolicyViolation,
-                            TypeError, KeyError, AttributeError) as exc:
-                        # ONE broken update must never kill the poll loop
-                        # (realrun bug #4: a raw ConnectError did exactly
-                        # that). Log loudly, keep polling.
-                        # audit G6: same containment breadth as the mirror
-                        # loop (N3) — N1 was exactly this crash class with
-                        # phone-controlled payload shapes.
+                    except Exception as exc:
                         log.error("update %s handling failed: %s: %s",
                                   uid, type(exc).__name__, exc)
     except (KeyboardInterrupt, asyncio.CancelledError):

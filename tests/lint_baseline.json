@@ -1,486 +1,1542 @@
 {
-  "backend/llama_client.py": {
-    "broad_except": 3,
-    "except_pass": 3
-  },
-  "backend/llama_compat.py": {
-    "broad_except": 2,
-    "except_pass": 0
-  },
-  "backend/llama_config.py": {
-    "broad_except": 11,
-    "except_pass": 4
-  },
-  "backend/llama_manager_utils.py": {
-    "broad_except": 23,
-    "except_pass": 4
-  },
-  "backend/llama_models.py": {
-    "broad_except": 9,
-    "except_pass": 5
-  },
-  "backend/llama_slots.py": {
-    "broad_except": 9,
-    "except_pass": 4
-  },
-  "backend/llama_vram_table.py": {
-    "broad_except": 8,
-    "except_pass": 4
-  },
-  "backend/manager_evict.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "backend/manager_health.py": {
-    "broad_except": 8,
-    "except_pass": 5
-  },
-  "backend/manager_load.py": {
-    "broad_except": 39,
-    "except_pass": 15
-  },
-  "backend/manager_prefetch.py": {
-    "broad_except": 2,
-    "except_pass": 0
-  },
-  "backend/manager_process.py": {
-    "broad_except": 2,
-    "except_pass": 1
-  },
-  "context/chat.py": {
-    "broad_except": 3,
-    "except_pass": 0
-  },
-  "context/compression.py": {
-    "broad_except": 3,
-    "except_pass": 0
-  },
-  "context/pause_state.py": {
-    "broad_except": 2,
-    "except_pass": 1
-  },
-  "context/resume.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "core/agentic_tool_loop.py": {
-    "broad_except": 14,
-    "except_pass": 8
-  },
-  "core/budgets.py": {
-    "broad_except": 3,
-    "except_pass": 0
-  },
-  "core/chat_run.py": {
-    "broad_except": 20,
-    "except_pass": 15
-  },
-  "core/direct_runner.py": {
-    "broad_except": 11,
-    "except_pass": 2
-  },
-  "core/duo/_pre_explore.py": {
-    "broad_except": 48,
-    "except_pass": 18
-  },
-  "core/duo/_utils.py": {
-    "broad_except": 1,
-    "except_pass": 1
-  },
-  "core/duo/_vram.py": {
-    "broad_except": 8,
-    "except_pass": 2
-  },
-  "core/duo/preflight.py": {
-    "broad_except": 26,
-    "except_pass": 11
-  },
-  "core/duo_helpers.py": {
-    "broad_except": 9,
-    "except_pass": 2
-  },
-  "core/duo_runner.py": {
-    "broad_except": 89,
-    "except_pass": 26
-  },
-  "core/fix_agent.py": {
-    "broad_except": 5,
-    "except_pass": 1
-  },
-  "core/model_sampling.py": {
-    "broad_except": 2,
-    "except_pass": 1
-  },
-  "core/pipeline_runner.py": {
-    "broad_except": 15,
-    "except_pass": 8
-  },
-  "core/run_audit.py": {
-    "broad_except": 3,
-    "except_pass": 0
-  },
-  "core/state.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "core/subagent_lite.py": {
-    "broad_except": 7,
-    "except_pass": 2
-  },
-  "core/telemetry.py": {
-    "broad_except": 4,
-    "except_pass": 1
-  },
-  "core/tool_exec_helpers.py": {
-    "broad_except": 9,
-    "except_pass": 3
-  },
-  "core/tool_executor.py": {
-    "broad_except": 12,
-    "except_pass": 4
-  },
-  "core/tool_loop.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "core/toolcall_sanitize.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "core/wedge_handoff.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "deploy/add_model.py": {
-    "broad_except": 6,
-    "except_pass": 1
-  },
-  "deploy/fetch_llamacpp.py": {
-    "broad_except": 8,
-    "except_pass": 0
-  },
-  "deploy/fetch_models.py": {
-    "broad_except": 5,
-    "except_pass": 0
-  },
-  "explore/cache.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "hive_functions/chunking.py": {
-    "broad_except": 7,
-    "except_pass": 3
-  },
-  "hive_functions/ctx_utils.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "hive_functions/git_tools.py": {
-    "broad_except": 8,
-    "except_pass": 2
-  },
-  "hive_functions/hivemind_feature/ast_tools.py": {
-    "broad_except": 6,
-    "except_pass": 1
-  },
-  "hive_functions/memory.py": {
-    "broad_except": 4,
-    "except_pass": 1
-  },
-  "hive_functions/num_ctx_config.py": {
-    "broad_except": 3,
-    "except_pass": 1
-  },
-  "hive_functions/pipeline.py": {
-    "broad_except": 5,
-    "except_pass": 2
-  },
-  "hive_functions/planner.py": {
-    "broad_except": 24,
-    "except_pass": 16
-  },
-  "hive_functions/pre_explore/contracts.py": {
-    "broad_except": 9,
-    "except_pass": 5
-  },
-  "hive_functions/pre_explore/llm.py": {
-    "broad_except": 3,
-    "except_pass": 0
-  },
-  "hive_functions/pre_explore/partition.py": {
-    "broad_except": 11,
-    "except_pass": 6
-  },
-  "hive_functions/pre_explore/runner.py": {
-    "broad_except": 2,
-    "except_pass": 2
-  },
-  "hive_functions/pre_explore/tooling.py": {
-    "broad_except": 8,
-    "except_pass": 2
-  },
-  "hive_functions/safe_profile_policy.py": {
-    "broad_except": 5,
-    "except_pass": 0
-  },
-  "hive_functions/skill_distiller.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "hive_functions/skills.py": {
-    "broad_except": 14,
-    "except_pass": 3
-  },
-  "hive_functions/soul_engine.py": {
-    "broad_except": 8,
-    "except_pass": 4
-  },
-  "hive_functions/static_repomap.py": {
-    "broad_except": 6,
-    "except_pass": 0
-  },
-  "hive_functions/test_runner.py": {
-    "broad_except": 4,
-    "except_pass": 3
-  },
-  "hive_functions/tree_scout.py": {
-    "broad_except": 9,
-    "except_pass": 4
-  },
-  "infra/keep_awake.py": {
-    "broad_except": 2,
-    "except_pass": 1
-  },
-  "infra/log_noise.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "infra/mcp_server.py": {
-    "broad_except": 31,
-    "except_pass": 4
-  },
-  "infra/notify.py": {
-    "broad_except": 3,
-    "except_pass": 0
-  },
-  "infra/run_control.py": {
-    "broad_except": 2,
-    "except_pass": 2
-  },
-  "infra/run_counter.py": {
-    "broad_except": 2,
-    "except_pass": 0
-  },
-  "infra/security.py": {
-    "broad_except": 2,
-    "except_pass": 1
-  },
-  "infra/token_stats.py": {
-    "broad_except": 2,
-    "except_pass": 2
-  },
-  "learning/insights.py": {
-    "broad_except": 8,
-    "except_pass": 4
-  },
-  "learning/peer_ratings.py": {
-    "broad_except": 4,
-    "except_pass": 1
-  },
-  "model_configs/__init__.py": {
-    "broad_except": 2,
-    "except_pass": 0
-  },
-  "model_configs/models_registry.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "routers/chats.py": {
-    "broad_except": 6,
-    "except_pass": 3
-  },
-  "routers/config.py": {
-    "broad_except": 15,
-    "except_pass": 6
-  },
-  "routers/core.py": {
-    "broad_except": 4,
-    "except_pass": 0
-  },
-  "routers/debug.py": {
-    "broad_except": 5,
-    "except_pass": 1
-  },
-  "routers/git.py": {
-    "broad_except": 10,
-    "except_pass": 1
-  },
-  "routers/models.py": {
-    "broad_except": 4,
-    "except_pass": 1
-  },
-  "routers/skills.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "routers/soul.py": {
-    "broad_except": 2,
-    "except_pass": 0
-  },
-  "routers/vision.py": {
-    "broad_except": 2,
-    "except_pass": 0
-  },
-  "routers/vram.py": {
-    "broad_except": 16,
-    "except_pass": 2
-  },
-  "routing/model_automap.py": {
-    "broad_except": 7,
-    "except_pass": 3
-  },
-  "run.py": {
-    "broad_except": 9,
-    "except_pass": 5
-  },
-  "server.py": {
-    "broad_except": 35,
-    "except_pass": 16
-  },
-  "settings.py": {
-    "broad_except": 4,
-    "except_pass": 2
-  },
-  "sse/events.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tests/run_regressions.py": {
-    "broad_except": 1,
-    "except_pass": 1
-  },
-  "tests/test_dispatch_smoke.py": {
-    "broad_except": 1,
-    "except_pass": 1
-  },
-  "tests/test_execute_tool_round.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tests/test_fallback_ctx_stall.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tests/test_linux_paths.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tests/test_mini_shrink_retry.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tests/test_noop_hint_and_zero_lines.py": {
-    "broad_except": 2,
-    "except_pass": 0
-  },
-  "tests/test_stuck_bash_reset_threshold.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tests/test_stuck_edit_false_positive.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tests/test_wedge_handoff.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tests/test_write_hang_bounded.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tools/background.py": {
-    "broad_except": 8,
-    "except_pass": 6
-  },
-  "tools/browser.py": {
-    "broad_except": 9,
-    "except_pass": 3
-  },
-  "tools/definitions.py": {
-    "broad_except": 2,
-    "except_pass": 2
-  },
-  "tools/errors.py": {
-    "broad_except": 1,
-    "except_pass": 1
-  },
-  "tools/handlers/_shared.py": {
-    "broad_except": 1,
-    "except_pass": 0
-  },
-  "tools/handlers/code_intel.py": {
-    "broad_except": 9,
-    "except_pass": 1
-  },
-  "tools/handlers/exec_tools.py": {
-    "broad_except": 23,
-    "except_pass": 7
-  },
-  "tools/handlers/file_ops.py": {
-    "broad_except": 30,
-    "except_pass": 11
-  },
-  "tools/handlers/git_tools.py": {
-    "broad_except": 2,
-    "except_pass": 0
-  },
-  "tools/handlers/linting.py": {
-    "broad_except": 7,
-    "except_pass": 1
-  },
-  "tools/handlers/misc.py": {
-    "broad_except": 3,
-    "except_pass": 1
-  },
-  "tools/handlers/web_tools.py": {
-    "broad_except": 2,
-    "except_pass": 0
-  },
-  "tools/runner.py": {
-    "broad_except": 26,
-    "except_pass": 18
-  },
-  "tools/sandbox.py": {
-    "broad_except": 10,
-    "except_pass": 4
-  },
-  "tools/websearch.py": {
-    "broad_except": 12,
-    "except_pass": 5
-  },
-  "tools/workspace.py": {
-    "broad_except": 5,
-    "except_pass": 1
-  },
-  "utils/file.py": {
-    "broad_except": 3,
-    "except_pass": 1
-  },
-  "utils/tool.py": {
-    "broad_except": 6,
-    "except_pass": 1
-  },
-  "utils/workspace_resolve.py": {
-    "broad_except": 3,
-    "except_pass": 0
-  },
-  "vision/preprocess.py": {
-    "broad_except": 5,
-    "except_pass": 0
-  },
-  "vram/loader.py": {
-    "broad_except": 5,
-    "except_pass": 2
-  }
+ "backend/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "backend/llama_client.py": {
+  "broad_except": 3,
+  "except_pass": 3
+ },
+ "backend/llama_compat.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "backend/llama_config.py": {
+  "broad_except": 11,
+  "except_pass": 4
+ },
+ "backend/llama_manager_utils.py": {
+  "broad_except": 20,
+  "except_pass": 4
+ },
+ "backend/llama_models.py": {
+  "broad_except": 9,
+  "except_pass": 5
+ },
+ "backend/llama_server_manager.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "backend/llama_slots.py": {
+  "broad_except": 9,
+  "except_pass": 4
+ },
+ "backend/llama_vram_table.py": {
+  "broad_except": 8,
+  "except_pass": 4
+ },
+ "backend/manager_evict.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "backend/manager_health.py": {
+  "broad_except": 8,
+  "except_pass": 5
+ },
+ "backend/manager_load.py": {
+  "broad_except": 39,
+  "except_pass": 15
+ },
+ "backend/manager_prefetch.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "backend/manager_process.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
+ "context/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "context/chat.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "context/chat_util.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "context/compression.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "context/ctx_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "context/pause_state.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
+ "context/project_state.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "context/resume.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "core/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/agentic_duo_state.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/agentic_tool_loop.py": {
+  "broad_except": 14,
+  "except_pass": 8
+ },
+ "core/budgets.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "core/chat_run.py": {
+  "broad_except": 20,
+  "except_pass": 14
+ },
+ "core/direct_runner.py": {
+  "broad_except": 11,
+  "except_pass": 2
+ },
+ "core/duo/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/duo/_portcheck.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/duo/_pre_explore.py": {
+  "broad_except": 48,
+  "except_pass": 18
+ },
+ "core/duo/_utils.py": {
+  "broad_except": 1,
+  "except_pass": 1
+ },
+ "core/duo/_vram.py": {
+  "broad_except": 8,
+  "except_pass": 2
+ },
+ "core/duo/preflight.py": {
+  "broad_except": 26,
+  "except_pass": 9
+ },
+ "core/duo_config.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/duo_helpers.py": {
+  "broad_except": 9,
+  "except_pass": 2
+ },
+ "core/duo_runner.py": {
+  "broad_except": 89,
+  "except_pass": 26
+ },
+ "core/error_rollup.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/fix_agent.py": {
+  "broad_except": 5,
+  "except_pass": 1
+ },
+ "core/harness_stats.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/model_sampling.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
+ "core/pipeline_runner.py": {
+  "broad_except": 15,
+  "except_pass": 8
+ },
+ "core/plan_tracker.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/repomap_pin.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/run_audit.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "core/run_context.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/state.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "core/stream.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/stt_audio.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/stt_engine.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/subagent_lite.py": {
+  "broad_except": 7,
+  "except_pass": 2
+ },
+ "core/telemetry.py": {
+  "broad_except": 4,
+  "except_pass": 1
+ },
+ "core/tool_exec_helpers.py": {
+  "broad_except": 9,
+  "except_pass": 3
+ },
+ "core/tool_executor.py": {
+  "broad_except": 12,
+  "except_pass": 4
+ },
+ "core/tool_loop.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "core/toolcall_sanitize.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "core/tts_audio.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/tts_engine.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "core/wedge_handoff.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "deploy/add_model.py": {
+  "broad_except": 6,
+  "except_pass": 1
+ },
+ "deploy/backfill_speeds.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "deploy/fetch_decider.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "deploy/fetch_llamacpp.py": {
+  "broad_except": 8,
+  "except_pass": 0
+ },
+ "deploy/fetch_models.py": {
+  "broad_except": 5,
+  "except_pass": 0
+ },
+ "deploy/fetch_whisper.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "deploy/gen_settings_docs.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "deploy/recommend_models.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "explore/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "explore/cache.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "hive_functions/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hive_functions/chunking.py": {
+  "broad_except": 7,
+  "except_pass": 3
+ },
+ "hive_functions/ctx_utils.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "hive_functions/git_tools.py": {
+  "broad_except": 8,
+  "except_pass": 2
+ },
+ "hive_functions/hivemind_feature/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hive_functions/hivemind_feature/ast_tools.py": {
+  "broad_except": 6,
+  "except_pass": 1
+ },
+ "hive_functions/language_config.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hive_functions/loop_machine.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hive_functions/memory.py": {
+  "broad_except": 4,
+  "except_pass": 1
+ },
+ "hive_functions/num_ctx_config.py": {
+  "broad_except": 3,
+  "except_pass": 1
+ },
+ "hive_functions/pipeline.py": {
+  "broad_except": 5,
+  "except_pass": 2
+ },
+ "hive_functions/planner.py": {
+  "broad_except": 24,
+  "except_pass": 16
+ },
+ "hive_functions/pre_explore/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hive_functions/pre_explore/context.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hive_functions/pre_explore/contracts.py": {
+  "broad_except": 9,
+  "except_pass": 5
+ },
+ "hive_functions/pre_explore/llm.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "hive_functions/pre_explore/partition.py": {
+  "broad_except": 11,
+  "except_pass": 6
+ },
+ "hive_functions/pre_explore/runner.py": {
+  "broad_except": 2,
+  "except_pass": 2
+ },
+ "hive_functions/pre_explore/tooling.py": {
+  "broad_except": 8,
+  "except_pass": 2
+ },
+ "hive_functions/prompts.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hive_functions/safe_profile_policy.py": {
+  "broad_except": 5,
+  "except_pass": 0
+ },
+ "hive_functions/skill_distiller.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "hive_functions/skills.py": {
+  "broad_except": 14,
+  "except_pass": 3
+ },
+ "hive_functions/soul_engine.py": {
+  "broad_except": 8,
+  "except_pass": 4
+ },
+ "hive_functions/static_repomap.py": {
+  "broad_except": 6,
+  "except_pass": 0
+ },
+ "hive_functions/test_runner.py": {
+  "broad_except": 4,
+  "except_pass": 3
+ },
+ "hive_functions/tree_scout.py": {
+  "broad_except": 9,
+  "except_pass": 4
+ },
+ "hivemind_gateway/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/approvals.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/auth.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/bridge.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/commands.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/config.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/cron.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/hive_client.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/main.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "hivemind_gateway/redaction.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/render.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/send.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/state.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "hivemind_gateway/telegram_api.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/ask_user_governor.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/config.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/editor_context.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/gateway_supervisor.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/keep_awake.py": {
+  "broad_except": 2,
+  "except_pass": 1
+ },
+ "infra/log_noise.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "infra/mcp_server.py": {
+  "broad_except": 30,
+  "except_pass": 3
+ },
+ "infra/notify.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "infra/phase_timer.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/run_control.py": {
+  "broad_except": 2,
+  "except_pass": 2
+ },
+ "infra/run_counter.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "infra/security.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "infra/shell_env.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/token_stats.py": {
+  "broad_except": 2,
+  "except_pass": 2
+ },
+ "learning/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "learning/insights.py": {
+  "broad_except": 8,
+  "except_pass": 4
+ },
+ "learning/peer_ratings.py": {
+  "broad_except": 4,
+  "except_pass": 1
+ },
+ "model_configs/__init__.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "model_configs/models_registry.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "routers/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "routers/automap.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "routers/chats.py": {
+  "broad_except": 6,
+  "except_pass": 3
+ },
+ "routers/config.py": {
+  "broad_except": 15,
+  "except_pass": 6
+ },
+ "routers/context.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "routers/core.py": {
+  "broad_except": 4,
+  "except_pass": 0
+ },
+ "routers/debug.py": {
+  "broad_except": 5,
+  "except_pass": 1
+ },
+ "routers/git.py": {
+  "broad_except": 10,
+  "except_pass": 1
+ },
+ "routers/learning.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "routers/models.py": {
+  "broad_except": 4,
+  "except_pass": 1
+ },
+ "routers/skills.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "routers/soul.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "routers/vision.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "routers/vram.py": {
+  "broad_except": 16,
+  "except_pass": 2
+ },
+ "routers/websearch.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "routing/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "routing/agent_intent.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "routing/complexity.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "routing/decider.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "routing/model_automap.py": {
+  "broad_except": 6,
+  "except_pass": 3
+ },
+ "routing/model_picker.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "run.py": {
+  "broad_except": 9,
+  "except_pass": 5
+ },
+ "scripts/bench_tts_latency.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "scripts/release_zip_report.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "server.py": {
+  "broad_except": 35,
+  "except_pass": 16
+ },
+ "settings.py": {
+  "broad_except": 3,
+  "except_pass": 2
+ },
+ "sse/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "sse/events.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/direct_vision_check.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/make_longchat.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/run_regressions.py": {
+  "broad_except": 1,
+  "except_pass": 1
+ },
+ "tests/smoke_image.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/smoke_vision_negative.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_action_approval.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_appjs_error_net.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_approval_timeout.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_audit_fixes_lock_debug.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_auto_decider_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_bat_encoding.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_bind_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_browser_blocked_dedup.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_browser_fileserve.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_budgets.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_chat_blobs.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_chat_concurrency.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_chat_real_roundtrip.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_chat_search.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_chats_ws_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_chunk_resume.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_coder_after_run.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_coder_briefing.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_compress_local_only.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_compress_plan_reinject.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_compression_plan_anchor.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_compression_plan_survival.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_content_budget_tokens.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_cpt_probe.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_cron.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_csrf_host_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_ctx_budget.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_ctx_fit_and_floor_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_ctx_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_ctx_lru_invalidation.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_debug_dump.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_decider_cache.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_decider_unload.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_destructive_gate.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_destructive_python.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_direct_tools.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_direct_vision_flag.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_dispatch_smoke.py": {
+  "broad_except": 1,
+  "except_pass": 1
+ },
+ "tests/test_edit_tool_layer.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_editor_context.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_editor_injection.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_ensure_loaded_stale_port.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_env_check.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_error_cap_decay.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_error_rollup.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_execute_tool_round.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_fallback_ctx_stall.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_feature_search_core.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_feature_search_coverage.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_follow_ui.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_fuzzy_autojunk.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_auth.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_bridge.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_command_flow.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_commands2.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_config.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_confinement.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_lint_gate.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_redaction.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_render.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_send.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_state.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_state_path.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_supervisor.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_transport.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_voice.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_voice_out.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gguf_tag_pinning.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_git_gate.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_git_tool_gating.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_harness_stats.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_history_source.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_image_plan.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_injection_budget.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_inline_think_format.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_install_package_errors.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_installer_coreutils.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_installer_uv_path.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_lint.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_linux_paths.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_live_findings.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_loop_detect_calibration.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_loop_detect_chunk_read.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_loop_detect_run_bash.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mcp_hardening.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_memory_routing.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mini_shrink_retry.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_mismatch_reload.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mmproj_fallback.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mmproj_specs.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_model_catalog.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_models_registry.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mtp_off_switch.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_native_lib_check.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_no_new_silent_excepts.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_noop_hint_and_zero_lines.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "tests/test_output_reserve.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_partial_cut.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_phone_restriction.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_planner_coder_port_verify.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_planner_connect_recovery.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_planner_model_persist.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_planner_reuse_ctx.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_planner_thinking_cap.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_post_run_model.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_pre_explore_gather.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_pre_explore_globals.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_prefix_stability.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_preflight_evict_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_preset_agent_merge.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_preset_never_keys_apply.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_preset_snapshot_complete.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_presets_bom.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_read_after_write.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_read_ladder.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_read_only_detect.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_readme_currency.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_reaudit_polish.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_remember_tool.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_repomap_pin.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_restored_caps_truth.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_router_exports.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_routing_decider.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_run_audit.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_run_bash_drive_paths.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_run_bash_shell_hint.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_run_python_encoding.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_runstate_persistence.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_safe_profile_choice.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_schema_fit_paths.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_schema_truth.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_searxng_bat.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_shell_env.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_skip_trap.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_smoke_harness.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_steer_card.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_steer_images.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_stt_audio.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_stt_engine.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_stt_server.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_stuck_bash_reset_threshold.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_stuck_edit_false_positive.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_stuck_handler_callable.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_takeover_polish.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_test_detection_fallback.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_token_stats_by_model.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_arg_compact.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_arg_schemas.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_budgets.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_descriptions.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_error_taxonomy.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_feedback.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_registry_consistency.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_toolcall_sanitize.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_toolgen_stream_card.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tools_audit_fixes.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_transcript_glob.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tree_scout_workspace.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tts_audio.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tts_broken_engine.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tts_engine.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tts_server.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_ui_context_card.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_update_prune.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_update_zip_layout.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_v131_hardening.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_verify_gate.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_vision_gate.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_vision_load_race.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_vision_strict.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_voice_card.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_voice_decider.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_vram_guard_lfm.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_webfetch_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_websearch_budget_stop.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_websearch_quality.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_wedge_ctx.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_wedge_handoff.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_wedge_ui_toggle.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_workspace_and_cpu_guards.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_workspace_guards.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_workspace_provenance.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_write_guard_and_explore_truth.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_write_hang_bounded.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tools/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tools/background.py": {
+  "broad_except": 8,
+  "except_pass": 6
+ },
+ "tools/browser.py": {
+  "broad_except": 9,
+  "except_pass": 3
+ },
+ "tools/definitions.py": {
+  "broad_except": 2,
+  "except_pass": 2
+ },
+ "tools/env_check.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tools/errors.py": {
+  "broad_except": 1,
+  "except_pass": 1
+ },
+ "tools/handlers/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tools/handlers/_shared.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
+ "tools/handlers/code_intel.py": {
+  "broad_except": 9,
+  "except_pass": 1
+ },
+ "tools/handlers/exec_tools.py": {
+  "broad_except": 23,
+  "except_pass": 7
+ },
+ "tools/handlers/file_ops.py": {
+  "broad_except": 28,
+  "except_pass": 10
+ },
+ "tools/handlers/git_tools.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "tools/handlers/linting.py": {
+  "broad_except": 7,
+  "except_pass": 1
+ },
+ "tools/handlers/misc.py": {
+  "broad_except": 3,
+  "except_pass": 1
+ },
+ "tools/handlers/web_tools.py": {
+  "broad_except": 2,
+  "except_pass": 0
+ },
+ "tools/limits.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tools/patch_2_fuzzy_edit.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tools/runner.py": {
+  "broad_except": 23,
+  "except_pass": 15
+ },
+ "tools/sandbox.py": {
+  "broad_except": 10,
+  "except_pass": 4
+ },
+ "tools/scan_models.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tools/sync_to_installs.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tools/websearch.py": {
+  "broad_except": 12,
+  "except_pass": 5
+ },
+ "tools/workspace.py": {
+  "broad_except": 5,
+  "except_pass": 1
+ },
+ "utils/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "utils/file.py": {
+  "broad_except": 3,
+  "except_pass": 1
+ },
+ "utils/httpx_utils.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "utils/math.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "utils/messages.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "utils/patterns.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "utils/text.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "utils/token.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "utils/tool.py": {
+  "broad_except": 6,
+  "except_pass": 1
+ },
+ "utils/workspace_resolve.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
+ "vision/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "vision/preprocess.py": {
+  "broad_except": 5,
+  "except_pass": 0
+ },
+ "vram/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "vram/loader.py": {
+  "broad_except": 5,
+  "except_pass": 2
+ }
 }
