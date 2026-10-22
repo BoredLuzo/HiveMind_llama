@@ -177,11 +177,16 @@ class TelegramApi:
     async def download_file(self, file_id: str, max_bytes: int = 20 * 1024 * 1024) -> bytes:
         """getFile + GET the file URL. Size-capped, never logs the token."""
         meta = await self.get_file(file_id)
-        result = meta.get("result") if isinstance(meta, dict) else None
-        path = (result or {}).get("file_path") if isinstance(result, dict) else None
+        # LEVEL-FIX (2026-10-22, live): _call already returns the INNER
+        # result — the file object {file_id, file_size, file_path}. The old
+        # code looked for a nested "result" INSIDE it (always None) so every
+        # voice-note download failed with "no file_path in the result"
+        # before a single byte was fetched (first real voice-in test).
+        file_obj = meta.get("result") if isinstance(meta, dict) and isinstance(meta.get("result"), dict) else meta
+        path = file_obj.get("file_path")
         if not path:
             raise TelegramApiError("getFile", "no file_path in the result")
-        size = int((result or {}).get("file_size") or 0)
+        size = int(file_obj.get("file_size") or 0)
         if size and size > max_bytes:
             raise TelegramApiError("getFile", f"file too large ({size} bytes)")
         c = await self._http()

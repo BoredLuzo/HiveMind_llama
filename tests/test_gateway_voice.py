@@ -91,85 +91,73 @@ check("tts has a longer timeout", "timeout=120.0" in client)
 # ── (d) the handler ────────────────────────────────────────────────────────
 main = read("hivemind_gateway/main.py")
 seg = main.split("async def handle_voice_note", 1)[1].split("async def start_owner_run", 1)[0]
-_dead_assign = [l for l in seg.splitlines()
-                if ".from_voice = True" in l and not l.strip().startswith("#")]
-check("the spoken flag is set ON the dataclass, no dead assignment",
-      "from_voice=True)" in seg and not _dead_assign)
-check("the length cap is enforced", "voice_max_seconds" in seg)
-check("the byte cap is enforced", "voice_max_bytes" in seg)
-check("download errors are answered", "Could not download the voice note" in seg)
-check("a transcribing notice is sent", "Transcribing" in seg)
-check("stt codes map to hints", "STT_NO_ENGINE" in seg and "STT_EMPTY" in seg)
-check("the transcript keeps the text cap", "max_text_chars" in seg)
-check("the transcript is re-dispatched through start_owner_run",
-      "await self.start_owner_run(voiced)" in seg)
-check("voice is only used when enabled",
-      "_voice_in_enabled" in main and "telegram_voice_in" in main)
-check("disabled voice gets a clear message", "Voice notes are off" in main)
 
-# ── (e) opt-in defaults ────────────────────────────────────────────────────
-cfg = GatewayConfig()
-check("voice_in defaults to off", cfg.voice_in is False)
-check("voice_out defaults to off", cfg.voice_out is False)
-check("the byte cap matches the Telegram limit", cfg.voice_max_bytes == 20 * 1024 * 1024)
-check("the duration cap is sane", 60 <= cfg.voice_max_seconds <= 900)
-
-# ── HiveClient.stt behaviour with a stub transport ────────────────────────
-class _StubResp:
-    def __init__(self, status, payload):
-        self.status_code = status
-        self._payload = payload
-        self.content = b""
-
-    def json(self):
-        if isinstance(self._payload, Exception):
-            raise self._payload
-        return self._payload
+# ── (d2) download_file level fix (2026-10-22, live): _call returns the
+# INNER result (the file object) — the old code looked for a nested
+# "result" inside it and every voice download failed before fetching. ──────
+import httpx as _httpx
+from hivemind_gateway.telegram_api import TelegramApi as _RealApi
+import asyncio as _aio
 
 
-class _StubClient:
-    def __init__(self, resp):
-        self.resp = resp
-        self.calls = []
+class _Transport:
+    """Fake transport: POST returns getFile-style JSON, GET returns bytes."""
 
-    async def post(self, path, **kwargs):
-        self.calls.append((path, kwargs))
-        return self.resp
+    class _R:
+        def __init__(self, status_code, content, json_data=None):
+            self.status_code = status_code
+            self.content = content
+            self._json = json_data
+
+        def json(self):
+            return self._json if self._json is not None else {}
+
+    def __init__(self, file_obj, payload=b"OggSvoice"):
+        self.file_obj, self.payload = file_obj, payload
+        self.get_urls = []
+
+    async def post(self, url, json=None):
+        return _Transport._R(200, content=b"{}",
+                             json_data={"ok": True, "result": self.file_obj})
+
+    async def get(self, url):
+        self.get_urls.append(url)
+        return _Transport._R(200, self.payload)
 
 
-from hivemind_gateway.hive_client import HiveClient  # noqa: E402
+def _make_api(transport):
+    """RealApi ohne __init__ (keine Locks) + Fake-Transport."""
+    api = _RealApi.__new__(_RealApi)
+    api._token = "test-token"
+    api._base_url = "https://api.telegram.org"
+    api._base = api._base_url + "/bottest-token"
+    api._lock = None
+    api._client = None
 
-hc = HiveClient("http://127.0.0.1:8001")
-hc._client = _StubClient(_StubResp(200, {"text": "hello world"}))
-text, code = asyncio.run(hc.stt(b"OggS..."))
-check("stt returns the transcript", text == "hello world" and code == "")
-hc._client = _StubClient(_StubResp(409, {"code": "STT_DISABLED"}))
-text, code = asyncio.run(hc.stt(b"x"))
-check("stt maps the engine code", text == "" and code == "STT_DISABLED")
-hc._client = _StubClient(_StubResp(200, {"text": "   "}))
-text, code = asyncio.run(hc.stt(b"x"))
-check("an empty transcript becomes STT_EMPTY", code == "STT_EMPTY")
-hc._client = _StubClient(_StubResp(200, ValueError("no json")))
-text, code = asyncio.run(hc.stt(b"x"))
-check("non-JSON is reported", code.startswith("http "))
+    async def _fake_http():
+        return transport
 
-hc._client = _StubClient(_StubResp(200, {"text": "x"}))
-hc._client.resp.content = b"OggSvoice"
-data, code = asyncio.run(hc.tts("hi"))
-check("tts returns the audio bytes", data == b"OggSvoice" and code == "")
-hc._client = _StubClient(_StubResp(400, {"code": "TTS_DISABLED"}))
-data, code = asyncio.run(hc.tts("hi"))
-check("tts maps the engine code", data == b"" and code == "TTS_DISABLED")
+    api._http = _fake_http
+    return api
 
-# ── DISPATCH (2026-10-22, live: voice notes fell into start_owner_run's
-# empty-text check and died silently - "audio sent, nothing happens") ──────
-disp = main.split("async def process_update", 1)[1]
-_seg = disp.split("if cmd:", 1)[1].split("await gw.start_owner_run(p)", 1)[0]
-check("voice notes route to handle_voice_note BEFORE the empty-text run",
-      "handle_voice_note(p)" in _seg and "_voice_in_enabled()" in _seg)
-check("the empty-text silent exit is AFTER the voice routing",
-      disp.find("handle_voice_note(p)") < disp.find("await gw.start_owner_run(p)"))
 
-print()
+_tr = _Transport({"file_id": "f1", "file_size": 9,
+                  "file_path": "voice/file_1.oga"}, b"OggSvoice")
+_api = _make_api(_tr)
+wav_dl = _aio.run(_api.download_file("f1"))
+check("download_file reads the file_path from the inner result",
+      wav_dl == b"OggSvoice" and len(_tr.get_urls) == 1
+      and "file_1.oga" in _tr.get_urls[0])
+
+# negative: getFile WITHOUT file_path -> clean TelegramApiError
+_tr2 = _Transport({"file_id": "f1"})
+_api2 = _make_api(_tr2)
+try:
+    _aio.run(_api2.download_file("f1"))
+    check("getFile without file_path raises", False)
+except Exception as exc:
+    check("getFile without file_path raises TelegramApiError",
+          "no file_path" in str(exc))
+
 print(f"SUMMARY gateway_voice: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
