@@ -445,6 +445,11 @@ class Gateway:
 
     async def handle_owner_update(self, p: gw_auth.ParsedUpdate,
                                   _internal: bool = False) -> None:
+        # POLL-DEBUG (2026-10-22): the gateway consumed a voice note silently
+        # once (no Transcribing reply, no error) - log the entry decision at
+        # INFO so a silent drop between poll and voice handler is visible.
+        log.info("[OWNER-UPDATE] kind=%s voice_file=%s text=%r",
+                 p.kind, bool(p.voice_file_id), str(p.text or "")[:40])
         if not _internal and await self._run_pending_as_arg(p):
             return
         cmd = gw_commands.command_from_message(p)
@@ -739,7 +744,11 @@ class Gateway:
             s = await self.hive.settings()
         except (HiveUnreachable, HTTPError, OSError):
             return False
-        return bool((s or {}).get("telegram_voice_in", False))
+        _enabled = bool((s or {}).get("telegram_voice_in", False))
+        # POLL-DEBUG (2026-10-22): cfg says off, engine setting decides.
+        log.info("[VOICE-IN] cfg.voice_in=%s -> engine telegram_voice_in=%s",
+                 self.cfg.voice_in, _enabled)
+        return _enabled
 
     async def handle_voice_note(self, p: gw_auth.ParsedUpdate) -> None:
         """Download the voice note, transcribe it via the engine, run the text.
