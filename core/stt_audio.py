@@ -107,6 +107,10 @@ def to_wav16k(data: bytes | str | Path, *, max_seconds: int = DEFAULT_MAX_SECOND
     # reads the same file happily, so only a real CLI run exposes this.
     # BOUNDED (2026-10-19, same trap as write_file): tempfile.mkstemp retries
     # PermissionError up to TMP_MAX - a locked-down %TEMP% hung the STT request.
+    # TMP-DIR DEFAULT (2026-10-22, live): the loop used to run with tmp_dir=None
+    # whenever the caller passed no explicit dir - Path(None) raised TypeError
+    # and EVERY voice note 500ed before the engine ever saw audio.
+    tmp_dir = tmp_dir or tempfile.gettempdir()
     _fd = _tmp_name = None
     for _ in range(16):
         _cand = Path(tmp_dir) / f"hivemind_stt_{secrets.token_hex(8)}.wav"

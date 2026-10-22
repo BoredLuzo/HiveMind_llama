@@ -137,6 +137,11 @@ finally:
     stt_audio.cleanup(wav8)
 
 wav_st, _ = stt_audio.to_wav16k(_wav_bytes(seconds=0.4, channels=2))
+# TMP-DIR DEFAULT (2026-10-22, live): every /stt request calls to_wav16k
+# WITHOUT a tmp_dir - Path(None) raised TypeError and the voice note 500ed.
+wav_none, _ = stt_audio.to_wav16k(raw_wav, tmp_dir=None)
+check("to_wav16k without tmp_dir defaults to %TEMP%",
+      Path(wav_none).exists())
 try:
     with wave.open(str(wav_st), "rb") as wf:
         check("stereo is downmixed to mono", wf.getnchannels() == 1)
@@ -199,6 +204,7 @@ try:
         stt_audio.cleanup(_wav2)
 except (OSError, ValueError) as _exc:
     check("another process can read the decoded WAV", False, f" ({_exc})")
+
 
 print()
 print(f"SUMMARY stt_audio: {passed} passed, {failed} failed, {skipped} skipped")
