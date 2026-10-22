@@ -1012,6 +1012,19 @@ async def process_update(gw: Gateway, raw: dict) -> None:
             log.info("[DROP] edited_message %s (edits never re-run)",
                      p.update_id)
         else:
+            # VOICE (1.4 / fixed 2026-10-22): a voice note has NO text — it
+            # used to fall into start_owner_run, whose empty-text check
+            # returned SILENTLY before the voice handler ever ran (live:
+            # "audio sent, nothing happens"). Route it to the voice handler.
+            if p.kind == "message" and p.voice_file_id:
+                if await gw._voice_in_enabled():
+                    await gw.handle_voice_note(p)
+                else:
+                    await gw.reply(p.chat_id,
+                                   "Voice notes are off. Enable 'voice_in' in "
+                                   "the gateway config to dictate runs.",
+                                   reply_to_message_id=p.message_id)
+                return
             await gw.start_owner_run(p)
         return
     if verdict == "pair_window":

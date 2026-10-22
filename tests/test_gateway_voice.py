@@ -161,6 +161,15 @@ hc._client = _StubClient(_StubResp(400, {"code": "TTS_DISABLED"}))
 data, code = asyncio.run(hc.tts("hi"))
 check("tts maps the engine code", data == b"" and code == "TTS_DISABLED")
 
+# ── DISPATCH (2026-10-22, live: voice notes fell into start_owner_run's
+# empty-text check and died silently - "audio sent, nothing happens") ──────
+disp = main.split("async def process_update", 1)[1]
+_seg = disp.split("if cmd:", 1)[1].split("await gw.start_owner_run(p)", 1)[0]
+check("voice notes route to handle_voice_note BEFORE the empty-text run",
+      "handle_voice_note(p)" in _seg and "_voice_in_enabled()" in _seg)
+check("the empty-text silent exit is AFTER the voice routing",
+      disp.find("handle_voice_note(p)") < disp.find("await gw.start_owner_run(p)"))
+
 print()
 print(f"SUMMARY gateway_voice: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
