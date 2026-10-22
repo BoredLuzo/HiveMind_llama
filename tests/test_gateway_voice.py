@@ -83,10 +83,15 @@ check("voice notes are sent as audio/ogg",
       "audio/ogg" in api and '"voice": ("voice.ogg"' in api)
 
 client = read("hivemind_gateway/hive_client.py")
-check("stt posts the raw body", 'post("/stt", content=audio' in client)
+check("stt posts the raw body", '"/stt"' in client and "content=audio" in client)
 check("stt returns a code on failure", "return \"\", code" in client or '{", code' in client)
 check("tts asks for opus", '"format": "opus"' in client)
 check("tts has a longer timeout", "timeout=120.0" in client)
+# STT-TIMEOUT (2026-10-22, audit): the client global is 60 s but the engine
+# budget is stt_timeout_s up to 120 s - a long clip raced the client and
+# came back "transport: ReadTimeout". The /stt call carries its own budget.
+check("stt carries the engine's time budget (not the 60s global)",
+      "timeout=httpx.Timeout(135.0" in client)
 
 # ── (d) the handler ────────────────────────────────────────────────────────
 main = read("hivemind_gateway/main.py")

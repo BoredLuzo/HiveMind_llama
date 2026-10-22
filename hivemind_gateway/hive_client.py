@@ -107,8 +107,15 @@ class HiveClient:
         failure becomes a code the caller can translate (STT_DISABLED, ...).
         """
         try:
-            r = await self._client.post("/stt", content=audio,
-                                        headers={"Content-Type": "audio/ogg"})
+            # STT-TIMEOUT (2026-10-22, audit): the client's global timeout is
+            # 60 s, but the engine allows stt_timeout_s up to 120 s for clips
+            # up to 300 s - a long clip lost the race and came back as
+            # "transport: ReadTimeout" instead of a transcript. The engine's
+            # documented budget wins here (read = transcribe+respond).
+            r = await self._client.post(
+                "/stt", content=audio,
+                headers={"Content-Type": "audio/ogg"},
+                timeout=httpx.Timeout(135.0, connect=5.0))
         except httpx.HTTPError as exc:
             return "", f"transport: {type(exc).__name__}"
         try:
