@@ -685,6 +685,9 @@ class Gateway:
         elif name == "status":
             await self.reply(p.chat_id, await self.bridge.status_text(),
                              reply_to_message_id=p.message_id)
+        elif name == "decider":
+            await self.reply(p.chat_id, await self.bridge.decider_text(arg),
+                             reply_to_message_id=p.message_id)
         elif name == "verbose":
             await self.reply(p.chat_id, self.bridge.toggle_verbose(),
                              reply_to_message_id=p.message_id)

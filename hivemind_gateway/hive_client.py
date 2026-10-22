@@ -74,6 +74,15 @@ class HiveClient:
             raise HiveUnreachable(f"/run/journal HTTP {r.status_code}")
         return r.json()
 
+    async def patch_settings(self, patch: dict) -> dict:
+        """POST /settings (partial update) - gateway commands like /decider
+        write single engine keys this way. Raises HiveUnreachable on any
+        non-200 (the caller answers the phone user)."""
+        r = await self._post_json("/settings", patch)
+        if r.status_code != 200:
+            raise HiveUnreachable(f"/settings HTTP {r.status_code}: {r.text[:120]}")
+        return r.json() if r.content else {}
+
     async def settings(self) -> dict:
         """GET /settings — the gateway reads (never writes) it so the
         HiveMind UI can veto the whole integration

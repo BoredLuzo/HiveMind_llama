@@ -531,6 +531,15 @@ async def post_settings(req: Request):
         logger.warning("[settings] save_settings failed: %s", e, exc_info=True)
         return JSONResponse({"error": f"Save failed: {str(e)[:120]}"}, status_code=500)
     _settings_rev += 1
+    # DECIDER-UNLOAD (2026-10-22, user request): switching routing_decider
+    # to off must free the encoder model (~1.8 GB RAM) immediately, not at
+    # the next engine restart. Best-effort - a failure here never fails
+    # the settings save.
+    try:
+        from routing.decider import react_to_routing_settings as _dec_react
+        await asyncio.to_thread(_dec_react, settings)
+    except (ImportError, TypeError, ValueError, OSError) as e:
+        logger.debug("[settings] decider react skipped: %s", e)
     return {"ok": True, "settings_rev": int(_settings_rev),
             "stripped": _stripped_keys}
 

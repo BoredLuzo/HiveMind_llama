@@ -65,6 +65,7 @@ class FakeHive:
         self.journal_body = {"active": False}
         self.journal_calls = []  # run_id scoping args (audit G7)
         self.settings_body = {}
+        self.patched_settings = []
         self.pending_body = {"active": False}
         self.steered = []
         self.fail_first_put_409 = fail_first_put_409
@@ -123,6 +124,10 @@ class FakeHive:
         if self.offline:
             raise HiveUnreachable("connection refused")
         return dict(self.journal_body)
+
+    async def patch_settings(self, patch: dict):
+        self.patched_settings.append(dict(patch))
+        return {"ok": True}
 
     async def settings(self):
         return dict(self.settings_body)
@@ -806,6 +811,19 @@ async def t_audit_fixes():
     check("from_voice: tagged as telegram-voice",
           _body_fv["overrides"].get("source") == "telegram-voice")
     check("from_voice: answered", _res_fv is not None)
+
+    # DECIDER command (2026-10-22): /decider off posts routing_decider to
+    # the engine settings (RAM release), bare = status.
+    _txt_d = await br.decider_text("off")
+    check("decider off posts the setting",
+          br.hive.patched_settings[-1].get("routing_decider") == "off"
+          and "Decider: off" in _txt_d)
+    _txt_s = await br.decider_text("")
+    check("decider bare shows status",
+          "Decider:" in _txt_s and "model:" in _txt_s)
+    _txt_b = await br.decider_text("banana")
+    check("decider invalid value -> usage error",
+          "on|off|shadow" in _txt_b)
 
     # ACTIVE-RUN VISIBILITY (2026-10-16): a UI/engine run the gateway did
     # NOT start shows in /status (live: agentic coder run in the browser,

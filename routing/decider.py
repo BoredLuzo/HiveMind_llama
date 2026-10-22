@@ -274,6 +274,15 @@ class EncoderBackend:
         self._model = None
         self._lock = threading.Lock()
 
+    def unload(self) -> None:
+        """Modell freigeben (RAM) - DECIDER-UNLOAD (2026-10-22).
+
+        Nur das geladene Modell objekt wird verworfen (die ~1,8 GB
+        Safetensors - der groesste Brocken); torch/transformers bleiben
+        importiert. Der naechste decide() laedt bei Bedarf neu (~18 s)."""
+        with self._lock:
+            self._model = None
+
     def available(self) -> bool:
         try:
             import gliner2  # noqa: F401
@@ -669,3 +678,25 @@ def backend(model_name: str = "fastino/GLiNER2.5-Decide") -> EncoderBackend:
 
 def cache() -> DecisionCache:
     return _CACHE
+
+
+def unload_encoder() -> None:
+    """DECIDER-UNLOAD (2026-10-22, user request): routing_decider off soll
+    den RAM freigeben - das geladene Encoder-Modell (~1,8 GB) wird
+    verworfen. Der naechste enable laedt neu (~18 s Kaltstart)."""
+    global _BACKEND
+    with _BACKEND_LOCK:
+        if _BACKEND is not None:
+            _BACKEND.unload()
+        _BACKEND = None
+
+
+def react_to_routing_settings(settings: dict | None) -> None:
+    """Von der Settings-Anwendung aufrufen (POST /settings): gibt das
+    Encoder-Modell frei, wenn der Decider auf off steht. Best-effort -
+    routing darf hier nie brechen."""
+    try:
+        if _mode_from(settings or {}, "routing_decider") == "off":
+            unload_encoder()
+    except (TypeError, ValueError, KeyError, OSError) as exc:
+        logger.debug("[DECIDER] react failed: %s", exc)

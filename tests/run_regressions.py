@@ -97,6 +97,7 @@ SUITES = [
     ("update_prune",              "tests/test_update_prune.py",                120),
     ("bind_guard",                "tests/test_bind_guard.py",                   60),
     ("decider_cache",             "tests/test_decider_cache.py",                60),
+    ("decider_unload",            "tests/test_decider_unload.py",               60),
     ("tool_budgets",              "tests/test_tool_budgets.py",                 60),
     ("ctx_budget",                "tests/test_ctx_budget.py",                   60),
     ("dispatch_smoke",            "tests/test_dispatch_smoke.py",               60),

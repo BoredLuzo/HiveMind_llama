@@ -1059,6 +1059,31 @@ class RunBridge:
         self.state.save()
         return f"🆕 New HiveMind chat: {title} ({mapping['hive_chat_id']})."
 
+    async def decider_text(self, arg: str) -> str:
+        """DECIDER (2026-10-22): /decider bare = status, on|off|shadow =
+        set routing_decider in the ENGINE settings. off frees the encoder
+        model (~1.8 GB RAM); on loads it lazily at the next decision."""
+        _a = (arg or "").strip().lower()
+        try:
+            s = await self.hive.settings()
+        except (HiveUnreachable, OSError) as exc:
+            return f"❌ Engine unreachable: {exc}"
+        if not _a:
+            _m = (s or {}).get("routing_decider") or "off"
+            _mdl = (s or {}).get("routing_decider_model") or "default"
+            return (f"🎛 Decider: {_m} (on|off|shadow)\n"
+                    f"model: {_mdl}\n"
+                    "off frees the encoder RAM; on routes via the CPU encoder.")
+        if _a not in ("on", "off", "shadow"):
+            return "❌ /decider on|off|shadow"
+        try:
+            await self.hive.patch_settings({"routing_decider": _a})
+        except (HiveUnreachable, OSError) as exc:
+            return f"❌ Engine unreachable: {exc}"
+        extra = (" - the encoder model is freed from RAM." if _a == "off"
+                 else " - the model loads at the next decision.")
+        return f"🎛 Decider: {_a}{extra}"
+
     async def status_text(self) -> str:
         run = self.state.data.get("active_run") or {}
         mapping = self._tg_chat() or {}
