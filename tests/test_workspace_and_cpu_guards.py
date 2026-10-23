@@ -85,7 +85,14 @@ check("real workspaces are still persisted",
       _src_cr.count("_save_last_ws(_ws_str)") == 1)
 
 # resolver contract: the fallback is the LAST resort and returns the flag
-from utils.workspace_resolve import (                                    # noqa: E402
+from utils import workspace_resolve as _wsr                                # noqa: E402
+import tempfile as _tmpf                                                   # noqa: E402
+# ISOLATION (2026-10-23): the resolver reads the REAL context/
+# last_workspace.json — a suite that runs a complete duo run before this
+# one (test_duo_e2e_smoke) persists its tmp workspace there and these
+# checks read that instead of the empty-file contract they pin.
+_wsr._LAST_WS_FILE = Path(_tmpf.mkdtemp(prefix="wsguards_")) / "last_workspace.json"
+from utils.workspace_resolve import (                                      # noqa: E402
     fallback_for_invalid_request,
     resolve_workspace,
 )
