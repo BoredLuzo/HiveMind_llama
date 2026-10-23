@@ -72,6 +72,10 @@ DEFAULT_SETTINGS = {
     "duo_worker_slots":        2,
     "moe_cpu_experts":         {},
     "llama_mlock":             True,
+    # Auto-fit (audit B3): omit --n-gpu-layers so llama.cpp fits the layers
+    # to the free VRAM itself — it refuses while the flag pins 99. Default
+    # keeps the explicit full-offload behavior.
+    "llama_gpu_layers_auto":   False,
     "gpu_backend":             "",
     # 0 = off, 256 = llama.cpp recommendation.
     "llama_cache_reuse":       256,

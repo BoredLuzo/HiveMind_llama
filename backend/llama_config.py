@@ -281,6 +281,54 @@ _MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 
 _MOE_KV_CACHE_TYPES: dict[str, str] = {}
 
+
+def moe_kv_cache_types(model_key: str) -> tuple[str, str]:
+    """MoE KV quantization for --cache-type-k/--cache-type-v.
+
+    Resolution: manual dict > model profile ("kv_cache_type") > q4_0 default.
+    The profile key is the escape hatch for models that degrade on q4_0 KV
+    at long context — the dict itself ships empty on purpose, the aggressive
+    default stays. Returns (k_type, v_type).
+    """
+    k = str(model_key or "").replace("-ud", "")
+    v = _MOE_KV_CACHE_TYPES.get(k)
+    if not v:
+        try:
+            from model_configs.models_registry import get_profile as _gp
+            v = (_gp(k) or {}).get("kv_cache_type")
+        except Exception:
+            v = None
+    v = str(v or "q4_0").strip().lower()
+    return v, v
+
+
+def llama_gpu_layers_auto() -> bool:
+    """llama_gpu_layers_auto setting: omit --n-gpu-layers so llama.cpp
+    auto-fits the layers to free VRAM (it refuses while the flag pins 99:
+    "n_gpu_layers already set by user to 99, abort" — live log)."""
+    try:
+        from settings import load_settings as _ls
+        return bool(_ls().get("llama_gpu_layers_auto", False))
+    except Exception:
+        return False
+
+
+def resolve_gpu_layers(model: str, override: int | None, table: dict,
+                       auto: bool) -> int | None:
+    """--n-gpu-layers value; None = omit the flag (llama auto-fit).
+
+    Precedence preserved from the inline code this replaces: explicit
+    override > per-model table entry > global default (99) — except in auto
+    mode, where a model without explicit entry/table value omits the flag.
+    """
+    if override is not None:
+        return int(override)
+    if str(model) in table:
+        return int(table[model])
+    if auto:
+        return None
+    return int(GPU_LAYERS)
+
 # Dense per-model KV-cache override (2026-09-26): MiniCPM5's 42 full-attention
 # layers hold a full-length cache and the Sharp-MiniCPM5 card's memory table
 # assumes -ctk/-ctv q8_0 — the global q4_0 default is too aggressive for this

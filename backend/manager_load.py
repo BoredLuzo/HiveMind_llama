@@ -11,8 +11,9 @@ from .llama_config import (
     DEFAULT_IDLE_TIMEOUT_SECONDS, VULKAN_DEVICE, GPU_BACKEND,
     BINARY_MIN_BUILD, MODELS_DIR,
     NO_MMAP_MIN_BUILD,
-    MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS, _MOE_KV_CACHE_TYPES,
+    MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS,
     _DENSE_KV_CACHE_TYPES,
+    moe_kv_cache_types, llama_gpu_layers_auto, resolve_gpu_layers,
     MLOCK_MODEL, CACHE_REUSE, CACHE_RAM_MIB, CTX_CHECKPOINTS, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
@@ -390,6 +391,11 @@ class LlamaLoadMixin:
         _need_start = False
         _vision_upgrade_pending = False
         slot = None
+        # LOAD-SEQ (audit B1): bumped by every ensure_loaded entry. The AMD
+        # commit wait in _start_process uses it to see loads queued behind
+        # this lock — they are the "next slot" the wait protects.
+        self._load_seq = getattr(self, "_load_seq", 0) + 1
+        _my_load_seq = self._load_seq
         async with self._lock:
             # F1-HOOK-A (2026-08-24) ADOPTION-ON-DEMAND: Ungetrackte llama-server
             if time.time() - self._last_orphan_scan_ts >= 15.0:
@@ -633,6 +639,7 @@ class LlamaLoadMixin:
             slot.model = model
             slot._idle_timeout = None if pin else DEFAULT_IDLE_TIMEOUT_SECONDS
             slot.set_pinned(pin)
+            slot._entry_load_seq = _my_load_seq   # B1: for the AMD commit wait
             try:
                 # H4 (deep audit): same zombie-guard as upgrade_port_to_vision
                 await self._start_process(slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
@@ -882,14 +889,18 @@ class LlamaLoadMixin:
             )
 
         # ── Befehlszeile aufbauen ─────────────────────────────────────────────
-        _gpu_layers = gpu_layers_override if gpu_layers_override is not None else _GPU_LAYERS_TABLE.get(model, GPU_LAYERS)
-        try:
-            from .llama_config import _try_registry_gpu_layers as _reg_gl
-            _gl_reg = _reg_gl(_strip_alias(model))
-            if _gl_reg is not None:
-                _gpu_layers = _gl_reg
-        except Exception:
-            pass
+        # B3 (audit): resolve_gpu_layers returns None in auto mode = omit the
+        # flag so llama.cpp fits the layers to free VRAM itself.
+        _gpu_layers = resolve_gpu_layers(model, gpu_layers_override,
+                                         _GPU_LAYERS_TABLE, llama_gpu_layers_auto())
+        if _gpu_layers is not None:
+            try:
+                from .llama_config import _try_registry_gpu_layers as _reg_gl
+                _gl_reg = _reg_gl(_strip_alias(model))
+                if _gl_reg is not None:
+                    _gpu_layers = _gl_reg
+            except Exception:
+                pass
         # CPU-BACKEND (2026-09-08): every layer runs on the CPU — a GPU-layer
         # count from registry/table would request an offload to a GPU that
         # does not exist.
@@ -909,7 +920,10 @@ class LlamaLoadMixin:
             "--model",        str(gguf_path),
             "--port",         str(slot.port),
             "--ctx-size",     str(num_ctx),
-            "--n-gpu-layers", str(_gpu_layers),
+        ]
+        if _gpu_layers is not None:
+            cmd += ["--n-gpu-layers", str(_gpu_layers)]
+        cmd += [
             "--parallel",     str(max(1, n_parallel)),
             "--flash-attn",   "on",
             "--batch-size",   "1024",
@@ -1260,8 +1274,10 @@ class LlamaLoadMixin:
                     cmd += ["--mlock"]
                     logger.info("--mlock active (model locked in RAM)")
                 if type(self)._kv_flag_supported:
-                    _moe_kv = _MOE_KV_CACHE_TYPES.get(_moe_model_key, "q4_0")
-                    cmd += ["--cache-type-k", _moe_kv, "--cache-type-v", _moe_kv]
+                    # B2 (audit): profile-driven override ("kv_cache_type"),
+                    # manual dict, else the aggressive q4_0 default.
+                    _moe_kv, _moe_kv_v = moe_kv_cache_types(_moe_model_key)
+                    cmd += ["--cache-type-k", _moe_kv, "--cache-type-v", _moe_kv_v]
                     logger.info("MoE KV-Cache: %s (ctx=%d, VRAM-optimiert)",
                                 _moe_kv, num_ctx)
             else:
@@ -1899,18 +1915,32 @@ class LlamaLoadMixin:
 
                 # AMD-VULKAN-COMMIT-FIX:
                 if ready:
-                    _other_running = [
+                    _peers_active = [
                         s for s in self._slots
                         if s.slot_id != slot.slot_id and (s.is_running or s._loading)
                     ]
-                    if _other_running:
-                        # AMD-VULKAN-ADAPTIVE-SLEEP:
+                    # AMD-VULKAN-ADAPTIVE-SLEEP + B1 (queue-aware, 2026-10-23):
+                    # the wait protects the NEXT slot start from our not-yet-
+                    # committed VRAM. Sleep only when a successor actually
+                    # exists — another ensure_loaded entered behind this lock
+                    # (its seq bump differs from ours) or a prefetch is
+                    # queued. Unknown seq (adoption/upgrade paths) keeps the
+                    # old always-wait behavior. Skipping is safe: the AMD
+                    # collision retry (exit=-1 → 5 s + one retry) remains the
+                    # safety net.
+                    _entry_seq = getattr(slot, "_entry_load_seq", None)
+                    _successor_pending = (
+                        bool(getattr(self, "_pending_prefetch", []))
+                        or _entry_seq is None
+                        or self._load_seq != _entry_seq
+                    )
+                    if _peers_active and _successor_pending:
                         # Formel: ctx=4096 → 2.0s | ctx=8192 → 4.0s | ctx=12800 → 6.0s (cap)
                         _vk_commit_s = round(min(6.0, max(2.0, 2.0 * (num_ctx / 4096))), 1)
                         logger.info(
                             f"AMD Vulkan commit wait: {model} loaded, waiting {_vk_commit_s}s "
                             f"for VRAM visibility for the next slot "
-                            f"(ctx={num_ctx}, {len(_other_running)} other slot(s) active)"
+                            f"(ctx={num_ctx}, {len(_peers_active)} other slot(s) active)"
                         )
                         await asyncio.sleep(_vk_commit_s)
             slot._loading = False

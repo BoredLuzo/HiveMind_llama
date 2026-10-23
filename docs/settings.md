@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**242 settings keys.**
+**243 settings keys.**
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -165,6 +165,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `keep_awake_during_run` | bool | `True` |  |
 | `learning_preset_mode` | bool | `False` |  |
 | `llama_cache_reuse` | int | `256` |  |
+| `llama_gpu_layers_auto` | bool | `False` |  |
 | `llama_mlock` | bool | `True` |  |
 | `llama_ubatch_size` | int | `256` |  |
 | `max_concurrent_models` | null | `None` |  |
