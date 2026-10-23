@@ -103,6 +103,10 @@ header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid #222a38;
 #h-tools{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 8px;border-radius:3px;
   background:var(--bg3);border:1px solid rgba(58,153,96,.35);color:var(--green);display:none}
 #h-tools.off{color:var(--tx3);border-color:var(--b2)}
+/* MODELS CHIP: which model(s) the selected mode calls — muted, details on hover */
+#h-models{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 8px;border-radius:3px;
+  background:var(--bg3);border:1px solid var(--b2);color:var(--tx2);max-width:340px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}
 #h-complexity{font-family:'IBM Plex Mono',monospace;font-size:10px;padding:2px 8px;border-radius:3px;
   border:1px solid var(--b2);background:var(--bg3);display:none}
 #h-complexity.is-complex{color:var(--amber);border-color:rgba(224,144,48,.4)}

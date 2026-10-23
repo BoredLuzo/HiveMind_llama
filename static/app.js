@@ -1406,6 +1406,7 @@ async function loadSettings() {
       _vramBudgetGb = parseFloat(s.vram_budget_gb);
       // initial ctx-fit estimates (needs the budget loaded first)
       if (typeof refreshCtxEstimates === 'function') refreshCtxEstimates();
+      if (typeof updateModelsChip === 'function') updateModelsChip();
     }
     // Per-model thinking overrides are no longer persisted
     // User toggles (duo_agentic_thinking etc.) control thinking at runtime
@@ -1626,6 +1627,7 @@ function onDuoPlannerModelChange(model) {
   updateDuoPairHint();
   updateDuoImageUI();
   if (typeof refreshCtxEstimates === 'function') refreshCtxEstimates();
+  if (typeof updateModelsChip === 'function') updateModelsChip();
 }
 
 function onDuoCoderModelChange(model) {
@@ -1637,6 +1639,7 @@ function onDuoCoderModelChange(model) {
   updateDuoImageUI();
   updateMoeVisibility();
   if (typeof refreshCtxEstimates === 'function') refreshCtxEstimates();
+  if (typeof updateModelsChip === 'function') updateModelsChip();
 }
 
 // COMPRESSION-MODELL + FIX-FLAGS (2026-09-07): UI-Schalter fuer Backend-Keys.
@@ -2469,6 +2472,48 @@ function onDuoPairChange(val) {
   updateDuoPairHint();
   updateDuoPairVramHint(parseFloat(document.getElementById('vram-budget-inp') && document.getElementById('vram-budget-inp').value || 7.5));
 }
+// MODELS CHIP (2026-10-23): the header shows which model(s) the selected mode
+// will actually call — one muted chip, full names on hover. Deliberately not
+// a second row of selects; the pickers stay in the Agents tab.
+function _shortModel(m) {
+  if (!m) return '';
+  m = String(m);
+  var slash = m.lastIndexOf('/');
+  if (slash >= 0) m = m.slice(slash + 1);
+  return m.length > 26 ? m.slice(0, 24) + '\u2026' : m;
+}
+function updateModelsChip() {
+  var el = document.getElementById('h-models');
+  if (!el) return;
+  var mode = S.mode || 'auto';
+  var parts = [], title = '';
+  if (mode === 'code_duo') {
+    var c = _shortModel(S.duoCoderModel);
+    if (c) parts.push('C: ' + c);
+    var p = (S.duoPlannerUseCoderCtx === false && S.duoPlannerModel && S.duoPlannerModel !== S.duoCoderModel)
+      ? _shortModel(S.duoPlannerModel) : '';
+    if (p) parts.push('P: ' + p);
+    title = 'Coder: ' + (S.duoCoderModel || '?')
+      + (p ? ' \u00b7 Planner: ' + S.duoPlannerModel : ' \u00b7 Planner: coder ctx');
+  } else if (mode === 'pipeline') {
+    var a = S.agentsCfg && S.agentsCfg.analyst && S.agentsCfg.analyst.model;
+    var sy = S.agentsCfg && S.agentsCfg.synthesizer && S.agentsCfg.synthesizer.model;
+    if (a) parts.push('A: ' + _shortModel(a));
+    if (sy) parts.push('S: ' + _shortModel(sy));
+    title = 'Pipeline \u00b7 analyst: ' + (a || '?') + ' \u00b7 synthesizer: ' + (sy || '?');
+  } else if (mode === 'automap') {
+    parts.push('auto-fit');
+    title = 'Automap assigns models per run (Models panel)';
+  } else {
+    var d = (S.currentAssignments && S.currentAssignments.direct && S.currentAssignments.direct.model)
+      || (S.agentsCfg && S.agentsCfg.direct && S.agentsCfg.direct.model) || '';
+    if (d) { parts.push(_shortModel(d)); title = 'Direct model: ' + d; }
+  }
+  el.textContent = parts.join(' \u00b7 ');
+  el.style.display = parts.length ? '' : 'none';
+  if (title) el.title = title;
+}
+
 function setMode(mode, el) {
   // MODE-SWITCH FIX: abort a running run when the mode is changed.
   // Without this fix: the old SSE stream keeps running and e.g. shows the refiner badge
@@ -2509,6 +2554,7 @@ function setMode(mode, el) {
   updateModeDesc();
   updateComplexityVisibility();
   updateDuoImageUI();
+  if (typeof updateModelsChip === 'function') updateModelsChip();
   postSettings({mode: mode});
 }
 
@@ -2541,6 +2587,7 @@ function setModeUI(mode) {
   updateChatToolsSectionVisibility();
   updateModeDesc();
   updateComplexityVisibility();
+  if (typeof updateModelsChip === 'function') updateModelsChip();
 }
 
 function setIters(val) {
