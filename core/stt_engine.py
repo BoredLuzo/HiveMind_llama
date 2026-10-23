@@ -43,6 +43,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 _IS_WIN = platform.system() == "Windows"
@@ -334,6 +336,15 @@ def transcribe(wav_path: str | Path, *, settings: dict | None = None,
             f"{m.label} cannot translate - pick a whisper tier (base/tiny/small) or "
             "turn stt_translate off",
         )
+    # WARM-FIRST (audit B4): use the preloaded whisper-server when it serves
+    # this model; the CLI below stays the fallback (translate forces the CLI —
+    # the warm server was started without a translate flag).
+    if not _translate:
+        _warm_text = transcribe_via_warm_server(key, wav, settings)
+        if _warm_text is not None:
+            if is_blank_transcript(_warm_text):
+                raise SttError("STT_EMPTY", "no speech detected in the audio")
+            return _warm_text
     argv = build_argv(m.engine, exe, mp, wav,
                       threads=resolve_threads(settings),
                       language=resolve_language(settings),
@@ -382,6 +393,47 @@ def stop_warm() -> None:
             proc.kill()
         except OSError:
             pass
+
+
+def transcribe_via_warm_server(model_key: str, wav: Path,
+                               settings: dict | None) -> str | None:
+    """Warm-server path for the preloaded whisper-server (audit B4).
+
+    preload() spawned the server since 1.3.11 but transcribe() always paid
+    the CLI's per-request model load — the warm feature was dead ware.
+    Returns the transcript, or None when the warm path is unavailable so
+    the caller falls back to the CLI. A warm-server timeout raises
+    STT_TIMEOUT (the CLI would only be slower); every other transport or
+    server error falls back, so preloading can never make things worse
+    (the module's own contract, previously only promised in prose)."""
+    if not warm_is_active(model_key):
+        return None
+    port = int(_WARM.get("port") or 0)
+    if not port:
+        return None
+    budget = resolve_timeout(settings)
+    try:
+        with httpx.Client(timeout=httpx.Timeout(
+                connect=5.0, read=float(budget), write=30.0, pool=5.0)) as _c:
+            r = _c.post(
+                f"http://127.0.0.1:{port}/inference",
+                files={"file": (wav.name, wav.read_bytes(), "audio/wav")},
+                data={"response_format": "json"},
+            )
+        if r.status_code != 200:
+            logger.warning("[STT] warm server HTTP %d - falling back to CLI", r.status_code)
+            return None
+        text = str((r.json() or {}).get("text") or "")
+        logger.info("[STT] warm server transcript (%d chars)", len(text))
+        return text
+    except httpx.TimeoutException:
+        raise SttError(
+            "STT_TIMEOUT",
+            f"transcription took longer than {budget:.0f}s") from None
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        logger.warning("[STT] warm server unreachable (%s) - falling back to CLI",
+                       type(exc).__name__)
+        return None
 
 
 def preload(settings: dict | None = None, *, model_key: str | None = None) -> bool:

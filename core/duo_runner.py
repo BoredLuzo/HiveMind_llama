@@ -781,12 +781,33 @@ async def run_code_duo(ctx):
                 # fallback to the lighter coder model to keep Planner responsive.
                 # P1-1 FIX: Capture port from first ensure_loaded — eliminates redundant
                 # second ensure_loaded call (was wasting ~300-500ms on /health re-check).
+                # PLANNER-HANDOFF-PIN (audit B5): when the planner IS the coder
+                # model, request the coder's ctx for the planner slot (max of
+                # both needs). The handoff reuses a slot only when its ctx
+                # covers the coder need — otherwise the coder reloaded the
+                # same weights at a bigger ctx (15-60 s + full KV loss, the
+                # ctx-mismatch class of manager_load 432). The loader's
+                # graceful cascade still protects tight-VRAM cases: a
+                # degraded slot is refused by the existing handoff check,
+                # exactly as before — worst case is today's behavior.
+                def _planner_load_ctx(model: str, ctx_final: int) -> int:
+                    try:
+                        if model != coder_mdl:
+                            return ctx_final
+                        _need = (
+                            resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
+                            if ctx.duo_config.agentic_mode
+                            else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
+                        )
+                        return max(ctx_final, int(_need)) if _need else ctx_final
+                    except (NameError, TypeError, ValueError):
+                        return ctx_final
                 _plan_port: int | None = None
                 try:
                     _ensure_timeout = float(ctx.settings.get("duo_planner_ttl_seconds", 0) or 0) or float(ctx.settings.get("duo_planner_ensure_load_timeout_s", 450.0) or 450.0)
                     _plan_port = await _await_with_hb(
                         lambda: _lsm_plan_pre.ensure_loaded(
-                            _planner_model, num_ctx=_plan_ctx_final, n_parallel=1,
+                            _planner_model, num_ctx=_planner_load_ctx(_planner_model, _plan_ctx_final), n_parallel=1,
                             vision=(_img_plan.get("planner") == "raw"),
                             # DUO-PIN (2026-10-01): vision-prepro load must not LRU-evict duo slots
                             # GRACEFUL-PLANNER (2026-09-07): the planner may
@@ -874,7 +895,7 @@ async def run_code_duo(ctx):
                     from backend.llama_server_manager import manager as _lsm_port_res
                     _plan_port = await asyncio.wait_for(
                         _lsm_port_res.ensure_loaded(
-                            _planner_model, num_ctx=_plan_ctx_final, n_parallel=1,
+                            _planner_model, num_ctx=_planner_load_ctx(_planner_model, _plan_ctx_final), n_parallel=1,
                             pin=True,
                             # GRACEFUL-PLANNER: see primary load above.
                             ctx_graceful=True,

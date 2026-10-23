@@ -24,6 +24,7 @@ SUITES = [
     ("prefix_stability",          "tests/test_prefix_stability.py",              60),
     ("chunk_resume",              "tests/test_chunk_resume.py",                  60),
     ("testmap",                   "tests/test_testmap.py",                       60),
+    ("audit_b",                   "tests/test_audit_b.py",                       60),
     ("run_stats",                 "tests/test_run_stats.py",                     60),
     ("preset_autoload_guard",     "tests/test_preset_autoload_guard.py",         60),
     ("debug_dump",                "tests/test_debug_dump.py",                    60),

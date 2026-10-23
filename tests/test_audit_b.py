@@ -1,0 +1,258 @@
+"""Sprint-B audit fixes: queue-aware AMD wait, MoE KV override, GPU auto-fit,
+warm whisper-server path, planner-handoff ctx pin, slow-independent tool
+parallelism. Pure helpers get behavioral checks; the in-loop changes get
+structural pins (the loop itself is covered by the executor suites)."""
+import asyncio
+import httpx
+import sys
+from pathlib import Path
+from types import SimpleNamespace as NS
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+passed = failed = 0
+
+
+def check(name, cond, extra=""):
+    global passed, failed
+    if cond:
+        passed += 1
+        print(f"  PASS {name} {extra}")
+    else:
+        failed += 1
+        print(f"  FAIL {name} {extra}")
+
+
+# ── B2: MoE KV cache types ───────────────────────────────────────────────
+from backend import llama_config as LC  # noqa: E402
+
+check("moe kv default is q4_0", LC.moe_kv_cache_types("unknown-model:7b") == ("q4_0", "q4_0"))
+LC._MOE_KV_CACHE_TYPES["manual-test:7b"] = "q8_0"
+check("moe kv manual dict wins",
+      LC.moe_kv_cache_types("manual-test:7b") == ("q8_0", "q8_0"))
+del LC._MOE_KV_CACHE_TYPES["manual-test:7b"]
+
+_real_gp = LC.__dict__.get("get_profile")
+_orig_import = __import__
+
+
+def _fake_gp(key):
+    if key == "profile-test:7b":
+        return {"kv_cache_type": "q5_1"}
+    return {}
+
+
+import importlib  # noqa: E402
+
+
+def _patched_get_profile(key):
+    return _fake_gp(key)
+
+
+# patch the registry accessor the helper imports lazily
+import model_configs.models_registry as _mr  # noqa: E402
+_gp_orig = _mr.get_profile
+_mr.get_profile = _patched_get_profile
+try:
+    check("moe kv profile override honored",
+          LC.moe_kv_cache_types("profile-test:7b") == ("q5_1", "q5_1"))
+finally:
+    _mr.get_profile = _gp_orig
+
+# ── B3: gpu layers resolution ────────────────────────────────────────────
+TABLE = {"tabled-model:4b": 33}
+check("gpu override wins over everything",
+      LC.resolve_gpu_layers("any", 12, TABLE, auto=True) == 12)
+check("gpu table entry survives auto",
+      LC.resolve_gpu_layers("tabled-model:4b", None, TABLE, auto=True) == 33)
+check("gpu auto omits the flag for unlisted models",
+      LC.resolve_gpu_layers("unknown:7b", None, TABLE, auto=True) is None)
+check("gpu default stays 99 without auto",
+      LC.resolve_gpu_layers("unknown:7b", None, TABLE, auto=False) == 99)
+
+_ls_orig = LC.__dict__.get("load_settings")
+import settings as _settings_mod  # noqa: E402
+
+
+class _FakeSettings(dict):
+    pass
+
+
+_orig_ls = _settings_mod.load_settings
+_settings_mod.load_settings = lambda: {"llama_gpu_layers_auto": True}
+try:
+    check("gpu auto reads the setting", LC.llama_gpu_layers_auto() is True)
+finally:
+    _settings_mod.load_settings = _orig_ls
+
+# ── B4: warm whisper-server path ─────────────────────────────────────────
+import core.stt_engine as SE  # noqa: E402
+
+import tempfile  # noqa: E402
+_wav_file = Path(tempfile.mkdtemp(prefix="auditb_")) / "a.wav"
+_wav_file.write_bytes(b"RIFF0000WAVEfmt ")   # only read_bytes() is called
+
+_orig_warm = SE.warm_is_active
+_orig_timeout = SE.resolve_timeout
+
+
+def _with_warm(active, status, payload, raise_exc=None):
+    SE.warm_is_active = lambda key="": active
+    SE.resolve_timeout = lambda s: 60
+    SE._WARM.update({"proc": object(), "port": 51111, "model": "ggml-base"})
+    state = {"called": False}
+
+    class _Resp:
+        def __init__(self):
+            self.status_code = status
+
+        def json(self):
+            return payload
+
+    class _Client:
+        def __init__(self, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, files=None, data=None):
+            state["called"] = True
+            if raise_exc is not None:
+                raise raise_exc
+            return _Resp()
+
+    SE.httpx = NS(Client=_Client, Timeout=httpx.Timeout,
+                  TimeoutException=httpx.TimeoutException,
+                  HTTPError=httpx.HTTPError)
+    return state
+
+
+try:
+    _with_warm(active=False, status=200, payload={})
+    check("warm path returns None when no warm server",
+          SE.transcribe_via_warm_server("ggml-base", _wav_file, {}) is None)
+
+    _with_warm(active=True, status=200, payload={"text": "hello world"})
+    check("warm server transcript returned",
+          SE.transcribe_via_warm_server("ggml-base", _wav_file, {}) == "hello world")
+
+    _with_warm(active=True, status=500, payload={})
+    check("warm server HTTP error falls back to CLI",
+          SE.transcribe_via_warm_server("ggml-base", _wav_file, {}) is None)
+
+    _with_warm(active=True, status=200, payload={},
+               raise_exc=httpx.ReadTimeout("timed out"))
+    try:
+        SE.transcribe_via_warm_server("ggml-base", _wav_file, {})
+        check("warm server timeout raises STT_TIMEOUT", False)
+    except SE.SttError as e:
+        check("warm server timeout raises STT_TIMEOUT", getattr(e, "code", "") == "STT_TIMEOUT"
+              or "TIMEOUT" in str(getattr(e, "code", "")) or "TIMEOUT" in str(e))
+
+    _with_warm(active=True, status=200, payload={},
+               raise_exc=httpx.ConnectError("refused"))
+    check("warm server connect error falls back to CLI",
+          SE.transcribe_via_warm_server("ggml-base", _wav_file, {}) is None)
+finally:
+    SE.warm_is_active = _orig_warm
+    SE.resolve_timeout = _orig_timeout
+    import httpx as _real_httpx
+    SE.httpx = _real_httpx
+    SE._WARM.update({"proc": None, "port": 0, "model": ""})
+
+check("transcribe consults the warm path before the CLI",
+      "transcribe_via_warm_server(key, wav, settings)" in
+      (ROOT / "core" / "stt_engine.py").read_text(encoding="utf-8", errors="replace"))
+
+# ── B1: queue-aware AMD commit wait (structural) ─────────────────────────
+ml = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+check("ensure_loaded bumps the load sequence",
+      "self._load_seq = getattr(self, \"_load_seq\", 0) + 1" in ml
+      and "_my_load_seq" in ml)
+check("the commit wait gates on a real successor",
+      "_successor_pending" in ml and "self._load_seq != _entry_seq" in ml
+      and "if _peers_active and _successor_pending:" in ml)
+
+# ── B5: planner-handoff ctx pin (structural) ─────────────────────────────
+dr = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+check("planner load ctx helper exists and covers the coder need",
+      "def _planner_load_ctx(model: str, ctx_final: int) -> int:" in dr
+      and "return max(ctx_final, int(_need)) if _need else ctx_final" in dr)
+check("both planner load sites use the pin",
+      dr.count("num_ctx=_planner_load_ctx(_planner_model, _plan_ctx_final)") == 2)
+check("the handoff reuse check still refuses degraded slots",
+      "_plan_port_actual_ctx >= _coder_ctx_need" in dr)
+
+# ── B6: slow-independent tool parallelism (behavioral) ────────────────────
+import core.tool_exec_helpers as TH  # noqa: E402
+
+
+def _tc(name):
+    return {"function": {"name": name, "arguments": {}}}
+
+
+async def _run_gate(calls):
+    started, released = [], {}
+    lock = asyncio.Lock()
+
+    async def _fake(name, args, **kw):
+        async with lock:
+            started.append(name)
+        if name == "run_tests":
+            # Prove the reads ran CONCURRENTLY: wait for the read to have
+            # started, fail the scenario if it never does (serial would
+            # deadlock into the timeout below).
+            if "read_file" in calls:
+                try:
+                    await asyncio.wait_for(released.setdefault(
+                        "read", asyncio.Event()).wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    return "[SERIAL-DEADLOCK]"
+        elif name == "read_file":
+            async with lock:
+                if "run_tests" in started:
+                    released.setdefault("read", asyncio.Event()).set()
+        return f"ok:{name}"
+
+    _orig = TH._run_inline_tool
+    TH._run_inline_tool = _fake
+    try:
+        res = await TH._prefetch_readonly_tools(
+            [_tc(n) for n in calls], "m", "ws", "tools", False)
+    finally:
+        TH._run_inline_tool = _orig
+    return started, res
+
+
+async def _b6():
+    out = {}
+    out["reads"] = await _run_gate(["read_file", "search_code"])
+    out["test_read"] = await _run_gate(["run_tests", "read_file"])
+    out["test_write"] = await _run_gate(["run_tests", "write_file"])
+    out["two_tests"] = await _run_gate(["run_tests", "run_tests"])
+    out["write_read"] = await _run_gate(["write_file", "read_file"])
+    return out
+
+
+_b6r = asyncio.run(_b6())
+s, r = _b6r["reads"]
+check("reads still run parallel (both prefetched)", len(r) == 2, f"({sorted(r)})")
+s, r = _b6r["test_read"]
+check("run_tests + read runs parallel (the measured 90s win)",
+      len(r) == 2 and "[SERIAL-DEADLOCK]" not in str(r), f"({sorted(r)})")
+s, r = _b6r["test_write"]
+check("run_tests next to a write stays serial", r == {})
+s, r = _b6r["two_tests"]
+check("two run_tests never run together (pytest cache races)", r == {})
+s, r = _b6r["write_read"]
+check("write + read keeps the serial order guarantee", r == {})
+
+print()
+print(f"SUMMARY audit_b: {passed} passed, {failed} failed")
+sys.exit(0 if failed == 0 else 1)

@@ -30,14 +30,27 @@ _SYS_PREFIX = "[AUTOMATED TOOL SYSTEM] "
 
 
 async def _prefetch_readonly_tools(tool_calls, exec_model, workspace_lock, tool_mode, duo_ws) -> dict:
-    """Parallel-prefetch read-only tools (S0 part of execute_tool_round)."""
+    """Parallel-prefetch read-only tools (S0 part of execute_tool_round).
+
+    B6 (audit, 2026-10-23): the gate opens for one more class — a single
+    run_tests next to read-only calls. Tests take up to 90 s and used to
+    serialize every read behind them; reads cannot observe a difference
+    from the test run (source files), and there is no write/stateful call
+    in the round whose ordering could break (any stateful tool forces the
+    fully serial path below). Two run_tests never run together (pytest
+    cache/tmp races)."""
     _PARALLEL_SAFE = {"read_file", "search_code", "find_files", "list_dir",
                        "get_signatures", "find_references", "git_status", "web_fetch"}
+    _SLOW_STATELESS = {"run_tests"}
     # web_search excluded: modifies duo_seen_web_queries (mutable set) — not parallel-safe
-    _all_read_only = tool_calls and all(
-        tc.get("function", {}).get("name", "") in _PARALLEL_SAFE
-        for tc in tool_calls
-    )
+    def _pclass(name: str) -> int:
+        if name in _PARALLEL_SAFE:
+            return 0
+        if name in _SLOW_STATELESS:
+            return 1
+        return 2
+    _classes = [_pclass(tc.get("function", {}).get("name", "")) for tc in (tool_calls or [])]
+    _all_read_only = bool(tool_calls) and max(_classes) <= 1 and _classes.count(1) <= 1
     _pre_results: dict[int, str] = {}
     if _all_read_only:
         async def _execute_one(_tc):
