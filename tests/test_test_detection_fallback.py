@@ -63,7 +63,7 @@ _d1 = _ws(["index.html", "test_n64_website.py"])
 check("plain folder with test_*.py -> python detected",
       "python" in detect_project_languages(_d1), f" ({detect_project_languages(_d1)})")
 check("its test command is the python one",
-      get_test_cmd("python") == "pytest -x -q 2>&1")
+      get_test_cmd("python") == "python -m pytest -x -q 2>&1")
 
 _d2 = _ws(["app.html", "helper_test.py"])
 check("folder with *_test.py -> python detected",

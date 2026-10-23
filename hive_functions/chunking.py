@@ -487,6 +487,7 @@ async def run_chunk_auto_test(
     emit_fn,
     test_timeout: int = 90,
     chat_id: str = "",
+    written_files: list[str] | None = None,
 ) -> tuple["_TestResult", bool]:
     """Run the auto-test suite after a chunk completes.
 
@@ -504,6 +505,9 @@ async def run_chunk_auto_test(
         The emit function for streaming events to the client.
     test_timeout : int
         Timeout in seconds for the test suite run.
+    written_files : list[str], optional
+        Files written this run. When given, the edit→test mapping scopes
+        the run to the covering test files; no mapping → full suite.
 
     Returns
     -------
@@ -512,13 +516,33 @@ async def run_chunk_auto_test(
     """
     _run_tests, _TestResult = await _get_test_runner()
 
-    await emit_fn({"type": "status",
-        "content": f"\U0001f9ea Verifying chunk {di+1}/{n_items}..."})
+    _test_paths: list[str] | None = None
+    if written_files:
+        try:
+            try:
+                from hive_functions.testmap import map_edits_to_tests
+            except ImportError:
+                from testmap import map_edits_to_tests
+            _test_paths = map_edits_to_tests(workspace, written_files) or None
+        except Exception as _tm_err:
+            # mapping is a speed/precision optimization only — any failure
+            # degrades to the full-suite run, never blocks verification
+            logger.warning("test mapping failed, falling back to full suite: %s", _tm_err)
+            _test_paths = None
+
+    if _test_paths:
+        await emit_fn({"type": "status",
+            "content": f"\U0001f3af Verifying chunk {di+1}/{n_items} — "
+                       f"{len(_test_paths)} mapped test file(s)"})
+    else:
+        await emit_fn({"type": "status",
+            "content": f"\U0001f9ea Verifying chunk {di+1}/{n_items}..."})
     try:
         _test_result = await _run_tests(
             workspace=workspace,
             timeout=test_timeout,
             chat_id=chat_id,
+            paths=_test_paths,
         )
     except Exception as _cte:
         _test_result = _TestResult(
@@ -689,6 +713,7 @@ class ChunkState:
         emit_fn,
         test_timeout: int = 90,
         chat_id: str = "",
+        written_files: list[str] | None = None,
     ) -> tuple["_TestResult", bool]:
         """Run auto-test for the current chunk. Delegates to run_chunk_auto_test()."""
         return await run_chunk_auto_test(
@@ -698,6 +723,7 @@ class ChunkState:
             emit_fn=emit_fn,
             test_timeout=test_timeout,
             chat_id=chat_id,
+            written_files=written_files or list(self.written_files),
         )
 
     def handle_auto_test_result(

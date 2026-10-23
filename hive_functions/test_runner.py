@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import os
 import asyncio
 import platform
 import logging
@@ -123,11 +124,31 @@ def _parse_failures(output: str, language: str) -> tuple[int, list[str]]:
     return count, errors
 
 
+# TESTMAP (2026-10-23): a scoped run (edit→test mapping) that matched no
+# test at all must NOT count as a red suite — jest/vitest print variations
+# of "no tests found" and exit 1. Detect and fall back to the full command.
+_NO_TESTS_RE = re.compile(
+    r"no tests found|no test files found|nothing to (?:run|test)"
+    r"|no tests ran|collected 0 items", re.IGNORECASE)
+
+_MAX_SCOPED_PATHS = 8
+
+
+def _quote_path(p: str, workspace: str) -> str:
+    """Workspace-relative, forward-slash, cmd.exe-safe (double quotes only
+    when needed — single quotes are not quoting on Windows shells)."""
+    if os.path.isabs(p):
+        p = os.path.relpath(p, workspace)
+    p = p.replace("\\", "/")
+    return f'"{p}"' if re.search(r"\s", p) else p
+
+
 async def run_tests(
     workspace: str,
     timeout: int = 60,
     lang_override: Optional[str] = None,
     chat_id: str = "",
+    paths: Optional[list[str]] = None,
 ) -> TestResult:
 
 
@@ -142,11 +163,15 @@ async def run_tests(
 
     lang = None
     cmd = None
+    scoped_template = None
     for l in langs:
-        c = LANGUAGE_RUNNERS.get(l, {}).get("test_cmd")
+        _cfg = LANGUAGE_RUNNERS.get(l, {})
+        c = _cfg.get("test_cmd")
         if c and "{file}" not in c:
             lang = l
             cmd = c
+            if paths:
+                scoped_template = _cfg.get("test_cmd_scoped")
             break
 
     if not cmd:
@@ -162,43 +187,59 @@ async def run_tests(
         # below then really kills the whole tree (pytest/npm children),
         # not just the /bin/sh wrapper. Windows keeps taskkill /T.
         from tools.sandbox import spawn_kwargs as _spawn_kwargs
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
-            cwd=workspace,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            **_spawn_kwargs(),
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            # TREE-KILL (2026-09-13): proc.kill() only killed the SHELL —
-            # pytest/npm children survived as orphans on Windows. Kill the
-            # whole tree, then reap.
-            if platform.system() == "Windows":
-                import subprocess as _sp
-                try:
-                    _sp.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                            capture_output=True, timeout=10)
-                except (OSError, _sp.SubprocessError):
-                    try:
-                        proc.kill()
-                    except ProcessLookupError:
-                        logging.debug("test tree already gone (pid %s)", proc.pid)
-            else:
-                try:
-                    import os as _os_kill
-                    import signal as _sig
-                    _os_kill.killpg(proc.pid, _sig.SIGKILL)
-                except (ProcessLookupError, PermissionError, AttributeError):
-                    try:
-                        proc.kill()
-                    except ProcessLookupError:
-                        logging.debug("test tree already gone (pid %s)", proc.pid)
+
+        async def _spawn_decode(run_cmd: str) -> tuple[str, int]:
+            """Run *run_cmd*, return (output, exit code). Raises TimeoutError
+            after tree-killing the process group."""
+            proc = await asyncio.create_subprocess_shell(
+                run_cmd,
+                cwd=workspace,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                **_spawn_kwargs(),
+            )
             try:
-                await proc.wait()
-            except ProcessLookupError:
-                logging.debug("test proc already reaped (pid %s)", proc.pid)
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                # TREE-KILL (2026-09-13): proc.kill() only killed the SHELL —
+                # pytest/npm children survived as orphans on Windows. Kill the
+                # whole tree, then reap.
+                if platform.system() == "Windows":
+                    import subprocess as _sp
+                    try:
+                        _sp.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                                capture_output=True, timeout=10)
+                    except (OSError, _sp.SubprocessError):
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            logging.debug("test tree already gone (pid %s)", proc.pid)
+                else:
+                    try:
+                        import os as _os_kill
+                        import signal as _sig
+                        _os_kill.killpg(proc.pid, _sig.SIGKILL)
+                    except (ProcessLookupError, PermissionError, AttributeError):
+                        try:
+                            proc.kill()
+                        except ProcessLookupError:
+                            logging.debug("test proc already reaped (pid %s)", proc.pid)
+                try:
+                    await proc.wait()
+                except ProcessLookupError:
+                    logging.debug("test proc already reaped (pid %s)", proc.pid)
+                raise
+
+            return stdout.decode("utf-8", errors="replace"), proc.returncode
+
+        _full_cmd = cmd
+        if scoped_template and paths:
+            cmd = scoped_template.format(
+                paths=" ".join(_quote_path(p, workspace) for p in paths[:_MAX_SCOPED_PATHS]))
+            _logger.info("[TESTMAP] scoped run: %s", cmd)
+        try:
+            raw, returncode = await _spawn_decode(cmd)
+        except asyncio.TimeoutError:
             return TestResult(
                 success=False, language=lang, command=cmd,
                 failure_count=0,
@@ -207,12 +248,32 @@ async def run_tests(
                 inject_msg=f"⚠️ Test timeout ({timeout}s) — command: {cmd}"
             )
 
-        raw = stdout.decode("utf-8", errors="replace")
-        success = proc.returncode == 0
+        success = returncode == 0
         failure_count, error_lines = _parse_failures(raw, lang)
 
         if success and failure_count > 0:
             success = False
+
+        # TESTMAP FALLBACK: the scoped command matched no test at all
+        # (renamed test file, npm script that ignores extra args) — that is
+        # "nothing to verify", not "failing". Re-run the full suite once.
+        if scoped_template and paths and not success and _NO_TESTS_RE.search(raw):
+            _logger.info("[TESTMAP] scoped run matched nothing — falling back to full suite")
+            cmd = _full_cmd
+            try:
+                raw, returncode = await _spawn_decode(cmd)
+            except asyncio.TimeoutError:
+                return TestResult(
+                    success=False, language=lang, command=cmd,
+                    failure_count=0,
+                    error_lines=[f"Test command timed out after {timeout}s"],
+                    raw_output="TIMEOUT",
+                    inject_msg=f"⚠️ Test timeout ({timeout}s) — command: {cmd}"
+                )
+            success = returncode == 0
+            failure_count, error_lines = _parse_failures(raw, lang)
+            if success and failure_count > 0:
+                success = False
 
         # Test history: record per-test outcomes for flaky detection
         if chat_id:

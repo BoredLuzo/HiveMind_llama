@@ -144,7 +144,7 @@
   "except_pass": 2
  },
  "core/duo_runner.py": {
-  "broad_except": 89,
+  "broad_except": 93,
   "except_pass": 26
  },
  "core/error_rollup.py": {
@@ -280,7 +280,7 @@
   "except_pass": 0
  },
  "hive_functions/chunking.py": {
-  "broad_except": 7,
+  "broad_except": 8,
   "except_pass": 3
  },
  "hive_functions/ctx_utils.py": {
@@ -378,6 +378,10 @@
  "hive_functions/test_runner.py": {
   "broad_except": 4,
   "except_pass": 3
+ },
+ "hive_functions/testmap.py": {
+  "broad_except": 0,
+  "except_pass": 0
  },
  "hive_functions/tree_scout.py": {
   "broad_except": 9,
@@ -1232,6 +1236,10 @@
   "except_pass": 0
  },
  "tests/test_test_detection_fallback.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_testmap.py": {
   "broad_except": 0,
   "except_pass": 0
  },

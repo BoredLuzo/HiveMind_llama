@@ -13,7 +13,16 @@ LANGUAGE_RUNNERS: dict[str, dict] = {
         # Python test file (owner: "the last test is still reported as
         # untested"). Test-looking .py files are the marker that matters here.
         "detect_files_fallback": ["test_*.py", "*_test.py", "tests/*.py"],
-        "test_cmd":      "pytest -x -q 2>&1",
+        # MODULE FORM (2026-10-23): `python -m pytest` works whenever pytest
+        # is importable by the ENGINE's interpreter — a bare `pytest` exe is
+        # not on PATH everywhere (live box: "Der Befehl pytest nicht
+        # gefunden"), which turned every auto-test into a false red.
+        "test_cmd":      "python -m pytest -x -q 2>&1",
+        # TESTMAP (2026-10-23): scoped variant for the edit→test mapping.
+        # {paths} is a shell-quoted list of test files; runners without a
+        # safe scoped form (cargo/go/mvn/ctest need project context) simply
+        # leave this key out and the mapping falls back to the full suite.
+        "test_cmd_scoped": "python -m pytest -x -q {paths} 2>&1",
         "run_cmd":       "python {file}",
         "start_cmd":     None,
         # switched. Exit propagation is now handled runner-side
@@ -25,6 +34,11 @@ LANGUAGE_RUNNERS: dict[str, dict] = {
         "extensions":    [".js", ".mjs", ".cjs"],
         "detect_files":  ["package.json"],
         "test_cmd":      "npm test 2>&1",
+        # npm passes args after -- to the test script; jest/vitest/mocha all
+        # accept path filters there. If the script ignores them the full
+        # suite runs — slower, never wrong. run_tests re-runs the full
+        # command when a scoped run reports "no tests found".
+        "test_cmd_scoped": "npm test -- {paths} 2>&1",
         "run_cmd":       "node {file}",
         "start_cmd":     "npm start",
         "lint_cmd":      "node --check {file}",
@@ -34,6 +48,7 @@ LANGUAGE_RUNNERS: dict[str, dict] = {
         "extensions":    [".ts", ".tsx"],
         "detect_files":  ["tsconfig.json"],
         "test_cmd":      "npm test 2>&1",
+        "test_cmd_scoped": "npm test -- {paths} 2>&1",
         "run_cmd":       "npx ts-node {file}",
         "start_cmd":     "npm run dev",
         "lint_cmd":      "npx tsc --noEmit 2>&1 | Select-Object -First 30",
@@ -190,7 +205,7 @@ import sys as _sys_lc
 
 if _sys_lc.platform != "win32":
     for _runner in LANGUAGE_RUNNERS.values():
-        for _key in ("test_cmd", "run_cmd", "start_cmd", "lint_cmd", "install_cmd"):
+        for _key in ("test_cmd", "test_cmd_scoped", "run_cmd", "start_cmd", "lint_cmd", "install_cmd"):
             _val = _runner.get(_key)
             if not _val:
                 continue
