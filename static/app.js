@@ -2206,6 +2206,16 @@ function _speakSyncSoon() {
   _syncSpeakButtons(act ? act.closest('.ablock') : null);
 }
 
+// Cheap has-answer check for the reveal decision: strip the chrome in a
+// DETACHED clone and count textContent — no mount, no layout (the innerText
+// read in _answerTextOnly forces layout per bubble per sync tick).
+function _answerLenOnly(bodyEl) {
+  if (!bodyEl) return 0;
+  var clone = bodyEl.cloneNode(true);
+  try { clone.querySelectorAll(_ANSWER_CHROME_SEL).forEach(function (n) { n.remove(); }); } catch (e) {}
+  return (clone.textContent || '').trim().length;
+}
+
 function _syncSpeakButtons(scope) {
   var blocks = scope ? [scope]
                      : Array.prototype.slice.call(document.querySelectorAll('#chat .ablock'));
@@ -2213,15 +2223,7 @@ function _syncSpeakButtons(scope) {
     var btn = wrap.querySelector('.amsg-foot .msg-speak');
     if (!btn) return;
     var body = wrap.querySelector('.abody');
-    // Has-answer check WITHOUT layout: strip chrome in a DETACHED clone and
-    // count textContent (the old path mounted a clone off-screen to read
-    // innerText — a forced layout per bubble per tick).
-    var hasText = false;
-    if (body) {
-      var clone = body.cloneNode(true);
-      try { clone.querySelectorAll(_ANSWER_CHROME_SEL).forEach(function (n) { n.remove(); }); } catch (e) {}
-      hasText = (clone.textContent || '').trim().length > 8;
-    }
+    var hasText = _answerLenOnly(body) > 8;
     btn.style.display = (hasText && S && S.ttsEnabled) ? '' : 'none';
   });
 }
@@ -6472,6 +6474,7 @@ async function sendMsg() {
   S.streaming = true;
   S.currentRunId = null;
   S._runIsDuo = false;
+  S._lastRunStats = null;   // RUN-STATS: a new run must never inherit the old line
   if (S._runAbortCtrl) { S._runAbortCtrl.abort(); }
   S._runAbortCtrl = new AbortController();
   _perfResetRuntimeState();
@@ -8651,6 +8654,13 @@ function handleEvent(d) {
       if (_cTok > 0)  _elapsedTxt += ' \u00b7 <span class="tok-cached">' + _fmtTokens(_cTok) + ' cached</span>';
       if (_rCnt > 0)  _elapsedTxt += ' \u00b7 <span style="color:#6a7a8a">' + _rCnt + ' reqs</span>';
       if (el && val) { val.innerHTML = _elapsedTxt; el.style.display = 'flex'; }
+      // RUN-STATS LINE (2026-10-23): stash + muted line under the final answer.
+      // Model may be '' on an older engine — the line then just shows fewer bits.
+      S._lastRunStats = {elapsed: parseFloat(d.elapsed) || 0, out: _genTok,
+                         prompt: _pTok, cached: _cTok, requests: _rCnt,
+                         model: String(d.model || ''),
+                         tps: (S.perfTokRate > 0 ? S.perfTokRate : 0)};
+      if (typeof renderRunStatsLine === 'function') renderRunStatsLine(S._lastRunStats);
     }
     S.runPromptTokens = 0;
     S.runCachedTokens = 0;
@@ -11400,6 +11410,50 @@ async function testVisionModel() {
 }
 
 // -- Chat History ----------------------------------------------
+// RUN-STATS LINE (2026-10-23): one muted line under the final answer —
+// DeepSeek-style: small by default, the full detail (model, prompt, requests)
+// on hover. Persisted with the chat as msg.stats so a reloaded chat shows it.
+function _fmtStatsLine(stats) {
+  var bits = [];
+  var s = parseFloat(stats.elapsed) || 0;
+  if (s >= 60) bits.push(Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's');
+  else if (s > 0) bits.push(Math.round(s * 10) / 10 + 's');
+  if (stats.out > 0) bits.push(_fmtTokens(stats.out) + ' tok');
+  if (stats.cached > 0) bits.push(_fmtTokens(stats.cached) + ' cached');
+  if (stats.tps > 0) bits.push((Math.round(stats.tps * 10) / 10) + ' t/s');
+  return bits.join(' \u00b7 ');
+}
+
+function renderRunStatsLine(stats, footEl) {
+  if (!stats) return;
+  var foot = footEl;
+  if (!foot) {
+    var feet = document.querySelectorAll('#chat .ablock .amsg-foot');
+    if (feet.length) {
+      foot = feet[feet.length - 1];
+    } else {
+      var blocks = document.querySelectorAll('#chat .ablock');
+      if (!blocks.length) return;
+      foot = document.createElement('div');
+      foot.className = 'amsg-foot';
+      blocks[blocks.length - 1].appendChild(foot);
+    }
+  }
+  var old = foot.querySelector('.msg-stats');
+  if (old) old.remove();
+  var line = _fmtStatsLine(stats);
+  if (!line && !stats.model) return;
+  var sp = document.createElement('span');
+  sp.className = 'msg-stats';
+  sp.textContent = line;
+  var title = line;
+  if (stats.model) title += (title ? ' \u00b7 ' : '') + stats.model;
+  if (stats.prompt > 0) title += ' \u00b7 ' + _fmtTokens(stats.prompt) + ' prompt';
+  if (stats.requests > 0) title += ' \u00b7 ' + stats.requests + ' requests';
+  sp.title = title;
+  foot.insertBefore(sp, foot.firstChild);
+}
+
 function _autosaveChatMessage() {
   // Collect current chat DOM as messages and store in S.currentChatMessages
   const msgs = [];
@@ -11461,6 +11515,18 @@ function _autosaveChatMessage() {
       }
     }
   });
+  // RUN-STATS (2026-10-23): attach the run's stats to the final answer so a
+  // reloaded chat shows the same muted line. The flag makes the attach happen
+  // exactly once per run (a stale object can never reach the next run).
+  if (S._lastRunStats && !S._lastRunStats._saved) {
+    for (var _i = msgs.length - 1; _i >= 0; _i--) {
+      if (msgs[_i].role === 'assistant' && !msgs[_i].part) {
+        msgs[_i].stats = S._lastRunStats;
+        S._lastRunStats._saved = true;
+        break;
+      }
+    }
+  }
   S.currentChatMessages = msgs;
 }
 
@@ -11649,6 +11715,14 @@ async function loadChat(chatId) {
         _wireSavedChips(abody);
         wrap.appendChild(hdr);
         wrap.appendChild(abody);
+        // RUN-STATS (2026-10-23): the saved per-answer stats line comes back
+        // with the chat — same muted footer as live.
+        if (msg.stats && typeof renderRunStatsLine === 'function') {
+          var _stFoot = document.createElement('div');
+          _stFoot.className = 'amsg-foot';
+          wrap.appendChild(_stFoot);
+          renderRunStatsLine(msg.stats, _stFoot);
+        }
         c.appendChild(wrap);
       }
     });

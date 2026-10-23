@@ -295,7 +295,14 @@ check("every chrome class is stripped", all(n in _chrome for n in _NEED),
 check("code blocks are stripped too", "'pre'" in _chrome and "'code'" in _chrome)
 check("read-aloud uses the extractor", "_answerTextOnly(_lastBody)" in app)
 check("the speaker button uses it", "_answerTextOnly(_body)" in app)
-check("the reveal check uses it", "_answerTextOnly(body)" in app)
+# PERF (2026-10-23): the reveal decision runs 4x/s during a run — it now uses
+# the cheap detached-clone counter (_answerLenOnly: same _ANSWER_CHROME_SEL
+# strip, no off-screen innerText mount per bubble per tick).
+check("the reveal check strips chrome via the cheap extractor",
+      "function _answerLenOnly(bodyEl)" in app
+      and "_answerLenOnly(body) > 8" in app)
+check("the cheap extractor strips the same chrome list",
+      app.split("function _answerLenOnly")[1].split("function ")[0].count("_ANSWER_CHROME_SEL") >= 1)
 check("the read is mounted so innerText works",
       "position:absolute;left:-99999px" in app and "host.remove()" in app)
 

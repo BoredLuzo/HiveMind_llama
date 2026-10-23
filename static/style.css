@@ -1416,6 +1416,12 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 .amsg-foot{display:flex;justify-content:flex-end;align-items:center;gap:6px;
   min-height:0;margin-top:2px}
 .amsg-foot:empty{display:none}
+/* RUN-STATS LINE: muted per-answer footer (elapsed · tokens · cached), the
+   full detail incl. model lives in the hover title */
+.msg-stats{font-family:'IBM Plex Mono',monospace;font-size:9.5px;
+  color:var(--tx3);margin-right:auto;cursor:default;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:75%}
+.msg-stats:hover{color:var(--tx2)}
 
 /* ── CONTEXT / ROUTING CARDS (2026-10-21) ──────────────────────────────
    The context fields used to be a bare stack of labels and orange number

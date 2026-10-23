@@ -486,6 +486,7 @@ async def run_direct(ctx):
                 # _pick_direct_model(complex, ...) → qwen3:8b → 131072 default ctx → ~8GB KV-Cache → OVERFLOW
                 _direct_no_cache = ctx.prepro_success or bool(_direct_vision and ctx.images)
                 _stream_msgs = messages
+                _usage: dict = {}   # RUN-STATS: filled by usage_out (llama include_usage)
                 if _direct_tools_active and _tool_final_msgs:
                     # Tool loop ran but produced no text (abort / round cap) —
                     # answer with the tool-augmented context instead.
@@ -498,7 +499,8 @@ async def run_direct(ctx):
                             no_cache=ctx.prepro_success,
                             think=True,
                             thinking_budget=_direct_budget or None,
-                            split_thinking=True):
+                            split_thinking=True,
+                            usage_out=_usage):
                         if ctx.aborted(): break
                         if _thk:
                             yield await ctx.emit({"type": "thinking_token", "content": _thk})
@@ -510,7 +512,8 @@ async def run_direct(ctx):
                             _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
                             ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
                             no_cache=ctx.prepro_success,
-                            think=False):
+                            think=False,
+                            usage_out=_usage):
                         if ctx.aborted(): break
                         parts.append(tok)
                         yield await ctx.emit({"type": "token", "content": tok})
@@ -518,6 +521,23 @@ async def run_direct(ctx):
                 _err_tok = f"[Direct error: {str(_direct_err)[:120]}]"
                 parts.append(_err_tok)
                 yield await ctx.emit({"type": "token", "content": _err_tok})
+            # RUN-STATS (2026-10-23): real usage for the per-answer stats line —
+            # the same include_usage pattern the pipeline wrapper uses. The model
+            # rides run_meta so run records and the done event attribute direct
+            # runs instead of showing the registry fallback only.
+            _d_ct = int(_usage.get("completion_tokens") or 0)
+            if _d_ct > 0:
+                _d_det = _usage.get("prompt_tokens_details") or {}
+                _d_tim = _usage.get("timings") or {}
+                _d_ca = int((_d_det.get("cached_tokens") if isinstance(_d_det, dict) else 0)
+                            or _usage.get("cached_tokens") or 0
+                            or (_d_tim.get("cache_n") if isinstance(_d_tim, dict) else 0) or 0)
+                await ctx.emit({"type": "run_meta", "models": {"direct": str(_direct_model)}})
+                await ctx.emit({"type": "usage_meta", "phase": "direct",
+                                "timer_key": "direct_chat",
+                                "completion_tokens": _d_ct,
+                                "prompt_tokens": int(_usage.get("prompt_tokens") or 0),
+                                "cached_tokens": _d_ca})
         content = "".join(parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
         # Content (z.B. max_tokens/thinking_budget durch Reasoning verbraucht),
         if _direct_think and not content and not ctx.aborted():

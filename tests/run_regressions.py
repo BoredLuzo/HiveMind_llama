@@ -24,6 +24,7 @@ SUITES = [
     ("prefix_stability",          "tests/test_prefix_stability.py",              60),
     ("chunk_resume",              "tests/test_chunk_resume.py",                  60),
     ("testmap",                   "tests/test_testmap.py",                       60),
+    ("run_stats",                 "tests/test_run_stats.py",                     60),
     ("debug_dump",                "tests/test_debug_dump.py",                    60),
     ("steer_card",                "tests/test_steer_card.py",                    60),
     ("planner_reuse_ctx",         "tests/test_planner_reuse_ctx.py",             60),

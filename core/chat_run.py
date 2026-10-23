@@ -446,6 +446,24 @@ async def run_stream(
                 notify_run_stopped(str(stop_reason), str(extra.get("summary", "") if extra else ""))
             except Exception:
                 pass
+        # RUN-STATS (2026-10-23): the UI renders a per-answer stats line and
+        # needs the model that actually produced the answer. duo/pipeline
+        # report through run_meta; a plain chat run only knows the registry
+        # slot (same fallback the run record uses).
+        _ev_model = ""
+        if _run_models:
+            _ev_model = str(
+                _run_models.get("coder")
+                or _run_models.get("direct")
+                or _run_models.get("synthesizer")
+                or next(iter(_run_models.values()), "")
+            )
+        else:
+            try:
+                from core.state import registry_get as _rg_ev
+                _ev_model = str(_rg_ev("direct") or _rg_ev("analyst") or "")
+            except (ImportError, AttributeError, LookupError):
+                _ev_model = ""
         ev = {
             "type": "done",
             "elapsed": float(elapsed),
@@ -455,6 +473,7 @@ async def run_stream(
             "prompt_tokens_total": _prompt_total,
             "cached_tokens_total": _cached_total,
             "requests_total": _run_requests,
+            "model": _ev_model,
         }
         if extra:
             ev.update(extra)
