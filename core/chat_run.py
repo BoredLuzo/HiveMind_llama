@@ -1377,6 +1377,12 @@ async def run_stream(
                 complexity = _routing_decider.complexity_for(_decision)
                 _judge_verdict = dict(_decision.details.get('judge_verdict') or {})
                 _complexity_source = _decision.source
+                # ROUTING-VISIBILITY (2026-10-22, user request): the phone
+                # should see WHAT the decider decided, not just "auto".
+                yield await emit({"type": "status", "content": (
+                    f"🧭 Routing: {_decision.route} "
+                    f"({_decision.source}, conf {_decision.confidence:.2f})"
+                    + (f" · planner: yes" if _decision.planner else ""))})
     else:
         if images and not _prepro_success:
             complexity = "simple"
@@ -1397,6 +1403,12 @@ async def run_stream(
                 complexity = _routing_decider.complexity_for(_decision)
                 _judge_verdict = dict(_decision.details.get('judge_verdict') or {})
                 _complexity_source = _decision.source
+                # ROUTING-VISIBILITY (2026-10-22, user request): the phone
+                # should see WHAT the decider decided, not just "auto".
+                yield await emit({"type": "status", "content": (
+                    f"🧭 Routing: {_decision.route} "
+                    f"({_decision.source}, conf {_decision.confidence:.2f})"
+                    + (f" · planner: yes" if _decision.planner else ""))})
     _judge_route    = _judge_verdict.get("route", "")           # "direct"|"tool"|"pipeline"|""
     _judge_tasktype = _judge_verdict.get("task_type", "") or _task_type
     _judge_toolsize = _judge_verdict.get("tool_model", "small")  # "small"|"large"

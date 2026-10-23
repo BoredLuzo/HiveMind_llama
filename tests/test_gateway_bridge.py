@@ -792,6 +792,20 @@ async def t_audit_fixes():
               "duo_action_approval_enabled") is True)
     check("G1: /status states the forced gate",
           "phone runs gated" in await br.status_text())
+    # ROUTING VISIBILITY (2026-10-22): /status shows decider + planner +
+    # model when the decider is configured.
+    br.hive.settings_body = {"routing_decider": "on",
+                             "routing_planner": "decider",
+                             "routing_decider_model": "models/decider/gliner25-decide"}
+    _st_r = await br.status_text()
+    check("status shows the routing block",
+          "routing: decider on" in _st_r
+          and "planner decider" in _st_r
+          and "models/decider/gliner25-decide" in _st_r)
+    br.hive.settings_body = {}
+    _st_r2 = await br.status_text()
+    check("status without decider config shows the off line",
+          "decider off (keyword rules)" in _st_r2)
     # version-skew detection: an engine WITHOUT the gateway_overrides
     # marker must downgrade /status instead of promising the invariant
     br.ms.engine_gate_support = False

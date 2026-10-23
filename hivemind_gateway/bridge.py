@@ -1125,6 +1125,22 @@ class RunBridge:
         active_txt = f"active run: {own}" if own else "active run: none"
         if engine_extra:
             active_txt += "\n" + engine_extra
+        # ROUTING VISIBILITY (2026-10-22, user request): /status shows the
+        # decider state, planner source and model — so a spoken note's route
+        # is explainable from the phone.
+        try:
+            _settings_fn = getattr(self.hive, "settings", None)
+            _rs = await _settings_fn() if _settings_fn else {}
+        except (HiveUnreachable, OSError, AttributeError):
+            _rs = {}  # fakes/old engines without a settings endpoint
+        _rd = str((_rs or {}).get("routing_decider") or "").strip()
+        if _rd:
+            _routing = (f"routing: decider {_rd}"
+                        + (f" · planner {(_rs or {}).get('routing_planner') or 'auto'}"
+                           if (_rs or {}).get("routing_planner") else "")
+                        + f" · model {(_rs or {}).get('routing_decider_model') or 'default'}")
+        else:
+            _routing = "routing: decider off (keyword rules)"
         return (
             "📡 Gateway status\n"
             "\n"
@@ -1137,6 +1153,7 @@ class RunBridge:
             f"tools (simple runs): {tools_txt}\n"
             f"phone restrict: {restr_txt}\n"
             f"verbose: {'on' if self.verbose else 'off'}\n"
+            f"{_routing}\n"
             "\n"
             f"{gate_line}\n"
             f"engine: {getattr(self.ms, 'engine_version', '?')}\n"
