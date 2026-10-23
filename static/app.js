@@ -2191,16 +2191,29 @@ function _speakSyncSoon() {
   var now = Date.now();
   if (now - _speakSyncAt < 250) return;
   _speakSyncAt = now;
-  _syncSpeakButtons();
+  // PERF (2026-10-23): sync only the ACTIVE bubble from the token flush —
+  // the full-document scan deep-cloned every bubble in the chat 4x per
+  // second, with cost growing with conversation length.
+  var act = (S.curAgent && S.curAgent.tid) ? document.getElementById('ab-' + S.curAgent.tid) : null;
+  _syncSpeakButtons(act ? act.closest('.ablock') : null);
 }
 
-function _syncSpeakButtons() {
-  document.querySelectorAll('#chat .amsg-foot').forEach(function (foot) {
-    var btn = foot.querySelector('.msg-speak');
+function _syncSpeakButtons(scope) {
+  var blocks = scope ? [scope]
+                     : Array.prototype.slice.call(document.querySelectorAll('#chat .ablock'));
+  blocks.forEach(function (wrap) {
+    var btn = wrap.querySelector('.amsg-foot .msg-speak');
     if (!btn) return;
-    var wrap = foot.closest('.ablock');
-    var body = wrap ? wrap.querySelector('.abody') : null;
-    var hasText = !!(body && _answerTextOnly(body).length > 8);
+    var body = wrap.querySelector('.abody');
+    // Has-answer check WITHOUT layout: strip chrome in a DETACHED clone and
+    // count textContent (the old path mounted a clone off-screen to read
+    // innerText — a forced layout per bubble per tick).
+    var hasText = false;
+    if (body) {
+      var clone = body.cloneNode(true);
+      try { clone.querySelectorAll(_ANSWER_CHROME_SEL).forEach(function (n) { n.remove(); }); } catch (e) {}
+      hasText = (clone.textContent || '').trim().length > 8;
+    }
     btn.style.display = (hasText && S && S.ttsEnabled) ? '' : 'none';
   });
 }
@@ -4734,6 +4747,13 @@ function _applyMdToBody(body) {
 var _liveMdMaxLen   = 100000;   // above this: pause live rendering (plain text)
 var _liveMdThrottle = 25000;    // above this: re-render only every 2nd frame
 var _liveMdTick     = 0;
+// PERF (2026-10-23): _mdRender re-parses the WHOLE accumulated answer and
+// rebuilds the bubble DOM on every call — quadratic over one answer at up to
+// 60 fps. Streaming paint at ~8 fps is indistinguishable; finalize always
+// forces the full render.
+var _liveMdMinMs    = 120;
+var _liveMdLastAt   = 0;
+var _liveMdTrailT   = null;
 
 function _liveMdRawOf(body) {
   if (body._liveRaw) return body._liveRaw;
@@ -4771,6 +4791,23 @@ function _liveMdRender(body, force) {
   }
   if (raw.length > _liveMdThrottle && !force && (_liveMdTick++ & 1)) {
     return;  // only render every 2nd frame
+  }
+  if (!force) {
+    var _nowMs = Date.now();
+    if (_nowMs - _liveMdLastAt < _liveMdMinMs) {
+      // Trailing paint: the flush loop stops once the queue drains, so a
+      // skipped tail must render itself when the gate opens (doneAgent's
+      // force render only covers run end).
+      if (!_liveMdTrailT) {
+        _liveMdTrailT = setTimeout(function () {
+          _liveMdTrailT = null;
+          body._liveDirty = true;
+          _liveMdRender(body, true);
+        }, _liveMdMinMs);
+      }
+      return;
+    }
+    _liveMdLastAt = _nowMs;
   }
   if (!body._liveEl) {
     body._liveEl = document.createElement('div');
@@ -5151,6 +5188,7 @@ function _tokenFlushLoop() {
     var thinkBodyEl  = document.getElementById('thb-' + S.curAgent.tid);
     if (!S.curAgent._inThink && combined.indexOf('<think>') >= 0) {
       S.curAgent._inThink = true;
+      S.curAgent._thinkShown = 0;
       var before = combined.split('<think>')[0];
       if (before) _liveMdAppend(body, before);
       S.curAgent._thinkBuf = '<think>' + combined.split('<think>').slice(1).join('<think>');
@@ -5159,10 +5197,29 @@ function _tokenFlushLoop() {
       S.curAgent._thinkBuf = combined;
       if (thinkBodyEl) {
         var visibleThink = combined.replace(/^<think>/i, '').split('</think>')[0];
-        thinkBodyEl.textContent = visibleThink;
+        // PERF (2026-10-23): append the delta on a persistent text node — the
+        // per-frame whole-block textContent rewrite copied the full think text
+        // every frame (O(n²) over long reasoning streams).
+        var _shown = S.curAgent._thinkShown || 0;
+        if (visibleThink.length > _shown) {
+          var _tn = thinkBodyEl.firstChild;
+          if (!(_tn && _tn.nodeType === Node.TEXT_NODE)) {
+            thinkBodyEl.textContent = '';
+            _tn = document.createTextNode('');
+            thinkBodyEl.appendChild(_tn);
+          }
+          _tn.appendData(visibleThink.slice(_shown));
+          S.curAgent._thinkShown = visibleThink.length;
+        }
         var tktEl = document.getElementById('tkt-' + S.curAgent.tid);
-        if (tktEl) tktEl.textContent = ' · ' + visibleThink.length + ' chars';
-        thinkBodyEl.scrollTop = thinkBodyEl.scrollHeight;
+        if (tktEl) {
+          var _nowTk = Date.now();
+          if (!S.curAgent._tktAt || _nowTk - S.curAgent._tktAt >= 500) {
+            S.curAgent._tktAt = _nowTk;
+            tktEl.textContent = ' · ' + visibleThink.length + ' chars';
+          }
+        }
+        if (_chatFollow) thinkBodyEl.scrollTop = thinkBodyEl.scrollHeight;
       }
       if (combined.indexOf('</think>') >= 0) {
         S.curAgent._inThink = false;
@@ -6152,16 +6209,25 @@ function _perfOnToken(content) {
   if (!isFinite(S.perfTokRateEma) || S.perfTokRateEma <= 0) S.perfTokRateEma = _inst;
   else S.perfTokRateEma = (S.perfTokRateEma * 0.8) + (_inst * 0.2);
   S.perfTokRate = S.perfTokRateEma;
-  if (S.curAgent) {
-    var at = document.getElementById(S.curAgent.tid);
-    if (at) {
-      var _t = S.perfEstTokens || 0;
-      var _r = S.perfTokRate > 0 ? S.perfTokRate.toFixed(1) + ' t/s' : '';
-      at.textContent = _t + ' tok' + (_r ? ' \u00b7 ' + _r : '');
+  // PERF (2026-10-23): the per-agent counter + full bar render ran on EVERY
+  // token event (600-1200 DOM writes/s at local decode rates). 4 Hz is plenty
+  // for a display; the accumulators above stay per-token.
+  var _nowPr = Date.now();
+  if (_nowPr - (_perfPaintLastAt || 0) >= 250) {
+    _perfPaintLastAt = _nowPr;
+    if (S.curAgent) {
+      var at = document.getElementById(S.curAgent.tid);
+      if (at) {
+        var _t = S.perfEstTokens || 0;
+        var _r = S.perfTokRate > 0 ? S.perfTokRate.toFixed(1) + ' t/s' : '';
+        at.textContent = _t + ' tok' + (_r ? ' \u00b7 ' + _r : '');
+      }
     }
+    _perfRender(false);
   }
-  _perfRender(false);
 }
+
+var _perfPaintLastAt = 0;
 
 function _perfWallRate() {
   // the "normal" figure: tokens over wall clock since the first token -
@@ -7304,10 +7370,23 @@ function handleEvent(d) {
       _tbEl.classList.add('live', 'open');
       var _thbEl = _tbEl.querySelector('.think-body');
       if (_thbEl) {
-        _thbEl.textContent += d.content || '';
+        // PERF (2026-10-23): O(delta) append on a persistent text node — the
+        // old `textContent +=` copied the whole block on EVERY event (O(n²)
+        // over long thinking streams), plus a layout-forcing scroll per event.
+        var _tn = _thbEl.firstChild;
+        if (!(_tn && _tn.nodeType === Node.TEXT_NODE)) {
+          _thbEl.textContent = '';
+          _tn = document.createTextNode('');
+          _thbEl.appendChild(_tn);
+        }
+        _tn.appendData(d.content || '');
         var _tktEl = _tbEl.querySelector('.th-tokens');
-        if (_tktEl) _tktEl.textContent = ' \u00b7 ' + _thbEl.textContent.length + ' chars';
-        _thbEl.scrollTop = _thbEl.scrollHeight;
+        var _nowTk = Date.now();
+        if (_tktEl && (!_thbEl._tktAt || _nowTk - _thbEl._tktAt >= 500)) {
+          _thbEl._tktAt = _nowTk;
+          _tktEl.textContent = ' \u00b7 ' + _tn.length + ' chars';
+        }
+        if (_chatFollow) _thbEl.scrollTop = _thbEl.scrollHeight;
       }
       scrollBtmIfNearBottom(120);
     }
