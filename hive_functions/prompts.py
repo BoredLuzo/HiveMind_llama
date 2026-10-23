@@ -148,15 +148,6 @@ def build_execution_block(settings, wf_chunk):
     if settings.get("duo_websearch_enabled", False) and settings.get("websearch_available", False):   rules.append("- Web search is available. PREFER looking things up over guessing. If you are unsure about an API, library, or framework detail, use web_search FIRST — wrong assumptions are worse than an extra tool call.")
     return "EXECUTION CONTROL:\n" + "\n".join(rules) + "\n"
 
-def build_duo_coder_prompt(settings, wf_limit, wf_chunk):
-    execution_block = build_execution_block(settings, wf_chunk)
-    websearch_note = "\n\nWeb search is available via the web_search tool. PREFER LOOKUP OVER HALLUCINATION: if you are unsure about an API signature, library function, framework behavior, or config option, search FIRST before guessing. A wrong assumption breaks the build; a web_search call costs 2 seconds. When in doubt: search." if settings.get("duo_websearch_enabled", False) and settings.get("websearch_available", False) else ""
-    return (
-        BASE_RULE + "\n\n" + execution_block + "\n\n" +
-        REASONING_PLANNING_BLOCK + websearch_note + "\n\n" +
-        f"You are the IMPLEMENTER. Write correct, runnable code. Max {wf_limit} chars."
-    )
-
 # ── Duo Coder: Modular Prompt-Blocks ──────────────────────────────────────────
 
 DUO_CODER_BASE = BASE_RULE + """
@@ -378,11 +369,6 @@ EXECUTION_PROFILES = {
     "balanced": {"pre_explore": False, "chunking": True},
     "heavy":    {"pre_explore": True,  "chunking": True},
 }
-
-def select_profile_and_model(task):
-    if task.route == "duo":
-        return ("heavy", "Omni") if task.level == "complex" else ("balanced", "Focused")
-    return "fast", "qwen3.5:2b"
 
 
 # ── Hivemind Soul (core identity — used as base system prompt) ────────────────
@@ -619,10 +605,6 @@ Rules:
 - When steps share types/imports: note the shared symbol and its origin file to prevent duplication.
 - Max 400 words."""
 
-
-def make_soft_planner_sys() -> str:
-    """System prompt for Soft-Planner: produces a structured briefing instead of a subtask list."""
-    return SOFT_PLANNER_SYSTEM
 
 
 def extract_soft_plan_research(plan_text: str) -> list:

@@ -409,53 +409,6 @@ def _build_inject_message(
     return header + body + footer
 
 
-def build_server_integration_snippet() -> str:
-
-
-    return '''
-# ── P3: Test Feedback Loop — inject after chunk completion ──────────────────
-# Importiert oben: from hive_functions.test_runner import run_tests
-# Importiert oben: from hive_functions.loop_machine import AgentState
-
-_test_fix_attempts: dict[int, int] = {}  # chunk_idx → number of fix attempts (before loop)
-
-# In the post-chunk block:
-if _workspace and duo_agentic_mode and settings.get("duo_test_feedback_chunk", False):
-    _emit_status("🧪 Verifying tests...")
-    _test_result = await run_tests(workspace=_workspace, timeout=90)
-    ctrl.transition(AgentState.VERIFY)
-
-    if not _test_result.is_clean():
-        _chunk_fix_count = _test_fix_attempts.get(_current_chunk_idx, 0)
-        _test_fix_attempts[_current_chunk_idx] = _chunk_fix_count + 1
-
-        _dtool_msgs.append({
-            "role": "tool",
-            "content": _test_result.inject_msg,
-            "name": "run_bash",
-        })
-
-        max_attempts = _settings.get("duo_p3_max_fix_attempts", 3)
-        if _chunk_fix_count >= max_attempts:
-            _emit_status(f"⚠️ Chunk {_current_chunk_idx}: {max_attempts} fix attempts without success — continuing")
-            _dtool_msgs.append({
-                "role": "tool",
-                "content": "[TEST-RESULT] ⛔ Max fix attempts reached. Declare as blocker and continue.",
-                "name": "run_bash",
-            })
-        elif until_finished and ctrl.can_continue(is_aborted_callback=_is_aborted):
-            _emit_status(f"🔁 {_test_result.failure_count} errors — coder fixes...")
-            # continue → next loop iteration sees inject_msg and fixes
-            continue
-        else:
-            _emit_status(f"⚠️ Tests: {_test_result.failure_count} failure(s) — critic is reviewing")
-    else:
-        _emit_status("✅ Tests bestanden")
-
-    ctrl.transition(AgentState.CODING)
-# ─────────────────────────────────────────────────────────────────────────────
-'''
-
 
 # ── Test Failure Classification ────────────────────────────────────────────
 

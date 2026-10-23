@@ -938,8 +938,3 @@ class ChunkState:
     def has_written_files(self) -> bool:
         """True if at least one file has been written to disk."""
         return bool(self.written_files)
-
-    @property
-    def is_chunking(self) -> bool:
-        """True if we're in chunking mode (subtasks were set)."""
-        return bool(self.done_tasks) or bool(self.coder_outputs)

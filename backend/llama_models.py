@@ -289,11 +289,6 @@ def _index_trigger_callers(_depth: int = 4) -> str:
     return " <- ".join(names) if names else "?"
 
 
-def refresh_index() -> None:
-    global _index_cache, _index_ts
-    _index_cache = _build_index()
-    _index_ts = _time_module.time()
-
 
 def _find_ollama_root() -> Path | None:
     env_root = os.environ.get("OLLAMA_MODELS", "").strip()
@@ -617,10 +612,6 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
     _names_cache_ts = _time_module.time()
     return result
 
-
-def list_available_models_sync(force_refresh: bool = False) -> list[str]:
-    """Compatibility alias."""
-    return list_available_models(force_refresh=force_refresh)
 
 
 def save_model_mapping(model_name: str, gguf_path: str):

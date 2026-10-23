@@ -463,43 +463,6 @@ def trim_query(raw: str, max_chars: int) -> str:
     return cut.strip()
 
 
-def normalize_planner_steps(raw_text: str, *, max_steps: int = 20, max_chars: int = 3000) -> str:
-    """Normalisiert rohen Planner-Output in nummeriertes Step-Format."""
-    raw = _RE_THINK_CLEANUP.sub("", str(raw_text or "")).strip()
-    if not raw:
-        return ""
-
-    raw = re.sub(r"```[\s\S]*?```", " ", raw)
-    bad_line_re = re.compile(
-        r"(apply one or more search/replace|edit_file\(|write_file_append|always call read_file first|<<<<<<<|=======|>>>>>>>)",
-        re.IGNORECASE,
-    )
-
-    items: list[str] = []
-    seen: set[str] = set()
-    for line in raw.splitlines():
-        s = line.strip()
-        if not s or bad_line_re.search(s):
-            continue
-        s = re.sub(r"^\s*(?:\d+[.)]\s*|[-*]\s+)", "", s).strip()
-        if len(s) < 8:
-            continue
-        key = s.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        items.append(s[:420])
-        if len(items) >= max_steps:
-            break
-
-    if not items:
-        return trim_query(re.sub(r"\s+", " ", raw), min(max_chars, 320))
-
-    out = "\n".join(f"{i+1}. {s}" for i, s in enumerate(items))
-    if len(out) > max_chars:
-        out = trim_query(out, max_chars)
-    return out
-
 
 def fallback_planner_steps(goal: str, *, max_steps: int = 4) -> str:
     """Generiert generische 4-Schritt-Fallback-Plan wenn LLM-Planner fehlschlaegt."""

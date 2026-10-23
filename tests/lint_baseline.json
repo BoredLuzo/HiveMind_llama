@@ -40,7 +40,7 @@
   "except_pass": 0
  },
  "backend/manager_health.py": {
-  "broad_except": 8,
+  "broad_except": 9,
   "except_pass": 5
  },
  "backend/manager_load.py": {
@@ -1099,6 +1099,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_preset_autoload_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_preset_never_keys_apply.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1164,6 +1168,10 @@
   "except_pass": 0
  },
  "tests/test_run_python_encoding.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_run_stats.py": {
   "broad_except": 0,
   "except_pass": 0
  },

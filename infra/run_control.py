@@ -80,12 +80,6 @@ async def _cleanup_abort_registry():
     except Exception:
         pass
 
-async def _abort_registry_cleanup_loop():
-    """Periodic abort-registry cleanup (every 5 minutes)."""
-    while True:
-        await asyncio.sleep(300)
-        await _cleanup_abort_registry()
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Pause/Resume — Human-in-the-Loop
@@ -337,7 +331,4 @@ def steer_queue_view(run_id: str) -> list:
     """Copy of the queued messages (endpoint/UI side)."""
     return list(_steer_queue.get(str(run_id or ""), []))
 
-
-def cleanup_steer(run_id: str) -> None:
-    _steer_queue.pop(str(run_id or ""), None)
 

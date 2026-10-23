@@ -64,9 +64,6 @@ async def model_load(model: str, keep_alive: str = "10m",
         raise
 
 
-async def model_evict(model: str):
-    await manager.evict(model)
-
 
 async def model_pin(model: str, num_ctx: Optional[int] = None):
     try:
@@ -81,10 +78,6 @@ async def force_kill_all() -> dict:
     return await manager.force_kill_all()
 
 
-async def model_unpin(model: str, keep_alive: str = "10m"):
-    seconds = _parse_keep_alive(keep_alive)
-    await manager.unpin(model, keep_alive_seconds=max(seconds, 60))
-
 
 async def evict_all_unpinned():
     await manager.evict_all_unpinned()
@@ -97,9 +90,6 @@ async def model_prefetch(model: str, num_ctx: Optional[int] = None):
 
     await manager.prefetch_next(model, num_ctx=num_ctx)
 
-
-def model_available(model: str) -> bool:
-    return resolve_model_path(model) is not None
 
 
 # ── Helper ────────────────────────────────────────────────────────────────────

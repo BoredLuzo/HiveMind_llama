@@ -291,7 +291,3 @@ def get_run_state(run_id: str) -> RollupState:
                     _states.pop(_old, None)
         return st
 
-
-def clear_run_state(run_id: str) -> None:
-    with _states_lock:
-        _states.pop(run_id, None)

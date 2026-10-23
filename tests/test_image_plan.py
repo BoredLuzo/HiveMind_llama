@@ -271,9 +271,9 @@ class PinExpiryAndUnpinAll(unittest.TestCase):
         from backend.manager_process import LlamaProcessMixin
         m = LlamaProcessMixin()
         old_pin = NS(model="old-coder", slot_id=0, is_running=True, pinned=True,
-                     pinned_at=time.time() - 3600, last_used=1, kill=lambda: None)
+                     pinned_at=time.monotonic() - 3600, last_used=1, kill=lambda: None)
         fresh_pin = NS(model="fresh-coder", slot_id=1, is_running=True, pinned=True,
-                       pinned_at=time.time(), last_used=2, kill=lambda: None)
+                       pinned_at=time.monotonic(), last_used=2, kill=lambda: None)
         m._slots = [old_pin, fresh_pin]
         m._metric_inc = lambda *a: None
         victim = m._evict_lru()

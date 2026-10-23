@@ -239,9 +239,6 @@ def resolve_timeout(settings: dict | None = None) -> float:
     return max(10.0, min(900.0, want))
 
 
-def _wants_preload(settings: dict | None = None) -> bool:
-    return bool((settings or {}).get("stt_preload"))
-
 
 # ── transcript parsing ──────────────────────────────────────────────────────
 def parse_transcript(stdout: str) -> str:

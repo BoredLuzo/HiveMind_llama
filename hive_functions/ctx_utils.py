@@ -750,60 +750,6 @@ def derive_static_map_budget(
 
 # ── Convenience: Full Pipeline ──────────────────────────────────────────────
 
-def run_context_pipeline(
-    explore_toml: str,
-    plan_text: str,
-    user_task: str,
-    workspace: str = "",
-    model_ctx: int | None = None,
-    profile: str = "balanced",
-) -> dict:
-    """
-    Run the full context pipeline. Called once after explore + planner complete.
-
-    Returns dict:
-      planner_ctx: context for planner stage
-      coder_ctx:   context for coder stage
-      snippets:    extracted CodeSnippet list
-      budget:      the ContextBudget used
-      touched_files: file paths from touched partitions
-      content_tokens: available content tokens
-    """
-    content_tokens = compute_content_budget(model_ctx, profile=profile)
-    budget = ContextBudget.from_content_tokens(content_tokens)
-    partitions = parse_toml_partitions(explore_toml)
-
-    # Collect touched files
-    touched_files: list[str] = []
-    seen: set[str] = set()
-    for p in partitions:
-        if p.touched_by_task in ("likely", "unknown"):
-            for f in p.key_files:
-                if f not in seen:
-                    seen.add(f)
-                    touched_files.append(f)
-
-    # Extract snippets (only if budget allows)
-    snippets: list[CodeSnippet] = []
-    if budget.snippets > 0 and touched_files:
-        snippets = collect_snippets_from_files(touched_files, workspace)
-
-    # Build contexts
-    planner_ctx = explore_to_planner_ctx(explore_toml, task=user_task, budget=budget)
-    coder_ctx = planner_to_coder_ctx(
-        plan_text, explore_toml,
-        snippets=snippets, task=user_task, budget=budget,
-    )
-
-    return {
-        "planner_ctx": planner_ctx,
-        "coder_ctx": coder_ctx,
-        "snippets": snippets,
-        "budget": budget,
-        "touched_files": touched_files,
-        "content_tokens": content_tokens,
-    }
-
 
 # ── Legacy API ───────────────────────────────────────────────────────────────
 
