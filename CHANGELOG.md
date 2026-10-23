@@ -1,5 +1,50 @@
 ## [1.4.8] - 2026-10-22
 
+### The EDIT→TEST→FIX loop, densified (2026-10-23)
+
+- **Per-chunk test feedback ships ON** (`duo_test_feedback_chunk=True`): the
+  chunk auto-test + self-fix loop was fully built but opt-in — most agentic
+  runs finished without any test feedback. Both this and the final gate are
+  on by default now.
+- **Edit→test mapping** (`hive_functions/testmap.py`, pure stdlib): the auto
+  test runs the test files that cover what was written instead of always the
+  full suite. Name conventions (pytest/jest layouts, tests/ placement) plus a
+  bounded python import probe; no match → full suite. The completion veto's
+  auto-verify uses the same mapping.
+- **Auto-Verify on veto**: the completion veto no longer asks the model to
+  run tests (small models often ignored that, and the retry slipped through
+  unverified). The harness runs the suite itself: green → completion accepted
+  as verified and the gate re-arms; red → concrete failures into the coder
+  context; no test suite → the smoke-test nudge (nothing ran is not a
+  failure).
+- **Scoped test runs**: `run_tests(paths=...)` with `test_cmd_scoped`
+  templates (python/js/ts) and a no-match fallback to the full command — a
+  jest "no tests found" must not read as red. `python -m pytest` replaces the
+  bare `pytest` call, which is not on PATH everywhere (every auto-test read
+  as a false red on such machines).
+- Verify-gate suite grew 9 → 16 checks; new testmap suite (15 checks).
+
+### Frontend (2026-10-23)
+
+- **Streaming performance**: four hotspots fixed — the speaker-button sync
+  deep-cloned and laid out every chat bubble 4×/s (now: active bubble only,
+  detached clone, no forced layout), live markdown re-parsed the whole answer
+  every frame (now ~8 renders/s with a trailing paint), think blocks rewrote
+  their full text per frame/event (now delta appends on a persistent text
+  node), and the perf bar painted on every token event (now 4 Hz).
+- **Run stats line**: a muted DeepSeek-style footer under the final answer —
+  elapsed, tokens, cached, t/s, model on hover. The `done` event now names
+  the model, and the direct path reports real usage (include_usage) instead
+  of a chars/3 guess. The stats persist on the assistant message, so a
+  reloaded chat shows the same line.
+- **Context-fit warnings**: every context input (all four duo ctx fields, the
+  per-agent sliders, on load and on model change) shows the real VRAM
+  estimate and marks it red over budget — a warning only, never a block; the
+  run-start preflight still decides.
+- **Models chip**: the header shows which model(s) the selected mode calls
+  (coder/planner in duo, analyst+synthesizer in pipeline, direct otherwise) —
+  one muted chip, full names on hover.
+
 ### Voice over Telegram (end-to-end verified live)
 
 - A voice note now runs the full chain: transcription -> decider ->
