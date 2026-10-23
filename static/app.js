@@ -2946,7 +2946,7 @@ function renderAgentCards(agents) {
     ctxSlider.addEventListener('change', (function(id, mdl) {
       return function() {
         var v = parseInt(this.value);
-        if (v && mdl && typeof _vramEstimate === 'function') _vramEstimate(mdl, v, id + '-kv');
+        if (v && mdl && typeof _vramEstimate === 'function') _vramEstimate(mdl, v, id + '-kv', true);
       };
     })(ctxId, activeModel));
     const ctxVal = document.createElement('div');
@@ -12447,7 +12447,7 @@ async function refreshVram() {
     }
   }
 }
-async function _vramEstimate(model, ctx, elId) {
+async function _vramEstimate(model, ctx, elId, compact) {
   if (!model || !ctx) return;
   var el = document.getElementById(elId);
   if (!el) return;
@@ -12458,17 +12458,36 @@ async function _vramEstimate(model, ctx, elId) {
     if (!r.ok) return;
     var d = await r.json();
     if (d.error) return;
-    var txt = '\u2248 ' + d.vram_gb.toFixed(1) + ' GB (KV: ' + d.vram_kv_gb.toFixed(2) + ' GB)';
-    if (d.ram_gb > 0) txt += ' + ' + d.ram_gb.toFixed(1) + ' GB RAM';
+    var kv = d.vram_kv_gb > 0.005 ? d.vram_kv_gb : 0;   // 0.00 GB = no KV row for this model
     // CTX-FIT-WARN (2026-10-23): non-blocking on purpose — a 35B @ 100k is a
     // deliberate choice some setups can make; the estimate only says what the
     // budget thinks. The run-start preflight still decides (and is toggleable).
     var budget = (_vramBudgetGb > 0 ? _vramBudgetGb : 8.0) - 0.4;
-    if (d.vram_gb > budget) {
-      txt += ' \u26a0 over ' + budget.toFixed(1) + ' GB budget';
-      el.classList.add('ctx-est-over');
+    var over = d.vram_gb > budget;
+    var title = d.vram_gb.toFixed(1) + ' GB total (KV ' + d.vram_kv_gb.toFixed(2) + ' GB)'
+      + (d.ram_gb > 0 ? ' + ' + d.ram_gb.toFixed(1) + ' GB CPU-expert RAM' : '')
+      + ' vs ' + budget.toFixed(1) + ' GB budget'
+      + (over ? ' \u2014 warning only, nothing is blocked' : '');
+    var txt;
+    if (compact) {
+      // COMPACT (owner feedback 2026-10-23): the per-agent value slot is one
+      // small line — the full estimate wrapped it into three. RAM and budget
+      // detail live in the hover title.
+      el.style.whiteSpace = 'nowrap';
+      el.style.overflow = 'hidden';
+      el.style.textOverflow = 'ellipsis';
+      txt = d.vram_gb.toFixed(1) + ' GB'
+        + (kv ? ' \u00b7 KV ' + kv.toFixed(1) : '')
+        + (over ? ' \u26a0 >' + budget.toFixed(1) : '');
+    } else {
+      txt = '\u2248 ' + d.vram_gb.toFixed(1) + ' GB'
+        + (kv ? ' (KV: ' + kv.toFixed(2) + ' GB)' : '')
+        + (d.ram_gb > 0 ? ' + ' + d.ram_gb.toFixed(1) + ' GB RAM' : '')
+        + (over ? ' \u26a0 over ' + budget.toFixed(1) + ' GB budget' : '');
     }
+    if (over) el.classList.add('ctx-est-over');
     el.textContent = txt;
+    el.title = title;
   } catch(e) {}
 }
 // CTX-FIT-WARN (2026-10-23): populate every duo ctx estimate once on load and
