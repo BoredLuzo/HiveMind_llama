@@ -25,6 +25,12 @@ REM Resolve server port: settings.json "server_port" (set by install.bat), defau
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$j = Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if ($j.server_port) { $j.server_port } else { '8001' }"`) do set HM_PORT=%%P
 if not defined HM_PORT set "HM_PORT=8001"
 
+REM WATCHDOG HANDSHAKE (2026-10-23): a headless watchdog restarts the engine
+REM within seconds of the kill below and re-grabs the port - the fresh
+REM foreground instance then dies with winerror 10048 (live). Stop it first.
+REM The headless setup is re-armed by running watchdog_engine.bat.
+call watchdog_engine.bat stop
+
 REM Port check: is HiveMind already running?
 set "HM_PORT_PID="
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$c = Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty OwningProcess; if ($c) { $c }"`) do set HM_PORT_PID=%%P
