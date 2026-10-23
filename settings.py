@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
+from datetime import datetime as _dt
 from pathlib import Path
 
 SETTINGS_FILE      = Path(__file__).parent / "settings.json"
@@ -705,9 +706,21 @@ def _load_settings_from_disk() -> dict:
 
 _settings_write_lock = threading.Lock()
 
-def save_settings(settings: dict):
+
+def _now_iso() -> str:
+    return _dt.now().astimezone().isoformat(timespec="seconds")
 
 
+def save_settings(settings: dict, *, saved_at: str | None = None):
+    """Persist the settings dict atomically.
+
+    saved_at: explicit stamp for callers that must keep two keys in lockstep
+    (the preset load writes preset_applied_at == settings_saved_at, so the
+    autoload guard sees "applied at the latest save", not "one write older").
+    """
+
+
+    settings["settings_saved_at"] = saved_at or _now_iso()
     _data = json.dumps(settings, ensure_ascii=False, indent=2)
     _tmp = SETTINGS_FILE.with_name(f".settings_{threading.get_ident()}.tmp")
     _tmp.write_text(_data, encoding="utf-8")

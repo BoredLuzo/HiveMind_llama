@@ -13,6 +13,7 @@ from settings import (
     get_custom_prompt, save_custom_prompt,
     delete_custom_prompts_for_preset, copy_prompts_to_preset,
     DEFAULT_AGENT_CFG, DEFAULT_SETTINGS,
+    _now_iso,
 )
 from hive_functions.prompts import PROMPTS
 from vram.loader import _bk_load
@@ -219,9 +220,30 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
             language=settings.get("searxng_language"),
         )
     if persist:
-        await asyncio.to_thread(save_settings, settings)
+        # PRESET-AUTOLOAD-GUARD (2026-10-23): record WHEN the preset was
+        # applied. The autoload compares this against settings_saved_at —
+        # without it, every engine boot re-applied the snapshot and silently
+        # reverted everything the user saved since the last load (live
+        # demonstration: a settings.json edit was reverted by the next boot).
+        _stamp = _now_iso()
+        settings["preset_applied_at"] = _stamp
+        await asyncio.to_thread(save_settings, settings, saved_at=_stamp)
     registry_sync_from_pipeline()
     return True
+
+
+def preset_autoload_stale(applied_at, saved_at) -> bool:
+    """True when settings were saved AFTER the active preset was applied.
+
+    The startup auto-load must then NOT re-apply the snapshot — the user's
+    newer config wins. Equal stamps (a load persists both in one write) and
+    missing stamps (old settings files) keep the historical apply-always
+    behavior."""
+    if not applied_at or not saved_at:
+        return False
+    # ISO stamps from one clock format compare chronologically as strings;
+    # str() coercion cannot raise, so there is no failure mode to guard.
+    return str(saved_at) > str(applied_at)
 
 
 @router.get("/settings")
@@ -737,6 +759,15 @@ async def del_preset(name: str):
 async def startup_preset_autoload() -> None:
     _ap_name = str(settings.get("active_preset") or "").strip()
     if not _ap_name:
+        return
+    # PRESET-AUTOLOAD-GUARD (2026-10-23): settings the user saved after the
+    # last preset load must win — re-applying the snapshot here silently
+    # reverted them on every boot. Re-load the preset explicitly to re-engage.
+    if preset_autoload_stale(settings.get("preset_applied_at"),
+                             settings.get("settings_saved_at")):
+        logger.info(
+            "[PRESET] startup auto-load skipped: settings were saved after "
+            "'%s' was applied — keeping the newer settings", _ap_name)
         return
     if await _apply_preset_internal(_ap_name, persist=True):
         logger.info("[PRESET] startup auto-load: applied preset '%s'", _ap_name)
