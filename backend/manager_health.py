@@ -34,21 +34,42 @@ class LlamaHealthMixin:
         while True:
             try:
                 await asyncio.sleep(30 + random.uniform(0.0, 5.0))
-                now = time.time()
+                # MONOTONIC (audit A3): pairs with touch()/load stamps — a
+                # wall-clock (NTP) jump used to mass-evict unpinned slots.
+                now = time.monotonic()
+                # LOCK-HELD-KILL (audit A5): _kill_slot_async awaits a blocking
+                # kill of up to ~10 s. Under the manager lock that stalled
+                # EVERY load/evict/touch for the whole duration. Scan under
+                # the lock (cheap), kill outside it; a slot touched between
+                # scan and kill is spared by the re-check.
+                _to_evict = []
                 async with self._lock:
                     for slot in self._slots:
                         try:
                             if (slot.is_running and not slot.pinned
                                     and slot._idle_timeout is not None
                                     and (now - slot.last_used) > slot._idle_timeout):
-                                logger.info(f"Idle-Evicting {slot.model} (slot {slot.slot_id})")
-                                self._metric_inc("evictions_total")
-                                self._metric_inc("evictions_idle")
-                                await _kill_slot_async(slot)
+                                _to_evict.append(slot)
                         except Exception as e:
-                            logger.warning("[idle_monitor] slot %s eviction failed: %s", slot.slot_id, e)
+                            logger.warning("[idle_monitor] slot %s scan failed: %s", slot.slot_id, e)
                             continue
                     await self._trigger_pending_prefetch()
+                for slot in _to_evict:
+                    try:
+                        if (slot.is_running and not slot.pinned
+                                and slot._idle_timeout is not None
+                                and (time.monotonic() - slot.last_used) > slot._idle_timeout):
+                            logger.info(f"Idle-Evicting {slot.model} (slot {slot.slot_id})")
+                            self._metric_inc("evictions_total")
+                            self._metric_inc("evictions_idle")
+                            await _kill_slot_async(slot)
+                        else:
+                            logger.info(
+                                "[idle_monitor] slot %s touched again between scan and kill - not evicting",
+                                slot.slot_id)
+                    except Exception as e:
+                        logger.warning("[idle_monitor] slot %s eviction failed: %s", slot.slot_id, e)
+                        continue
             except asyncio.CancelledError:
                 logger.info("[idle_monitor] cancelled, exiting")
                 break

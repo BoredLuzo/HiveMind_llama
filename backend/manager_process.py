@@ -140,8 +140,9 @@ class LlamaProcessMixin:
     def _evict_lru(self, exclude_slot: Optional[ModelSlot] = None) -> Optional[ModelSlot]:
         # PIN EXPIRY (2026-10-02): a pin protects a slot for 30 minutes from
         # its pin time — hung pins (crashed runner that never unpinned) can
-        # no longer block eviction forever.
-        _now = time.time()
+        # no longer block eviction forever. MONOTONIC (audit A3): pairs with
+        # set_pinned's stamp.
+        _now = time.monotonic()
         def _protected(s: "ModelSlot") -> bool:
             if not s.pinned:
                 return False

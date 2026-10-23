@@ -215,7 +215,7 @@ def test_executor_wedge_trigger():
     async def one_round(args_str):
         trs = ToolRoundState(
             tool_ctx_lru=ToolContextLRU(default_ttl=3),
-            duo_deadline_at=time.time() + 600,
+            duo_deadline_at=time.monotonic() + 600,
             wedge_state=wstate,
             total_tool_errors=total_errors,
         )
@@ -256,7 +256,7 @@ def test_executor_wedge_trigger():
     async def one_round2(args_str):
         trs = ToolRoundState(
             tool_ctx_lru=ToolContextLRU(default_ttl=3),
-            duo_deadline_at=time.time() + 600,
+            duo_deadline_at=time.monotonic() + 600,
             wedge_state=wstate2,
             total_tool_errors=total_errors2,
         )
@@ -279,7 +279,7 @@ def test_executor_wedge_trigger():
     async def one_round_off(args_str):
         trs = ToolRoundState(
             tool_ctx_lru=ToolContextLRU(default_ttl=3),
-            duo_deadline_at=time.time() + 600,
+            duo_deadline_at=time.monotonic() + 600,
             wedge_state=None,
             total_tool_errors=[0],
         )

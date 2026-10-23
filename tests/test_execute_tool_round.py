@@ -88,7 +88,7 @@ def run_round(tool_calls, dtool_msgs=None, round_state=None, **over):
     msgs = dtool_msgs if dtool_msgs is not None else []
     slot_defaults = dict(
         tool_ctx_lru=_LRU(),
-        duo_deadline_at=time.time() + 60,
+        duo_deadline_at=time.monotonic() + 60,
         verify_mutation_serial=0, verify_last_ok_serial=0,
         last_run_bash_failure=None, changed_since_failure=set(),
         last_learned_insight_sig="", last_too_large_path=[None],
@@ -130,7 +130,7 @@ check("success focus paths", res.recent_focus_paths_updated == ["x.py"])
 # ── 2. Deadline-Break ───────────────────────────────────────────────────
 res, hooks, msgs, rs, seen, ltl = run_round(
     [tc("read_file", {"path": "a.py"}), tc("read_file", {"path": "b.py"})],
-    duo_deadline_at=time.time() - 1)
+    duo_deadline_at=time.monotonic() - 1)
 check("deadline duo_timed_out", res.duo_timed_out is True)
 check("deadline loop_detected", res.loop_detected is True)
 check("deadline retry hint", any("were NOT executed" in str(m.get("content", "")) for m in msgs))
@@ -263,20 +263,20 @@ check("stub-echo read still works", "fine to read" in res.last_tool_result)
 
 # ── 14. DEADLINE-GRACE (2026-09-09): a successful write pushes the run
 #        deadline; a failed write does not. ────────────────────────────────
-_deadline = time.time() + 10
+_deadline = time.monotonic() + 10
 _HANDLERS["write_file"] = "[write_file: created 'g.txt' (+1 lines)]"
 res, hooks, msgs, rs, seen, ltl = run_round(
     [tc("write_file", {"path": "g.txt", "content": "x"})],
     duo_deadline_at=_deadline)
-check("deadline-grace extended", run_round.last_trs.duo_deadline_at >= time.time() + 299)
-check("deadline-grace reported", res.deadline_extended_to >= time.time() + 299)
+check("deadline-grace extended", run_round.last_trs.duo_deadline_at >= time.monotonic() + 299)
+check("deadline-grace reported", res.deadline_extended_to >= time.monotonic() + 299)
 
-_deadline = time.time() + 10
+_deadline = time.monotonic() + 10
 _HANDLERS["write_file"] = "[write_file error: disk full]"
 res, hooks, msgs, rs, seen, ltl = run_round(
     [tc("write_file", {"path": "g.txt", "content": "x"})],
     duo_deadline_at=_deadline)
-check("deadline-grace not on failure", run_round.last_trs.duo_deadline_at < time.time() + 299)
+check("deadline-grace not on failure", run_round.last_trs.duo_deadline_at < time.monotonic() + 299)
 
 # ── 15. READ-LADDER PATH-RESET (2026-09-09): only same-path re-reads
 #        escalate; different files reset the counter. ──────────────────────
@@ -320,7 +320,7 @@ check("ladder silent after write reset",
 # ── 16. LADDER-PERSIST (2026-09-09): the counter survives across rounds ──
 from core.tool_exec_helpers import ToolRoundState as _TRS
 _slot_defs = dict(
-    tool_ctx_lru=_LRU(), duo_deadline_at=time.time() + 60,
+    tool_ctx_lru=_LRU(), duo_deadline_at=time.monotonic() + 60,
     verify_mutation_serial=0, verify_last_ok_serial=0,
     last_run_bash_failure=None, changed_since_failure=set(),
     last_learned_insight_sig="", last_too_large_path=[None],

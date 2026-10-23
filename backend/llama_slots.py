@@ -60,9 +60,11 @@ class ModelSlot:
     def set_pinned(self, val: bool) -> None:
         # PIN EXPIRY (2026-10-02): set/clear the pin and stamp the time so
         # LRU eviction can reclaim pins older than 30 minutes.
+        # MONOTONIC (audit A3): the whole slot lifecycle clock is monotonic —
+        # an NTP wall-clock jump used to expire pins and mass-evict slots.
         import time as _t
         self.pinned = bool(val)
-        self.pinned_at = _t.time() if val else 0.0
+        self.pinned_at = _t.monotonic() if val else 0.0
 
     def mark_in_flight(self) -> None:
         """A round starts using this slot (see in_flight in __init__)."""
@@ -96,7 +98,8 @@ class ModelSlot:
         return self.process is not None and self.process.poll() is None
 
     def touch(self):
-        self.last_used = time.time()
+        # MONOTONIC (audit A3): pairs with the idle monitor's clock
+        self.last_used = time.monotonic()
 
     async def wait_ready(self, timeout: float = LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
                          http_client: Optional[httpx.AsyncClient] = None) -> bool:

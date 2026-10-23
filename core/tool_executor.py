@@ -372,7 +372,7 @@ async def execute_tool_round(
     _warn_duplicate_write_targets(tool_calls, dtool_msgs)
 
     for _i, _dtc_call in enumerate(tool_calls):
-        if time.time() >= trs.duo_deadline_at:
+        if time.monotonic() >= trs.duo_deadline_at:
             result.duo_timed_out = True
             _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
             result.loop_detected = True
@@ -940,7 +940,7 @@ async def execute_tool_round(
             # before its legitimate recovery read_file after 5 big write
             # rounds). Push the deadline forward instead of aborting
             # productive work; the hard tool-round cap still bounds runaways.
-            _grace_at = time.time() + 300.0
+            _grace_at = time.monotonic() + 300.0
             if _grace_at > trs.duo_deadline_at:
                 trs.duo_deadline_at = _grace_at
                 result.deadline_extended_to = _grace_at

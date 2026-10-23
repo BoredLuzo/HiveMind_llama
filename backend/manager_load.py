@@ -132,7 +132,8 @@ class LlamaLoadMixin:
         if model_name:
             slot.model     = model_name
             slot.loaded_at = time.time()
-            slot.last_used = time.time()
+            # MONOTONIC (audit A3): idle-eviction clock, pairs with touch()
+            slot.last_used = time.monotonic()
             slot._idle_timeout  = DEFAULT_IDLE_TIMEOUT_SECONDS
             slot._ready_event.set()
             slot._orphan_port   = slot.port
@@ -210,7 +211,8 @@ class LlamaLoadMixin:
             if model_name:
                 slot.model     = model_name
                 slot.loaded_at = time.time()
-                slot.last_used = time.time()
+                # MONOTONIC (audit A3): idle-eviction clock, pairs with touch()
+                slot.last_used = time.monotonic()
                 slot._idle_timeout  = DEFAULT_IDLE_TIMEOUT_SECONDS
                 slot._ready_event.set()
                 slot._orphan_port   = slot.port

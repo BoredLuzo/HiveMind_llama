@@ -1119,7 +1119,7 @@ async def run_code_duo(ctx):
                     while not _plan_task.done() or not _plan_event_q.empty():
                         # Enforce the run deadline even while the planner runs;
                         # otherwise a 600s planner overshoots a 90-420s run timeout.
-                        if _duo_deadline_at and time.time() >= _duo_deadline_at:
+                        if _duo_deadline_at and time.monotonic() >= _duo_deadline_at:
                             _duo_timed_out = True
                             logger.warning(
                                 "[PLANNER] Run deadline exceeded - planner aborted (run timeout %ss)",
@@ -2041,14 +2041,18 @@ async def run_code_duo(ctx):
                     ))
                     return
 
-        _duo_deadline_at = time.time() + (
+        # MONOTONIC-DEADLINE (audit A3): the run deadline lives on
+        # time.monotonic() — a wall-clock (NTP) jump used to expire or extend
+        # runs spuriously. Every consumer swaps in the same commit; the log
+        # line keeps its human-readable wall-clock estimate separately.
+        _duo_deadline_at = time.monotonic() + (
             86400.0 if ctx.duo_config.until_finished else _duo_run_timeout_s
         )
         ctx.phase_timer.start("coder_loop")
         logger.debug(
             "Coder deadline set: +%.0fs (until %s) | phases so far: %s",
             _duo_run_timeout_s,
-            time.strftime("%H:%M:%S", time.localtime(_duo_deadline_at)),
+            time.strftime("%H:%M:%S", time.localtime(time.time() + _duo_run_timeout_s)),
             ctx.phase_timer.ui_summary(),
         )
 
@@ -2125,7 +2129,7 @@ async def run_code_duo(ctx):
                 )
                 break
 
-            if time.time() >= _duo_deadline_at:
+            if time.monotonic() >= _duo_deadline_at:
                 _duo_timed_out = True
                 yield await ctx.emit({
                     "type": "status",
@@ -3040,7 +3044,7 @@ async def run_code_duo(ctx):
                             )
                             # Yield events from the bridge while planner runs
                             while not _inloop_plan_task.done() or not _inloop_event_q.empty():
-                                if _duo_deadline_at and time.time() >= _duo_deadline_at:
+                                if _duo_deadline_at and time.monotonic() >= _duo_deadline_at:
                                     _duo_timed_out = True
                                     logger.warning(
                                         "[INLOOP-PLANNER] Run deadline exceeded - planner aborted (run timeout %ss)",
@@ -3590,12 +3594,12 @@ async def run_code_duo(ctx):
                     # +2 slots: the grace round plus one nudge-retry round; the
                     # extra slots stay gated on _grace_round_active at the top.
                     for _dr in range(_max_tool_rounds + 2):
-                        _round_t0 = time.time()
+                        _round_t0 = time.monotonic()
                         if ctx.aborted() or ctx.is_aborted_chat(ctx.chat_id) or _loop_detected:
                             break
                         if _dr >= _round_budget0 and not _grace_round_active:
                             break
-                        if time.time() >= _duo_deadline_at:
+                        if time.monotonic() >= _duo_deadline_at:
                             _duo_timed_out = True
                             _ld_setter(2677); _loop_detected = True
                             yield await ctx.emit({
@@ -5477,7 +5481,7 @@ async def run_code_duo(ctx):
                                     f"Prioritize: finish the current file edit, verify with run_bash, "
                                     f"then stop. Do NOT start new large operations."
                                 )})
-                        _tool_round_durations.append(round(max(0.0, time.time() - _round_t0), 3))
+                        _tool_round_durations.append(round(max(0.0, time.monotonic() - _round_t0), 3))
                         # PATCH-1: Plan tracker — update progress per tool round
                         # extended with deviation detection: hard/soft rules, streak tracking,
                         if _plan_tracker is not None and not _plan_tracker.is_finished:

@@ -89,7 +89,7 @@ class _Harness:
         self.state = DuoRoundState()
         self.trs = ToolRoundState(
             tool_ctx_lru=ToolContextLRU(default_ttl=3),
-            duo_deadline_at=time.time() + 300,   # 0.0 counts as "deadline passed"
+            duo_deadline_at=time.monotonic() + 300,   # 0.0 counts as "deadline passed"
         )
 
     def round(self, calls: list[dict]):

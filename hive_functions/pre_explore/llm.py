@@ -10,6 +10,13 @@ import re
 
 from .contracts import logger
 
+# RETRY-CAP (audit A4, 2026-10-23): the explorer used 30 attempts. A dead
+# port cost ~30 x (connect + backoff) ~= 3.5 min of dead waiting, and a
+# ReadTimeout (read window up to 300 s) could burn 30 x the window = the
+# whole pre-explore budget. Connect-class failures retry 5x (a llama-server
+# starting up recovers in seconds); a ReadTimeout is not retried at all.
+_LLM_MAX_ATTEMPTS = 5
+
 # MODUL-GLOBALS (2026-10-20): diese drei Namen wurden in Funktionen per `global`
 # benutzt, aber nie auf Modulebene angelegt - jedes Lesen warf NameError und die
 # LLM-gestuetzte Pre-Explore lief 30 Versuche in den Fehler.
@@ -166,7 +173,7 @@ async def _llm(
         payload["tool_choice"] = "required"
     _apply_thinking_fields(payload, thinking, thinking_budget)
 
-    for attempt in range(30):
+    for attempt in range(_LLM_MAX_ATTEMPTS):
         content = ""
         tool_calls = []
         try:
@@ -177,7 +184,7 @@ async def _llm(
                     "POST", f"http://127.0.0.1:{port}/v1/chat/completions",
                     json=payload, timeout=_req_timeout,
                 ) as r:
-                    if r.status_code in (404, 503) and attempt < 29:
+                    if r.status_code in (404, 503) and attempt < _LLM_MAX_ATTEMPTS - 1:
                         await asyncio.sleep(min(2.5, 0.4 * (attempt + 1)))
                         continue
                     if r.status_code != 200:
@@ -206,7 +213,7 @@ async def _llm(
                     f"http://127.0.0.1:{port}/v1/chat/completions",
                     json=payload, timeout=_req_timeout,
                 )
-                if r.status_code in (404, 503) and attempt < 29:
+                if r.status_code in (404, 503) and attempt < _LLM_MAX_ATTEMPTS - 1:
                     await asyncio.sleep(min(2.5, 0.4 * (attempt + 1)))
                     continue
                 if r.status_code != 200:
@@ -230,11 +237,14 @@ async def _llm(
             logger.warning("LLM ConnectError port=%d attempt=%d", port, attempt + 1)
             await asyncio.sleep(min(2.0, 0.3 * (attempt + 1)))
         except httpx.ReadTimeout:
-            logger.warning("LLM ReadTimeout port=%d attempt=%d", port, attempt + 1)
-            await asyncio.sleep(min(2.0, 0.3 * (attempt + 1)))
+            # RETRY-CAP: the model hung for the full read window — retrying
+            # the same prompt on the same port burns window x attempts. One
+            # attempt, then the caller's fallback (static repo map) takes over.
+            logger.warning("LLM ReadTimeout port=%d attempt=%d - not retrying", port, attempt + 1)
+            return {"content": "", "tool_calls": []}
         except Exception as e:
             logger.error("LLM error port=%d attempt=%d: %s", port, attempt + 1, e)
             await asyncio.sleep(min(1.5, 0.2 * (attempt + 1)))
 
-    logger.error("LLM FAILED after 30 attempts port=%d model=%s", port, model)
+    logger.error("LLM FAILED after %d attempts port=%d model=%s", _LLM_MAX_ATTEMPTS, port, model)
     return {"content": "", "tool_calls": []}
