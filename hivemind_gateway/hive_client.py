@@ -62,13 +62,19 @@ class HiveClient:
             raise HiveUnreachable(f"/health HTTP {r.status_code}")
         return r.json()
 
-    async def journal(self, run_id: str = "") -> dict:
-        """GET /run/journal — {active, run_id, done, aborted, ts, frames}.
+    async def journal(self, run_id: str = "", after: int = 0) -> dict:
+        """GET /run/journal — {active, run_id, done, aborted, ts, frames, n, base}.
         Busiest heuristic the server offers until the WP3 409 guard.
         With run_id: THAT run's journal (audit G7: always scope when the
         id is known — the unscoped endpoint answers with the most recently
-        ACTIVE run, which can be the wrong one when two runs are alive)."""
+        ACTIVE run, which can be the wrong one when two runs are alive).
+        JOURNAL-AFTER (audit A2, 2026-10-23): `after` is the logical frame
+        cursor the server already understands (frames[after-base:]) — the
+        mirror used to re-download ALL frames on every 5 s tick."""
         params = {"run_id": run_id} if run_id else None
+        if after:
+            params = dict(params or {})
+            params["after"] = int(after)
         r = await self._get("/run/journal", params=params)
         if r.status_code != 200:
             raise HiveUnreachable(f"/run/journal HTTP {r.status_code}")

@@ -51,6 +51,10 @@ STOP_REASON_TEXT = {
 }
 FINAL_CHUNK_LIMIT = 3
 STALE_JOURNAL_S = 180.0
+# JOURNAL-AFTER (audit A2): a cursor past the window makes the server return
+# the response meta with EMPTY frames — used by the second-run peek, which
+# reads only run_id/active/done/aborted.
+JOURNAL_META_ONLY_AFTER = 1 << 30
 
 # Run modes accepted via /mode (the /stream BODY field - the browser
 # UI's own mode in settings stays untouched). Friendly aliases map to
@@ -1508,8 +1512,13 @@ class RunBridge:
         # audit G7: once a session is active, fetch THAT run's journal -
         # the unscoped endpoint answers with the most recently ACTIVE run,
         # which can be the wrong one when a second run starts.
-        j = await self.hive.journal(m["run_id"]) if m["run_id"] \
-            else await self.hive.journal()
+        # JOURNAL-AFTER (audit A2, 2026-10-23): m["after"] is the logical
+        # frame cursor this mirror already maintains — send it so the server
+        # slices and the tick stops re-downloading the whole window. The
+        # done/abort branch below still receives the tail frames it parses
+        # (they lie AFTER the cursor by definition).
+        j = await self.hive.journal(m["run_id"], after=int(m.get("after") or 0)) \
+            if m["run_id"] else await self.hive.journal()
         if not isinstance(j, dict) or not j.get("active") \
                 or j.get("done") or j.get("aborted"):
             # nothing active: end a session, report how it ended
@@ -1676,7 +1685,11 @@ class RunBridge:
         # active run surfaces, say so once per foreign run id.
         if m["run_id"]:
             try:
-                _j_all = await self.hive.journal()
+                # META-ONLY PEEK (audit A2, 2026-10-23): this peek reads only
+                # run_id/active/done/aborted — a cursor past the window makes
+                # the server return empty frames, so the second-run check
+                # stops hauling the full journal every tick.
+                _j_all = await self.hive.journal(after=JOURNAL_META_ONLY_AFTER)
                 _other = str((_j_all or {}).get("run_id") or "")
                 if (_other and _other != m["run_id"]
                         and _other != str(self._own_run_id() or "")

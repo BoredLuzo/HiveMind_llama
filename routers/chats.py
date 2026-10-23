@@ -45,6 +45,9 @@ _IMG_PLACEHOLDER = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
 _REF_KEYS = {"content", "diffText", "text", "preview"}
 
 
+_BLOB_MAGIC = b"HIVEBLOB1\n"
+
+
 def _blob_dir(chat_id: str) -> Path:
     return _state._SESSIONS_DIR / f"{chat_id}.blobs"
 
@@ -60,9 +63,26 @@ def _store_blob(chat_id: str, data: str) -> str:
     p = d / h
     if not p.exists():
         tmp = p.with_suffix(".tmp")
-        tmp.write_text(data, encoding="utf-8")
+        # BINARY-SAFE (2026-10-23): text-mode write translated \n to \r\n on
+        # Windows, so payloads containing literal \r\n came back as \n\n —
+        # the roundtrip was lossy for every CRLF payload since 2026-10-03.
+        # New blobs carry a magic prefix; legacy files are repaired on read
+        # (the text-mode expansion \r*m+\n maps back to \r*(m-1)+\n).
+        tmp.write_bytes(_BLOB_MAGIC + data.encode("utf-8"))
         os.replace(tmp, p)
     return h
+
+
+def _read_blob(chat_id: str, h: str) -> str | None:
+    try:
+        raw = (_blob_dir(chat_id) / h).read_bytes()
+    except OSError:
+        return None
+    if raw.startswith(_BLOB_MAGIC):
+        return raw[len(_BLOB_MAGIC):].decode("utf-8")
+    # legacy (text-mode written): every original \n was expanded to \r\n,
+    # so a run of m CRs before an LF means m-1 original CRs
+    return raw.replace(b"\r\n", b"\n").decode("utf-8", errors="replace")
 
 
 def _extract_refs(chat_id: str, node) -> None:
@@ -86,10 +106,9 @@ def _restore_refs(chat_id: str, node) -> None:
     if isinstance(node, dict):
         for k, v in list(node.items()):
             if isinstance(v, dict) and isinstance(v.get("_ref"), str):
-                try:
-                    node[k] = (_blob_dir(chat_id) / v["_ref"]).read_text(encoding="utf-8")
-                except OSError:
-                    node[k] = _IMG_PLACEHOLDER if k == "preview" else _BLOB_PLACEHOLDER
+                _txt = _read_blob(chat_id, v["_ref"])
+                node[k] = _txt if _txt is not None else (
+                    _IMG_PLACEHOLDER if k == "preview" else _BLOB_PLACEHOLDER)
             elif isinstance(v, (dict, list)):
                 _restore_refs(chat_id, v)
     elif isinstance(node, list):
@@ -104,6 +123,13 @@ def _blobify_messages(chat_id: str, messages) -> None:
     for m in messages or []:
         if not isinstance(m, dict):
             continue
+        # HTML-BLOB (audit A6, 2026-10-23): the rendered answer html is the
+        # biggest per-message payload (measured 1.1-2.7 MB per chat, 15-50x
+        # the cp snapshots) and used to stay inline in the json.
+        if (isinstance(m.get("html"), str)
+                and len(m["html"]) >= _BLOB_MIN_CHARS
+                and not m["html"].startswith(_BLOB_PLACEHOLDER)):
+            m["html"] = {"_ref": _store_blob(chat_id, m["html"])}
         if isinstance(m.get("cp"), dict):
             _extract_refs(chat_id, m["cp"])
         imgs = m.get("images")
@@ -119,6 +145,11 @@ def _restore_messages(chat_id: str, messages) -> None:
     for m in messages or []:
         if not isinstance(m, dict):
             continue
+        # HTML-BLOB: a missing blob restores as "" — the frontend renders the
+        # plain-text content field when html is empty (loadChat fallback).
+        if isinstance(m.get("html"), dict) and isinstance(m["html"].get("_ref"), str):
+            _txt = _read_blob(chat_id, m["html"]["_ref"])
+            m["html"] = _txt if _txt is not None else ""
         if isinstance(m.get("cp"), dict):
             _restore_refs(chat_id, m["cp"])
         imgs = m.get("images")
@@ -126,10 +157,8 @@ def _restore_messages(chat_id: str, messages) -> None:
             for im in imgs:
                 if isinstance(im, dict) and isinstance(im.get("preview"), dict):
                     ref = im["preview"]
-                    try:
-                        im["preview"] = (_blob_dir(chat_id) / ref["_ref"]).read_text(encoding="utf-8")
-                    except OSError:
-                        im["preview"] = _IMG_PLACEHOLDER
+                    _txt = _read_blob(chat_id, ref.get("_ref", ""))
+                    im["preview"] = _txt if _txt is not None else _IMG_PLACEHOLDER
 
 
 def _sweep_orphan_blob_dirs() -> None:
@@ -409,6 +438,13 @@ async def list_chats():
         except OSError:
             pass
         return total
+    # DISK-BYTES OFF-LOOP (audit A1, 2026-10-23): _disk_bytes globs+walks
+    # each chat's blob dir — measured 1.77 s of event-loop stall on 480
+    # chats, once per sidebar refresh. One to_thread for the whole map.
+    def _disk_bytes_all(pairs):
+        return {cid: _disk_bytes(cid, f) for cid, f in pairs}
+    _bytes_map = await asyncio.to_thread(
+        _disk_bytes_all, [(cid, c.get("_file", "")) for cid, c in items])
     for cid, c in items:
         result.append({
             "id": cid,
@@ -418,7 +454,7 @@ async def list_chats():
             "msg_count": c.get("_msg_count", 0),
             "tokens": c.get("_tokens", 0),
             "preview": c.get("_preview", ""),
-            "bytes": _disk_bytes(cid, c.get("_file", "")),
+            "bytes": _bytes_map.get(cid, 0),
         })
     # INTERRUPTED-FLAG (2026-08-21): letzter Run via Browser-Close parkiert?
     def _is_interrupted(cid: str) -> bool:

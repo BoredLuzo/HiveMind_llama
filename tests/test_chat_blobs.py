@@ -177,6 +177,35 @@ def main():
         else:
             fail("young orphan removed too early")
 
+        # ── BINARY-SAFE BLOBS (2026-10-23): text-mode writes corrupted \r\n ──
+        _crlf = "line one\r\nline two\r\n\r\nlast"
+        _h = C._store_blob("blobcrlf", _crlf)
+        _back = C._read_blob("blobcrlf", _h)
+        if _back == _crlf:
+            ok("CRLF payload roundtrips byte-exact")
+        else:
+            fail("CRLF roundtrip", f"{len(_back or '')} vs {len(_crlf)} chars")
+        _legacy_dir = C._blob_dir("bloblegacy")
+        _legacy_dir.mkdir(parents=True, exist_ok=True)
+        _lh = C._blob_hash(_crlf)
+        (_legacy_dir / _lh).write_bytes(_crlf.replace("\n", "\r\n").encode("utf-8"))
+        if C._read_blob("bloblegacy", _lh) == _crlf:
+            ok("legacy text-mode blob is repaired on read")
+        else:
+            fail("legacy blob repair")
+        _msgs = [{"role": "assistant", "html": "<div>" + ("x" * 500 + "\r\n") + "</div>",
+                  "content": "plain"}]
+        C._blobify_messages("blobhtml", _msgs)
+        if isinstance(_msgs[0].get("html"), dict) and "_ref" in _msgs[0]["html"]:
+            C._restore_messages("blobhtml", _msgs)
+            if (_msgs[0]["html"].startswith("<div>")
+                    and "\r\n" in _msgs[0]["html"]):
+                ok("big html roundtrips through the blob store lossless")
+            else:
+                fail("html blob roundtrip content")
+        else:
+            fail("html not blobbed")
+
     finally:
         shutil.rmtree(str(ws), ignore_errors=True)
 

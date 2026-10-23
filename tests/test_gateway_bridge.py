@@ -119,7 +119,7 @@ class FakeHive:
         self.aborts.append(("chat", chat_id))
         return FakeResponse(200, {"ok": True})
 
-    async def journal(self, run_id=""):
+    async def journal(self, run_id="", after=0):
         self.journal_calls.append(run_id)
         if self.offline:
             raise HiveUnreachable("connection refused")
@@ -510,7 +510,7 @@ async def t_takeover():
         async def settings(self):
             return dict(self.settings_body)
 
-        async def journal(self, run_id=""):
+        async def journal(self, run_id="", after=0):
             self.journal_calls.append(run_id)
             return dict(self.journal_body)
 
@@ -1172,7 +1172,7 @@ async def t_relay_hardening():
         async def settings(self):
             return dict(self.settings_body)
 
-        async def journal(self, run_id=""):
+        async def journal(self, run_id="", after=0):
             self.journal_calls.append(run_id)
             return dict(self.journal_body)
 
@@ -1279,7 +1279,7 @@ async def t_tg_visibility():
         async def settings(self):
             return dict(self.settings_body)
 
-        async def journal(self, run_id=""):
+        async def journal(self, run_id="", after=0):
             self.journal_calls.append(run_id)
             return dict(self.journal_body)
 
@@ -1416,7 +1416,7 @@ async def t_tg_audit():
         async def settings(self):
             return dict(self.settings_body)
 
-        async def journal(self, run_id=""):
+        async def journal(self, run_id="", after=0):
             self.journal_calls.append(run_id)
             return dict(self.journal_body)
 
