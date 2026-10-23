@@ -1353,6 +1353,7 @@ async function loadSettings() {
 
     // call renderAgentCards - S.models is already filled now
     const agents = s.agents || {};
+    S.agentsCfg = agents;   // CTX-FIT-WARN: critic model for the ctx estimates
     console.log('[loadSettings] agents keys:', Object.keys(agents), 'S.models:', S.models.length);
     if (Object.keys(agents).length > 0) {
       try { renderAgentCards(agents); } catch(e) { console.error('[loadSettings] renderAgentCards error:', e); }
@@ -1403,6 +1404,8 @@ async function loadSettings() {
     if (_vbInp && s.vram_budget_gb) {
       _vbInp.value = parseFloat(s.vram_budget_gb).toFixed(1);
       _vramBudgetGb = parseFloat(s.vram_budget_gb);
+      // initial ctx-fit estimates (needs the budget loaded first)
+      if (typeof refreshCtxEstimates === 'function') refreshCtxEstimates();
     }
     // Per-model thinking overrides are no longer persisted
     // User toggles (duo_agentic_thinking etc.) control thinking at runtime
@@ -1622,6 +1625,7 @@ function onDuoPlannerModelChange(model) {
   if (S.currentAssignments.duo_planner) S.currentAssignments.duo_planner.model = S.duoPlannerModel;
   updateDuoPairHint();
   updateDuoImageUI();
+  if (typeof refreshCtxEstimates === 'function') refreshCtxEstimates();
 }
 
 function onDuoCoderModelChange(model) {
@@ -1632,6 +1636,7 @@ function onDuoCoderModelChange(model) {
   updateDuoPairHint();
   updateDuoImageUI();
   updateMoeVisibility();
+  if (typeof refreshCtxEstimates === 'function') refreshCtxEstimates();
 }
 
 // COMPRESSION-MODELL + FIX-FLAGS (2026-09-07): UI-Schalter fuer Backend-Keys.
@@ -2886,6 +2891,15 @@ function renderAgentCards(agents) {
         refresh();
       };
     })(ctxId, refreshBudget));
+    // CTX-FIT-WARN (2026-10-23): on commit (change, not every input tick) the
+    // v/8192 heuristic is replaced by the real /vram/estimate for THIS model,
+    // marked red when it exceeds the budget. Warning only — never blocks.
+    ctxSlider.addEventListener('change', (function(id, mdl) {
+      return function() {
+        var v = parseInt(this.value);
+        if (v && mdl && typeof _vramEstimate === 'function') _vramEstimate(mdl, v, id + '-kv');
+      };
+    })(ctxId, activeModel));
     const ctxVal = document.createElement('div');
     ctxVal.className = 'sl-val';
     ctxVal.id = ctxId + '-kv';
@@ -12317,6 +12331,7 @@ async function _vramEstimate(model, ctx, elId) {
   var el = document.getElementById(elId);
   if (!el) return;
   el.textContent = '';
+  el.classList.remove('ctx-est-over');
   try {
     var r = await fetch('/vram/estimate?model=' + encodeURIComponent(model) + '&ctx=' + ctx);
     if (!r.ok) return;
@@ -12324,8 +12339,26 @@ async function _vramEstimate(model, ctx, elId) {
     if (d.error) return;
     var txt = '\u2248 ' + d.vram_gb.toFixed(1) + ' GB (KV: ' + d.vram_kv_gb.toFixed(2) + ' GB)';
     if (d.ram_gb > 0) txt += ' + ' + d.ram_gb.toFixed(1) + ' GB RAM';
+    // CTX-FIT-WARN (2026-10-23): non-blocking on purpose — a 35B @ 100k is a
+    // deliberate choice some setups can make; the estimate only says what the
+    // budget thinks. The run-start preflight still decides (and is toggleable).
+    var budget = (_vramBudgetGb > 0 ? _vramBudgetGb : 8.0) - 0.4;
+    if (d.vram_gb > budget) {
+      txt += ' \u26a0 over ' + budget.toFixed(1) + ' GB budget';
+      el.classList.add('ctx-est-over');
+    }
     el.textContent = txt;
   } catch(e) {}
+}
+// CTX-FIT-WARN (2026-10-23): populate every duo ctx estimate once on load and
+// on coder/planner model change — before, the estimate only appeared after the
+// user edited the field by hand.
+function refreshCtxEstimates() {
+  _vramEstimate(S.duoCoderModel, S.duoCtxAgentic, 'vram-est-agentic');
+  _vramEstimate(S.duoPlannerModel, S.duoCtxPlanner, 'vram-est-planner');
+  _vramEstimate(S.duoCoderModel, S.duoCtxNormal, 'vram-est-normal');
+  var _crit = (S.agentsCfg && S.agentsCfg.duo_critic && S.agentsCfg.duo_critic.model) || S.duoCoderModel;
+  _vramEstimate(_crit, S.duoCtxCritic, 'vram-est-critic');
 }
 async function unloadModel(name) {
   try {

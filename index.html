@@ -805,11 +805,12 @@
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Context (Coder + Critic Dual)</span>
             <input type="number" min="1024" step="1024" id="duo-ctx-normal" value="8192" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
               class="ctx-num"
-              onchange="postSettings({duo_coder_ctx_normal:parseInputAsOptionalInt(this.value,8192)});S.duoCtxNormal=parseInputAsOptionalInt(this.value,8192);updateCtxScopeHint();refreshVram()">
+              onchange="postSettings({duo_coder_ctx_normal:parseInputAsOptionalInt(this.value,8192)});S.duoCtxNormal=parseInputAsOptionalInt(this.value,8192);updateCtxScopeHint();refreshVram();_vramEstimate(S.duoCoderModel,S.duoCtxNormal,'vram-est-normal')">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
             num_ctx while coder + critic run in VRAM together.<br>
             <span style="color:var(--tx2)">8192&ndash;12288 recommended. Values &gt;16384 force CPU offload.</span>
+            <span id="vram-est-normal" class="ctx-est"></span>
           </div>
         </div>
 
@@ -819,11 +820,12 @@
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#e08840;flex:1;font-weight:600">Context Critic</span>
             <input type="number" min="1024" step="1024" id="duo-ctx-critic" value="8192"
               class="ctx-num"
-              onchange="var v=parseInputAsOptionalInt(this.value,8192);S.duoCtxCritic=v;postSettings({duo_critic_ctx:v});updateCtxScopeHint();refreshVram()">
+              onchange="var v=parseInputAsOptionalInt(this.value,8192);S.duoCtxCritic=v;postSettings({duo_critic_ctx:v});updateCtxScopeHint();refreshVram();_vramEstimate((S.agentsCfg&&S.agentsCfg.duo_critic&&S.agentsCfg.duo_critic.model)||S.duoCoderModel,v,'vram-est-critic')">
           </div>
           <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55">
             Separate context for the critic (Critic-Duo only).<br>
             <span style="color:var(--tx2)">8192&ndash;12288 recommended. Default = coder context.</span>
+            <span id="vram-est-critic" class="ctx-est"></span>
           </div>
         </div>
 

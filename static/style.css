@@ -1487,6 +1487,8 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 }
 .ctx-est { display: block; color: #b98a3c; font-size: 9.5px; }
 .ctx-est-plan { color: #9a74dc; }
+/* CTX-FIT-WARN: estimate exceeds the VRAM budget — a warning, never a block */
+.ctx-est-over { color: #e05555; font-weight: 600; }
 .rt-select {
   width: 150px; flex-shrink: 0;
   background: #0a0e13;
