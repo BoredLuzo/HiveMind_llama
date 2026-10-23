@@ -117,7 +117,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_symbol_ref_max_items` | int | `120` |  |
 | `duo_symbol_ref_top_k` | int | `2` |  |
 | `duo_test_feedback` | bool | `False` |  |
-| `duo_test_feedback_chunk` | bool | `False` |  |
+| `duo_test_feedback_chunk` | bool | `True` |  |
 | `duo_test_feedback_final` | bool | `True` |  |
 | `duo_thinking_per_chunk` | bool | `False` |  |
 | `duo_tool_autopromote_max_rounds` | int | `4` |  |

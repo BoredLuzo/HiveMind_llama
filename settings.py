@@ -280,7 +280,12 @@ DEFAULT_SETTINGS = {
     "duo_peer_ratings_agentic": False,
     "duo_tool_autopromote_max_rounds": 4,
     "duo_test_feedback":       False,
-    "duo_test_feedback_chunk": False,
+    # LOOP-DEFAULT (2026-10-23): per-chunk auto-test + self-fix now ships ON.
+    # The EDIT→TEST→FIX loop is this harness's core idea — the per-chunk
+    # verify (and the edit→test mapping) only ran for users who found this
+    # toggle, so most agentic runs finished without any test feedback.
+    # Both this and duo_test_feedback_final must be ON for the full loop.
+    "duo_test_feedback_chunk": True,
     # TESTING-DEFAULT (2026-08-12): finaler Auto-Test standardmaessig aktiv —
     "duo_test_feedback_final": True,
     "duo_p3_max_fix_attempts": 3,

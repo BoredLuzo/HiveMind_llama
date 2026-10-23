@@ -5253,19 +5253,112 @@ async def run_code_duo(ctx):
                                     _exec_result.task_complete_called = False
                                     _verify_gate_blocks += 1
                                     _verify_warned = True
-                                    # vague "run your tests" — baseline FAIL repo_peon r1
-                                    # run_tests → no-suite fallback run_bash → task_complete.
-                                    _dtool_msgs.append({"role": "user", "content": (
-                                        "[VERIFY REQUIRED] You called task_complete but the last file write "
-                                        "has not been followed by a successful test run.\n"
-                                        "Do this NOW, in this order:\n"
-                                        "1. Call run_tests. If it reports no suite, write a minimal smoke test that "
-                                        "   exercises the created files and run it via run_bash instead. "
-                                        "documented check via run_bash instead (e.g. python selftest.py).\n"
-                                        "2. Ensure it exits with code 0.\n"
-                                        "3. Then call task_complete again with status "
-                                        "{completed, blockers, build_status}."
-                                    )})
+                                    # AUTO-VERIFY (2026-10-23): the veto used to
+                                    # rely on the MODEL running the tests ("run
+                                    # your tests NOW") — a small model often
+                                    # ignores that and burns rounds until the
+                                    # second attempt slips through unverified.
+                                    # The harness now runs the check itself:
+                                    # green → completion accepted as verified,
+                                    # red → concrete failures into context.
+                                    # Scoped via the edit→test mapping, like the
+                                    # per-chunk verify; [] → full suite.
+                                    _av_paths: list[str] | None = None
+                                    try:
+                                        from hive_functions.testmap import map_edits_to_tests as _av_map
+                                        _av_paths = _av_map(_ws_str, list(_written_files or [])) or None
+                                    except Exception as _av_map_err:
+                                        logger.debug(
+                                            "[VERIFY-GATE] veto test mapping failed: %s", _av_map_err)
+                                    try:
+                                        _av_res = await _run_test_suite(
+                                            workspace=_ws_str, timeout=90,
+                                            chat_id=ctx.chat_id or "",
+                                            paths=_av_paths,
+                                        )
+                                    except Exception as _av_exc:
+                                        _av_res = None
+                                        logger.warning(
+                                            "[VERIFY-GATE] auto-verify run_tests failed: %s: %s",
+                                            type(_av_exc).__name__, str(_av_exc)[:150],
+                                        )
+                                    if _av_res is not None and _av_res.is_clean():
+                                        _verify_last_ok_serial = _verify_mutation_serial
+                                        # re-arm the gate: the next write cycle
+                                        # gets its own veto+auto-verify chance
+                                        # (vetoes>=1 would downgrade it straight
+                                        # to "unverified")
+                                        _verify_gate_blocks = 0
+                                        _verify_warned = False
+                                        _exec_result.task_complete_called = True
+                                        logger.info(
+                                            "[VERIFY-GATE] auto-verify green — completion accepted as verified"
+                                        )
+                                        _dtool_msgs.append({"role": "user", "content": (
+                                            "[AUTO-VERIFY] The harness ran the test suite itself "
+                                            "after your task_complete: ALL TESTS GREEN. "
+                                            "Your completion is accepted as verified."
+                                        )})
+                                        try:
+                                            await ctx.emit({"type": "status", "content": (
+                                                "✅ Auto-Verify: tests green — completion verified"
+                                            )})
+                                        except Exception as _av_emit_err:
+                                            logger.debug(
+                                                "[VERIFY-GATE] auto-verify green emit failed: %s",
+                                                _av_emit_err)
+                                    elif _av_res is not None and not _av_res.command:
+                                        # No test suite in the workspace — nothing
+                                        # ran, so this is NOT a failure. Ask for a
+                                        # smoke test (same as the fallback path).
+                                        logger.info(
+                                            "[VERIFY-GATE] auto-verify: no test suite in workspace — smoke-test nudge")
+                                        _dtool_msgs.append({"role": "user", "content": (
+                                            "[VERIFY REQUIRED] You called task_complete but the last file write "
+                                            "has not been followed by a successful test run.\n"
+                                            "Do this NOW, in this order:\n"
+                                            "1. Call run_tests. If it reports no suite, write a minimal smoke test that "
+                                            "   exercises the created files and run it via run_bash instead. "
+                                            "documented check via run_bash instead (e.g. python selftest.py).\n"
+                                            "2. Ensure it exits with code 0.\n"
+                                            "3. Then call task_complete again with status "
+                                            "{completed, blockers, build_status}."
+                                        )})
+                                    elif _av_res is not None:
+                                        _av_note = (f"{_av_res.failure_count} test failure(s)"
+                                                    if _av_res.failure_count
+                                                    else "the test run did not pass")
+                                        _dtool_msgs.append({"role": "user", "content": (
+                                            "[VERIFY REQUIRED] You called task_complete but the harness "
+                                            "re-ran the tests itself and they FAILED:\n"
+                                            + str(_av_res.inject_msg)[:900] + "\n"
+                                            "Fix the failures above, run_tests again, then call "
+                                            "task_complete. Do NOT call task_complete while tests are red."
+                                        )})
+                                        try:
+                                            await ctx.emit({"type": "status", "content": (
+                                                f"❌ Auto-Verify: {_av_note} — completion blocked"
+                                            )})
+                                        except Exception as _av_emit_err:
+                                            logger.debug(
+                                                "[VERIFY-GATE] auto-verify red emit failed: %s",
+                                                _av_emit_err)
+                                    else:
+                                        # Harness could not run the suite — fall
+                                        # back to instructing the model.
+                                        # vague "run your tests" — baseline FAIL repo_peon r1
+                                        # run_tests → no-suite fallback run_bash → task_complete.
+                                        _dtool_msgs.append({"role": "user", "content": (
+                                            "[VERIFY REQUIRED] You called task_complete but the last file write "
+                                            "has not been followed by a successful test run.\n"
+                                            "Do this NOW, in this order:\n"
+                                            "1. Call run_tests. If it reports no suite, write a minimal smoke test that "
+                                            "   exercises the created files and run it via run_bash instead. "
+                                            "documented check via run_bash instead (e.g. python selftest.py).\n"
+                                            "2. Ensure it exits with code 0.\n"
+                                            "3. Then call task_complete again with status "
+                                            "{completed, blockers, build_status}."
+                                        )})
                             # Fall-through: re-check after Verify injection
                             if not _exec_result.task_complete_called:
                                 pass  # Verify blocked the completion — loop continues

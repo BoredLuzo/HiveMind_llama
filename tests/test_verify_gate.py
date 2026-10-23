@@ -53,6 +53,24 @@ check("the accept branch says it was not verified",
       "WITHOUT a green test run" in src
       and "result marked unverified" in src)
 
+# ── AUTO-VERIFY (2026-10-23): the veto must not depend on the model ──────
+check("the harness runs the suite itself on veto",
+      "[AUTO-VERIFY] The harness ran the test suite itself" in src)
+check("green auto-verify accepts the completion as verified",
+      "completion accepted as verified" in src
+      and "_verify_last_ok_serial = _verify_mutation_serial" in src)
+check("green auto-verify re-arms the veto budget",
+      "_verify_gate_blocks = 0" in src)
+check("red auto-verify feeds concrete failures back",
+      "re-ran the tests itself and they FAILED" in src)
+check("auto-verify runs the mapped tests, not always the full suite",
+      "paths=_av_paths" in src)
+check("no-suite veto asks for a smoke test instead of claiming failure",
+      "not _av_res.command" in src)
+check("the chunk loop passes written files to the mapping",
+      "written_files=written_files or list(self.written_files)" in
+      (ROOT / "hive_functions" / "chunking.py").read_text(encoding="utf-8", errors="replace"))
+
 print()
 print(f"SUMMARY verify_gate: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
