@@ -64,14 +64,22 @@ check("the hint names the setting key", "duo_wedge_handoff_enabled" in _html)
 from settings import DEFAULT_SETTINGS                            # noqa: E402
 check("settings.py default is ON",
       DEFAULT_SETTINGS.get("duo_wedge_handoff_enabled") is True)
-# the live install sits next to the repo checkout; no user path here
+# the live install sits next to the repo checkout; no user path here.
+# Audit 2026-10-24 follow-up: the live presets were stale default snapshots
+# (wedge=False / mlock=True from before the measurement round) — applying any
+# of them would have silently reverted the handoff default AND the measured
+# load-mode-none prefill win. They were aligned; this pins them there.
 _live_presets = ROOT.parent / "live" / "presets.json"
 if _live_presets.exists():
     import json as _json                                          # noqa: E402
     _pd = _json.loads(_live_presets.read_text(encoding="utf-8"))
-    _on = [n for n, b in _pd.items()
-           if isinstance(b, dict) and b.get("duo_wedge_handoff_enabled") is True]
-    check("no shipped/ live preset turns it on", not _on, f" (on: {_on})")
+    _off = [n for n, b in _pd.items()
+            if isinstance(b, dict) and b.get("duo_wedge_handoff_enabled") is False]
+    _mlock = [n for n, b in _pd.items()
+              if isinstance(b, dict) and b.get("llama_mlock") is True]
+    check("live presets keep the wedge handoff on", not _off, f" (off: {_off})")
+    check("live presets keep llama_mlock off (load-mode none prefill win)",
+          not _mlock, f" (on: {_mlock})")
 
 # ── (b) read + (c) sync ─────────────────────────────────────────────────────
 check("app.js reads the setting",
