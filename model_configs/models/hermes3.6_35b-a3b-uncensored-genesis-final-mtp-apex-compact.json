@@ -14,7 +14,7 @@
   "reasoning": "on",
   "distilled": false,
   "moe_cpu_experts": 35,
-  "mtp": true,
+  "mtp": false,
   "gpu_layers": null,
   "mmproj_filename": "mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf",
   "vram_gb_override": null,
