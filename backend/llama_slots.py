@@ -37,7 +37,6 @@ class ModelSlot:
         self._idle_timeout: Optional[float] = None
         self._ready_event  = asyncio.Event()
         self._loading      = False
-        self.pinned_at     = 0.0   # PIN EXPIRY: LRU ignores pins older than 30 min
         self.pinned_at     = 0.0   # PIN EXPIRY (2026-10-02): set on pin, LRU ignores pins older than 30 min
         self._orphan_port: Optional[int] = None
         self._vision       = False

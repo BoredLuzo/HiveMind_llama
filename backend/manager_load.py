@@ -108,51 +108,79 @@ def _slot_evictable(slot) -> bool:
             and int(getattr(slot, "in_flight", 0) or 0) == 0)
 
 
+
+def _probe_all(llama_bin: str) -> tuple[int, bool, bool, bool, bool, bool]:
+    """Einmalige Probe: Build-Nummer + Flag-Tests aus einem --help-Aufruf."""
+    import re as _re3
+    build_num = 0
+    device_ok = False
+    kv_ok     = False
+    moe_ok    = False
+    load_mode_ok = False
+    dspark_ok = False
+    for flag in ["--version", "-v"]:
+        try:
+            r = subprocess.run(
+                [llama_bin, flag],
+                capture_output=True, text=True, timeout=10,
+                encoding="utf-8", errors="replace",
+                creationflags=_WIN_CNF,
+            )
+            text = (r.stdout or "") + (r.stderr or "")
+            for pat in [r'build[:\s]+(\d{4,})', r'\bb(\d{4,})\b']:
+                m = _re3.search(pat, text, _re3.IGNORECASE)
+                if m:
+                    build_num = int(m.group(1))
+                    break
+            if build_num > 0:
+                break
+        except Exception:
+            continue
+    try:
+        r = subprocess.run(
+            [llama_bin, "--help"],
+            capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
+            creationflags=_WIN_CNF,
+        )
+        help_text = (r.stdout or "") + (r.stderr or "")
+        if build_num == 0:
+            for pat in [r'build[:\s]+(\d{4,})', r'\bb(\d{4,})\b']:
+                m = _re3.search(pat, help_text, _re3.IGNORECASE)
+                if m:
+                    build_num = int(m.group(1))
+                    break
+        device_ok = "--device" in help_text.lower()
+        kv_ok     = ("cache-type-k" in help_text.lower()
+                     or "cache_type_k" in help_text.lower())
+        moe_ok    = "n-cpu-moe" in help_text.lower()
+        load_mode_ok = "load-mode" in help_text.lower()
+        dspark_ok = "draft-dspark" in help_text.lower()
+    except Exception:
+        pass
+    if build_num == 0:
+        import os as _os
+        _fname = _os.path.basename(llama_bin)
+        _fm = _re3.search(r'b(\d{4,})', _fname, _re3.IGNORECASE)
+        if _fm:
+            build_num = int(_fm.group(1))
+    if build_num >= 8278:
+        device_ok = True
+        kv_ok     = True
+        moe_ok    = True
+    if build_num >= DSPARK_MIN_BUILD:
+        dspark_ok = True
+    return build_num, device_ok, kv_ok, moe_ok, load_mode_ok, dspark_ok
+
+
+
 class LlamaLoadMixin:
 
     async def _adopt_or_kill_port(self, slot) -> str:
+        model_name, _props_cache = await self._fetch_slot_props(slot)
 
-
-        model_name = None
-        _props_cache: dict | None = None
-        c = self._get_shared_http_client()
-        try:
-            r = await c.get(f"http://127.0.0.1:{slot.port}/props")
-            if r.status_code == 200:
-                props = r.json()
-                _props_cache = props
-                model_path = props.get("model_path") or props.get("default_generation_settings", {}).get("model", "")
-                if model_path:
-                    model_name = _gguf_path_to_model_name(model_path)
-                    if not model_name:
-                        from pathlib import Path as _P
-                        model_name = _P(model_path).stem
-        except Exception:
-            pass
-
-        if model_name:
-            slot.model     = model_name
-            slot.loaded_at = time.time()
-            # MONOTONIC (audit A3): idle-eviction clock, pairs with touch()
-            slot.last_used = time.monotonic()
-            slot._idle_timeout  = DEFAULT_IDLE_TIMEOUT_SECONDS
-            slot._ready_event.set()
-            slot._orphan_port   = slot.port
-            try:
-                props_full = _props_cache if _props_cache is not None else {}
-                _dgs = props_full.get("default_generation_settings", {})
-                _ctx_val = _dgs.get("n_ctx") or props_full.get("n_ctx")
-                if _ctx_val and int(_ctx_val) > 0:
-                    slot._num_ctx = int(_ctx_val)
-                _parallel_val = _dgs.get("n_parallel") or props_full.get("n_parallel")
-                if _parallel_val and int(_parallel_val) > 0:
-                    slot._n_parallel = int(_parallel_val)
-                _attn = props_full.get("attention", {})
-                _swa_window = _attn.get("sliding_window") or _attn.get("rope_sliding_window") or 0
-                slot.swa_window = int(_swa_window) if _swa_window else 0
-                slot.vision_active = bool((props_full.get("modalities") or {}).get("vision"))
-            except Exception:
-                pass
+        if model_name and _props_cache is not None:
+            self._apply_slot_props(slot, model_name, _props_cache)
             self._metric_inc("startup_orphan_rehabilitations")
             logger.info(f"[ADOPT] Slot {slot.slot_id} rehabilitated - {model_name} on port {slot.port}")
             return "rehabilitated"
@@ -160,6 +188,51 @@ class LlamaLoadMixin:
         logger.warning(f"[ADOPT] Port {slot.port} is alive but no model identifiable - killing process")
         await self._kill_port(slot.port)
         return "killed"
+
+    async def _fetch_slot_props(self, slot):
+        """GET /props for a live port. Returns (model_name|None, props|None)."""
+        c = self._get_shared_http_client()
+        try:
+            r = await c.get(f"http://127.0.0.1:{slot.port}/props")
+            if r.status_code == 200:
+                props = r.json()
+                # llama-server /props: {"model_path": "/path/to/model.gguf", ...}
+                model_path = props.get("model_path") or props.get("default_generation_settings", {}).get("model", "")
+                if model_path:
+                    model_name = _gguf_path_to_model_name(model_path)
+                    if not model_name:
+                        from pathlib import Path as _P
+                        model_name = _P(model_path).stem
+                    return model_name, props
+        except Exception:
+            pass
+        return None, None
+
+    def _apply_slot_props(self, slot, model_name: str, props: dict) -> None:
+        """Adopt a live server into the slot: identity + runtime facts from
+        its /props (shared by orphan adoption and startup cleanup)."""
+        slot.model     = model_name
+        slot.loaded_at = time.time()
+        # MONOTONIC (audit A3): idle-eviction clock, pairs with touch()
+        slot.last_used = time.monotonic()
+        slot._idle_timeout  = DEFAULT_IDLE_TIMEOUT_SECONDS
+        slot._ready_event.set()
+        slot._orphan_port   = slot.port
+        try:
+            _dgs = props.get("default_generation_settings", {})
+            _ctx_val = _dgs.get("n_ctx") or props.get("n_ctx")
+            if _ctx_val and int(_ctx_val) > 0:
+                slot._num_ctx = int(_ctx_val)
+            _parallel_val = _dgs.get("n_parallel") or props.get("n_parallel")
+            if _parallel_val and int(_parallel_val) > 0:
+                slot._n_parallel = int(_parallel_val)
+            # SWA window size (Qwen3.6 and other sliding-window models)
+            _attn = props.get("attention", {})
+            _swa_window = _attn.get("sliding_window") or _attn.get("rope_sliding_window") or 0
+            slot.swa_window = int(_swa_window) if _swa_window else 0
+            slot.vision_active = bool((props.get("modalities") or {}).get("vision"))
+        except Exception:
+            pass
 
     async def _adopt_orphan_slots(self) -> int:
 
@@ -186,54 +259,15 @@ class LlamaLoadMixin:
         rehabilitated = []
         killed_ports  = []
 
-        c = self._get_shared_http_client()
         for slot in self._slots:
             alive = await self._port_alive(slot.port)
             if not alive:
                 continue
 
-            model_name = None
-            _props_cache: dict | None = None
-            try:
-                r = await c.get(f"http://127.0.0.1:{slot.port}/props")
-                if r.status_code == 200:
-                    props = r.json()
-                    _props_cache = props
-                    # llama-server /props: {"model_path": "/path/to/model.gguf", ...}
-                    model_path = props.get("model_path") or props.get("default_generation_settings", {}).get("model", "")
-                    if model_path:
-                        model_name = _gguf_path_to_model_name(model_path)
-                        if not model_name:
-                            from pathlib import Path as _P
-                            model_name = _P(model_path).stem
-            except Exception:
-                pass
+            model_name, _props_cache = await self._fetch_slot_props(slot)
 
-            if model_name:
-                slot.model     = model_name
-                slot.loaded_at = time.time()
-                # MONOTONIC (audit A3): idle-eviction clock, pairs with touch()
-                slot.last_used = time.monotonic()
-                slot._idle_timeout  = DEFAULT_IDLE_TIMEOUT_SECONDS
-                slot._ready_event.set()
-                slot._orphan_port   = slot.port
-                # NUM_CTX FIX: Versuche ctx-Size aus /props zu lesen.
-                try:
-                    props_full = _props_cache if _props_cache is not None else {}
-                    _dgs = props_full.get("default_generation_settings", {})
-                    _ctx_val = _dgs.get("n_ctx") or props_full.get("n_ctx")
-                    if _ctx_val and int(_ctx_val) > 0:
-                        slot._num_ctx = int(_ctx_val)
-                    _parallel_val = _dgs.get("n_parallel") or props_full.get("n_parallel")
-                    if _parallel_val and int(_parallel_val) > 0:
-                        slot._n_parallel = int(_parallel_val)
-                    # SWA window size (Qwen3.6 and other sliding-window models)
-                    _attn = props_full.get("attention", {})
-                    _swa_window = _attn.get("sliding_window") or _attn.get("rope_sliding_window") or 0
-                    slot.swa_window = int(_swa_window) if _swa_window else 0
-                    slot.vision_active = bool((props_full.get("modalities") or {}).get("vision"))
-                except Exception:
-                    pass
+            if model_name and _props_cache is not None:
+                self._apply_slot_props(slot, model_name, _props_cache)
                 rehabilitated.append(f"{model_name}@{slot.port}")
                 self._metric_inc("startup_orphan_rehabilitations")
                 logger.info(f"startup_cleanup: Slot {slot.slot_id} rehabilitated - {model_name} on port {slot.port}")
@@ -369,6 +403,47 @@ class LlamaLoadMixin:
 
             self._schedule_prefetch_task(slot, model, _prefetch_ctx)
 
+    async def _enforce_vram_budget(self, slot) -> None:
+        """Committed-VRAM guard before a start: wait for active workers,
+        evict LRU twice if the budget is still oversubscribed. Kills peer
+        slots; *slot* itself is never a candidate (exclude_slot)."""
+        async with self._lock:
+            _committed = sum(
+                vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
+                if any(x in (s.model or "") for x in ("35b-a3b", "a3b-ud", "a3b-mtp"))
+                else _vram_of(s.model)
+                for s in self._slots if s.model
+            )
+            if _committed > VRAM_BUDGET_GB:
+                _active_workers = [
+                    s for s in self._slots
+                    if s.model and s.is_running
+                ]
+                if _active_workers:
+                    logging.getLogger("vram_guard").info(
+                        "[VRAM-GUARD] Committed=%.1fGB > budget=%.1fGB — %d active worker(s) still running. Waiting 5s.",
+                        _committed, VRAM_BUDGET_GB, len(_active_workers),
+                    )
+                    await asyncio.sleep(5.0)
+                _extra = self._evict_lru(exclude_slot=slot)
+                if _extra is not None:
+                    await _kill_slot_async(_extra)
+                # Recalculate after eviction (stale _committed used to log wrong value)
+                _committed_after = sum(
+                    vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
+                    if any(x in (s.model or "") for x in ("35b-a3b", "a3b-ud", "a3b-mtp"))
+                    else _vram_of(s.model)
+                    for s in self._slots if s.model
+                )
+                if _committed_after > VRAM_BUDGET_GB:
+                    logging.getLogger("vram_guard").warning(
+                        "[VRAM-GUARD] committed=%.1fGB > budget=%.1fGB after eviction — forced extra evict",
+                        _committed_after, VRAM_BUDGET_GB,
+                    )
+                    _extra2 = self._evict_lru(exclude_slot=slot)
+                    if _extra2 is not None:
+                        await _kill_slot_async(_extra2)
+
     async def ensure_loaded(self, model: str, num_ctx: Optional[int] = None,
                             pin: bool = False, vision: bool = False,
                             n_parallel: int = 1,
@@ -496,42 +571,7 @@ class LlamaLoadMixin:
                 slot.set_pinned(pin)
                 _need_start = True
 
-        async with self._lock:
-            _committed = sum(
-                vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
-                if any(x in (s.model or "") for x in ("35b-a3b", "a3b-ud", "a3b-mtp"))
-                else _vram_of(s.model)
-                for s in self._slots if s.model
-            )
-            if _committed > VRAM_BUDGET_GB:
-                _active_workers = [
-                    s for s in self._slots
-                    if s.model and s.is_running
-                ]
-                if _active_workers:
-                    logging.getLogger("vram_guard").info(
-                        "[VRAM-GUARD] Committed=%.1fGB > budget=%.1fGB — %d active worker(s) still running. Waiting 5s.",
-                        _committed, VRAM_BUDGET_GB, len(_active_workers),
-                    )
-                    await asyncio.sleep(5.0)
-                _extra = self._evict_lru(exclude_slot=slot)
-                if _extra is not None:
-                    await _kill_slot_async(_extra)
-                # Recalculate after eviction (stale _committed used to log wrong value)
-                _committed_after = sum(
-                    vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
-                    if any(x in (s.model or "") for x in ("35b-a3b", "a3b-ud", "a3b-mtp"))
-                    else _vram_of(s.model)
-                    for s in self._slots if s.model
-                )
-                if _committed_after > VRAM_BUDGET_GB:
-                    logging.getLogger("vram_guard").warning(
-                        "[VRAM-GUARD] committed=%.1fGB > budget=%.1fGB after eviction — forced extra evict",
-                        _committed_after, VRAM_BUDGET_GB,
-                    )
-                    _extra2 = self._evict_lru(exclude_slot=slot)
-                    if _extra2 is not None:
-                        await _kill_slot_async(_extra2)
+        await self._enforce_vram_budget(slot)
 
         if _need_start:
             # H3 (deep audit 2026-10-06): no is_set() gate - a claimed
@@ -964,69 +1004,6 @@ class LlamaLoadMixin:
             or type(self)._load_mode_supported is None
         )
         if _all_flags_uncached:
-            def _probe_all(llama_bin: str) -> tuple[int, bool, bool, bool, bool, bool]:
-                """Einmalige Probe: Build-Nummer + Flag-Tests aus einem --help-Aufruf."""
-                import re as _re3
-                build_num = 0
-                device_ok = False
-                kv_ok     = False
-                moe_ok    = False
-                load_mode_ok = False
-                dspark_ok = False
-                for flag in ["--version", "-v"]:
-                    try:
-                        r = subprocess.run(
-                            [llama_bin, flag],
-                            capture_output=True, text=True, timeout=10,
-                            encoding="utf-8", errors="replace",
-                            creationflags=_WIN_CNF,
-                        )
-                        text = (r.stdout or "") + (r.stderr or "")
-                        for pat in [r'build[:\s]+(\d{4,})', r'\bb(\d{4,})\b']:
-                            m = _re3.search(pat, text, _re3.IGNORECASE)
-                            if m:
-                                build_num = int(m.group(1))
-                                break
-                        if build_num > 0:
-                            break
-                    except Exception:
-                        continue
-                try:
-                    r = subprocess.run(
-                        [llama_bin, "--help"],
-                        capture_output=True, text=True, timeout=10,
-                        encoding="utf-8", errors="replace",
-                        creationflags=_WIN_CNF,
-                    )
-                    help_text = (r.stdout or "") + (r.stderr or "")
-                    if build_num == 0:
-                        for pat in [r'build[:\s]+(\d{4,})', r'\bb(\d{4,})\b']:
-                            m = _re3.search(pat, help_text, _re3.IGNORECASE)
-                            if m:
-                                build_num = int(m.group(1))
-                                break
-                    device_ok = "--device" in help_text.lower()
-                    kv_ok     = ("cache-type-k" in help_text.lower()
-                                 or "cache_type_k" in help_text.lower())
-                    moe_ok    = "n-cpu-moe" in help_text.lower()
-                    load_mode_ok = "load-mode" in help_text.lower()
-                    dspark_ok = "draft-dspark" in help_text.lower()
-                except Exception:
-                    pass
-                if build_num == 0:
-                    import os as _os
-                    _fname = _os.path.basename(llama_bin)
-                    _fm = _re3.search(r'b(\d{4,})', _fname, _re3.IGNORECASE)
-                    if _fm:
-                        build_num = int(_fm.group(1))
-                if build_num >= 8278:
-                    device_ok = True
-                    kv_ok     = True
-                    moe_ok    = True
-                if build_num >= DSPARK_MIN_BUILD:
-                    dspark_ok = True
-                return build_num, device_ok, kv_ok, moe_ok, load_mode_ok, dspark_ok
-
             _bn, _dev, _kv, _moe, _lm, _dspark = await asyncio.to_thread(_probe_all, str(LLAMA_BIN))
             if _bn > 0 and type(self)._binary_build_number in (None, 0):
                 type(self)._binary_build_number = _bn
@@ -1394,6 +1371,7 @@ class LlamaLoadMixin:
         _reg_reasoning = None
         _reg_distilled = None
         _reg_template = None
+        _reg_is_mtp = None   # audit: pre-bind — the MTP block below calls it outside this import's try
         try:
             from model_configs.models_registry import (
                 is_jinja as _reg_is_jinja,
@@ -1442,7 +1420,7 @@ class LlamaLoadMixin:
         # them as their own draft model. Verified on VULKAN: the server
         # accepts the flags and generates.
         try:
-            if _reg_is_mtp(model) and "--spec-type" not in cmd:
+            if _reg_is_mtp is not None and _reg_is_mtp(model) and "--spec-type" not in cmd:
                 # FLAG-NAME FIX (2026-10-10, exit=1 evidence): this build wants
                 # --spec-draft-n-max; the shipped --spec-draft-max is an
                 # invalid argument and CRASHED EVERY mtp-model server start
