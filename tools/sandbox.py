@@ -148,7 +148,7 @@ def spawn_kwargs() -> dict:
     return _kw
 
 
-def kill_tree(proc) -> None:
+def kill_tree(proc, taskkill_timeout: int = 5) -> None:
     """Kills the entire process tree. No-op-safe.
 
     Windows: the job object usually takes over; taskkill /T as fallback.
@@ -161,7 +161,8 @@ def kill_tree(proc) -> None:
         try:
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
-                capture_output=True, timeout=5, creationflags=0x08000000,
+                capture_output=True, timeout=taskkill_timeout,
+                creationflags=0x08000000,
             )
         except Exception:
             pass
@@ -173,6 +174,18 @@ def kill_tree(proc) -> None:
             proc.kill()
         except Exception:
             pass
+
+
+async def kill_tree_and_reap(proc, taskkill_timeout: int = 5) -> None:
+    """kill_tree + reap, for subprocesses killed on a timeout: the shell
+    wrapper is dead but must be waited on, or the event loop's child
+    watcher keeps it as a zombie. THE shared timeout-kill path (test
+    runner, sandbox) — do not hand-roll copies."""
+    kill_tree(proc, taskkill_timeout=taskkill_timeout)
+    try:
+        await proc.wait()
+    except Exception:
+        pass
 
 
 def _k32():

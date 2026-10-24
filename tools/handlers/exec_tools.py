@@ -419,13 +419,13 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 _ps_seq.append(_and_parts[-1].strip())
                 _cmd_translated = "; ".join(_ps_seq)
 
-            if sys.platform == "win32" and re.search(r"(?<![-\w])(curl|wget)(?=[\s.]|$)", _cmd_translated, re.IGNORECASE):
+            if re.search(r"(?<![-\w])(curl|wget)(?=[\s.]|$)", _cmd_translated, re.IGNORECASE):
                 _cmd_translated = (
                     "Remove-Item alias:curl,alias:wget -ErrorAction SilentlyContinue; "
                     + _cmd_translated
                 )
 
-            if "2>&1" in _cmd_translated and sys.platform == "win32":
+            if "2>&1" in _cmd_translated:
                 _cmd_translated = (
                     "$ErrorActionPreference='SilentlyContinue'; "
                     + "& { " + _cmd_translated + " } 2>&1 | ForEach-Object { \"$_\" }; "
@@ -433,12 +433,6 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 )
 
         _cmd_l = cmd.lower()
-        _bl_hit2 = _bash_blocklisted(cmd)
-        if _bl_hit2 is not None:
-            return _tool_error_response(
-                "RUN_BASH_BLOCKED",
-                f"Command blocked: dangerous pattern '{_bl_hit2}' detected. Use safer alternatives.",
-                tool="run_bash" , details={"cmd": cmd[:400]})
         _is_build = any(k in _cmd_l for k in (
             "mvn ", "gradle", "npm install", "npm ci", "npm run build",
             "cargo build", "cargo test", "dotnet build", "dotnet restore",

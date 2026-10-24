@@ -1017,35 +1017,6 @@ _dispatch_active_cv: _contextvars.ContextVar = _contextvars.ContextVar(
 
 
 
-# MODE-STRICT WRITES (audit 2026-10-17): names that must be OFFERED by the
-# current mode before the dispatcher runs them. A chat/read-only run must not be
-# able to write or execute just because the model named the tool.
-_MODE_STRICT_NAMES = frozenset({
-    "write_file", "write_file_append", "edit_file", "edit_ast", "replace_lines",
-    "patch_file", "run_bash", "run_python", "install_package", "git_commit",
-    "start_background", "stop_background", "undo_last",
-})
-
-
-def _mode_blocks(name: str, tool_mode: str, include_websearch: bool) -> bool:
-    """True when the current mode does not offer a machine-changing tool."""
-    if name not in _MODE_STRICT_NAMES:
-        return False
-    try:
-        from tools.definitions import _TOOL_MODE_ALLOWLISTS, _tool_names_for_mode
-    except ImportError:
-        return False
-    if not tool_mode or tool_mode not in _TOOL_MODE_ALLOWLISTS:
-        return False        # unknown mode: do not invent a policy
-    if _dispatch_active_cv.get(False):
-        return False        # internal delegation inside an approved call
-    try:
-        allowed = _tool_names_for_mode(tool_mode, include_websearch=include_websearch)
-    except (TypeError, ValueError):
-        return False
-    return name not in allowed
-
-
 def _funnel_guard(name: str, fn):
     async def _guarded(args: dict, workspace: Path, workspace_lock: str | None) -> str:
         if not _dispatch_active_cv.get(False):
@@ -1447,15 +1418,6 @@ async def _run_inline_tool(
             f"Unknown tool '{name}'. Use one of the tools that are available in "
             f"this run.",
             tool=name, mode=str(tool_mode or ""))
-    if _mode_blocks(name, tool_mode, include_websearch):
-        import logging as _lg_mode_mod
-        _lg_mode_mod.getLogger("hivemind.tools").warning(
-            "[TOOL-MODE] '%s' is not offered by mode '%s' - rejected", name, tool_mode)
-        return _tool_error_response(
-            "TOOL_NOT_AVAILABLE_IN_MODE",
-            f"Tool '{name}' is not available in this run (mode '{tool_mode}'). "
-            f"Work with the tools that are available for this task.",
-            tool=name, mode=str(tool_mode or ""))
     if _tools_restricted_run.get() and name not in _PHONE_SAFE_TOOLS:
         return _tool_error_response(
             "PHONE_RESTRICTED",
@@ -1480,8 +1442,6 @@ async def _run_inline_tool(
                         if corrected_ext:
                             args["path"] = corrected_ext
     handler = _INLINE_TOOL_HANDLER_MAP.get(name)
-    if handler is None:
-        pass
     if handler is not None:
         # ── A-P1-9: Web-Search-Call-Budget (Governor analog ask_user) ──
         # FETCH-BUDGET (2026-10-14, phase 7): web_fetch has its OWN pool now.

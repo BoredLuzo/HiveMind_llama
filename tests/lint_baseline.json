@@ -4,8 +4,8 @@
   "except_pass": 0
  },
  "backend/llama_client.py": {
-  "broad_except": 3,
-  "except_pass": 3
+  "broad_except": 2,
+  "except_pass": 2
  },
  "backend/llama_compat.py": {
   "broad_except": 2,
@@ -44,8 +44,8 @@
   "except_pass": 5
  },
  "backend/manager_load.py": {
-  "broad_except": 39,
-  "except_pass": 15
+  "broad_except": 37,
+  "except_pass": 13
  },
  "backend/manager_prefetch.py": {
   "broad_except": 2,
@@ -815,6 +815,10 @@
   "broad_except": 1,
   "except_pass": 1
  },
+ "tests/test_duo_e2e_smoke.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_edit_tool_layer.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1452,8 +1456,8 @@
   "except_pass": 7
  },
  "tools/handlers/file_ops.py": {
-  "broad_except": 28,
-  "except_pass": 10
+  "broad_except": 18,
+  "except_pass": 5
  },
  "tools/handlers/git_tools.py": {
   "broad_except": 2,
@@ -1484,8 +1488,8 @@
   "except_pass": 15
  },
  "tools/sandbox.py": {
-  "broad_except": 10,
-  "except_pass": 4
+  "broad_except": 11,
+  "except_pass": 5
  },
  "tools/scan_models.py": {
   "broad_except": 0,

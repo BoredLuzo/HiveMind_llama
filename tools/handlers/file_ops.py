@@ -35,6 +35,36 @@ def _recheck_workspace_before_replace(p, workspace_lock, tool_name):
 _MAX_TMP_TRIES = 16
 
 
+def _atomic_write(path, data: str) -> None:
+    """Atomic file write: bounded temp file in the target dir + os.replace.
+    Creates missing parent dirs; unlinks the temp file on any failure.
+    THE write path for every file-editing tool (six hand-rolled copies
+    collapsed here)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _tmp_fd, _tmp_path = _mkstemp_bounded(path.parent, ".tmp")
+    try:
+        with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
+            _f.write(data)
+        os.replace(_tmp_path, str(path))
+    except Exception:
+        try:
+            os.unlink(_tmp_path)
+        except Exception:
+            pass
+        raise
+
+
+async def _checked_atomic_write(path, data: str, workspace_lock, tool: str):
+    """Containment re-check BEFORE any byte is written (T6), then the
+    atomic write off the event loop. Returns the error response when the
+    re-check fails, else None."""
+    _chk = _recheck_workspace_before_replace(path, workspace_lock, tool)
+    if _chk:
+        return _chk
+    await asyncio.to_thread(_atomic_write, path, data)
+    return None
+
+
 def _write_error_code(exc: BaseException) -> str | None:
     """Classify an OS error from the atomic write into a tool error code.
 
@@ -380,27 +410,9 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
                     _patched = (_pre + "\n" if _pre else "") + _nnorm + ("\n" + _post if _post else "")
                     new_content = _patched.replace("\n", "\r\n") if _has_crlf else _patched
 
-                    def _write_fuzzy_patch() -> None:
-                        _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
-                        try:
-                            with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                                _f.write(new_content)
-                            os.replace(_tmp_path, str(p))
-                            _recheck_workspace_before_replace(p, workspace_lock, "_write_fuzzy_patch")
-                        except Exception:
-                            try:
-                                os.unlink(_tmp_path)
-                            except Exception:
-                                pass
-                            raise
-
-                    _chk = _recheck_workspace_before_replace(p, workspace_lock, "patch_file")
-
+                    _chk = await _checked_atomic_write(p, new_content, workspace_lock, "patch_file")
                     if _chk:
-
                         return _chk  # T6: containment re-check BEFORE any byte is written
-
-                    await asyncio.to_thread(_write_fuzzy_patch)
                     added = new_str.count("\n") + (1 if new_str else 0)
                     removed = old_str.count("\n") + (1 if old_str else 0)
                     _fuzzy_applied = True
@@ -424,23 +436,9 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
                 _p2_result = None
             if _p2_result is not None:
                 _nc_p2 = _p2_result.replace("\n", "\r\n") if _has_crlf else _p2_result
-                def _write_p2_patch() -> None:
-                    _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
-                    try:
-                        with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                            _f.write(_nc_p2)
-                        os.replace(_tmp_path, str(p))
-                        _recheck_workspace_before_replace(p, workspace_lock, "_write_p2_patch")
-                    except Exception:
-                        try:
-                            os.unlink(_tmp_path)
-                        except Exception:
-                            pass
-                        raise
-                _chk = _recheck_workspace_before_replace(p, workspace_lock, "patch_file")
+                _chk = await _checked_atomic_write(p, _nc_p2, workspace_lock, "patch_file")
                 if _chk:
                     return _chk  # T6: containment re-check BEFORE any byte is written
-                await asyncio.to_thread(_write_p2_patch)
                 _lint = await _auto_lint_result(p, workspace)
                 _snippet = _old_str_snippet(old_str)
                 return f"[patch_file: {p} patched (fuzzy-jaccard match)]{_snippet}{_lint}"
@@ -459,27 +457,10 @@ async def _inline_tool_patch_file(args: dict, workspace: Path, workspace_lock: s
         _patched = _cnorm.replace(_onorm, _nnorm, 1)
         new_content = _patched.replace("\n", "\r\n") if _has_crlf else _patched
 
-        def _write_patch_result() -> None:
-            _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
-            try:
-                with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                    _f.write(new_content)
-                os.replace(_tmp_path, str(p))
-                _recheck_workspace_before_replace(p, workspace_lock, "_write_patch_result")
-            except Exception:
-                try:
-                    os.unlink(_tmp_path)
-                except Exception:
-                    pass
-                raise
-
-        _chk = _recheck_workspace_before_replace(p, workspace_lock, "patch_file")
-
+        _chk = await _checked_atomic_write(p, new_content, workspace_lock, "patch_file")
         if _chk:
-
             return _chk  # T6: containment re-check BEFORE any byte is written
 
-        await asyncio.to_thread(_write_patch_result)
         added = new_str.count("\n") + (1 if new_str else 0)
         removed = old_str.count("\n") + (1 if old_str else 0)
         _lint = await _auto_lint_result(p, workspace)
@@ -560,19 +541,6 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
     if _had_crlf:
         content = content.replace("\n", "\r\n")
 
-    def _write_now() -> None:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
-        try:
-            with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                _f.write(content)
-            os.replace(_tmp_path, str(p))
-            _recheck_workspace_before_replace(p, workspace_lock, "_write_now")
-        except Exception:
-            try: os.unlink(_tmp_path)
-            except Exception: pass
-            raise
-
     _chk = _recheck_workspace_before_replace(p, workspace_lock, "write_file")
 
     if _chk:
@@ -580,7 +548,7 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
         return _chk  # T6: containment re-check BEFORE any byte is written
 
     try:
-        await asyncio.to_thread(_write_now)
+        await asyncio.to_thread(_atomic_write, p, content)
     except OSError as _werr:
         # SANDBOX/ACL/RO-FS (2026-10-19): the process may not write into this
         # folder. Before, tempfile.mkstemp retried a Windows denial up to TMP_MAX -
@@ -716,21 +684,9 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             working = _fzr
             final = working.replace("\n", "\r\n") if _has_crlf else working
 
-            def _write_fuzzy() -> None:
-                _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
-                try:
-                    with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                        _f.write(final)
-                    os.replace(_tmp_path, str(p))
-                    _recheck_workspace_before_replace(p, workspace_lock, "_write_fuzzy")
-                except Exception:
-                    try: os.unlink(_tmp_path)
-                    except Exception: pass
-                    raise
-            _chk = _recheck_workspace_before_replace(p, workspace_lock, "edit_file")
+            _chk = await _checked_atomic_write(p, final, workspace_lock, "edit_file")
             if _chk:
                 return _chk  # T6: containment re-check BEFORE any byte is written
-            await asyncio.to_thread(_write_fuzzy)
             _lint = await _auto_lint_result(p, workspace)
             return f"[edit_file: '{p}' edited via fuzzy match]{_lint}"
         # OLD-TEXT RE-ANCHOR (2026-10-08, user feedback: the old_text retry loop): the
@@ -816,25 +772,12 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
 
     final = working.replace("\n", "\r\n") if _has_crlf else working
 
-    def _write_exact() -> None:
-        _tmp_fd, _tmp_path = _mkstemp_bounded(p.parent, ".tmp")
-        try:
-            with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
-                _f.write(final)
-            os.replace(_tmp_path, str(p))
-            _recheck_workspace_before_replace(p, workspace_lock, "_write_exact")
-        except Exception:
-            try: os.unlink(_tmp_path)
-            except Exception: pass
-            raise
-
-    _chk = _recheck_workspace_before_replace(p, workspace_lock, "edit_file")
+    _chk = await _checked_atomic_write(p, final, workspace_lock, "edit_file")
 
     if _chk:
 
         return _chk  # T6: containment re-check BEFORE any byte is written
 
-    await asyncio.to_thread(_write_exact)
     _old_lines_n = content.count("\n") + 1
     _new_lines_n = final.count("\n") + 1
     _delta = _new_lines_n - _old_lines_n

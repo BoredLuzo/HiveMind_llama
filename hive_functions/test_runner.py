@@ -186,14 +186,14 @@ async def run_tests(
 
     try:
         # SPAWN-SESSION (2026-09-19): start_new_session makes proc.pid a
-        # process-group leader on POSIX — the killpg() in the timeout path
-        # below then really kills the whole tree (pytest/npm children),
-        # not just the /bin/sh wrapper. Windows keeps taskkill /T.
-        from tools.sandbox import spawn_kwargs as _spawn_kwargs
+        # process-group leader on POSIX — the tree-kill on timeout then
+        # really kills the whole tree (pytest/npm children), not just the
+        # /bin/sh wrapper. Windows keeps taskkill /T.
+        from tools.sandbox import spawn_kwargs as _spawn_kwargs, kill_tree_and_reap as _kill_reap
 
         async def _spawn_decode(run_cmd: str) -> tuple[str, int]:
             """Run *run_cmd*, return (output, exit code). Raises TimeoutError
-            after tree-killing the process group."""
+            after tree-killing the process group (shared kill path)."""
             proc = await asyncio.create_subprocess_shell(
                 run_cmd,
                 cwd=workspace,
@@ -204,33 +204,10 @@ async def run_tests(
             try:
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
             except asyncio.TimeoutError:
-                # TREE-KILL (2026-09-13): proc.kill() only killed the SHELL —
-                # pytest/npm children survived as orphans on Windows. Kill the
-                # whole tree, then reap.
-                if platform.system() == "Windows":
-                    import subprocess as _sp
-                    try:
-                        _sp.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                                capture_output=True, timeout=10)
-                    except (OSError, _sp.SubprocessError):
-                        try:
-                            proc.kill()
-                        except ProcessLookupError:
-                            logging.debug("test tree already gone (pid %s)", proc.pid)
-                else:
-                    try:
-                        import os as _os_kill
-                        import signal as _sig
-                        _os_kill.killpg(proc.pid, _sig.SIGKILL)
-                    except (ProcessLookupError, PermissionError, AttributeError):
-                        try:
-                            proc.kill()
-                        except ProcessLookupError:
-                            logging.debug("test proc already reaped (pid %s)", proc.pid)
-                try:
-                    await proc.wait()
-                except ProcessLookupError:
-                    logging.debug("test proc already reaped (pid %s)", proc.pid)
+                # TREE-KILL (2026-09-13): the shared helper kills the whole
+                # tree (taskkill /T on Windows — slower binary, hence 10 s —
+                # killpg on POSIX) and reaps the wrapper.
+                await _kill_reap(proc, taskkill_timeout=10)
                 raise
 
             return stdout.decode("utf-8", errors="replace"), proc.returncode
@@ -311,29 +288,8 @@ async def run_tests(
                     try:
                         stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=timeout)
                     except asyncio.TimeoutError:
-                        # Tree-kill wie oben (2026-09-19): killpg/taskkill
-                        # statt nur der Shell-Wrapper.
-                        if platform.system() == "Windows":
-                            import subprocess as _sp2
-                            try:
-                                _sp2.run(["taskkill", "/F", "/T", "/PID", str(proc2.pid)],
-                                         capture_output=True, timeout=10)
-                            except (OSError, _sp2.SubprocessError):
-                                try:
-                                    proc2.kill()
-                                except ProcessLookupError:
-                                    pass
-                        else:
-                            try:
-                                import os as _os_k2
-                                import signal as _sig2
-                                _os_k2.killpg(proc2.pid, _sig2.SIGKILL)
-                            except (ProcessLookupError, PermissionError, AttributeError):
-                                try:
-                                    proc2.kill()
-                                except ProcessLookupError:
-                                    pass
-                        await proc2.communicate()
+                        # shared tree-kill + reap (2026-09-19 semantics)
+                        await _kill_reap(proc2, taskkill_timeout=10)
                         stdout2 = b"TIMEOUT"
                     raw2 = stdout2.decode("utf-8", errors="replace")
                     success2 = proc2.returncode == 0

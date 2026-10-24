@@ -69,8 +69,12 @@ else:
 
 src = (ROOT / "tools" / "handlers" / "file_ops.py").read_text(encoding="utf-8")
 check("write_file returns WRITE_FILE_PERMISSION", "WRITE_FILE_PERMISSION" in src)
-check("the atomic writes use the bounded helper",
-      src.count("_mkstemp_bounded(") >= 7, f"({src.count('_mkstemp_bounded(')})")
+# The six hand-rolled write closures collapsed into _atomic_write (2026-10-24):
+# one bounded-helper call site + one os.replace in the whole file now.
+check("the atomic write uses the bounded helper",
+      src.count("_mkstemp_bounded(") >= 2, f"({src.count('_mkstemp_bounded(')})")
+check("every write path goes through _atomic_write (one os.replace in the file)",
+      src.count("os.replace(") == 1 and "def _atomic_write" in src)
 check("no raw tempfile.mkstemp call is left", "tempfile.mkstemp(" not in src)
 
 

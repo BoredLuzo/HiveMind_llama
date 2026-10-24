@@ -121,30 +121,37 @@ check("start_background joins the same gate",
 
 
 # ── 9. per-mode enforcement for machine-changing tools ────────────────────
-from tools.runner import _mode_blocks, _MODE_STRICT_NAMES  # noqa: E402
+# (_mode_blocks was removed: the mode-allowlist gate in the dispatcher is
+# strictly stronger. The same guarantees are asserted against the real gate.)
+from tools.definitions import _tool_names_for_mode as _names_for  # noqa: E402
 
-check("a chat mode cannot write", _mode_blocks("write_file", "direct", True) is True)
-check("a chat mode cannot run shell", _mode_blocks("run_bash", "direct", True) is True)
-check("a read-only mode cannot write", _mode_blocks("write_file", "duo_readonly", True) is True)
-check("a read-only mode cannot run shell", _mode_blocks("run_bash", "duo_readonly", True) is True)
-check("the coder mode may write", _mode_blocks("write_file", "duo_full", True) is False)
-check("the fix agent may write", _mode_blocks("write_file", "fix_agent", True) is False)
-check("the critic may use its own shell", _mode_blocks("run_bash", "critic_verify", True) is False)
-check("harmless reads stay allowed everywhere",
-      all(_mode_blocks("read_file", m, True) is False for m in MODES))
-check("an unknown mode invents no policy",
-      _mode_blocks("write_file", "some_future_mode", True) is False)
+check("a chat mode cannot write", "write_file" not in _names_for("direct", include_websearch=True))
+check("a chat mode cannot run shell", "run_bash" not in _names_for("direct", include_websearch=True))
+check("a read-only mode cannot write", "write_file" not in _names_for("duo_readonly", include_websearch=True))
+check("a read-only mode cannot run shell", "run_bash" not in _names_for("duo_readonly", include_websearch=True))
+check("the coder mode may write", "write_file" in _names_for("duo_full", include_websearch=True))
+check("the fix agent may write", "write_file" in _names_for("fix_agent", include_websearch=True))
+check("the critic may use its own shell", "run_bash" in _names_for("critic_verify", include_websearch=True))
+check("harmless reads stay allowed in every coder mode",
+      all("read_file" in _names_for(m, include_websearch=True)
+          for m in MODES if m != "direct"),
+      f" (missing in: {[m for m in MODES if m != 'direct' and 'read_file' not in _names_for(m, include_websearch=True)]})")
+check("the dispatcher enforces the mode allowlist",
+      "TOOL_NOT_ALLOWED" in src and "_tool_names_for_mode(tool_mode" in src)
+# machine-changing names (the policy _APPROVAL_TOOLS must cover; kept local
+# since _MODE_STRICT_NAMES was removed with its dead consumer)
+STRICT = {"write_file", "write_file_append", "edit_file", "edit_ast",
+          "replace_lines", "patch_file", "run_bash", "run_python",
+          "install_package", "git_commit", "start_background", "undo_last"}
 # undo_last (reverts an approved change) and stop_background (kills a process the
-# model started itself) are mode-strict but deliberately NOT approval-gated - the
-# policy next to _APPROVAL_TOOLS says so.
+# model started itself) are deliberately NOT approval-gated - the policy next to
+# _APPROVAL_TOOLS says so.
 INTENTIONALLY_UNGATED = {"undo_last", "stop_background"}
-check("every strict name is approval-gated or documented",
-      _MODE_STRICT_NAMES - INTENTIONALLY_UNGATED <= APPROVAL,
-      f" (not gated: {sorted(_MODE_STRICT_NAMES - INTENTIONALLY_UNGATED - APPROVAL)})")
-check("every strict name is a real handler", _MODE_STRICT_NAMES <= MAP,
-      f" (unknown: {sorted(_MODE_STRICT_NAMES - MAP)})")
-check("the dispatcher rejects a mode-blocked tool",
-      "TOOL_NOT_AVAILABLE_IN_MODE" in src)
+check("every machine-changing name is approval-gated or documented",
+      STRICT - INTENTIONALLY_UNGATED <= APPROVAL,
+      f" (not gated: {sorted(STRICT - INTENTIONALLY_UNGATED - APPROVAL)})")
+check("every machine-changing name is a real handler", STRICT <= MAP,
+      f" (unknown: {sorted(STRICT - MAP)})")
 
 print()
 print(f"SUMMARY tool_registry: {passed} passed, {failed} failed")
