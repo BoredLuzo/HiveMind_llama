@@ -169,6 +169,53 @@ check("the pin is announced, not silent (audit F4)",
 check("the handoff reuse check still refuses degraded slots",
       "_plan_port_actual_ctx >= _coder_ctx_need" in dr)
 
+# ── measurement-round fixes (2026-10-24): MTP env bypass, mlock no-op,
+#    spec+load-mode-none crash guard ───────────────────────────────────────
+ml_src = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+srv_src = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+check("the registry-MTP block honors the env off-switch",
+      "ENV-BYPASS FIX" in ml_src
+      and 'and os.environ.get("HIVEMIND_MTP_SPEC", "1") not in' in ml_src)
+check("llama_mlock reaches the load path (dynamic read, canonical module)",
+      "_llama_cfg.MLOCK_MODEL" in ml_src and "MLOCK_MODEL" not in ml_src.split("from .llama_config import")[1].split(")")[0]
+      and "_lc_init.MLOCK_MODEL = bool(settings.get" in srv_src)
+check("speculative models keep mmap even with mlock off (OOM guard)",
+      "_speculation_planned" in ml_src
+      and '"mmap+mlock" if (_mlock_now or _spec_planned) else "none"' in ml_src)
+
+# behavioral: _speculation_planned
+import backend.manager_load as ML
+_patched_env = {"HIVEMIND_MTP_SPEC": "1"}
+class _MLProbe:
+    _speculation_planned = ML.LlamaLoadMixin._speculation_planned
+probe = _MLProbe()
+
+import model_configs.models_registry as _mr2
+_gp2 = _mr2.get_profile
+_dd_cfg = _mr2.get_dspark_draft_filename if hasattr(_mr2, "get_dspark_draft_filename") else None
+try:
+    _mr2.get_profile = lambda k: {}
+    if _dd_cfg:
+        _mr2.get_dspark_draft_filename = lambda k: None
+    import os as _os2
+    _os2.environ["HIVEMIND_MTP_SPEC"] = "1"
+    check("an MTP name-list model plans speculation",
+          probe._speculation_planned("qwen3.5:4b-mtp") is True)
+    _os2.environ["HIVEMIND_MTP_SPEC"] = "0"
+    check("env-off + plain model plans no speculation",
+          probe._speculation_planned("some-unknown:7b") is False)
+    _os2.environ["HIVEMIND_MTP_SPEC"] = "0"
+    _mr2.get_profile = lambda k: {"mtp": True}
+    check("registry-mtp model with env off plans no speculation",
+          probe._speculation_planned("reg-mtp:7b") is False)
+finally:
+    _mr2.get_profile = _gp2
+    if _dd_cfg:
+        _mr2.get_dspark_draft_filename = _dd_cfg
+    import os as _os3
+    _os3.environ.pop("HIVEMIND_MTP_SPEC", None)
+
+
 # ── B6: slow-independent tool parallelism (behavioral) ────────────────────
 import core.tool_exec_helpers as TH  # noqa: E402
 

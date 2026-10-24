@@ -361,8 +361,13 @@ def _sync_backend_runtime_config() -> None:
             _lsm_init.MOE_CPU_EXPERTS = {str(k): int(v or 0) for k, v in _moe_cfg.items()}
         else:
             _lsm_init.MOE_CPU_EXPERTS = {}
-        _lsm_init.MLOCK_MODEL = bool(settings.get("llama_mlock", True))
+        # MLOCK-PROPAGATION (audit 2026-10-24): the setting used to land only
+        # on the manager module - the load path (manager_load) holds a by-value
+        # import from boot, so llama_mlock=false never reached the flags.
+        # llama_config is the canonical source; manager_load reads it live.
         import backend.llama_config as _lc_init
+        _lc_init.MLOCK_MODEL = bool(settings.get("llama_mlock", True))
+        _lsm_init.MLOCK_MODEL = _lc_init.MLOCK_MODEL
         _gb = str(settings.get("gpu_backend", "") or "").strip().lower()
         # ENV-WINS (2026-09-19): a repo-shipped settings.json must not defeat
         # a container/systemd deployment — HIVEMIND_GPU_BACKEND has priority

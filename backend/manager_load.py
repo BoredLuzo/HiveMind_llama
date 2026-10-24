@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 
+from . import llama_config as _llama_cfg
 from .llama_config import (
     LLAMA_BIN, BASE_PORT, MAX_SLOTS,
     KV_CACHE_TYPE, GPU_LAYERS, CONTEXT_SIZE_DEFAULT,
@@ -14,7 +15,7 @@ from .llama_config import (
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS,
     _DENSE_KV_CACHE_TYPES,
     moe_kv_cache_types, llama_gpu_layers_auto, resolve_gpu_layers,
-    MLOCK_MODEL, CACHE_REUSE, CACHE_RAM_MIB, CTX_CHECKPOINTS, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
+    CACHE_REUSE, CACHE_RAM_MIB, CTX_CHECKPOINTS, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
     _MTP_MODELS,
@@ -756,6 +757,32 @@ class LlamaLoadMixin:
             raise RuntimeError("slot died during the vision upgrade")
         return True
 
+    def _speculation_planned(self, model: str) -> bool:
+        """True when speculative decoding WILL run for this model (draft-mtp
+        with the env switch on, or a DSpark drafter in the profile).
+        Uncertainty answers True: the mmap fallback is the known-good path
+        (spec + eager load = Vulkan OOM, live 2026-10-24)."""
+        try:
+            _key = _strip_alias(model)
+            _mtp = _key in _MTP_MODELS
+            if not _mtp:
+                try:
+                    from model_configs.models_registry import is_mtp as _reg_mtp
+                    _mtp = bool(_reg_mtp(model))
+                except Exception:
+                    _mtp = True   # registry unreadable: assume spec (safe path)
+            if _mtp and os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off"):
+                return True
+            try:
+                from .llama_config import _try_registry_dspark_draft as _dd
+                if _dd(_key):
+                    return True
+            except Exception:
+                return True   # unreadable: assume spec
+            return False
+        except Exception:
+            return True
+
     async def _start_process(self, slot: ModelSlot, model: str, num_ctx: int,
                              vision: bool = False, n_parallel: int = 1,
                              gpu_layers_override: Optional[int] = None,
@@ -1118,7 +1145,14 @@ class LlamaLoadMixin:
         # (2026-08-17, Hermes-35B-MoE auf Windows-Vulkan):
         #   --load-mode mlock      → GGML_ASSERT(addr) in llama-mmap.cpp (crasht)
         if type(self)._load_mode_supported:
-            _load_mode = "mmap+mlock" if MLOCK_MODEL else "none"
+            # SPEC+NONE-CRASH-GUARD (audit 2026-10-24, live): load-mode none
+            # (eager load) TOGETHER with speculative decoding crashed Vulkan
+            # with vk::Queue::submit ErrorOutOfDeviceMemory on the 35B - the
+            # draft buffers on top of the eager upload exceed the device
+            # budget. Speculative models keep mmap regardless of mlock.
+            _spec_planned = self._speculation_planned(model)
+            _mlock_now = _llama_cfg.MLOCK_MODEL
+            _load_mode = "mmap+mlock" if (_mlock_now or _spec_planned) else "none"
             # MEMLOCK-GUARD (2026-09-19): Docker default RLIMIT_MEMLOCK is
             # 64 MiB — llama.cpp fails the model load when it cannot lock
             # the weights. One-time warning; fix via --ulimit memlock=-1 in
@@ -1132,7 +1166,8 @@ class LlamaLoadMixin:
                     "set llama_mlock=false in settings."
                 )
             cmd += ["--load-mode", _load_mode]
-            logger.info("--load-mode %s (mlock=%s)", _load_mode, bool(MLOCK_MODEL))
+            logger.info("--load-mode %s (mlock=%s, spec=%s)",
+                        _load_mode, bool(_mlock_now), _spec_planned)
         elif (type(self)._binary_build_number or 0) >= NO_MMAP_MIN_BUILD:
             cmd += ["--no-mmap"]
             logger.info("--no-mmap aktiv (Build %d >= %d, Windows-Vulkan mmap-Fix)",
@@ -1251,7 +1286,7 @@ class LlamaLoadMixin:
                     )
                 # MoE-spezifische Optimierungen
                 cmd += ["--no-warmup"]
-                if not type(self)._load_mode_supported and MLOCK_MODEL:
+                if not type(self)._load_mode_supported and _llama_cfg.MLOCK_MODEL:
                     cmd += ["--mlock"]
                     logger.info("--mlock active (model locked in RAM)")
                 if type(self)._kv_flag_supported:
@@ -1420,7 +1455,12 @@ class LlamaLoadMixin:
         # them as their own draft model. Verified on VULKAN: the server
         # accepts the flags and generates.
         try:
-            if _reg_is_mtp is not None and _reg_is_mtp(model) and "--spec-type" not in cmd:
+            if (_reg_is_mtp is not None and _reg_is_mtp(model)
+                    and "--spec-type" not in cmd
+                    # ENV-BYPASS FIX (audit 2026-10-24): the registry block
+                    # re-enabled draft-mtp even with HIVEMIND_MTP_SPEC=0 -
+                    # the off-switch only covered the name-list gate.
+                    and os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off")):
                 # FLAG-NAME FIX (2026-10-10, exit=1 evidence): this build wants
                 # --spec-draft-n-max; the shipped --spec-draft-max is an
                 # invalid argument and CRASHED EVERY mtp-model server start
@@ -1840,7 +1880,7 @@ class LlamaLoadMixin:
                 _gguf_gb = -1.0
             logger.info(
                 "[LOAD-DIAG] mlock=%s ctx=%d gguf=%.1fGB ram_free=%.1fGB",
-                bool(MLOCK_MODEL), num_ctx, _gguf_gb, _available_ram_gb(),
+                bool(_llama_cfg.MLOCK_MODEL), num_ctx, _gguf_gb, _available_ram_gb(),
             )
 
             slot._ready_event.clear()
