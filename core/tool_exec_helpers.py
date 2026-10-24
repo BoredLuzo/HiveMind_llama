@@ -43,14 +43,10 @@ async def _prefetch_readonly_tools(tool_calls, exec_model, workspace_lock, tool_
                        "get_signatures", "find_references", "git_status", "web_fetch"}
     _SLOW_STATELESS = {"run_tests"}
     # web_search excluded: modifies duo_seen_web_queries (mutable set) — not parallel-safe
-    def _pclass(name: str) -> int:
-        if name in _PARALLEL_SAFE:
-            return 0
-        if name in _SLOW_STATELESS:
-            return 1
-        return 2
-    _classes = [_pclass(tc.get("function", {}).get("name", "")) for tc in (tool_calls or [])]
-    _all_read_only = bool(tool_calls) and max(_classes) <= 1 and _classes.count(1) <= 1
+    _names = [tc.get("function", {}).get("name", "") for tc in (tool_calls or [])]
+    _all_read_only = bool(_names) and all(
+        n in _PARALLEL_SAFE or n in _SLOW_STATELESS for n in _names
+    ) and sum(n in _SLOW_STATELESS for n in _names) <= 1
     _pre_results: dict[int, str] = {}
     if _all_read_only:
         async def _execute_one(_tc):

@@ -92,7 +92,22 @@ from hive_functions.planner import (
 from hive_functions.chunking import ChunkState, build_chunk_context, ChunkAction
 from hive_functions.loop_machine import AgentState, StopReason, ExecutionController
 from hive_functions.memory import ToolContextLRU
-from hive_functions.test_runner import run_tests as _run_test_suite, TestResult as _TestResult, NO_TESTS_RE as _NO_TESTS_RE_PUB
+from hive_functions.test_runner import (
+    run_tests as _run_test_suite, TestResult as _TestResult, NO_TESTS_RE,
+)
+
+# VERIFY-GATE PROMPT: shared by the veto fallback and the auto-verify
+# no-tests branch - one wording, two call sites.
+_VERIFY_REQUIRED_PROMPT = "[VERIFY REQUIRED] You called task_complete but the last file write "
+"has not been followed by a successful test run.\n"
+"Do this NOW, in this order:\n"
+"1. Call run_tests. If it reports no suite, write a minimal smoke test that "
+"   exercises the created files and run it via run_bash instead. "
+"documented check via run_bash instead (e.g. python selftest.py).\n"
+"2. Ensure it exits with code 0.\n"
+"3. Then call task_complete again with status "
+"{completed, blockers, build_status}."
+
 from hive_functions.language_config import build_test_hint as _build_test_hint
 from hive_functions.num_ctx_config import resolve_ctx
 
@@ -5285,16 +5300,10 @@ async def run_code_duo(ctx):
                                     _exec_result.task_complete_called = False
                                     _verify_gate_blocks += 1
                                     _verify_warned = True
-                                    # AUTO-VERIFY (2026-10-23): the veto used to
-                                    # rely on the MODEL running the tests ("run
-                                    # your tests NOW") — a small model often
-                                    # ignores that and burns rounds until the
-                                    # second attempt slips through unverified.
-                                    # The harness now runs the check itself:
-                                    # green → completion accepted as verified,
-                                    # red → concrete failures into context.
-                                    # Scoped via the edit→test mapping, like the
-                                    # per-chunk verify; [] → full suite.
+                                    # AUTO-VERIFY (2026-10-23): the harness runs
+                                    # the verify suite itself on veto — green →
+                                    # verified, red → failures into context,
+                                    # scoped via the edit→test mapping ([] → full).
                                     _av_paths: list[str] | None = None
                                     try:
                                         from hive_functions.testmap import map_edits_to_tests as _av_map
@@ -5362,7 +5371,7 @@ async def run_code_duo(ctx):
                                             _duo_deadline_at = _av_grace
                                     elif _av_res is not None and (
                                             not _av_res.command
-                                            or _NO_TESTS_RE_PUB.search(str(_av_res.raw_output or ""))):
+                                            or NO_TESTS_RE.search(str(_av_res.raw_output or ""))):
                                         # AUDIT FIX (F2): "nothing ran" is broader than
                                         # command=="" — a workspace WITH a manifest but
                                         # zero tests also answers exit 5 / "no tests ran"
@@ -5371,15 +5380,7 @@ async def run_code_duo(ctx):
                                         logger.info(
                                             "[VERIFY-GATE] auto-verify: no tests ran in workspace — smoke-test nudge")
                                         _dtool_msgs.append({"role": "user", "content": (
-                                            "[VERIFY REQUIRED] You called task_complete but the last file write "
-                                            "has not been followed by a successful test run.\n"
-                                            "Do this NOW, in this order:\n"
-                                            "1. Call run_tests. If it reports no suite, write a minimal smoke test that "
-                                            "   exercises the created files and run it via run_bash instead. "
-                                            "documented check via run_bash instead (e.g. python selftest.py).\n"
-                                            "2. Ensure it exits with code 0.\n"
-                                            "3. Then call task_complete again with status "
-                                            "{completed, blockers, build_status}."
+                                            _VERIFY_REQUIRED_PROMPT
                                         )})
                                     elif _av_res is not None:
                                         _av_note = (f"{_av_res.failure_count} test failure(s)"
@@ -5406,15 +5407,7 @@ async def run_code_duo(ctx):
                                         # vague "run your tests" — baseline FAIL repo_peon r1
                                         # run_tests → no-suite fallback run_bash → task_complete.
                                         _dtool_msgs.append({"role": "user", "content": (
-                                            "[VERIFY REQUIRED] You called task_complete but the last file write "
-                                            "has not been followed by a successful test run.\n"
-                                            "Do this NOW, in this order:\n"
-                                            "1. Call run_tests. If it reports no suite, write a minimal smoke test that "
-                                            "   exercises the created files and run it via run_bash instead. "
-                                            "documented check via run_bash instead (e.g. python selftest.py).\n"
-                                            "2. Ensure it exits with code 0.\n"
-                                            "3. Then call task_complete again with status "
-                                            "{completed, blockers, build_status}."
+                                            _VERIFY_REQUIRED_PROMPT
                                         )})
                             # Fall-through: re-check after Verify injection
                             if not _exec_result.task_complete_called:

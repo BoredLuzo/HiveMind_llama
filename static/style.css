@@ -1499,6 +1499,8 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 .ctx-est-plan { color: #9a74dc; }
 /* CTX-FIT-WARN: estimate exceeds the VRAM budget — a warning, never a block */
 .ctx-est-over { color: #e05555; font-weight: 600; }
+/* compact variant for the per-agent value slots: one line, no wrap */
+.ctx-est-compact { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rt-select {
   width: 150px; flex-shrink: 0;
   background: #0a0e13;

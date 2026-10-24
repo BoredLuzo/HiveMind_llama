@@ -28,15 +28,11 @@ def check(name, cond, extra=""):
 # ── B2: MoE KV cache types ───────────────────────────────────────────────
 from backend import llama_config as LC  # noqa: E402
 
-check("moe kv default is q4_0", LC.moe_kv_cache_types("unknown-model:7b") == ("q4_0", "q4_0"))
+check("moe kv default is q4_0", LC.moe_kv_cache_types("unknown-model:7b") == "q4_0")
 LC._MOE_KV_CACHE_TYPES["manual-test:7b"] = "q8_0"
 check("moe kv manual dict wins",
-      LC.moe_kv_cache_types("manual-test:7b") == ("q8_0", "q8_0"))
+      LC.moe_kv_cache_types("manual-test:7b") == "q8_0")
 del LC._MOE_KV_CACHE_TYPES["manual-test:7b"]
-
-_real_gp = LC.__dict__.get("get_profile")
-_orig_import = __import__
-
 
 def _fake_gp(key):
     if key == "profile-test:7b":
@@ -44,20 +40,13 @@ def _fake_gp(key):
     return {}
 
 
-import importlib  # noqa: E402
-
-
-def _patched_get_profile(key):
-    return _fake_gp(key)
-
-
 # patch the registry accessor the helper imports lazily
 import model_configs.models_registry as _mr  # noqa: E402
 _gp_orig = _mr.get_profile
-_mr.get_profile = _patched_get_profile
+_mr.get_profile = _fake_gp
 try:
     check("moe kv profile override honored",
-          LC.moe_kv_cache_types("profile-test:7b") == ("q5_1", "q5_1"))
+          LC.moe_kv_cache_types("profile-test:7b") == "q5_1")
 finally:
     _mr.get_profile = _gp_orig
 
@@ -72,14 +61,7 @@ check("gpu auto omits the flag for unlisted models",
 check("gpu default stays 99 without auto",
       LC.resolve_gpu_layers("unknown:7b", None, TABLE, auto=False) == 99)
 
-_ls_orig = LC.__dict__.get("load_settings")
 import settings as _settings_mod  # noqa: E402
-
-
-class _FakeSettings(dict):
-    pass
-
-
 _orig_ls = _settings_mod.load_settings
 _settings_mod.load_settings = lambda: {"llama_gpu_layers_auto": True}
 try:
@@ -102,8 +84,6 @@ def _with_warm(active, status, payload, raise_exc=None):
     SE.warm_is_active = lambda key="": active
     SE.resolve_timeout = lambda s: 60
     SE._WARM.update({"proc": object(), "port": 51111, "model": "ggml-base"})
-    state = {"called": False}
-
     class _Resp:
         def __init__(self):
             self.status_code = status
@@ -122,7 +102,6 @@ def _with_warm(active, status, payload, raise_exc=None):
             return False
 
         def post(self, url, files=None, data=None):
-            state["called"] = True
             if raise_exc is not None:
                 raise raise_exc
             return _Resp()
@@ -130,7 +109,6 @@ def _with_warm(active, status, payload, raise_exc=None):
     SE.httpx = NS(Client=_Client, Timeout=httpx.Timeout,
                   TimeoutException=httpx.TimeoutException,
                   HTTPError=httpx.HTTPError)
-    return state
 
 
 try:

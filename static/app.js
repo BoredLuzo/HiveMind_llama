@@ -12465,6 +12465,7 @@ async function _vramEstimate(model, ctx, elId, compact) {
   if (!el) return;
   el.textContent = '';
   el.classList.remove('ctx-est-over');
+  el.classList.remove('ctx-est-compact');
   try {
     var r = await fetch('/vram/estimate?model=' + encodeURIComponent(model) + '&ctx=' + ctx);
     if (!r.ok) return;
@@ -12485,9 +12486,7 @@ async function _vramEstimate(model, ctx, elId, compact) {
       // COMPACT (owner feedback 2026-10-23): the per-agent value slot is one
       // small line — the full estimate wrapped it into three. RAM and budget
       // detail live in the hover title.
-      el.style.whiteSpace = 'nowrap';
-      el.style.overflow = 'hidden';
-      el.style.textOverflow = 'ellipsis';
+      el.classList.add('ctx-est-compact');
       txt = d.vram_gb.toFixed(1) + ' GB'
         + (kv ? ' \u00b7 KV ' + kv.toFixed(1) : '')
         + (over ? ' \u26a0 >' + budget.toFixed(1) : '');

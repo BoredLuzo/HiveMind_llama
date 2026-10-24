@@ -126,15 +126,11 @@ def _parse_failures(output: str, language: str) -> tuple[int, list[str]]:
 
 # TESTMAP (2026-10-23): a scoped run (edit→test mapping) that matched no
 # test at all must NOT count as a red suite — jest/vitest print variations
-# of "no tests found" and exit 1. Detect and fall back to the full command.
-_NO_TESTS_RE = re.compile(
+# of "no tests found" and exit 1. Also exported for the completion veto,
+# which needs the same classification for full-suite runs.
+NO_TESTS_RE = re.compile(
     r"no tests found|no test files found|nothing to (?:run|test)"
     r"|no tests ran|collected 0 items", re.IGNORECASE)
-
-# Public alias (2026-10-24 audit F2): the completion veto (duo_runner
-# auto-verify) needs the same "nothing ran" classification for FULL-suite
-# runs, not only scoped ones.
-NO_TESTS_RE = _NO_TESTS_RE
 
 _MAX_SCOPED_PATHS = 8
 
@@ -264,7 +260,7 @@ async def run_tests(
         # TESTMAP FALLBACK: the scoped command matched no test at all
         # (renamed test file, npm script that ignores extra args) — that is
         # "nothing to verify", not "failing". Re-run the full suite once.
-        if scoped_template and paths and not success and _NO_TESTS_RE.search(raw):
+        if scoped_template and paths and not success and NO_TESTS_RE.search(raw):
             _logger.info("[TESTMAP] scoped run matched nothing — falling back to full suite")
             cmd = _full_cmd
             try:

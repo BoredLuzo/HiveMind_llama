@@ -220,11 +220,9 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
             language=settings.get("searxng_language"),
         )
     if persist:
-        # PRESET-AUTOLOAD-GUARD (2026-10-23): record WHEN the preset was
-        # applied. The autoload compares this against settings_saved_at —
-        # without it, every engine boot re-applied the snapshot and silently
-        # reverted everything the user saved since the last load (live
-        # demonstration: a settings.json edit was reverted by the next boot).
+        # PRESET-AUTOLOAD-GUARD (2026-10-23): the autoload skips re-applying
+        # when settings_saved_at is newer than this stamp — user edits must
+        # survive reboots. Both stamps land in ONE write.
         _stamp = _now_iso()
         settings["preset_applied_at"] = _stamp
         await asyncio.to_thread(save_settings, settings, saved_at=_stamp)

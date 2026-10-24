@@ -69,18 +69,27 @@ def _handler(request: httpx.Request) -> httpx.Response:  # noqa: F821 (import be
 
 
 # ── fakes ────────────────────────────────────────────────────────────────
+class _ShimClient(httpx.AsyncClient):
+    """Every httpx client in the driven code lands on the mock server."""
+    def __init__(self, *a, **kw):
+        kw.setdefault("transport", httpx.MockTransport(_handler))
+        super().__init__(*a, **kw)
+
+
+class _HttpxShim:
+    """Module stand-in for duo_runner.httpx: same surface, mocked client."""
+    AsyncClient = _ShimClient
+
+    def __getattr__(self, name):
+        return getattr(httpx, name)
+
+
 def _build(monkey_events: list):
-    import httpx
     import backend.llama_server_manager as LSM
     from core.run_context import RunContext
     from core.duo_config import DuoConfig
     from infra.phase_timer import PhaseTimer
     from settings import DEFAULT_SETTINGS
-
-    class _ShimClient(httpx.AsyncClient):
-        def __init__(self, *a, **kw):
-            kw.setdefault("transport", httpx.MockTransport(_handler))
-            super().__init__(*a, **kw)
 
     _slot = NS(port=PORT, _num_ctx=8192, model=MODEL, pinned=False,
                is_running=True, _loading=False, slot_id=0, last_used=0.0,
@@ -218,19 +227,10 @@ import httpx  # noqa: E402
 
 def _install_shim():
     import core.duo_runner as DR
-
-    class _ShimClientFactory(httpx.AsyncClient):
-        def __init__(self, *a, **kw):
-            kw.setdefault("transport", httpx.MockTransport(_handler))
-            super().__init__(*a, **kw)
-
-    _shim = NS(**{k: getattr(httpx, k) for k in dir(httpx) if not k.startswith("_")})
-    _shim.AsyncClient = _ShimClientFactory
-    DR.httpx = _shim
-    return httpx
+    DR.httpx = _HttpxShim()
 
 
-_real_httpx = _install_shim()
+_install_shim()
 # CLEANUP (2026-10-23): the run persists its tmp workspace as "last used"
 # (context/last_workspace.json, git-ignored). A later REAL engine start in
 # this checkout must not inherit it — restore the pre-suite state.
@@ -240,7 +240,7 @@ try:
     _events = asyncio.run(_drive())
 finally:
     import core.duo_runner as DR
-    DR.httpx = _real_httpx
+    DR.httpx = httpx
     if not _lwsf_existed and _LWSF.exists():
         _LWSF.unlink()
 

@@ -282,17 +282,14 @@ _MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 _MOE_KV_CACHE_TYPES: dict[str, str] = {}
 
 
-def moe_kv_cache_types(model_key: str) -> tuple[str, str]:
-    """MoE KV quantization for --cache-type-k/--cache-type-v.
+def moe_kv_cache_types(model_key: str) -> str:
+    """MoE KV quantization for --cache-type-k/-cache-type-v.
 
-    Resolution: manual dict > model profile ("kv_cache_type") > q4_0 default.
-    The profile key is the escape hatch for models that degrade on q4_0 KV
-    at long context — the dict itself ships empty on purpose, the aggressive
-    default stays. Returns (k_type, v_type).
-    """
+    Resolution: manual dict (raw or -ud-stripped key) > model profile
+    ("kv_cache_type") > q4_0 default. The profile key is the escape hatch
+    for models that degrade on q4_0 KV at long context; the aggressive
+    default stays."""
     k = str(model_key or "").replace("-ud", "")
-    # audit L4: the manual dict may be keyed with the RAW model id (with
-    # "-ud") — check both before falling through to the profile.
     v = _MOE_KV_CACHE_TYPES.get(str(model_key or "")) or _MOE_KV_CACHE_TYPES.get(k)
     if not v:
         try:
@@ -300,8 +297,7 @@ def moe_kv_cache_types(model_key: str) -> tuple[str, str]:
             v = (_gp(k) or {}).get("kv_cache_type")
         except Exception:
             v = None
-    v = str(v or "q4_0").strip().lower()
-    return v, v
+    return str(v or "q4_0").strip().lower()
 
 
 def llama_gpu_layers_auto() -> bool:

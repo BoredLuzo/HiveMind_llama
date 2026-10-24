@@ -1278,10 +1278,8 @@ class LlamaLoadMixin:
                     cmd += ["--mlock"]
                     logger.info("--mlock active (model locked in RAM)")
                 if type(self)._kv_flag_supported:
-                    # B2 (audit): profile-driven override ("kv_cache_type"),
-                    # manual dict, else the aggressive q4_0 default.
-                    _moe_kv, _moe_kv_v = moe_kv_cache_types(_moe_model_key)
-                    cmd += ["--cache-type-k", _moe_kv, "--cache-type-v", _moe_kv_v]
+                    _moe_kv = moe_kv_cache_types(_moe_model_key)
+                    cmd += ["--cache-type-k", _moe_kv, "--cache-type-v", _moe_kv]
                     logger.info("MoE KV-Cache: %s (ctx=%d, VRAM-optimiert)",
                                 _moe_kv, num_ctx)
             else:
@@ -1923,15 +1921,10 @@ class LlamaLoadMixin:
                         s for s in self._slots
                         if s.slot_id != slot.slot_id and (s.is_running or s._loading)
                     ]
-                    # AMD-VULKAN-ADAPTIVE-SLEEP + B1 (queue-aware, 2026-10-23):
-                    # the wait protects the NEXT slot start from our not-yet-
-                    # committed VRAM. Sleep only when a successor actually
-                    # exists — another ensure_loaded entered behind this lock
-                    # (its seq bump differs from ours) or a prefetch is
-                    # queued. Unknown seq (adoption/upgrade paths) keeps the
-                    # old always-wait behavior. Skipping is safe: the AMD
-                    # collision retry (exit=-1 → 5 s + one retry) remains the
-                    # safety net.
+                    # B1 (queue-aware): sleep only when a successor exists —
+                    # another ensure_loaded entered behind this lock (seq bump)
+                    # or a prefetch is queued; unknown seq keeps always-wait.
+                    # The AMD collision retry (exit=-1) remains the safety net.
                     _entry_seq = getattr(slot, "_entry_load_seq", None)
                     _successor_pending = (
                         bool(getattr(self, "_pending_prefetch", []))

@@ -24,6 +24,19 @@ import time
 import logging
 logger = logging.getLogger("llama_manager")
 
+
+def _idle_evictable(slot, now: float) -> bool:
+    """Idle-eviction predicate — one definition for the scan AND the
+    pre-kill freshness re-check (the two copies drifted once already).
+    `_loading` slots are never evictable (a slot claimed after the scan
+    must not die mid-start); `now` is monotonic, paired with the
+    claim-time/touch stamps."""
+    return (slot.is_running and not slot.pinned
+            and not getattr(slot, "_loading", False)
+            and slot._idle_timeout is not None
+            and (now - slot.last_used) > slot._idle_timeout)
+
+
 class LlamaHealthMixin:
 
     def start_idle_monitor(self):
@@ -40,16 +53,12 @@ class LlamaHealthMixin:
                 # LOCK-HELD-KILL (audit A5): _kill_slot_async awaits a blocking
                 # kill of up to ~10 s. Under the manager lock that stalled
                 # EVERY load/evict/touch for the whole duration. Scan under
-                # the lock (cheap), kill outside it; a slot touched between
-                # scan and kill is spared by the re-check.
+                # the lock (cheap), kill outside it.
                 _to_evict = []
                 async with self._lock:
                     for slot in self._slots:
                         try:
-                            if (slot.is_running and not slot.pinned
-                                    and not getattr(slot, "_loading", False)
-                                    and slot._idle_timeout is not None
-                                    and (now - slot.last_used) > slot._idle_timeout):
+                            if _idle_evictable(slot, now):
                                 _to_evict.append(slot)
                         except Exception as e:
                             logger.warning("[idle_monitor] slot %s scan failed: %s", slot.slot_id, e)
@@ -57,14 +66,7 @@ class LlamaHealthMixin:
                     await self._trigger_pending_prefetch()
                 for slot in _to_evict:
                     try:
-                        # AUDIT M2: `_loading` excluded — a slot claimed AFTER
-                        # the scan (invisible to it) must never be killed
-                        # mid-start; the claim-time last_used stamp is the
-                        # second half of that guard.
-                        if (slot.is_running and not slot.pinned
-                                and not getattr(slot, "_loading", False)
-                                and slot._idle_timeout is not None
-                                and (time.monotonic() - slot.last_used) > slot._idle_timeout):
+                        if _idle_evictable(slot, time.monotonic()):
                             logger.info(f"Idle-Evicting {slot.model} (slot {slot.slot_id})")
                             self._metric_inc("evictions_total")
                             self._metric_inc("evictions_idle")
