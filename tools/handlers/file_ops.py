@@ -199,14 +199,21 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
     # paid for twice. Range reads and first reads always return content.
     _rr_unchanged = False
     try:
-        from tools.runner import _read_signatures as _rr_sig, _normalize_tool_path as _rr_ntp
+        from tools.runner import (_files_read_in_run as _rr_read_set,
+                                  _read_signatures as _rr_sig,
+                                  _normalize_tool_path as _rr_ntp)
         # _read_signatures is a FLAT {path: sig} dict (runner.py seeds it
         # directly) — a .get(None) here copied the _files_read_in_run
         # ContextVar idiom, always missed, and the dedup never fired.
-        _rr_prev = _rr_sig.get(_rr_ntp(str(p), workspace))
+        # The signature dict is module-global (survives across runs): require
+        # a read THIS RUN as well — the same gate as the fuzzy-edit stale-gate
+        # below — or a fresh run gets "UNCHANGED" for content it never saw.
+        _rr_key = _rr_ntp(str(p), workspace)
+        _rr_prev = _rr_sig.get(_rr_key)
         _rr_st = p.stat()
         _rr_cur = (_rr_st.st_mtime_ns, _rr_st.st_size)
-        if _rr_prev is not None and _rr_prev == _rr_cur:
+        _rr_this_run = _rr_key in (_rr_read_set.get(None) or set())
+        if _rr_this_run and _rr_prev is not None and _rr_prev == _rr_cur:
             _rr_unchanged = True
     except Exception:
         pass

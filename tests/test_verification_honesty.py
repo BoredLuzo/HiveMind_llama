@@ -99,9 +99,18 @@ async def _read():
 
 st = f.stat()
 _tr._read_signatures[key] = (st.st_mtime_ns, st.st_size)
+_tok = _tr._files_read_in_run.set({key})   # read happened THIS run
 out = asyncio.run(_read())
+_tr._files_read_in_run.reset(_tok)
 check("2a unchanged re-read answers compact UNCHANGED",
       "UNCHANGED" in out and "function one()" not in out, out[:70])
+# same signature, but a FRESH run (empty read-set) must get real content —
+# the signature dict is module-global and survives across runs
+_tok = _tr._files_read_in_run.set(set())
+out = asyncio.run(_read())
+_tr._files_read_in_run.reset(_tok)
+check("2a2 cross-run: matching signature, fresh context -> full content",
+      "function one()" in out and "UNCHANGED" not in out)
 
 msgs = [{"role": "tool", "name": "read_file",
          "content": str(f) + "\n" + "x" * 800}]
@@ -185,7 +194,9 @@ check("5h run_tests description honest about pre-existing failures",
 
 _fo = (ROOT / "tools" / "handlers" / "file_ops.py").read_text(encoding="utf-8", errors="replace")
 check("5i re-read dedup reads the flat signature dict, not .get(None)",
-      "_rr_sig.get(_rr_ntp(" in _fo and "_rr_sig.get(None)" not in _fo)
+      "_rr_sig.get(_rr_key)" in _fo and "_rr_sig.get(None)" not in _fo)
+check("5j UNCHANGED answer is gated on a read THIS run (module-global sig dict)",
+      "_rr_this_run and _rr_prev is not None" in _fo)
 
 print(f"\nverification_honesty: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
