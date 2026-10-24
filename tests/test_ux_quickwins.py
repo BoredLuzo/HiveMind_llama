@@ -41,17 +41,23 @@ check("routing changes refresh the mode description",
 # ── actionable run-end hints ─────────────────────────────────────────────
 check("stop reasons carry one-line hints",
       "hint: 'The model repeated itself" in app
-      and "hint: 'Check logs/hivemind.log" in app)
-check("the hint renders as a second line in the divider",
-      "_hintEl.textContent = _sr.hint" in app)
+      and "hint: 'Check logs/hivemind.log" in app
+      and "hint: 'The run died mid-flight" in app)
+check("the hint renders as its own line in the divider (CSS class)",
+      "_hintEl.className = 'hint-line'" in app
+      and ".divider .hint-line{flex-basis:100%" in
+      (ROOT / "static" / "style.css").read_text(encoding="utf-8", errors="replace"))
 
 # ── opt-in browser autostart ─────────────────────────────────────────────
-check("server opens the browser only when asked (env-gated)",
-      'HIVEMIND_OPEN_BROWSER' in srv and "webbrowser.open" in srv)
+check("server opens the browser only when asked (env-gated, case-insensitive)",
+      "HIVEMIND_OPEN_BROWSER" in srv and "webbrowser.open" in srv
+      and '.strip().lower() in ("1", "true", "yes")' in srv)
 check("the interactive launcher asks, headless does not",
       'set "HIVEMIND_OPEN_BROWSER=1"' in bat
       and "HIVEMIND_OPEN_BROWSER" not in
       (ROOT / "watchdog_engine.bat").read_text(encoding="utf-8", errors="replace"))
+check("the launcher contains its env (setlocal) - no leak into a calling shell",
+      "setlocal" in bat)
 
 print()
 print(f"SUMMARY ux_quickwins: {passed} passed, {failed} failed")

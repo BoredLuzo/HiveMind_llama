@@ -142,7 +142,8 @@ check("the dispatcher enforces the mode allowlist",
 # since _MODE_STRICT_NAMES was removed with its dead consumer)
 STRICT = {"write_file", "write_file_append", "edit_file", "edit_ast",
           "replace_lines", "patch_file", "run_bash", "run_python",
-          "install_package", "git_commit", "start_background", "undo_last"}
+          "install_package", "git_commit", "start_background", "undo_last",
+          "stop_background"}
 # undo_last (reverts an approved change) and stop_background (kills a process the
 # model started itself) are deliberately NOT approval-gated - the policy next to
 # _APPROVAL_TOOLS says so.

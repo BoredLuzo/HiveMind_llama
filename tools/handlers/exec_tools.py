@@ -385,6 +385,18 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 cmd)
             if _cmd_unix_fixed != cmd:
                 cmd = _cmd_unix_fixed
+                # BLOCKLIST-RECHECK (audit 2026-10-24): the rewrite itself can
+                # COMPLETE a dangerous pattern — "/c/users" -> "C:/users" turns
+                # `rd /s /q /c/users` into a blocklisted form. The old second
+                # entry-check was removed as "redundant on unchanged cmd";
+                # cmd IS reassigned above, so the rewritten string needs its
+                # own check.
+                _bl_rewrite = _bash_blocklisted(cmd)
+                if _bl_rewrite is not None:
+                    return _tool_error_response(
+                        "RUN_BASH_BLOCKED",
+                        f"Command blocked: dangerous pattern '{_bl_rewrite}' detected. Use safer alternatives.",
+                        tool="run_bash" , details={"cmd": cmd[:400]})
 
             _cmd_translated = cmd
             _cd_strip = _re_win.match(

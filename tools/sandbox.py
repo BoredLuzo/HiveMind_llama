@@ -151,7 +151,10 @@ def spawn_kwargs() -> dict:
 def kill_tree(proc, taskkill_timeout: int = 5) -> None:
     """Kills the entire process tree. No-op-safe.
 
-    Windows: the job object usually takes over; taskkill /T as fallback.
+    Windows: the job object usually takes over; taskkill /T as fallback —
+    and proc.kill() when taskkill itself fails (audit 2026-10-24: callers
+    without a job object — bare shell spawns like the test runner — relied
+    on that fallback; without it a surviving wrapper hangs every wait()).
     Non-Windows: killpg auf die Prozessgruppe des Kinds (start_new_session).
     """
     pid = getattr(proc, "pid", None)
@@ -165,7 +168,10 @@ def kill_tree(proc, taskkill_timeout: int = 5) -> None:
                 creationflags=0x08000000,
             )
         except Exception:
-            pass
+            try:
+                proc.kill()
+            except Exception:
+                pass
         return
     try:
         os.killpg(os.getpgid(pid), signal.SIGKILL)

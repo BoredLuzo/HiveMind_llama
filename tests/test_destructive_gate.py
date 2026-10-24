@@ -208,5 +208,15 @@ check("B6 no dead TIMEOUT text",
 print()
 print(f"{'='*50}")
 print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
+# ── DRIVE-REWRITE BLOCKLIST (audit 2026-10-24): the /c/ -> C:/ rewrite can
+# complete a dangerous pattern; the rewritten command must be re-checked. ──
+from pathlib import Path as _P_ex  # noqa: E402
+_src_ex = (_P_ex(__file__).resolve().parent.parent / "tools" / "handlers" / "exec_tools.py").read_text(encoding="utf-8", errors="replace")
+check("the drive rewrite re-runs the blocklist on the fixed command",
+      "BLOCKLIST-RECHECK" in _src_ex
+      and _src_ex.index("_cmd_unix_fixed = re.sub(") < _src_ex.index("_bl_rewrite = _bash_blocklisted(cmd)")
+      < _src_ex.index("_cmd_translated = cmd"))
+
+
 print(f"{'='*50}")
 sys.exit(0 if failed == 0 else 1)

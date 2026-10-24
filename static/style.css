@@ -192,8 +192,12 @@ header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid #222a38;
 .cfl-sw input:checked + .sl{background:rgba(58,153,96,.35);border:1px solid var(--green)}
 .cfl-sw input:checked + .sl:before{transform:translateX(15px);background:var(--green);box-shadow:0 0 5px var(--green)}
 .divider{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);
-  text-transform:uppercase;letter-spacing:.12em;display:flex;align-items:center;gap:8px;margin:2px 0}
+  text-transform:uppercase;letter-spacing:.12em;display:flex;align-items:center;
+  gap:8px;margin:2px 0;flex-wrap:wrap}
 .divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--b)}
+/* UX run-end hint: its own line under the label, normal case, not bolded */
+.divider .hint-line{flex-basis:100%;text-transform:none;letter-spacing:normal;
+  font-weight:400;opacity:.85;margin-top:1px}
 /* ── Flow connector: transition between agents ─────────────────────────────── */
 .flow-connector{
   font-family:'IBM Plex Mono',monospace;font-size:10px;

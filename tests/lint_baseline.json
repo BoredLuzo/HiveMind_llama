@@ -1492,7 +1492,7 @@
   "except_pass": 15
  },
  "tools/sandbox.py": {
-  "broad_except": 11,
+  "broad_except": 12,
   "except_pass": 5
  },
  "tools/scan_models.py": {

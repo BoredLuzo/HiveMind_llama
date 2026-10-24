@@ -8585,7 +8585,7 @@ function handleEvent(d) {
       'stuck_in_loop':   { icon: '\u21BA', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Stuck loop aborted', hint: 'No progress for several rounds. Retry with a clearer, smaller task.' },
       'error':           { icon: '\u2716', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'Run error', hint: 'Check logs/hivemind.log for the traceback, then retry.' },
       'user_aborted':    { icon: '\u23F9', color: '#808080', border: 'rgba(128,128,128,.35)', label: 'Run aborted (user)' },
-      'aborted':         { icon: '\u25A0', color: '#c04040', border: 'rgba(200,64,64,.3)',   label: 'Run aborted' },
+      'aborted':         { icon: '\u25A0', color: '#c04040', border: 'rgba(200,64,64,.3)',   label: 'Run aborted', hint: 'The run died mid-flight (engine or model slot lost). Check logs/hivemind.log, then retry.' },
       'timeout':         { icon: '\u23F1', color: '#e09030', border: 'rgba(224,144,48,.3)',  label: 'Run timeout', hint: 'Time budget spent. Split the task or raise the duo timeout in Configs.' },
       // B11 (2026-08-04): error/stop reasons that previously fell silently on the green
       // 'completed' checkmark (_stopMap fallback) — "silently wrong".
@@ -8604,7 +8604,7 @@ function handleEvent(d) {
       _endDiv.textContent = _sr.icon + ' ' + _sr.label;
       if (_sr.hint) {
         var _hintEl = document.createElement('div');
-        _hintEl.style.cssText = 'font-weight:400;opacity:.85;letter-spacing:0;margin-top:2px';
+        _hintEl.className = 'hint-line';
         _hintEl.textContent = _sr.hint;
         _endDiv.appendChild(_hintEl);
       }

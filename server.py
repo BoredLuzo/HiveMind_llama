@@ -666,7 +666,7 @@ async def _startup():
     # UX (2026-10-24): open the browser once the server is up — but ONLY
     # when the interactive launcher asked for it (HIVEMIND_OPEN_BROWSER=1).
     # Headless watchdog restarts must not spawn browser windows.
-    if os.environ.get("HIVEMIND_OPEN_BROWSER", "").strip() in ("1", "true", "yes"):
+    if os.environ.get("HIVEMIND_OPEN_BROWSER", "").strip().lower() in ("1", "true", "yes"):
         def _open_browser():
             import webbrowser
             try:
@@ -674,7 +674,9 @@ async def _startup():
                 webbrowser.open(f"http://localhost:{_p}")
             except Exception:
                 pass
-        threading.Timer(1.5, _open_browser).start()
+        _browser_timer = threading.Timer(1.5, _open_browser)
+        _browser_timer.daemon = True   # never block interpreter exit
+        _browser_timer.start()
 
     # AGENT-MODEL-SANITIZE (2026-10-06, owner rule): persisted/default agent
     # models that are NOT on disk must not surface anywhere (UI selectors,

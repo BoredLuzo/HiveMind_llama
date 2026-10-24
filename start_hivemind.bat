@@ -1,4 +1,9 @@
 @echo off
+REM setlocal (audit 2026-10-24): without it, HIVEMIND_OPEN_BROWSER=1 leaks
+REM into a calling shell when this bat is invoked via `call` ? a watchdog
+REM started from that shell would then open a browser on every headless
+REM engine restart.
+setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo.
