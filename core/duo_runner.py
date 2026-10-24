@@ -101,9 +101,9 @@ from hive_functions.test_runner import (
 _VERIFY_REQUIRED_PROMPT = "[VERIFY REQUIRED] You called task_complete but the last file write "
 "has not been followed by a successful test run.\n"
 "Do this NOW, in this order:\n"
-"1. Call run_tests. If it reports no suite, write a minimal smoke test that "
-"   exercises the created files and run it via run_bash instead. "
-"documented check via run_bash instead (e.g. python selftest.py).\n"
+"1. Call run_tests. If it reports no suite, write a minimal smoke test "
+"that exercises the created files and run it via run_bash instead "
+"(e.g. python selftest.py).\n"
 "2. Ensure it exits with code 0.\n"
 "3. Then call task_complete again with status "
 "{completed, blockers, build_status}."
@@ -1541,25 +1541,10 @@ async def run_code_duo(ctx):
             _duo_coder_sys += "\n\n" + _follow_up_hint
 
 
-        # WEBSEARCH-NOTE (2026-09-13): the coder was NEVER told that web_search
-        # exists - the only "PREFER LOOKUP" hint lived in a dead prompt builder
-        # gated on the NON-EXISTENT settings key "websearch" (real key:
-        # duo_websearch_enabled). A plan promising web research then produced a
-        # coder that never searched (live 2026-09-14). Gate on the ACTUAL
-        # per-run availability flag.
-        if _duo_ws:
-            _duo_coder_sys += (
-                "\n\nWEB SEARCH is available via the web_search tool (results via "
-                "web_fetch). PREFER LOOKUP OVER HALLUCINATION: if you are unsure "
-                "about an API signature, library function, framework behavior, or "
-                "config option, web_search FIRST. A wrong assumption breaks the "
-                "build; a web_search call costs seconds. If the plan calls for "
-                "research, actually run the searches - do not skip them. "
-                "Search EXTERNAL knowledge only (docs, APIs, error messages). "
-                "Never search for this project's own name, private repos, or the "
-                "user's identity - search engines return only junk for those, and "
-                "a search budget is spent fast."
-            )
+        # WEBSEARCH-DEDUP (audit 2026-10-24): the availability guidance now
+        # lives ONLY in _build_duo_coder_sys (duo_helpers gates on the same
+        # per-run flag) - this second copy burned ~110 tokens per run saying
+        # the same thing twice.
         # Writes were being truncated by the token limit or rejected as too large
         # AFTER full generation (7-minute total loss). Instruct proactively with
         # an exact per-call char cap (same source as the runtime tool check:
@@ -2430,7 +2415,7 @@ async def run_code_duo(ctx):
                             "Existing files may contain code you have not seen. BEFORE changing any listed existing file:\n"
                             "  → call read_file on it first.\n"
                             "write_file with full content is ONLY for NEW files. For existing files use "
-                            "edit_file/patch_file (SEARCH/REPLACE) AFTER reading the current content.\n\n"
+                            "edit_file(old_text, new_text) AFTER reading the current content.\n\n"
                         )
                     _MAX_EXPLORE_INJECT = _coder_caps.explore_inject
                     _explore_inject = _explore_ctx
@@ -2794,14 +2779,14 @@ async def run_code_duo(ctx):
                             f"Prefix every file path in tool calls with this exact "
                             f"absolute path, written with forward slashes.\n\n"
                             f"Rules:\n"
-                            f"- write_file(path, edits) writes a file's FULL content — use it to create a NEW file "
+                            f"- write_file(path, content) writes a file's FULL content — use it to create a NEW file "
                             f"or to overwrite an existing file completely.\n"
-                            f"- To change only PART of an existing file, use edit_file with SEARCH/REPLACE blocks (preferred):\n"
-                            f"    edit_file(path=<file>, edits=\"<<<<<<< SEARCH\\n<exact old code>\\n=======\\n<new code>\\n>>>>>>> REPLACE\")\n"
-                            f"  For a single small exact-text change, patch_file(path=<file>, old_str=<exact>, new_str=<new>) is also OK.\n"
+                            f"- To change only PART of an existing file, use edit_file with EXACT text:\n"
+                            f"    edit_file(path=<file>, old_text=<the exact current code copied verbatim>, new_text=<the replacement>)\n"
+                            f"  old_text must match the file exactly (whitespace included) and appear exactly once.\n"
                             f"- If a tool returns READ_REQUIRED: call read_file once on that path, then retry.\n"
                             f"- Do NOT call list_dir or find_files on directories already shown above.\n"
-                            f"- After writing/editing, run_bash to verify."
+                            f"- After writing/editing, run_tests (or run_bash) to verify."
                         )
                     }
                     # Bridge message always injects _explore_ctx (contracts) into coder prompt.
@@ -3223,7 +3208,7 @@ async def run_code_duo(ctx):
                         f"The code reviewer found these specific issues — fix ALL of them:\n"
                         f"{_issues_block}\n\n"
                         f"Use the tools to read the current files, apply the fixes with "
-                        f"patch_file, then run tests to confirm. Do not ask — just fix."
+                        f"edit_file, then run tests to confirm. Do not ask — just fix."
                     )
                     if _dtool_msgs and _dtool_msgs[-1].get("role") == "user":
                         _dtool_msgs[-1]["content"] = (
@@ -3625,7 +3610,9 @@ async def run_code_duo(ctx):
                             pass
                         return _sse
 
-
+    # WORKING SET (audit 2026-10-24): the run's focus files (last edits/
+    # reads) are never masked — evicting the file the model is editing
+    # forces memory-based edits. Non-focus history pays instead.
                     _tool_exec_hooks = ToolExecHooks(
                         emit=_coder_emit_fn,
                         is_aborted=lambda cid: bool(ctx.is_aborted_chat(cid)),
@@ -3889,6 +3876,7 @@ async def run_code_duo(ctx):
                                 lru=_tool_ctx_lru,
                                 target_token_budget=int(_dtool_ctx * 0.70),
                                 hard_floor_tokens=int(_dtool_ctx * 0.62),
+                                protect_paths=_recent_focus_paths,
                             )
                             if _evicted_n > 0:
                                 _ctx_evictions += int(_evicted_n)
@@ -3932,6 +3920,7 @@ async def run_code_duo(ctx):
                                     lru=_tool_ctx_lru,
                                     target_token_budget=int(_dtool_ctx * 0.70),
                                     hard_floor_tokens=int(_dtool_ctx * 0.62),
+                                    protect_paths=_recent_focus_paths,
                                 )
                                 if _evicted_n > 0:
                                     _ctx_evictions += int(_evicted_n)
@@ -3970,6 +3959,7 @@ async def run_code_duo(ctx):
                                     lru=_tool_ctx_lru,
                                     target_token_budget=int(_compress_threshold),
                                     hard_floor_tokens=int(_dtool_ctx * 0.62),
+                                    protect_paths=_recent_focus_paths,
                                 )
                             except Exception as _mask_err:
                                 logger.warning("[CTX-MASK] failed: %s", _mask_err)
@@ -5531,7 +5521,9 @@ async def run_code_duo(ctx):
                         # PATCH-1: Plan tracker — update progress per tool round
                         # extended with deviation detection: hard/soft rules, streak tracking,
                         if _plan_tracker is not None and not _plan_tracker.is_finished:
-                            if _last_tool_name and _plan_tracker.should_advance(_last_tool_name, _last_tool_result):
+                            if _last_tool_name and _plan_tracker.should_advance(
+                                    _last_tool_name, _last_tool_result,
+                                    touched_paths=list((_file_changes or {}).keys())):
                                 _plan_tracker.advance(_last_tool_name)
                                 logger.info(
                                     "[PlanTracker] Step advanced after '%s' -> step %d/%d",

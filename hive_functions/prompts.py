@@ -163,11 +163,13 @@ RUNTIME ENVIRONMENT:
   not verbatim text, and a memory-based edit fails with old_text-not-found.
 - If edit_file reports old_text not found: the error includes the CURRENT file
   head. Build your next edit from that excerpt directly - no re-read needed.
-  - read_file refuses FULL reads above 400 lines (the file on disk is fine):
-    inspect bigger files with start_line/end_line ranges. Never rewrite or
-    delete a file just because a partial read looks incomplete.
-    - One write_file call caps at the output limit (~28k chars). For bigger
-      files: write_file the FIRST HALF ending at a clean line boundary, then
+  - read_file refuses FULL reads of very large files by CHARACTER budget
+    (the file on disk is fine): inspect bigger files with start_line/end_line
+    ranges. Never rewrite or delete a file just because a partial read looks
+    incomplete.
+    - One write_file call caps at the run's write budget (a TRUNCATION_MARKER
+      in the result means it got cut). For bigger files: write_file the FIRST
+      HALF ending at a clean line boundary, then
       write_file_append the rest. Never attempt an oversized full write - it
       gets cut - the partial content lands with a TRUNCATION_MARKER; continue with edit_file / write_file_append.
       - When the user asks you to remember/store a fact: call the `remember`
@@ -207,7 +209,7 @@ ERROR RECOVERY:
   identical call with identical arguments — it will fail the same way.
 - If edit_file content is too large: use several smaller edit_file calls
   (one change each). Do NOT repeat the oversized call.
-- If patch_file fails 2x: switch to edit_file with SEARCH/REPLACE blocks.
+- If edit_file old_text fails to match 2x: read_file the file again and copy the passage verbatim.
 - If run_bash times out: split work into smaller commands or use run_python.
 - If run_bash returns non-zero: read the error output CAREFULLY before retrying.
 """
@@ -244,7 +246,7 @@ AUTONOMOUS MODE — No Planner. You figure it out yourself.
 RULES:
 - Your first action MUST be a tool call. No text, no plan, no markdown before the first tool call.
 - When you receive [CTX CRITICAL]: stop all read_file calls immediately and switch to writing/editing.
-- When you receive [CTX WARNING]: finish the current read sequence, then write.
+- When you receive a [CTX: ~N% full] warning: finish the current read sequence, then write.
 - Never call read_file on the same file more than twice without an edit in between.
 - If tests fail 3x with the same error: stop, call task_complete with status=blocked and reason.
 - Do not describe what you will do. Do it.
@@ -674,16 +676,6 @@ STUCK_READER_INJECT = (
     "Stop reading and write your implementation summary now."
 )
 
-
-UNTIL_FINISHED_BLOCK = (
-    "\n\nUNTIL-FINISHED MODE — ACTIVE:\n"
-    "- You have an extended tool-call budget. Use it.\n"
-    "- DO NOT stop after the first run_bash. Fix failures and retry.\n"
-    "- Stop ONLY when: (a) all tests pass OR (b) you have exhausted all fixable errors.\n"
-    "- After each failing run_bash: diagnose the error, fix the code, run again.\n"
-    "- If the same error repeats 3× without progress: declare it a blocker and stop.\n"
-    "- Always end with a run_bash that shows the final test result.\n"
-)
 
 
 # ── Duo Critic with Tool Access ───────────────────────────────────────────────

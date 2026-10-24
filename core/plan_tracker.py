@@ -399,12 +399,45 @@ class PlanTracker:
 
     # ── Backward-compat: should_advance / advance ───────────────────────────
 
-    def should_advance(self, tool_name: str, tool_result: str) -> bool:
-        """Check if the current step's done_when criteria are satisfied."""
+    _ADVANCING_TOOLS = frozenset({
+        "edit_file", "write_file", "write_file_append", "edit_ast",
+        "undo_last", "run_bash", "run_tests", "git_commit",
+    })
+
+    def should_advance(self, tool_name: str, tool_result: str,
+                       touched_paths: list[str] | None = None) -> bool:
+        """True when the CURRENT step's work is plausibly done.
+
+        AUDIT FIX (2026-10-24): the old body completed the step
+        unconditionally and returned None — the caller's `if` was always
+        falsy, so the plan advanced exactly one step per tool round
+        regardless of work, and check_deviation then compared real work
+        against an unrelated step (false replans, CRITICAL STALLs).
+        Now: only a successful machine-changing call advances, and only
+        when it touched one of the step's expected paths (steps without
+        path info advance on any successful edit/run)."""
         step = self._current_step()
-        if step is None:
-            return
-        if self.is_finished:
+        if step is None or self.is_finished:
+            return False
+        if tool_name not in self._ADVANCING_TOOLS:
+            return False
+        _res = str(tool_result or "")
+        _low = _res.lower()[:300]
+        if ("error" in _low or "failed" in _low
+                or _res.startswith("[TOOL_ERROR") or _res.startswith("[TOOL_DISABLED")):
+            return False
+        touched = touched_paths or []
+        if step.expected_paths:
+            return any(
+                _path_matches(sp, tp)
+                for sp in step.expected_paths for tp in touched)
+        return True
+
+    def advance(self, tool_name: str = "") -> None:
+        """Complete the current step, move to the next, reset deviation
+        (the state reset the old should_advance performed inline)."""
+        step = self._current_step()
+        if step is None or self.is_finished:
             return
         if step.id not in self._plan.completed_step_ids:
             self._plan.completed_step_ids.append(step.id)

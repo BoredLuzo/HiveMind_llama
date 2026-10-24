@@ -331,8 +331,11 @@ DEFAULT_SETTINGS = {
     # file repeatedly (streak threshold, or the identical call twice within a
     # streak), the run delegates that ONE edit to a fresh-context fix agent
     # (same model weights, clean window) and continues. Off by default until
-    # validated in live/test — flip duo_wedge_handoff_enabled to true there.
-    "duo_wedge_handoff_enabled":         False,
+    # WEDGE-DEFAULT (audit 2026-10-24): the handoff converts the #1 small-
+    # model death spiral (repeating a failing edit) into a fresh-context fix
+    # agent — default on. Includes run_bash wedges (see EDIT_FAMILY_TOOLS
+    # counterpart in the gate).
+    "duo_wedge_handoff_enabled":         True,
     "duo_wedge_handoff_streak_threshold": 4,
     "duo_wedge_handoff_max_per_run":     2,
     "duo_wedge_handoff_timeout_s":       900,

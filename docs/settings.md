@@ -137,7 +137,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_websearch_timeout_critical_seconds` | int | `24` |  |
 | `duo_websearch_timeout_fast_seconds` | int | `13` |  |
 | `duo_websearch_timeout_seconds` | int | `20` |  |
-| `duo_wedge_handoff_enabled` | bool | `False` |  |
+| `duo_wedge_handoff_enabled` | bool | `True` |  |
 | `duo_wedge_handoff_max_per_run` | int | `2` |  |
 | `duo_wedge_handoff_max_rounds` | int | `10` |  |
 | `duo_wedge_handoff_max_tokens` | int | `1200` |  |

@@ -1110,9 +1110,10 @@ async function loadSettings() {
     S.duoPinStaticMap  = s.duo_pin_static_map !== false;
     S.duoWriteGuard    = s.duo_write_guard_enabled !== false;
     S.duoNoopHint      = s.duo_noop_hint_enabled !== false;
-    // WEDGE-HANDOFF (2026-10-17): off by default in settings.py - the toggle is
-    // the only way to switch the fix agent on without editing settings.json.
-    S.duoWedgeHandoff  = s.duo_wedge_handoff_enabled === true;
+    // WEDGE-HANDOFF: ON by default (audit 2026-10-24 - it converts the #1
+    // small-model death spiral into a fresh-context fix agent). Mirror the
+    // backend default so an absent key still shows the true state.
+    S.duoWedgeHandoff  = s.duo_wedge_handoff_enabled !== false;
     S.duoPartialCompr  = s.duo_partial_compression === true;
     S.duoCompressLocal = s.duo_compress_local_only === true;
     S.settingsRev = parseInt(s.settings_rev || 0, 10) || S.settingsRev || 0;

@@ -150,15 +150,22 @@ def _evict_stale_tool_outputs(
     lru: ToolContextLRU,
     target_token_budget: int,
     hard_floor_tokens: int,
+    protect_paths: list[str] | None = None,
 ) -> int:
     """
     Phase 2 semantic eviction:
     - keeps conversational turns intact
     - evicts lowest-TTL tool outputs first
     - replaces evicted payloads with strict recall markers
+    - protect_paths (WORKING SET, audit 2026-10-24): read_file outputs for
+      the run's current focus files are never evicted — masking the file the
+      model is actively editing is the direct cause of memory-based edits
+      ("old_text not found" loops after compression).
     """
     if not messages:
         return 0
+    _protect = {str(p).replace("\\", "/").rstrip("/").lower()
+                for p in (protect_paths or [])}
 
     est = _estimate_ctx_tokens(messages)
     if est <= target_token_budget:
@@ -175,6 +182,14 @@ def _evict_stale_tool_outputs(
         msg = messages[idx]
         if msg.get("role") != "tool":
             continue
+        if _protect and str(msg.get("name", "")) == "read_file":
+            # a protected focus file's read output stays verbatim. The content
+            # carries the path as str(Path) — backslashes and original case on
+            # Windows — while _protect is forward-slash lowercase: normalize
+            # both sides or the match never fires outside POSIX.
+            _msg_text = str(msg.get("content", "")).replace("\\", "/").lower()
+            if any(pp and (pp in _msg_text) for pp in _protect):
+                continue
         old = str(msg.get("content", ""))
         if not old:
             continue
@@ -207,6 +222,23 @@ def _evict_stale_tool_outputs(
     # was gone.
     if _evicted_read_paths:
         _drop_read_guard_paths(_evicted_read_paths)
+        # READ-DEDUP CONSISTENCY (audit 2026-10-24): the re-read dedup in
+        # read_file answers "UNCHANGED — the content in your context above is
+        # still current" from the very content this pass just evicted. Drop
+        # the read signatures for evicted paths so the next read returns real
+        # content again, matching what the recall marker promises.
+        try:
+            from tools.runner import _read_signatures as _rs_map
+            for _p in _evicted_read_paths:
+                # keys are normalize_tool_path'd (absolute, forward-slash,
+                # lowercase); the LRU path may be relative or cased —
+                # compare normalized or the drop silently misses on Windows.
+                _p_norm = str(_p).replace("\\", "/").rstrip("/").lower()
+                for _key in [k for k in _rs_map
+                             if k.rstrip("/") == _p_norm or k.rstrip("/").endswith("/" + _p_norm)]:
+                    del _rs_map[_key]
+        except Exception:
+            pass
 
     return evicted
 

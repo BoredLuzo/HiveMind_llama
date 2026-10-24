@@ -733,14 +733,17 @@ async def execute_tool_round(
                             _last_bash_verified = False
                         else:
                             _last_bash_failed = False
-                            # "TEST-RESULT" removed from the run_bash heuristic:
-                            # that marker is server-generated for run_tests only;
-                            # in run_bash output it is model-echoable noise.
-                            _last_bash_verified = bool(re.search(
-                                r"(?i)(\bpassed\b|\bsuccess\b|successful|\u2713|\u2705"
-                                r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))",
-                                _content,
-                            ))
+                            # ANTI-SPOOF-2 (audit 2026-10-24): "passed/success"
+                            # keywords are model-echoable. Verification counts
+                            # ONLY with the server's genuine trailing
+                            # [exit code: 0] marker (the LAST one must be 0).
+                            _last_bash_verified = bool(
+                                _ec_matches and int(_ec_matches[-1]) == 0
+                                and re.search(
+                                    r"(?i)(\bpassed\b|\bsuccess\b|successful|\u2713|\u2705"
+                                    r"|\bbuilt\b|compiled|0 failed|0 errors|no (errors|vulnerabilities))",
+                                    _content,
+                                ))
                     elif _tname == "run_tests":
                         _content = str(_m.get("content") or "")
                         _last_bash_idx = _idx

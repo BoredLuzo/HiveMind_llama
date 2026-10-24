@@ -163,15 +163,16 @@ def detect_project_languages(workspace: str) -> list[str]:
 
 def build_test_hint(workspace: str) -> str:
 
-
+    # RUN_TESTS-FIRST (audit 2026-10-24): the old concrete run_bash example
+    # outranked the "MUST run_tests" rule for small models — they copied the
+    # example and the verify ladder then parsed echo-prone stdout heuristics
+    # instead of the genuine [TEST-RESULT] marker.
     langs = detect_project_languages(workspace)
     if not langs:
         return "Detect the test command from project files and run it with run_bash."
     hints = []
     for lang in langs[:3]:
-        cmd = LANGUAGE_RUNNERS[lang].get("test_cmd")
-        if cmd and "{file}" not in cmd:
-            hints.append(f"  run_bash(cmd='{cmd}')  # {lang}")
+        hints.append(f"  run_tests (full suite)  # {lang}")
     if not hints:
         return "Detect the test command from project files and run it with run_bash."
     return "After implementing, verify with:\n" + "\n".join(hints)

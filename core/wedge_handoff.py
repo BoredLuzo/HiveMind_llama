@@ -29,7 +29,7 @@ import os
 
 # The write/edit tools whose repetition defines a wedge. replace_lines /
 # edit_ast are legacy (not advertised) and excluded on purpose.
-EDIT_FAMILY_TOOLS = ("edit_file", "patch_file", "write_file", "write_file_append")
+EDIT_FAMILY_TOOLS = ("edit_file", "patch_file", "write_file", "write_file_append", "run_bash")
 
 _HISTORY_PER_PATH = 3        # handover carries the LAST 3 failed attempts
 _RESULT_CAP_CHARS = 220      # per-attempt error snippet cap in the state

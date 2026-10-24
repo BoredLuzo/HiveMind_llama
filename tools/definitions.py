@@ -222,10 +222,10 @@ _INLINE_CODING_TOOLS = [
     {"type": "function", "function": {
         "name": "run_tests",
         "description": (
-            "Run the project's test suite (auto-detects pytest/npm/vitest/jest/"
-            "cargo/go/maven/dotnet). MUST run before task_complete. Returns "
-            "[TEST-RESULT] pass/fail lines. No suite found -> verify manually "
-            "via run_bash."
+            "Run the project's FULL test suite (auto-detects pytest/npm/vitest/"
+            "jest/cargo/go/maven/dotnet; pre-existing failures count too). "
+            "MUST run before task_complete. Returns [TEST-RESULT] pass/fail "
+            "lines. No suite found -> verify manually via run_bash."
         ),
         "parameters": {"type": "object", "properties": {
             "timeout": {"type": "integer", "description": "Timeout in seconds (default 90, max 300)", "default": 90},

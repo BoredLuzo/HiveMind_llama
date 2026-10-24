@@ -200,7 +200,10 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
     _rr_unchanged = False
     try:
         from tools.runner import _read_signatures as _rr_sig, _normalize_tool_path as _rr_ntp
-        _rr_prev = (_rr_sig.get(None) or {}).get(_rr_ntp(str(p), workspace))
+        # _read_signatures is a FLAT {path: sig} dict (runner.py seeds it
+        # directly) — a .get(None) here copied the _files_read_in_run
+        # ContextVar idiom, always missed, and the dedup never fired.
+        _rr_prev = _rr_sig.get(_rr_ntp(str(p), workspace))
         _rr_st = p.stat()
         _rr_cur = (_rr_st.st_mtime_ns, _rr_st.st_size)
         if _rr_prev is not None and _rr_prev == _rr_cur:
@@ -210,7 +213,8 @@ async def _inline_tool_read_file(args: dict, workspace: Path, workspace_lock: st
     if _full and _rr_unchanged:
         try:
             _rr_nl = await asyncio.to_thread(_fast_newline_count, p, 100000)
-            _rr_disp = str(_rr_nl)
+            # returns (count, capped) — show the count, not the tuple
+            _rr_disp = str(_rr_nl[0]) if isinstance(_rr_nl, tuple) else str(_rr_nl)
         except Exception:
             _rr_disp = "?"
         return (f"[read_file: '{p.name}' is UNCHANGED since your last read "

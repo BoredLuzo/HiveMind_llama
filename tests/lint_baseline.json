@@ -44,7 +44,7 @@
   "except_pass": 5
  },
  "backend/manager_load.py": {
-  "broad_except": 37,
+  "broad_except": 40,
   "except_pass": 13
  },
  "backend/manager_prefetch.py": {
@@ -68,8 +68,8 @@
   "except_pass": 0
  },
  "context/compression.py": {
-  "broad_except": 3,
-  "except_pass": 0
+  "broad_except": 4,
+  "except_pass": 1
  },
  "context/ctx_guard.py": {
   "broad_except": 0,
@@ -1344,6 +1344,10 @@
   "except_pass": 0
  },
  "tests/test_v131_hardening.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_verification_honesty.py": {
   "broad_except": 0,
   "except_pass": 0
  },

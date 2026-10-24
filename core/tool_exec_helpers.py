@@ -105,6 +105,13 @@ def _warn_duplicate_write_targets(tool_calls, dtool_msgs) -> None:
 def _track_focus_path(dargs, dname, tool_ctx_lru, recent_focus_paths, max_focus_paths: int) -> str:
     """Focus-Pfad normalisieren + LRU-Decay + Ring-Puffer (S4)."""
     _focus_path = str(dargs.get("path", "") or dargs.get("file", "")).strip()
+    if not _focus_path and dname == "run_bash":
+        # WEDGE-AWARE (audit 2026-10-24): a run_bash wedge has no path arg —
+        # key it by the first command word so a repeated failing command can
+        # trigger the handoff like an edit wedge does.
+        _cmd = str(dargs.get("cmd", "") or "").strip().split()
+        if _cmd:
+            _focus_path = _cmd[0]
     tool_ctx_lru.decay(_focus_path)
 
     if _focus_path and dname in ("patch_file", "edit_file", "write_file", "read_file"):

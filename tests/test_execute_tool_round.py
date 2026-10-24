@@ -194,13 +194,23 @@ check("too large split required", any("SPLIT REQUIRED" in str(m.get("content", "
 check("too large token event", any(e.get("type") == "token" for e in hooks.events))
 
 # ── 9. task_complete nach verifiziertem bash ────────────────────────────
-_HANDLERS["run_bash"] = "2 passed in 0.5s"
+# ANTI-SPOOF-2 (audit 2026-10-24): verification needs the genuine trailing
+# [exit code: 0] marker - keywords alone are model-echoable and no longer count.
+_HANDLERS["run_bash"] = "2 passed in 0.5s\n---\n[exit code: 0]"
 _HANDLERS["task_complete"] = "ok"
 res, hooks, msgs, rs, seen, ltl = run_round([
     tc("run_bash", {"cmd": "pytest"}),
     tc("task_complete", {"summary": "done"}),
 ])
 check("task_complete_called after verified bash", res.task_complete_called is True)
+# keywords WITHOUT the exit-code marker must NOT count as verified
+_HANDLERS["run_bash"] = "all tests passed, success, 0 errors"
+res, hooks, msgs, rs, seen, ltl = run_round([
+    tc("run_bash", {"cmd": "pytest"}),
+    tc("task_complete", {"summary": "done"}),
+])
+check("echoed keywords without exit-code marker stay unverified",
+      res.task_complete_called is False)
 
 # ── 10. Loop-Detection ──────────────────────────────────────────────────
 # 10a. run_bash ABAB loop -> BASH-LOOP-REINJECT: NOT aborted, all tools

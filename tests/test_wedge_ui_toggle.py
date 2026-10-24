@@ -57,12 +57,13 @@ check("the badge sits in the wedge row",
       _html.index(">BETA</span>") < _html.index('id="duo-wedge-handoff-toggle"')
       and _html.index(">BETA</span>") > _html.index("Wedge handoff"))
 check("the badge uses the amber warning colour", "var(--amber)" in _html[_html.index(">BETA</span>") - 320:_html.index(">BETA</span>")])
-check("the hint states beta explicitly", "Beta &mdash; off by default." in _html)
+check("the hint states beta explicitly", "Beta &mdash; on by default." in _html)
 check("the hint names the setting key", "duo_wedge_handoff_enabled" in _html)
-# ── default off, in code and in every shipped preset template ───────────────
+# ── default ON (audit 2026-10-24: the handoff converts the #1 small-model
+#    death spiral into a fresh-context fix agent) ─────────────────────────────
 from settings import DEFAULT_SETTINGS                            # noqa: E402
-check("settings.py default is OFF",
-      DEFAULT_SETTINGS.get("duo_wedge_handoff_enabled") is False)
+check("settings.py default is ON",
+      DEFAULT_SETTINGS.get("duo_wedge_handoff_enabled") is True)
 # the live install sits next to the repo checkout; no user path here
 _live_presets = ROOT.parent / "live" / "presets.json"
 if _live_presets.exists():
@@ -74,9 +75,9 @@ if _live_presets.exists():
 
 # ── (b) read + (c) sync ─────────────────────────────────────────────────────
 check("app.js reads the setting",
-      "S.duoWedgeHandoff  = s.duo_wedge_handoff_enabled === true;" in _js)
-check("app.js defaults it to off when absent",
-      "=== true" in _js.split("S.duoWedgeHandoff")[1][:40])
+      "S.duoWedgeHandoff  = s.duo_wedge_handoff_enabled !== false;" in _js)
+check("app.js defaults it to on when absent (backend default)",
+      "!== false" in _js.split("S.duoWedgeHandoff")[1][:60])
 check("app.js syncs the checkbox",
       "_syncFlagCheck('duo-wedge-handoff-toggle', S.duoWedgeHandoff);" in _js)
 
@@ -91,8 +92,8 @@ if _m:
 # ── (e) settings + docs ─────────────────────────────────────────────────────
 from settings import DEFAULT_SETTINGS                           # noqa: E402
 
-check("setting exists and defaults to off",
-      DEFAULT_SETTINGS.get("duo_wedge_handoff_enabled") is False)
+check("setting exists and defaults to on",
+      DEFAULT_SETTINGS.get("duo_wedge_handoff_enabled") is True)
 _doc = (ROOT / "docs" / "settings.md").read_text(encoding="utf-8", errors="replace")
 check("docs/settings.md documents it", "`duo_wedge_handoff_enabled`" in _doc)
 
