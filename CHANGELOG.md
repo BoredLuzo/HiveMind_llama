@@ -105,6 +105,30 @@
   and grants a deadline grace, and "no tests ran" (manifest but zero tests)
   is a smoke-test nudge, not a red suite.
 
+### Hardening, simplification and measured tuning (2026-10-24)
+
+- **Deep simplification of the grown subsystems** (net −300 lines across
+  four adversarial audit + simplification rounds, all behavior-preserving,
+  180 suites green): dead retry branches in the llama client (provably
+  unreachable), the VRAM budget guard extracted from ensure_loaded, the
+  duplicated /props adoption unified, six atomic-write closures collapsed
+  into one, `_mode_blocks` removed (unreachable behind the stronger
+  allowlist gate), 14+ dead functions and 8 dead state fields gone.
+- **Windows blocklist bypass closed**: the POSIX drive rewrite
+  (`/c/users` → `C:/users`) could complete a dangerous pattern after the
+  entry check — the rewritten command is re-checked now.
+- **UX quick wins**: `lang="en"` + the last German failure strings, the
+  auto-mode description names what actually routes (keyword rules vs
+  decider), every non-green run-end reason carries a one-line actionable
+  hint, opt-in browser autostart (env-gated, headless restarts never
+  spawn windows).
+- **Measured flag tuning** (see above): hermes coder without draft-mtp
+  and with eager loading; `llama_mlock` actually works now; the
+  registry-MTP env bypass closed; speculative models keep mmap (Vulkan
+  OOM guard).
+- MiniCPM-V-4_7: the DSpark drafter moved to the Q6_K build; the retired
+  AD variant and old drafters removed from the shared model folder.
+
 ### Voice over Telegram (end-to-end verified live)
 
 - A voice note now runs the full chain: transcription -> decider ->
