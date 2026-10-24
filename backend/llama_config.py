@@ -261,7 +261,6 @@ _MOE_EXPERT_COUNTS = {
 # MiniCPM-V-4.7 35B-A3B (2026-10-13): same MoE offload as hermes3.6/qwen3.6
 # (n-cpu-moe 35, GPU-Offload 99, KV q4_0) — same 35B-A3B architecture class.
 _MOE_EXPERT_COUNTS["minicpm-v-4.7:35b-a3b"] = 35
-_MOE_EXPERT_COUNTS["minicpm-v-4.7:35b-a3b-ad-q4-k"] = 35
 
 # LFM2.5-24B-A2B (2026-10-13): 24B total / 2.45B active MoE (64 experts,
 # top-4). Measured 2026-10-14 (-lv 5 fit projection): 24 is the MAXIMUM that

@@ -663,6 +663,19 @@ async def _startup():
 
     global S_models_cache
 
+    # UX (2026-10-24): open the browser once the server is up — but ONLY
+    # when the interactive launcher asked for it (HIVEMIND_OPEN_BROWSER=1).
+    # Headless watchdog restarts must not spawn browser windows.
+    if os.environ.get("HIVEMIND_OPEN_BROWSER", "").strip() in ("1", "true", "yes"):
+        def _open_browser():
+            import webbrowser
+            try:
+                _p = os.environ.get("HIVEMIND_PORT") or settings.get("server_port") or 8001
+                webbrowser.open(f"http://localhost:{_p}")
+            except Exception:
+                pass
+        threading.Timer(1.5, _open_browser).start()
+
     # AGENT-MODEL-SANITIZE (2026-10-06, owner rule): persisted/default agent
     # models that are NOT on disk must not surface anywhere (UI selectors,
     # Telegram /setModel current, run bodies). Wipe them to unconfigured ONCE

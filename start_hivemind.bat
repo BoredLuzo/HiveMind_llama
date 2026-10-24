@@ -155,6 +155,10 @@ REM [7b] MOVED (2026-10-06, owner): the gateway no longer auto-starts
 REM with the engine. It starts when toggled in the UI (Telegram panel,
 REM "Enabled" switch starts/stops the process) or via the Start button
 REM there / start_gateway.bat. No gateway.toml probing here anymore.
+REM UX (2026-10-24): the interactive launcher asks the server to open the
+REM browser once it is up (server-side, env-gated - headless watchdog
+REM restarts never set this).
+set "HIVEMIND_OPEN_BROWSER=1"
 "%PY%" run.py
 if errorlevel 1 (
     echo.

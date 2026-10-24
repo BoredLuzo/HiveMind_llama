@@ -444,7 +444,17 @@ function updateRoutingVisibility() {
 
 function updateModeDesc() {
   var el = document.getElementById('mode-desc');
-  if (el) el.textContent = _MODE_DESC[S.mode] || '';
+  if (el) {
+    var _txt = _MODE_DESC[S.mode] || '';
+    // UX (2026-10-24): auto must not promise a decider that ships off —
+    // say what actually routes, and where to change it.
+    if (S.mode === 'auto') {
+      _txt = (S.routingDecider === 'on')
+        ? 'Auto — the decider (local encoder) routes each message to direct or agentic. Tool requests run in the Direct chat loop (when Chat Tools on).'
+        : 'Auto — keyword rules route direct vs agentic. Enable the decider in Agents → Routing for smarter routing.';
+    }
+    el.textContent = _txt;
+  }
   updateRoutingVisibility();
 }
 
@@ -8563,26 +8573,28 @@ function handleEvent(d) {
     }
     S._coderElapsed = null;
     finalizePlannerBubble();
-    // F2: run-end marker — all stop reasons
+    // F2: run-end marker — all stop reasons.
+    // UX (2026-10-24): every non-green reason carries a one-line hint —
+    // a label alone never told the user what to DO next.
     var _stopMap = {
       'completed':       { icon: '\u2713', color: '#22c55e', border: 'rgba(34,197,94,.35)',  label: 'Run completed' },
-      'graceful_stop':   { icon: '\u23F8', color: '#f0ad4e', border: 'rgba(240,173,78,.35)',  label: 'Graceful stop after chunk' },
-      'loop_detected':   { icon: '\u21BA', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Loop detected - run stopped' },
-      'blocked':         { icon: '\u26A0', color: '#e09030', border: 'rgba(224,144,48,.35)',  label: 'Run blocked' },
-      'max_tool_rounds': { icon: '\u23F1', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Max tool rounds reached' },
-      'stuck_in_loop':   { icon: '\u21BA', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Stuck loop aborted' },
-      'error':           { icon: '\u2716', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'Run error' },
+      'graceful_stop':   { icon: '\u23F8', color: '#f0ad4e', border: 'rgba(240,173,78,.35)',  label: 'Graceful stop after chunk', hint: 'Continue with a follow-up message to pick up where it stopped.' },
+      'loop_detected':   { icon: '\u21BA', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Loop detected - run stopped', hint: 'The model repeated itself. Retry and steer it explicitly, or use a stronger model.' },
+      'blocked':         { icon: '\u26A0', color: '#e09030', border: 'rgba(224,144,48,.35)',  label: 'Run blocked', hint: 'A gate refused a tool call — check the approval card above or the approval settings.' },
+      'max_tool_rounds': { icon: '\u23F1', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Max tool rounds reached', hint: 'The round budget is spent. Continue with a follow-up message.' },
+      'stuck_in_loop':   { icon: '\u21BA', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Stuck loop aborted', hint: 'No progress for several rounds. Retry with a clearer, smaller task.' },
+      'error':           { icon: '\u2716', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'Run error', hint: 'Check logs/hivemind.log for the traceback, then retry.' },
       'user_aborted':    { icon: '\u23F9', color: '#808080', border: 'rgba(128,128,128,.35)', label: 'Run aborted (user)' },
       'aborted':         { icon: '\u25A0', color: '#c04040', border: 'rgba(200,64,64,.3)',   label: 'Run aborted' },
-      'timeout':         { icon: '\u23F1', color: '#e09030', border: 'rgba(224,144,48,.3)',  label: 'Run timeout' },
+      'timeout':         { icon: '\u23F1', color: '#e09030', border: 'rgba(224,144,48,.3)',  label: 'Run timeout', hint: 'Time budget spent. Split the task or raise the duo timeout in Configs.' },
       // B11 (2026-08-04): error/stop reasons that previously fell silently on the green
       // 'completed' checkmark (_stopMap fallback) — "silently wrong".
-      'hard_stop':         { icon: '\u26D4', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'Run hard-stopped - resume available' },
-      'tool_round_error':  { icon: '\u26D4', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'Tool round error - run stopped' },
-      'verification_required': { icon: '\u26A0', color: '#f0ad4e', border: 'rgba(240,173,78,.35)', label: 'Verification pending - resume available' },
-      'halted':            { icon: '\u23F9', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Run halted' },
-      'timeout_guard':     { icon: '\u23F1', color: '#e09030', border: 'rgba(224,144,48,.3)',  label: 'Run timeout (guard)' },
-      'vram_guard':        { icon: '\u26D4', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'VRAM too small for coder ctx — reduce the ctx slider' },
+      'hard_stop':         { icon: '\u26D4', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'Run hard-stopped - resume available', hint: 'Continue this chat with a follow-up message to resume.' },
+      'tool_round_error':  { icon: '\u26D4', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'Tool round error - run stopped', hint: 'The last tool error is in the chat above. Fix the cause and continue.' },
+      'verification_required': { icon: '\u26A0', color: '#f0ad4e', border: 'rgba(240,173,78,.35)', label: 'Verification pending - resume available', hint: 'Answer the open question or continue with a follow-up message.' },
+      'halted':            { icon: '\u23F9', color: '#d0a020', border: 'rgba(208,160,32,.35)',  label: 'Run halted', hint: 'A guard halted the run — the reason is in the status lines above.' },
+      'timeout_guard':     { icon: '\u23F1', color: '#e09030', border: 'rgba(224,144,48,.3)',  label: 'Run timeout (guard)', hint: 'Continue with a follow-up message to resume.' },
+      'vram_guard':        { icon: '\u26D4', color: '#c04040', border: 'rgba(200,64,64,.35)',   label: 'VRAM too small for coder ctx — reduce the ctx slider', hint: 'Lower the coder context (Agents tab) or free VRAM, then retry.' },
     };
     var _sr = _stopMap[d.stop_reason] || _stopMap['completed'];
     if (_sr && d.stop_reason) {
@@ -8590,6 +8602,12 @@ function handleEvent(d) {
       _endDiv.className = 'msg divider';
       _endDiv.style.cssText = 'color:' + _sr.color + ';border-color:' + _sr.border + ';font-size:10px;letter-spacing:.05em;font-weight:600';
       _endDiv.textContent = _sr.icon + ' ' + _sr.label;
+      if (_sr.hint) {
+        var _hintEl = document.createElement('div');
+        _hintEl.style.cssText = 'font-weight:400;opacity:.85;letter-spacing:0;margin-top:2px';
+        _hintEl.textContent = _sr.hint;
+        _endDiv.appendChild(_hintEl);
+      }
       document.getElementById('chat').appendChild(_endDiv);
     }
     // B11 (2026-08-04): explicitly mark non-finished runs — no more
@@ -10459,13 +10477,13 @@ async function handleStopClick() {
         var resp = await fetch('/abort/graceful/' + S.currentRunId, {method: 'POST'});
         if (!resp.ok) {
           setStopBtnState('idle');
-          showInfo('\u26A0 Graceful-Stop fehlgeschlagen');
+          showInfo('\u26A0 Graceful stop failed');
           return;
         }
         showInfo('\u23F9 Stop requested after chunk end \u2014 runs until the current chunk completes');
       } catch(e) {
         setStopBtnState('idle');
-        showInfo('\u26A0 Graceful-Stop fehlgeschlagen: ' + e);
+        showInfo('\u26A0 Graceful stop failed: ' + e);
       }
       break;
     case 'graceful_pending':
@@ -10639,7 +10657,7 @@ async function toggleSkill(el, name) {
       body: JSON.stringify({name: name, enabled: el.checked})
     });
     const data = await r.json();
-    if (!data.ok) { el.checked = !el.checked; showInfo('⚠ Skill-Toggle fehlgeschlagen'); }
+    if (!data.ok) { el.checked = !el.checked; showInfo('⚠ Skill toggle failed'); }
   } catch (e) {
     el.checked = !el.checked;
     showInfo('⚠ Network error while toggling skill');
@@ -10899,6 +10917,7 @@ function setRouting(key, value) {
   if (key === 'routing_judge') S.routingJudge = value;
   if (key === 'routing_planner') S.routingPlanner = value;
   renderRoutingStatus();
+  if (typeof updateModeDesc === 'function') updateModeDesc();  // UX: the auto text names the router
 }
 
 function renderRoutingStatus() {
@@ -12553,7 +12572,7 @@ async function forceKillAll(btn) {
     }
     setTimeout(function() { if (!_vramPending && _vramOpen) refreshVram(); }, 1200);
   } catch(e) {
-    showStatus('Force Kill fehlgeschlagen: ' + e.message);
+    showStatus('Force kill failed: ' + e.message);
   } finally {
     if (btn) { btn.disabled=false; btn.innerHTML='\u26a0 Force Kill'; }
   }

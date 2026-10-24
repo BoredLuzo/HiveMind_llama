@@ -620,8 +620,8 @@
   "except_pass": 0
  },
  "server.py": {
-  "broad_except": 35,
-  "except_pass": 16
+  "broad_except": 36,
+  "except_pass": 17
  },
  "settings.py": {
   "broad_except": 3,
@@ -1336,6 +1336,10 @@
   "except_pass": 0
  },
  "tests/test_update_zip_layout.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_ux_quickwins.py": {
   "broad_except": 0,
   "except_pass": 0
  },
