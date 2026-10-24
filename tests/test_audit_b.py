@@ -184,8 +184,10 @@ dr = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="repla
 check("planner load ctx helper exists and covers the coder need",
       "def _planner_load_ctx(model: str, ctx_final: int) -> int:" in dr
       and "return max(ctx_final, int(_need)) if _need else ctx_final" in dr)
-check("both planner load sites use the pin",
-      dr.count("num_ctx=_planner_load_ctx(_planner_model, _plan_ctx_final)") == 2)
+check("the primary planner load uses the pin",
+      "num_ctx=_pin_ctx" in dr and "_pin_ctx = _planner_load_ctx(" in dr)
+check("the pin is announced, not silent (audit F4)",
+      "Planner ctx pinned" in dr)
 check("the handoff reuse check still refuses degraded slots",
       "_plan_port_actual_ctx >= _coder_ctx_need" in dr)
 

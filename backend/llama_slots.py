@@ -204,6 +204,10 @@ class ModelSlot:
         self._num_ctx       = 0
         self._n_parallel    = 1
         self._jinja         = False
+        # AUDIT M1 (2026-10-24): the AMD commit-wait token must not survive a
+        # recycle — a stale equal seq made the wait skip on slots whose next
+        # start came from a path that never bumps the sequence.
+        self._entry_load_seq = None
         self.swa_window     = 0
         self.vision_active  = None
         # A.2 FIX: Object-swap wake — set() on old Event instance wakes all

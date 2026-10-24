@@ -92,7 +92,7 @@ from hive_functions.planner import (
 from hive_functions.chunking import ChunkState, build_chunk_context, ChunkAction
 from hive_functions.loop_machine import AgentState, StopReason, ExecutionController
 from hive_functions.memory import ToolContextLRU
-from hive_functions.test_runner import run_tests as _run_test_suite, TestResult as _TestResult
+from hive_functions.test_runner import run_tests as _run_test_suite, TestResult as _TestResult, NO_TESTS_RE as _NO_TESTS_RE_PUB
 from hive_functions.language_config import build_test_hint as _build_test_hint
 from hive_functions.num_ctx_config import resolve_ctx
 
@@ -803,11 +803,18 @@ async def run_code_duo(ctx):
                     except (NameError, TypeError, ValueError):
                         return ctx_final
                 _plan_port: int | None = None
+                # AUDIT F4 (2026-10-24): the pin overrides an explicit
+                # planner ctx target — say so instead of doing it silently.
+                _pin_ctx = _planner_load_ctx(_planner_model, _plan_ctx_final)
+                if _pin_ctx > _plan_ctx_final:
+                    yield await ctx.emit({"type": "status", "content": (
+                        f"⚙️ Planner ctx pinned {_plan_ctx_final} → {_pin_ctx} tok "
+                        "(planner is the coder model — slot reuse avoids a mid-run reload)")})
                 try:
                     _ensure_timeout = float(ctx.settings.get("duo_planner_ttl_seconds", 0) or 0) or float(ctx.settings.get("duo_planner_ensure_load_timeout_s", 450.0) or 450.0)
                     _plan_port = await _await_with_hb(
                         lambda: _lsm_plan_pre.ensure_loaded(
-                            _planner_model, num_ctx=_planner_load_ctx(_planner_model, _plan_ctx_final), n_parallel=1,
+                            _planner_model, num_ctx=_pin_ctx, n_parallel=1,
                             vision=(_img_plan.get("planner") == "raw"),
                             # DUO-PIN (2026-10-01): vision-prepro load must not LRU-evict duo slots
                             # GRACEFUL-PLANNER (2026-09-07): the planner may
@@ -5295,11 +5302,22 @@ async def run_code_duo(ctx):
                                     except Exception as _av_map_err:
                                         logger.debug(
                                             "[VERIFY-GATE] veto test mapping failed: %s", _av_map_err)
+                                    # AUDIT FIX (F3, 2026-10-24): the inline
+                                    # await used to block this generator for
+                                    # up to 180 s with no heartbeat yield and
+                                    # no deadline grace — the run could die as
+                                    # duo_timed_out right after a GREEN verify.
                                     try:
-                                        _av_res = await _run_test_suite(
-                                            workspace=_ws_str, timeout=90,
-                                            chat_id=ctx.chat_id or "",
-                                            paths=_av_paths,
+                                        _av_res = await _await_with_hb(
+                                            lambda: _run_test_suite(
+                                                workspace=_ws_str, timeout=90,
+                                                chat_id=ctx.chat_id or "",
+                                                paths=_av_paths,
+                                            ),
+                                            timeout=200.0,
+                                            emit_fn=ctx.emit,
+                                            label="Auto-Verify: running the test suite",
+                                            interval=10.0,
                                         )
                                     except Exception as _av_exc:
                                         _av_res = None
@@ -5324,20 +5342,34 @@ async def run_code_duo(ctx):
                                             "after your task_complete: ALL TESTS GREEN. "
                                             "Your completion is accepted as verified."
                                         )})
+                                        # AUDIT FIX (F1): bare `await ctx.emit` never
+                                        # reached the SSE stream (emit only serializes)
+                                        # — the status events must be yielded.
                                         try:
-                                            await ctx.emit({"type": "status", "content": (
+                                            yield await ctx.emit({"type": "status", "content": (
                                                 "✅ Auto-Verify: tests green — completion verified"
                                             )})
                                         except Exception as _av_emit_err:
                                             logger.debug(
                                                 "[VERIFY-GATE] auto-verify green emit failed: %s",
                                                 _av_emit_err)
-                                    elif _av_res is not None and not _av_res.command:
-                                        # No test suite in the workspace — nothing
-                                        # ran, so this is NOT a failure. Ask for a
-                                        # smoke test (same as the fallback path).
+                                        # AUDIT FIX (F3b): the verify run (up to 200 s)
+                                        # consumed run budget — grant a fresh grace so
+                                        # a green verify cannot be followed by
+                                        # duo_timed_out (same shape as the wedge handoff).
+                                        _av_grace = time.monotonic() + 300.0
+                                        if _av_grace > _duo_deadline_at:
+                                            _duo_deadline_at = _av_grace
+                                    elif _av_res is not None and (
+                                            not _av_res.command
+                                            or _NO_TESTS_RE_PUB.search(str(_av_res.raw_output or ""))):
+                                        # AUDIT FIX (F2): "nothing ran" is broader than
+                                        # command=="" — a workspace WITH a manifest but
+                                        # zero tests also answers exit 5 / "no tests ran"
+                                        # with a non-empty command. That is a nudge, not
+                                        # a red suite.
                                         logger.info(
-                                            "[VERIFY-GATE] auto-verify: no test suite in workspace — smoke-test nudge")
+                                            "[VERIFY-GATE] auto-verify: no tests ran in workspace — smoke-test nudge")
                                         _dtool_msgs.append({"role": "user", "content": (
                                             "[VERIFY REQUIRED] You called task_complete but the last file write "
                                             "has not been followed by a successful test run.\n"
@@ -5361,7 +5393,7 @@ async def run_code_duo(ctx):
                                             "task_complete. Do NOT call task_complete while tests are red."
                                         )})
                                         try:
-                                            await ctx.emit({"type": "status", "content": (
+                                            yield await ctx.emit({"type": "status", "content": (
                                                 f"❌ Auto-Verify: {_av_note} — completion blocked"
                                             )})
                                         except Exception as _av_emit_err:

@@ -11451,6 +11451,10 @@ function renderRunStatsLine(stats, footEl) {
   if (stats.prompt > 0) title += ' \u00b7 ' + _fmtTokens(stats.prompt) + ' prompt';
   if (stats.requests > 0) title += ' \u00b7 ' + stats.requests + ' requests';
   sp.title = title;
+  // AUDIT (2026-10-24): stash the STRUCTURED stats on the footer so every
+  // later autosave can re-attach them — the one-shot _saved flag lost the
+  // line on any persist after the run (pagehide beacon, next-run flush).
+  try { foot.dataset.stats = JSON.stringify(stats); } catch (e) {}
   foot.insertBefore(sp, foot.firstChild);
 }
 
@@ -11479,8 +11483,16 @@ function _autosaveChatMessage() {
         // and the chat is shown as flat text on load.
         // CP SNAPSHOT (2026-10-03): persist the code-panel state (diffs per
         // path) so tool chips stay clickable in the LOADED chat too.
-        msgs.push({role: 'assistant', agent: aname.textContent, content: abody.textContent,
-                   html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()});
+        var _stMsg = {role: 'assistant', agent: aname.textContent, content: abody.textContent,
+                      html: abody.innerHTML, ts: Date.now(), cp: _cpSnapshot()};
+        // AUDIT (2026-10-24): re-read the structured stats from the footer
+        // (dataset stash) — every persist must carry the stats line, not
+        // only the first one after the run ended.
+        var _stFoot = el.querySelector('.amsg-foot[data-stats]');
+        if (_stFoot && _stFoot.dataset.stats) {
+          try { _stMsg.stats = JSON.parse(_stFoot.dataset.stats); } catch (e) {}
+        }
+        msgs.push(_stMsg);
       }
     } else if (el.classList.contains('steer-note')) {
       // STEER CARD PERSISTENCE (2026-10-06): save as an assistant part —

@@ -80,8 +80,14 @@ def _read_blob(chat_id: str, h: str) -> str | None:
         return None
     if raw.startswith(_BLOB_MAGIC):
         return raw[len(_BLOB_MAGIC):].decode("utf-8")
-    # legacy (text-mode written): every original \n was expanded to \r\n,
-    # so a run of m CRs before an LF means m-1 original CRs
+    # Legacy repair (text-mode writes) is WINDOWS-ONLY (audit 2026-10-24):
+    # the \r\n expansion the repair reverses happens in Windows text-mode
+    # writes. A POSIX-written legacy blob holds genuine \r\n — repairing
+    # there would strip real CRs (silent corruption on the Linux install).
+    if os.name != "nt":
+        return raw.decode("utf-8", errors="replace")
+    # every original \n was expanded to \r\n, so a run of m CRs before an
+    # LF means m-1 original CRs
     return raw.replace(b"\r\n", b"\n").decode("utf-8", errors="replace")
 
 

@@ -25,11 +25,11 @@ REM Resolve server port: settings.json "server_port" (set by install.bat), defau
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$j = Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; if ($j.server_port) { $j.server_port } else { '8001' }"`) do set HM_PORT=%%P
 if not defined HM_PORT set "HM_PORT=8001"
 
-REM WATCHDOG HANDSHAKE (2026-10-23): a headless watchdog restarts the engine
-REM within seconds of the kill below and re-grabs the port - the fresh
-REM foreground instance then dies with winerror 10048 (live). Stop it first.
-REM The headless setup is re-armed by running watchdog_engine.bat.
-call watchdog_engine.bat stop
+REM WATCHDOG HANDSHAKE (2026-10-23, audit M3 2026-10-24): a headless watchdog
+REM restarts the engine within seconds of the kill below and re-grabs the
+REM port - the fresh foreground instance then dies with winerror 10048.
+REM The stop runs in the KILL path only (see below): answering "N" must keep
+REM the watchdog protecting the kept instance.
 
 REM Port check: is HiveMind already running?
 set "HM_PORT_PID="
@@ -50,6 +50,9 @@ REM SERIAL-RESTART (2026-09-10): kill the old instance with its process tree
 REM (llama-server children). Linear flow: labels must stay at top level, cmd
 REM breaks on goto/labels inside parenthesized blocks.
 echo  [..] Killing PID %HM_PORT_PID% ...
+REM WATCHDOG HANDSHAKE (audit M3): stop AFTER the "Y" decision - keeping the
+REM instance must keep its watchdog. Re-arm headless with watchdog_engine.bat.
+call watchdog_engine.bat stop
 taskkill /F /T /PID %HM_PORT_PID%
 powershell -NoProfile -Command "Stop-Process -Id %HM_PORT_PID% -Force -ErrorAction SilentlyContinue"
 

@@ -47,6 +47,7 @@ class LlamaHealthMixin:
                     for slot in self._slots:
                         try:
                             if (slot.is_running and not slot.pinned
+                                    and not getattr(slot, "_loading", False)
                                     and slot._idle_timeout is not None
                                     and (now - slot.last_used) > slot._idle_timeout):
                                 _to_evict.append(slot)
@@ -56,7 +57,12 @@ class LlamaHealthMixin:
                     await self._trigger_pending_prefetch()
                 for slot in _to_evict:
                     try:
+                        # AUDIT M2: `_loading` excluded — a slot claimed AFTER
+                        # the scan (invisible to it) must never be killed
+                        # mid-start; the claim-time last_used stamp is the
+                        # second half of that guard.
                         if (slot.is_running and not slot.pinned
+                                and not getattr(slot, "_loading", False)
                                 and slot._idle_timeout is not None
                                 and (time.monotonic() - slot.last_used) > slot._idle_timeout):
                             logger.info(f"Idle-Evicting {slot.model} (slot {slot.slot_id})")

@@ -35,15 +35,75 @@
 - **Run stats line**: a muted DeepSeek-style footer under the final answer —
   elapsed, tokens, cached, t/s, model on hover. The `done` event now names
   the model, and the direct path reports real usage (include_usage) instead
-  of a chars/3 guess. The stats persist on the assistant message, so a
-  reloaded chat shows the same line.
+  of a chars/3 guess. The stats persist on the assistant message (structured
+  stash on the footer — every autosave re-attaches them, not only the first),
+  so a reloaded chat shows the same line.
 - **Context-fit warnings**: every context input (all four duo ctx fields, the
   per-agent sliders, on load and on model change) shows the real VRAM
   estimate and marks it red over budget — a warning only, never a block; the
-  run-start preflight still decides.
+  run-start preflight still decides. Per-agent slots render one compact line,
+  full detail on hover.
 - **Models chip**: the header shows which model(s) the selected mode calls
   (coder/planner in duo, analyst+synthesizer in pipeline, direct otherwise) —
   one muted chip, full names on hover.
+
+### Preset autoload guard (2026-10-23)
+
+- The startup auto-load re-applied the active preset snapshot at EVERY
+  engine boot and persisted it — silently reverting everything the user
+  saved since the last preset load. A preset application now stamps
+  `preset_applied_at == settings_saved_at` in one write; the boot skips
+  re-applying when settings are newer. Old files without stamps keep the
+  historical apply-always behavior.
+
+### Engine/watchdog + measured audit fixes (2026-10-23/24)
+
+- **Watchdog handshake**: the headless watchdog had no marker — it raced a
+  manual `start_hivemind.bat` for port 8001 (winerror 10048). It now writes
+  a heartbeat marker, supports `stop`, and `start_hivemind.bat` stops it in
+  the kill path only (answering "N" keeps the watchdog protecting the kept
+  instance).
+- **GET /chats off the event loop**: per-chat disk-bytes glob+walk measured
+  a 1.77 s loop stall on 480 chats — one `to_thread` for the whole map.
+- **Gateway journal cursor**: the mirror re-downloaded the FULL frame window
+  twice per 5 s tick; it now sends the cursor it always tracked, and the
+  second-run peek fetches meta-only.
+- **Blob store binary-safe + html blobified**: text-mode writes corrupted
+  any payload containing literal CRLF (`\r\n` → `\n\n`, lossy since
+  2026-10-03, found by the real-chat roundtrip suite); blobs are bytes now
+  with a magic prefix, legacy files repaired on read (Windows). The rendered
+  `html` — the biggest inline payload (1.1–2.7 MB per chat) — is blobified
+  like cp/images.
+- **Monotonic run/slot clocks**: run deadlines, `last_used` and `pinned_at`
+  ran on wall clock (NTP jump = spurious run expiry / mass eviction). The
+  idle monitor kills outside the manager lock (the kill held it ~10 s) with
+  a freshness re-check, excludes mid-load slots, and stamps last_used at
+  claim time. The pre-explore LLM client retries 5× instead of 30 and never
+  retries a ReadTimeout (was: up to 30 × the read window).
+- **Dead code**: 14 verified-dead functions removed (grep-verified def-only).
+- **Queue-aware AMD commit wait**: the 2–6 s Vulkan commit sleep ran after
+  every load; it now fires only when a successor is actually pending
+  (load-sequence bump / queued prefetch). The collision retry remains the
+  net.
+- **MoE KV cache profile override** (`kv_cache_type` profile key; default
+  stays q4_0) and **`llama_gpu_layers_auto`** (omit `--n-gpu-layers` so
+  llama.cpp fits layers to free VRAM itself; default off).
+- **Whisper warm server wired**: `preload()` spawned `whisper-server` since
+  1.3.11 but transcription always paid the CLI's model load. The warm path
+  is used first now; any transport error falls back to the CLI.
+- **Planner-handoff ctx pin**: planner==coder loads the planner slot at
+  `max(planner_ctx, coder_ctx)` so the coder reuses the slot instead of a
+  kill+reload (15–60 s + KV loss). The pin is announced; the graceful
+  cascade keeps the worst case identical.
+- **run_tests parallel with reads**: one run_tests in a read-only round runs
+  concurrently with the reads (up to 90 s no longer serialized behind it);
+  any stateful/write tool keeps the fully serial path.
+- **duo e2e smoke**: `run_code_duo` is driven end-to-end on a scripted
+  llama-server (first-ever regression coverage for the 6.6k-line core).
+- Completion-veto auto-verify hardening (2026-10-24 audit): the status
+  events actually reach the stream, the inline verify run emits heartbeats
+  and grants a deadline grace, and "no tests ran" (manifest but zero tests)
+  is a smoke-test nudge, not a red suite.
 
 ### Voice over Telegram (end-to-end verified live)
 

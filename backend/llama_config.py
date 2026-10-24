@@ -291,7 +291,9 @@ def moe_kv_cache_types(model_key: str) -> tuple[str, str]:
     default stays. Returns (k_type, v_type).
     """
     k = str(model_key or "").replace("-ud", "")
-    v = _MOE_KV_CACHE_TYPES.get(k)
+    # audit L4: the manual dict may be keyed with the RAW model id (with
+    # "-ud") — check both before falling through to the profile.
+    v = _MOE_KV_CACHE_TYPES.get(str(model_key or "")) or _MOE_KV_CACHE_TYPES.get(k)
     if not v:
         try:
             from model_configs.models_registry import get_profile as _gp

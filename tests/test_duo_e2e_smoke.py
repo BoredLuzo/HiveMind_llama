@@ -245,7 +245,8 @@ finally:
         _LWSF.unlink()
 
 _types = [e.get("type") for e in _events if isinstance(e, dict)]
-if failed_expected := ("done" not in _types or len(_post_bodies) == 0):
+needs_diag = ("done" not in _types or len(_post_bodies) == 0)
+if needs_diag:
     print("  (diag) posts:", len(_post_bodies), "| events:", len(_events))
     for _e in _events[-10:]:
         print("  (diag)", repr(_e)[:160] if not isinstance(_e, dict)

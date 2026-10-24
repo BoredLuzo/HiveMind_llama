@@ -48,7 +48,11 @@ async def _phase_vram(ctx, state: dict):
     if _planner_step_cap > 0:
         _planner_step_cap = max(3, min(100, _planner_step_cap))
     _duo_run_timeout_s = ctx.resolve_duo_run_timeout_seconds(_duo_runtime_profile)
-    _duo_deadline_at = time.time() + _duo_run_timeout_s
+    # MONOTONIC (2026-10-24 audit H1): the consumers (duo_runner 1122/2128,
+    # tool_executor 375) compare against time.monotonic() — a wall-clock
+    # stamp here read as "far future" and the planner-phase overshoot abort
+    # could never fire. Same clock as duo_runner's own producer (2069).
+    _duo_deadline_at = time.monotonic() + _duo_run_timeout_s
     _duo_timed_out = False
     _ctx_peak_tokens = 0
     _ctx_limit_seen = 0

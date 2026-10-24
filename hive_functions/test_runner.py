@@ -131,16 +131,23 @@ _NO_TESTS_RE = re.compile(
     r"no tests found|no test files found|nothing to (?:run|test)"
     r"|no tests ran|collected 0 items", re.IGNORECASE)
 
+# Public alias (2026-10-24 audit F2): the completion veto (duo_runner
+# auto-verify) needs the same "nothing ran" classification for FULL-suite
+# runs, not only scoped ones.
+NO_TESTS_RE = _NO_TESTS_RE
+
 _MAX_SCOPED_PATHS = 8
 
 
 def _quote_path(p: str, workspace: str) -> str:
-    """Workspace-relative, forward-slash, cmd.exe-safe (double quotes only
-    when needed — single quotes are not quoting on Windows shells)."""
+    """Workspace-relative, forward-slash, cmd.exe-safe (double quotes when
+    needed — single quotes are not quoting on Windows shells). Quote on any
+    cmd metacharacter too, not only whitespace (audit F5 2026-10-24: `&`,
+    `^`, `%`, parens in a test filename would otherwise inject)."""
     if os.path.isabs(p):
         p = os.path.relpath(p, workspace)
     p = p.replace("\\", "/")
-    return f'"{p}"' if re.search(r"\s", p) else p
+    return f'"{p}"' if re.search(r"[\s&^%!()]", p) else p
 
 
 async def run_tests(

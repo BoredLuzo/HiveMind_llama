@@ -726,6 +726,10 @@ class LlamaLoadMixin:
             await _kill_slot_async(slot)
             _evicted_here = True
         slot._orphan_port = None
+        # AUDIT M2 (2026-10-24): stamp freshness at claim time — a recycled
+        # slot's stale last_used let the idle monitor kill a SLOW LOAD
+        # mid-start once the kill moved off the manager lock (A5).
+        slot.last_used = time.monotonic()
 
         gguf_path = resolve_model_path(model)
         if not gguf_path:
