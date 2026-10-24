@@ -227,22 +227,14 @@ class ToolLoopState:
     tool_calls_made: int = 0
     tool_errors: int = 0
     content_parts: list[str] = field(default_factory=list)
-    file_changes: dict = field(default_factory=dict)
     stop_reason: str = "completed"
 
     verify_mutation_serial: int = 0
     verify_last_ok_serial: int = 0
     verify_guard_hits: int = 0
 
-    parse_errors: int = 0
-    fail_streak: int = 0
-    think_only_retries: int = 0
-    think_runtime: bool = False
 
-    call_sigs: list[int] = field(default_factory=list)
 
-    last_run_bash_failure: dict | None = None
-    changed_since_failure: set = field(default_factory=set)
 
 
 # ── Callbacks ──────────────────────────────────────────────────────────
@@ -415,7 +407,6 @@ class ToolLoop:
                         model=getattr(self.cfg, "model", ""),
                     )
                     _feedback_injected_count += 1
-                    state.fail_streak += 1
                     continue
 
                 if _content:

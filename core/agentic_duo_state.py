@@ -42,7 +42,3 @@ class DuoRoundState:
     # (not in message history) so it survives full compression —
     # analogous to duo_error_rollup / read guard.
     edit_noop_streak: dict = field(default_factory=dict)
-
-
-# Backward-compatible alias for code still importing AgenticDuoState
-AgenticDuoState = DuoRoundState

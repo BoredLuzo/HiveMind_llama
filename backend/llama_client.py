@@ -189,34 +189,8 @@ class LlamaClient:
                     continue
                 raise LlamaError(f"[{req_id}] llama-server for '{model}' unreachable (port {port})")
             except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404 and attempt < max_attempts - 1:
-                    backoff = _retry_backoff(attempt)
-                    self._log.warning(
-                        "req=%s chat HTTP 404 -> recover model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                        req_id,
-                        model,
-                        attempt + 1,
-                        max_attempts,
-                        port,
-                        backoff,
-                    )
-                    port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
-                    await asyncio.sleep(backoff)
-                    continue
-                if e.response.status_code in _TRANSIENT_HTTP_STATUSES and attempt < max_attempts - 1:
-                    backoff = _retry_backoff(attempt, e.response.status_code)
-                    self._log.warning(
-                        "req=%s chat HTTP transient=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                        req_id,
-                        e.response.status_code,
-                        model,
-                        attempt + 1,
-                        max_attempts,
-                        port,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    continue
+                # the 404/transient retries already ran pre-raise_for_status();
+                # every path reaching here is final
                 raise LlamaError(f"[{req_id}] HTTP {e.response.status_code} von llama-server")
         raise LlamaError(f"[{req_id}] llama-server chat failure for '{model}' after retry")
 
@@ -386,49 +360,10 @@ class LlamaClient:
                     continue
                 raise LlamaError(f"[{req_id}] llama-server for '{model}' unreachable (port {port})")
             except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404 and attempt < max_attempts - 1:
-                    backoff = _retry_backoff(attempt)
-                    self._log.warning(
-                        "req=%s stream HTTP 404 -> recover model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                        req_id,
-                        model,
-                        attempt + 1,
-                        max_attempts,
-                        port,
-                        backoff,
-                    )
-                    port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
-                    await asyncio.sleep(backoff)
-                    continue
-                if e.response.status_code in _TRANSIENT_HTTP_STATUSES and attempt < max_attempts - 1:
-                    backoff = _retry_backoff(attempt, e.response.status_code)
-                    self._log.warning(
-                        "req=%s stream HTTP transient=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
-                        req_id,
-                        e.response.status_code,
-                        model,
-                        attempt + 1,
-                        max_attempts,
-                        port,
-                        backoff,
-                    )
-                    await asyncio.sleep(backoff)
-                    continue
+                # the 404/transient retries already ran pre-raise_for_status();
+                # every path reaching here is final
                 raise LlamaError(f"[{req_id}] HTTP {e.response.status_code} von llama-server")
         raise LlamaError(f"[{req_id}] llama-server stream failure for '{model}' after retry")
-
-    async def warmup(self, model: str, num_ctx: Optional[int] = None):
-
-
-        try:
-            await manager.load(
-                model,
-                keep_alive_seconds=600,
-                num_ctx=num_ctx or CONTEXT_SIZE_DEFAULT,
-                pin=False,
-            )
-        except Exception:
-            pass
 
     async def close(self):
         """Called on app shutdown."""
