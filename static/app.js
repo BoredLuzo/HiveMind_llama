@@ -430,7 +430,7 @@ var _MODE_DESC = {
   simple:    'Chat (Direct) \u2014 fast single-model chat. Chat Tools (read/python/web) available.',
   pipeline:  'Pipeline \u2014 multi-agent: Analyst \u2192 Refiner \u2192 Critic \u2192 Synthesizer.',
   automap:   'AutoMap \u2014 Judge picks a model per task type.',
-  code_duo:  'Code-Duo \u2014 iterative coder+critic loop, 2 models in parallel in VRAM.',
+  code_duo:  'Code-Duo — agentic coder with plan, tools and test verification (optional critic). Models load on demand.',
 };
 // ROUTING (2026-10-21): the routing card lives under MODE in the Agents tab.
 // It only matters while the mode is "auto", so it is hidden otherwise.
