@@ -83,5 +83,3 @@ speed, and a hardening/simplification pass.
   scripted llama-server drives the real generator).
 - Net −300 lines through adversarial audit + simplification rounds;
   181 test suites, ruff clean.
-- Model housekeeping: MiniCPM-V-4_7 drafter moved to the Q6_K build;
-  the retired AD variant and old drafters removed.
