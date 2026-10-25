@@ -201,6 +201,7 @@ SUITES = [
     ("gateway_supervisor",     "tests/test_gateway_supervisor.py",              60),
     ("phone_restriction",      "tests/test_phone_restriction.py",               60),
     ("verification_honesty",   "tests/test_verification_honesty.py",          60),
+    ("git_init_clone",        "tests/test_git_init_clone.py",               60),
 ]
 
 

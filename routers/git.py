@@ -263,6 +263,11 @@ async def git_init_ep(request: Request):
     remote_url = (data.get("clone_url") or settings.get("git_repo_url", "") or "").strip()
     default_branch = data.get("default_branch") or settings.get("git_default_branch", "main")
 
+    # CLONE-PATH UNBOUND (live 2026-10-25): _gh_created/_gh_msg were only
+    # initialized inside the init branch - a successful clone into an empty
+    # workspace fell through to the return and crashed with UnboundLocalError.
+    # Initialize before the branch; both paths reach the return.
+    _gh_created, _gh_msg = False, ""
     _ws_files = [f for f in os.listdir(ws) if f != ".git"]
     if not _ws_files and remote_url:
         # empty workspace + remote -> clone INTO the workspace
@@ -283,7 +288,6 @@ async def git_init_ep(request: Request):
         # actually create it on GitHub when it does not exist yet. Errors
         # come back in plain language instead of a green "created" that
         # only meant a local git init.
-        _gh_created, _gh_msg = False, ""
         _gh_owner, _gh_name = _gh_owner_name(remote_url)
         if _gh_owner and str(settings.get("git_token", "") or ""):
             import httpx as _hx
@@ -315,8 +319,6 @@ async def git_init_ep(request: Request):
                                    + ") - token permissions?")
             except Exception as _ge:
                 _gh_msg = "github create check failed: " + str(_ge)[:120]
-        else:
-            _gh_created, _gh_msg = False, ""
 
     if username:
         await asyncio.to_thread(
