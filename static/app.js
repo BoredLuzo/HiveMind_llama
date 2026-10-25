@@ -1028,11 +1028,13 @@ async function loadSettings() {
     S.askUserMaxPer10min = s.ask_user_max_per_10min || 5;
     S.askUserAutoAnswer = s.ask_user_auto_answer || 'Use best judgment, document decision in commit message.';
     S.askUserAutoProceed = !!s.ask_user_auto_proceed;
-    // Ensure chunk-dependent toggles are correctly shown/hidden
-    onChunkingChange();
+    // Ensure chunk-dependent toggles are correctly shown/hidden.
+    // persist=false: a render must never write derived state back (see
+    // onChunkingChange header — this post reverted saved values on reload).
+    onChunkingChange(false);
     // Until-finished is always ∞ — no cap field anymore
         // restore chunking state
-        onChunkingChange();
+        onChunkingChange(false);
     updateAgenticCombinedWarn();
     setDuoSubMode(S.duoAgenticMode ? 'agentic' : 'critic');
     updateComplexityVisibility();
@@ -10777,7 +10779,15 @@ function setDuoParallelPreexplore(on) {
     S.duoParallelPreexplore = !!on;
     postSettings({duo_parallel_preexplore: S.duoParallelPreexplore});
 }
-function onChunkingChange() {
+// PERSIST-FLAG (2026-10-25, forensics): applySettings calls this on every
+// render, and the posts below used to fire there too. With duo_chunking off,
+// every page load re-posted duo_test_feedback_chunk:false — the saved true
+// could not survive a reload and a preset saved from such a page snapshotted
+// the reverted value (live 2026-10-24/25). Render calls pass persist=false;
+// the chunking checkbox (index.html) keeps calling without the flag and
+// persists as before.
+function onChunkingChange(persist) {
+    var _persist = persist !== false;
     var tpcToggle = document.getElementById('duo-thinking-per-chunk-toggle');
     var tpcLabel  = document.getElementById('tpc-label');
     var tpcHint   = document.getElementById('tpc-hint');
@@ -10798,7 +10808,7 @@ function onChunkingChange() {
         // FIX: persist the original preference, do NOT persist the forced value
         if (S._thinkingBeforeChunking === undefined || S._thinkingBeforeChunking === null) {
             S._thinkingBeforeChunking = S.duoAgenticThinking;
-            postSettings({_thinking_before_chunking: S.duoAgenticThinking}); // persist original preference
+            if (_persist) postSettings({_thinking_before_chunking: S.duoAgenticThinking}); // persist original preference
         }
         S.duoAgenticThinking = true; // UI-only override, NOT persisted
         if (thinkTog) { thinkTog.checked = true; thinkTog.disabled = true; }
@@ -10824,18 +10834,18 @@ function onChunkingChange() {
             if (typeof _restoreThinking === 'boolean') {
                 S.duoAgenticThinking = _restoreThinking;
                 thinkTog.checked = S.duoAgenticThinking;
-                postSettings({duo_agentic_thinking: S.duoAgenticThinking});
+                if (_persist) postSettings({duo_agentic_thinking: S.duoAgenticThinking});
             }
             // cleanup: remove the stored preference
             S._thinkingBeforeChunking = undefined;
-            postSettings({_thinking_before_chunking: null}); // clear persisted backup
+            if (_persist) postSettings({_thinking_before_chunking: null}); // clear persisted backup
         }
         if (thinkHint) thinkHint.textContent = 'Planner thinks through the task before output';
         // Test-Feedback pro Chunk ausblenden (nur bei Chunking relevant)
         S.duoTestFeedbackChunk = false;
         if (tfChunkToggle) { tfChunkToggle.checked = false; }
         if (tfChunkRow) tfChunkRow.style.display = 'none';
-        postSettings({duo_test_feedback_chunk: false});
+        if (_persist) postSettings({duo_test_feedback_chunk: false});
     }
 }
 function updatePlannerHint() {

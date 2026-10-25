@@ -4,9 +4,12 @@
 from __future__ import annotations
 import copy
 import json
+import logging
 import threading
 from datetime import datetime as _dt
 from pathlib import Path
+
+_logger = logging.getLogger("hivemind.settings")
 
 SETTINGS_FILE      = Path(__file__).parent / "settings.json"
 PRESETS_FILE       = Path(__file__).parent / "presets.json"
@@ -607,6 +610,12 @@ DEFAULT_PRESETS = {}
 _load_cache_key: tuple | None = None
 _load_cache_data: dict | None = None
 
+# FORENSICS-WATERMARK (2026-10-25): (mtime_ns, size) of settings.json at the
+# last read/write by THIS process. save_settings warns when the on-disk file
+# changed in between — the live 2026-10-24/25 revert case (llama_mlock /
+# duo_test_feedback_chunk) was unprovable because saves were silent.
+_last_sync_stat: tuple | None = None
+
 
 def load_settings() -> dict:
     """Cached based on mtime.
@@ -617,13 +626,14 @@ def load_settings() -> dict:
     mutations of the returned dict do not corrupt the cache. save_settings()
     changes the file
     """
-    global _load_cache_key, _load_cache_data
+    global _load_cache_key, _load_cache_data, _last_sync_stat
     _key = None
     try:
         _st = SETTINGS_FILE.stat()
         _key = (_st.st_mtime_ns, _st.st_size)
     except Exception:
         _key = None
+    _last_sync_stat = _key
     if _key is not None and _key == _load_cache_key and _load_cache_data is not None:
         return copy.deepcopy(_load_cache_data)
     data = _load_settings_from_disk()
@@ -724,8 +734,28 @@ def save_settings(settings: dict, *, saved_at: str | None = None):
     saved_at: explicit stamp for callers that must keep two keys in lockstep
     (the preset load writes preset_applied_at == settings_saved_at, so the
     autoload guard sees "applied at the latest save", not "one write older").
-    """
 
+    FOREIGN-WRITE GUARD (2026-10-25): if the on-disk file changed since this
+    process last read/saved it, that is a writer outside this process (hand
+    edit, another install) — say so in the log before overwriting it with the
+    in-memory state. Detection only; the save itself always proceeds (the
+    endpoints rely on it).
+    """
+    global _last_sync_stat
+    _pre_stat = None
+    try:
+        _st = SETTINGS_FILE.stat()
+        _pre_stat = (_st.st_mtime_ns, _st.st_size)
+    except OSError:
+        _pre_stat = None
+    if _pre_stat is not None and _last_sync_stat is not None \
+            and _pre_stat != _last_sync_stat:
+        _logger.warning(
+            "[settings] foreign write detected: settings.json changed on disk "
+            "since this process last read/saved it (disk=%s, last_known=%s). "
+            "This save persists the in-memory state and reverts those external "
+            "edits — if a hand-edited value just disappeared, this line is why.",
+            _pre_stat, _last_sync_stat)
 
     settings["settings_saved_at"] = saved_at or _now_iso()
     _data = json.dumps(settings, ensure_ascii=False, indent=2)
@@ -733,6 +763,11 @@ def save_settings(settings: dict, *, saved_at: str | None = None):
     _tmp.write_text(_data, encoding="utf-8")
     with _settings_write_lock:
         _tmp.replace(SETTINGS_FILE)                  # atomar, OS-Garantie
+    try:
+        _st = SETTINGS_FILE.stat()
+        _last_sync_stat = (_st.st_mtime_ns, _st.st_size)
+    except OSError:
+        pass
 
 
 # ── Presets (user config snapshots) ──────────────────────────────────────────
