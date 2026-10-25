@@ -290,7 +290,11 @@ async def validate_git_ep(request: Request):
 async def git_branches_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE:
         return {"branches": [], "current": "", "error": "git_tools.py not loaded"}
-    valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
+    # the panel calls this with ?workspace=<project> - honor it, or the
+    # branch list shows the DEFAULT workspace's repo (live: pathtracer
+    # panel listed Test5's branches)
+    ws = _resolve_ws(_ws_from_query(request))
+    valid, branch, branches = await asyncio.to_thread(_validate_git_repo, ws)
     return {"branches": branches, "current": branch, "valid": valid}
 
 
@@ -333,7 +337,7 @@ async def git_init_ep(request: Request):
                     subprocess.run, ["git", "remote", "add", "origin", _eh_url],
                     cwd=ws, capture_output=True, text=True, encoding="utf-8",
                     errors="replace", timeout=5)
-        valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
+        valid, branch, branches = await asyncio.to_thread(_validate_git_repo, ws)
         return {"ok": True, "already_existed": True, "branch": branch,
                 "branches": branches,
                 "github_created": _gh_created, "github_msg": _gh_msg}

@@ -264,31 +264,37 @@ def _wait_healthy(url: str, timeout_s: float, require_proc: bool = True) -> bool
 
 def _start(settings: dict | None = None, voice: str = "") -> str:
     """Start the sidecar if needed and return its base URL."""
+    # START-RACE (live 2026-10-25): a second request while the first is
+    # still booting the sidecar saw "process alive", skipped the health
+    # wait and connected to a port nobody listens on yet (ConnectError
+    # -> 400 after 8 s while the install takes ~40 s). The fast path now
+    # requires CONFIRMED health (_state["ready"]). A running-but-not-ready
+    # sidecar is waited on OUTSIDE the lock - _wait_healthy polls up to the
+    # remaining start budget and stop()/synthesize share this lock.
+    _pending_url, _pending_budget = None, 0.0
     with _lock:
-        # START-RACE (live 2026-10-25): a second request while the first is
-        # still booting the sidecar saw "process alive", skipped the health
-        # wait and connected to a port nobody listens on yet (ConnectError
-        # -> 400 after 8 s while the install takes ~40 s). The fast path
-        # now requires CONFIRMED health (_state["ready"]); a running but
-        # not-yet-ready process waits for /health like the first starter.
         if is_running():
             if _state.get("ready"):
                 _state["last_used"] = time.time()
                 return base_url()
-            _started_at = float(_state.get("started_at") or 0)
-            _budget = max(15.0, START_TIMEOUT_S - (time.time() - _started_at))
-            url = base_url()
-            _ok = _wait_healthy(url, _budget)
-            if _ok:
-                _state["ready"] = True
-                _state["last_used"] = time.time()
-                return url
-            # fall through to a fresh start only if the process died;
-            # otherwise raise like the starter would
+            _pending_url = base_url()
+            _pending_budget = max(
+                15.0, START_TIMEOUT_S - (time.time() - float(_state.get("started_at") or 0)))
+    if _pending_url is not None:
+        if _wait_healthy(_pending_url, _pending_budget):
+            with _lock:
+                if is_running() and base_url() == _pending_url:
+                    _state["ready"] = True
+                    _state["last_used"] = time.time()
+                    return _pending_url
+            return _start(settings, voice)   # restarted meanwhile - recheck
+        with _lock:
             if is_running():
                 raise TtsError("TTS_FAILED",
                                "the TTS engine did not answer /health in time - see logs/pocket_tts.log")
             stop(force=True)
+        # process died while waiting - fall through to a fresh start
+    with _lock:
         # An explicit URL means the sidecar is managed elsewhere (tests, a manual
         # `uvx pocket-tts serve`, or a future shared instance).
         env_url = (os.environ.get("HIVEMIND_TTS_URL") or "").strip()

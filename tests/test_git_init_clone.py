@@ -144,6 +144,10 @@ check("4g validate exposes remote_state + remote_hint",
       '"remote_state": _remote_state' in _src_git
       and '"remote_hint": _GH_STATE_HINTS' in _src_git)
 
+check("4h branches endpoint honors ?workspace= (audit 2026-10-25)",
+      "ws = _resolve_ws(_ws_from_query(request))" in _src_git
+      and "_validate_git_repo, ws)" in _src_git)
+
 git_router.load_settings, git_router.save_settings = _orig_load, _orig_save
 print(f"\ngit_init_clone: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

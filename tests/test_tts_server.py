@@ -104,6 +104,17 @@ check("stop helper exists", "function _voiceStopAudio" in app)
 check("error codes are translated", "TTS_DISABLED" in app and "TTS_NO_UV" in app)
 check("the button has a style", ".msg-speak{" in css)
 
+# START-RACE AUDIT PIN (2026-10-25): the not-ready wait must live OUTSIDE
+# the _lock block - stop()/synthesize share that lock.
+_tts = (Path(__file__).parent.parent / "core" / "tts_engine.py").read_text(encoding="utf-8", errors="replace")
+_i1 = _tts.index("_pending_url, _pending_budget = None, 0.0")
+_i2 = _tts.index("_wait_healthy(_pending_url, _pending_budget)")
+_seg = _tts[_i1:_i2]
+check("tts not-ready wait runs outside the engine lock",
+      _seg.count("with _lock:") == 1 and '_state["ready"] = True' in _tts)
+check("tts fast path requires confirmed readiness",
+      'if _state.get("ready"):' in _tts)
+
 print()
 print(f"SUMMARY tts_server: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
