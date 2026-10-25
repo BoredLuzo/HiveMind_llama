@@ -2350,7 +2350,7 @@ async function _ttsStatusRefresh() {
         line.textContent = 'ready \\u00b7 ' + st.voice + ' \\u00b7 ' + st.speed + 'x';
         line.style.color = '#6ee7a8';
       } else {
-        line.textContent = 'engine idle - starts on the first request (~2 s)';
+        line.textContent = 'engine idle - warm start ~2 s, cold start installs dependencies (can take up to ~1 min, later requests succeed)';
         line.style.color = '#f5c451';
       }
     }
@@ -13140,6 +13140,7 @@ function updateGitIntegrationUI() {
 }
 
 function updateGitAuthStatus() {
+  updateAgentGitLine();
   var el = document.getElementById('git-auth-status');
   if (!el) return;
   if (S.gitRepoUrl || S.gitUsername) {
@@ -13181,8 +13182,19 @@ async function testGitConfig() {
       body: JSON.stringify({ workspace: S.workspace || '' })
     });
     var data = await res.json();
-    var _remote = (data.remote_msg ? (' | remote: ' + data.remote_msg) : '');
+    // GIT-TRANSPARENCY (2026-10-25): remote_state is machine-readable -
+    // render the exact remedy and cache the state for the Agents-tab line.
+    S._gitRemote = { state: data.remote_state || '', msg: data.remote_msg || '',
+                     hint: data.remote_hint || '', valid: !!data.valid,
+                     branch: data.branch || '' };
     var _remoteBad = (data.remote_ok === false);
+    var _remote = '';
+    if (data.remote_state === 'missing_or_invisible') {
+      _remote = ' | ⚠ ' + (data.remote_hint || data.remote_msg || '');
+    } else if (data.remote_msg) {
+      _remote = ' | ' + data.remote_msg;
+    }
+    updateAgentGitLine();
     if (data.valid) {
       if (result) { result.textContent = '\u2713 ' + (data.branch ? ('OK - ' + data.branch) : 'Connection OK') + _remote; result.style.color = _remoteBad ? '#e0a030' : 'var(--green)'; }
     } else {
@@ -13192,6 +13204,47 @@ async function testGitConfig() {
     if (result) { result.textContent = '\u2717 Server error'; result.style.color = 'var(--red)'; }
   }
   if (btn) btn.textContent = 'Test connection';
+}
+function updateAgentGitLine() {
+  var el = document.getElementById('agent-git-state');
+  if (!el) return;
+  if (!S.gitRepoUrl && !S.gitUsername) {
+    el.innerHTML = '⚠ no git configured';
+    el.style.color = '#f5c451';
+    return;
+  }
+  var r = S._gitRemote;
+  if (!r) {
+    el.innerHTML = '• configured - press Test connection in the config for the remote check';
+    el.style.color = 'var(--tx2)';
+    return;
+  }
+  if (r.state === 'ok') {
+    el.innerHTML = '✓ ' + (r.branch ? (r.branch + ' · remote OK') : 'remote OK');
+    el.style.color = 'var(--green)';
+  } else if (r.state === 'missing_or_invisible') {
+    el.innerHTML = '⚠ repo missing or token cannot see it - Create repo / check token';
+    el.style.color = '#e0a030';
+  } else if (r.state === 'token_invalid' || r.state === 'no_access') {
+    el.innerHTML = '✗ token problem: ' + (r.msg || r.state);
+    el.style.color = 'var(--red)';
+  } else {
+    el.innerHTML = '• ' + (r.msg || r.state || 'state unknown');
+    el.style.color = 'var(--tx2)';
+  }
+}
+
+function jumpToGitConfig() {
+  var tab = document.querySelector('.tab[data-p="config"]');
+  if (tab) tab.click();
+  setTimeout(function() {
+    var card = document.getElementById('git-cfg-card');
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.style.outline = '2px solid var(--amber)';
+    card.style.outlineOffset = '3px';
+    setTimeout(function() { card.style.outline = 'none'; }, 2200);
+  }, 60);
 }
 
 async function initGitRepo() {

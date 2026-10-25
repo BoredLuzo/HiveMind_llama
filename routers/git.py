@@ -160,16 +160,33 @@ def _gh_owner_name(repo_url: str):
     return _m.group(1), _m.group(2)
 
 
-async def _github_repo_exists(repo_url: str, token: str):
-    """True/false/None (None = cannot judge, e.g. non-github URL) plus a
-    plain-language detail for the panel. GITHUB-PANEL FIX (2026-10-07):
-    'Test connection' only checked the LOCAL repo and 'Create repo' only
-    ran a local git init - both reported green while GitHub had no repo
-    and the token had no write access."""
+_GH_STATE_HINTS = {
+    "ok": "remote repo reachable with this token",
+    "missing_or_invisible": (
+        "GitHub answers 404. Either the repo does not exist yet (Create repo "
+        "below makes it) - or it exists but is PRIVATE and your fine-grained "
+        "token does not list it (GitHub -> Settings -> Developer settings -> "
+        "Fine-grained tokens -> Repository access: add this repo, then Test "
+        "connection again)"),
+    "token_invalid": "token rejected (401) - paste a fresh token below",
+    "no_access": "token is valid but lacks access to this repo (403) - check its permissions",
+    "unreachable": "github.com could not be reached - network or rate limit",
+    "not_github": "the URL is not a github.com remote (local-only git works fine without one)",
+}
+
+
+async def _github_repo_state(repo_url: str, token: str) -> tuple[str, str]:
+    """('ok'|'missing_or_invisible'|'token_invalid'|'no_access'|
+    'unreachable'|'not_github', plain-language detail).
+
+    GIT-TRANSPARENCY (2026-10-25, live): the old boolean flattened
+    'repo missing' and 'token cannot see it' into one 404 message - the
+    panel could not tell the user which of the two very different
+    remedies applies. States map 1:1 to hints via _GH_STATE_HINTS."""
     import httpx as _hx
     _owner, _name = _gh_owner_name(repo_url)
     if not _owner:
-        return None, "remote is not a github.com URL"
+        return "not_github", "remote is not a github.com URL"
     _headers = {"Accept": "application/vnd.github+json"}
     if token:
         _headers["Authorization"] = "Bearer " + token
@@ -178,17 +195,59 @@ async def _github_repo_exists(repo_url: str, token: str):
             _r = await _c.get("https://api.github.com/repos/" + _owner + "/" + _name,
                               headers=_headers)
     except Exception as _e:
-        return False, "github unreachable: " + str(_e)[:120]
+        return "unreachable", "github unreachable: " + str(_e)[:120]
     if _r.status_code == 200:
-        return True, "repo exists and the token can see it"
+        return "ok", "repo exists and the token can see it"
     if _r.status_code == 404:
-        return False, ("repo does not exist - or your token cannot see it "
-                       "(fine-grained tokens must list this repo)")
+        return "missing_or_invisible", _GH_STATE_HINTS["missing_or_invisible"]
     if _r.status_code == 401:
-        return False, "token is invalid or expired (401)"
+        return "token_invalid", _GH_STATE_HINTS["token_invalid"]
     if _r.status_code == 403:
-        return False, "token is valid but lacks access to this repo (403)"
-    return False, "github returned HTTP " + str(_r.status_code)
+        return "no_access", _GH_STATE_HINTS["no_access"]
+    return "unreachable", "github returned HTTP " + str(_r.status_code)
+
+
+async def _github_repo_exists(repo_url: str, token: str):
+    """Backward-compatible bool view of _github_repo_state."""
+    _state, _msg = await _github_repo_state(repo_url, token)
+    return (_state == "ok"), _msg
+
+
+async def _github_ensure_repo(remote_url: str, token: str) -> tuple[bool, str]:
+    """Make the GitHub repo exist. Returns (created, msg).
+
+    Extracted from git_init_ep so ALL paths can use it (GIT-TRANSPARENCY
+    2026-10-25): an empty workspace used to clone-fail, an existing local
+    repo used to silently skip - now both create the remote first."""
+    _owner, _name = _gh_owner_name(remote_url)
+    if not _owner:
+        return False, ""
+    if not token:
+        return False, "no github token saved - Create repo cannot reach GitHub"
+    _state, _msg = await _github_repo_state(remote_url, token)
+    if _state == "ok":
+        return False, "github repo already exists"
+    if _state != "missing_or_invisible":
+        return False, "github check failed: " + _msg
+    import httpx as _hx
+    _headers = {"Accept": "application/vnd.github+json",
+                "Authorization": "Bearer " + token}
+    try:
+        async with _hx.AsyncClient(timeout=25.0) as _c:
+            _cr = await _c.post("https://api.github.com/user/repos",
+                                headers=_headers,
+                                json={"name": _name, "private": True,
+                                      "auto_init": False})
+            if _cr.status_code == 201:
+                return True, "github repo created"
+            _body = str((_cr.json() or {}).get("message", ""))[:140] if _cr.text else ""
+            if _cr.status_code == 422 and "exist" in _body.lower():
+                return False, ("repo already exists but this token cannot see it - "
+                               "add it to the fine-grained token's repository list")
+            return False, ("github repo NOT created (HTTP " + str(_cr.status_code)
+                           + ": " + _body + ") - check token permissions")
+    except Exception as _e:
+        return False, "github create failed: " + str(_e)[:120]
 
 
 @router.post("/validate")
@@ -208,17 +267,21 @@ async def validate_git_ep(request: Request):
     fully_valid = valid and has_credentials
     # GITHUB-PANEL FIX (2026-10-07): also answer what the panel button
     # actually promises - can this token SEE the configured remote repo?
-    _remote_ok, _remote_msg = None, ""
+    # GIT-TRANSPARENCY (2026-10-25): remote_state is machine-readable so
+    # the UI can name the exact next step instead of one yellow blob.
+    _remote_state, _remote_msg = "not_github", _GH_STATE_HINTS["not_github"]
     _repo_url = str(settings.get("git_repo_url", "") or "")
     if valid and _repo_url:
-        _remote_ok, _remote_msg = await _github_repo_exists(
+        _remote_state, _remote_msg = await _github_repo_state(
             _repo_url, str(settings.get("git_token", "") or ""))
     return {
         "valid": fully_valid,
         "branch": branch,
         "branches": branches,
-        "remote_ok": _remote_ok,
+        "remote_ok": _remote_state == "ok",
         "remote_msg": _remote_msg,
+        "remote_state": _remote_state,
+        "remote_hint": _GH_STATE_HINTS.get(_remote_state, _remote_msg),
         "reason": "" if fully_valid else ("No git repo" if not valid else "Credentials missing"),
     }
 
@@ -251,8 +314,29 @@ async def git_init_ep(request: Request):
         cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
     )
     if check.returncode == 0:
+        # EXISTING-REPO REMOTE HEAL (live 2026-10-25): a bare local init used
+        # to short-circuit here - "Create repo" answered "already exists"
+        # while the GitHub repo was never created and no remote was attached
+        # (the one-click dead end). Heal it: ensure the remote exists, then
+        # attach origin if missing.
+        _gh_created, _gh_msg = False, ""
+        _eh_url = (data.get("clone_url") or settings.get("git_repo_url", "") or "").strip()
+        _eh_token = str(settings.get("git_token", "") or "")
+        if _eh_url and _eh_token:
+            _gh_created, _gh_msg = await _github_ensure_repo(_eh_url, _eh_token)
+            _origin = await asyncio.to_thread(
+                subprocess.run, ["git", "remote", "get-url", "origin"],
+                cwd=ws, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=5)
+            if _origin.returncode != 0:
+                await asyncio.to_thread(
+                    subprocess.run, ["git", "remote", "add", "origin", _eh_url],
+                    cwd=ws, capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=5)
         valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
-        return {"ok": True, "already_existed": True, "branch": branch, "branches": branches}
+        return {"ok": True, "already_existed": True, "branch": branch,
+                "branches": branches,
+                "github_created": _gh_created, "github_msg": _gh_msg}
 
     # INIT-IN-PLACE (2026-09-22): the old flow cloned the remote into the
     # workspace's PARENT directory (live: Desktop/showCase_... created while
@@ -270,13 +354,30 @@ async def git_init_ep(request: Request):
     _gh_created, _gh_msg = False, ""
     _ws_files = [f for f in os.listdir(ws) if f != ".git"]
     if not _ws_files and remote_url:
-        # empty workspace + remote -> clone INTO the workspace
-        _clone = await asyncio.to_thread(
-            subprocess.run, ["git", "clone", remote_url, "."],
-            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
-        )
-        if _clone.returncode != 0:
-            return {"ok": False, "error": f"Clone fehlgeschlagen: {_clone.stderr.strip()[:200]}"}
+        # CREATE-FIRST (live 2026-10-25): an empty workspace plus a remote
+        # that does not exist yet used to fail the whole init in the clone
+        # step (catch-22: the UI could never create the repo). Ensure the
+        # remote exists first; a repo we just created is EMPTY - init
+        # locally and attach instead of cloning.
+        _token = str(settings.get("git_token", "") or "")
+        if _token:
+            _gh_created, _gh_msg = await _github_ensure_repo(remote_url, _token)
+        if _gh_created:
+            _init = await asyncio.to_thread(
+                subprocess.run, ["git", "init", "-b", default_branch],
+                cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
+            )
+            if _init.returncode != 0:
+                return {"ok": False, "error": f"git init fehlgeschlagen: {_init.stderr.strip()[:200]}"}
+        else:
+            # empty workspace + remote -> clone INTO the workspace
+            _clone = await asyncio.to_thread(
+                subprocess.run, ["git", "clone", remote_url, "."],
+                cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
+            )
+            if _clone.returncode != 0:
+                _extra = f" | {_gh_msg}" if _gh_msg else ""
+                return {"ok": False, "error": f"Clone fehlgeschlagen: {_clone.stderr.strip()[:200]}{_extra}"}
     else:
         _init = await asyncio.to_thread(
             subprocess.run, ["git", "init", "-b", default_branch],
@@ -284,41 +385,13 @@ async def git_init_ep(request: Request):
         )
         if _init.returncode != 0:
             return {"ok": False, "error": f"git init fehlgeschlagen: {_init.stderr.strip()[:200]}"}
-        # GITHUB CREATE (2026-10-07, owner): the button says "Create repo" -
-        # actually create it on GitHub when it does not exist yet. Errors
-        # come back in plain language instead of a green "created" that
-        # only meant a local git init.
-        _gh_owner, _gh_name = _gh_owner_name(remote_url)
-        if _gh_owner and str(settings.get("git_token", "") or ""):
-            import httpx as _hx
-            _headers = {
-                "Accept": "application/vnd.github+json",
-                "Authorization": "Bearer " + str(settings.get("git_token", "") or ""),
-            }
-            try:
-                async with _hx.AsyncClient(timeout=20.0) as _c:
-                    _chk = await _c.get("https://api.github.com/repos/" + _gh_owner + "/" + _gh_name,
-                                        headers=_headers)
-                    if _chk.status_code == 404:
-                        _cr = await _c.post("https://api.github.com/user/repos",
-                                            headers=_headers,
-                                            json={"name": _gh_name, "private": False,
-                                                  "auto_init": False})
-                        if _cr.status_code == 201:
-                            _gh_created = True
-                            _gh_msg = "github repo created"
-                        else:
-                            _gh_msg = ("github repo NOT created (HTTP "
-                                       + str(_cr.status_code) + ": "
-                                       + str((_cr.json() or {}).get("message", ""))[:120]
-                                       + ") - check token permissions")
-                    elif _chk.status_code == 200:
-                        _gh_msg = "github repo already exists"
-                    else:
-                        _gh_msg = ("github check failed (HTTP " + str(_chk.status_code)
-                                   + ") - token permissions?")
-            except Exception as _ge:
-                _gh_msg = "github create check failed: " + str(_ge)[:120]
+        # GITHUB CREATE (2026-10-07, owner; refactored 2026-10-25): the button
+        # says "Create repo" - actually create it on GitHub when it does not
+        # exist yet. Shared helper with the other init paths; private by
+        # default (flip on GitHub if you want it public).
+        if remote_url and str(settings.get("git_token", "") or ""):
+            _gh_created, _gh_msg = await _github_ensure_repo(
+                remote_url, str(settings.get("git_token", "") or ""))
 
     if username:
         await asyncio.to_thread(

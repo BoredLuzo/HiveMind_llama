@@ -207,7 +207,8 @@ def stop(force: bool = False) -> None:
     with _lock:
         proc = _state.get("proc")
         log = _state.get("log")
-        _state.update({"proc": None, "port": 0, "voice": "", "log": None})
+        _state.update({"proc": None, "port": 0, "voice": "", "log": None,
+                       "ready": False})
     if log is not None:
         try:
             log.close()
@@ -264,9 +265,30 @@ def _wait_healthy(url: str, timeout_s: float, require_proc: bool = True) -> bool
 def _start(settings: dict | None = None, voice: str = "") -> str:
     """Start the sidecar if needed and return its base URL."""
     with _lock:
+        # START-RACE (live 2026-10-25): a second request while the first is
+        # still booting the sidecar saw "process alive", skipped the health
+        # wait and connected to a port nobody listens on yet (ConnectError
+        # -> 400 after 8 s while the install takes ~40 s). The fast path
+        # now requires CONFIRMED health (_state["ready"]); a running but
+        # not-yet-ready process waits for /health like the first starter.
         if is_running():
-            _state["last_used"] = time.time()
-            return base_url()
+            if _state.get("ready"):
+                _state["last_used"] = time.time()
+                return base_url()
+            _started_at = float(_state.get("started_at") or 0)
+            _budget = max(15.0, START_TIMEOUT_S - (time.time() - _started_at))
+            url = base_url()
+            _ok = _wait_healthy(url, _budget)
+            if _ok:
+                _state["ready"] = True
+                _state["last_used"] = time.time()
+                return url
+            # fall through to a fresh start only if the process died;
+            # otherwise raise like the starter would
+            if is_running():
+                raise TtsError("TTS_FAILED",
+                               "the TTS engine did not answer /health in time - see logs/pocket_tts.log")
+            stop(force=True)
         # An explicit URL means the sidecar is managed elsewhere (tests, a manual
         # `uvx pocket-tts serve`, or a future shared instance).
         env_url = (os.environ.get("HIVEMIND_TTS_URL") or "").strip()
@@ -305,6 +327,7 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
         raise TtsError("TTS_FAILED",
                        "the TTS engine did not answer /health in time - see logs/pocket_tts.log")
     _state["failures"] = 0          # a healthy start clears the budget
+    _state["ready"] = True          # START-RACE: fast path may return now
     logger.info("[TTS] sidecar ready after %.1fs", time.time() - _state["started_at"])
     return url
 

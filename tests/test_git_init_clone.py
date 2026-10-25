@@ -87,6 +87,63 @@ r3 = asyncio.run(git_router.git_init_ep(_FakeRequest(
 check("3a existing repo short-circuits with already_existed",
       r3.get("ok") is True and r3.get("already_existed") is True)
 
+# ── 4. GIT TRANSPARENCY (2026-10-25): the one-click dead ends ────────────
+# 4a existing local repo + remote missing on github -> Create repo now
+#    heals: ensure called, origin attached (was: silent "already exists")
+_ws4 = Path(tempfile.mkdtemp(prefix="hm_gi_ws4_"))
+_git(_ws4, "init", "-q", "-b", "main")
+(_ws4 / "a.txt").write_text("x", encoding="utf-8")
+_ensure_calls = []
+
+
+async def _fake_ensure(url, token):
+    _ensure_calls.append(url)
+    return True, "github repo created"
+
+
+_orig_ensure = git_router._github_ensure_repo
+git_router._github_ensure_repo = _fake_ensure
+git_router.settings["git_token"] = "testtoken"
+git_router.settings["git_repo_url"] = "https://github.com/u/r.git"
+try:
+    r4 = asyncio.run(git_router.git_init_ep(_FakeRequest(
+        {"workspace": str(_ws4),
+         "clone_url": "https://github.com/u/created.git"})))
+    _origin = _git(_ws4, "remote", "get-url", "origin")
+    check("4a existing repo: github ensure called",
+          len(_ensure_calls) == 1 and "u/created" in _ensure_calls[0])
+    check("4b existing repo: origin remote attached",
+          _origin.returncode == 0 and "u/created" in (_origin.stdout or ""))
+    check("4c response carries the github result",
+          r4.get("github_created") is True and "created" in r4.get("github_msg", ""))
+
+    # 4d empty workspace + remote that does not exist yet -> repo created
+    #    FIRST, local init + attach (was: clone from nothing -> hard error)
+    _ws5 = Path(tempfile.mkdtemp(prefix="hm_gi_ws5_"))
+    r5 = asyncio.run(git_router.git_init_ep(_FakeRequest(
+        {"workspace": str(_ws5),
+         "clone_url": "https://github.com/u/created.git"})))
+    _origin5 = _git(_ws5, "remote", "get-url", "origin")
+    check("4d empty ws + missing remote: no clone error, ok returned",
+          r5.get("ok") is True, f" ({r5})")
+    check("4e fresh repo created and attached, not cloned",
+          (_ws5 / ".git").exists() and _origin5.returncode == 0)
+finally:
+    git_router._github_ensure_repo = _orig_ensure
+    git_router.settings["git_token"] = ""
+    git_router.settings["git_repo_url"] = ""
+
+# 4f validate states: every state has an actionable hint
+_hints = git_router._GH_STATE_HINTS
+check("4f all github states have hints",
+      set(_hints) == {"ok", "missing_or_invisible", "token_invalid",
+                      "no_access", "unreachable", "not_github"}
+      and all(isinstance(v, str) and v for v in _hints.values()))
+_src_git = (ROOT / "routers" / "git.py").read_text(encoding="utf-8", errors="replace")
+check("4g validate exposes remote_state + remote_hint",
+      '"remote_state": _remote_state' in _src_git
+      and '"remote_hint": _GH_STATE_HINTS' in _src_git)
+
 git_router.load_settings, git_router.save_settings = _orig_load, _orig_save
 print(f"\ngit_init_clone: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

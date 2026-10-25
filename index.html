@@ -666,6 +666,12 @@
           <span class="sl"></span>
         </label>
       </div>
+      <!-- AGENT-TAB GIT STATUS (2026-10-25): repo state at a glance where
+           the runs start, one click to the full config card. -->
+      <div id="agent-git-line" style="display:flex;align-items:center;gap:8px;padding:2px 0 6px 10px;border-left:2px solid rgba(120,140,170,.25);margin-left:10px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2)">
+        <span id="agent-git-state">&#x26A0; git state unknown</span>
+        <a href="#" onclick="jumpToGitConfig();return false" style="color:var(--amber);text-decoration:none">Configure &#8594;</a>
+      </div>
       <div class="opt-row" style="margin-top:2px">
         <div class="opt-row-left">
           <span class="opt-name">Git tools</span>
@@ -1411,6 +1417,90 @@
   <!-- CONFIGS -->
   <div class="panel" id="p-configs">
     <!-- Compression & Context Fixes (2026-09-07) -->
+    <!-- Git Integration -->
+    <div class="cfg-card" id="git-cfg-card">
+      <div class="cfg-card-title">Git Integration</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Auto-Commit <em>DUO</em></span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="git-autocommit-cfg-toggle" onchange="S.duoGitAutocommit=this.checked;postSettings({duo_git_autocommit:S.duoGitAutocommit});syncGitToggles()">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Commits automatically after each chunk in duo/agentic mode.<br>Requires a valid git configuration below.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Git Checkpoints</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="git-checkpoints-cfg-toggle" onchange="S.duoGitCheckpoints=this.checked;postSettings({duo_git_checkpoints:S.duoGitCheckpoints})">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Session-start and consolidation checkpoints (the undo_last safety net). Separate from Auto-Commit; both only run with a git identity below.</div>
+      <div class="cfg-grid" style="margin-top:6px">
+        <div class="fld">
+          <div class="fld-label">Repository URL <em id="git-repo-preview" style="color:var(--amber)"></em></div>
+          <input class="fld-input" type="text" id="git-repo-url" placeholder="https://github.com/user/repo.git"
+            onchange="postSettings({git_repo_url:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Username</div>
+          <input class="fld-input" type="text" id="git-username" placeholder="git username"
+            onchange="postSettings({git_username:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Token / Password</div>
+          <input class="fld-input" type="password" id="git-token" placeholder="Personal Access Token"
+            autocomplete="new-password" spellcheck="false"
+            onchange="if(this.value) postSettings({git_token:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Branch</div>
+          <input class="fld-input" type="text" id="git-branch-inp" placeholder="main"
+            onchange="postSettings({git_branch:this.value})">
+        </div>
+      </div>
+      <div class="fld-row" style="margin-bottom:6px">
+        <button class="btn" onclick="testGitConfig()" id="git-test-btn">Test connection</button>
+        <button class="btn" onclick="initGitRepo()" id="git-init-btn" style="color:var(--green);border-color:rgba(58,153,96,.3)">Create repo</button>
+        <span id="git-test-result" class="fld-hint" style="margin:0;line-height:30px"></span>
+      </div>
+      <div id="git-init-status" class="fld-hint" style="font-size:9px;margin-bottom:4px"></div>
+      <!-- Git Operations v0.96.5 -->
+      <div class="fld-label" style="margin-top:10px">Git Operations</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
+        <button class="btn" onclick="gitStash('push')" style="font-size:9px;padding:3px 9px">Stash</button>
+        <button class="btn" onclick="gitStash('pop')" style="font-size:9px;padding:3px 9px">Stash Pop</button>
+        <button class="btn" onclick="gitStash('list')" style="font-size:9px;padding:3px 9px">Stash List</button>
+        <button class="btn" onclick="gitReset(false)" style="font-size:9px;padding:3px 9px;color:var(--amber);border-color:rgba(224,144,48,.3)">Soft Reset</button>
+        <button class="btn danger" onclick="gitReset(true)" style="font-size:9px;padding:3px 9px">Hard Reset</button>
+      </div>
+      <div id="git-ops-status" class="fld-hint" style="font-size:9px;margin-bottom:4px"></div>
+      <!-- Git Auto-Push + Email + Branch Default -->
+      <div class="tgl-row" style="margin-top:6px">
+        <span class="tgl-text">Auto-Push</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="git-auto-push-toggle" onchange="postSettings({git_auto_push:this.checked})">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="cfg-grid" style="margin-top:6px">
+        <div class="fld">
+          <div class="fld-label">Email</div>
+          <input class="fld-input" type="text" id="git-email" placeholder="user@example.com"
+            onchange="postSettings({git_email:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Commit Prefix</div>
+          <input class="fld-input" type="text" id="git-commit-prefix" placeholder="hivemind:"
+            onchange="postSettings({git_commit_prefix:this.value})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Default Branch</div>
+          <input class="fld-input" type="text" id="git-default-branch-inp" placeholder="main"
+            onchange="postSettings({git_default_branch:this.value})">
+        </div>
+      </div>
+    </div>
     <div class="cfg-card">
       <div class="cfg-card-title">Compression &amp; Context Fixes</div>
       <div style="margin:8px 0 4px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2)">Compression model</div>
@@ -1845,90 +1935,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       <div class="fld-hint">Prevents system sleep while a run is active (sleep mid-run would break the stream). Display may turn off. Applies to all /stream runs.</div>
     </div>
 
-    <!-- Git Integration -->
-    <div class="cfg-card">
-      <div class="cfg-card-title">Git Integration</div>
-      <div class="tgl-row">
-        <span class="tgl-text">Auto-Commit <em>DUO</em></span>
-        <label class="cfl-sw">
-          <input type="checkbox" id="git-autocommit-cfg-toggle" onchange="S.duoGitAutocommit=this.checked;postSettings({duo_git_autocommit:S.duoGitAutocommit});syncGitToggles()">
-          <span class="sl"></span>
-        </label>
-      </div>
-      <div class="fld-hint">Commits automatically after each chunk in duo/agentic mode.<br>Requires a valid git configuration below.</div>
-      <div class="tgl-row">
-        <span class="tgl-text">Git Checkpoints</span>
-        <label class="cfl-sw">
-          <input type="checkbox" id="git-checkpoints-cfg-toggle" onchange="S.duoGitCheckpoints=this.checked;postSettings({duo_git_checkpoints:S.duoGitCheckpoints})">
-          <span class="sl"></span>
-        </label>
-      </div>
-      <div class="fld-hint">Session-start and consolidation checkpoints (the undo_last safety net). Separate from Auto-Commit; both only run with a git identity below.</div>
-      <div class="cfg-grid" style="margin-top:6px">
-        <div class="fld">
-          <div class="fld-label">Repository URL <em id="git-repo-preview" style="color:var(--amber)"></em></div>
-          <input class="fld-input" type="text" id="git-repo-url" placeholder="https://github.com/user/repo.git"
-            onchange="postSettings({git_repo_url:this.value})">
-        </div>
-        <div class="fld">
-          <div class="fld-label">Username</div>
-          <input class="fld-input" type="text" id="git-username" placeholder="git username"
-            onchange="postSettings({git_username:this.value})">
-        </div>
-        <div class="fld">
-          <div class="fld-label">Token / Password</div>
-          <input class="fld-input" type="password" id="git-token" placeholder="Personal Access Token"
-            autocomplete="new-password" spellcheck="false"
-            onchange="if(this.value) postSettings({git_token:this.value})">
-        </div>
-        <div class="fld">
-          <div class="fld-label">Branch</div>
-          <input class="fld-input" type="text" id="git-branch-inp" placeholder="main"
-            onchange="postSettings({git_branch:this.value})">
-        </div>
-      </div>
-      <div class="fld-row" style="margin-bottom:6px">
-        <button class="btn" onclick="testGitConfig()" id="git-test-btn">Test connection</button>
-        <button class="btn" onclick="initGitRepo()" id="git-init-btn" style="color:var(--green);border-color:rgba(58,153,96,.3)">Create repo</button>
-        <span id="git-test-result" class="fld-hint" style="margin:0;line-height:30px"></span>
-      </div>
-      <div id="git-init-status" class="fld-hint" style="font-size:9px;margin-bottom:4px"></div>
-      <!-- Git Operations v0.96.5 -->
-      <div class="fld-label" style="margin-top:10px">Git Operations</div>
-      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
-        <button class="btn" onclick="gitStash('push')" style="font-size:9px;padding:3px 9px">Stash</button>
-        <button class="btn" onclick="gitStash('pop')" style="font-size:9px;padding:3px 9px">Stash Pop</button>
-        <button class="btn" onclick="gitStash('list')" style="font-size:9px;padding:3px 9px">Stash List</button>
-        <button class="btn" onclick="gitReset(false)" style="font-size:9px;padding:3px 9px;color:var(--amber);border-color:rgba(224,144,48,.3)">Soft Reset</button>
-        <button class="btn danger" onclick="gitReset(true)" style="font-size:9px;padding:3px 9px">Hard Reset</button>
-      </div>
-      <div id="git-ops-status" class="fld-hint" style="font-size:9px;margin-bottom:4px"></div>
-      <!-- Git Auto-Push + Email + Branch Default -->
-      <div class="tgl-row" style="margin-top:6px">
-        <span class="tgl-text">Auto-Push</span>
-        <label class="cfl-sw">
-          <input type="checkbox" id="git-auto-push-toggle" onchange="postSettings({git_auto_push:this.checked})">
-          <span class="sl"></span>
-        </label>
-      </div>
-      <div class="cfg-grid" style="margin-top:6px">
-        <div class="fld">
-          <div class="fld-label">Email</div>
-          <input class="fld-input" type="text" id="git-email" placeholder="user@example.com"
-            onchange="postSettings({git_email:this.value})">
-        </div>
-        <div class="fld">
-          <div class="fld-label">Commit Prefix</div>
-          <input class="fld-input" type="text" id="git-commit-prefix" placeholder="hivemind:"
-            onchange="postSettings({git_commit_prefix:this.value})">
-        </div>
-        <div class="fld">
-          <div class="fld-label">Default Branch</div>
-          <input class="fld-input" type="text" id="git-default-branch-inp" placeholder="main"
-            onchange="postSettings({git_default_branch:this.value})">
-        </div>
-      </div>
-    </div>
   <!-- TELEGRAM GATEWAY (2026-10-05): the master veto for the optional
        Telegram bridge (hivemind_gateway/). false => a running gateway
        shuts itself down within one poll loop and nothing polls Telegram.
@@ -2281,6 +2287,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261025-01"></script>
+        <script src="/static/app.js?v=20261025-02"></script>
 </body>
 </html>
