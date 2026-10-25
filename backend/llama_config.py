@@ -340,8 +340,17 @@ _DENSE_KV_CACHE_TYPES: dict[str, str] = {
 # DRAFT-N-MAX 2 (2026-09-15): draft-mtp with n-max 3 has a documented
 # determinism/quality bug for the Qwen3.x MTP family (llama.cpp issue #23302,
 # Qwen3.6-27B dense: output diverges from non-speculative greedy at n-max 3;
-# 35B-A3B uses the same MTP implementation). 2 keeps most of the speedup with
-# clean output. Overridable for experiments via HIVEMIND_MTP_DRAFT_N_MAX.
+# 35B-A3B uses the same MTP implementation).
+# NOT BIT-LOSSLESS AT 2 EITHER (measured 2026-10-25, b11802/Vulkan/q4_0, live
+# box): greedy (temp 0, fixed seed) mtp=on n=2 diverged from mtp=off on 3/3
+# prompts (near-tie token flips, coherent paraphrases - no visible corruption),
+# while mtp=off was byte-identical across two engine restarts (3/3). The spec
+# path changes the target-logit computation enough to flip near-ties: the
+# "speculative decoding is lossless" guarantee does NOT hold here.
+# Decision: keep n-max at 2 and the coder default mtp OFF (determinism beats
+# the measured +42% decode for unattended coding; +42% decode / -30% prefill
+# measured the same day, hermes 35B, 1024-token generations). Overridable via
+# HIVEMIND_MTP_DRAFT_N_MAX - never ship 3+ (documented corruption).
 # SPEC OFF-SWITCH (2026-09-17): HIVEMIND_MTP_SPEC=0 disables the spec-decode
 # flags entirely — draft-mtp also disables llama-server's prompt cache-reuse
 # and has reported heavy prefill regressions on some backends (Vulkan/Metal,
