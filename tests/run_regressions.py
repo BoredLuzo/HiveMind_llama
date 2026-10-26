@@ -207,6 +207,13 @@ SUITES = [
     ("git_ws_guard_init",      "tests/test_git_ws_guard_and_init.py",          60),
     ("ws_guards_chats_skills", "tests/test_ws_guards_chats_skills.py",         60),
     ("tts_start_decay",        "tests/test_tts_start_decay_pin.py",            30),
+    ("manager_lock",            "tests/test_manager_lock.py",                  30),
+    ("git_clone_cleanup",       "tests/test_git_clone_cleanup.py",              30),
+    ("cron",                    "tests/test_cron.py",                           60),
+    ("mmproj_fallback",         "tests/test_mmproj_fallback.py",                60),
+    ("remember_tool",           "tests/test_remember_tool.py",                  60),
+    ("tree_scout_workspace",    "tests/test_tree_scout_workspace.py",           60),
+    ("wait_ready",              "tests/test_wait_ready.py",                     60),
 ]
 
 

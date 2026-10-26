@@ -114,7 +114,7 @@ def write_speeds(samples: dict[str, list[float]], stats_path: Path = STATS) -> d
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Median-Decodierrate je Modell aus den Logs")
-    ap.add_argument("--dry-run", action="store_true", help="nur zeigen, nichts schreiben")
+    ap.add_argument("--dry-run", action="store_true", help="show only, write nothing")
     ap.add_argument("--log-dir", default=str(LOG_DIR))
     ap.add_argument("--stats", default=str(STATS))
     args = ap.parse_args(argv)
@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
                 mapped.setdefault(stem, []).extend(values)
         samples = mapped
     if not samples:
-        print("keine auswertbaren Logs gefunden")
+        print("no usable logs found")
         return 1
     print(f"{len(samples)} Modelle, {sum(len(v) for v in samples.values())} Messungen")
     for tag, values in sorted(samples.items(), key=lambda kv: -statistics.median(kv[1])):

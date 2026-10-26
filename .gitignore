@@ -175,3 +175,19 @@ tts-venv/
 voice_models/
 *.safetensors
 .fetch_state.json
+
+# Scratch scripts and measurement artifacts were committed by accident several
+# times (ad-hoc probes, ZIP exports, SSE dumps, patch leftovers). Keep them out
+# of the public tree; the negations below protect the tracked package modules
+# that happen to start with an underscore.
+_*.py
+!__init__.py
+!core/duo/_*.py
+!tools/handlers/_shared.py
+*.zip
+dist/
+*.bundle
+*.sse
+*.orig
+*.rej
+reports/

@@ -553,7 +553,7 @@
  },
  "routers/git.py": {
   "broad_except": 10,
-  "except_pass": 1
+  "except_pass": 0
  },
  "routers/learning.py": {
   "broad_except": 0,
@@ -720,6 +720,10 @@
   "except_pass": 0
  },
  "tests/test_chats_ws_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_chunk_render_no_write_pin.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -939,11 +943,23 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_git_clone_cleanup.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_git_gate.py": {
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_git_init_clone.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_git_tool_gating.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_git_ws_guard_and_init.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1000,6 +1016,10 @@
   "except_pass": 0
  },
  "tests/test_loop_detect_run_bash.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_manager_lock.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1203,6 +1223,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_settings_foreign_write_warning.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_shell_env.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1327,6 +1351,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_tts_start_decay_pin.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_ui_context_card.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1340,10 +1368,6 @@
   "except_pass": 0
  },
  "tests/test_ux_quickwins.py": {
-  "broad_except": 0,
-  "except_pass": 0
- },
- "tests/test_v131_hardening.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1376,6 +1400,10 @@
   "except_pass": 0
  },
  "tests/test_vram_guard_lfm.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_wait_ready.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1421,6 +1449,10 @@
  },
  "tests/test_write_hang_bounded.py": {
   "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_ws_guards_chats_skills.py": {
+  "broad_except": 0,
   "except_pass": 0
  },
  "tools/__init__.py": {

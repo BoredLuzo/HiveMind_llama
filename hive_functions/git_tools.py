@@ -201,7 +201,7 @@ async def exec_git_commit(message: str, workspace: str, files: list[str] | None 
             _err = commit_result.stderr.strip()
             if "nothing to commit" in _err.lower() or "no changes added" in _err.lower():
                 return "ℹ️ git_commit: no changes in the listed files — no commit."
-            return f"❌ git commit fehlgeschlagen: {_err}"
+            return f"❌ git commit failed: {_err}"
         hash_result = await _git("git", "rev-parse", "--short", "HEAD")
         short_hash = hash_result.stdout.strip()
         return f"✅ Committed: [{short_hash}] {message[:72]}"
@@ -214,11 +214,11 @@ async def exec_git_commit(message: str, workspace: str, files: list[str] | None 
 
     add_result = await _git("git", "add", "-A")
     if add_result.returncode != 0:
-        return f"❌ git add fehlgeschlagen: {add_result.stderr.strip()}"
+        return f"❌ git add failed: {add_result.stderr.strip()}"
 
     commit_result = await _git("git", "commit", "-m", message[:72])
     if commit_result.returncode != 0:
-        return f"❌ git commit fehlgeschlagen: {commit_result.stderr.strip()}"
+        return f"❌ git commit failed: {commit_result.stderr.strip()}"
 
     hash_result = await _git("git", "rev-parse", "--short", "HEAD")
     short_hash = hash_result.stdout.strip()
@@ -386,7 +386,7 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
         reset = await _git("git", "reset", "--soft", base)
 
     if reset.returncode != 0:
-        return f"❌ squash: git reset fehlgeschlagen: {reset.stderr.strip()}"
+        return f"❌ squash: git reset failed: {reset.stderr.strip()}"
 
     if consolidate_only:
         msg = f"{_checkpoint_marker()} session consolidated ({cp_count} checkpoints)"
@@ -395,19 +395,19 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
         cc = await _git("git", "commit", "-m", msg[:72],
                         *(["--allow-empty"] if not staged.stdout.strip() else []))
         if cc.returncode != 0:
-            return f"❌ squash-consolidate fehlgeschlagen: {cc.stderr.strip()}"
+            return f"❌ squash-consolidate failed: {cc.stderr.strip()}"
         return f"✅ {cp_count} Checkpoints konsolidiert"
 
     add = await _git("git", "add", "-A")
     if add.returncode != 0:
-        return f"❌ git add fehlgeschlagen: {add.stderr.strip()}"
+        return f"❌ git add failed: {add.stderr.strip()}"
     staged = await _git("git", "diff", "--cached", "--name-only")
     if not staged.stdout.strip():
         cc = await _git("git", "reset", "--hard", "HEAD")
         return ""
     cc = await _git("git", "commit", "-m", message[:72])
     if cc.returncode != 0:
-        return f"❌ squash-commit fehlgeschlagen: {cc.stderr.strip()}"
+        return f"❌ squash-commit failed: {cc.stderr.strip()}"
     h = await _git("git", "rev-parse", "--short", "HEAD")
     return f"✅ Committed (Checkpoints gefaltet): [{h.stdout.strip()}] {message[:72]}"
 
@@ -597,7 +597,7 @@ async def exec_git_reset(workspace: str, target: str = "HEAD", hard: bool = Fals
     mode = "--hard" if hard else "--soft"
     result = await _git("git", "reset", mode, target)
     if result.returncode != 0:
-        return f"❌ git reset {mode} {target} fehlgeschlagen: {result.stderr.strip()}"
+        return f"❌ git reset {mode} {target} failed: {result.stderr.strip()}"
     return f"✅ Reset {mode} → {target}"
 
 
@@ -617,7 +617,7 @@ async def exec_git_checkout(workspace: str, target: str) -> str:
 
     result = await _git("git", "checkout", target)
     if result.returncode != 0:
-        return f"❌ git checkout {target} fehlgeschlagen: {result.stderr.strip()}"
+        return f"❌ git checkout {target} failed: {result.stderr.strip()}"
     return f"✅ Checkout → {target}"
 
 

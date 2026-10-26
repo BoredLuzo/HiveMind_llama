@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Decider-Checkpoint herunterladen (optional)")
     ap.add_argument("--model", default=DEFAULT_MODEL, help=f"HF-Repo (Default: {DEFAULT_MODEL})")
     ap.add_argument("--dir", default="", help="Zielordner (Default: models/decider/gliner25-decide)")
-    ap.add_argument("--dry-run", action="store_true", help="nur zeigen, nichts laden")
+    ap.add_argument("--dry-run", action="store_true", help="show only, download nothing")
     args = ap.parse_args(argv)
 
     target = Path(args.dir) if args.dir else (MODELS_DIR / "gliner25-decide")
@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         import gliner2  # noqa: F401
         print("gliner2: installiert")
     except ImportError:
-        print("gliner2: FEHLT - nach dem Download ausfuehren:")
+        print("gliner2: MISSING - run this after the download:")
         print("         pip install -r requirements-decider.txt")
 
     cli = _hf_cli()
@@ -65,14 +65,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     cmd = cli + ["download", args.model, "--local-dir", str(target)]
-    print("Befehl :", " ".join(cmd))
+    print("Command:", " ".join(cmd))
     if args.dry_run:
         return 0
 
     target.parent.mkdir(parents=True, exist_ok=True)
     rc = subprocess.call(cmd)
     if rc != 0:
-        print(f"[FEHLER] Download fehlgeschlagen (exit {rc})")
+        print(f"[ERROR] Download failed (exit {rc})")
         return rc
 
     print()

@@ -497,7 +497,7 @@ async def tool_query(query: str, mode: str = "auto", iterations: int = 2, notify
 
 async def tool_shell(cmd: str, timeout: int = 30) -> str:
     safe   = bool(SAFE_SHELL_RE.match(cmd.strip()))
-    prefix = "" if safe else "⚠ Unsicherer Befehl: "
+    prefix = "" if safe else "⚠ Unsafe command: "
     try:
         if IS_WINDOWS:
             proc = await asyncio.create_subprocess_exec(
@@ -515,7 +515,7 @@ async def tool_shell(cmd: str, timeout: int = 30) -> str:
             )
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         result = _decode(out) + (f"\n[stderr]: {_decode(err)}" if err.strip() else "")
-        return prefix + (result.strip() or "(kein Output)")
+        return prefix + (result.strip() or "(no output)")
     except asyncio.TimeoutError:
         return _tool_error_response(
             "RUN_BASH_TIMEOUT",
@@ -626,7 +626,7 @@ async def tool_list_dir(path: str = ".", depth: int = 2) -> str:
                     _walk(item, indent + 2)
 
         _walk(p)
-        return "\n".join(lines) or "(leer)"
+        return "\n".join(lines) or "(empty)"
     except Exception as e:
         return _tool_error_response(
             "LIST_DIR_FAILED",

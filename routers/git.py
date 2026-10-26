@@ -472,20 +472,33 @@ async def git_init_ep(request: Request):
             _init = _run_git(ws, ["init", "-b", default_branch], timeout=10)
             if _init is None or _init.returncode != 0:
                 return {"ok": False,
-                        "error": f"git init fehlgeschlagen: {((_init and _init.stderr) or 'git failed').strip()[:200]}"}
+                        "error": f"git init failed: {((_init and _init.stderr) or 'git failed').strip()[:200]}"}
         else:
             # empty workspace + remote -> clone INTO the workspace
             _clone = _run_git(ws, ["clone", remote_url, "."], timeout=120)
             if _clone is None or _clone.returncode != 0:
+                # PARTIAL-CLONE CLEANUP (audit follow-up 2026-10-26): a failed
+                # clone leaves a half-written .git behind; the next attempt
+                # then hits the early "already_existed" branch and every
+                # further action fails cryptically. Remove only what this
+                # clone created (the workspace had no .git to begin with -
+                # that is why this branch ran).
+                _half_git = Path(ws) / ".git"
+                if _half_git.exists():
+                    import shutil as _shutil
+                    try:
+                        await asyncio.to_thread(_shutil.rmtree, _half_git, True)
+                    except OSError:
+                        pass
                 _extra = f" | {_gh_msg}" if _gh_msg else ""
                 return {"ok": False,
-                        "error": f"Clone fehlgeschlagen: {((_clone and _clone.stderr) or 'git failed').strip()[:200]}{_extra}"}
+                        "error": f"Clone failed: {((_clone and _clone.stderr) or 'git failed').strip()[:200]}{_extra}"}
             _cloned = True
     else:
         _init = _run_git(ws, ["init", "-b", default_branch], timeout=10)
         if _init is None or _init.returncode != 0:
             return {"ok": False,
-                    "error": f"git init fehlgeschlagen: {((_init and _init.stderr) or 'git failed').strip()[:200]}"}
+                    "error": f"git init failed: {((_init and _init.stderr) or 'git failed').strip()[:200]}"}
         # GITHUB CREATE (2026-10-07, owner; refactored 2026-10-25): the button
         # says "Create repo" - actually create it on GitHub when it does not
         # exist yet. Shared helper with the other init paths; private by

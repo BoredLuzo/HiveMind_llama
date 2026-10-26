@@ -59,6 +59,6 @@ skips linting with a notice instead of failing. To bypass it in an emergency:
 
 ## What does not ship
 
-`tests/`, `scripts/`, `docs/audit_*.md`, `RELEASE_NOTES_*.md`, `CONTRIBUTING.md`,
+`tests/`, `scripts/`, `docs/audit/`, `RELEASE_NOTES_*.md`, `CONTRIBUTING.md`,
 `.gitignore` and `.gitattributes` are `export-ignore` - the release zip contains
 the program, the launchers and the user docs only.
