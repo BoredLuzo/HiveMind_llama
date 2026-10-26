@@ -695,6 +695,17 @@ def parse_planner_output(raw: str, *, step_cap: int = 20,
     if not _pr:
         return [], "empty", {"rejected": True, "reason": "empty_input"}
 
+    # COMPLETED-TASKS-STRIP (2026-10-26, live): the planner lists finished work
+    # under "### Completed Tasks" with [x] markers. The numbered parser turned
+    # those into extra chunks ("Chunk 3/4: [x] greet.py created"), so the coder
+    # re-ran work that was already done. Everything from that heading on is
+    # finished work, not a plan step.
+    _completed = re.search(r"(?im)^[#\s]*completed tasks?[\s:]*$", _pr)
+    if _completed:
+        _pr = _pr[:_completed.start()].rstrip()
+    if not _pr:
+        return [], "empty", {"rejected": True, "reason": "completed_only"}
+
     _cap = step_cap if (step_cap and step_cap > 0) else None
 
     subtasks: list[str] = []
@@ -713,6 +724,10 @@ def parse_planner_output(raw: str, *, step_cap: int = 20,
         # 2. Numbered-List-Parser
         _num_items = re.findall(r"^\s*(?:\d+[.)]\s*|\*\*\d+[.)]\*\*\s*|[-*]\s+)(.+)", _pr, re.MULTILINE)
         _num_items = [s.strip() for s in _num_items if len(s.strip()) >= 8]
+        # CHECKED-STEPS (2026-10-26): "[x] ..." and a leading check mark are
+        # finished items, not open tasks, whatever section they appear in.
+        _num_items = [s for s in _num_items
+                      if not re.match(r"(?i)^(?:\[x\]|\[\u2713\]|\u2713|done\b)", s)]
         if _num_items:
             parsed = _num_items
             parse_mode = "numbered"

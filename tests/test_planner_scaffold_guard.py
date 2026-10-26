@@ -95,6 +95,25 @@ check("5c the runner hands the raw request in",
 check("5b the filter is wired after validate_chunk_plan",
       SRC.index("drop_scaffold_steps(subtasks, goal)") > SRC.index("validate_chunk_plan(subtasks"))
 
+
+# ── 6. "Completed Tasks" sind keine offenen Schritte ───────────────────
+COMPLETED_PLAN = (
+    "## Plan: two files\n\n### Open Tasks\n"
+    "1. file: greet.py | touch: greet(name) | decision: return | risk: none\n"
+    "2. file: main.py | touch: print greet | decision: none | risk: none\n\n"
+    "### Completed Tasks\n1. [x] greet.py created\n2. [x] main.py created\n"
+)
+subs_c, mode_c, _ = parse_planner_output(COMPLETED_PLAN, goal=GOAL)
+check("6a completed tasks are not plan steps",
+      len(subs_c) == 2 and all("[x]" not in s for s in subs_c), f"({subs_c})")
+check("6b the open steps survive", any("greet.py" in s for s in subs_c) and
+      any("main.py" in s for s in subs_c))
+subs_ck, _, _ = parse_planner_output(
+    "### Open Tasks\n1. [x] already done thing here\n2. build the real thing now\n",
+    goal="build the real thing")
+check("6c a [x] line inside Open Tasks is skipped too",
+      len(subs_ck) == 1 and "[x]" not in subs_ck[0], f"({subs_ck})")
+
 print()
 print(f"SUMMARY planner_scaffold_guard: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)
