@@ -731,6 +731,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_chunking_fixes.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_coder_after_run.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -820,6 +824,10 @@
   "except_pass": 1
  },
  "tests/test_duo_e2e_smoke.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_split.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1225,6 +1233,10 @@
  },
  "tests/test_settings_foreign_write_warning.py": {
   "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_shell_chain_guard.py": {
+  "broad_except": 1,
   "except_pass": 0
  },
  "tests/test_shell_env.py": {

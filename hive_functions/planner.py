@@ -591,7 +591,55 @@ def validate_chunk_plan(steps: list[str], *, max_steps: int) -> tuple[list[str],
 #  FULL OUTPUT PARSING PIPELINE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def parse_planner_output(raw: str, *, step_cap: int = 20) -> tuple[list[str], str, dict]:
+# ── SCAFFOLD-GUARD (2026-10-26, live) ─────────────────────────────────
+# A small model turns "create two files" into "initialize a python project":
+# README, requirements.txt, .gitignore, src/. That is unrequested work and, in
+# chunking mode, seven chunks of it. Deterministic post-parse filter instead of
+# another prompt rule the model ignores.
+_SCAFFOLD_WORDS = (
+    "readme", "requirements.txt", "pyproject.toml", "setup.py", "setup.cfg",
+    "package.json", "tsconfig", "dockerfile", "docker-compose", "makefile",
+    ".gitignore", ".env.example", "license", "src/", "src directory",
+    "changelog", "manifest", "project structure", "directory structure",
+)
+_SCAFFOLD_ALLOW_WORDS = ("project", "scaffold", "setup", "set up", "struktur",
+                         "structure", "init", "initialize", "boilerplate",
+                         "geruest", "gerüst")
+
+
+def goal_allows_scaffold(goal: str) -> bool:
+    """True when the user actually asked for a project shell."""
+    g = str(goal or "").lower()
+    return any(w in g for w in _SCAFFOLD_ALLOW_WORDS)
+
+
+def drop_scaffold_steps(steps: list[str], goal: str) -> tuple[list[str], list[str]]:
+    """Split plan steps into (kept, dropped) for unrequested scaffolding."""
+    if not steps:
+        return [], []
+    if not str(goal or "").strip():
+        # Without the request we cannot tell requested setup from invented
+        # setup. Stay conservative: keep the plan untouched.
+        return list(steps), []
+    g = str(goal or "").lower()
+    if goal_allows_scaffold(goal):
+        return list(steps), []
+    kept, dropped = [], []
+    for step in steps:
+        s = str(step or "").lower()
+        if any(w in s and w not in g for w in _SCAFFOLD_WORDS):
+            dropped.append(step)
+            continue
+        kept.append(step)
+    # Never silently empty a plan: if EVERY step was scaffolding, the goal is
+    # better served by the deterministic fallback plan than by nothing.
+    if not kept:
+        return [], list(steps)
+    return kept, dropped
+
+
+def parse_planner_output(raw: str, *, step_cap: int = 20,
+                          goal: str = "") -> tuple[list[str], str, dict]:
     """
     Parse raw planner output into a subtask list.
 
@@ -679,6 +727,17 @@ def parse_planner_output(raw: str, *, step_cap: int = 20) -> tuple[list[str], st
     quality_meta: dict = {}
     if subtasks:
         subtasks, quality_meta = validate_chunk_plan(subtasks, max_steps=step_cap)
+    _kept, _dropped = drop_scaffold_steps(subtasks, goal)
+    if _dropped and not _kept:
+        # everything the plan proposed looked like scaffolding: keep the plan
+        # instead of handing an empty plan to the coder
+        _dropped = []
+    if _dropped:
+        logger.warning("[PLANNER-SCAFFOLD] dropped %d unrequested scaffold step(s): %s",
+                       len(_dropped), "; ".join(str(s)[:60] for s in _dropped[:4]))
+        quality_meta = dict(quality_meta or {})
+        quality_meta["scaffold_dropped"] = len(_dropped)
+        subtasks = _kept
 
     return subtasks, parse_mode, quality_meta
 
@@ -1307,7 +1366,8 @@ async def run_planner(
         _fallback_reason = _fallback_reason or "empty_plan_output"
 
     if _raw_output:
-        subtasks, parse_mode, quality_meta = parse_planner_output(_raw_output, step_cap=step_cap)
+        subtasks, parse_mode, quality_meta = parse_planner_output(
+            _raw_output, step_cap=step_cap, goal=str(task or ""))
         result.subtasks = subtasks
         result.parse_mode = parse_mode
         result.plan_guard = quality_meta

@@ -291,11 +291,18 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
 
             # P1-FIX (2026-08-10): Semikolon-verkettete Kommandos (z.B.
             _HAS_SEMICOLON = ";" in cmd
+            # SHELL-CHAIN-GUARD (2026-10-26, live): the shims below split their
+            # arguments on whitespace and act on EVERY token. A chained command
+            # like `touch a.py && echo done` therefore created files named
+            # "&&", "echo" and "done" in the workspace. Anything with a shell
+            # operator is refused with instructions instead of half-run.
+            _SHELL_OPS = ("&&", "||", "|", ";", ">", "<", "`", "$(")
+            _HAS_SHELL_CHAIN = any(op in cmd for op in _SHELL_OPS)
             _cd_mkdir = _re_win.match(
                 r'cd\s+("([^"]+)"|(\S+))\s+&&\s+mkdir\s+-p\s+(.*)',
                 cmd.strip(), _re_win.DOTALL
             )
-            if _cd_mkdir and not _HAS_SEMICOLON:
+            if _cd_mkdir and not _HAS_SHELL_CHAIN:
                 _base = _WPath(_cd_mkdir.group(2) or _cd_mkdir.group(3))
                 _dirs_raw = _cd_mkdir.group(4).strip()
                 _dir_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _dirs_raw)
@@ -303,20 +310,27 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 return _do_mkdir(_dirs)
 
             _mkdir_p_match = _re_win.match(r'mkdir\s+-p\s+(.*)', cmd.strip(), _re_win.DOTALL)
-            if _mkdir_p_match and not _HAS_SEMICOLON:
+            if _mkdir_p_match and not _HAS_SHELL_CHAIN:
                 _raw_paths = _mkdir_p_match.group(1).strip()
                 _path_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _raw_paths)
                 _dirs = [_WPath(a or b) for a, b in _path_parts]
                 return _do_mkdir(_dirs)
 
             _mkdir_plain = _re_win.match(r'mkdir\s+(.*)', cmd.strip(), _re_win.DOTALL)
-            if _mkdir_plain and not _HAS_SEMICOLON:
+            if _mkdir_plain and not _HAS_SHELL_CHAIN:
                 _raw_paths = _mkdir_plain.group(1).strip()
                 _path_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _raw_paths)
                 _dirs = [_WPath(a or b) for a, b in _path_parts]
                 return _do_mkdir(_dirs)
 
             _touch_match = _re_win.match(r'touch\s+(.*)', cmd.strip())
+            if _touch_match and _HAS_SHELL_CHAIN:
+                return ("[TOOL_ERROR: SHELL_CHAIN_UNSUPPORTED]\n"
+                        "run_bash does not chain commands on Windows (found: "
+                        "'&&', '||', ';', '|', '>', '<' or a subshell). The "
+                        "shell shims would treat the operators as file names.\n"
+                        "Run one command per call, or create the file with "
+                        "write_file.")
             if _touch_match:
                 _touch_raw = _touch_match.group(1).strip()
                 _touch_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _touch_raw)
@@ -341,6 +355,10 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                 return f"[exit 0 - touched {len(_touch_done)} file(s)]"
 
             _rm_match = _re_win.match(r'rm\s+(?:-[rRfF]+\s+)?(.*)', cmd.strip())
+            if _rm_match and cmd.strip().startswith("rm ") and _HAS_SHELL_CHAIN:
+                return ("[TOOL_ERROR: SHELL_CHAIN_UNSUPPORTED]\n"
+                        "run_bash does not chain commands on Windows (found a "
+                        "shell operator). Run one command per call.")
             if _rm_match and cmd.strip().startswith("rm "):
                 _rm_raw = _rm_match.group(1).strip()
                 _rm_parts = _re_win.findall(r'"([^"]+)"|(\S+)', _rm_raw)

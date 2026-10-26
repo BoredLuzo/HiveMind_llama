@@ -202,6 +202,8 @@ SUITES = [
     ("gateway_supervisor",     "tests/test_gateway_supervisor.py",              60),
     ("phone_restriction",      "tests/test_phone_restriction.py",               60),
     ("verification_honesty",   "tests/test_verification_honesty.py",          60),
+    ("planner_scaffold_guard", "tests/test_planner_scaffold_guard.py",    30),
+    ("shell_chain_guard",    "tests/test_shell_chain_guard.py",         30),
     ("chunking_fixes",         "tests/test_chunking_fixes.py",               60),
     ("git_init_clone",        "tests/test_git_init_clone.py",               60),
     ("chunk_render_no_write",  "tests/test_chunk_render_no_write_pin.py",      30),
