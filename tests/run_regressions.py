@@ -219,6 +219,7 @@ SUITES = [
     ("smoke_harness",           "tests/test_smoke_harness.py",                 60),
     ("vision_gate",             "tests/test_vision_gate.py",                   60),
     ("steer_images",            "tests/test_steer_images.py",                  60),
+    ("mcp_client",              "tests/test_mcp_client.py",                    90),
 ]
 
 

@@ -203,6 +203,7 @@ from routers import learning_router
 from routers import soul_router
 from routers import vision_router
 from routers import vram_router
+from routers import mcp_router
 from routers import websearch_router
 from routers import skills_router
 from routers import debug_router, models_router
@@ -2418,6 +2419,7 @@ async def gateway_stop():
 
 # -- Router Registration --
 app.include_router(automap_router)
+app.include_router(mcp_router)
 app.include_router(chats_router)
 app.include_router(config_router)
 app.include_router(context_router)

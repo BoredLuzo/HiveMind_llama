@@ -1396,7 +1396,7 @@ async def _run_inline_tool(
                 f"Note: write_file with full content is only for creating NEW files.\n"
                 f"      To disable this guard set duo_write_guard_enabled=false."
             )
-    if tool_mode:
+    if tool_mode and not (bool(name) and name.startswith("mcp_")):
         _allowed = _tool_names_for_mode(tool_mode, include_websearch=include_websearch)
         if name not in _allowed:
             return _tool_error_response(
@@ -1415,7 +1415,22 @@ async def _run_inline_tool(
     # legacy handler can never be resurrected by a hallucinated call. Internal
     # delegations (write_file -> edit_file) stay untouched: those names are
     # offered.
-    if name and name not in _OFFERED_TOOL_NAMES_UNION:
+    _is_mcp_tool = bool(name) and name.startswith("mcp_")
+    if _is_mcp_tool:
+        # MCP-CLIENT (beta, 2026-10-26): the tool names are dynamic, so they
+        # are not part of any static mode allowlist. Accept them only while the
+        # client is enabled; the phone gate above still blocks phone runs.
+        try:
+            from infra import mcp_client as _mcp_mod
+            if not _mcp_mod.enabled():
+                return _tool_error_response(
+                    "MCP_DISABLED",
+                    f"Tool '{name}' belongs to an MCP server, but the MCP client "
+                    f"is disabled (settings: mcp_client_enabled).",
+                    tool=name)
+        except (ImportError, AttributeError, TypeError):
+            pass
+    if name and name not in _OFFERED_TOOL_NAMES_UNION and not _is_mcp_tool:
         import logging as _lg_dead_mod
         _lg_dead = _lg_dead_mod.getLogger("hivemind.tools")
         _lg_dead.warning("[TOOL-DEAD] '%s' is not offered by any tool mode - rejected",
@@ -1448,6 +1463,19 @@ async def _run_inline_tool(
                         corrected_ext = _fuzzy_resolve_path(_with_ext, str(workspace))
                         if corrected_ext:
                             args["path"] = corrected_ext
+    if bool(name) and name.startswith("mcp_"):
+        # MCP-CLIENT (beta): one branch, no handler entry - the tool set is
+        # dynamic and must not disturb the static handler map or its pins.
+        try:
+            from infra import mcp_client as _mcp_call
+            _mcp_result = await _mcp_call.call(name, args or {})
+        except (ImportError, AttributeError, TypeError) as _mcp_exc:
+            _mcp_result = (f"[TOOL_ERROR: MCP_UNAVAILABLE]\n"
+                           f"MCP client not available: {_mcp_exc}")
+        _mcp_result = _normalize_meta_paths(_mcp_result)
+        if _resolve_hint:
+            _mcp_result = _resolve_hint + _mcp_result
+        return _mcp_result
     handler = _INLINE_TOOL_HANDLER_MAP.get(name)
     if handler is not None:
         # ── A-P1-9: Web-Search-Call-Budget (Governor analog ask_user) ──

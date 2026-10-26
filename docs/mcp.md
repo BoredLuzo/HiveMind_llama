@@ -2,6 +2,9 @@
 
 HiveMind is usable from an IDE in two directions. Both are local-only by default.
 
+> The opposite direction, using **external** MCP servers as tools, is the
+> MCP client beta: [mcp_client.md](mcp_client.md).
+
 ## 1. HiveMind → IDE (MCP server, port 8090)
 
 `start_mcp.bat` starts an MCP server (`infra/mcp_server.py`) with stdio and an

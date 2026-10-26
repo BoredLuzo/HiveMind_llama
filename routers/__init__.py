@@ -13,3 +13,4 @@ from routers.skills import router as skills_router
 from routers.automap import router as automap_router
 from routers.debug import router as debug_router
 from routers.models import router as models_router
+from routers.mcp import router as mcp_router

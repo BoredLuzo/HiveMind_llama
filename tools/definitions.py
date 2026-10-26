@@ -605,6 +605,15 @@ def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
     tools = list(_INLINE_CODING_TOOLS)
     if include_websearch and _WEBSEARCH_AVAILABLE and _websearch is not None:
         tools.extend(_websearch.get_tool_defs())
+    # MCP CLIENT (beta, 2026-10-26): tools of the configured external servers.
+    # get_tool_defs is cache-only; the client starts servers on /mcp/reload and
+    # on the first run that needs them (see infra/mcp_client.py).
+    try:
+        from infra import mcp_client as _mcp
+        if _mcp.enabled():
+            tools.extend(_mcp.tool_defs())
+    except (ImportError, AttributeError, TypeError):
+        pass
     if mode:
         tools = _filter_tools_for_mode(tools, mode, include_websearch=include_websearch)
     if budget_chars:
