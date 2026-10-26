@@ -224,7 +224,7 @@ check("7d more than MAX_SERVERS is capped",
 # ── 8. Dispatch-Verdrahtung --------------------------------------------
 from tools import runner as R  # noqa: E402
 
-_orig_enabled = MC.McpClient.enabled
+_orig_enabled = MC.McpClient.__dict__["enabled"]   # staticmethod descriptor
 _orig_call = MC.call
 
 
@@ -263,6 +263,42 @@ import settings as S  # noqa: E402
 check("10a mcp_client_enabled defaults to off", S.DEFAULT_SETTINGS.get("mcp_client_enabled") is False)
 check("10b timeout default is 30 s", S.DEFAULT_SETTINGS.get("mcp_client_timeout_s") == 30)
 check("10c server list default is empty", S.DEFAULT_SETTINGS.get("mcp_servers") == [])
+
+
+# ── 11. Entfernter Server wird geschlossen, Kollision gemeldet ----------
+async def _orphan_flow():
+    client = MC.McpClient()
+    first = spec("alpha")
+    st1 = await client.refresh(settings_with(first))
+    conn = client._conns.get("alpha")
+    proc = conn._proc if conn else None
+    # zweiter Refresh ohne diesen Server
+    st2 = await client.refresh(settings_with(spec("beta")))
+    rc = getattr(proc, "returncode", None)
+    await client.close_all()
+    return st1, st2, rc, dict(client._conns)
+
+
+st1, st2, rc, conns = asyncio.run(_orphan_flow())
+check("11a a server that left the config is closed", rc is not None, f"(rc={rc})")
+check("11b the new config is active", st2["servers"][0]["name"] == "beta")
+
+async def _collision_flow():
+    # two names that sanitize to the same tool prefix: "my srv" and "my/srv"
+    client = MC.McpClient()
+    st = await client.refresh(settings_with(spec("my srv"), spec("my/srv")))
+    names = [d["function"]["name"] for d in client.tool_defs()]
+    await client.close_all()
+    return st, names
+
+
+st, names = asyncio.run(_collision_flow())
+check("11c colliding tool names are not duplicated",
+      len(names) == len(set(names)), f"({sorted(names)})")
+check("11d the prefix is the sanitized server name",
+      all(n.startswith("mcp_my_srv_") for n in names), f"({sorted(names)})")
+skipped = [s for e in st["servers"] for s in e.get("skipped", [])]
+check("11e the skip is reported in the status", len(skipped) == 4, f"({skipped})")
 
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")

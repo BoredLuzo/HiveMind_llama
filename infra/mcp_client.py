@@ -416,11 +416,24 @@ class McpClient:
             self._names = {}
             return {"enabled": False, "servers": []}
         timeout_s = self.timeout_s(settings)
+        specs = self._specs(settings)
+        # ORPHAN-CLOSE (2026-10-26): a server removed from the config (or set to
+        # enabled:false) must not keep its child alive. Before, the process
+        # stayed running until the engine shut down.
+        wanted = {s.name for s in specs}
+        for gone in [n for n in self._conns if n not in wanted]:
+            conn = self._conns.pop(gone, None)
+            if conn is not None:
+                try:
+                    await conn.close()
+                except (OSError, ValueError, McpError):
+                    pass
+                logger.info("[MCP] server %s left the config, process closed", gone)
         status: list[dict] = []
         self._defs = []
         self._names = {}
-        for spec in self._specs(settings):
-            entry = spec.describe() | {"ok": False, "tools": 0, "error": ""}
+        for spec in specs:
+            entry = spec.describe() | {"ok": False, "tools": 0, "error": "", "skipped": []}
             try:
                 conn = await self._conn(spec, timeout_s)
             except McpError as exc:
@@ -432,6 +445,15 @@ class McpClient:
             status.append(entry)
             for tool in conn.tools:
                 name = _tool_name(spec.name, tool["name"])
+                if name in self._names:
+                    # COLLISION (2026-10-26): two servers sanitize to the same
+                    # name. Skip the later one instead of letting it silently
+                    # own the call, and say so in the status.
+                    other = self._names[name][0]
+                    entry["skipped"].append(tool["name"])
+                    logger.info("[MCP] tool name %s of %s collides with %s, "
+                                "skipped", name, spec.name, other)
+                    continue
                 self._names[name] = (spec.name, tool["name"])
                 self._defs.append(_tool_def(name, spec.name, tool))
         return {"enabled": True, "servers": status}
