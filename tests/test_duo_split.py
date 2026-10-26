@@ -198,6 +198,48 @@ if _h is not None:
     check("[b3] runner still owns the planner skip / planner-off branches",
           "Planner skipped — going straight to coder" in _runseg)
 
+# ── block 5: critic review + final test ─────────────────────────────────────
+CRITIC_FIELDS = [
+    "parts", "t", "verify_last_ok_serial", "critic_issues",
+    "final_verdict", "approved", "verify_gate_blocked",
+]
+check_seam("_duo_critic_review", "_DuoCriticReviewState", CRITIC_FIELDS, "b5")
+
+_h = fn("_duo_critic_review")
+if _h is not None:
+    _seg = ast.get_source_segment(SRC, _h) or ""
+    check("[b5] both critic variants moved into the helper",
+          "_CRITIC_VERIFY_TOOLS" in _seg and "_critic_plain_payload" in _seg)
+    check("[b5] duo_critic_done emit moved into the helper",
+          "duo_critic_done" in _seg)
+    check("[b5] verify-gate patch moved into the helper",
+          "verification_required_after_write" in _seg)
+    _runseg = SRC[SRC.index("async def run_code_duo"):]
+    check("[b5] runner no longer builds critic payloads",
+          "_critic_plain_payload" not in _runseg and "_critic_tc_payload" not in _runseg)
+    check("[b5] runner still owns the _can_finish_round advance logic",
+          "_can_finish_round" in _runseg)
+
+_ft = fn("_duo_final_test")
+check("[b5] _duo_final_test is module-level async", _ft is not None and isinstance(_ft, ast.AsyncFunctionDef))
+if _ft is not None:
+    _seg = ast.get_source_segment(SRC, _ft) or ""
+    check("[b5] final-test gate moved into the helper",
+          "_final_test_fb" in _seg and "test_feedback_final" in _seg)
+    check("[b5] completion notes stay on the shared ChunkState",
+          "_cs.completion_notes.append" in _seg)
+    _params = {a.arg for a in _ft.args.args + _ft.args.kwonlyargs}
+    check("[b5] final-test params explicit", _params == {"ctx", "state", "_cs", "_n_items", "_eff_run_ws"},
+          f"got={sorted(_params)}")
+    _local = in_scope_names(_ft.body)
+    _loads = {_n.id for _n in ast.walk(_ft)
+              if isinstance(_n, ast.Name) and isinstance(_n.ctx, ast.Load)}
+    _rl = runner_locals()
+    _shadow = sorted(_n for _n in _loads
+                     if _n in _rl and _n not in _params and _n not in _local
+                     and _n not in MODULE_NAMES)
+    check("[b5] final-test reads no unpassed runner local", not _shadow, f"leaked={_shadow}")
+
 print()
 if failed:
     print(f"FAILED: {failed} check(s) failed, {passed} passed")
