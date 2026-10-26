@@ -87,8 +87,11 @@ check("4e without a goal the filter stays out of the way", len(subs3) == 6, f"({
 
 # ── 5. Quelle: der Aufruf im Runner gibt das Ziel mit ──────────────────
 SRC = (ROOT / "hive_functions" / "planner.py").read_text(encoding="utf-8", errors="replace")
-check("5a run_planner passes the task as goal",
-      "goal=str(task or \"\")" in SRC)
+check("5a the filter gets the user request, not the enriched task",
+      "goal=_goal_for_guard" in SRC and "user_goal or task" in SRC)
+check("5c the runner hands the raw request in",
+      "user_goal=ctx.user_input" in (ROOT / "core" / "duo_runner.py").read_text(
+          encoding="utf-8", errors="replace"))
 check("5b the filter is wired after validate_chunk_plan",
       SRC.index("drop_scaffold_steps(subtasks, goal)") > SRC.index("validate_chunk_plan(subtasks"))
 

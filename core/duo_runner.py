@@ -807,6 +807,7 @@ async def _duo_planner_phase(
             # ── Run planner as background task ──────────────────────────────
             _plan_task = asyncio.create_task(run_planner(
                 task=_planner_task,
+                user_goal=ctx.user_input,
                 sees_images=_img_plan.get("planner") == "raw",
                 coder_sees_images=_img_plan.get("coder") == "raw",
                 images=ctx.images if _img_plan.get("planner") == "raw" else None,

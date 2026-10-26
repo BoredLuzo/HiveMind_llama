@@ -1196,6 +1196,7 @@ def _resolve_planner_max_tokens(settings: dict | None, planner_ctx: int) -> int:
 async def run_planner(
     *,
     task:                 str,
+    user_goal:            str = "",
     explore_ctx:          str,
     planner_model:        str,
     planner_port:         int,
@@ -1418,8 +1419,20 @@ async def run_planner(
         _fallback_reason = _fallback_reason or "empty_plan_output"
 
     if _raw_output:
+        # THE FILTER NEEDS THE USER REQUEST, not the enriched planner task:
+        # the caller adds project/follow-up context that mentions "project",
+        # which would switch the scaffold allow-list on (live 2026-10-26).
+        _goal_for_guard = str(user_goal or task or "")
         subtasks, parse_mode, quality_meta = parse_planner_output(
-            _raw_output, step_cap=step_cap, goal=str(task or ""))
+            _raw_output, step_cap=step_cap, goal=_goal_for_guard)
+        if (subtasks and not (quality_meta or {}).get("scaffold_dropped")
+                and not (quality_meta or {}).get("scaffold_replaced")
+                and any(w in " ".join(map(str, subtasks)).lower()
+                        for w in _SCAFFOLD_WORDS)):
+            logger.warning(
+                "[PLANNER-SCAFFOLD] steps look like scaffolding but nothing was "
+                "dropped: allow=%s goal=%r", goal_allows_scaffold(_goal_for_guard),
+                _goal_for_guard[:140])
         result.subtasks = subtasks
         result.parse_mode = parse_mode
         result.plan_guard = quality_meta
