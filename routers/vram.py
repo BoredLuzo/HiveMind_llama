@@ -326,9 +326,21 @@ async def ollama_load(req: Request):
         keep_alive = data.get("keep_alive", "-1")
         if not model:
             return JSONResponse({"error": "model fehlt"}, status_code=400)
-        _load_ctx = _get_num_ctx(model)
+        # CTX-PARAM (2026-10-26, measurement finding): the load path sized
+        # the server from _get_num_ctx ONLY (hardcoded table + settings
+        # overrides) - a profile's num_ctx never reached llama-server and
+        # neither did any caller value. Accept an explicit num_ctx like
+        # /vram/estimate already does; absent = old behavior.
+        _load_ctx = None
+        try:
+            _load_ctx = int(data.get("num_ctx") or data.get("ctx") or 0) or None
+        except (TypeError, ValueError):
+            _load_ctx = None
+        if _load_ctx is None:
+            _load_ctx = _get_num_ctx(model)
         await _bk_load(model, keep_alive=keep_alive, num_ctx=_load_ctx)
-        return {"ok": True, "model": model, "keep_alive": keep_alive}
+        return {"ok": True, "model": model, "keep_alive": keep_alive,
+                "num_ctx": _load_ctx}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
