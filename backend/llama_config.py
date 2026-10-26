@@ -351,6 +351,10 @@ _DENSE_KV_CACHE_TYPES: dict[str, str] = {
 # the measured +42% decode for unattended coding; +42% decode / -30% prefill
 # measured the same day, hermes 35B, 1024-token generations). Overridable via
 # HIVEMIND_MTP_DRAFT_N_MAX - never ship 3+ (documented corruption).
+# RE-TESTED on the b11889 update (2026-10-26): still 0/3 greedy-identical
+# (same near-tie flip pattern as b11802). The update does NOT fix the
+# determinism divergence - mtp stays off. Re-check after the NEXT build
+# bump (scripts: HiveMind_dev/mtp_quality.py + mtp_control.py).
 # SPEC OFF-SWITCH (2026-09-17): HIVEMIND_MTP_SPEC=0 disables the spec-decode
 # flags entirely — draft-mtp also disables llama-server's prompt cache-reuse
 # and has reported heavy prefill regressions on some backends (Vulkan/Metal,
