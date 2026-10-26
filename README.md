@@ -8,7 +8,7 @@
 Local multi-agent coding assistant on top of llama.cpp. Runs on your own
 hardware, no cloud, no API keys, nothing leaves your machine.
 
-**Current release: 1.4.9 (2026-10-26)** - Windows installer and Linux script,
+**Current release: see the [releases page](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)** - Windows installer and Linux script,
 voice in and out, hardened tool layer. Download:
 [`HiveMind_v1.4.9_release.zip`](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)
 | what changed: [CHANGELOG](CHANGELOG.md).
