@@ -33,7 +33,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_agentic_thinking` | bool | `False` |  |
 | `duo_autolint_python_engine` | str | `auto` |  |
 | `duo_caps` | object | `{}` |  |
-| `duo_chunking` | bool | `True` |  |
+| `duo_chunking` | bool | `False` |  |
 | `duo_coder_after_run` | str | `keep` |  |
 | `duo_coder_briefing_think_tokens` | int | `1500` |  |
 | `duo_coder_ctx_agentic` | null | `None` |  |

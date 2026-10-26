@@ -580,7 +580,7 @@ made while it runs is lost on the next settings write.
 | `duo_tree_scout_enabled` | true | tree-scout codebase analysis |
 | `duo_static_map_chars` | 0 | static repo-map budget (0 = auto) |
 | `duo_pre_explore` | false | LLM pre-explore before planning |
-| `duo_chunking` | true | task decomposition into subtasks |
+| `duo_chunking` | false | task decomposition into subtasks (opt-in) |
 | `duo_agentic_mode` | false | agentic (single-model) instead of duo |
 | `duo_git_autocommit` | false | auto-commit after each chunk |
 | `duo_git_checkpoints` | false | git commit at chunk start (writes to your repo - opt-in) |

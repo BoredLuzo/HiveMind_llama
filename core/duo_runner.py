@@ -3250,9 +3250,13 @@ async def run_code_duo(ctx):
         _accumulated_replan_bonus: int = 0
         _di = 0
         while _di < _n_items:
-            if _subtasks and not bool(ctx.settings.get("duo_chunking", False)):
+            # CHUNKING-OFF HONESTY (2026-10-27): the old message claimed the
+            # run "continues with chunking" while chunking was disabled and
+            # the planner subtasks were already discarded (1028) - it also
+            # fired on EVERY chunk. Say it once, say what actually happens.
+            if _di == 0 and _subtasks and not bool(ctx.settings.get("duo_chunking", False)):
                 yield await ctx.emit({"type": "status",
-                    "content": "⚙️ Chunking disabled in settings — current run continues with chunking (value from start)"})
+                    "content": f"⚙️ Chunking is off - the planner's {len(_subtasks)} subtask(s) are skipped; the coder runs the task in one pass"})
             _subtask = _loop_items[_di]
             _soft_check_done = False  # reset per subtask
             if _subtask:
@@ -6931,14 +6935,17 @@ async def run_code_duo(ctx):
                                   "elapsed": 0,
                                   "verdict": {"approved": True, "issues": [], "verdict": "Auto-approved"},
                                   "approved": True})
+                # CHUNK-DONE TIMING (2026-10-27): mark AFTER the auto-test,
+                # not before - a failing test re-processes this chunk, and a
+                # pre-marked chunk would count as done while broken.
+                _ac_out = await _auto_commit_chunk(ctx.user_input, _subtask, _ws_str,
+                                                   ctx.duo_config.git_autocommit,
+                                                   files=list(_cs.written_files[-20:]),
+                                                   commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
+                if _ac_out:
+                    yield await ctx.emit({"type": "status", "content": _ac_out})
                 if _subtask:
                     _cs.mark_chunk_done(_subtask)
-                    _ac_out = await _auto_commit_chunk(ctx.user_input, _subtask, _ws_str,
-                                                       ctx.duo_config.git_autocommit,
-                                                       files=list(_cs.written_files[-20:]),
-                                                       commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
-                    if _ac_out:
-                        yield await ctx.emit({"type": "status", "content": _ac_out})
                 if _is_last:
                     break
                 _di += 1
@@ -6969,10 +6976,14 @@ async def run_code_duo(ctx):
                 _approved = _critic_ps.approved
                 _verify_gate_blocked = _critic_ps.verify_gate_blocked
 
-            _can_finish_round = (_approved or _is_last) and not _verify_gate_blocked
+            # CRITIC-GATE FAIRNESS (2026-10-27): the old `_approved or _is_last`
+            # waved the LAST chunk through unreviewed - exactly the chunk that
+            # usually carries the integration work. The last chunk needs the
+            # same approval as every other; `_is_last` only removes the
+            # continue-to-next-chunk part, not the gate.
+            _can_finish_round = _approved and not _verify_gate_blocked
             if _can_finish_round:
                 if _subtask:
-                    _cs.mark_chunk_done(_subtask)
                     critic_issues = _cs.critic_issues  # cleared by mark_chunk_done
                     _rem = _n_items - _di - 1
                     yield await ctx.emit({"type":"status",
@@ -6984,6 +6995,12 @@ async def run_code_duo(ctx):
                                                        commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
                     if _ac_out:
                         yield await ctx.emit({"type": "status", "content": _ac_out})
+                    # CHUNK-DONE TIMING (2026-10-27): the chunk is marked done
+                    # AFTER the auto-test verdict below - a failing test
+                    # re-processes it; a pre-marked chunk would count as done
+                    # while broken. Also: mark_chunk_done clears critic_issues
+                    # (kept by reading them here once, before the test).
+                    critic_issues = _cs.critic_issues
                     # ── P3: Auto-Test after chunk completion (Self-Awakening) ──────────
                     # Delegates to ChunkState for the self-fix/re-awaken pattern.
                     _duo_test_feedback = bool(ctx.duo_config.test_feedback_chunk)
@@ -7010,6 +7027,10 @@ async def run_code_duo(ctx):
                         if _is_clean:
                             yield await ctx.emit({"type": "status",
                                 "content": f"\u2705 Tests passed ({_chunk_test_result.language})"})
+                            # CHUNK-DONE TIMING (2026-10-27): the verdict is
+                            # clean - NOW the chunk counts as done.
+                            if _subtask:
+                                _cs.mark_chunk_done(_subtask)
                             _di += 1
                             _cs.reset_test_retries()
                             _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")

@@ -99,7 +99,10 @@ DEFAULT_SETTINGS = {
     "duo_tool_rounds":         0,
     "duo_use_pipeline":        False,
     "duo_critic_tools":        False,
-    "duo_chunking":            True,
+    # CHUNKING DEFAULT OFF (2026-10-27, owner): stays a working opt-in, but a
+    # fresh install runs one coder pass (the planner subtasks are skipped
+    # with an honest status) instead of silently chunking.
+    "duo_chunking":            False,
     "duo_coding_mode":         True,
     "duo_pre_explore":         False,
     # UI state only: remembers the Duo "pair" selector position. The same
