@@ -461,8 +461,6 @@ token - whisper and parakeet are public repos.
 ## API
 
 - OpenAI-compatible `/v1/chat/completions` (agent tool-loop mode).
-- MCP client (beta): external MCP servers as tools (`settings: mcp_client_enabled`,
-  off by default) - see [docs/mcp_client.md](docs/mcp_client.md).
 - MCP server (Model Context Protocol, `infra/mcp_server.py`), stdio + HTTP on - see [docs/mcp.md](docs/mcp.md) for the tiers, limits and the editor-context endpoint.
   port 8090 (`start_mcp.bat`), tiered read/write/exec permissions.
 - `/automap/*` for routing profiles, `/model_configs/*` for base/learned/

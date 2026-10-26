@@ -21,4 +21,3 @@
 /ruff.toml export-ignore
 /.gitignore export-ignore
 /.gitattributes export-ignore
-/CONTRIBUTING.md export-ignore
