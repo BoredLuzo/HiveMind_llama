@@ -291,6 +291,50 @@ if _h is not None:
     check("[b4] runner no longer builds the pressure prompt",
           "[CTX CRITICAL — ~" not in _runseg)
 
+# ── block 2: coder tool-loop setup (port cache / slot ctx / budgets) ───────
+PORTCACHE_FIELDS = ["dport", "cached_coder_port", "cached_coder_port_ctx"]
+check_seam("_duo_resolve_coder_port_cache", "_DuoCoderPortCacheState", PORTCACHE_FIELDS, "b2")
+
+_h = fn("_duo_resolve_coder_port_cache")
+if _h is not None:
+    _seg = ast.get_source_segment(SRC, _h) or ""
+    check("[b2] ensure_loaded retry moved into the helper",
+          "ensure_loaded" in _seg and "Model unreachable" in _seg)
+    _runseg = SRC[SRC.index("async def run_code_duo"):]
+    check("[b2] runner no longer owns the reload retry",
+          "Model unreachable" not in _runseg)
+    check("[b2] runner still owns the model-load-fail chunk stop",
+          "_model_load_failed = True" in _runseg and "could not be loaded" in _runseg)
+
+SLOTCTX_FIELDS = [
+    "dtool_ctx", "cached_coder_port_ctx", "actual_ctx",
+    "slot_degraded", "slot_ctx_floor_stop", "dtool_ctx_requested",
+]
+check_seam("_duo_query_actual_slot_ctx", "_DuoSlotCtxState", SLOTCTX_FIELDS, "b2")
+
+_h = fn("_duo_query_actual_slot_ctx")
+if _h is not None:
+    _seg = ast.get_source_segment(SRC, _h) or ""
+    check("[b2] slot-ctx query + Guard-C flags moved into the helper",
+          "[CTX-ACTUAL] slot ctx=%d" in _seg and "CTX-FLOOR-PRECONDITION" in _seg)
+    _runseg = SRC[SRC.index("async def run_code_duo"):]
+    check("[b2] runner still owns the Guard-C round-loop stop",
+          "_slot_ctx_floor_stop = True" in _runseg)
+
+BUDGETS_FIELDS = ["xtools_ws", "compress_threshold", "max_tool_rounds", "max_tool_rounds_cfg"]
+check_seam("_duo_resolve_tool_budgets", "_DuoToolBudgetsState", BUDGETS_FIELDS, "b2")
+
+_h = fn("_duo_resolve_tool_budgets")
+if _h is not None:
+    _seg = ast.get_source_segment(SRC, _h) or ""
+    check("[b2] REAL-CPT probe + budgets resolve moved into the helper",
+          "tokenize_count" in _seg and "_resolve_tool_budget(" in _seg)
+    _runseg = SRC[SRC.index("async def run_code_duo"):]
+    check("[b2] runner no longer resolves budgets inline",
+          "tokenize_count" not in _runseg)
+    check("[b2] runner still owns the round loop bound",
+          "for _dr in range(_max_tool_rounds + 2)" in _runseg)
+
 print()
 if failed:
     print(f"FAILED: {failed} check(s) failed, {passed} passed")
