@@ -207,11 +207,17 @@ echo  ==========================================================
 echo   [playwright] Installing Chromium browser
 echo  ==========================================================
 echo.
-uv run playwright install chromium
+REM PLAYWRIGHT-HARDENING (2026-10-26, ThinkPad): the venv python is the
+REM deterministic context (uv run could resolve elsewhere); on failure say
+REM the exact manual retry - a blocked Chromium download is the usual cause
+REM (proxy/firewall) and must not look like a broken install.
+"%~dp0.venv\Scripts\python.exe" -m playwright install chromium
 if errorlevel 1 (
     echo.
-    echo   [ERROR] Chromium installation failed.
-    echo   Browser tool will not work without it.
+    echo   [WARN] Chromium installation failed - HiveMind works without it,
+    echo   only the browser tool stays unavailable. Usual cause: the
+    echo   Chromium download was blocked ^(proxy/firewall^). Manual retry:
+    echo     .venv\Scripts\python.exe -m playwright install chromium
     echo.
 ) else (
     echo   OK.
