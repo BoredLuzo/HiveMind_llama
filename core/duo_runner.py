@@ -1959,6 +1959,143 @@ async def _duo_resolve_tool_budgets(
         ps.max_tool_rounds = _max_tool_rounds
         ps.max_tool_rounds_cfg = _max_tool_rounds_cfg
 
+
+
+@dataclasses.dataclass
+class _DuoDisconnectParkState:
+    """Disconnect-park state (moved verbatim from run_code_duo's abort path).
+
+    One field per local the park handler needs. Every field keeps the
+    default of the old `_p_*` pre-init because any of them can still be
+    unbound when the abort lands mid-setup - run_code_duo's ladders fill
+    in what exists (the commit-2270557 NameError-ladder bug class).
+    """
+    loop_items: list | None = None
+    di: int | None = None
+    done_tasks: list | None = None
+    written_files: list | None = None
+    explore_ctx: str = ""
+    ws_str: str = ""
+    n_items: int = 0
+
+
+def _duo_disconnect_park(ctx, ps: _DuoDisconnectParkState):
+    # CODE-MOTION (duo-runner-split): the disconnect-park call moved VERBATIM
+    # from run_code_duo's except (GeneratorExit, asyncio.CancelledError)
+    # branch; only the ps.X reads replace the old _p_* locals. No logic
+    # changes. Sync on purpose - the abort path must not grow new suspension
+    # points.
+    try:
+        _park_on_disconnect(
+            ctx=ctx,
+            loop_items=ps.loop_items,
+            di=ps.di,
+            done_tasks=ps.done_tasks,
+            written_files=ps.written_files,
+            explore_ctx=ps.explore_ctx,
+            ws_str=ps.ws_str,
+            n_items=ps.n_items,
+        )
+    except Exception as _park_err:
+        logger.warning("[DISCONNECT-PARK] Handler error: %s", _park_err)
+
+
+@dataclasses.dataclass
+class _DuoFinalCleanupState:
+    """Final-cleanup state (moved verbatim from run_code_duo's finally).
+
+    One field per run_code_duo local the cleanup reads. exec_mdl /
+    _run_id_global / _duo_pinned / _project_state /
+    _project_state_run_counted are bound before the mega-try and are
+    passed directly; _planner_model lives inside it and is ladder-collected
+    by the runner (default None = the old except-swallowed
+    UnboundLocalError path).
+    """
+    _planner_model: str | None = None
+    exec_mdl: str = ""
+    _run_id_global: str = ""
+    _duo_pinned: list | None = None
+    _project_state: object = None
+    _project_state_run_counted: bool = False
+
+
+async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
+    # CODE-MOTION (duo-runner-split): the mega-try finally body (duo slot
+    # unpin, coder-after-run evict, pause/resume cleanup, duo unpin task,
+    # project-state save) moved VERBATIM from run_code_duo; only the unpack
+    # at entry is new. No logic changes.
+    _planner_model = ps._planner_model
+    exec_mdl = ps.exec_mdl
+    _run_id_global = ps._run_id_global
+    _duo_pinned = ps._duo_pinned
+    _project_state = ps._project_state
+    _project_state_run_counted = ps._project_state_run_counted
+    # DUO-SLOT UNPIN (2026-10-01): the run pinned its planner/coder slots
+    # so the vision-preprocessing load could not LRU-evict them; release
+    # the pin so normal eviction can reclaim VRAM after the run.
+    try:
+        from backend.llama_server_manager import manager as _lsm_unpin
+        for _m in (_planner_model, exec_mdl):
+            if _m:
+                _lsm_unpin.unpin(_m)
+    except Exception:
+        pass
+    # CODER LIFETIME (2026-10-17, owner request): with
+    # duo_coder_after_run = "evict" the coder slot is released here - the
+    # next prompt can then load any model/mode without evicting something
+    # first. "keep" (default) leaves the slot warm; the idle TTL decides.
+    # This finally-block also runs on abort, so an aborted run releases the
+    # slot too.
+    try:
+        if str(ctx.settings.get("duo_coder_after_run", "keep")).strip().lower() == "evict" and exec_mdl:
+            from backend.llama_server_manager import manager as _lsm_car
+            await _lsm_car.evict(exec_mdl)
+            logger.info("[CODER-AFTER-RUN] coder slot evicted (duo_coder_after_run=evict)")
+    except (ImportError, AttributeError, TypeError, RuntimeError, OSError) as _car_err:
+        logger.debug("[CODER-AFTER-RUN] evict skipped: %s", _car_err)
+    # Cleanup Pause/Resume State
+    try:
+        _rid = _run_id_global
+        if _rid:
+            from infra.run_control import cleanup_pause
+            cleanup_pause(_rid)
+    except Exception as _err:
+        if isinstance(_err, (
+            GeneratorExit,
+            asyncio.CancelledError,
+            KeyboardInterrupt,
+            SystemExit,
+        )):
+            raise
+        logger.debug(
+            "[DUO] Suppressed error at cleanup_pause: %s",
+            _err, exc_info=True
+        )
+    _restore_ka = str(ctx.settings.get("smart_preload_keep_alive", "10m"))
+    if _duo_pinned:
+        asyncio.create_task(_unpin_duo_fn(ctx, _duo_pinned, _restore_ka))
+
+    if _project_state is not None and ctx.chat_id:
+        try:
+            from context.project_state import ProjectStateManager
+            if not _project_state_run_counted:
+                _project_state.total_runs += 1
+                _project_state_run_counted = True
+            _project_state.last_run_timestamp = datetime.now().isoformat()
+            if getattr(_project_state, 'last_run_success', None) is None:
+                # SUCCESS-ORDER (2026-09-22): the normal completion path
+                # sets last_run_success after this fallback ran — stamping
+                # False here logged every completed run as failed first
+                # (live: FireWork run ended 'completed' but the interim
+                # save said success=False). Mirror the stop reason instead.
+                _project_state.last_run_success = (getattr(ctx, "duo_stop_reason", "") == "completed")
+            ProjectStateManager().save(_project_state)
+            logger.info("[PROJECT] State gesichert in finally (Run #%d, success=%s)",
+                        _project_state.total_runs, _project_state.last_run_success)
+        except Exception as _save_err:
+            logger.warning("[PROJECT] Save in finally failed: %s", _save_err)
+
+
 async def run_code_duo(ctx):
     """Code-duo handler: iterative coder+critic loop."""
     state: dict = {
@@ -7008,105 +7145,40 @@ async def run_code_duo(ctx):
             )
 
     except (GeneratorExit, asyncio.CancelledError):
-        _p_loop_items = _p_di = None
-        _p_done_tasks = _p_written = None
-        _p_explore_ctx = ""
-        _p_ws_str = ""
-        _p_n_items = 0
-        try: _p_loop_items = _loop_items
+        _park_ps = _DuoDisconnectParkState()
+        try: _park_ps.loop_items = _loop_items
         except (NameError, UnboundLocalError): pass
-        try: _p_di = _di
+        try: _park_ps.di = _di
         except (NameError, UnboundLocalError): pass
-        try: _p_done_tasks = _done_tasks
+        try: _park_ps.done_tasks = _done_tasks
         except (NameError, UnboundLocalError): pass
-        try: _p_written = _written_files
+        try: _park_ps.written_files = _written_files
         except (NameError, UnboundLocalError): pass
-        try: _p_explore_ctx = _explore_ctx
+        try: _park_ps.explore_ctx = _explore_ctx
         except (NameError, UnboundLocalError): pass
-        try: _p_ws_str = _ws_str
+        try: _park_ps.ws_str = _ws_str
         except (NameError, UnboundLocalError): pass
-        try: _p_n_items = _n_items
+        try: _park_ps.n_items = _n_items
         except (NameError, UnboundLocalError): pass
-        try:
-            _park_on_disconnect(
-                ctx=ctx,
-                loop_items=_p_loop_items,
-                di=_p_di,
-                done_tasks=_p_done_tasks,
-                written_files=_p_written,
-                explore_ctx=_p_explore_ctx,
-                ws_str=_p_ws_str,
-                n_items=_p_n_items,
-            )
-        except Exception as _park_err:
-            logger.warning("[DISCONNECT-PARK] Handler error: %s", _park_err)
+        _duo_disconnect_park(ctx, _park_ps)
         raise
 
     finally:
-        # DUO-SLOT UNPIN (2026-10-01): the run pinned its planner/coder slots
-        # so the vision-preprocessing load could not LRU-evict them; release
-        # the pin so normal eviction can reclaim VRAM after the run.
-        try:
-            from backend.llama_server_manager import manager as _lsm_unpin
-            for _m in (_planner_model, exec_mdl):
-                if _m:
-                    _lsm_unpin.unpin(_m)
-        except Exception:
-            pass
-        # CODER LIFETIME (2026-10-17, owner request): with
-        # duo_coder_after_run = "evict" the coder slot is released here - the
-        # next prompt can then load any model/mode without evicting something
-        # first. "keep" (default) leaves the slot warm; the idle TTL decides.
-        # This finally-block also runs on abort, so an aborted run releases the
-        # slot too.
-        try:
-            if str(ctx.settings.get("duo_coder_after_run", "keep")).strip().lower() == "evict" and exec_mdl:
-                from backend.llama_server_manager import manager as _lsm_car
-                await _lsm_car.evict(exec_mdl)
-                logger.info("[CODER-AFTER-RUN] coder slot evicted (duo_coder_after_run=evict)")
-        except (ImportError, AttributeError, TypeError, RuntimeError, OSError) as _car_err:
-            logger.debug("[CODER-AFTER-RUN] evict skipped: %s", _car_err)
-        # Cleanup Pause/Resume State
-        try:
-            _rid = _run_id_global
-            if _rid:
-                from infra.run_control import cleanup_pause
-                cleanup_pause(_rid)
-        except Exception as _err:
-            if isinstance(_err, (
-                GeneratorExit,
-                asyncio.CancelledError,
-                KeyboardInterrupt,
-                SystemExit,
-            )):
-                raise
-            logger.debug(
-                "[DUO] Suppressed error at cleanup_pause: %s",
-                _err, exc_info=True
-            )
-        _restore_ka = str(ctx.settings.get("smart_preload_keep_alive", "10m"))
-        if _duo_pinned:
-            asyncio.create_task(_unpin_duo_fn(ctx, _duo_pinned, _restore_ka))
-
-        if _project_state is not None and ctx.chat_id:
-            try:
-                from context.project_state import ProjectStateManager
-                if not _project_state_run_counted:
-                    _project_state.total_runs += 1
-                    _project_state_run_counted = True
-                _project_state.last_run_timestamp = datetime.now().isoformat()
-                if getattr(_project_state, 'last_run_success', None) is None:
-                    # SUCCESS-ORDER (2026-09-22): the normal completion path
-                    # sets last_run_success after this fallback ran — stamping
-                    # False here logged every completed run as failed first
-                    # (live: FireWork run ended 'completed' but the interim
-                    # save said success=False). Mirror the stop reason instead.
-                    _project_state.last_run_success = (getattr(ctx, "duo_stop_reason", "") == "completed")
-                ProjectStateManager().save(_project_state)
-                logger.info("[PROJECT] State gesichert in finally (Run #%d, success=%s)",
-                            _project_state.total_runs, _project_state.last_run_success)
-            except Exception as _save_err:
-                logger.warning("[PROJECT] Save in finally failed: %s", _save_err)
+        # CODE-MOTION (duo-runner-split): the cleanup body lives in
+        # _duo_final_cleanup now; the state object carries every runner
+        # local it reads. _planner_model is the only one bound inside the
+        # mega-try, so it is ladder-collected exactly like the park fields
+        # (the commit-2270557 NameError-ladder bug class).
+        _cleanup_ps = _DuoFinalCleanupState(
+            exec_mdl=exec_mdl,
+            _run_id_global=_run_id_global,
+            _duo_pinned=_duo_pinned,
+            _project_state=_project_state,
+            _project_state_run_counted=_project_state_run_counted,
+        )
+        try: _cleanup_ps._planner_model = _planner_model
+        except (NameError, UnboundLocalError): pass
+        await _duo_final_cleanup(ctx, _cleanup_ps)
 
     # ── P3: Final Test after all chunks ──────────────────────────
     async for _ev in _duo_final_test(ctx, state, _cs, _n_items, _eff_run_ws=_eff_run_ws):

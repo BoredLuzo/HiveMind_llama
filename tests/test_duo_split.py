@@ -29,7 +29,8 @@ Blocks pinned here (in commit order):
            budgets                  -> _duo_resolve_coder_port_cache,
                                         _duo_query_actual_slot_ctx,
                                         _duo_resolve_tool_budgets
-  block 1  disconnect park + final cleanup state objects
+  block 1  disconnect park + final   -> _duo_disconnect_park,
+           cleanup state objects      _duo_final_cleanup
 
 Run: python tests/test_duo_split.py
 """
@@ -334,6 +335,81 @@ if _h is not None:
           "tokenize_count" not in _runseg)
     check("[b2] runner still owns the round loop bound",
           "for _dr in range(_max_tool_rounds + 2)" in _runseg)
+
+# ── block 1: disconnect park + final cleanup ────────────────────────────────
+PARK_FIELDS = ["loop_items", "di", "done_tasks", "written_files",
+               "explore_ctx", "ws_str", "n_items"]
+
+_h = fn("_duo_disconnect_park")
+check("[b1] _duo_disconnect_park is module-level", _h is not None)
+if _h is not None:
+    _params = {a.arg for a in _h.args.args + _h.args.kwonlyargs}
+    check("[b1] park helper params explicit", _params == {"ctx", "ps"},
+          f"got={sorted(_params)}")
+    _seg = ast.get_source_segment(SRC, _h) or ""
+    check("[b1] park helper owns the _park_on_disconnect call",
+          "_park_on_disconnect(" in _seg and "[DISCONNECT-PARK] Handler error" in _seg)
+    _loads = {_n.id for _n in ast.walk(_h)
+              if isinstance(_n, ast.Name) and isinstance(_n.ctx, ast.Load)}
+    _rl = runner_locals()
+    _shadow = sorted(_n for _n in _loads
+                     if _n in _rl and _n not in _params and _n not in MODULE_NAMES)
+    check("[b1] park helper reads no unpassed runner local", not _shadow, f"leaked={_shadow}")
+
+c = cls("_DuoDisconnectParkState")
+check("[b1] _DuoDisconnectParkState is module-level", c is not None)
+if c is not None:
+    got = {t.target.id for t in c.body if isinstance(t, ast.AnnAssign)}
+    check("[b1] park state fields == expected set", got == set(PARK_FIELDS),
+          f"missing={sorted(set(PARK_FIELDS) - got)} extra={sorted(got - set(PARK_FIELDS))}")
+
+CLEANUP_FIELDS = ["_planner_model", "exec_mdl", "_run_id_global", "_duo_pinned",
+                  "_project_state", "_project_state_run_counted"]
+
+_h = fn("_duo_final_cleanup")
+check("[b1] _duo_final_cleanup is module-level async",
+      _h is not None and isinstance(_h, ast.AsyncFunctionDef))
+if _h is not None:
+    _seg = ast.get_source_segment(SRC, _h) or ""
+    check("[b1] cleanup helper owns unpin + evict + pause-cleanup + project save",
+          "unpin(" in _seg and "duo_coder_after_run" in _seg
+          and "cleanup_pause(" in _seg and "ProjectStateManager().save" in _seg)
+    n_unpack = 0
+    for s2 in _h.body:
+        if isinstance(s2, ast.Assign) and len(s2.targets) == 1                 and isinstance(s2.targets[0], ast.Name)                 and isinstance(s2.value, ast.Attribute) and s2.value.attr in CLEANUP_FIELDS:
+            n_unpack += 1
+    check("[b1] cleanup helper unpacks every field at entry",
+          n_unpack == len(CLEANUP_FIELDS), f"{n_unpack}/{len(CLEANUP_FIELDS)}")
+    _params = {a.arg for a in _h.args.args + _h.args.kwonlyargs}
+    _local = in_scope_names(_h.body)
+    _loads = {_n.id for _n in ast.walk(_h)
+              if isinstance(_n, ast.Name) and isinstance(_n.ctx, ast.Load)}
+    _rl = runner_locals()
+    _shadow = sorted(_n for _n in _loads
+                     if _n in _rl and _n not in _params and _n not in _local
+                     and _n not in MODULE_NAMES)
+    check("[b1] cleanup helper reads no unpassed runner local", not _shadow, f"leaked={_shadow}")
+
+c = cls("_DuoFinalCleanupState")
+check("[b1] _DuoFinalCleanupState is module-level", c is not None)
+if c is not None:
+    got = {t.target.id for t in c.body if isinstance(t, ast.AnnAssign)}
+    check("[b1] cleanup state fields == expected set", got == set(CLEANUP_FIELDS),
+          f"missing={sorted(set(CLEANUP_FIELDS) - got)} extra={sorted(got - set(CLEANUP_FIELDS))}")
+
+_runseg = SRC[SRC.index("async def run_code_duo"):]
+_uncovered_park = [f for f in PARK_FIELDS if f"try: _park_ps.{f} = _" not in _runseg]
+check("[b1] except-branch ladders cover every park field (2270557 bug class)",
+      not _uncovered_park, f"missing={_uncovered_park}")
+_uncovered_cleanup = [f for f in CLEANUP_FIELDS
+                      if f"_cleanup_ps.{f} = _" not in _runseg
+                      and f"{f}={f}" not in _runseg]
+check("[b1] finally construction covers every cleanup field (2270557 bug class)",
+      not _uncovered_cleanup, f"missing={_uncovered_cleanup}")
+check("[b1] abort branch still parks then re-raises",
+      "_duo_disconnect_park(ctx, _park_ps)" in _runseg)
+check("[b1] runner no longer runs the cleanup inline",
+      "DUO-SLOT UNPIN" not in _runseg and "cleanup_pause(" not in _runseg)
 
 print()
 if failed:
