@@ -63,9 +63,14 @@ check("2b goal_allows_scaffold detects it", goal_allows_scaffold(proj_goal) is T
 # ── 3. Ein Plan aus NUR Geruest bleibt nicht leer ──────────────────────
 only_scaffold = SCAFFOLD_PLAN[:4]
 raw_all = "\n".join(f"{i+1}. {s}" for i, s in enumerate(only_scaffold))
-subs_all, _, _ = parse_planner_output(raw_all, step_cap=20, goal=GOAL)
-check("3a an all-scaffold plan is not silently emptied",
-      len(subs_all) == 4, f"({len(subs_all)} subtasks)")
+subs_all, _, q_all = parse_planner_output(raw_all, step_cap=20, goal=GOAL)
+# The request names greet.py and main.py, so the plan is derived from THOSE
+# instead of the scaffold (live finding 2026-10-26).
+check("3a an all-scaffold plan is replaced by the requested files",
+      len(subs_all) == 2 and all("greet.py" in s or "main.py" in s for s in subs_all),
+      f"({subs_all})")
+check("3b the replacement is reported", q_all.get("scaffold_replaced") == 4,
+      f"({q_all.get('scaffold_replaced')})")
 
 # ── 4. Verdrahtung im Parser ───────────────────────────────────────────
 raw = "\n".join(f"{i+1}. {s}" for i, s in enumerate(SCAFFOLD_PLAN))

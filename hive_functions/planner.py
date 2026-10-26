@@ -638,6 +638,46 @@ def drop_scaffold_steps(steps: list[str], goal: str) -> tuple[list[str], list[st
     return kept, dropped
 
 
+_FILE_TOKEN = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_./\\-]*\.[A-Za-z0-9]{1,6}\b")
+_FILE_EXTS = {"py", "js", "mjs", "ts", "jsx", "tsx", "html", "htm", "css", "scss",
+              "json", "yaml", "yml", "toml", "md", "txt", "sh", "bat", "ps1",
+              "sql", "go", "rs", "java", "kt", "c", "h", "cpp", "cs", "rb", "php"}
+
+
+def requested_files(goal: str, *, limit: int = 8) -> list[str]:
+    """File names the user request explicitly names, in order, deduped."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in _FILE_TOKEN.findall(str(goal or "")):
+        tok = str(m).strip().strip(".,;:()[]\"")
+        base = tok.replace("\\", "/").rsplit("/", 1)[-1]
+        ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
+        if ext not in _FILE_EXTS:
+            continue
+        key = tok.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(tok)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def subtasks_for_requested_files(goal: str, *, limit: int = 8) -> list[str]:
+    """A minimal, honest plan: one step per file the user named.
+
+    Used when the planner's own plan is nothing but project scaffolding that the
+    request never asked for. The chunk context still carries the full request,
+    so each step only has to say WHICH file it is about.
+    """
+    return [
+        f"file: {f} | touch: implement the change the request asks for in {f} "
+        f"| decision: follow the request | risk: none"
+        for f in requested_files(goal, limit=limit)
+    ]
+
+
 def parse_planner_output(raw: str, *, step_cap: int = 20,
                           goal: str = "") -> tuple[list[str], str, dict]:
     """
@@ -729,9 +769,21 @@ def parse_planner_output(raw: str, *, step_cap: int = 20,
         subtasks, quality_meta = validate_chunk_plan(subtasks, max_steps=step_cap)
     _kept, _dropped = drop_scaffold_steps(subtasks, goal)
     if _dropped and not _kept:
-        # everything the plan proposed looked like scaffolding: keep the plan
-        # instead of handing an empty plan to the coder
-        _dropped = []
+        # The plan is nothing but scaffolding the request never asked for
+        # (live 2026-10-26: "create two files" became README + src/ + requirements).
+        # If the request names concrete files, plan exactly those instead of
+        # handing the scaffold to the coder.
+        _derived = subtasks_for_requested_files(goal)
+        if _derived:
+            logger.warning(
+                "[PLANNER-SCAFFOLD] plan was %d scaffold step(s); derived %d step(s) "
+                "from the requested files: %s", len(_dropped), len(_derived),
+                ", ".join(requested_files(goal)))
+            quality_meta = dict(quality_meta or {})
+            quality_meta["scaffold_replaced"] = len(_dropped)
+            _kept = _derived
+        else:
+            _dropped = []      # cannot tell: keep the plan untouched
     if _dropped:
         logger.warning("[PLANNER-SCAFFOLD] dropped %d unrequested scaffold step(s): %s",
                        len(_dropped), "; ".join(str(s)[:60] for s in _dropped[:4]))
