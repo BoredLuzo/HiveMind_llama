@@ -24,6 +24,7 @@ Blocks pinned here (in commit order):
   block 5  final test               -> _duo_final_test
   block 4  tool-round launch/wait   -> _duo_exec_round_task
   block 4  wedge handoff            -> _duo_wedge_handoff
+  block 4  ctx pressure warn-once   -> _duo_ctx_pressure_check
   block 2  port cache / slot ctx /
            budgets                  -> _duo_resolve_coder_port_cache,
                                         _duo_query_actual_slot_ctx,
@@ -239,6 +240,56 @@ if _ft is not None:
                      if _n in _rl and _n not in _params and _n not in _local
                      and _n not in MODULE_NAMES)
     check("[b5] final-test reads no unpassed runner local", not _shadow, f"leaked={_shadow}")
+
+# ── block 4: tool-round exec + wedge handoff + ctx pressure ────────────────
+EXEC_FIELDS = [
+    "duo_deadline_at", "exec_result", "snap_before",
+    "last_too_large_ref", "cached_port_ref",
+]
+check_seam("_duo_exec_round_task", "_DuoExecRoundState", EXEC_FIELDS, "b4")
+
+_h = fn("_duo_exec_round_task")
+if _h is not None:
+    _seg = ast.get_source_segment(SRC, _h) or ""
+    check("[b4] execute_tool_round launch moved into the helper",
+          "execute_tool_round(" in _seg)
+    check("[b4] heartbeat wait loop moved into the helper",
+          '"type": "heartbeat"' in _seg)
+    check("[b4] deadline-grace pull-back moved into the helper",
+          "deadline_extended_to" in _seg)
+    _runseg = SRC[SRC.index("async def run_code_duo"):]
+    check("[b4] runner no longer launches execute_tool_round",
+          "execute_tool_round(" not in _runseg)
+    check("[b4] runner still owns the post-round ref syncs",
+          "_last_too_large_ref[0]" in _runseg and "_cached_port_ref[0]" in _runseg)
+
+WEDGE_FIELDS = ["loop_detected", "wedge_escalated", "duo_deadline_at", "break_out"]
+check_seam("_duo_wedge_handoff", "_DuoWedgeHandoffState", WEDGE_FIELDS, "b4")
+
+_h = fn("_duo_wedge_handoff")
+if _h is not None:
+    _seg = ast.get_source_segment(SRC, _h) or ""
+    check("[b4] fix-agent handoff call moved into the helper",
+          "_wedge_run_fix_agent" in _seg)
+    check("[b4] both wedge breaks surface via break_out",
+          _seg.count("_break_out = True; return") == 2)
+    _runseg = SRC[SRC.index("async def run_code_duo"):]
+    check("[b4] runner breaks on the wedge signal after the write-back",
+          "_break_out = _wedge_ps.break_out" in _runseg and "if _break_out:" in _runseg)
+    check("[b4] runner no longer calls the fix agent directly",
+          "_wedge_run_fix_agent" not in _runseg)
+
+CTXP_FIELDS = ["ctx_pressure_warned"]
+check_seam("_duo_ctx_pressure_check", "_DuoCtxPressureState", CTXP_FIELDS, "b4")
+
+_h = fn("_duo_ctx_pressure_check")
+if _h is not None:
+    _seg = ast.get_source_segment(SRC, _h) or ""
+    check("[b4] CTX-pressure finish prompt moved into the helper",
+          "[CTX CRITICAL — ~" in _seg)
+    _runseg = SRC[SRC.index("async def run_code_duo"):]
+    check("[b4] runner no longer builds the pressure prompt",
+          "[CTX CRITICAL — ~" not in _runseg)
 
 print()
 if failed:

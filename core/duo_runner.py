@@ -1380,6 +1380,297 @@ async def _duo_final_test(ctx, state, _cs, _n_items, *, _eff_run_ws):
             _cs.completion_notes.append(
                 f"Final test: {_final_test_result.failure_count} failure(s) ({_final_test_result.language})"
             )
+
+
+@dataclasses.dataclass
+class _DuoExecRoundState:
+    """Tool-round exec in/out locals (moved verbatim from run_code_duo).
+
+    Holds the locals crossing the execute_tool_round seam: the deadline
+    (read for the round state, pulled forward when the executor extended
+    it), the result object, the run-bash snapshot guard and the two
+    by-ref bridges the executor mutates in place. Same unpack/pack
+    contract as _DuoPlannerPhaseState.
+    """
+    duo_deadline_at: float = 0.0
+    exec_result: object = None
+    snap_before: object = None
+    last_too_large_ref: list | None = None
+    cached_port_ref: list | None = None
+
+
+async def _duo_exec_round_task(
+    ctx, state, ps: _DuoExecRoundState, *,
+    _dr_tcs, _dtool_msgs, _duo_state, _tool_exec_hooks, _tool_ctx_lru,
+    _verify_mutation_serial, _verify_last_ok_serial, _last_run_bash_failure,
+    _changed_since_failure, _last_learned_insight_sig, _last_too_large_path,
+    _attempts_per_file, _wedge_state, _tool_error_retries, _call_sigs,
+    _recent_focus_paths, _file_changes, _duo_seen_web_queries,
+    _task_complete_blocked, _total_tool_errors_ref, _tc_consecutive,
+    _at_nosuite_nudged, _consecutive_reads, _last_read_path,
+    _read_ladder_fired, _ws_budget_streak, _ws_disabled, _tool_mode, _duo_ws,
+    _ws_str, _explore_ctx, _pre_explore_msgs, _written_files, _contracts_raw,
+    _coder_event_q, _cached_coder_port, exec_mdl, _exec_has_thinking,
+    _tool_think_auto_mode, _run_id_global, _di,
+):
+    # CODE-MOTION (duo-runner-split): tool-round launch (run-bash snapshot
+    # guard + cache horizon + execute_tool_round task) and the heartbeat
+    # wait loop with the result/deadline sync moved VERBATIM from
+    # run_code_duo's tool loop; only the unpack/pack wrapper around the
+    # body is new. No logic changes.
+    _duo_deadline_at = ps.duo_deadline_at
+    _exec_result = ps.exec_result
+    _snap_before = ps.snap_before
+    _last_too_large_ref = ps.last_too_large_ref
+    _cached_port_ref = ps.cached_port_ref
+    try:
+        # ── RUN-BASH-CHANGE-DETECTION (Problem 2) ─────────────
+        # _contracts_raw exports, normalized against _ws_str.
+
+        _round_bash_only = (
+            {tc.get("function", {}).get("name", "") for tc in (_dr_tcs or [])}
+            == {"run_bash"}
+        )
+        _snap_before = (await asyncio.to_thread(
+            _ld_file_snapshot, _ws_str, _explore_ctx, _pre_explore_msgs,
+            _written_files, _contracts_raw)) if _round_bash_only else None
+        # ── Execute all tool calls via shared executor ──
+        # CACHE-HORIZON (2026-09-04): everything < cache_horizon
+        # has already been sent (immutable prefix); everything
+        # from here is this round and may be mutated freely.
+        _round_cache_horizon = len(_dtool_msgs)
+        _last_too_large_ref = [_last_too_large_path]
+        _cached_port_ref = [_cached_coder_port]
+        _exec_task = asyncio.create_task(execute_tool_round(
+            tool_calls=_dr_tcs,
+            dtool_msgs=_dtool_msgs,
+            round_state=_duo_state,
+            hooks=_tool_exec_hooks,
+            trs=ToolRoundState(
+                cache_horizon=_round_cache_horizon,
+                tool_ctx_lru=_tool_ctx_lru,
+                duo_deadline_at=_duo_deadline_at,
+                verify_mutation_serial=_verify_mutation_serial,
+                verify_last_ok_serial=_verify_last_ok_serial,
+                last_run_bash_failure=_last_run_bash_failure,
+                changed_since_failure=_changed_since_failure,
+                last_learned_insight_sig=_last_learned_insight_sig,
+                last_too_large_path=_last_too_large_ref,
+                attempts_per_file=_attempts_per_file,
+                wedge_state=_wedge_state,
+                tool_error_retries=_tool_error_retries,
+                call_sigs=_call_sigs,
+                recent_focus_paths=_recent_focus_paths,
+                file_changes=_file_changes,
+                duo_seen_web_queries=_duo_seen_web_queries,
+                cached_coder_port=_cached_port_ref,
+                task_complete_blocked_count=_task_complete_blocked,
+                total_tool_errors=_total_tool_errors_ref,
+                tc_consecutive=_tc_consecutive,
+                at_nosuite_nudged=_at_nosuite_nudged,
+                consecutive_reads=_consecutive_reads,
+                last_read_path=_last_read_path,
+                read_ladder_fired=_read_ladder_fired,
+                ws_budget_streak=_ws_budget_streak,
+                ws_disabled=_ws_disabled,
+            ),
+            tool_mode=_tool_mode,
+            duo_ws=_duo_ws,
+            workspace_lock=_ws_str,
+            exec_model=exec_mdl,
+            auto_test_before_complete=bool(ctx.duo_config.test_feedback_final),
+            exec_has_thinking=_exec_has_thinking,
+            tool_think_auto_mode=_tool_think_auto_mode,
+            run_id_global=_run_id_global,
+            chat_id=ctx.chat_id,
+            subtask_index=_di,
+        ))
+        _hb_interval = _read_hb_interval(ctx.settings)
+        _hb_start = time.monotonic()
+        _hb_last = _hb_start
+        while True:
+            _hb_had = False
+            while not _coder_event_q.empty():
+                _hb_had = True
+                try:
+                    yield _coder_event_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            if _hb_had:
+                _hb_last = time.monotonic()
+            if _exec_task.done():
+                break
+            # HEARTBEAT (2026-08-21): keepalive during long tool rounds.
+            # elapsed = total time since loop start.
+            if time.monotonic() - _hb_last >= _hb_interval:
+                _hb_total = int(time.monotonic() - _hb_start)
+                _hb_last = time.monotonic()
+                yield await ctx.emit({"type": "heartbeat", "elapsed": _hb_total})
+            await asyncio.sleep(0.02)
+        _exec_result = _exec_task.result()
+        # DEADLINE-GRACE (2026-09-09): pull the extended
+        # deadline back into the runner + state so the outer
+        # checks and later phases see it too.
+        if _exec_result.deadline_extended_to:
+            if _exec_result.deadline_extended_to > _duo_deadline_at:
+                _duo_deadline_at = _exec_result.deadline_extended_to
+                state["_duo_deadline_at"] = _duo_deadline_at
+    finally:
+        ps.duo_deadline_at = _duo_deadline_at
+        ps.exec_result = _exec_result
+        ps.snap_before = _snap_before
+        ps.last_too_large_ref = _last_too_large_ref
+        ps.cached_port_ref = _cached_port_ref
+
+
+@dataclasses.dataclass
+class _DuoWedgeHandoffState:
+    """Wedge-handoff in/out locals (moved verbatim from run_code_duo).
+
+    loop_detected / wedge_escalated / duo_deadline_at cross the seam in
+    both directions; break_out is the loop-control signal: the moved
+    block's two `break`s exit run_code_duo's tool-round loop, so inside
+    the helper they set break_out and return, and the runner breaks.
+    """
+    loop_detected: bool = False
+    wedge_escalated: bool = False
+    duo_deadline_at: float = 0.0
+    break_out: bool = False
+
+
+async def _duo_wedge_handoff(
+    ctx, state, ps: _DuoWedgeHandoffState, *,
+    _exec_result, exec_mdl, _ws_str, _di, _n_items, _subtask, _dtool_ctx,
+    _dtool_msgs, _wedge_state, _wedge_handoffs_used, _cached_coder_port,
+):
+    # CODE-MOTION (duo-runner-split): the WEDGE-HANDOFF block moved VERBATIM
+    # from run_code_duo's tool loop; only the unpack/pack wrapper and the
+    # break->(break_out, return) translation are new. No logic changes.
+    _loop_detected = ps.loop_detected
+    _wedge_escalated = ps.wedge_escalated
+    _duo_deadline_at = ps.duo_deadline_at
+    _break_out = ps.break_out
+    try:
+        # ── WEDGE-HANDOFF (2026-09-17): fresh-agent handoff ──
+        # The executor detected a wedging edit (same file,
+        # repeated failures). Delegation, not abort: run the
+        # fix agent, feed the outcome back as ONE compact
+        # notice, continue the chunk with a clean slate.
+        if getattr(_exec_result, "wedge_file", "") and not _loop_detected:
+            _wedge_path = str(_exec_result.wedge_file)
+            _wedge_max = int(ctx.settings.get("duo_wedge_handoff_max_per_run", 2) or 2)
+            if _wedge_handoffs_used[0] >= _wedge_max:
+                yield await ctx.emit({"type": "status",
+                    "content": f"⚠️ Wedge on {Path(_wedge_path).name} — handoff budget exhausted, escalating to human."})
+                _ld_setter(4650); _loop_detected = True
+                _wedge_escalated = True
+                _break_out = True; return
+            yield await ctx.emit({"type": "wedge_handoff",
+                "file": _wedge_path,
+                "attempt": _wedge_handoffs_used[0] + 1})
+            yield await ctx.emit({"type": "status",
+                "content": f"🧩 Wedge on {Path(_wedge_path).name} — handing the edit to a fresh-context fix agent…"})
+            _wedge_t0 = time.time()
+            _handover = _wedge_build_handover(
+                path=_wedge_path,
+                intent=(f"Plan chunk {_di + 1}/{_n_items}: {str(_subtask)[:300]}" if _subtask else ""),
+                attempts=_wedge_attempts_of(_wedge_state, _wedge_path),
+                streak=_wedge_streak_of(_wedge_state, _wedge_path),
+                threshold=int(_wedge_state.get("threshold", 4)),
+            )
+            # Same weights as the coder (fresh context, no model
+            # switch); duo_wedge_handoff_model is an explicit
+            # escape hatch only — never a silent fallback.
+            _fix_model = str(ctx.settings.get("duo_wedge_handoff_model", "") or "").strip() or exec_mdl
+            _fx = await _wedge_run_fix_agent(
+                path=_wedge_path,
+                handover=_handover,
+                model=_fix_model,
+                workspace_lock=_ws_str,
+                port=_cached_coder_port,
+                max_rounds=int(ctx.settings.get("duo_wedge_handoff_max_rounds", 10) or 10),
+                timeout_s=float(ctx.settings.get("duo_wedge_handoff_timeout_s", 900) or 900),
+                # CTX-MATCH (2026-10-17): the fix agent defaulted
+                # to 8192 while the coder may run at another ctx;
+                # ensure_loaded then killed and reloaded the warm
+                # slot (manager_load.py:402) - the opposite of the
+                # "NEVER evicts" promise in fix_agent's docstring.
+                num_ctx=int(_dtool_ctx or 8192),
+            )
+            # BUDGET-EXEMPT: the handoff wait does not burn the
+            # chunk deadline — push it forward by the elapsed
+            # time so a successful handoff cannot time the run out.
+            _duo_deadline_at += (time.time() - _wedge_t0)
+            state["_duo_deadline_at"] = _duo_deadline_at
+            _wedge_handoffs_used[0] += 1
+            if _fx.get("status") in ("resolved", "no_fix_needed"):
+                # The handoff counts as the successful write on
+                # this path (or as verified-correct): reset the
+                # streak so the coder gets a clean slate.
+                _wedge_note_success(_wedge_state, _wedge_path)
+                _wedge_invalidate_sig(_wedge_path, _ws_str)
+                _dtool_msgs.append({"role": "user", "content": _wedge_build_resolved(
+                    _wedge_path, str(_fx.get("summary", "")),
+                    no_fix=(_fx.get("status") == "no_fix_needed"))})
+                yield await ctx.emit({"type": "status",
+                    "content": f"✅ Wedge handoff on {Path(_wedge_path).name}: {_fx.get('status')}"})
+            else:
+                _dtool_msgs.append({"role": "user", "content": _wedge_build_escalated(
+                    _wedge_path, str(_fx.get("summary", "fix agent failed")))})
+                yield await ctx.emit({"type": "status",
+                    "content": f"⚠️ Wedge handoff failed on {Path(_wedge_path).name} — escalating to human."})
+                _ld_setter(4651); _loop_detected = True
+                _wedge_escalated = True
+                _break_out = True; return
+    finally:
+        ps.loop_detected = _loop_detected
+        ps.wedge_escalated = _wedge_escalated
+        ps.duo_deadline_at = _duo_deadline_at
+        ps.break_out = _break_out
+
+
+@dataclasses.dataclass
+class _DuoCtxPressureState:
+    """CTX-pressure warn-once state (moved verbatim from run_code_duo)."""
+    ctx_pressure_warned: bool = False
+
+
+async def _duo_ctx_pressure_check(
+    ctx, ps: _DuoCtxPressureState, *,
+    _dtool_msgs, _dtool_ctx, _coder_real_prompt_tokens, est_tokens,
+):
+    # CODE-MOTION (duo-runner-split): the CTX-pressure warn-once check moved
+    # VERBATIM from run_code_duo's tool loop; only the unpack/pack wrapper
+    # is new. No logic changes. est_tokens arrives under its own name (its
+    # single body read was renamed to it) because the module also imports
+    # a dead _est_tokens helper from preflight - keeping the name would
+    # shadow-capture that import instead of the runner local.
+    _ctx_pressure_warned = ps.ctx_pressure_warned
+    try:
+        # ── CTX Pressure Check ─────────────────────────────
+        if not _ctx_pressure_warned:
+            # GUARD-REAL-BASIS: fresh real value (usage_meta of the
+            # last round), fallback estimator — no more coarse
+            # sum(len)//3 estimation.
+            _guard_tokens = int(_coder_real_prompt_tokens[0] or est_tokens)
+            if _guard_tokens > int(_dtool_ctx * 0.72):
+                _ctx_pressure_warned = True
+                _pressure_msg = {
+                    "role": "user",
+                    "content": (
+                        f"[CTX CRITICAL — ~{_guard_tokens} tokens used, {_dtool_ctx} available]\n"
+                        "Stop all read_file calls immediately. "
+                        "Write ALL pending changes now using edit_file / write_file. "
+                        "Then call task_complete. "
+                        "Do NOT read any more files."
+                    ),
+                }
+                _dtool_msgs.append(_pressure_msg)
+                yield await ctx.emit({"type": "status",
+                    "content": f"\u26a0\ufe0f CTX CRITICAL — ~{_guard_tokens}/{_dtool_ctx} tokens. Coder prompted to finish."})
+    finally:
+        ps.ctx_pressure_warned = _ctx_pressure_warned
+
 async def run_code_duo(ctx):
     """Code-duo handler: iterative coder+critic loop."""
     state: dict = {
@@ -5433,168 +5724,79 @@ async def run_code_duo(ctx):
                                 )})
                                 _dr_think_only_retries += 1
                                 continue
-                        # ── RUN-BASH-CHANGE-DETECTION (Problem 2) ─────────────
-                        # _contracts_raw exports, normalized against _ws_str.
-
-                        _round_bash_only = (
-                            {tc.get("function", {}).get("name", "") for tc in (_dr_tcs or [])}
-                            == {"run_bash"}
+                        _exec_ps = _DuoExecRoundState(duo_deadline_at=_duo_deadline_at)
+                        try:
+                            async for _ev in _duo_exec_round_task(
+                                ctx, state, _exec_ps,
+                                _dr_tcs=_dr_tcs, _dtool_msgs=_dtool_msgs,
+                                _duo_state=_duo_state,
+                                _tool_exec_hooks=_tool_exec_hooks,
+                                _tool_ctx_lru=_tool_ctx_lru,
+                                _verify_mutation_serial=_verify_mutation_serial,
+                                _verify_last_ok_serial=_verify_last_ok_serial,
+                                _last_run_bash_failure=_last_run_bash_failure,
+                                _changed_since_failure=_changed_since_failure,
+                                _last_learned_insight_sig=_last_learned_insight_sig,
+                                _last_too_large_path=_last_too_large_path,
+                                _attempts_per_file=_attempts_per_file,
+                                _wedge_state=_wedge_state,
+                                _tool_error_retries=_tool_error_retries,
+                                _call_sigs=_call_sigs,
+                                _recent_focus_paths=_recent_focus_paths,
+                                _file_changes=_file_changes,
+                                _duo_seen_web_queries=_duo_seen_web_queries,
+                                _task_complete_blocked=_task_complete_blocked,
+                                _total_tool_errors_ref=_total_tool_errors_ref,
+                                _tc_consecutive=_tc_consecutive,
+                                _at_nosuite_nudged=_at_nosuite_nudged,
+                                _consecutive_reads=_consecutive_reads,
+                                _last_read_path=_last_read_path,
+                                _read_ladder_fired=_read_ladder_fired,
+                                _ws_budget_streak=_ws_budget_streak,
+                                _ws_disabled=_ws_disabled,
+                                _tool_mode=_tool_mode, _duo_ws=_duo_ws,
+                                _ws_str=_ws_str, _explore_ctx=_explore_ctx,
+                                _pre_explore_msgs=_pre_explore_msgs,
+                                _written_files=_written_files,
+                                _contracts_raw=_contracts_raw,
+                                _coder_event_q=_coder_event_q,
+                                _cached_coder_port=_cached_coder_port,
+                                exec_mdl=exec_mdl,
+                                _exec_has_thinking=_exec_has_thinking,
+                                _tool_think_auto_mode=_tool_think_auto_mode,
+                                _run_id_global=_run_id_global, _di=_di,
+                            ):
+                                yield _ev
+                        finally:
+                            _duo_deadline_at = _exec_ps.duo_deadline_at
+                            _exec_result = _exec_ps.exec_result
+                            _snap_before = _exec_ps.snap_before
+                            _last_too_large_ref = _exec_ps.last_too_large_ref
+                            _cached_port_ref = _exec_ps.cached_port_ref
+                        _wedge_ps = _DuoWedgeHandoffState(
+                            loop_detected=_loop_detected,
+                            wedge_escalated=_wedge_escalated,
+                            duo_deadline_at=_duo_deadline_at,
                         )
-                        _snap_before = (await asyncio.to_thread(
-            _ld_file_snapshot, _ws_str, _explore_ctx, _pre_explore_msgs,
-            _written_files, _contracts_raw)) if _round_bash_only else None
-                        # ── Execute all tool calls via shared executor ──
-                        # CACHE-HORIZON (2026-09-04): everything < cache_horizon
-                        # has already been sent (immutable prefix); everything
-                        # from here is this round and may be mutated freely.
-                        _round_cache_horizon = len(_dtool_msgs)
-                        _last_too_large_ref = [_last_too_large_path]
-                        _cached_port_ref = [_cached_coder_port]
-                        _exec_task = asyncio.create_task(execute_tool_round(
-                            tool_calls=_dr_tcs,
-                            dtool_msgs=_dtool_msgs,
-                            round_state=_duo_state,
-                            hooks=_tool_exec_hooks,
-                            trs=ToolRoundState(
-                                cache_horizon=_round_cache_horizon,
-                                tool_ctx_lru=_tool_ctx_lru,
-                                duo_deadline_at=_duo_deadline_at,
-                                verify_mutation_serial=_verify_mutation_serial,
-                                verify_last_ok_serial=_verify_last_ok_serial,
-                                last_run_bash_failure=_last_run_bash_failure,
-                                changed_since_failure=_changed_since_failure,
-                                last_learned_insight_sig=_last_learned_insight_sig,
-                                last_too_large_path=_last_too_large_ref,
-                                attempts_per_file=_attempts_per_file,
-                                wedge_state=_wedge_state,
-                                tool_error_retries=_tool_error_retries,
-                                call_sigs=_call_sigs,
-                                recent_focus_paths=_recent_focus_paths,
-                                file_changes=_file_changes,
-                                duo_seen_web_queries=_duo_seen_web_queries,
-                                cached_coder_port=_cached_port_ref,
-                                task_complete_blocked_count=_task_complete_blocked,
-                                total_tool_errors=_total_tool_errors_ref,
-                                tc_consecutive=_tc_consecutive,
-                                at_nosuite_nudged=_at_nosuite_nudged,
-                                consecutive_reads=_consecutive_reads,
-                                last_read_path=_last_read_path,
-                                read_ladder_fired=_read_ladder_fired,
-                                ws_budget_streak=_ws_budget_streak,
-                                ws_disabled=_ws_disabled,
-                            ),
-                            tool_mode=_tool_mode,
-                            duo_ws=_duo_ws,
-                            workspace_lock=_ws_str,
-                            exec_model=exec_mdl,
-                            auto_test_before_complete=bool(ctx.duo_config.test_feedback_final),
-                            exec_has_thinking=_exec_has_thinking,
-                            tool_think_auto_mode=_tool_think_auto_mode,
-                            run_id_global=_run_id_global,
-                            chat_id=ctx.chat_id,
-                            subtask_index=_di,
-                        ))
-                        _hb_interval = _read_hb_interval(ctx.settings)
-                        _hb_start = time.monotonic()
-                        _hb_last = _hb_start
-                        while True:
-                            _hb_had = False
-                            while not _coder_event_q.empty():
-                                _hb_had = True
-                                try:
-                                    yield _coder_event_q.get_nowait()
-                                except asyncio.QueueEmpty:
-                                    break
-                            if _hb_had:
-                                _hb_last = time.monotonic()
-                            if _exec_task.done():
-                                break
-                            # HEARTBEAT (2026-08-21): keepalive during long tool rounds.
-                            # elapsed = total time since loop start.
-                            if time.monotonic() - _hb_last >= _hb_interval:
-                                _hb_total = int(time.monotonic() - _hb_start)
-                                _hb_last = time.monotonic()
-                                yield await ctx.emit({"type": "heartbeat", "elapsed": _hb_total})
-                            await asyncio.sleep(0.02)
-                        _exec_result = _exec_task.result()
-                        # DEADLINE-GRACE (2026-09-09): pull the extended
-                        # deadline back into the runner + state so the outer
-                        # checks and later phases see it too.
-                        if _exec_result.deadline_extended_to:
-                            if _exec_result.deadline_extended_to > _duo_deadline_at:
-                                _duo_deadline_at = _exec_result.deadline_extended_to
-                                state["_duo_deadline_at"] = _duo_deadline_at
-                        # ── WEDGE-HANDOFF (2026-09-17): fresh-agent handoff ──
-                        # The executor detected a wedging edit (same file,
-                        # repeated failures). Delegation, not abort: run the
-                        # fix agent, feed the outcome back as ONE compact
-                        # notice, continue the chunk with a clean slate.
-                        if getattr(_exec_result, "wedge_file", "") and not _loop_detected:
-                            _wedge_path = str(_exec_result.wedge_file)
-                            _wedge_max = int(ctx.settings.get("duo_wedge_handoff_max_per_run", 2) or 2)
-                            if _wedge_handoffs_used[0] >= _wedge_max:
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"⚠️ Wedge on {Path(_wedge_path).name} — handoff budget exhausted, escalating to human."})
-                                _ld_setter(4650); _loop_detected = True
-                                _wedge_escalated = True
-                                break
-                            yield await ctx.emit({"type": "wedge_handoff",
-                                "file": _wedge_path,
-                                "attempt": _wedge_handoffs_used[0] + 1})
-                            yield await ctx.emit({"type": "status",
-                                "content": f"🧩 Wedge on {Path(_wedge_path).name} — handing the edit to a fresh-context fix agent…"})
-                            _wedge_t0 = time.time()
-                            _handover = _wedge_build_handover(
-                                path=_wedge_path,
-                                intent=(f"Plan chunk {_di + 1}/{_n_items}: {str(_subtask)[:300]}" if _subtask else ""),
-                                attempts=_wedge_attempts_of(_wedge_state, _wedge_path),
-                                streak=_wedge_streak_of(_wedge_state, _wedge_path),
-                                threshold=int(_wedge_state.get("threshold", 4)),
-                            )
-                            # Same weights as the coder (fresh context, no model
-                            # switch); duo_wedge_handoff_model is an explicit
-                            # escape hatch only — never a silent fallback.
-                            _fix_model = str(ctx.settings.get("duo_wedge_handoff_model", "") or "").strip() or exec_mdl
-                            _fx = await _wedge_run_fix_agent(
-                                path=_wedge_path,
-                                handover=_handover,
-                                model=_fix_model,
-                                workspace_lock=_ws_str,
-                                port=_cached_coder_port,
-                                max_rounds=int(ctx.settings.get("duo_wedge_handoff_max_rounds", 10) or 10),
-                                timeout_s=float(ctx.settings.get("duo_wedge_handoff_timeout_s", 900) or 900),
-                                # CTX-MATCH (2026-10-17): the fix agent defaulted
-                                # to 8192 while the coder may run at another ctx;
-                                # ensure_loaded then killed and reloaded the warm
-                                # slot (manager_load.py:402) - the opposite of the
-                                # "NEVER evicts" promise in fix_agent's docstring.
-                                num_ctx=int(_dtool_ctx or 8192),
-                            )
-                            # BUDGET-EXEMPT: the handoff wait does not burn the
-                            # chunk deadline — push it forward by the elapsed
-                            # time so a successful handoff cannot time the run out.
-                            _duo_deadline_at += (time.time() - _wedge_t0)
-                            state["_duo_deadline_at"] = _duo_deadline_at
-                            _wedge_handoffs_used[0] += 1
-                            if _fx.get("status") in ("resolved", "no_fix_needed"):
-                                # The handoff counts as the successful write on
-                                # this path (or as verified-correct): reset the
-                                # streak so the coder gets a clean slate.
-                                _wedge_note_success(_wedge_state, _wedge_path)
-                                _wedge_invalidate_sig(_wedge_path, _ws_str)
-                                _dtool_msgs.append({"role": "user", "content": _wedge_build_resolved(
-                                    _wedge_path, str(_fx.get("summary", "")),
-                                    no_fix=(_fx.get("status") == "no_fix_needed"))})
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"✅ Wedge handoff on {Path(_wedge_path).name}: {_fx.get('status')}"})
-                            else:
-                                _dtool_msgs.append({"role": "user", "content": _wedge_build_escalated(
-                                    _wedge_path, str(_fx.get("summary", "fix agent failed")))})
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"⚠️ Wedge handoff failed on {Path(_wedge_path).name} — escalating to human."})
-                                _ld_setter(4651); _loop_detected = True
-                                _wedge_escalated = True
-                                break
+                        try:
+                            async for _ev in _duo_wedge_handoff(
+                                ctx, state, _wedge_ps,
+                                _exec_result=_exec_result, exec_mdl=exec_mdl,
+                                _ws_str=_ws_str, _di=_di, _n_items=_n_items,
+                                _subtask=_subtask, _dtool_ctx=_dtool_ctx,
+                                _dtool_msgs=_dtool_msgs,
+                                _wedge_state=_wedge_state,
+                                _wedge_handoffs_used=_wedge_handoffs_used,
+                                _cached_coder_port=_cached_coder_port,
+                            ):
+                                yield _ev
+                        finally:
+                            _loop_detected = _wedge_ps.loop_detected
+                            _wedge_escalated = _wedge_ps.wedge_escalated
+                            _duo_deadline_at = _wedge_ps.duo_deadline_at
+                            _break_out = _wedge_ps.break_out
+                        if _break_out:
+                            break
                         _last_too_large_path = _last_too_large_ref[0]
                         _cached_coder_port = _cached_port_ref[0]
                         _verify_mutation_serial = _exec_result.verify_mutation_serial
@@ -5621,27 +5823,17 @@ async def run_code_duo(ctx):
                         # Plan tracker references
                         _last_tool_name = _exec_result.last_tool_name
                         _last_tool_result = _exec_result.last_tool_result
-                        # ── CTX Pressure Check ─────────────────────────────
-                        if not _ctx_pressure_warned:
-                            # GUARD-REAL-BASIS: fresh real value (usage_meta of the
-                            # last round), fallback estimator — no more coarse
-                            # sum(len)//3 estimation.
-                            _guard_tokens = int(_coder_real_prompt_tokens[0] or _est_tokens)
-                            if _guard_tokens > int(_dtool_ctx * 0.72):
-                                _ctx_pressure_warned = True
-                                _pressure_msg = {
-                                    "role": "user",
-                                    "content": (
-                                        f"[CTX CRITICAL — ~{_guard_tokens} tokens used, {_dtool_ctx} available]\n"
-                                        "Stop all read_file calls immediately. "
-                                        "Write ALL pending changes now using edit_file / write_file. "
-                                        "Then call task_complete. "
-                                        "Do NOT read any more files."
-                                    ),
-                                }
-                                _dtool_msgs.append(_pressure_msg)
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"\u26a0\ufe0f CTX CRITICAL — ~{_guard_tokens}/{_dtool_ctx} tokens. Coder prompted to finish."})
+                        _ctxp_ps = _DuoCtxPressureState(ctx_pressure_warned=_ctx_pressure_warned)
+                        try:
+                            async for _ev in _duo_ctx_pressure_check(
+                                ctx, _ctxp_ps,
+                                _dtool_msgs=_dtool_msgs, _dtool_ctx=_dtool_ctx,
+                                _coder_real_prompt_tokens=_coder_real_prompt_tokens,
+                                est_tokens=_est_tokens,
+                            ):
+                                yield _ev
+                        finally:
+                            _ctx_pressure_warned = _ctxp_ps.ctx_pressure_warned
                         # Check if ALL tool-calls in this round were rejected/errored
                         _round_tool_results = []
                         for _msg in reversed(_dtool_msgs):
