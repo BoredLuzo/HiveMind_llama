@@ -1026,6 +1026,13 @@ async def _duo_planner_phase(
                         logger.debug("[PlanTracker] Enriched from planner: %d steps", _plan_tracker.total)
 
         if not ctx.duo_config.chunking and _subtasks:
+            # CHUNKING-OFF HONESTY (2026-10-26, live): say it here, where the
+            # subtasks actually go away, and read the RUN flag. The body can set
+            # duo_chunking=true while settings.json says false; reading the
+            # setting fired this while the chunks did run.
+            yield await ctx.emit({"type": "status",
+                "content": f"⚙️ Chunking is off - the planner's {len(_subtasks)} "
+                           f"subtask(s) are skipped; the coder runs the task in one pass"})
             logger.debug("[CHUNKING-GUARD] ctx.duo_config.chunking=False - %d subtasks discarded, planner briefing kept", len(_subtasks))
             _subtasks = []
 
@@ -3250,13 +3257,6 @@ async def run_code_duo(ctx):
         _accumulated_replan_bonus: int = 0
         _di = 0
         while _di < _n_items:
-            # CHUNKING-OFF HONESTY (2026-10-27): the old message claimed the
-            # run "continues with chunking" while chunking was disabled and
-            # the planner subtasks were already discarded (1028) - it also
-            # fired on EVERY chunk. Say it once, say what actually happens.
-            if _di == 0 and _subtasks and not bool(ctx.settings.get("duo_chunking", False)):
-                yield await ctx.emit({"type": "status",
-                    "content": f"⚙️ Chunking is off - the planner's {len(_subtasks)} subtask(s) are skipped; the coder runs the task in one pass"})
             _subtask = _loop_items[_di]
             _soft_check_done = False  # reset per subtask
             if _subtask:

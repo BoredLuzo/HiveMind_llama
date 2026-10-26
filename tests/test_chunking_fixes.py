@@ -34,10 +34,25 @@ def check(name, cond, extra=""):
 _dr = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
 
 # 1. honest status: fires once (_di == 0), carries the real count, no lie
-check("1a chunking-off status fires once on the first chunk",
-      "if _di == 0 and _subtasks and not bool(ctx.settings.get(\"duo_chunking\", False)):" in _dr)
+# 1a/1b after the live fix: the message is emitted exactly where the subtasks
+# are dropped, and it reads the RUN flag (ctx.duo_config.chunking), not the
+# setting. Keys on the discard site, not on the chunk loop.
+_discard = _dr.index("if not ctx.duo_config.chunking and _subtasks:")
+_emit = _dr.index("subtask(s) are skipped")
+_clear = _dr.index("_subtasks = []", _discard)
+check("1a chunking-off status fires at the discard site",
+      _discard < _emit < _clear)
 check("1b status names the skipped subtask count",
-      "the planner's {len(_subtasks)} subtask(s) are skipped" in _dr)
+      "the planner's {len(_subtasks)}" in _dr and "subtask(s) are skipped" in _dr)
+check("1f the message does not depend on settings[duo_chunking]",
+      'ctx.settings.get("duo_chunking"' not in _dr[_discard:_clear])
+# SOURCE-PIN (2026-10-26, live found): the message must read the RUN flag, not
+# the setting. The body can set duo_chunking=true while settings.json says
+# false; that combination fired the "skipped" text while the chunks ran.
+check("1d the skip message lives at the discard site, not in the chunk loop",
+      _dr.index("subtask(s) are skipped") < _dr.index("while _di < _n_items"))
+check("1e no status reads ctx.settings[\"duo_chunking\"] for that decision",
+      'ctx.settings.get("duo_chunking"' not in _dr.split("while _di < _n_items")[1].split("def ")[0][:4000])
 # the old string survives only inside the explanatory comment
 check("1c old false claim only survives inside the explanatory comment",
       all("chunking (value from start)" not in ln or ln.strip().startswith("#")
