@@ -436,10 +436,6 @@ async def _files_new_since_cp(workspace: str, cp_hash: str) -> list[str]:
     return new_files
 
 
-async def list_files_added_since(workspace: str, cp_hash: str) -> list[str]:
-    return await _files_new_since_cp(workspace, cp_hash)
-
-
 async def file_changed_since(workspace: str, cp_hash: str, rel_path: str) -> bool:
 
     import asyncio as _asyncio

@@ -282,12 +282,6 @@ async def _github_repo_state(repo_url: str, token: str) -> tuple[str, str]:
     return "unreachable", "github returned HTTP " + str(_r.status_code)
 
 
-async def _github_repo_exists(repo_url: str, token: str):
-    """Backward-compatible bool view of _github_repo_state."""
-    _state, _msg = await _github_repo_state(repo_url, token)
-    return (_state == "ok"), _msg
-
-
 async def _github_ensure_repo(remote_url: str, token: str) -> tuple[bool, str]:
     """Make the GitHub repo exist. Returns (created, msg).
 

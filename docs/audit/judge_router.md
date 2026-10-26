@@ -51,7 +51,7 @@ because this session's change set is the 1.4.0 release.
 |---|---|
 | `server.py` `HIVEMIND_VERSION` | `1.4.0` |
 | CHANGELOG top | `## [1.4.0] - 2026-10-17` (matches - gate check b) |
-| `RELEASE_NOTES_1.4.0.md` | present, used as the release body |
+| `RELEASE_NOTES_1.4.0.md` | was in the tree; now only the GitHub release body |
 | Zip | 288 entries, `BUILD_INFO` embedded, leak check clean |
 | Export-ignored | `/tests/`, `docs/plan_1.4_voice.md`, `docs/roadmap_1.4.md` (verified **inside** the built zip: both absent) |
 | Tag | `v1.4.0` **local only** (not pushed) |

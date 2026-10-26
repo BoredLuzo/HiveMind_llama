@@ -76,11 +76,11 @@ def main(argv: list[str] | None = None) -> int:
         return rc
 
     print()
-    print("Fertig. In den Settings setzen:")
+    print("Done. Set these in the settings:")
     print(f"  routing_decider_model = \"{target.relative_to(ROOT).as_posix()}\"")
     print("  routing_decider       = \"shadow\"    # erst vergleichen, dann \"on\"")
-    print("Hinweis: der Encoder laeuft auf der CPU (~0,5-1,2 s pro Entscheidung) und")
-    print("belegt keinen VRAM. Ohne ihn entscheidet der LLM-Judge wie bisher.")
+    print("Note: the encoder runs on the CPU (~0.5-1.2 s per decision) and uses")
+    print("no VRAM. Without it the LLM judge decides as before.")
     return 0
 
 

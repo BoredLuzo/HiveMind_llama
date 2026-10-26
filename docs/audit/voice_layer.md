@@ -44,7 +44,8 @@ flush loop, plus one call when the run ends.
 still `cosette` and `resolve_voice()` reads the settings key first. A fresh install
 would therefore have started on the CC BY-NC recording anyway - the licence fix was
 cosmetic. Fix: `"tts_voice": "anna"` in `settings.py`, plus `docs/settings.md`,
-`docs/voice_setup.md`, `RELEASE_NOTES_1.4.0.md` and the `tts_engine` docstring.
+`docs/voice_setup.md` and the `tts_engine` docstring (the 1.4.0 release notes now
+live only in the GitHub release).
 (The owner's own settings pin `cosette`, so nothing changed for them.)
 
 ## 5. Latency work: one real regression, caught by the suite
