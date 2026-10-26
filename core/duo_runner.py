@@ -305,6 +305,1797 @@ from core.duo.preflight import (  # noqa: F401
     _strip_stale_ctx_notices,
     coder_briefing_text,
 )
+
+
+@dataclasses.dataclass
+class _DuoPlannerPhaseState:
+    """Planner-phase in/out locals (moved verbatim from run_code_duo).
+
+    One field per local the moved block reads on entry or assigns for
+    the rest of the run. The runner syncs locals <-> fields around the
+    helper call so every later read (and the abort/cleanup paths) sees
+    exactly the assignments the inline code used to make in the runner
+    frame (the commit-2270557 NameError-ladder bug class).
+    """
+    subtasks: list = dataclasses.field(default_factory=list)
+    plan_thinking: str = ""
+    plan_content_txt: str = ""
+    plan_result: object = None
+    planner_used_fallback: bool = False
+    planner_fallback_reason: str = ""
+    planner_parse_mode: str = "none"
+    planner_context_trimmed: bool = False
+    plan_guard_quality: dict = dataclasses.field(default_factory=dict)
+    planner_model: str = ""
+    img_plan: dict = dataclasses.field(default_factory=dict)
+    plan_port: int | None = None
+    plan_ctx_final: int | None = None
+    duo_timed_out: bool = False
+    plan_tracker: object = None
+
+async def _duo_planner_phase(
+    ctx, state, ps: _DuoPlannerPhaseState, *,
+    coder_mdl, critic_mdl, exec_mdl, _ws_str, _explore_ctx, _xtools_ws,
+    _coder_ctx, _contracts_raw, _matched_skills, _planner_step_cap,
+    _project_state, _duo_runtime_profile, _duo_deadline_at, _duo_run_timeout_s,
+    _fup_task_ctx,
+):
+    # CODE-MOTION (duo-runner-split): planner phase moved VERBATIM from
+    # run_code_duo's planner if-block; only the unpack/pack wrapper around
+    # the body is new. No logic changes.
+    _subtasks = ps.subtasks
+    _plan_thinking = ps.plan_thinking
+    _plan_content_txt = ps.plan_content_txt
+    _plan_result = ps.plan_result
+    _planner_used_fallback = ps.planner_used_fallback
+    _planner_fallback_reason = ps.planner_fallback_reason
+    _planner_parse_mode = ps.planner_parse_mode
+    _planner_context_trimmed = ps.planner_context_trimmed
+    _plan_guard_quality = ps.plan_guard_quality
+    _planner_model = ps.planner_model
+    _img_plan = ps.img_plan
+    _plan_port = ps.plan_port
+    _plan_ctx_final = ps.plan_ctx_final
+    _duo_timed_out = ps.duo_timed_out
+    _plan_tracker = ps.plan_tracker
+    try:
+        _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
+        _planner_is_distilled = False
+        _disable_think_planner    = bool(ctx.settings.get("disable_thinking_in_planner", False))
+        _chunking_forces_thinking = ctx.duo_config.chunking and not _disable_think_planner
+        _use_thinking_planner = bool(
+            ctx.duo_config.agentic_thinking
+            or (not _disable_think_planner and (
+                ctx.duo_config.chunking
+                or (_planner_default_thinking and ctx.duo_config.coding_mode)
+            ))
+        )
+        _planner_use_exec_model = bool(ctx.settings.get("duo_planner_use_exec_model", True))
+        _planner_model = exec_mdl if (_use_thinking_planner or _planner_use_exec_model) else coder_mdl
+        if bool(ctx.settings.get("duo_planner_use_coder_ctx", True)):
+            _planner_model = coder_mdl
+        _planner_model_override = str(ctx.settings.get("duo_planner_model", "") or "").strip()
+        if _planner_model_override:
+            _planner_model = _planner_model_override
+        # IMAGE PLAN (2026-10-01): pure decision over planner/coder roles
+        # (raw | description | none) — computed once per run, before the
+        # coder load so a needed projector reload is visible in the
+        # status stream. Planner-aus runs: _planner_model is set anyway.
+        _img_plan = resolve_image_plan(_planner_model, exec_mdl, ctx.settings, ctx)
+        _rm_models = {"planner": _planner_model, "coder": exec_mdl}
+        if critic_mdl:
+            _rm_models["critic"] = critic_mdl
+        yield await ctx.emit({"type": "run_meta", "models": _rm_models})
+        _planner_profile = ctx.model_profile(_planner_model)
+        _planner_supports_thinking = bool(_planner_profile.get("thinking", False))
+        _planner_effective_thinking = bool(_use_thinking_planner)
+
+        _planner_ctx_cap_cfg = int(ctx.settings.get("duo_planner_ctx_cap", 0) or 0)
+        _planner_ctx_target = int(ctx.settings.get("duo_planner_ctx_target", 0) or 0)
+        _planner_ctx_cap = 131072
+        if _planner_ctx_cap_cfg > 0:
+            _planner_ctx_cap = _planner_ctx_cap_cfg
+        _planner_ctx_cap = max(4096, _planner_ctx_cap)
+
+        try:
+            _lsm_plan_pre = None
+            from backend.llama_server_manager import manager as _lsm_plan_pre
+
+            if ctx.settings.get("duo_planner_use_coder_ctx", True):
+                _plan_ctx_final_raw = _coder_ctx
+            elif _planner_ctx_target > 0:
+                _plan_ctx_final_raw = _planner_ctx_target
+            else:
+                _plan_ctx_base_raw = (
+                    resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
+                    if ctx.duo_config.agentic_mode
+                    else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
+                )
+                _plan_ctx_final_raw = max(
+                    6144,
+                    int(_plan_ctx_base_raw),
+                )
+            _plan_ctx_final = min(int(_plan_ctx_final_raw), int(_planner_ctx_cap))
+            if _plan_ctx_final < int(_plan_ctx_final_raw):
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": (
+                        f"⚙️ Planner ctx guard: {int(_plan_ctx_final_raw)}→{int(_plan_ctx_final)} "
+                        f"(profile {_duo_runtime_profile})"
+                    ),
+                })
+            _plan_mdl_short = _planner_model.split(":")[0]
+            yield await ctx.emit({"type": "status",
+                              "content": f"⚡ Preloading {_plan_mdl_short} for planner…"})
+            _evicted_any = False
+            try:
+                _loaded_preplan = await _lsm_plan_pre.list_loaded()
+                for _lm in _loaded_preplan:
+                    _lpname = str(_lm.get("name") or _lm.get("model") or "")
+                    if _lpname and _lpname.rsplit("#", 1)[0] != _planner_model.rsplit("#", 1)[0]:
+                        await _lsm_plan_pre.evict(_lpname)
+                        _evicted_any = True
+            except Exception as _plan_evict_exc:
+                logger.warning("Planner pre-eviction failed: %s", _plan_evict_exc)
+            if _evicted_any:
+                # DRIVER-LAG-SETTLE (2026-09-06): this used to wait in an
+                # UNCONDITIONAL wait_for_vram_reclaim for needed(full ctx)+768 —
+                # a structurally unreachable target while the target model
+                # itself is still warm in VRAM (e.g. Hermes@4096 from the
+                # warmup): guaranteed 45s stall BEFORE every load. The settle
+                # now only runs after real peer evictions above and targets
+                # the ACHIEVABLE reduced margin; the ctx-mismatch kill +
+                # the manager's margin resolution cover the rest.
+                await asyncio.sleep(2.5)
+                try:
+                    from backend.llama_vram_table import wait_for_vram_reclaim, vram_of_moe
+                    from backend.llama_manager_utils import VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB as _RED_MIB
+                    _planner_vram_rm = vram_of_moe(_planner_model, _plan_ctx_final) * 1024 + _RED_MIB
+                    await _await_with_hb(
+                        lambda: wait_for_vram_reclaim(int(_planner_vram_rm), timeout_sec=20),
+                        timeout=30.0,
+                        emit_fn=ctx.emit,
+                        label="Waiting for VRAM to free up",
+                        interval=5.0,
+                    )
+                except Exception:
+                    pass
+            _lsm_plan_pre._planner_critical_phase = True
+            # PIN RESET AT RUN START (2026-10-02): stale pins from a
+            # crashed previous run must not block eviction for this one.
+            try:
+                _lsm_plan_pre.unpin_all()
+            except Exception:
+                pass
+            # fallback to the lighter coder model to keep Planner responsive.
+            # P1-1 FIX: Capture port from first ensure_loaded — eliminates redundant
+            # second ensure_loaded call (was wasting ~300-500ms on /health re-check).
+            # PLANNER-HANDOFF-PIN (audit B5): when the planner IS the coder
+            # model, request the coder's ctx for the planner slot (max of
+            # both needs). The handoff reuses a slot only when its ctx
+            # covers the coder need — otherwise the coder reloaded the
+            # same weights at a bigger ctx (15-60 s + full KV loss, the
+            # ctx-mismatch class of manager_load 432). The loader's
+            # graceful cascade still protects tight-VRAM cases: a
+            # degraded slot is refused by the existing handoff check,
+            # exactly as before — worst case is today's behavior.
+            def _planner_load_ctx(model: str, ctx_final: int) -> int:
+                try:
+                    if model != coder_mdl:
+                        return ctx_final
+                    _need = (
+                        resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
+                        if ctx.duo_config.agentic_mode
+                        else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
+                    )
+                    return max(ctx_final, int(_need)) if _need else ctx_final
+                except (NameError, TypeError, ValueError):
+                    return ctx_final
+            _plan_port: int | None = None
+            # AUDIT F4 (2026-10-24): the pin overrides an explicit
+            # planner ctx target — say so instead of doing it silently.
+            _pin_ctx = _planner_load_ctx(_planner_model, _plan_ctx_final)
+            if _pin_ctx > _plan_ctx_final:
+                yield await ctx.emit({"type": "status", "content": (
+                    f"⚙️ Planner ctx pinned {_plan_ctx_final} → {_pin_ctx} tok "
+                    "(planner is the coder model — slot reuse avoids a mid-run reload)")})
+            try:
+                _ensure_timeout = float(ctx.settings.get("duo_planner_ttl_seconds", 0) or 0) or float(ctx.settings.get("duo_planner_ensure_load_timeout_s", 450.0) or 450.0)
+                _plan_port = await _await_with_hb(
+                    lambda: _lsm_plan_pre.ensure_loaded(
+                        _planner_model, num_ctx=_pin_ctx, n_parallel=1,
+                        vision=(_img_plan.get("planner") == "raw"),
+                        # DUO-PIN (2026-10-01): vision-prepro load must not LRU-evict duo slots
+                        # GRACEFUL-PLANNER (2026-09-07): the planner may
+                        # degrade to a smaller ctx (its prompts are small).
+                        # This load used to be STRICT when planner==coder —
+                        # then tight VRAM already aborted planning although
+                        # e.g. 16384 would fit. The coder later loads
+                        # strictly at full ctx (level A: a degraded planner
+                        # slot is never inherited, because the fast path
+                        # reuses only when slot-ctx >= coder-ctx).
+                        ctx_graceful=True,
+                    ),
+                    timeout=_ensure_timeout,
+                    emit_fn=ctx.emit,
+                    label=f"Loading model {_planner_model.split(':')[0]}",
+                    interval=10.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[Planner] ensure_loaded timeout (%.1fs) for %s — falling back to coder model",
+                    _ensure_timeout,
+                    _planner_model,
+                )
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": (
+                        f"⚠ Preload takes too long ({int(_ensure_timeout)}s) — using lighter model for planner"
+                    ),
+                })
+                _planner_model = coder_mdl
+                _planner_used_fallback = True
+                # IMAGE-PLAN REPLAN (2026-10-03): the plan was computed with
+                # the original planner model; a text-only fallback would
+                # otherwise still receive raw parts (or lose its raw flag).
+                _img_plan = resolve_image_plan(_planner_model, exec_mdl, ctx.settings, ctx)
+            except Exception as _pre_load_err:
+                logger.warning("Planner pre-load failed: %s", _pre_load_err, exc_info=True)
+                _err_short = str(_pre_load_err)[:120]
+                # FALLBACK-RESOLVE (2026-09-07): the configured fallback
+                # model may be missing (e.g. qwen3.5:4b-ud not installed) —
+                # then fall back deterministically to an installed, loadable one.
+                _planner_fb = _resolve_fallback_model(
+                    preferred=str(ctx.settings.get("duo_coder_fallback_model", "") or "").strip(),
+                    exclude_mdl=_planner_model,
+                    num_ctx=int(_plan_ctx_final or 8192),
+                )
+                if _planner_fb and _planner_fb != _planner_model:
+                    _planner_model = _planner_fb
+                    _planner_used_fallback = True
+                    _planner_fallback_reason = f"preload_exception→fallback_model: {_err_short[:50]}"
+                    _plan_ctx_final = resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), _planner_fb, "planner")
+                    yield await ctx.emit({
+                        "type": "status",
+                        "content": (
+                            f"⚠ Planner model could not be loaded: {_err_short[:60]} — "
+                            f"fallback to {_planner_fb.split(':')[0]}"
+                        ),
+                    })
+                else:
+                    _planner_model = coder_mdl
+                    _planner_used_fallback = True
+                    _planner_fallback_reason = f"preload_exception: {_err_short[:60]}"
+                    _plan_ctx_final = resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "planner")
+                    yield await ctx.emit({
+                        "type": "status",
+                        "content": (
+                            f"⚠ Planner model could not be loaded: {_err_short[:80]} — "
+                            f"fallback to {coder_mdl.split(':')[0]}"
+                        ),
+                    })
+
+            _lsm_plan_pre._planner_critical_phase = False
+
+        except Exception as _pre_load_err_outer:
+            logger.warning("Planner pre-load outer failed: %s", _pre_load_err_outer, exc_info=True)
+            _plan_ctx_final = resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "planner")  # Fallback
+            if _lsm_plan_pre is not None:
+                _lsm_plan_pre._planner_critical_phase = False
+
+        # P1-1 FIX: Port already captured from the first ensure_loaded call above.
+        # Removed redundant second ensure_loaded (was wasting ~300-500ms on /health re-check).
+        # Only try a lightweight re-resolution if the port was not captured (shouldn't happen).
+        if _plan_port is None:
+            try:
+                from backend.llama_server_manager import manager as _lsm_port_res
+                _plan_port = await asyncio.wait_for(
+                    _lsm_port_res.ensure_loaded(
+                        _planner_model, num_ctx=_planner_load_ctx(_planner_model, _plan_ctx_final), n_parallel=1,
+                        pin=True,
+                        # GRACEFUL-PLANNER: see primary load above.
+                        ctx_graceful=True,
+                    ),
+                    timeout=30.0,
+                )
+            except Exception as _port_err:
+                logger.warning("[Planner] Port resolution failed: %s", _port_err)
+
+        # VISION-TRUTH GATE (2026-10-04): the requested
+        # vision flag can silently drop on load (mmproj resolution failed,
+        # VRAM restart without projector). If the loaded planner slot
+        # really runs without a projector, downgrade the plan instead of
+        # letting the planner claim it sees the image. vision_active None
+        # (/props unreachable) trusts the plan - no false fallback.
+        if _img_plan.get("planner") == "raw" and _plan_port is not None:
+            try:
+                from backend.llama_server_manager import manager as _lsm_vgate
+                _pslot = _lsm_vgate.get_slot_by_port(int(_plan_port))
+                _pv = getattr(_pslot, "vision_active", None) if _pslot is not None else None
+                if _pv is False:
+                    _img_plan, _vg_warns = effective_image_plan(
+                        _img_plan, planner_slot_vision=_pv,
+                        has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
+                    for _w in _vg_warns:
+                        logger.warning("[DUO][VISION-GATE] %s", _w)
+                        yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
+                elif _pv is None:
+                    # UNKNOWN (2026-10-04): a server build without
+                    # /props modalities would make the gate a silent
+                    # no-op - say so once instead.
+                    logger.info("[DUO][VISION-GATE] planner vision state UNKNOWN "
+                                "(/props reports no modalities?) - trusting the plan")
+            except (ImportError, AttributeError, TypeError, ValueError) as _vg_err:
+                logger.debug("[DUO][VISION-GATE] planner check skipped: %s", _vg_err)
+
+        yield await ctx.emit({
+            "type": "status",
+            "content": (
+                f"🧠 Planner (Thinking, {_planner_model.split(':')[0]})…"
+                if _planner_effective_thinking
+                else f"🧩 Planner ({_planner_model.split(':')[0]}): splitting task into subtasks..."
+            ),
+        })
+        _planner_hb_stop = asyncio.Event()
+
+        # Unique planner id for client-side mapping + additional metadata
+        _planner_id = str(uuid.uuid4())
+        # Will this run buffer model thinking (e.g. llama.cpp distilled models)?
+        # BUG-2-FIX: Distilled models (qwen3.5, qwen3.5-d) run via llama.cpp --reasoning on
+        _planner_will_buffer = False
+        _planner_streaming_expected = True
+        yield await ctx.emit({
+            "type": "planner_start",
+            "planner_id": _planner_id,
+            "model": _planner_model,
+            "thinking": _planner_effective_thinking,
+            "streaming_expected": _planner_streaming_expected,
+            "will_buffer": _planner_will_buffer,
+        })
+
+        # PERF-2 FIX: maxsize prevents unbounded queue growth when
+        # the SSE consumer is slow (network hiccup, tab in background).
+        # 30 heartbeats = 30s buffer; extras are silently dropped below.
+        _planner_hb_queue: asyncio.Queue = asyncio.Queue(maxsize=30)
+
+
+        _planner_hb_task = asyncio.create_task(_planner_hb_fn(
+        ctx, _planner_hb_queue, _planner_hb_stop, _planner_model))
+        if _use_thinking_planner and not _planner_supports_thinking:
+            yield await ctx.emit({
+                "type": "status",
+                "content": (
+                    f"\u2139 Thinking enabled for {_planner_model.split(':')[0]} (not in MODEL_PROFILES \u2014 "
+                    "user override). The model may not produce thinking tokens."
+                ),
+            })
+        ctx.phase_timer.start("soft_planner")
+
+        # ── Context Pipeline: explore → planner ─────────────────────────────
+        # CTX-PRIORITY (2026-09-20): the coder exec ctx resolves from the
+        # coder's OWN setting (duo_coder_ctx_agentic). It previously read
+        # duo_planner_ctx_target first, so a non-zero planner target (8192)
+        # silently truncated coder prompts to 8k while the server held KV
+        # for the full agentic ctx (live: 7762-token prefills vs 20k
+        # internal count — empty coder rounds).
+        _exec_ctx = resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic") if ctx.duo_config.agentic_mode else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
+        try:
+            _over = ((ctx.settings.get("ctx_overrides") or {}).get("roles") or {}).get("duo_coder")
+            logger.info(
+                "[CTX-EFFECTIVE] mode=%s model=%s coder_ctx=%d agentic_setting=%s planner_target=%s ctx_overrides_duo_coder=%s",
+                "agentic" if ctx.duo_config.agentic_mode else "duo",
+                coder_mdl, _exec_ctx,
+                ctx.settings.get("duo_coder_ctx_agentic"),
+                ctx.settings.get("duo_planner_ctx_target"),
+                _over,
+            )
+        except Exception:
+            pass
+        # CPU-CONTEXT-GUARD (2026-10-17, ThinkPad report "1500 s for one
+        # write_file with a 2B model"): on a CPU-only install the ctx setting
+        # is a *time* setting - the first prompt alone can take many minutes
+        # and every re-prefill repeats it. Say so once, with the number, so
+        # the fix (smaller ctx) is obvious instead of looking like a hang.
+        try:
+            from core.duo_helpers import cpu_prefill_warning as _cpu_warn
+            from backend.llama_config import GPU_BACKEND as _gpu_backend
+            _pw = _cpu_warn(_exec_ctx, _gpu_backend)
+            if _pw:
+                logger.warning("[PERF-WARN] %s", _pw)
+                yield await ctx.emit({"type": "status", "content": "⚠ " + _pw})
+        except (ImportError, AttributeError, TypeError, ValueError):
+            pass
+        _runtime_profile = ctx.resolve_duo_runtime_profile(
+            None, important_task=False, until_finished=ctx.duo_config.until_finished,
+        )
+        # MEASURED OVERHEADS (2026-10-17): the content budget used to
+        # subtract the hardcoded assumptions 800 (system) / 1200 (tools) -
+        # the tool schema really is ~2050 tokens at 8k (SCHEMA_FRAC of the
+        # window), so the planner/explore content was over-committed by
+        # ~850-2500 tokens. Both numbers now come from the real artefacts:
+        # the coder prompt constant and the tool-schema JSON, capped by the
+        # schema budget this run will actually allow.
+        _ov_sys_tok = 0
+        _ov_tool_tok = 0
+        try:
+            from core import budgets as _budg_ov
+            from hive_functions.prompts import PROMPTS as _PROMPTS_OV
+            _ov_prompt_txt = max(
+                str(_PROMPTS_OV.get("duo_coder_execution") or ""),
+                str(_PROMPTS_OV.get("duo_coder_autonomous") or ""), key=len)
+            _ov_sys_tok = _budg_ov.tokens_for_text(_ov_prompt_txt, exec_mdl)
+            _ov_schema_chars = len(json.dumps(_xtools_ws or []))
+            _ov_cap = _budg_ov.schema_budget_for(int(_exec_ctx or 16384), exec_mdl)
+            if _ov_cap > 0:
+                _ov_schema_chars = min(_ov_schema_chars, _ov_cap)
+            _ov_tool_tok = _budg_ov.tokens_for_text("x" * _ov_schema_chars, exec_mdl)
+        except (ImportError, AttributeError, TypeError, ValueError):
+            _ov_sys_tok = _ov_tool_tok = 0
+        _content_tokens = compute_content_budget(
+            _exec_ctx, profile=_runtime_profile,
+            system_prompt_tokens=_ov_sys_tok or None,
+            tool_def_tokens=_ov_tool_tok or None,
+        )
+        _ctx_budget = ContextBudget.from_content_tokens(_content_tokens).with_static_map_override(
+            ctx.settings.get("duo_static_map_chars", 0)
+        )
+
+        # Planner gets structured architecture (NOT raw TOML)
+        _planner_ctx = explore_to_planner_ctx(_explore_ctx, task=ctx.user_input, budget=_ctx_budget)
+
+        _planner_task = ctx.user_input + build_image_desc_block(getattr(ctx, "image_description", None))
+        if _fup_task_ctx:
+            _planner_task = (
+                ctx.user_input
+                + "\n\n[Previous task in this chat — context for this follow-up]\n"
+                + _fup_task_ctx
+            )
+
+        if _project_state is not None:
+            from context.project_state import build_project_context
+            _proj_ctx = build_project_context(_project_state)
+            if _proj_ctx:
+                _planner_ctx = _proj_ctx + "\n\n---\n\n" + (_planner_ctx or "")
+
+        if _matched_skills:
+            try:
+                from hive_functions.skills import format_skill_planner
+                _skills_plan = "\n".join(format_skill_planner(_sk) for _sk in _matched_skills[:5])
+                _planner_ctx = (
+                    "[Relevante Skills (use these patterns when planning)]\n"
+                    + _skills_plan + "\n\n---\n\n" + (_planner_ctx or "")
+                )
+            except Exception as _skp_err:
+                logger.debug("[SKILLS] Planner injection failed: %s", _skp_err)
+
+        if ctx.duo_config.chunking:
+            _planner_sys_est = _make_duo_thinking_planner_sys(_planner_step_cap, model_name=_planner_model) if _planner_effective_thinking else _make_duo_planner_sys(_planner_step_cap)
+        else:
+            _planner_sys_est = make_planner_analysis_sys(model_name=_planner_model)
+        _planner_thinking_budget = _calculate_thinking_tokens(
+            _planner_model,
+            ctx.settings,
+            input_tokens=(len(_planner_sys_est) + len(_planner_ctx) + len(ctx.user_input) + 500) // 3,
+            available_ctx=_plan_ctx_final,
+            agent_name="planner",
+        )
+        logger.info("[PLANNER-THINKING] model=%s thinking=%s budget=%d ctx=%d",
+                     _planner_model, _planner_effective_thinking,
+                     _planner_thinking_budget, _plan_ctx_final)
+
+        # ── Event bridge: run_planner ctx.emits via callback → queue → SSE yield ───
+        # run_planner() uses emit_fn/heartbeat_fn callbacks, but the server's
+        # SSE ctx.pipeline uses yield await ctx.emit(). The bridge uses an asyncio.Queue
+        # to connect the two: run_planner puts events into the queue via the
+        # callback, and the main generator yields them from the queue.
+        _plan_event_q: asyncio.Queue = asyncio.Queue(maxsize=100)
+
+
+
+
+        # ── Port check ──────────────────────────────────────────────────────
+        _plan_result: PlannerResult | None = None
+        _plan_thinking = ""
+        _plan_content_txt = ""
+        if _plan_port is None:
+            logger.warning("[Planner] No port available — skipping planner")
+            _planner_used_fallback = True
+            _planner_fallback_reason = "no_port_available"
+            yield await ctx.emit({"type": "status", "content": "⚠ Planner: no model port available — chunking disabled"})
+            yield await ctx.emit({"type": "planner_done", "summary": "⚠ no port"})
+        else:
+            # ── Run planner as background task ──────────────────────────────
+            _plan_task = asyncio.create_task(run_planner(
+                task=_planner_task,
+                sees_images=_img_plan.get("planner") == "raw",
+                coder_sees_images=_img_plan.get("coder") == "raw",
+                images=ctx.images if _img_plan.get("planner") == "raw" else None,
+                explore_ctx=_planner_ctx,
+                planner_model=_planner_model,
+                planner_port=_plan_port,
+                step_cap=_planner_step_cap,
+                use_thinking=_planner_effective_thinking,
+                chunking=ctx.duo_config.chunking,
+                thinking_budget=_planner_thinking_budget,
+                max_output_tokens=_plan_ctx_final,
+                planner_ctx=_plan_ctx_final,
+                websearch_available=ctx.settings.get("duo_websearch_enabled", False) and ctx.websearch_available,
+                settings=ctx.settings,
+                aborted_fn=partial(plan_aborted_fn, ctx),
+                emit_fn=partial(plan_emit_fn, _plan_event_q),
+                heartbeat_fn=partial(plan_heartbeat_fn, _plan_event_q, _planner_hb_queue),
+            ))
+
+            # PLANNER-SKIP (2026-09-04): Skip during the planner aborts the
+            # planner and goes straight to the coder (before, the planner
+            # kept running and the skip was later wrongly consumed as
+            # "Round skipped" -> coder 0s, silent done).
+            _planner_skip_mid = False
+            try:
+                # Yield events from the bridge as they arrive
+                while not _plan_task.done() or not _plan_event_q.empty():
+                    # Enforce the run deadline even while the planner runs;
+                    # otherwise a 600s planner overshoots a 90-420s run timeout.
+                    if _duo_deadline_at and time.monotonic() >= _duo_deadline_at:
+                        _duo_timed_out = True
+                        logger.warning(
+                            "[PLANNER] Run deadline exceeded - planner aborted (run timeout %ss)",
+                            _duo_run_timeout_s,
+                        )
+                        yield await ctx.emit({
+                            "type": "status",
+                            "content": (
+                                f"⏱ Duo timeout reached ({int(_duo_run_timeout_s)}s) "
+                                "- planner aborted, continuing with best effort."
+                            ),
+                        })
+                        _plan_task.cancel()
+                        break
+                    # PLANNER-SKIP (2026-09-04): Skip pressed while the
+                    # planner is running -> abort planner, go to coder.
+                    if ctx.step_skipped() and not ctx.aborted():
+                        _planner_skip_mid = True
+                        ctx.clear_step_skip()
+                        try:
+                            _plan_task.cancel()
+                        except Exception:
+                            pass
+                        yield await ctx.emit({"type": "status",
+                            "content": "⏭ Planner skipped — going straight to coder"})
+                        yield await ctx.emit({"type": "planner_done", "summary": "⏭ skipped mid-plan"})
+                        break
+                    # Yield pending events from the bridge
+                    while not _plan_event_q.empty():
+                        try:
+                            _evt = _plan_event_q.get_nowait()
+                            yield await ctx.emit(_evt)
+                        except asyncio.QueueEmpty:
+                            break
+                    # Also drain heartbeat queue directly (for events not routed through run_planner)
+                    while not _planner_hb_queue.empty():
+                        try:
+                            yield await ctx.emit(_planner_hb_queue.get_nowait())
+                        except asyncio.QueueEmpty:
+                            break
+                    if _plan_task.done():
+                        break
+                    await asyncio.sleep(0.05)
+
+                # Drain any remaining events after task completion
+                while not _plan_event_q.empty():
+                    try:
+                        _evt = _plan_event_q.get_nowait()
+                        yield await ctx.emit(_evt)
+                    except asyncio.QueueEmpty:
+                        break
+
+                # Get result from completed task
+                try:
+                    _plan_result = _plan_task.result()
+                except asyncio.CancelledError:
+                    _plan_result = None
+                    _planner_used_fallback = True
+                    _planner_fallback_reason = "planner_step_skipped" if _planner_skip_mid else "run_deadline"
+                    _planner_parse_mode = "skipped" if _planner_skip_mid else "timeout"
+                except asyncio.InvalidStateError:
+                    # DEADLINE-CANCEL-RACE (2026-09-09): cancel() is only
+                    # SCHEDULED — calling result() immediately after the
+                    # deadline break hits a still-pending task ("Result is
+                    # not set", live traceback). Same handling as a clean
+                    # cancellation.
+                    _plan_result = None
+                    _planner_used_fallback = True
+                    _planner_fallback_reason = "run_deadline"
+                    _planner_parse_mode = "timeout"
+            except Exception as _plan_exc:
+                logger.error("[Planner] Exception: %s", _plan_exc, exc_info=True)
+                _subtasks = []
+                _plan_thinking = ""
+                _plan_content_txt = ""
+                _planner_used_fallback = True
+                _planner_fallback_reason = "planner_exception"
+                _planner_parse_mode = "error"
+                _plan_guard_quality = {}
+                ctx.phase_timer.end("soft_planner", status="error")
+                _exc_short = f"{type(_plan_exc).__name__}: {str(_plan_exc)[:120]}"
+                yield await ctx.emit({"type": "status", "content": f"⚠ Planner error — {_exc_short}"})
+                yield await ctx.emit({"type": "planner_done", "summary": f"⚠ Error: {_exc_short}"})
+            finally:
+                _planner_hb_stop.set()
+                try:
+                    _planner_hb_task.cancel()
+                except Exception as _hb_err:
+                    logger.debug("[DUO] Heartbeat task cancel failed: %s", _hb_err)
+                # Cancel the planner task if it's still running (e.g. after exception)
+                if not _plan_task.done():
+                    _plan_task.cancel()
+                    try:
+                        await _plan_task
+                    except asyncio.CancelledError:
+                        pass
+
+            # ── Extract result from PlannerResult ────────────────────────────
+            if _plan_result is not None:
+                _subtasks = _plan_result.subtasks
+                _plan_thinking = _plan_result.thinking
+                # CODER-BRIEFING-STAGE: the pure plan text, used instead of
+                # the thinking when the reasoning is over the briefing limit.
+                _plan_content_txt = str(getattr(_plan_result, "plan_content", "") or "")
+                # Merge fallback flags: pre-load fallback + planner-internal fallback
+                _planner_used_fallback = _plan_result.used_fallback or _planner_used_fallback
+                _planner_fallback_reason = _plan_result.fallback_reason or _planner_fallback_reason
+                _planner_parse_mode = _plan_result.parse_mode
+                _planner_context_trimmed = _plan_result.context_trimmed
+                _plan_guard_quality = _plan_result.plan_guard
+
+                try:
+                    from core.run_audit import record_run_audit
+                    record_run_audit(ctx.chat_id, {
+                        "run_id": ctx.run_id,
+                        "event": "planner",
+                        "plan_content_len": len(_plan_result.plan_content or ""),
+                        "thinking_len": len(_plan_result.thinking or ""),
+                        "subtasks": len(_plan_result.subtasks or []),
+                        "used_fallback": bool(_plan_result.used_fallback),
+                        "fallback_reason": str(_plan_result.fallback_reason or ""),
+                        "parse_mode": str(_plan_result.parse_mode or ""),
+                        "context_trimmed": bool(_plan_result.context_trimmed),
+                        "explore_ctx_len": len(_explore_ctx or ""),
+                        "planner_mdl": str(_planner_model or ""),
+                    })
+                except Exception:
+                    pass
+
+                if _project_state is not None and _plan_result.plan_content:
+                    try:
+                        _pt = _plan_result.plan_content
+                        # Offene Tasks
+                        _ot = re.search(r"###\s*(?:Offene Tasks|Open Tasks)\s*\n((?:\d+\.\s*.*\n?)+)", _pt, re.IGNORECASE)
+                        if _ot:
+                            # OPEN-TASKS DISPLAY FIX (2026-10-07, owner):
+                            # strip leading numbers, a leading "file: "
+                            # and a trailing empty pipe segment - the raw
+                            # plan lines rendered with a dangling "|"
+                            _ot_lines = []
+                            for _l in _ot.group(1).strip().split("\n"):
+                                _t = re.sub(r"^\d+\.\s*", "", _l).strip()
+                                _t = re.sub(r"\s*\|\s*$", "", _t)
+                                _t = re.sub(r"^file:\s*", "", _t).strip()
+                                if _t:
+                                    _ot_lines.append(_t)
+                            _project_state.open_tasks = _ot_lines
+                        # Abgeschlossene Tasks
+                        _ct = re.search(r"###\s*(?:Abgeschlossene Tasks|Completed Tasks)\s*\n((?:-\s*\[x\]\s*.*\n?)+)", _pt, re.IGNORECASE)
+                        if _ct:
+                            _new_completed = [
+                                re.sub(r"^-\s*\[x\]\s*", "", l).strip()
+                                for l in _ct.group(1).strip().split("\n") if l.strip()
+                            ]
+                            _project_state.completed_tasks.extend(_new_completed)
+                            _seen = set()
+                            _deduped = []
+                            for _t in reversed(_project_state.completed_tasks):
+                                if _t not in _seen:
+                                    _seen.add(_t)
+                                    _deduped.append(_t)
+                            _project_state.completed_tasks = list(reversed(_deduped))[-50:]
+                        # Plan-Summary
+                        _sm = re.search(r"##\s*Plan:\s*(.+)", _pt)
+                        _plan_summary_set = False
+                        if _sm:
+                            _project_state.plan_summary = _sm.group(1).strip()[:500]
+                            _plan_summary_set = True
+                        else:
+                            for _line in _pt.split("\n"):
+                                _ls = _line.strip()
+                                if _ls and not _ls.startswith("#"):
+                                    _project_state.plan_summary = _ls[:500]
+                                    _plan_summary_set = True
+                                    break
+                        if not _plan_summary_set:
+                            _project_state.plan_summary = ""
+                        _project_state.plan_version += 1
+                    except Exception:
+                        pass
+
+                # PATCH-1: Plan-Tracker aus Planner-Result anreichern.
+                if _plan_tracker is None or _plan_tracker.total <= 1:
+                    _enriched = _build_tracker_from_planner(_plan_result, _contracts_raw if _contracts_raw else None, workspace=_ws_str)
+                    if _enriched is not None and _enriched.total > 0:
+                        _plan_tracker = _enriched
+                        logger.debug("[PlanTracker] Enriched from planner: %d steps", _plan_tracker.total)
+
+        if not ctx.duo_config.chunking and _subtasks:
+            logger.debug("[CHUNKING-GUARD] ctx.duo_config.chunking=False - %d subtasks discarded, planner briefing kept", len(_subtasks))
+            _subtasks = []
+
+        if not ctx.phase_timer.is_ended("soft_planner"):
+            _planner_status = "ok" if _subtasks else "empty"
+            if not _subtasks and _plan_result is not None:
+                _planner_status += f"(reason={getattr(_plan_result, 'fallback_reason', None) or 'none'})"
+            ctx.phase_timer.end("soft_planner", status=_planner_status)
+        # When chunking is off, don't send chunks to the UI — prevents
+        # confusing "CHUNK-PLAN" panel when only a briefing was requested.
+        # PLAN-TITLES (2026-09-17): ship {"title","raw"} objects so the UI
+        # checklist shows a concise readable title per chunk instead of the
+        # raw pipe-format step line ("file: ... | read: ... | risk: ...").
+        # The frontend already prefers c.title (app.js planner_result
+        # handler) and falls back to the string. DISPLAY ONLY: _loop_items
+        # below keep the RAW strings — the coder contract is unchanged.
+        _emit_chunks = (
+            [{"title": _derive_step_title(_s), "raw": _s} for _s in _subtasks]
+            if ctx.duo_config.chunking else []
+        )
+        yield await ctx.emit({
+            "type":          "planner_result",
+            "chunks":        _emit_chunks,
+            "thinking":      _plan_thinking if _plan_result is not None else "",
+            "model":         _planner_model,
+            "used_thinking": _planner_effective_thinking,
+            "quality": {
+                "used_fallback": bool(_planner_used_fallback),
+                "fallback_reason": str(_planner_fallback_reason or ""),
+                "parse_mode": str(_planner_parse_mode or "none"),
+                "context_trimmed": bool(_planner_context_trimmed),
+                "step_limit": int(_planner_step_cap),
+                "plan_guard": _plan_guard_quality,
+            },
+        })
+    finally:
+        ps.subtasks = _subtasks
+        ps.plan_thinking = _plan_thinking
+        ps.plan_content_txt = _plan_content_txt
+        ps.plan_result = _plan_result
+        ps.planner_used_fallback = _planner_used_fallback
+        ps.planner_fallback_reason = _planner_fallback_reason
+        ps.planner_parse_mode = _planner_parse_mode
+        ps.planner_context_trimmed = _planner_context_trimmed
+        ps.plan_guard_quality = _plan_guard_quality
+        ps.planner_model = _planner_model
+        ps.img_plan = _img_plan
+        ps.plan_port = _plan_port
+        ps.plan_ctx_final = _plan_ctx_final
+        ps.duo_timed_out = _duo_timed_out
+        ps.plan_tracker = _plan_tracker
+
+
+@dataclasses.dataclass
+class _DuoCriticReviewState:
+    """Critic-review in/out locals (moved verbatim from run_code_duo).
+
+    Holds every local the critic block (input build, tool-loop variant,
+    plain variant, verdict parse, verify-gate patch, duo_critic_done emit)
+    reads from or writes back to the runner loop. Same unpack/pack
+    contract as _DuoPlannerPhaseState.
+    """
+    parts: list = dataclasses.field(default_factory=list)
+    t: float = 0.0
+    verify_last_ok_serial: int = 0
+    critic_issues: list = dataclasses.field(default_factory=list)
+    final_verdict: str = ""
+    approved: bool = False
+    verify_gate_blocked: bool = False
+
+
+async def _duo_critic_review(
+    ctx, ps: _DuoCriticReviewState, *,
+    coder_mdl, coder_out, critic_mdl, _ws_str, _di, _subtask,
+    _duo_critic_sys, _duo_critic_temp, _duo_critic_tok,
+    _critic_profile, _critic_thinking, _critic_tools_enabled,
+    _verify_mutation_serial,
+):
+    # CODE-MOTION (duo-runner-split): the critic section (input build,
+    # tool-capable variant, plain variant, TUNE/JSON verdict parse,
+    # verify-gate patch and the duo_critic_done emit) moved VERBATIM
+    # from run_code_duo. No logic changes.
+    _parts = ps.parts
+    _t = ps.t
+    _verify_last_ok_serial = ps.verify_last_ok_serial
+    critic_issues = ps.critic_issues
+    final_verdict = ps.final_verdict
+    _approved = ps.approved
+    _verify_gate_blocked = ps.verify_gate_blocked
+    try:
+        _critic_task_ref = _subtask if _subtask else ctx.user_input
+        _content_label = "Code" if ctx.duo_config.coding_mode else "Answer"
+        _review_verb   = "Review the code." if ctx.duo_config.coding_mode else "Review the answer."
+        _critic_input = (
+            f"Task: {_critic_task_ref}\n\n"
+            f"{_content_label} (round {_di + 1}):\n{coder_out}\n\n"
+            f"{_review_verb}"
+        )
+        ctx.exec_ctrl.transition(AgentState.CRITIC_REVIEW)
+        ctx.exec_ctrl.reset_stuck_detection()  # BUG-NO-RESET FIX
+
+        # Use tool-capable system prompt when tools are enabled
+        _effective_critic_sys = DUO_CRITIC_TOOLS_SYSTEM if _critic_tools_enabled else _duo_critic_sys
+
+        _critic_msgs = [
+            {"role": "system", "content": _effective_critic_sys},
+            {"role": "user",   "content": _critic_input},
+        ]
+
+        yield await ctx.emit({"type": "duo_critic", "model": critic_mdl, "round": _di + 1})
+        _parts, _t = [], time.time()
+
+        _critic_tc_read_s = float(ctx.settings.get("duo_llm_slow_timeout_s", 300))
+        _critic_tc_timeout = httpx.Timeout(connect=10.0, read=_critic_tc_read_s, write=10.0, pool=5.0)
+        from backend.llama_server_manager import manager as _lsm_c
+        _critic_port = await _lsm_c.ensure_loaded(critic_mdl, num_ctx=resolve_ctx(ctx.settings.get("duo_critic_ctx") or ctx.settings.get("duo_coder_ctx_normal"), critic_mdl, "critic"))
+
+        if _critic_tools_enabled:
+            # ── Critic Tool-Loop ─────────────────────────────────────
+            # Critic can read files and run tests before giving verdict.
+            # Max 3 rounds to keep VRAM pressure low on 8GB GPUs.
+            _critic_tc_msgs  = list(_critic_msgs)
+            _critic_tc_max   = 3
+            try:
+                async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc:
+                  for _ctr in range(_critic_tc_max):
+                    if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
+                        break
+                    # Retry transient server errors (up to 3 attempts per tool round)
+                    for _critic_post_attempt in range(3):
+                        try:
+                            _c_gen_t0 = time.monotonic()  # GEN-TIME: critic POST duration
+                            _critic_tc_payload = {
+                                "model": critic_mdl,
+                                "messages": _critic_tc_msgs,
+                                "tools": _CRITIC_VERIFY_TOOLS,
+                                "stream": False,
+                                "tool_choice": "auto",
+                                "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
+                                "top_p": _critic_profile.get("top_p", 0.95),
+                                "top_k": _critic_profile.get("top_k", 20),
+                                "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
+                                "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
+                                "max_tokens": _duo_critic_tok,
+                            }
+                            if _critic_profile.get("seed") is not None:
+                                _critic_tc_payload["seed"] = int(_critic_profile["seed"])
+                            _cresp = await _chttpc.post(
+                                    f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
+                             json=_critic_tc_payload
+                                    )
+                            if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
+                                await _cresp.aread()
+                                await asyncio.sleep(2.0)
+                                continue
+                            break
+                        except httpx.ConnectError:
+                            if _critic_post_attempt < 2:
+                                await asyncio.sleep(3.0)
+                                continue
+                            raise
+                    if _cresp.status_code != 200:
+                        raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
+                    _cd = _cresp.json()
+                    _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
+                             if "choices" in _cd else _cd.get("message", {}))
+                    _cusage = _cd.get("usage") or {}
+                    if _cusage.get("completion_tokens"):
+                        # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
+                        try:
+                            _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+                        except Exception:
+                            _cc_cached = 0
+                        yield await ctx.emit({"type": "usage_meta", "phase": "critic",
+                            "completion_tokens": int(_cusage["completion_tokens"]),
+                            "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
+                            "cached_tokens": _cc_cached,
+                            "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
+                    _ctc = _cmsg.get("tool_calls", [])
+                    if not _ctc:
+                        # No more tool calls — this is the final verdict
+                        _parts.append(_cmsg.get("content", "").strip())
+                        break
+                    # Execute tool calls, append results
+                    _critic_tc_msgs.append(_cmsg)
+                    for _ctc_call in _ctc:
+                        _cfn   = _ctc_call.get("function", {})
+                        _cname = _cfn.get("name", "")
+                        _cargs = _parse_tool_args(_cfn.get("arguments", {}))
+                        _cres  = await _run_inline_tool(
+                            _cname,
+                            _cargs,
+                            tool_mode="critic_verify",
+                            include_websearch=False,
+                            workspace_lock=_ws_str,  # CRITIC-LOCK (2026-09-13): was None -> reads/searches unconstrained
+                        )
+                        if _cname == "run_bash" and not _run_bash_failed(_cres):
+                            _verify_last_ok_serial = max(_verify_last_ok_serial, _verify_mutation_serial)
+                        _critic_tc_msgs.append({
+                            "role": "tool",
+                            "content": _cres,
+                            "name": _cname,
+                            "tool_call_id": _ctc_call.get("id", _cname),
+                        })
+            except Exception as _cte:
+                _parts.append(json.dumps({"approved": False, "issues": [f"Critic-tool-error: {str(_cte)[:80]}"], "verdict": "tool_error"}))
+        else:
+            # ── Critic Plain Request ──────────────────────────────────
+            _critic_plain_payload = {
+                "model": critic_mdl,
+                "messages": _critic_msgs,
+                "tools": [],
+                "stream": False,
+                "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
+                "top_p": _critic_profile.get("top_p", 0.95),
+                "top_k": _critic_profile.get("top_k", 20),
+                "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
+                "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
+                "max_tokens": _duo_critic_tok,
+            }
+            if _critic_profile.get("seed") is not None:
+                _critic_plain_payload["seed"] = int(_critic_profile["seed"])
+            # MIN-P-EXPLICIT (2026-09-20): see the coder payload — a
+            # declared min_p 0.0 must ship (API default is 0.05).
+            if "min_p" in _critic_profile:
+                _critic_plain_payload["min_p"] = _critic_profile["min_p"]
+            if _critic_profile.get("cache_prompt"):
+                _critic_plain_payload["cache_prompt"] = True
+            _critic_plain_payload = _apply_thinking_kwargs(
+                _critic_plain_payload, _critic_profile, _critic_thinking, coder_tool_think=False
+            )
+            try:
+                async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc_plain:
+                    for _critic_post_attempt in range(3):
+                        try:
+                            _c_gen_t0 = time.monotonic()  # GEN-TIME: Critic-POST-Dauer
+                            _cresp = await _chttpc_plain.post(
+                                f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
+                                json=_critic_plain_payload,
+                            )
+                            if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
+                                await _cresp.aread()
+                                await asyncio.sleep(2.0)
+                                continue
+                            break
+                        except httpx.ConnectError:
+                            if _critic_post_attempt < 2:
+                                await asyncio.sleep(3.0)
+                                continue
+                            raise
+                    if _cresp.status_code != 200:
+                        raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
+                    _cd = _cresp.json()
+                    _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
+                             if "choices" in _cd else _cd.get("message", {}))
+                    _cusage = _cd.get("usage") or {}
+                    if _cusage.get("completion_tokens"):
+                        # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
+                        try:
+                            _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+                        except Exception:
+                            _cc_cached = 0
+                        yield await ctx.emit({"type": "usage_meta", "phase": "critic",
+                            "completion_tokens": int(_cusage["completion_tokens"]),
+                            "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
+                            "cached_tokens": _cc_cached,
+                            "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
+                    _parts.append(_cmsg.get("content", "").strip())
+            except Exception as _cre:
+                _err_d = {"approved": False, "issues": [f"Critic error: {str(_cre)[:80]}"], "verdict": "error"}
+                _parts.append(json.dumps(_err_d))
+
+        _critic_raw = "".join(_parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
+
+        # TUNE-PARSER: 'approved=false issues=[P1;P2] verdict=OK'
+        _critic_verdict: dict = {}
+        if "approved=" in _critic_raw:
+            _critic_verdict = _parse_critic_tune(_critic_raw)
+        else:
+            try:
+                jm = re.search(r"\{[\s\S]*?\}", _critic_raw)
+                if jm: _critic_verdict = json.loads(jm.group())
+            except (json.JSONDecodeError, AttributeError):
+                logger.debug("Critic JSON parse failed for: %.200s", _critic_raw)
+        if _critic_verdict.get("approved") is None:
+            _critic_verdict = {"approved": False, "issues": [_critic_raw[:300]], "verdict": "Parsing error"}
+
+        critic_issues  = _critic_verdict.get("issues", [])
+        final_verdict  = _critic_verdict.get("verdict", "")
+        _approved      = bool(_critic_verdict.get("approved", False))
+        _verify_gate_blocked = False
+        if _verify_mutation_serial > _verify_last_ok_serial:
+            _verify_gate_blocked = True
+            _verify_issue = "Verification missing: run_bash must pass after the latest file changes."
+            if _verify_issue not in critic_issues:
+                critic_issues = list(critic_issues) + [_verify_issue]
+            final_verdict = "verification_required_after_write"
+            _approved = False
+            _critic_verdict["approved"] = False
+            _critic_verdict["issues"] = critic_issues
+            _critic_verdict["verdict"] = final_verdict
+
+        yield await ctx.emit({
+            "type":     "duo_critic_done",
+            "elapsed":  round(time.time() - _t, 1),
+            "verdict":  _critic_verdict,
+            "approved": _approved,
+        })
+    finally:
+        ps.parts = _parts
+        ps.t = _t
+        ps.verify_last_ok_serial = _verify_last_ok_serial
+        ps.critic_issues = critic_issues
+        ps.final_verdict = final_verdict
+        ps.approved = _approved
+        ps.verify_gate_blocked = _verify_gate_blocked
+
+
+async def _duo_final_test(ctx, state, _cs, _n_items, *, _eff_run_ws):
+    # CODE-MOTION (duo-runner-split): P3 final-test-after-all-chunks
+    # moved VERBATIM from run_code_duo (function-level block, same
+    # indent). Reads shared objects only (_cs mutated in place).
+    _final_test_fb = bool(ctx.duo_config.test_feedback_final)
+    if _final_test_fb and _cs.has_written_files and not ctx.aborted():
+        yield await ctx.emit({"type": "status", "content": "\U0001f9ea Final test run after all chunks..."})
+        try:
+            _final_test_result = await _run_test_suite(
+                workspace=_eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", "")),
+                timeout=120,
+                chat_id=ctx.chat_id or "",
+            )
+        except Exception as _fte:
+            _final_test_result = _TestResult(
+                success=False, language="unknown", command="",
+                failure_count=0, error_lines=[str(_fte)],
+                raw_output="", inject_msg=f"\u26a0\ufe0f Final test runner error: {_fte}"
+            )
+        yield await ctx.emit({
+            "type": "test_result",
+            "chunk": "final",
+            "total_chunks": _n_items,
+            "passed": _final_test_result.is_clean(),
+            "language": _final_test_result.language,
+            "failures": _final_test_result.failure_count,
+            "command": _final_test_result.command,
+        })
+        if _final_test_result.is_clean():
+            yield await ctx.emit({"type": "status", "content": f"\u2705 All tests passed ({_final_test_result.language})"})
+        else:
+            yield await ctx.emit({"type": "status",
+                "content": f"\u274c {_final_test_result.failure_count} test failures in the final run"})
+            _cs.completion_notes.append(
+                f"Final test: {_final_test_result.failure_count} failure(s) ({_final_test_result.language})"
+            )
+
+
+@dataclasses.dataclass
+class _DuoExecRoundState:
+    """Tool-round exec in/out locals (moved verbatim from run_code_duo).
+
+    Holds the locals crossing the execute_tool_round seam: the deadline
+    (read for the round state, pulled forward when the executor extended
+    it), the result object, the run-bash snapshot guard and the two
+    by-ref bridges the executor mutates in place. Same unpack/pack
+    contract as _DuoPlannerPhaseState.
+    """
+    duo_deadline_at: float = 0.0
+    exec_result: object = None
+    snap_before: object = None
+    last_too_large_ref: list | None = None
+    cached_port_ref: list | None = None
+
+
+async def _duo_exec_round_task(
+    ctx, state, ps: _DuoExecRoundState, *,
+    _dr_tcs, _dtool_msgs, _duo_state, _tool_exec_hooks, _tool_ctx_lru,
+    _verify_mutation_serial, _verify_last_ok_serial, _last_run_bash_failure,
+    _changed_since_failure, _last_learned_insight_sig, _last_too_large_path,
+    _attempts_per_file, _wedge_state, _tool_error_retries, _call_sigs,
+    _recent_focus_paths, _file_changes, _duo_seen_web_queries,
+    _task_complete_blocked, _total_tool_errors_ref, _tc_consecutive,
+    _at_nosuite_nudged, _consecutive_reads, _last_read_path,
+    _read_ladder_fired, _ws_budget_streak, _ws_disabled, _tool_mode, _duo_ws,
+    _ws_str, _explore_ctx, _pre_explore_msgs, _written_files, _contracts_raw,
+    _coder_event_q, _cached_coder_port, exec_mdl, _exec_has_thinking,
+    _tool_think_auto_mode, _run_id_global, _di,
+):
+    # CODE-MOTION (duo-runner-split): tool-round launch (run-bash snapshot
+    # guard + cache horizon + execute_tool_round task) and the heartbeat
+    # wait loop with the result/deadline sync moved VERBATIM from
+    # run_code_duo's tool loop; only the unpack/pack wrapper around the
+    # body is new. No logic changes.
+    _duo_deadline_at = ps.duo_deadline_at
+    _exec_result = ps.exec_result
+    _snap_before = ps.snap_before
+    _last_too_large_ref = ps.last_too_large_ref
+    _cached_port_ref = ps.cached_port_ref
+    try:
+        # ── RUN-BASH-CHANGE-DETECTION (Problem 2) ─────────────
+        # _contracts_raw exports, normalized against _ws_str.
+
+        _round_bash_only = (
+            {tc.get("function", {}).get("name", "") for tc in (_dr_tcs or [])}
+            == {"run_bash"}
+        )
+        _snap_before = (await asyncio.to_thread(
+            _ld_file_snapshot, _ws_str, _explore_ctx, _pre_explore_msgs,
+            _written_files, _contracts_raw)) if _round_bash_only else None
+        # ── Execute all tool calls via shared executor ──
+        # CACHE-HORIZON (2026-09-04): everything < cache_horizon
+        # has already been sent (immutable prefix); everything
+        # from here is this round and may be mutated freely.
+        _round_cache_horizon = len(_dtool_msgs)
+        _last_too_large_ref = [_last_too_large_path]
+        _cached_port_ref = [_cached_coder_port]
+        _exec_task = asyncio.create_task(execute_tool_round(
+            tool_calls=_dr_tcs,
+            dtool_msgs=_dtool_msgs,
+            round_state=_duo_state,
+            hooks=_tool_exec_hooks,
+            trs=ToolRoundState(
+                cache_horizon=_round_cache_horizon,
+                tool_ctx_lru=_tool_ctx_lru,
+                duo_deadline_at=_duo_deadline_at,
+                verify_mutation_serial=_verify_mutation_serial,
+                verify_last_ok_serial=_verify_last_ok_serial,
+                last_run_bash_failure=_last_run_bash_failure,
+                changed_since_failure=_changed_since_failure,
+                last_learned_insight_sig=_last_learned_insight_sig,
+                last_too_large_path=_last_too_large_ref,
+                attempts_per_file=_attempts_per_file,
+                wedge_state=_wedge_state,
+                tool_error_retries=_tool_error_retries,
+                call_sigs=_call_sigs,
+                recent_focus_paths=_recent_focus_paths,
+                file_changes=_file_changes,
+                duo_seen_web_queries=_duo_seen_web_queries,
+                cached_coder_port=_cached_port_ref,
+                task_complete_blocked_count=_task_complete_blocked,
+                total_tool_errors=_total_tool_errors_ref,
+                tc_consecutive=_tc_consecutive,
+                at_nosuite_nudged=_at_nosuite_nudged,
+                consecutive_reads=_consecutive_reads,
+                last_read_path=_last_read_path,
+                read_ladder_fired=_read_ladder_fired,
+                ws_budget_streak=_ws_budget_streak,
+                ws_disabled=_ws_disabled,
+            ),
+            tool_mode=_tool_mode,
+            duo_ws=_duo_ws,
+            workspace_lock=_ws_str,
+            exec_model=exec_mdl,
+            auto_test_before_complete=bool(ctx.duo_config.test_feedback_final),
+            exec_has_thinking=_exec_has_thinking,
+            tool_think_auto_mode=_tool_think_auto_mode,
+            run_id_global=_run_id_global,
+            chat_id=ctx.chat_id,
+            subtask_index=_di,
+        ))
+        _hb_interval = _read_hb_interval(ctx.settings)
+        _hb_start = time.monotonic()
+        _hb_last = _hb_start
+        while True:
+            _hb_had = False
+            while not _coder_event_q.empty():
+                _hb_had = True
+                try:
+                    yield _coder_event_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+            if _hb_had:
+                _hb_last = time.monotonic()
+            if _exec_task.done():
+                break
+            # HEARTBEAT (2026-08-21): keepalive during long tool rounds.
+            # elapsed = total time since loop start.
+            if time.monotonic() - _hb_last >= _hb_interval:
+                _hb_total = int(time.monotonic() - _hb_start)
+                _hb_last = time.monotonic()
+                yield await ctx.emit({"type": "heartbeat", "elapsed": _hb_total})
+            await asyncio.sleep(0.02)
+        _exec_result = _exec_task.result()
+        # DEADLINE-GRACE (2026-09-09): pull the extended
+        # deadline back into the runner + state so the outer
+        # checks and later phases see it too.
+        if _exec_result.deadline_extended_to:
+            if _exec_result.deadline_extended_to > _duo_deadline_at:
+                _duo_deadline_at = _exec_result.deadline_extended_to
+                state["_duo_deadline_at"] = _duo_deadline_at
+    finally:
+        ps.duo_deadline_at = _duo_deadline_at
+        ps.exec_result = _exec_result
+        ps.snap_before = _snap_before
+        ps.last_too_large_ref = _last_too_large_ref
+        ps.cached_port_ref = _cached_port_ref
+
+
+@dataclasses.dataclass
+class _DuoWedgeHandoffState:
+    """Wedge-handoff in/out locals (moved verbatim from run_code_duo).
+
+    loop_detected / wedge_escalated / duo_deadline_at cross the seam in
+    both directions; break_out is the loop-control signal: the moved
+    block's two `break`s exit run_code_duo's tool-round loop, so inside
+    the helper they set break_out and return, and the runner breaks.
+    """
+    loop_detected: bool = False
+    wedge_escalated: bool = False
+    duo_deadline_at: float = 0.0
+    break_out: bool = False
+
+
+async def _duo_wedge_handoff(
+    ctx, state, ps: _DuoWedgeHandoffState, *,
+    _exec_result, exec_mdl, _ws_str, _di, _n_items, _subtask, _dtool_ctx,
+    _dtool_msgs, _wedge_state, _wedge_handoffs_used, _cached_coder_port,
+):
+    # CODE-MOTION (duo-runner-split): the WEDGE-HANDOFF block moved VERBATIM
+    # from run_code_duo's tool loop; only the unpack/pack wrapper and the
+    # break->(break_out, return) translation are new. No logic changes.
+    _loop_detected = ps.loop_detected
+    _wedge_escalated = ps.wedge_escalated
+    _duo_deadline_at = ps.duo_deadline_at
+    _break_out = ps.break_out
+    try:
+        # ── WEDGE-HANDOFF (2026-09-17): fresh-agent handoff ──
+        # The executor detected a wedging edit (same file,
+        # repeated failures). Delegation, not abort: run the
+        # fix agent, feed the outcome back as ONE compact
+        # notice, continue the chunk with a clean slate.
+        if getattr(_exec_result, "wedge_file", "") and not _loop_detected:
+            _wedge_path = str(_exec_result.wedge_file)
+            _wedge_max = int(ctx.settings.get("duo_wedge_handoff_max_per_run", 2) or 2)
+            if _wedge_handoffs_used[0] >= _wedge_max:
+                yield await ctx.emit({"type": "status",
+                    "content": f"⚠️ Wedge on {Path(_wedge_path).name} — handoff budget exhausted, escalating to human."})
+                _ld_setter(4650); _loop_detected = True
+                _wedge_escalated = True
+                _break_out = True; return
+            yield await ctx.emit({"type": "wedge_handoff",
+                "file": _wedge_path,
+                "attempt": _wedge_handoffs_used[0] + 1})
+            yield await ctx.emit({"type": "status",
+                "content": f"🧩 Wedge on {Path(_wedge_path).name} — handing the edit to a fresh-context fix agent…"})
+            _wedge_t0 = time.time()
+            _handover = _wedge_build_handover(
+                path=_wedge_path,
+                intent=(f"Plan chunk {_di + 1}/{_n_items}: {str(_subtask)[:300]}" if _subtask else ""),
+                attempts=_wedge_attempts_of(_wedge_state, _wedge_path),
+                streak=_wedge_streak_of(_wedge_state, _wedge_path),
+                threshold=int(_wedge_state.get("threshold", 4)),
+            )
+            # Same weights as the coder (fresh context, no model
+            # switch); duo_wedge_handoff_model is an explicit
+            # escape hatch only — never a silent fallback.
+            _fix_model = str(ctx.settings.get("duo_wedge_handoff_model", "") or "").strip() or exec_mdl
+            _fx = await _wedge_run_fix_agent(
+                path=_wedge_path,
+                handover=_handover,
+                model=_fix_model,
+                workspace_lock=_ws_str,
+                port=_cached_coder_port,
+                max_rounds=int(ctx.settings.get("duo_wedge_handoff_max_rounds", 10) or 10),
+                timeout_s=float(ctx.settings.get("duo_wedge_handoff_timeout_s", 900) or 900),
+                # CTX-MATCH (2026-10-17): the fix agent defaulted
+                # to 8192 while the coder may run at another ctx;
+                # ensure_loaded then killed and reloaded the warm
+                # slot (manager_load.py:402) - the opposite of the
+                # "NEVER evicts" promise in fix_agent's docstring.
+                num_ctx=int(_dtool_ctx or 8192),
+            )
+            # BUDGET-EXEMPT: the handoff wait does not burn the
+            # chunk deadline — push it forward by the elapsed
+            # time so a successful handoff cannot time the run out.
+            _duo_deadline_at += (time.time() - _wedge_t0)
+            state["_duo_deadline_at"] = _duo_deadline_at
+            _wedge_handoffs_used[0] += 1
+            if _fx.get("status") in ("resolved", "no_fix_needed"):
+                # The handoff counts as the successful write on
+                # this path (or as verified-correct): reset the
+                # streak so the coder gets a clean slate.
+                _wedge_note_success(_wedge_state, _wedge_path)
+                _wedge_invalidate_sig(_wedge_path, _ws_str)
+                _dtool_msgs.append({"role": "user", "content": _wedge_build_resolved(
+                    _wedge_path, str(_fx.get("summary", "")),
+                    no_fix=(_fx.get("status") == "no_fix_needed"))})
+                yield await ctx.emit({"type": "status",
+                    "content": f"✅ Wedge handoff on {Path(_wedge_path).name}: {_fx.get('status')}"})
+            else:
+                _dtool_msgs.append({"role": "user", "content": _wedge_build_escalated(
+                    _wedge_path, str(_fx.get("summary", "fix agent failed")))})
+                yield await ctx.emit({"type": "status",
+                    "content": f"⚠️ Wedge handoff failed on {Path(_wedge_path).name} — escalating to human."})
+                _ld_setter(4651); _loop_detected = True
+                _wedge_escalated = True
+                _break_out = True; return
+    finally:
+        ps.loop_detected = _loop_detected
+        ps.wedge_escalated = _wedge_escalated
+        ps.duo_deadline_at = _duo_deadline_at
+        ps.break_out = _break_out
+
+
+@dataclasses.dataclass
+class _DuoCtxPressureState:
+    """CTX-pressure warn-once state (moved verbatim from run_code_duo)."""
+    ctx_pressure_warned: bool = False
+
+
+async def _duo_ctx_pressure_check(
+    ctx, ps: _DuoCtxPressureState, *,
+    _dtool_msgs, _dtool_ctx, _coder_real_prompt_tokens, est_tokens,
+):
+    # CODE-MOTION (duo-runner-split): the CTX-pressure warn-once check moved
+    # VERBATIM from run_code_duo's tool loop; only the unpack/pack wrapper
+    # is new. No logic changes. est_tokens arrives under its own name (its
+    # single body read was renamed to it) because the module also imports
+    # a dead _est_tokens helper from preflight - keeping the name would
+    # shadow-capture that import instead of the runner local.
+    _ctx_pressure_warned = ps.ctx_pressure_warned
+    try:
+        # ── CTX Pressure Check ─────────────────────────────
+        if not _ctx_pressure_warned:
+            # GUARD-REAL-BASIS: fresh real value (usage_meta of the
+            # last round), fallback estimator — no more coarse
+            # sum(len)//3 estimation.
+            _guard_tokens = int(_coder_real_prompt_tokens[0] or est_tokens)
+            if _guard_tokens > int(_dtool_ctx * 0.72):
+                _ctx_pressure_warned = True
+                _pressure_msg = {
+                    "role": "user",
+                    "content": (
+                        f"[CTX CRITICAL — ~{_guard_tokens} tokens used, {_dtool_ctx} available]\n"
+                        "Stop all read_file calls immediately. "
+                        "Write ALL pending changes now using edit_file / write_file. "
+                        "Then call task_complete. "
+                        "Do NOT read any more files."
+                    ),
+                }
+                _dtool_msgs.append(_pressure_msg)
+                yield await ctx.emit({"type": "status",
+                    "content": f"\u26a0\ufe0f CTX CRITICAL — ~{_guard_tokens}/{_dtool_ctx} tokens. Coder prompted to finish."})
+    finally:
+        ps.ctx_pressure_warned = _ctx_pressure_warned
+
+
+
+@dataclasses.dataclass
+class _DuoCoderPortCacheState:
+    """Coder port-cache in/out locals (moved verbatim from run_code_duo)."""
+    dport: int | None = None
+    cached_coder_port: int | None = None
+    cached_coder_port_ctx: int | None = None
+
+
+async def _duo_resolve_coder_port_cache(
+    ctx, ps: _DuoCoderPortCacheState, *,
+    exec_mdl, _dtool_opts, _img_plan, _always_vision, _lsm3,
+):
+    # CODE-MOTION (duo-runner-split): the coder port cache fast path
+    # (P1-3), the ctx-mismatch invalidation and the 3-attempt
+    # ensure_loaded reload moved VERBATIM from run_code_duo's coder
+    # tool-loop try; only the unpack/pack wrapper around the body is new.
+    # No logic changes. The MODEL-LOAD-FAIL stop (which breaks the chunk
+    # loop) stays in the runner.
+    _dport = ps.dport
+    _cached_coder_port = ps.cached_coder_port
+    _cached_coder_port_ctx = ps.cached_coder_port_ctx
+    try:
+        # P1-3 FIX: Cache coder port — coder is pinned (keep_alive=-1), so
+        # ensure_loaded is a no-op after the first call but still costs
+        # ~200-300ms per /health re-check on Vulkan.
+        if _cached_coder_port is not None:
+            _target_ctx = _dtool_opts.get("num_ctx", 4096)
+            if _cached_coder_port_ctx is not None and _cached_coder_port_ctx != _target_ctx:
+                logger.info(
+                    "[DUO] Cached port ctx mismatch (cached=%s, needed=%s) — force reload",
+                    _cached_coder_port_ctx, _target_ctx,
+                )
+                _cached_coder_port = None
+                _cached_coder_port_ctx = None
+                # RECLAIM-STALL-FIX (2026-09-06): this waited in a
+                # wait_for_vram_reclaim for needed(full ctx)+768 —
+                # structurally unreachable while the old slot is still
+                # loaded (the kill only happens in the ensure_loaded
+                # ctx-mismatch branch below) → guaranteed 45s stall.
+                # The manager kill + margin resolution (768→256→error)
+                # now free VRAM correctly.
+                logger.info(
+                    "[DUO] Cached port ctx mismatch — reload via ensure_loaded "
+                    "(ctx-mismatch kill + margin resolution in the manager)"
+                )
+            else:
+                _dport = _cached_coder_port
+                # Touch keep-alive so idle monitor doesn't kill model mid-run
+                try:
+                    await _lsm3.touch_if_loaded(exec_mdl)
+                except Exception as _err:
+                    if isinstance(_err, (
+                        GeneratorExit,
+                        asyncio.CancelledError,
+                        KeyboardInterrupt,
+                        SystemExit,
+                    )):
+                        raise
+                    logger.debug(
+                        "[DUO] Suppressed error at keep-alive touch: %s",
+                        _err, exc_info=True
+                    )
+        # MISMATCH-RELOAD-FIX (2026-09-10): the ctx-mismatch branch
+        # above only cleared the cached port — the ensure_loaded call
+        # lived in the `else` of the cache check, so a mismatch fell
+        # straight into `_dport is None` → _loop_detected stop with 0
+        # tool rounds. `_dport` still None (mismatch or empty cache)
+        # now always runs the reload.
+        if _dport is None:
+            for _connect_attempt in range(3):
+                try:
+                    # VISION RELOAD (2026-10-04): keep the mmproj
+                    # when the image plan routes raw images to the
+                    # coder - the cached slot may predate the plan
+                    _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True,
+                                                        vision=(_img_plan.get("coder") == "raw" or _always_vision))
+                    break
+                except Exception as _ce:
+                    if _connect_attempt < 2:
+                        yield await ctx.emit({"type": "status",
+                            "content": f"⟳ Model unreachable, attempt {_connect_attempt+2}/3 in 3s…"})
+                        await asyncio.sleep(3.0)
+                    else:
+                        _dport = None
+                        logger.warning("[DUO] ensure_loaded for %s failed after 3 attempts: %s",
+                                       exec_mdl, _ce)
+            _cached_coder_port = _dport
+            _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)
+    finally:
+        ps.dport = _dport
+        ps.cached_coder_port = _cached_coder_port
+        ps.cached_coder_port_ctx = _cached_coder_port_ctx
+
+
+@dataclasses.dataclass
+class _DuoSlotCtxState:
+    """Slot-ctx query in/out locals (moved verbatim from run_code_duo)."""
+    dtool_ctx: int = 0
+    cached_coder_port_ctx: int | None = None
+    actual_ctx: int = 0
+    slot_degraded: bool = False
+    slot_ctx_floor_stop: bool = False
+    dtool_ctx_requested: int = 0
+
+
+async def _duo_query_actual_slot_ctx(
+    ps: _DuoSlotCtxState, *,
+    _lsm3, _dport, _dtool_opts, _duo_coder_tok,
+):
+    # CODE-MOTION (duo-runner-split): the CTX-ACTUAL slot query (manager
+    # slots, /props fallback, guard/clamp/budget follow-the-slot) and the
+    # Guard-C floor-precondition flags moved VERBATIM from run_code_duo's
+    # coder tool-loop try; only the unpack/pack wrapper around the body is
+    # new. No logic changes.
+    _dtool_ctx = ps.dtool_ctx
+    _cached_coder_port_ctx = ps.cached_coder_port_ctx
+    _actual_ctx = ps.actual_ctx
+    _slot_degraded = ps.slot_degraded
+    _slot_ctx_floor_stop = ps.slot_ctx_floor_stop
+    _dtool_ctx_requested = ps.dtool_ctx_requested
+    try:
+        # CTX-ACTUAL (2026-09-06): the manager can downscale the slot
+        # (PRE-FLIGHT ctx-down when VRAM is tight), so the server runs a
+        # SMALLER n_ctx than configured. Guard/threshold/clamp/max_tokens
+        # must follow the REAL slot ctx - otherwise prompt+budget exceed
+        # the slot (llama HTTP 400) and the run churns through
+        # force-compressions every few rounds.
+        _dtool_ctx_requested = int(_dtool_ctx)
+        _actual_ctx = 0
+        try:
+            for _s_act in _lsm3._slots:
+                if getattr(_s_act, "port", None) == _dport and getattr(_s_act, "_num_ctx", 0):
+                    _actual_ctx = int(_s_act._num_ctx)
+                    break
+            if not _actual_ctx:
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(connect=3.0, read=3.0, write=3.0, pool=3.0),
+                    ) as _c_act:
+                        _props_act = (await _c_act.get(
+                            f"http://127.0.0.1:{_dport}/props"
+                        )).json()
+                    _actual_ctx = int((_props_act.get("default_generation_settings") or {}).get("n_ctx") or 0)
+                except Exception:
+                    pass
+            if _actual_ctx > 0 and _actual_ctx < _dtool_ctx_requested:
+                logger.warning(
+                    "[CTX-ACTUAL] slot ctx=%d < configured %d - guard/clamp/budget follow the slot",
+                    _actual_ctx, _dtool_ctx_requested,
+                )
+                _dtool_ctx = _actual_ctx
+                _dtool_opts["num_ctx"] = _actual_ctx
+                _dtool_opts["num_predict"] = min(
+                    max(int(_duo_coder_tok), 1024), _actual_ctx
+                )
+                _cached_coder_port_ctx = _actual_ctx
+        except Exception as _ctx_act_err:
+            logger.debug("[CTX-ACTUAL] query failed: %s", _ctx_act_err)
+        # CTX-FLOOR-PRECONDITION (Guard C): slot runs smaller than
+        # requested by the coder (manager degradation) — stored for
+        # the early round-loop stop instead of compress churn (paths 1/2).
+        _slot_degraded = bool(
+            _actual_ctx > 0
+            and _actual_ctx < _dtool_ctx_requested
+        )
+        _slot_ctx_floor_stop = False  # Guard-C telemetry (see LOOP-DETECT-STOP)
+    finally:
+        ps.dtool_ctx = _dtool_ctx
+        ps.cached_coder_port_ctx = _cached_coder_port_ctx
+        ps.actual_ctx = _actual_ctx
+        ps.slot_degraded = _slot_degraded
+        ps.slot_ctx_floor_stop = _slot_ctx_floor_stop
+        ps.dtool_ctx_requested = _dtool_ctx_requested
+
+
+@dataclasses.dataclass
+class _DuoToolBudgetsState:
+    """Tool-budget resolve in/out locals (moved verbatim from run_code_duo)."""
+    xtools_ws: list = None
+    compress_threshold: int = 0
+    max_tool_rounds: int = 0
+    max_tool_rounds_cfg: int = 0
+
+
+async def _duo_resolve_tool_budgets(
+    ctx, state, ps: _DuoToolBudgetsState, *,
+    exec_mdl, _dtool_ctx, _duo_out_budget, _duo_ws, _stored_threshold,
+    duo_rounds, _duo_runtime_profile, _accumulated_replan_bonus,
+    _cached_coder_port,
+):
+    # CODE-MOTION (duo-runner-split): the BUDGETS resolve (REAL-CPT probe,
+    # core.budgets.resolve + set_active, tool-schema rebuild from the
+    # schema budget, telemetry) and the tool-round budget derivation
+    # (headroom compress threshold + _resolve_tool_budget) moved VERBATIM
+    # from run_code_duo's coder tool-loop try; only the unpack/pack
+    # wrapper around the body is new. No logic changes.
+    _xtools_ws = ps.xtools_ws
+    _compress_threshold = ps.compress_threshold
+    _max_tool_rounds = ps.max_tool_rounds
+    _max_tool_rounds_cfg = ps.max_tool_rounds_cfg
+    try:
+        # BUDGETS (2026-10-14, redesign of audit phase 6):
+        # ONE resolve per run from measured sizes only — n_ctx,
+        # the per-model chars/token EMA and the output budget.
+        # Nothing here branches on model names; settings keys
+        # "budget_<field>" override individual derived values
+        # (None = auto). Frozen for the whole run: everything the
+        # schema shows (tool caps, tool list) must not change
+        # mid-run or the prefix cache dies.
+        from core import budgets as _budg
+        from backend.llama_client import tokenize_count
+        # REAL-CPT PROBE (2026-10-17): if the coder slot is already
+        # up, ask the server for the true token count of the exact
+        # tool-schema JSON we are about to send. chars/tokens is
+        # then THIS model's measured ratio instead of the module
+        # default 3.92 / the previous runs' EMA. Failure -> EMA.
+        _cpt_for_run = _budg.cpt_for(exec_mdl)
+        _cpt_source = "ema"
+        try:
+            _probe_port = int(_cached_coder_port or 0)
+            if _probe_port and _xtools_ws:
+                _probe_txt = json.dumps(_xtools_ws)
+                _probe_toks = await tokenize_count(_probe_port, _probe_txt)
+                _probe_cpt = _budg.cpt_from_measurement(
+                    len(_probe_txt), int(_probe_toks or 0))
+                if _probe_cpt:
+                    _cpt_for_run = _probe_cpt
+                    _cpt_source = f"tokenize({len(_probe_txt)}c/{_probe_toks}t)"
+        except (TypeError, ValueError, KeyError, AttributeError) as _cpt_err:
+            logger.debug("[BUDGETS] cpt probe skipped: %s", _cpt_err)
+        _run_budgets = _budg.resolve(
+            n_ctx=int(_dtool_ctx or 16384),
+            cpt=_cpt_for_run,
+            max_out=int(_duo_out_budget or 1024),
+            settings=ctx.settings,
+            # FREEZE RULE (task 4): the persisted EMA from
+            # PREVIOUS runs - never a mid-run value.
+            prefill_tps=_budg.prefill_tps_for(exec_mdl),
+        )
+        _budg.set_active(_run_budgets)
+        state["_budgets"] = _run_budgets
+        _xtools_ws = _get_inline_tools(
+            include_websearch=_duo_ws, mode="duo_full",
+            budget_chars=_run_budgets.schema_budget)
+        state["_xtools_ws"] = _xtools_ws
+        logger.info(
+            "[BUDGETS] ctx=%d cpt=%.2f(%s) out=%d -> tool_cap=%d read_cap=%d schema=%d "
+            "inj=%d anchor=+%d outline=%d compress@%d/rest@%d overrides=%s",
+            _run_budgets.n_ctx, _run_budgets.cpt, _cpt_source,
+            _run_budgets.max_out,
+            _run_budgets.tool_result_cap, _run_budgets.read_char_cap,
+            _run_budgets.schema_budget, _run_budgets.injection_budget,
+            _run_budgets.anchor_lines, _run_budgets.outline_items,
+            _run_budgets.compress_trigger_tokens,
+            _run_budgets.compress_rest_tokens,
+            ",".join(_run_budgets.overrides_used) or "-",
+        )
+        try:
+            from core import telemetry as _b_tel
+            _b_tel.append_round({
+                "phase": "budgets",
+                "model": exec_mdl,
+                **_run_budgets.as_dict(),
+            })
+        except Exception:
+            pass
+        _max_tool_rounds_cfg = int(ctx.settings.get("duo_max_tool_rounds", 64))
+        _max_tool_rounds_cfg = 8 if duo_rounds > 1 else _max_tool_rounds_cfg
+        if not _stored_threshold:
+            # BUDGETS (2026-10-14): headroom-based compression
+            # trigger (free < 1.5 × reserve with reserve =
+            # clamped max_out + growth) replaces the fixed floor —
+            # write-heavy runs trigger earlier without a special
+            # case. An explicit ui_threshold still wins.
+            _compress_threshold = _run_budgets.compress_trigger_tokens
+        _max_tool_rounds = _resolve_tool_budget(
+            _max_tool_rounds_cfg,
+            ctx.duo_config.until_finished,
+            profile=_duo_runtime_profile,
+        ) + _accumulated_replan_bonus
+    finally:
+        ps.xtools_ws = _xtools_ws
+        ps.compress_threshold = _compress_threshold
+        ps.max_tool_rounds = _max_tool_rounds
+        ps.max_tool_rounds_cfg = _max_tool_rounds_cfg
+
+
+
+@dataclasses.dataclass
+class _DuoDisconnectParkState:
+    """Disconnect-park state (moved verbatim from run_code_duo's abort path).
+
+    One field per local the park handler needs. Every field keeps the
+    default of the old `_p_*` pre-init because any of them can still be
+    unbound when the abort lands mid-setup - run_code_duo's ladders fill
+    in what exists (the commit-2270557 NameError-ladder bug class).
+    """
+    loop_items: list | None = None
+    di: int | None = None
+    done_tasks: list | None = None
+    written_files: list | None = None
+    explore_ctx: str = ""
+    ws_str: str = ""
+    n_items: int = 0
+
+
+def _duo_disconnect_park(ctx, ps: _DuoDisconnectParkState):
+    # CODE-MOTION (duo-runner-split): the disconnect-park call moved VERBATIM
+    # from run_code_duo's except (GeneratorExit, asyncio.CancelledError)
+    # branch; only the ps.X reads replace the old _p_* locals. No logic
+    # changes. Sync on purpose - the abort path must not grow new suspension
+    # points.
+    try:
+        _park_on_disconnect(
+            ctx=ctx,
+            loop_items=ps.loop_items,
+            di=ps.di,
+            done_tasks=ps.done_tasks,
+            written_files=ps.written_files,
+            explore_ctx=ps.explore_ctx,
+            ws_str=ps.ws_str,
+            n_items=ps.n_items,
+        )
+    except Exception as _park_err:
+        logger.warning("[DISCONNECT-PARK] Handler error: %s", _park_err)
+
+
+@dataclasses.dataclass
+class _DuoFinalCleanupState:
+    """Final-cleanup state (moved verbatim from run_code_duo's finally).
+
+    One field per run_code_duo local the cleanup reads. exec_mdl /
+    _run_id_global / _duo_pinned / _project_state /
+    _project_state_run_counted are bound before the mega-try and are
+    passed directly; _planner_model lives inside it and is ladder-collected
+    by the runner (default None = the old except-swallowed
+    UnboundLocalError path).
+    """
+    _planner_model: str | None = None
+    exec_mdl: str = ""
+    _run_id_global: str = ""
+    _duo_pinned: list | None = None
+    _project_state: object = None
+    _project_state_run_counted: bool = False
+
+
+async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
+    # CODE-MOTION (duo-runner-split): the mega-try finally body (duo slot
+    # unpin, coder-after-run evict, pause/resume cleanup, duo unpin task,
+    # project-state save) moved VERBATIM from run_code_duo; only the unpack
+    # at entry is new. No logic changes.
+    _planner_model = ps._planner_model
+    exec_mdl = ps.exec_mdl
+    _run_id_global = ps._run_id_global
+    _duo_pinned = ps._duo_pinned
+    _project_state = ps._project_state
+    _project_state_run_counted = ps._project_state_run_counted
+    # DUO-SLOT UNPIN (2026-10-01): the run pinned its planner/coder slots
+    # so the vision-preprocessing load could not LRU-evict them; release
+    # the pin so normal eviction can reclaim VRAM after the run.
+    try:
+        from backend.llama_server_manager import manager as _lsm_unpin
+        for _m in (_planner_model, exec_mdl):
+            if _m:
+                _lsm_unpin.unpin(_m)
+    except Exception:
+        pass
+    # CODER LIFETIME (2026-10-17, owner request): with
+    # duo_coder_after_run = "evict" the coder slot is released here - the
+    # next prompt can then load any model/mode without evicting something
+    # first. "keep" (default) leaves the slot warm; the idle TTL decides.
+    # This finally-block also runs on abort, so an aborted run releases the
+    # slot too.
+    try:
+        if str(ctx.settings.get("duo_coder_after_run", "keep")).strip().lower() == "evict" and exec_mdl:
+            from backend.llama_server_manager import manager as _lsm_car
+            await _lsm_car.evict(exec_mdl)
+            logger.info("[CODER-AFTER-RUN] coder slot evicted (duo_coder_after_run=evict)")
+    except (ImportError, AttributeError, TypeError, RuntimeError, OSError) as _car_err:
+        logger.debug("[CODER-AFTER-RUN] evict skipped: %s", _car_err)
+    # Cleanup Pause/Resume State
+    try:
+        _rid = _run_id_global
+        if _rid:
+            from infra.run_control import cleanup_pause
+            cleanup_pause(_rid)
+    except Exception as _err:
+        if isinstance(_err, (
+            GeneratorExit,
+            asyncio.CancelledError,
+            KeyboardInterrupt,
+            SystemExit,
+        )):
+            raise
+        logger.debug(
+            "[DUO] Suppressed error at cleanup_pause: %s",
+            _err, exc_info=True
+        )
+    _restore_ka = str(ctx.settings.get("smart_preload_keep_alive", "10m"))
+    if _duo_pinned:
+        asyncio.create_task(_unpin_duo_fn(ctx, _duo_pinned, _restore_ka))
+
+    if _project_state is not None and ctx.chat_id:
+        try:
+            from context.project_state import ProjectStateManager
+            if not _project_state_run_counted:
+                _project_state.total_runs += 1
+                _project_state_run_counted = True
+            _project_state.last_run_timestamp = datetime.now().isoformat()
+            if getattr(_project_state, 'last_run_success', None) is None:
+                # SUCCESS-ORDER (2026-09-22): the normal completion path
+                # sets last_run_success after this fallback ran — stamping
+                # False here logged every completed run as failed first
+                # (live: FireWork run ended 'completed' but the interim
+                # save said success=False). Mirror the stop reason instead.
+                _project_state.last_run_success = (getattr(ctx, "duo_stop_reason", "") == "completed")
+            ProjectStateManager().save(_project_state)
+            logger.info("[PROJECT] State gesichert in finally (Run #%d, success=%s)",
+                        _project_state.total_runs, _project_state.last_run_success)
+        except Exception as _save_err:
+            logger.warning("[PROJECT] Save in finally failed: %s", _save_err)
+
+
 async def run_code_duo(ctx):
     """Code-duo handler: iterative coder+critic loop."""
     state: dict = {
@@ -685,708 +2476,42 @@ async def run_code_duo(ctx):
         # with UnboundLocalError. Same class as the _coder_port init.
         _img_plan = {"planner": "none", "coder": "none", "warnings": [], "mode": None}
         if (ctx.duo_config.chunking or ctx.duo_config.planner) and not ctx.aborted() and not _resume_data and not _planner_skipped:
-            _planner_default_thinking = bool(ctx.settings.get("duo_planner_default_thinking", True))
-            _planner_is_distilled = False
-            _disable_think_planner    = bool(ctx.settings.get("disable_thinking_in_planner", False))
-            _chunking_forces_thinking = ctx.duo_config.chunking and not _disable_think_planner
-            _use_thinking_planner = bool(
-                ctx.duo_config.agentic_thinking
-                or (not _disable_think_planner and (
-                    ctx.duo_config.chunking
-                    or (_planner_default_thinking and ctx.duo_config.coding_mode)
-                ))
+            _plan_ps = _DuoPlannerPhaseState(
+                subtasks=_subtasks, plan_thinking=_plan_thinking, plan_content_txt=_plan_content_txt,
+                plan_result=_plan_result, planner_used_fallback=_planner_used_fallback,
+                planner_fallback_reason=_planner_fallback_reason, planner_parse_mode=_planner_parse_mode,
+                planner_context_trimmed=_planner_context_trimmed, plan_guard_quality=_plan_guard_quality,
+                planner_model=_planner_model, img_plan=_img_plan, duo_timed_out=_duo_timed_out,
+                plan_tracker=_plan_tracker,
             )
-            _planner_use_exec_model = bool(ctx.settings.get("duo_planner_use_exec_model", True))
-            _planner_model = exec_mdl if (_use_thinking_planner or _planner_use_exec_model) else coder_mdl
-            if bool(ctx.settings.get("duo_planner_use_coder_ctx", True)):
-                _planner_model = coder_mdl
-            _planner_model_override = str(ctx.settings.get("duo_planner_model", "") or "").strip()
-            if _planner_model_override:
-                _planner_model = _planner_model_override
-            # IMAGE PLAN (2026-10-01): pure decision over planner/coder roles
-            # (raw | description | none) — computed once per run, before the
-            # coder load so a needed projector reload is visible in the
-            # status stream. Planner-aus runs: _planner_model is set anyway.
-            _img_plan = resolve_image_plan(_planner_model, exec_mdl, ctx.settings, ctx)
-            _rm_models = {"planner": _planner_model, "coder": exec_mdl}
-            if critic_mdl:
-                _rm_models["critic"] = critic_mdl
-            yield await ctx.emit({"type": "run_meta", "models": _rm_models})
-            _planner_profile = ctx.model_profile(_planner_model)
-            _planner_supports_thinking = bool(_planner_profile.get("thinking", False))
-            _planner_effective_thinking = bool(_use_thinking_planner)
-
-            _planner_ctx_cap_cfg = int(ctx.settings.get("duo_planner_ctx_cap", 0) or 0)
-            _planner_ctx_target = int(ctx.settings.get("duo_planner_ctx_target", 0) or 0)
-            _planner_ctx_cap = 131072
-            if _planner_ctx_cap_cfg > 0:
-                _planner_ctx_cap = _planner_ctx_cap_cfg
-            _planner_ctx_cap = max(4096, _planner_ctx_cap)
-
             try:
-                _lsm_plan_pre = None
-                from backend.llama_server_manager import manager as _lsm_plan_pre
-
-                if ctx.settings.get("duo_planner_use_coder_ctx", True):
-                    _plan_ctx_final_raw = _coder_ctx
-                elif _planner_ctx_target > 0:
-                    _plan_ctx_final_raw = _planner_ctx_target
-                else:
-                    _plan_ctx_base_raw = (
-                        resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
-                        if ctx.duo_config.agentic_mode
-                        else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
-                    )
-                    _plan_ctx_final_raw = max(
-                        6144,
-                        int(_plan_ctx_base_raw),
-                    )
-                _plan_ctx_final = min(int(_plan_ctx_final_raw), int(_planner_ctx_cap))
-                if _plan_ctx_final < int(_plan_ctx_final_raw):
-                    yield await ctx.emit({
-                        "type": "status",
-                        "content": (
-                            f"⚙️ Planner ctx guard: {int(_plan_ctx_final_raw)}→{int(_plan_ctx_final)} "
-                            f"(profile {_duo_runtime_profile})"
-                        ),
-                    })
-                _plan_mdl_short = _planner_model.split(":")[0]
-                yield await ctx.emit({"type": "status",
-                                  "content": f"⚡ Preloading {_plan_mdl_short} for planner…"})
-                _evicted_any = False
-                try:
-                    _loaded_preplan = await _lsm_plan_pre.list_loaded()
-                    for _lm in _loaded_preplan:
-                        _lpname = str(_lm.get("name") or _lm.get("model") or "")
-                        if _lpname and _lpname.rsplit("#", 1)[0] != _planner_model.rsplit("#", 1)[0]:
-                            await _lsm_plan_pre.evict(_lpname)
-                            _evicted_any = True
-                except Exception as _plan_evict_exc:
-                    logger.warning("Planner pre-eviction failed: %s", _plan_evict_exc)
-                if _evicted_any:
-                    # DRIVER-LAG-SETTLE (2026-09-06): this used to wait in an
-                    # UNCONDITIONAL wait_for_vram_reclaim for needed(full ctx)+768 —
-                    # a structurally unreachable target while the target model
-                    # itself is still warm in VRAM (e.g. Hermes@4096 from the
-                    # warmup): guaranteed 45s stall BEFORE every load. The settle
-                    # now only runs after real peer evictions above and targets
-                    # the ACHIEVABLE reduced margin; the ctx-mismatch kill +
-                    # the manager's margin resolution cover the rest.
-                    await asyncio.sleep(2.5)
-                    try:
-                        from backend.llama_vram_table import wait_for_vram_reclaim, vram_of_moe
-                        from backend.llama_manager_utils import VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB as _RED_MIB
-                        _planner_vram_rm = vram_of_moe(_planner_model, _plan_ctx_final) * 1024 + _RED_MIB
-                        await _await_with_hb(
-                            lambda: wait_for_vram_reclaim(int(_planner_vram_rm), timeout_sec=20),
-                            timeout=30.0,
-                            emit_fn=ctx.emit,
-                            label="Waiting for VRAM to free up",
-                            interval=5.0,
-                        )
-                    except Exception:
-                        pass
-                _lsm_plan_pre._planner_critical_phase = True
-                # PIN RESET AT RUN START (2026-10-02): stale pins from a
-                # crashed previous run must not block eviction for this one.
-                try:
-                    _lsm_plan_pre.unpin_all()
-                except Exception:
-                    pass
-                # fallback to the lighter coder model to keep Planner responsive.
-                # P1-1 FIX: Capture port from first ensure_loaded — eliminates redundant
-                # second ensure_loaded call (was wasting ~300-500ms on /health re-check).
-                # PLANNER-HANDOFF-PIN (audit B5): when the planner IS the coder
-                # model, request the coder's ctx for the planner slot (max of
-                # both needs). The handoff reuses a slot only when its ctx
-                # covers the coder need — otherwise the coder reloaded the
-                # same weights at a bigger ctx (15-60 s + full KV loss, the
-                # ctx-mismatch class of manager_load 432). The loader's
-                # graceful cascade still protects tight-VRAM cases: a
-                # degraded slot is refused by the existing handoff check,
-                # exactly as before — worst case is today's behavior.
-                def _planner_load_ctx(model: str, ctx_final: int) -> int:
-                    try:
-                        if model != coder_mdl:
-                            return ctx_final
-                        _need = (
-                            resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
-                            if ctx.duo_config.agentic_mode
-                            else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
-                        )
-                        return max(ctx_final, int(_need)) if _need else ctx_final
-                    except (NameError, TypeError, ValueError):
-                        return ctx_final
-                _plan_port: int | None = None
-                # AUDIT F4 (2026-10-24): the pin overrides an explicit
-                # planner ctx target — say so instead of doing it silently.
-                _pin_ctx = _planner_load_ctx(_planner_model, _plan_ctx_final)
-                if _pin_ctx > _plan_ctx_final:
-                    yield await ctx.emit({"type": "status", "content": (
-                        f"⚙️ Planner ctx pinned {_plan_ctx_final} → {_pin_ctx} tok "
-                        "(planner is the coder model — slot reuse avoids a mid-run reload)")})
-                try:
-                    _ensure_timeout = float(ctx.settings.get("duo_planner_ttl_seconds", 0) or 0) or float(ctx.settings.get("duo_planner_ensure_load_timeout_s", 450.0) or 450.0)
-                    _plan_port = await _await_with_hb(
-                        lambda: _lsm_plan_pre.ensure_loaded(
-                            _planner_model, num_ctx=_pin_ctx, n_parallel=1,
-                            vision=(_img_plan.get("planner") == "raw"),
-                            # DUO-PIN (2026-10-01): vision-prepro load must not LRU-evict duo slots
-                            # GRACEFUL-PLANNER (2026-09-07): the planner may
-                            # degrade to a smaller ctx (its prompts are small).
-                            # This load used to be STRICT when planner==coder —
-                            # then tight VRAM already aborted planning although
-                            # e.g. 16384 would fit. The coder later loads
-                            # strictly at full ctx (level A: a degraded planner
-                            # slot is never inherited, because the fast path
-                            # reuses only when slot-ctx >= coder-ctx).
-                            ctx_graceful=True,
-                        ),
-                        timeout=_ensure_timeout,
-                        emit_fn=ctx.emit,
-                        label=f"Loading model {_planner_model.split(':')[0]}",
-                        interval=10.0,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "[Planner] ensure_loaded timeout (%.1fs) for %s — falling back to coder model",
-                        _ensure_timeout,
-                        _planner_model,
-                    )
-                    yield await ctx.emit({
-                        "type": "status",
-                        "content": (
-                            f"⚠ Preload takes too long ({int(_ensure_timeout)}s) — using lighter model for planner"
-                        ),
-                    })
-                    _planner_model = coder_mdl
-                    _planner_used_fallback = True
-                    # IMAGE-PLAN REPLAN (2026-10-03): the plan was computed with
-                    # the original planner model; a text-only fallback would
-                    # otherwise still receive raw parts (or lose its raw flag).
-                    _img_plan = resolve_image_plan(_planner_model, exec_mdl, ctx.settings, ctx)
-                except Exception as _pre_load_err:
-                    logger.warning("Planner pre-load failed: %s", _pre_load_err, exc_info=True)
-                    _err_short = str(_pre_load_err)[:120]
-                    # FALLBACK-RESOLVE (2026-09-07): the configured fallback
-                    # model may be missing (e.g. qwen3.5:4b-ud not installed) —
-                    # then fall back deterministically to an installed, loadable one.
-                    _planner_fb = _resolve_fallback_model(
-                        preferred=str(ctx.settings.get("duo_coder_fallback_model", "") or "").strip(),
-                        exclude_mdl=_planner_model,
-                        num_ctx=int(_plan_ctx_final or 8192),
-                    )
-                    if _planner_fb and _planner_fb != _planner_model:
-                        _planner_model = _planner_fb
-                        _planner_used_fallback = True
-                        _planner_fallback_reason = f"preload_exception→fallback_model: {_err_short[:50]}"
-                        _plan_ctx_final = resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), _planner_fb, "planner")
-                        yield await ctx.emit({
-                            "type": "status",
-                            "content": (
-                                f"⚠ Planner model could not be loaded: {_err_short[:60]} — "
-                                f"fallback to {_planner_fb.split(':')[0]}"
-                            ),
-                        })
-                    else:
-                        _planner_model = coder_mdl
-                        _planner_used_fallback = True
-                        _planner_fallback_reason = f"preload_exception: {_err_short[:60]}"
-                        _plan_ctx_final = resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "planner")
-                        yield await ctx.emit({
-                            "type": "status",
-                            "content": (
-                                f"⚠ Planner model could not be loaded: {_err_short[:80]} — "
-                                f"fallback to {coder_mdl.split(':')[0]}"
-                            ),
-                        })
-                
-                _lsm_plan_pre._planner_critical_phase = False
-            
-            except Exception as _pre_load_err_outer:
-                logger.warning("Planner pre-load outer failed: %s", _pre_load_err_outer, exc_info=True)
-                _plan_ctx_final = resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "planner")  # Fallback
-                if _lsm_plan_pre is not None:
-                    _lsm_plan_pre._planner_critical_phase = False
-
-            # P1-1 FIX: Port already captured from the first ensure_loaded call above.
-            # Removed redundant second ensure_loaded (was wasting ~300-500ms on /health re-check).
-            # Only try a lightweight re-resolution if the port was not captured (shouldn't happen).
-            if _plan_port is None:
-                try:
-                    from backend.llama_server_manager import manager as _lsm_port_res
-                    _plan_port = await asyncio.wait_for(
-                        _lsm_port_res.ensure_loaded(
-                            _planner_model, num_ctx=_planner_load_ctx(_planner_model, _plan_ctx_final), n_parallel=1,
-                            pin=True,
-                            # GRACEFUL-PLANNER: see primary load above.
-                            ctx_graceful=True,
-                        ),
-                        timeout=30.0,
-                    )
-                except Exception as _port_err:
-                    logger.warning("[Planner] Port resolution failed: %s", _port_err)
-
-            # VISION-TRUTH GATE (2026-10-04): the requested
-            # vision flag can silently drop on load (mmproj resolution failed,
-            # VRAM restart without projector). If the loaded planner slot
-            # really runs without a projector, downgrade the plan instead of
-            # letting the planner claim it sees the image. vision_active None
-            # (/props unreachable) trusts the plan - no false fallback.
-            if _img_plan.get("planner") == "raw" and _plan_port is not None:
-                try:
-                    from backend.llama_server_manager import manager as _lsm_vgate
-                    _pslot = _lsm_vgate.get_slot_by_port(int(_plan_port))
-                    _pv = getattr(_pslot, "vision_active", None) if _pslot is not None else None
-                    if _pv is False:
-                        _img_plan, _vg_warns = effective_image_plan(
-                            _img_plan, planner_slot_vision=_pv,
-                            has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
-                        for _w in _vg_warns:
-                            logger.warning("[DUO][VISION-GATE] %s", _w)
-                            yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
-                    elif _pv is None:
-                        # UNKNOWN (2026-10-04): a server build without
-                        # /props modalities would make the gate a silent
-                        # no-op - say so once instead.
-                        logger.info("[DUO][VISION-GATE] planner vision state UNKNOWN "
-                                    "(/props reports no modalities?) - trusting the plan")
-                except (ImportError, AttributeError, TypeError, ValueError) as _vg_err:
-                    logger.debug("[DUO][VISION-GATE] planner check skipped: %s", _vg_err)
-
-            yield await ctx.emit({
-                "type": "status",
-                "content": (
-                    f"🧠 Planner (Thinking, {_planner_model.split(':')[0]})…"
-                    if _planner_effective_thinking
-                    else f"🧩 Planner ({_planner_model.split(':')[0]}): splitting task into subtasks..."
-                ),
-            })
-            _planner_hb_stop = asyncio.Event()
-
-            # Unique planner id for client-side mapping + additional metadata
-            _planner_id = str(uuid.uuid4())
-            # Will this run buffer model thinking (e.g. llama.cpp distilled models)?
-            # BUG-2-FIX: Distilled models (qwen3.5, qwen3.5-d) run via llama.cpp --reasoning on
-            _planner_will_buffer = False
-            _planner_streaming_expected = True
-            yield await ctx.emit({
-                "type": "planner_start",
-                "planner_id": _planner_id,
-                "model": _planner_model,
-                "thinking": _planner_effective_thinking,
-                "streaming_expected": _planner_streaming_expected,
-                "will_buffer": _planner_will_buffer,
-            })
-
-            # PERF-2 FIX: maxsize prevents unbounded queue growth when
-            # the SSE consumer is slow (network hiccup, tab in background).
-            # 30 heartbeats = 30s buffer; extras are silently dropped below.
-            _planner_hb_queue: asyncio.Queue = asyncio.Queue(maxsize=30)
-
-
-            _planner_hb_task = asyncio.create_task(_planner_hb_fn(
-            ctx, _planner_hb_queue, _planner_hb_stop, _planner_model))
-            if _use_thinking_planner and not _planner_supports_thinking:
-                yield await ctx.emit({
-                    "type": "status",
-                    "content": (
-                        f"\u2139 Thinking enabled for {_planner_model.split(':')[0]} (not in MODEL_PROFILES \u2014 "
-                        "user override). The model may not produce thinking tokens."
-                    ),
-                })
-            ctx.phase_timer.start("soft_planner")
-
-            # ── Context Pipeline: explore → planner ─────────────────────────────
-            # CTX-PRIORITY (2026-09-20): the coder exec ctx resolves from the
-            # coder's OWN setting (duo_coder_ctx_agentic). It previously read
-            # duo_planner_ctx_target first, so a non-zero planner target (8192)
-            # silently truncated coder prompts to 8k while the server held KV
-            # for the full agentic ctx (live: 7762-token prefills vs 20k
-            # internal count — empty coder rounds).
-            _exec_ctx = resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic") if ctx.duo_config.agentic_mode else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
-            try:
-                _over = ((ctx.settings.get("ctx_overrides") or {}).get("roles") or {}).get("duo_coder")
-                logger.info(
-                    "[CTX-EFFECTIVE] mode=%s model=%s coder_ctx=%d agentic_setting=%s planner_target=%s ctx_overrides_duo_coder=%s",
-                    "agentic" if ctx.duo_config.agentic_mode else "duo",
-                    coder_mdl, _exec_ctx,
-                    ctx.settings.get("duo_coder_ctx_agentic"),
-                    ctx.settings.get("duo_planner_ctx_target"),
-                    _over,
-                )
-            except Exception:
-                pass
-            # CPU-CONTEXT-GUARD (2026-10-17, ThinkPad report "1500 s for one
-            # write_file with a 2B model"): on a CPU-only install the ctx setting
-            # is a *time* setting - the first prompt alone can take many minutes
-            # and every re-prefill repeats it. Say so once, with the number, so
-            # the fix (smaller ctx) is obvious instead of looking like a hang.
-            try:
-                from core.duo_helpers import cpu_prefill_warning as _cpu_warn
-                from backend.llama_config import GPU_BACKEND as _gpu_backend
-                _pw = _cpu_warn(_exec_ctx, _gpu_backend)
-                if _pw:
-                    logger.warning("[PERF-WARN] %s", _pw)
-                    yield await ctx.emit({"type": "status", "content": "⚠ " + _pw})
-            except (ImportError, AttributeError, TypeError, ValueError):
-                pass
-            _runtime_profile = ctx.resolve_duo_runtime_profile(
-                None, important_task=False, until_finished=ctx.duo_config.until_finished,
-            )
-            # MEASURED OVERHEADS (2026-10-17): the content budget used to
-            # subtract the hardcoded assumptions 800 (system) / 1200 (tools) -
-            # the tool schema really is ~2050 tokens at 8k (SCHEMA_FRAC of the
-            # window), so the planner/explore content was over-committed by
-            # ~850-2500 tokens. Both numbers now come from the real artefacts:
-            # the coder prompt constant and the tool-schema JSON, capped by the
-            # schema budget this run will actually allow.
-            _ov_sys_tok = 0
-            _ov_tool_tok = 0
-            try:
-                from core import budgets as _budg_ov
-                from hive_functions.prompts import PROMPTS as _PROMPTS_OV
-                _ov_prompt_txt = max(
-                    str(_PROMPTS_OV.get("duo_coder_execution") or ""),
-                    str(_PROMPTS_OV.get("duo_coder_autonomous") or ""), key=len)
-                _ov_sys_tok = _budg_ov.tokens_for_text(_ov_prompt_txt, exec_mdl)
-                _ov_schema_chars = len(json.dumps(_xtools_ws or []))
-                _ov_cap = _budg_ov.schema_budget_for(int(_exec_ctx or 16384), exec_mdl)
-                if _ov_cap > 0:
-                    _ov_schema_chars = min(_ov_schema_chars, _ov_cap)
-                _ov_tool_tok = _budg_ov.tokens_for_text("x" * _ov_schema_chars, exec_mdl)
-            except (ImportError, AttributeError, TypeError, ValueError):
-                _ov_sys_tok = _ov_tool_tok = 0
-            _content_tokens = compute_content_budget(
-                _exec_ctx, profile=_runtime_profile,
-                system_prompt_tokens=_ov_sys_tok or None,
-                tool_def_tokens=_ov_tool_tok or None,
-            )
-            _ctx_budget = ContextBudget.from_content_tokens(_content_tokens).with_static_map_override(
-                ctx.settings.get("duo_static_map_chars", 0)
-            )
-
-            # Planner gets structured architecture (NOT raw TOML)
-            _planner_ctx = explore_to_planner_ctx(_explore_ctx, task=ctx.user_input, budget=_ctx_budget)
-
-            _planner_task = ctx.user_input + build_image_desc_block(getattr(ctx, "image_description", None))
-            if _fup_task_ctx:
-                _planner_task = (
-                    ctx.user_input
-                    + "\n\n[Previous task in this chat — context for this follow-up]\n"
-                    + _fup_task_ctx
-                )
-
-            if _project_state is not None:
-                from context.project_state import build_project_context
-                _proj_ctx = build_project_context(_project_state)
-                if _proj_ctx:
-                    _planner_ctx = _proj_ctx + "\n\n---\n\n" + (_planner_ctx or "")
-
-            if _matched_skills:
-                try:
-                    from hive_functions.skills import format_skill_planner
-                    _skills_plan = "\n".join(format_skill_planner(_sk) for _sk in _matched_skills[:5])
-                    _planner_ctx = (
-                        "[Relevante Skills (use these patterns when planning)]\n"
-                        + _skills_plan + "\n\n---\n\n" + (_planner_ctx or "")
-                    )
-                except Exception as _skp_err:
-                    logger.debug("[SKILLS] Planner injection failed: %s", _skp_err)
-
-            if ctx.duo_config.chunking:
-                _planner_sys_est = _make_duo_thinking_planner_sys(_planner_step_cap, model_name=_planner_model) if _planner_effective_thinking else _make_duo_planner_sys(_planner_step_cap)
-            else:
-                _planner_sys_est = make_planner_analysis_sys(model_name=_planner_model)
-            _planner_thinking_budget = _calculate_thinking_tokens(
-                _planner_model,
-                ctx.settings,
-                input_tokens=(len(_planner_sys_est) + len(_planner_ctx) + len(ctx.user_input) + 500) // 3,
-                available_ctx=_plan_ctx_final,
-                agent_name="planner",
-            )
-            logger.info("[PLANNER-THINKING] model=%s thinking=%s budget=%d ctx=%d",
-                         _planner_model, _planner_effective_thinking,
-                         _planner_thinking_budget, _plan_ctx_final)
-
-            # ── Event bridge: run_planner ctx.emits via callback → queue → SSE yield ───
-            # run_planner() uses emit_fn/heartbeat_fn callbacks, but the server's
-            # SSE ctx.pipeline uses yield await ctx.emit(). The bridge uses an asyncio.Queue
-            # to connect the two: run_planner puts events into the queue via the
-            # callback, and the main generator yields them from the queue.
-            _plan_event_q: asyncio.Queue = asyncio.Queue(maxsize=100)
-
-
-
-
-            # ── Port check ──────────────────────────────────────────────────────
-            _plan_result: PlannerResult | None = None
-            _plan_thinking = ""
-            _plan_content_txt = ""
-            if _plan_port is None:
-                logger.warning("[Planner] No port available — skipping planner")
-                _planner_used_fallback = True
-                _planner_fallback_reason = "no_port_available"
-                yield await ctx.emit({"type": "status", "content": "⚠ Planner: no model port available — chunking disabled"})
-                yield await ctx.emit({"type": "planner_done", "summary": "⚠ no port"})
-            else:
-                # ── Run planner as background task ──────────────────────────────
-                _plan_task = asyncio.create_task(run_planner(
-                    task=_planner_task,
-                    sees_images=_img_plan.get("planner") == "raw",
-                    coder_sees_images=_img_plan.get("coder") == "raw",
-                    images=ctx.images if _img_plan.get("planner") == "raw" else None,
-                    explore_ctx=_planner_ctx,
-                    planner_model=_planner_model,
-                    planner_port=_plan_port,
-                    step_cap=_planner_step_cap,
-                    use_thinking=_planner_effective_thinking,
-                    chunking=ctx.duo_config.chunking,
-                    thinking_budget=_planner_thinking_budget,
-                    max_output_tokens=_plan_ctx_final,
-                    planner_ctx=_plan_ctx_final,
-                    websearch_available=ctx.settings.get("duo_websearch_enabled", False) and ctx.websearch_available,
-                    settings=ctx.settings,
-                    aborted_fn=partial(plan_aborted_fn, ctx),
-                    emit_fn=partial(plan_emit_fn, _plan_event_q),
-                    heartbeat_fn=partial(plan_heartbeat_fn, _plan_event_q, _planner_hb_queue),
-                ))
-
-                # PLANNER-SKIP (2026-09-04): Skip during the planner aborts the
-                # planner and goes straight to the coder (before, the planner
-                # kept running and the skip was later wrongly consumed as
-                # "Round skipped" -> coder 0s, silent done).
-                _planner_skip_mid = False
-                try:
-                    # Yield events from the bridge as they arrive
-                    while not _plan_task.done() or not _plan_event_q.empty():
-                        # Enforce the run deadline even while the planner runs;
-                        # otherwise a 600s planner overshoots a 90-420s run timeout.
-                        if _duo_deadline_at and time.monotonic() >= _duo_deadline_at:
-                            _duo_timed_out = True
-                            logger.warning(
-                                "[PLANNER] Run deadline exceeded - planner aborted (run timeout %ss)",
-                                _duo_run_timeout_s,
-                            )
-                            yield await ctx.emit({
-                                "type": "status",
-                                "content": (
-                                    f"⏱ Duo timeout reached ({int(_duo_run_timeout_s)}s) "
-                                    "- planner aborted, continuing with best effort."
-                                ),
-                            })
-                            _plan_task.cancel()
-                            break
-                        # PLANNER-SKIP (2026-09-04): Skip pressed while the
-                        # planner is running -> abort planner, go to coder.
-                        if ctx.step_skipped() and not ctx.aborted():
-                            _planner_skip_mid = True
-                            ctx.clear_step_skip()
-                            try:
-                                _plan_task.cancel()
-                            except Exception:
-                                pass
-                            yield await ctx.emit({"type": "status",
-                                "content": "⏭ Planner skipped — going straight to coder"})
-                            yield await ctx.emit({"type": "planner_done", "summary": "⏭ skipped mid-plan"})
-                            break
-                        # Yield pending events from the bridge
-                        while not _plan_event_q.empty():
-                            try:
-                                _evt = _plan_event_q.get_nowait()
-                                yield await ctx.emit(_evt)
-                            except asyncio.QueueEmpty:
-                                break
-                        # Also drain heartbeat queue directly (for events not routed through run_planner)
-                        while not _planner_hb_queue.empty():
-                            try:
-                                yield await ctx.emit(_planner_hb_queue.get_nowait())
-                            except asyncio.QueueEmpty:
-                                break
-                        if _plan_task.done():
-                            break
-                        await asyncio.sleep(0.05)
-
-                    # Drain any remaining events after task completion
-                    while not _plan_event_q.empty():
-                        try:
-                            _evt = _plan_event_q.get_nowait()
-                            yield await ctx.emit(_evt)
-                        except asyncio.QueueEmpty:
-                            break
-
-                    # Get result from completed task
-                    try:
-                        _plan_result = _plan_task.result()
-                    except asyncio.CancelledError:
-                        _plan_result = None
-                        _planner_used_fallback = True
-                        _planner_fallback_reason = "planner_step_skipped" if _planner_skip_mid else "run_deadline"
-                        _planner_parse_mode = "skipped" if _planner_skip_mid else "timeout"
-                    except asyncio.InvalidStateError:
-                        # DEADLINE-CANCEL-RACE (2026-09-09): cancel() is only
-                        # SCHEDULED — calling result() immediately after the
-                        # deadline break hits a still-pending task ("Result is
-                        # not set", live traceback). Same handling as a clean
-                        # cancellation.
-                        _plan_result = None
-                        _planner_used_fallback = True
-                        _planner_fallback_reason = "run_deadline"
-                        _planner_parse_mode = "timeout"
-                except Exception as _plan_exc:
-                    logger.error("[Planner] Exception: %s", _plan_exc, exc_info=True)
-                    _subtasks = []
-                    _plan_thinking = ""
-                    _plan_content_txt = ""
-                    _planner_used_fallback = True
-                    _planner_fallback_reason = "planner_exception"
-                    _planner_parse_mode = "error"
-                    _plan_guard_quality = {}
-                    ctx.phase_timer.end("soft_planner", status="error")
-                    _exc_short = f"{type(_plan_exc).__name__}: {str(_plan_exc)[:120]}"
-                    yield await ctx.emit({"type": "status", "content": f"⚠ Planner error — {_exc_short}"})
-                    yield await ctx.emit({"type": "planner_done", "summary": f"⚠ Error: {_exc_short}"})
-                finally:
-                    _planner_hb_stop.set()
-                    try:
-                        _planner_hb_task.cancel()
-                    except Exception as _hb_err:
-                        logger.debug("[DUO] Heartbeat task cancel failed: %s", _hb_err)
-                    # Cancel the planner task if it's still running (e.g. after exception)
-                    if not _plan_task.done():
-                        _plan_task.cancel()
-                        try:
-                            await _plan_task
-                        except asyncio.CancelledError:
-                            pass
-
-                # ── Extract result from PlannerResult ────────────────────────────
-                if _plan_result is not None:
-                    _subtasks = _plan_result.subtasks
-                    _plan_thinking = _plan_result.thinking
-                    # CODER-BRIEFING-STAGE: the pure plan text, used instead of
-                    # the thinking when the reasoning is over the briefing limit.
-                    _plan_content_txt = str(getattr(_plan_result, "plan_content", "") or "")
-                    # Merge fallback flags: pre-load fallback + planner-internal fallback
-                    _planner_used_fallback = _plan_result.used_fallback or _planner_used_fallback
-                    _planner_fallback_reason = _plan_result.fallback_reason or _planner_fallback_reason
-                    _planner_parse_mode = _plan_result.parse_mode
-                    _planner_context_trimmed = _plan_result.context_trimmed
-                    _plan_guard_quality = _plan_result.plan_guard
-
-                    try:
-                        from core.run_audit import record_run_audit
-                        record_run_audit(ctx.chat_id, {
-                            "run_id": ctx.run_id,
-                            "event": "planner",
-                            "plan_content_len": len(_plan_result.plan_content or ""),
-                            "thinking_len": len(_plan_result.thinking or ""),
-                            "subtasks": len(_plan_result.subtasks or []),
-                            "used_fallback": bool(_plan_result.used_fallback),
-                            "fallback_reason": str(_plan_result.fallback_reason or ""),
-                            "parse_mode": str(_plan_result.parse_mode or ""),
-                            "context_trimmed": bool(_plan_result.context_trimmed),
-                            "explore_ctx_len": len(_explore_ctx or ""),
-                            "planner_mdl": str(_planner_model or ""),
-                        })
-                    except Exception:
-                        pass
-
-                    if _project_state is not None and _plan_result.plan_content:
-                        try:
-                            _pt = _plan_result.plan_content
-                            # Offene Tasks
-                            _ot = re.search(r"###\s*(?:Offene Tasks|Open Tasks)\s*\n((?:\d+\.\s*.*\n?)+)", _pt, re.IGNORECASE)
-                            if _ot:
-                                # OPEN-TASKS DISPLAY FIX (2026-10-07, owner):
-                                # strip leading numbers, a leading "file: "
-                                # and a trailing empty pipe segment - the raw
-                                # plan lines rendered with a dangling "|"
-                                _ot_lines = []
-                                for _l in _ot.group(1).strip().split("\n"):
-                                    _t = re.sub(r"^\d+\.\s*", "", _l).strip()
-                                    _t = re.sub(r"\s*\|\s*$", "", _t)
-                                    _t = re.sub(r"^file:\s*", "", _t).strip()
-                                    if _t:
-                                        _ot_lines.append(_t)
-                                _project_state.open_tasks = _ot_lines
-                            # Abgeschlossene Tasks
-                            _ct = re.search(r"###\s*(?:Abgeschlossene Tasks|Completed Tasks)\s*\n((?:-\s*\[x\]\s*.*\n?)+)", _pt, re.IGNORECASE)
-                            if _ct:
-                                _new_completed = [
-                                    re.sub(r"^-\s*\[x\]\s*", "", l).strip()
-                                    for l in _ct.group(1).strip().split("\n") if l.strip()
-                                ]
-                                _project_state.completed_tasks.extend(_new_completed)
-                                _seen = set()
-                                _deduped = []
-                                for _t in reversed(_project_state.completed_tasks):
-                                    if _t not in _seen:
-                                        _seen.add(_t)
-                                        _deduped.append(_t)
-                                _project_state.completed_tasks = list(reversed(_deduped))[-50:]
-                            # Plan-Summary
-                            _sm = re.search(r"##\s*Plan:\s*(.+)", _pt)
-                            _plan_summary_set = False
-                            if _sm:
-                                _project_state.plan_summary = _sm.group(1).strip()[:500]
-                                _plan_summary_set = True
-                            else:
-                                for _line in _pt.split("\n"):
-                                    _ls = _line.strip()
-                                    if _ls and not _ls.startswith("#"):
-                                        _project_state.plan_summary = _ls[:500]
-                                        _plan_summary_set = True
-                                        break
-                            if not _plan_summary_set:
-                                _project_state.plan_summary = ""
-                            _project_state.plan_version += 1
-                        except Exception:
-                            pass
-
-                    # PATCH-1: Plan-Tracker aus Planner-Result anreichern.
-                    if _plan_tracker is None or _plan_tracker.total <= 1:
-                        _enriched = _build_tracker_from_planner(_plan_result, _contracts_raw if _contracts_raw else None, workspace=_ws_str)
-                        if _enriched is not None and _enriched.total > 0:
-                            _plan_tracker = _enriched
-                            logger.debug("[PlanTracker] Enriched from planner: %d steps", _plan_tracker.total)
-
-            if not ctx.duo_config.chunking and _subtasks:
-                logger.debug("[CHUNKING-GUARD] ctx.duo_config.chunking=False - %d subtasks discarded, planner briefing kept", len(_subtasks))
-                _subtasks = []
-
-            if not ctx.phase_timer.is_ended("soft_planner"):
-                _planner_status = "ok" if _subtasks else "empty"
-                if not _subtasks and _plan_result is not None:
-                    _planner_status += f"(reason={getattr(_plan_result, 'fallback_reason', None) or 'none'})"
-                ctx.phase_timer.end("soft_planner", status=_planner_status)
-            # When chunking is off, don't send chunks to the UI — prevents
-            # confusing "CHUNK-PLAN" panel when only a briefing was requested.
-            # PLAN-TITLES (2026-09-17): ship {"title","raw"} objects so the UI
-            # checklist shows a concise readable title per chunk instead of the
-            # raw pipe-format step line ("file: ... | read: ... | risk: ...").
-            # The frontend already prefers c.title (app.js planner_result
-            # handler) and falls back to the string. DISPLAY ONLY: _loop_items
-            # below keep the RAW strings — the coder contract is unchanged.
-            _emit_chunks = (
-                [{"title": _derive_step_title(_s), "raw": _s} for _s in _subtasks]
-                if ctx.duo_config.chunking else []
-            )
-            yield await ctx.emit({
-                "type":          "planner_result",
-                "chunks":        _emit_chunks,
-                "thinking":      _plan_thinking if _plan_result is not None else "",
-                "model":         _planner_model,
-                "used_thinking": _planner_effective_thinking,
-                "quality": {
-                    "used_fallback": bool(_planner_used_fallback),
-                    "fallback_reason": str(_planner_fallback_reason or ""),
-                    "parse_mode": str(_planner_parse_mode or "none"),
-                    "context_trimmed": bool(_planner_context_trimmed),
-                    "step_limit": int(_planner_step_cap),
-                    "plan_guard": _plan_guard_quality,
-                },
-            })
+                async for _ev in _duo_planner_phase(
+                    ctx, state, _plan_ps,
+                    coder_mdl=coder_mdl, critic_mdl=critic_mdl, exec_mdl=exec_mdl,
+                    _ws_str=_ws_str, _explore_ctx=_explore_ctx, _xtools_ws=_xtools_ws,
+                    _coder_ctx=_coder_ctx, _contracts_raw=_contracts_raw,
+                    _matched_skills=_matched_skills, _planner_step_cap=_planner_step_cap,
+                    _project_state=_project_state, _duo_runtime_profile=_duo_runtime_profile,
+                    _duo_deadline_at=_duo_deadline_at, _duo_run_timeout_s=_duo_run_timeout_s,
+                    _fup_task_ctx=_fup_task_ctx,
+                ):
+                    yield _ev
+            finally:
+                _subtasks = _plan_ps.subtasks
+                _plan_thinking = _plan_ps.plan_thinking
+                _plan_content_txt = _plan_ps.plan_content_txt
+                _plan_result = _plan_ps.plan_result
+                _planner_used_fallback = _plan_ps.planner_used_fallback
+                _planner_fallback_reason = _plan_ps.planner_fallback_reason
+                _planner_parse_mode = _plan_ps.planner_parse_mode
+                _planner_context_trimmed = _plan_ps.planner_context_trimmed
+                _plan_guard_quality = _plan_ps.plan_guard_quality
+                _planner_model = _plan_ps.planner_model
+                _img_plan = _plan_ps.img_plan
+                _plan_port = _plan_ps.plan_port
+                _plan_ctx_final = _plan_ps.plan_ctx_final
+                _duo_timed_out = _plan_ps.duo_timed_out
+                _plan_tracker = _plan_ps.plan_tracker
 
         _cs = ChunkState()  # ChunkState replaces _done_tasks, _written_files, _coder_outputs, etc.
         _done_tasks = _cs.done_tasks          # backward-compat aliases for the loop
@@ -3224,72 +4349,21 @@ async def run_code_duo(ctx):
                 _duo_loop: "AgenticToolLoop | None" = None
                 try:
                     from backend.llama_server_manager import manager as _lsm3
-                    # P1-3 FIX: Cache coder port — coder is pinned (keep_alive=-1), so
-                    # ensure_loaded is a no-op after the first call but still costs
-                    # ~200-300ms per /health re-check on Vulkan.
-                    if _cached_coder_port is not None:
-                        _target_ctx = _dtool_opts.get("num_ctx", 4096)
-                        if _cached_coder_port_ctx is not None and _cached_coder_port_ctx != _target_ctx:
-                            logger.info(
-                                "[DUO] Cached port ctx mismatch (cached=%s, needed=%s) — force reload",
-                                _cached_coder_port_ctx, _target_ctx,
-                            )
-                            _cached_coder_port = None
-                            _cached_coder_port_ctx = None
-                            # RECLAIM-STALL-FIX (2026-09-06): this waited in a
-                            # wait_for_vram_reclaim for needed(full ctx)+768 —
-                            # structurally unreachable while the old slot is still
-                            # loaded (the kill only happens in the ensure_loaded
-                            # ctx-mismatch branch below) → guaranteed 45s stall.
-                            # The manager kill + margin resolution (768→256→error)
-                            # now free VRAM correctly.
-                            logger.info(
-                                "[DUO] Cached port ctx mismatch — reload via ensure_loaded "
-                                "(ctx-mismatch kill + margin resolution in the manager)"
-                            )
-                        else:
-                            _dport = _cached_coder_port
-                            # Touch keep-alive so idle monitor doesn't kill model mid-run
-                            try:
-                                await _lsm3.touch_if_loaded(exec_mdl)
-                            except Exception as _err:
-                                if isinstance(_err, (
-                                    GeneratorExit,
-                                    asyncio.CancelledError,
-                                    KeyboardInterrupt,
-                                    SystemExit,
-                                )):
-                                    raise
-                                logger.debug(
-                                    "[DUO] Suppressed error at keep-alive touch: %s",
-                                    _err, exc_info=True
-                                )
-                    # MISMATCH-RELOAD-FIX (2026-09-10): the ctx-mismatch branch
-                    # above only cleared the cached port — the ensure_loaded call
-                    # lived in the `else` of the cache check, so a mismatch fell
-                    # straight into `_dport is None` → _loop_detected stop with 0
-                    # tool rounds. `_dport` still None (mismatch or empty cache)
-                    # now always runs the reload.
-                    if _dport is None:
-                        for _connect_attempt in range(3):
-                            try:
-                                # VISION RELOAD (2026-10-04): keep the mmproj
-                                # when the image plan routes raw images to the
-                                # coder - the cached slot may predate the plan
-                                _dport = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True,
-                                                                    vision=(_img_plan.get("coder") == "raw" or _always_vision))
-                                break
-                            except Exception as _ce:
-                                if _connect_attempt < 2:
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"⟳ Model unreachable, attempt {_connect_attempt+2}/3 in 3s…"})
-                                    await asyncio.sleep(3.0)
-                                else:
-                                    _dport = None
-                                    logger.warning("[DUO] ensure_loaded for %s failed after 3 attempts: %s",
-                                                   exec_mdl, _ce)
-                        _cached_coder_port = _dport
-                        _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)
+                    _port_ps = _DuoCoderPortCacheState(
+                        dport=_dport, cached_coder_port=_cached_coder_port,
+                        cached_coder_port_ctx=_cached_coder_port_ctx,
+                    )
+                    try:
+                        async for _ev in _duo_resolve_coder_port_cache(
+                            ctx, _port_ps, exec_mdl=exec_mdl,
+                            _dtool_opts=_dtool_opts, _img_plan=_img_plan,
+                            _always_vision=_always_vision, _lsm3=_lsm3,
+                        ):
+                            yield _ev
+                    finally:
+                        _dport = _port_ps.dport
+                        _cached_coder_port = _port_ps.cached_coder_port
+                        _cached_coder_port_ctx = _port_ps.cached_coder_port_ctx
                     if _dport is None:
                         # MODEL-LOAD-FAIL (2026-10-04, live log): a coder the
                         # GPU cannot host is a resource error, not a loop -
@@ -3301,51 +4375,20 @@ async def run_code_duo(ctx):
                                        f"(VRAM/ctx). Lower the coder context in the agent "
                                        f"tab, pick a smaller model, or free VRAM - run stopped."})
                         break
-                    # CTX-ACTUAL (2026-09-06): the manager can downscale the slot
-                    # (PRE-FLIGHT ctx-down when VRAM is tight), so the server runs a
-                    # SMALLER n_ctx than configured. Guard/threshold/clamp/max_tokens
-                    # must follow the REAL slot ctx - otherwise prompt+budget exceed
-                    # the slot (llama HTTP 400) and the run churns through
-                    # force-compressions every few rounds.
-                    _dtool_ctx_requested = int(_dtool_ctx)
-                    _actual_ctx = 0
-                    try:
-                        for _s_act in _lsm3._slots:
-                            if getattr(_s_act, "port", None) == _dport and getattr(_s_act, "_num_ctx", 0):
-                                _actual_ctx = int(_s_act._num_ctx)
-                                break
-                        if not _actual_ctx:
-                            try:
-                                async with httpx.AsyncClient(
-                                    timeout=httpx.Timeout(connect=3.0, read=3.0, write=3.0, pool=3.0),
-                                ) as _c_act:
-                                    _props_act = (await _c_act.get(
-                                        f"http://127.0.0.1:{_dport}/props"
-                                    )).json()
-                                _actual_ctx = int((_props_act.get("default_generation_settings") or {}).get("n_ctx") or 0)
-                            except Exception:
-                                pass
-                        if _actual_ctx > 0 and _actual_ctx < _dtool_ctx_requested:
-                            logger.warning(
-                                "[CTX-ACTUAL] slot ctx=%d < configured %d - guard/clamp/budget follow the slot",
-                                _actual_ctx, _dtool_ctx_requested,
-                            )
-                            _dtool_ctx = _actual_ctx
-                            _dtool_opts["num_ctx"] = _actual_ctx
-                            _dtool_opts["num_predict"] = min(
-                                max(int(_duo_coder_tok), 1024), _actual_ctx
-                            )
-                            _cached_coder_port_ctx = _actual_ctx
-                    except Exception as _ctx_act_err:
-                        logger.debug("[CTX-ACTUAL] query failed: %s", _ctx_act_err)
-                    # CTX-FLOOR-PRECONDITION (Guard C): slot runs smaller than
-                    # requested by the coder (manager degradation) — stored for
-                    # the early round-loop stop instead of compress churn (paths 1/2).
-                    _slot_degraded = bool(
-                        _actual_ctx > 0
-                        and _actual_ctx < _dtool_ctx_requested
+                    _slotctx_ps = _DuoSlotCtxState(
+                        dtool_ctx=_dtool_ctx,
+                        cached_coder_port_ctx=_cached_coder_port_ctx,
                     )
-                    _slot_ctx_floor_stop = False  # Guard-C telemetry (see LOOP-DETECT-STOP)
+                    await _duo_query_actual_slot_ctx(
+                        _slotctx_ps, _lsm3=_lsm3, _dport=_dport,
+                        _dtool_opts=_dtool_opts, _duo_coder_tok=_duo_coder_tok,
+                    )
+                    _dtool_ctx = _slotctx_ps.dtool_ctx
+                    _cached_coder_port_ctx = _slotctx_ps.cached_coder_port_ctx
+                    _actual_ctx = _slotctx_ps.actual_ctx
+                    _slot_degraded = _slotctx_ps.slot_degraded
+                    _slot_ctx_floor_stop = _slotctx_ps.slot_ctx_floor_stop
+                    _dtool_ctx_requested = _slotctx_ps.dtool_ctx_requested
                     _dtc_owned = getattr(getattr(ctx.pipeline, 'ollama', None), '_client', None) is None
                     _dtc = getattr(getattr(ctx.pipeline, 'ollama', None), '_client', None) or httpx.AsyncClient(
                         limits=httpx.Limits(max_connections=4, max_keepalive_connections=4),
@@ -3388,85 +4431,23 @@ async def run_code_duo(ctx):
                         _comp_llm_cfg = ""
                     _comp_llm_timeout_s = int(ctx.settings.get("duo_compress_llm_timeout_s", 180) or 180)
                     _compress_local_only = bool(ctx.settings.get("duo_compress_local_only", False))
-                    # BUDGETS (2026-10-14, redesign of audit phase 6):
-                    # ONE resolve per run from measured sizes only — n_ctx,
-                    # the per-model chars/token EMA and the output budget.
-                    # Nothing here branches on model names; settings keys
-                    # "budget_<field>" override individual derived values
-                    # (None = auto). Frozen for the whole run: everything the
-                    # schema shows (tool caps, tool list) must not change
-                    # mid-run or the prefix cache dies.
-                    from core import budgets as _budg
-                    from backend.llama_client import tokenize_count
-                    # REAL-CPT PROBE (2026-10-17): if the coder slot is already
-                    # up, ask the server for the true token count of the exact
-                    # tool-schema JSON we are about to send. chars/tokens is
-                    # then THIS model's measured ratio instead of the module
-                    # default 3.92 / the previous runs' EMA. Failure -> EMA.
-                    _cpt_for_run = _budg.cpt_for(exec_mdl)
-                    _cpt_source = "ema"
-                    try:
-                        _probe_port = int(_cached_coder_port or 0)
-                        if _probe_port and _xtools_ws:
-                            _probe_txt = json.dumps(_xtools_ws)
-                            _probe_toks = await tokenize_count(_probe_port, _probe_txt)
-                            _probe_cpt = _budg.cpt_from_measurement(
-                                len(_probe_txt), int(_probe_toks or 0))
-                            if _probe_cpt:
-                                _cpt_for_run = _probe_cpt
-                                _cpt_source = f"tokenize({len(_probe_txt)}c/{_probe_toks}t)"
-                    except (TypeError, ValueError, KeyError, AttributeError) as _cpt_err:
-                        logger.debug("[BUDGETS] cpt probe skipped: %s", _cpt_err)
-                    _run_budgets = _budg.resolve(
-                        n_ctx=int(_dtool_ctx or 16384),
-                        cpt=_cpt_for_run,
-                        max_out=int(_duo_out_budget or 1024),
-                        settings=ctx.settings,
-                        # FREEZE RULE (task 4): the persisted EMA from
-                        # PREVIOUS runs - never a mid-run value.
-                        prefill_tps=_budg.prefill_tps_for(exec_mdl),
+                    _budg_ps = _DuoToolBudgetsState(
+                        xtools_ws=_xtools_ws,
+                        compress_threshold=_compress_threshold,
                     )
-                    _budg.set_active(_run_budgets)
-                    state["_budgets"] = _run_budgets
-                    _xtools_ws = _get_inline_tools(
-                        include_websearch=_duo_ws, mode="duo_full",
-                        budget_chars=_run_budgets.schema_budget)
-                    state["_xtools_ws"] = _xtools_ws
-                    logger.info(
-                        "[BUDGETS] ctx=%d cpt=%.2f(%s) out=%d -> tool_cap=%d read_cap=%d schema=%d "
-                        "inj=%d anchor=+%d outline=%d compress@%d/rest@%d overrides=%s",
-                        _run_budgets.n_ctx, _run_budgets.cpt, _cpt_source,
-                        _run_budgets.max_out,
-                        _run_budgets.tool_result_cap, _run_budgets.read_char_cap,
-                        _run_budgets.schema_budget, _run_budgets.injection_budget,
-                        _run_budgets.anchor_lines, _run_budgets.outline_items,
-                        _run_budgets.compress_trigger_tokens,
-                        _run_budgets.compress_rest_tokens,
-                        ",".join(_run_budgets.overrides_used) or "-",
+                    await _duo_resolve_tool_budgets(
+                        ctx, state, _budg_ps, exec_mdl=exec_mdl,
+                        _dtool_ctx=_dtool_ctx, _duo_out_budget=_duo_out_budget,
+                        _duo_ws=_duo_ws, _stored_threshold=_stored_threshold,
+                        duo_rounds=duo_rounds,
+                        _duo_runtime_profile=_duo_runtime_profile,
+                        _accumulated_replan_bonus=_accumulated_replan_bonus,
+                        _cached_coder_port=_cached_coder_port,
                     )
-                    try:
-                        from core import telemetry as _b_tel
-                        _b_tel.append_round({
-                            "phase": "budgets",
-                            "model": exec_mdl,
-                            **_run_budgets.as_dict(),
-                        })
-                    except Exception:
-                        pass
-                    _max_tool_rounds_cfg = int(ctx.settings.get("duo_max_tool_rounds", 64))
-                    _max_tool_rounds_cfg = 8 if duo_rounds > 1 else _max_tool_rounds_cfg
-                    if not _stored_threshold:
-                        # BUDGETS (2026-10-14): headroom-based compression
-                        # trigger (free < 1.5 × reserve with reserve =
-                        # clamped max_out + growth) replaces the fixed floor —
-                        # write-heavy runs trigger earlier without a special
-                        # case. An explicit ui_threshold still wins.
-                        _compress_threshold = _run_budgets.compress_trigger_tokens
-                    _max_tool_rounds = _resolve_tool_budget(
-                        _max_tool_rounds_cfg,
-                        ctx.duo_config.until_finished,
-                        profile=_duo_runtime_profile,
-                    ) + _accumulated_replan_bonus
+                    _xtools_ws = _budg_ps.xtools_ws
+                    _compress_threshold = _budg_ps.compress_threshold
+                    _max_tool_rounds = _budg_ps.max_tool_rounds
+                    _max_tool_rounds_cfg = _budg_ps.max_tool_rounds_cfg
                     _loop_detected = False
                     _chunk_budget_exhausted = False
                     _partial_escalated = False  # partial no-shrink -> next attempt runs full
@@ -5024,168 +6005,79 @@ async def run_code_duo(ctx):
                                 )})
                                 _dr_think_only_retries += 1
                                 continue
-                        # ── RUN-BASH-CHANGE-DETECTION (Problem 2) ─────────────
-                        # _contracts_raw exports, normalized against _ws_str.
-
-                        _round_bash_only = (
-                            {tc.get("function", {}).get("name", "") for tc in (_dr_tcs or [])}
-                            == {"run_bash"}
+                        _exec_ps = _DuoExecRoundState(duo_deadline_at=_duo_deadline_at)
+                        try:
+                            async for _ev in _duo_exec_round_task(
+                                ctx, state, _exec_ps,
+                                _dr_tcs=_dr_tcs, _dtool_msgs=_dtool_msgs,
+                                _duo_state=_duo_state,
+                                _tool_exec_hooks=_tool_exec_hooks,
+                                _tool_ctx_lru=_tool_ctx_lru,
+                                _verify_mutation_serial=_verify_mutation_serial,
+                                _verify_last_ok_serial=_verify_last_ok_serial,
+                                _last_run_bash_failure=_last_run_bash_failure,
+                                _changed_since_failure=_changed_since_failure,
+                                _last_learned_insight_sig=_last_learned_insight_sig,
+                                _last_too_large_path=_last_too_large_path,
+                                _attempts_per_file=_attempts_per_file,
+                                _wedge_state=_wedge_state,
+                                _tool_error_retries=_tool_error_retries,
+                                _call_sigs=_call_sigs,
+                                _recent_focus_paths=_recent_focus_paths,
+                                _file_changes=_file_changes,
+                                _duo_seen_web_queries=_duo_seen_web_queries,
+                                _task_complete_blocked=_task_complete_blocked,
+                                _total_tool_errors_ref=_total_tool_errors_ref,
+                                _tc_consecutive=_tc_consecutive,
+                                _at_nosuite_nudged=_at_nosuite_nudged,
+                                _consecutive_reads=_consecutive_reads,
+                                _last_read_path=_last_read_path,
+                                _read_ladder_fired=_read_ladder_fired,
+                                _ws_budget_streak=_ws_budget_streak,
+                                _ws_disabled=_ws_disabled,
+                                _tool_mode=_tool_mode, _duo_ws=_duo_ws,
+                                _ws_str=_ws_str, _explore_ctx=_explore_ctx,
+                                _pre_explore_msgs=_pre_explore_msgs,
+                                _written_files=_written_files,
+                                _contracts_raw=_contracts_raw,
+                                _coder_event_q=_coder_event_q,
+                                _cached_coder_port=_cached_coder_port,
+                                exec_mdl=exec_mdl,
+                                _exec_has_thinking=_exec_has_thinking,
+                                _tool_think_auto_mode=_tool_think_auto_mode,
+                                _run_id_global=_run_id_global, _di=_di,
+                            ):
+                                yield _ev
+                        finally:
+                            _duo_deadline_at = _exec_ps.duo_deadline_at
+                            _exec_result = _exec_ps.exec_result
+                            _snap_before = _exec_ps.snap_before
+                            _last_too_large_ref = _exec_ps.last_too_large_ref
+                            _cached_port_ref = _exec_ps.cached_port_ref
+                        _wedge_ps = _DuoWedgeHandoffState(
+                            loop_detected=_loop_detected,
+                            wedge_escalated=_wedge_escalated,
+                            duo_deadline_at=_duo_deadline_at,
                         )
-                        _snap_before = (await asyncio.to_thread(
-            _ld_file_snapshot, _ws_str, _explore_ctx, _pre_explore_msgs,
-            _written_files, _contracts_raw)) if _round_bash_only else None
-                        # ── Execute all tool calls via shared executor ──
-                        # CACHE-HORIZON (2026-09-04): everything < cache_horizon
-                        # has already been sent (immutable prefix); everything
-                        # from here is this round and may be mutated freely.
-                        _round_cache_horizon = len(_dtool_msgs)
-                        _last_too_large_ref = [_last_too_large_path]
-                        _cached_port_ref = [_cached_coder_port]
-                        _exec_task = asyncio.create_task(execute_tool_round(
-                            tool_calls=_dr_tcs,
-                            dtool_msgs=_dtool_msgs,
-                            round_state=_duo_state,
-                            hooks=_tool_exec_hooks,
-                            trs=ToolRoundState(
-                                cache_horizon=_round_cache_horizon,
-                                tool_ctx_lru=_tool_ctx_lru,
-                                duo_deadline_at=_duo_deadline_at,
-                                verify_mutation_serial=_verify_mutation_serial,
-                                verify_last_ok_serial=_verify_last_ok_serial,
-                                last_run_bash_failure=_last_run_bash_failure,
-                                changed_since_failure=_changed_since_failure,
-                                last_learned_insight_sig=_last_learned_insight_sig,
-                                last_too_large_path=_last_too_large_ref,
-                                attempts_per_file=_attempts_per_file,
-                                wedge_state=_wedge_state,
-                                tool_error_retries=_tool_error_retries,
-                                call_sigs=_call_sigs,
-                                recent_focus_paths=_recent_focus_paths,
-                                file_changes=_file_changes,
-                                duo_seen_web_queries=_duo_seen_web_queries,
-                                cached_coder_port=_cached_port_ref,
-                                task_complete_blocked_count=_task_complete_blocked,
-                                total_tool_errors=_total_tool_errors_ref,
-                                tc_consecutive=_tc_consecutive,
-                                at_nosuite_nudged=_at_nosuite_nudged,
-                                consecutive_reads=_consecutive_reads,
-                                last_read_path=_last_read_path,
-                                read_ladder_fired=_read_ladder_fired,
-                                ws_budget_streak=_ws_budget_streak,
-                                ws_disabled=_ws_disabled,
-                            ),
-                            tool_mode=_tool_mode,
-                            duo_ws=_duo_ws,
-                            workspace_lock=_ws_str,
-                            exec_model=exec_mdl,
-                            auto_test_before_complete=bool(ctx.duo_config.test_feedback_final),
-                            exec_has_thinking=_exec_has_thinking,
-                            tool_think_auto_mode=_tool_think_auto_mode,
-                            run_id_global=_run_id_global,
-                            chat_id=ctx.chat_id,
-                            subtask_index=_di,
-                        ))
-                        _hb_interval = _read_hb_interval(ctx.settings)
-                        _hb_start = time.monotonic()
-                        _hb_last = _hb_start
-                        while True:
-                            _hb_had = False
-                            while not _coder_event_q.empty():
-                                _hb_had = True
-                                try:
-                                    yield _coder_event_q.get_nowait()
-                                except asyncio.QueueEmpty:
-                                    break
-                            if _hb_had:
-                                _hb_last = time.monotonic()
-                            if _exec_task.done():
-                                break
-                            # HEARTBEAT (2026-08-21): keepalive during long tool rounds.
-                            # elapsed = total time since loop start.
-                            if time.monotonic() - _hb_last >= _hb_interval:
-                                _hb_total = int(time.monotonic() - _hb_start)
-                                _hb_last = time.monotonic()
-                                yield await ctx.emit({"type": "heartbeat", "elapsed": _hb_total})
-                            await asyncio.sleep(0.02)
-                        _exec_result = _exec_task.result()
-                        # DEADLINE-GRACE (2026-09-09): pull the extended
-                        # deadline back into the runner + state so the outer
-                        # checks and later phases see it too.
-                        if _exec_result.deadline_extended_to:
-                            if _exec_result.deadline_extended_to > _duo_deadline_at:
-                                _duo_deadline_at = _exec_result.deadline_extended_to
-                                state["_duo_deadline_at"] = _duo_deadline_at
-                        # ── WEDGE-HANDOFF (2026-09-17): fresh-agent handoff ──
-                        # The executor detected a wedging edit (same file,
-                        # repeated failures). Delegation, not abort: run the
-                        # fix agent, feed the outcome back as ONE compact
-                        # notice, continue the chunk with a clean slate.
-                        if getattr(_exec_result, "wedge_file", "") and not _loop_detected:
-                            _wedge_path = str(_exec_result.wedge_file)
-                            _wedge_max = int(ctx.settings.get("duo_wedge_handoff_max_per_run", 2) or 2)
-                            if _wedge_handoffs_used[0] >= _wedge_max:
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"⚠️ Wedge on {Path(_wedge_path).name} — handoff budget exhausted, escalating to human."})
-                                _ld_setter(4650); _loop_detected = True
-                                _wedge_escalated = True
-                                break
-                            yield await ctx.emit({"type": "wedge_handoff",
-                                "file": _wedge_path,
-                                "attempt": _wedge_handoffs_used[0] + 1})
-                            yield await ctx.emit({"type": "status",
-                                "content": f"🧩 Wedge on {Path(_wedge_path).name} — handing the edit to a fresh-context fix agent…"})
-                            _wedge_t0 = time.time()
-                            _handover = _wedge_build_handover(
-                                path=_wedge_path,
-                                intent=(f"Plan chunk {_di + 1}/{_n_items}: {str(_subtask)[:300]}" if _subtask else ""),
-                                attempts=_wedge_attempts_of(_wedge_state, _wedge_path),
-                                streak=_wedge_streak_of(_wedge_state, _wedge_path),
-                                threshold=int(_wedge_state.get("threshold", 4)),
-                            )
-                            # Same weights as the coder (fresh context, no model
-                            # switch); duo_wedge_handoff_model is an explicit
-                            # escape hatch only — never a silent fallback.
-                            _fix_model = str(ctx.settings.get("duo_wedge_handoff_model", "") or "").strip() or exec_mdl
-                            _fx = await _wedge_run_fix_agent(
-                                path=_wedge_path,
-                                handover=_handover,
-                                model=_fix_model,
-                                workspace_lock=_ws_str,
-                                port=_cached_coder_port,
-                                max_rounds=int(ctx.settings.get("duo_wedge_handoff_max_rounds", 10) or 10),
-                                timeout_s=float(ctx.settings.get("duo_wedge_handoff_timeout_s", 900) or 900),
-                                # CTX-MATCH (2026-10-17): the fix agent defaulted
-                                # to 8192 while the coder may run at another ctx;
-                                # ensure_loaded then killed and reloaded the warm
-                                # slot (manager_load.py:402) - the opposite of the
-                                # "NEVER evicts" promise in fix_agent's docstring.
-                                num_ctx=int(_dtool_ctx or 8192),
-                            )
-                            # BUDGET-EXEMPT: the handoff wait does not burn the
-                            # chunk deadline — push it forward by the elapsed
-                            # time so a successful handoff cannot time the run out.
-                            _duo_deadline_at += (time.time() - _wedge_t0)
-                            state["_duo_deadline_at"] = _duo_deadline_at
-                            _wedge_handoffs_used[0] += 1
-                            if _fx.get("status") in ("resolved", "no_fix_needed"):
-                                # The handoff counts as the successful write on
-                                # this path (or as verified-correct): reset the
-                                # streak so the coder gets a clean slate.
-                                _wedge_note_success(_wedge_state, _wedge_path)
-                                _wedge_invalidate_sig(_wedge_path, _ws_str)
-                                _dtool_msgs.append({"role": "user", "content": _wedge_build_resolved(
-                                    _wedge_path, str(_fx.get("summary", "")),
-                                    no_fix=(_fx.get("status") == "no_fix_needed"))})
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"✅ Wedge handoff on {Path(_wedge_path).name}: {_fx.get('status')}"})
-                            else:
-                                _dtool_msgs.append({"role": "user", "content": _wedge_build_escalated(
-                                    _wedge_path, str(_fx.get("summary", "fix agent failed")))})
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"⚠️ Wedge handoff failed on {Path(_wedge_path).name} — escalating to human."})
-                                _ld_setter(4651); _loop_detected = True
-                                _wedge_escalated = True
-                                break
+                        try:
+                            async for _ev in _duo_wedge_handoff(
+                                ctx, state, _wedge_ps,
+                                _exec_result=_exec_result, exec_mdl=exec_mdl,
+                                _ws_str=_ws_str, _di=_di, _n_items=_n_items,
+                                _subtask=_subtask, _dtool_ctx=_dtool_ctx,
+                                _dtool_msgs=_dtool_msgs,
+                                _wedge_state=_wedge_state,
+                                _wedge_handoffs_used=_wedge_handoffs_used,
+                                _cached_coder_port=_cached_coder_port,
+                            ):
+                                yield _ev
+                        finally:
+                            _loop_detected = _wedge_ps.loop_detected
+                            _wedge_escalated = _wedge_ps.wedge_escalated
+                            _duo_deadline_at = _wedge_ps.duo_deadline_at
+                            _break_out = _wedge_ps.break_out
+                        if _break_out:
+                            break
                         _last_too_large_path = _last_too_large_ref[0]
                         _cached_coder_port = _cached_port_ref[0]
                         _verify_mutation_serial = _exec_result.verify_mutation_serial
@@ -5212,27 +6104,17 @@ async def run_code_duo(ctx):
                         # Plan tracker references
                         _last_tool_name = _exec_result.last_tool_name
                         _last_tool_result = _exec_result.last_tool_result
-                        # ── CTX Pressure Check ─────────────────────────────
-                        if not _ctx_pressure_warned:
-                            # GUARD-REAL-BASIS: fresh real value (usage_meta of the
-                            # last round), fallback estimator — no more coarse
-                            # sum(len)//3 estimation.
-                            _guard_tokens = int(_coder_real_prompt_tokens[0] or _est_tokens)
-                            if _guard_tokens > int(_dtool_ctx * 0.72):
-                                _ctx_pressure_warned = True
-                                _pressure_msg = {
-                                    "role": "user",
-                                    "content": (
-                                        f"[CTX CRITICAL — ~{_guard_tokens} tokens used, {_dtool_ctx} available]\n"
-                                        "Stop all read_file calls immediately. "
-                                        "Write ALL pending changes now using edit_file / write_file. "
-                                        "Then call task_complete. "
-                                        "Do NOT read any more files."
-                                    ),
-                                }
-                                _dtool_msgs.append(_pressure_msg)
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"\u26a0\ufe0f CTX CRITICAL — ~{_guard_tokens}/{_dtool_ctx} tokens. Coder prompted to finish."})
+                        _ctxp_ps = _DuoCtxPressureState(ctx_pressure_warned=_ctx_pressure_warned)
+                        try:
+                            async for _ev in _duo_ctx_pressure_check(
+                                ctx, _ctxp_ps,
+                                _dtool_msgs=_dtool_msgs, _dtool_ctx=_dtool_ctx,
+                                _coder_real_prompt_tokens=_coder_real_prompt_tokens,
+                                est_tokens=_est_tokens,
+                            ):
+                                yield _ev
+                        finally:
+                            _ctx_pressure_warned = _ctxp_ps.ctx_pressure_warned
                         # Check if ALL tool-calls in this round were rejected/errored
                         _round_tool_results = []
                         for _msg in reversed(_dtool_msgs):
@@ -6063,224 +6945,29 @@ async def run_code_duo(ctx):
                 _cs.reset_test_retries()
                 _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                 continue
-            _critic_task_ref = _subtask if _subtask else ctx.user_input
-            _content_label = "Code" if ctx.duo_config.coding_mode else "Answer"
-            _review_verb   = "Review the code." if ctx.duo_config.coding_mode else "Review the answer."
-            _critic_input = (
-                f"Task: {_critic_task_ref}\n\n"
-                f"{_content_label} (round {_di + 1}):\n{coder_out}\n\n"
-                f"{_review_verb}"
+            _critic_ps = _DuoCriticReviewState(
+                parts=_parts, verify_last_ok_serial=_verify_last_ok_serial,
+                critic_issues=critic_issues, final_verdict=final_verdict,
             )
-            ctx.exec_ctrl.transition(AgentState.CRITIC_REVIEW)
-            ctx.exec_ctrl.reset_stuck_detection()  # BUG-NO-RESET FIX
-
-            # Use tool-capable system prompt when tools are enabled
-            _effective_critic_sys = DUO_CRITIC_TOOLS_SYSTEM if _critic_tools_enabled else _duo_critic_sys
-
-            _critic_msgs = [
-                {"role": "system", "content": _effective_critic_sys},
-                {"role": "user",   "content": _critic_input},
-            ]
-
-            yield await ctx.emit({"type": "duo_critic", "model": critic_mdl, "round": _di + 1})
-            _parts, _t = [], time.time()
-
-            _critic_tc_read_s = float(ctx.settings.get("duo_llm_slow_timeout_s", 300))
-            _critic_tc_timeout = httpx.Timeout(connect=10.0, read=_critic_tc_read_s, write=10.0, pool=5.0)
-            from backend.llama_server_manager import manager as _lsm_c
-            _critic_port = await _lsm_c.ensure_loaded(critic_mdl, num_ctx=resolve_ctx(ctx.settings.get("duo_critic_ctx") or ctx.settings.get("duo_coder_ctx_normal"), critic_mdl, "critic"))
-
-            if _critic_tools_enabled:
-                # ── Critic Tool-Loop ─────────────────────────────────────
-                # Critic can read files and run tests before giving verdict.
-                # Max 3 rounds to keep VRAM pressure low on 8GB GPUs.
-                _critic_tc_msgs  = list(_critic_msgs)
-                _critic_tc_max   = 3
-                try:
-                    async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc:
-                      for _ctr in range(_critic_tc_max):
-                        if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
-                            break
-                        # Retry transient server errors (up to 3 attempts per tool round)
-                        for _critic_post_attempt in range(3):
-                            try:
-                                _c_gen_t0 = time.monotonic()  # GEN-TIME: critic POST duration
-                                _critic_tc_payload = {
-                                    "model": critic_mdl,
-                                    "messages": _critic_tc_msgs,
-                                    "tools": _CRITIC_VERIFY_TOOLS,
-                                    "stream": False,
-                                    "tool_choice": "auto",
-                                    "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
-                                    "top_p": _critic_profile.get("top_p", 0.95),
-                                    "top_k": _critic_profile.get("top_k", 20),
-                                    "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
-                                    "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
-                                    "max_tokens": _duo_critic_tok,
-                                }
-                                if _critic_profile.get("seed") is not None:
-                                    _critic_tc_payload["seed"] = int(_critic_profile["seed"])
-                                _cresp = await _chttpc.post(
-                                        f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
-                                 json=_critic_tc_payload
-                                        )
-                                if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
-                                    await _cresp.aread()
-                                    await asyncio.sleep(2.0)
-                                    continue
-                                break
-                            except httpx.ConnectError:
-                                if _critic_post_attempt < 2:
-                                    await asyncio.sleep(3.0)
-                                    continue
-                                raise
-                        if _cresp.status_code != 200:
-                            raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
-                        _cd = _cresp.json()
-                        _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
-                                 if "choices" in _cd else _cd.get("message", {}))
-                        _cusage = _cd.get("usage") or {}
-                        if _cusage.get("completion_tokens"):
-                            # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
-                            try:
-                                _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-                            except Exception:
-                                _cc_cached = 0
-                            yield await ctx.emit({"type": "usage_meta", "phase": "critic",
-                                "completion_tokens": int(_cusage["completion_tokens"]),
-                                "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
-                                "cached_tokens": _cc_cached,
-                                "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
-                        _ctc = _cmsg.get("tool_calls", [])
-                        if not _ctc:
-                            # No more tool calls — this is the final verdict
-                            _parts.append(_cmsg.get("content", "").strip())
-                            break
-                        # Execute tool calls, append results
-                        _critic_tc_msgs.append(_cmsg)
-                        for _ctc_call in _ctc:
-                            _cfn   = _ctc_call.get("function", {})
-                            _cname = _cfn.get("name", "")
-                            _cargs = _parse_tool_args(_cfn.get("arguments", {}))
-                            _cres  = await _run_inline_tool(
-                                _cname,
-                                _cargs,
-                                tool_mode="critic_verify",
-                                include_websearch=False,
-                                workspace_lock=_ws_str,  # CRITIC-LOCK (2026-09-13): was None -> reads/searches unconstrained
-                            )
-                            if _cname == "run_bash" and not _run_bash_failed(_cres):
-                                _verify_last_ok_serial = max(_verify_last_ok_serial, _verify_mutation_serial)
-                            _critic_tc_msgs.append({
-                                "role": "tool",
-                                "content": _cres,
-                                "name": _cname,
-                                "tool_call_id": _ctc_call.get("id", _cname),
-                            })
-                except Exception as _cte:
-                    _parts.append(json.dumps({"approved": False, "issues": [f"Critic-tool-error: {str(_cte)[:80]}"], "verdict": "tool_error"}))
-            else:
-                # ── Critic Plain Request ──────────────────────────────────
-                _critic_plain_payload = {
-                    "model": critic_mdl,
-                    "messages": _critic_msgs,
-                    "tools": [],
-                    "stream": False,
-                    "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
-                    "top_p": _critic_profile.get("top_p", 0.95),
-                    "top_k": _critic_profile.get("top_k", 20),
-                    "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
-                    "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
-                    "max_tokens": _duo_critic_tok,
-                }
-                if _critic_profile.get("seed") is not None:
-                    _critic_plain_payload["seed"] = int(_critic_profile["seed"])
-                # MIN-P-EXPLICIT (2026-09-20): see the coder payload — a
-                # declared min_p 0.0 must ship (API default is 0.05).
-                if "min_p" in _critic_profile:
-                    _critic_plain_payload["min_p"] = _critic_profile["min_p"]
-                if _critic_profile.get("cache_prompt"):
-                    _critic_plain_payload["cache_prompt"] = True
-                _critic_plain_payload = _apply_thinking_kwargs(
-                    _critic_plain_payload, _critic_profile, _critic_thinking, coder_tool_think=False
-                )
-                try:
-                    async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc_plain:
-                        for _critic_post_attempt in range(3):
-                            try:
-                                _c_gen_t0 = time.monotonic()  # GEN-TIME: Critic-POST-Dauer
-                                _cresp = await _chttpc_plain.post(
-                                    f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
-                                    json=_critic_plain_payload,
-                                )
-                                if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
-                                    await _cresp.aread()
-                                    await asyncio.sleep(2.0)
-                                    continue
-                                break
-                            except httpx.ConnectError:
-                                if _critic_post_attempt < 2:
-                                    await asyncio.sleep(3.0)
-                                    continue
-                                raise
-                        if _cresp.status_code != 200:
-                            raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
-                        _cd = _cresp.json()
-                        _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
-                                 if "choices" in _cd else _cd.get("message", {}))
-                        _cusage = _cd.get("usage") or {}
-                        if _cusage.get("completion_tokens"):
-                            # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
-                            try:
-                                _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-                            except Exception:
-                                _cc_cached = 0
-                            yield await ctx.emit({"type": "usage_meta", "phase": "critic",
-                                "completion_tokens": int(_cusage["completion_tokens"]),
-                                "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
-                                "cached_tokens": _cc_cached,
-                                "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
-                        _parts.append(_cmsg.get("content", "").strip())
-                except Exception as _cre:
-                    _err_d = {"approved": False, "issues": [f"Critic error: {str(_cre)[:80]}"], "verdict": "error"}
-                    _parts.append(json.dumps(_err_d))
-
-            _critic_raw = "".join(_parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
-
-            # TUNE-PARSER: 'approved=false issues=[P1;P2] verdict=OK'
-            _critic_verdict: dict = {}
-            if "approved=" in _critic_raw:
-                _critic_verdict = _parse_critic_tune(_critic_raw)
-            else:
-                try:
-                    jm = re.search(r"\{[\s\S]*?\}", _critic_raw)
-                    if jm: _critic_verdict = json.loads(jm.group())
-                except (json.JSONDecodeError, AttributeError):
-                    logger.debug("Critic JSON parse failed for: %.200s", _critic_raw)
-            if _critic_verdict.get("approved") is None:
-                _critic_verdict = {"approved": False, "issues": [_critic_raw[:300]], "verdict": "Parsing error"}
-
-            critic_issues  = _critic_verdict.get("issues", [])
-            final_verdict  = _critic_verdict.get("verdict", "")
-            _approved      = bool(_critic_verdict.get("approved", False))
-            _verify_gate_blocked = False
-            if _verify_mutation_serial > _verify_last_ok_serial:
-                _verify_gate_blocked = True
-                _verify_issue = "Verification missing: run_bash must pass after the latest file changes."
-                if _verify_issue not in critic_issues:
-                    critic_issues = list(critic_issues) + [_verify_issue]
-                final_verdict = "verification_required_after_write"
-                _approved = False
-                _critic_verdict["approved"] = False
-                _critic_verdict["issues"] = critic_issues
-                _critic_verdict["verdict"] = final_verdict
-
-            yield await ctx.emit({
-                "type":     "duo_critic_done",
-                "elapsed":  round(time.time() - _t, 1),
-                "verdict":  _critic_verdict,
-                "approved": _approved,
-            })
+            try:
+                async for _ev in _duo_critic_review(
+                    ctx, _critic_ps,
+                    coder_mdl=coder_mdl, coder_out=coder_out, critic_mdl=critic_mdl,
+                    _ws_str=_ws_str, _di=_di, _subtask=_subtask,
+                    _duo_critic_sys=_duo_critic_sys, _duo_critic_temp=_duo_critic_temp,
+                    _duo_critic_tok=_duo_critic_tok, _critic_profile=_critic_profile,
+                    _critic_thinking=_critic_thinking, _critic_tools_enabled=_critic_tools_enabled,
+                    _verify_mutation_serial=_verify_mutation_serial,
+                ):
+                    yield _ev
+            finally:
+                _parts = _critic_ps.parts
+                _t = _critic_ps.t
+                _verify_last_ok_serial = _critic_ps.verify_last_ok_serial
+                critic_issues = _critic_ps.critic_issues
+                final_verdict = _critic_ps.final_verdict
+                _approved = _critic_ps.approved
+                _verify_gate_blocked = _critic_ps.verify_gate_blocked
 
             _can_finish_round = (_approved or _is_last) and not _verify_gate_blocked
             if _can_finish_round:
@@ -6458,139 +7145,44 @@ async def run_code_duo(ctx):
             )
 
     except (GeneratorExit, asyncio.CancelledError):
-        _p_loop_items = _p_di = None
-        _p_done_tasks = _p_written = None
-        _p_explore_ctx = ""
-        _p_ws_str = ""
-        _p_n_items = 0
-        try: _p_loop_items = _loop_items
+        _park_ps = _DuoDisconnectParkState()
+        try: _park_ps.loop_items = _loop_items
         except (NameError, UnboundLocalError): pass
-        try: _p_di = _di
+        try: _park_ps.di = _di
         except (NameError, UnboundLocalError): pass
-        try: _p_done_tasks = _done_tasks
+        try: _park_ps.done_tasks = _done_tasks
         except (NameError, UnboundLocalError): pass
-        try: _p_written = _written_files
+        try: _park_ps.written_files = _written_files
         except (NameError, UnboundLocalError): pass
-        try: _p_explore_ctx = _explore_ctx
+        try: _park_ps.explore_ctx = _explore_ctx
         except (NameError, UnboundLocalError): pass
-        try: _p_ws_str = _ws_str
+        try: _park_ps.ws_str = _ws_str
         except (NameError, UnboundLocalError): pass
-        try: _p_n_items = _n_items
+        try: _park_ps.n_items = _n_items
         except (NameError, UnboundLocalError): pass
-        try:
-            _park_on_disconnect(
-                ctx=ctx,
-                loop_items=_p_loop_items,
-                di=_p_di,
-                done_tasks=_p_done_tasks,
-                written_files=_p_written,
-                explore_ctx=_p_explore_ctx,
-                ws_str=_p_ws_str,
-                n_items=_p_n_items,
-            )
-        except Exception as _park_err:
-            logger.warning("[DISCONNECT-PARK] Handler error: %s", _park_err)
+        _duo_disconnect_park(ctx, _park_ps)
         raise
 
     finally:
-        # DUO-SLOT UNPIN (2026-10-01): the run pinned its planner/coder slots
-        # so the vision-preprocessing load could not LRU-evict them; release
-        # the pin so normal eviction can reclaim VRAM after the run.
-        try:
-            from backend.llama_server_manager import manager as _lsm_unpin
-            for _m in (_planner_model, exec_mdl):
-                if _m:
-                    _lsm_unpin.unpin(_m)
-        except Exception:
-            pass
-        # CODER LIFETIME (2026-10-17, owner request): with
-        # duo_coder_after_run = "evict" the coder slot is released here - the
-        # next prompt can then load any model/mode without evicting something
-        # first. "keep" (default) leaves the slot warm; the idle TTL decides.
-        # This finally-block also runs on abort, so an aborted run releases the
-        # slot too.
-        try:
-            if str(ctx.settings.get("duo_coder_after_run", "keep")).strip().lower() == "evict" and exec_mdl:
-                from backend.llama_server_manager import manager as _lsm_car
-                await _lsm_car.evict(exec_mdl)
-                logger.info("[CODER-AFTER-RUN] coder slot evicted (duo_coder_after_run=evict)")
-        except (ImportError, AttributeError, TypeError, RuntimeError, OSError) as _car_err:
-            logger.debug("[CODER-AFTER-RUN] evict skipped: %s", _car_err)
-        # Cleanup Pause/Resume State
-        try:
-            _rid = _run_id_global
-            if _rid:
-                from infra.run_control import cleanup_pause
-                cleanup_pause(_rid)
-        except Exception as _err:
-            if isinstance(_err, (
-                GeneratorExit,
-                asyncio.CancelledError,
-                KeyboardInterrupt,
-                SystemExit,
-            )):
-                raise
-            logger.debug(
-                "[DUO] Suppressed error at cleanup_pause: %s",
-                _err, exc_info=True
-            )
-        _restore_ka = str(ctx.settings.get("smart_preload_keep_alive", "10m"))
-        if _duo_pinned:
-            asyncio.create_task(_unpin_duo_fn(ctx, _duo_pinned, _restore_ka))
-
-        if _project_state is not None and ctx.chat_id:
-            try:
-                from context.project_state import ProjectStateManager
-                if not _project_state_run_counted:
-                    _project_state.total_runs += 1
-                    _project_state_run_counted = True
-                _project_state.last_run_timestamp = datetime.now().isoformat()
-                if getattr(_project_state, 'last_run_success', None) is None:
-                    # SUCCESS-ORDER (2026-09-22): the normal completion path
-                    # sets last_run_success after this fallback ran — stamping
-                    # False here logged every completed run as failed first
-                    # (live: FireWork run ended 'completed' but the interim
-                    # save said success=False). Mirror the stop reason instead.
-                    _project_state.last_run_success = (getattr(ctx, "duo_stop_reason", "") == "completed")
-                ProjectStateManager().save(_project_state)
-                logger.info("[PROJECT] State gesichert in finally (Run #%d, success=%s)",
-                            _project_state.total_runs, _project_state.last_run_success)
-            except Exception as _save_err:
-                logger.warning("[PROJECT] Save in finally failed: %s", _save_err)
+        # CODE-MOTION (duo-runner-split): the cleanup body lives in
+        # _duo_final_cleanup now; the state object carries every runner
+        # local it reads. _planner_model is the only one bound inside the
+        # mega-try, so it is ladder-collected exactly like the park fields
+        # (the commit-2270557 NameError-ladder bug class).
+        _cleanup_ps = _DuoFinalCleanupState(
+            exec_mdl=exec_mdl,
+            _run_id_global=_run_id_global,
+            _duo_pinned=_duo_pinned,
+            _project_state=_project_state,
+            _project_state_run_counted=_project_state_run_counted,
+        )
+        try: _cleanup_ps._planner_model = _planner_model
+        except (NameError, UnboundLocalError): pass
+        await _duo_final_cleanup(ctx, _cleanup_ps)
 
     # ── P3: Final Test after all chunks ──────────────────────────
-    _final_test_fb = bool(ctx.duo_config.test_feedback_final)
-    if _final_test_fb and _cs.has_written_files and not ctx.aborted():
-        yield await ctx.emit({"type": "status", "content": "\U0001f9ea Final test run after all chunks..."})
-        try:
-            _final_test_result = await _run_test_suite(
-                workspace=_eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", "")),
-                timeout=120,
-                chat_id=ctx.chat_id or "",
-            )
-        except Exception as _fte:
-            _final_test_result = _TestResult(
-                success=False, language="unknown", command="",
-                failure_count=0, error_lines=[str(_fte)],
-                raw_output="", inject_msg=f"\u26a0\ufe0f Final test runner error: {_fte}"
-            )
-        yield await ctx.emit({
-            "type": "test_result",
-            "chunk": "final",
-            "total_chunks": _n_items,
-            "passed": _final_test_result.is_clean(),
-            "language": _final_test_result.language,
-            "failures": _final_test_result.failure_count,
-            "command": _final_test_result.command,
-        })
-        if _final_test_result.is_clean():
-            yield await ctx.emit({"type": "status", "content": f"\u2705 All tests passed ({_final_test_result.language})"})
-        else:
-            yield await ctx.emit({"type": "status",
-                "content": f"\u274c {_final_test_result.failure_count} test failures in the final run"})
-            _cs.completion_notes.append(
-                f"Final test: {_final_test_result.failure_count} failure(s) ({_final_test_result.language})"
-            )
+    async for _ev in _duo_final_test(ctx, state, _cs, _n_items, _eff_run_ws=_eff_run_ws):
+        yield _ev
 
     if _loop_detected:
         _written_list = sorted(_written_files or [])

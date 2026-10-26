@@ -71,6 +71,7 @@ SUITES = [
     ("schema_fit_paths",          "tests/test_schema_fit_paths.py",             60),
     ("wedge_ctx",                 "tests/test_wedge_ctx.py",                    60),
     ("wedge_ui_toggle",           "tests/test_wedge_ui_toggle.py",              60),
+    ("duo_split",                 "tests/test_duo_split.py",                    60),
     ("tool_descriptions",         "tests/test_tool_descriptions.py",            60),
     ("live_findings",             "tests/test_live_findings.py",                60),
     ("content_budget_tokens",     "tests/test_content_budget_tokens.py",        60),
