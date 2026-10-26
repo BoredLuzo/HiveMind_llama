@@ -2014,7 +2014,7 @@ async def _phase_pre_explore(ctx, state: dict):
                             )
                             yield await ctx.emit({
                                 "type": "status",
-                                "content": f"⚠️ Parallel Pre-Explore fehlgeschlagen ({str(_pxe)[:90]}) — fallback: sequenziell",
+                                "content": f"⚠️ Parallel pre-explore failed ({str(_pxe)[:90]}) — fallback: sequential",
                             })
 
                             import socket as _sock_fb

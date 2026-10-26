@@ -325,22 +325,33 @@ async def ollama_load(req: Request):
         model = data.get("model", "")
         keep_alive = data.get("keep_alive", "-1")
         if not model:
-            return JSONResponse({"error": "model fehlt"}, status_code=400)
+            return JSONResponse({"error": "model missing"}, status_code=400)
         # CTX-PARAM (2026-10-26, measurement finding): the load path sized
         # the server from _get_num_ctx ONLY (hardcoded table + settings
         # overrides) - a profile's num_ctx never reached llama-server and
         # neither did any caller value. Accept an explicit num_ctx like
         # /vram/estimate already does; absent = old behavior.
         _load_ctx = None
+        _ctx_src = "llama-server default"
         try:
             _load_ctx = int(data.get("num_ctx") or data.get("ctx") or 0) or None
         except (TypeError, ValueError):
             _load_ctx = None
+        if _load_ctx is not None:
+            _ctx_src = "request"
         if _load_ctx is None:
             _load_ctx = _get_num_ctx(model)
+            if _load_ctx is not None:
+                _ctx_src = "profile/settings"
+        if _load_ctx is None:
+            # neither a caller value nor a profile/settings override: the
+            # loader then leaves --ctx-size out and llama-server uses its own
+            # default. Report that number instead of null, so "the ctx used"
+            # is not a lie.
+            _load_ctx = 4096
         await _bk_load(model, keep_alive=keep_alive, num_ctx=_load_ctx)
         return {"ok": True, "model": model, "keep_alive": keep_alive,
-                "num_ctx": _load_ctx}
+                "num_ctx": _load_ctx, "ctx_source": _ctx_src}
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
@@ -351,7 +362,7 @@ async def ollama_unload(req: Request):
         data = await req.json()
         model = data.get("model", "")
         if not model:
-            return JSONResponse({"error": "model fehlt"}, status_code=400)
+            return JSONResponse({"error": "model missing"}, status_code=400)
         await _bk_evict(model)
         return {"ok": True, "model": model}
     except Exception as e:

@@ -248,7 +248,7 @@ different route.
 
 ### Partial compression (default first resort)
 
-`duo_partial_compression` (default on) adds a cache-friendly pass before any
+`duo_partial_compression` (default off) adds a cache-friendly pass before any
 full rewrite. A cut index splits the raw tail: everything before the cut is
 replaced by the summary, while the most recent messages (at least eight) stay
 byte-identical, targeting 60 percent or less of the pre-compression context.
@@ -331,8 +331,9 @@ whole write and edit family (`edit_file`, `patch_file`, `write_file`,
 `write_file_append`, `replace_lines`) on existing, never-seen files with the
 same `READ_REQUIRED` mechanics.
 
-A note on `patch_file`: it stays registered so old persisted sessions keep
-working, but it is no longer advertised to models. The model-facing toolset is
+A note on `patch_file`: the handler is still registered, but the dispatch
+rejects it as TOOL_NOT_FOUND. Every prompt and doc points at `edit_file`.
+Old persisted sessions therefore have to be re-run, not replayed, but it is no longer advertised to models. The model-facing toolset is
 `edit_file` (search/replace) plus `write_file`. An earlier, broader version of
 the guard also blocked `edit_file`, which produced unusable empty-diff errors
 on legitimate full-file rewrites; the current narrow scope does not reproduce

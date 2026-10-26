@@ -101,7 +101,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.4.8"
+HIVEMIND_VERSION = "1.4.9"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -630,6 +630,25 @@ async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: in
 
 
 @app.on_event("shutdown")
+async def _mcp_startup_refresh() -> None:
+    """Start the configured MCP servers once at boot (best effort).
+
+    Without this the tool list stayed empty until someone POSTed /mcp/reload,
+    so "change the settings, restart the engine" did nothing.
+    """
+    try:
+        from infra import mcp_client
+        if not mcp_client.enabled():
+            return
+        status = await mcp_client.refresh()
+        _logger.info("[MCP] startup: %s",
+                     ", ".join(f"{s['name']}={'ok' if s['ok'] else s['error'][:40]}"
+                               for s in status.get("servers") or []) or "no servers")
+    except (ImportError, OSError, ValueError, RuntimeError, KeyError,
+            TypeError, AttributeError) as exc:
+        _logger.info("[MCP] startup refresh skipped: %s", exc)
+
+
 async def _shutdown():
     """Clean shutdown: terminate all llama-server processes."""
     _logger.info("[Hivemind] Shutdown ─ terminating all llama-server processes…")
@@ -638,6 +657,14 @@ async def _shutdown():
         await _sm.shutdown()
     except Exception as _se:
         _logger.debug("[Hivemind] Manager-shutdown error: %s", _se)
+    try:
+        # H2: MCP children inherit nothing, so they must be closed here or
+        # they survive the engine and duplicate on the next start.
+        from infra import mcp_client as _mc
+        await _mc.close_all()
+        _logger.info("[Hivemind] MCP client: server processes closed")
+    except Exception as _mce:
+        _logger.debug("[Hivemind] MCP shutdown error: %s", _mce)
     if _force_kill_all:
         try:
             _fk = _force_kill_all()

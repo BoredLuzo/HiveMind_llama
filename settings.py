@@ -575,6 +575,8 @@ DEFAULT_SETTINGS = {
     # RESERVED (2026-10-21): config for MCP *clients* HiveMind may call
     # (e.g. an IDE exposing editor context). Nothing reads it yet; kept so
     # preset snapshots stay stable until the client lands.
+    # MCP client (beta): external stdio servers as tools. Off by default;
+    # phone runs stay blocked by the phone restriction gate.
     "mcp_servers":             [],
     # MCP client (beta): use external MCP servers over stdio. Off by
     # default; phone runs stay blocked by the phone restriction gate.

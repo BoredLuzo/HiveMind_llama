@@ -37,6 +37,7 @@ FAKE = r'''
 import json, sys, time
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "normal"
+MARKER = sys.argv[2] if len(sys.argv) > 2 else "none"
 
 def send(payload):
     sys.stdout.write(json.dumps(payload) + "\n")
@@ -82,7 +83,7 @@ for line in sys.stdin:
         args = params.get("arguments") or {}
         if name == "echo":
             send({"jsonrpc": "2.0", "id": rid, "result": {"content": [
-                {"type": "text", "text": "echo: " + str(args.get("text", ""))}]}})
+                {"type": "text", "text": "echo: " + MARKER + "|" + str(args.get("text", ""))}]}})
         elif name == "boom":
             send({"jsonrpc": "2.0", "id": rid, "result": {
                 "isError": True, "content": [{"type": "text", "text": "tool exploded"}]}})
@@ -98,12 +99,12 @@ for line in sys.stdin:
 '''
 
 
-def spec(name: str, mode: str = "normal") -> dict:
+def spec(name: str, mode: str = "normal", marker: str = "none") -> dict:
     d = Path(tempfile.mkdtemp(prefix="hm_mcp_"))
     script = d / f"server_{mode}.py"
     script.write_text(FAKE, encoding="utf-8")
     return {"name": name, "command": sys.executable,
-            "args": [str(script), mode], "enabled": True}
+            "args": [str(script), mode, marker], "enabled": True}
 
 
 def settings_with(*servers: dict, enabled: bool = True, timeout_s: float = 5.0) -> dict:
@@ -161,7 +162,7 @@ check("2d description is tagged", echo["function"]["description"].startswith("[m
 check("2e input schema is passed through",
       echo["function"]["parameters"]["properties"]["text"]["type"] == "string")
 
-check("3a call returns the text content", res["echo"] == "echo: hi", f"({res['echo']!r})")
+check("3a call returns the text content", res["echo"] == "echo: none|hi", f"({res['echo']!r})")
 check("3b isError becomes a tool error",
       res["boom"].startswith("[TOOL_ERROR: MCP_TOOL_ERROR]"), f"({res['boom'][:40]!r})")
 check("3c the error text survives", "tool exploded" in res["boom"])
@@ -299,6 +300,138 @@ check("11d the prefix is the sanitized server name",
       all(n.startswith("mcp_my_srv_") for n in names), f"({sorted(names)})")
 skipped = [s for e in st["servers"] for s in e.get("skipped", [])]
 check("11e the skip is reported in the status", len(skipped) == 4, f"({skipped})")
+
+
+
+# ── 12. B1/H6: Schema nur in Modes mit MCP-Recht ------------------------
+import tools.definitions as D  # noqa: E402
+
+_prev_enabled = MC.McpClient.__dict__["enabled"]
+_prev_defs = MC.tool_defs
+MC.McpClient.enabled = staticmethod(lambda settings=None: True)   # type: ignore[assignment]
+MC.tool_defs = lambda settings=None: [{"type": "function", "function": {
+    "name": "mcp_demo_echo", "description": "demo",
+    "parameters": {"type": "object", "properties": {}}}}]
+
+
+def _names_for(mode):
+    return [t["function"]["name"] for t in D._get_inline_tools(mode=mode)]
+
+
+check("12a a write/exec mode sees MCP tools", "mcp_demo_echo" in _names_for("duo_full"))
+check("12b mcp_agent sees them too", "mcp_demo_echo" in _names_for("mcp_agent"))
+check("12c a read-only mode does not", "mcp_demo_echo" not in _names_for("duo_readonly"))
+check("12d pre_explore does not", "mcp_demo_echo" not in _names_for("pre_explore"))
+check("12e the direct chat does not", "mcp_demo_echo" not in _names_for("direct"))
+
+out = asyncio.run(R._run_inline_tool("mcp_demo_echo", {}, tool_mode="duo_readonly"))
+check("12f a read-only run cannot CALL one either", "TOOL_NOT_ALLOWED" in out, f"({out[:60]!r})")
+
+MC.McpClient.enabled = _prev_enabled          # type: ignore[assignment]
+MC.tool_defs = _prev_defs                     # type: ignore[assignment]
+
+# ── 13. H4: Reload mit geaenderten args startet neu --------------------
+async def _reload_flow():
+    client = MC.McpClient()
+    await client.refresh(settings_with(spec("reload", "normal", "A")))
+    first = await client.call("mcp_reload_echo", {"text": "x"})
+    await client.refresh(settings_with(spec("reload", "normal", "B")))
+    second = await client.call("mcp_reload_echo", {"text": "x"})
+    await client.close_all()
+    return first, second
+
+
+first, second = asyncio.run(_reload_flow())
+check("13a the first config answers", first == "echo: A|x", f"({first!r})")
+check("13b a reload with new args restarts the server", second == "echo: B|x", f"({second!r})")
+
+# ── 14. M2: ein belegter Server killt den zweiten Call nicht ------------
+SLOW = r'''
+import json, sys, time
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "protocolVersion": "2024-11-05", "capabilities": {},
+            "serverInfo": {"name": "slow", "version": "0"}}}) + "\n")
+        sys.stdout.flush()
+    elif msg.get("method") == "tools/list":
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "tools": [{"name": "wait", "description": "slow",
+                       "inputSchema": {"type": "object", "properties": {}}}]}}) + "\n")
+        sys.stdout.flush()
+    elif msg.get("method") == "tools/call":
+        time.sleep(3)
+        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "content": [{"type": "text", "text": "done"}]}}) + "\n")
+        sys.stdout.flush()
+'''
+
+
+async def _busy_flow():
+    d = Path(tempfile.mkdtemp(prefix="hm_mcp_slow_"))
+    script = d / "slow.py"
+    script.write_text(SLOW, encoding="utf-8")
+    client = MC.McpClient()
+    conf = settings_with({"name": "slow", "command": sys.executable,
+                          "args": [str(script)], "enabled": True}, timeout_s=5.0)
+    await client.refresh(conf)
+    first = asyncio.create_task(client.call("mcp_slow_wait", {}, timeout=5.0))
+    await asyncio.sleep(0.2)
+    # the second call gets a shorter budget than the first needs, so the LOCK
+    # wait is what runs out - and that must not kill the server (M2)
+    second = await client.call("mcp_slow_wait", {}, timeout=0.5)
+    try:
+        await first
+    except (MC.McpError, asyncio.TimeoutError):
+        pass
+    await client.close_all()
+    return second
+
+
+second = asyncio.run(_busy_flow())
+check("14a a second call reports busy instead of dying", "busy" in second.lower(), f"({second[:70]!r})")
+
+# ── 15. M8/L4/L6/N3: Namen, Slots, Caches, Text ------------------------
+check("15a tool names stay within 64 characters",
+      len(MC._tool_name("s" * 40, "t" * 80)) <= 64,
+      f"({len(MC._tool_name('s' * 40, 't' * 80))})")
+check("15b disabled entries do not eat a slot",
+      len(MC.McpClient._specs({"mcp_servers": [
+          {"name": f"off{i}", "command": "x", "enabled": False} for i in range(8)
+      ] + [{"name": "on", "command": "x", "enabled": True}]})) == 1)
+check("15c duplicate server names are ignored",
+      len(MC.McpClient._specs({"mcp_servers": [
+          {"name": "dup", "command": "a"}, {"name": "dup", "command": "b"}]})) == 1)
+check("15d enabled accepts the string false",
+      MC.ServerSpec({"name": "x", "command": "y", "enabled": "false"}, 0).enabled is False)
+
+
+async def _cache_flow():
+    client = MC.McpClient()
+    await client.refresh(settings_with(spec("cache")))
+    had = len(client.tool_defs())
+    await client.close_all()
+    return had, client.tool_defs()
+
+
+had, after = asyncio.run(_cache_flow())
+check("15e close_all clears the cached tool definitions", had > 0 and after == [], f"({had} -> {len(after)})")
+
+# ── 16. Struktur-Pins fuer Shutdown, Approval, Quoting -----------------
+SRC_CLIENT = (ROOT / "infra" / "mcp_client.py").read_text(encoding="utf-8", errors="replace")
+SRC_SERVER = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+SRC_RUNNER = (ROOT / "tools" / "runner.py").read_text(encoding="utf-8", errors="replace")
+check("16a the shutdown hook closes MCP children",
+      "_mc.close_all()" in SRC_SERVER and "async def _shutdown" in SRC_SERVER)
+check("16b a startup refresh exists", "async def _mcp_startup_refresh" in SRC_SERVER)
+check("16c the tree kill is wired", "_kill_tree(proc)" in SRC_CLIENT and "taskkill" in SRC_CLIENT)
+check("16d cmd gets /d and quoted arguments", '"cmd", "/d", "/c"' in SRC_CLIENT)
+check("16e MCP calls pass the approval gate", "gated=True" in SRC_RUNNER)
+check("16f no path normalisation on the MCP payload", "_normalize_meta_paths(_mcp_result)" not in SRC_RUNNER)
+check("16g schemas are capped", "MAX_SCHEMA_CHARS" in SRC_CLIENT)
+check("16h the router reports running servers", '"running"' in
+      (ROOT / "routers" / "mcp.py").read_text(encoding="utf-8", errors="replace"))
 
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")

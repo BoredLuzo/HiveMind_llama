@@ -40,7 +40,7 @@ def _hf_cli() -> list[str] | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Decider-Checkpoint herunterladen (optional)")
+    ap = argparse.ArgumentParser(description="Download the decider checkpoint (optional)")
     ap.add_argument("--model", default=DEFAULT_MODEL, help=f"HF-Repo (Default: {DEFAULT_MODEL})")
     ap.add_argument("--dir", default="", help="Zielordner (Default: models/decider/gliner25-decide)")
     ap.add_argument("--dry-run", action="store_true", help="show only, download nothing")
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         import gliner2  # noqa: F401
-        print("gliner2: installiert")
+        print("gliner2: installed")
     except ImportError:
         print("gliner2: MISSING - run this after the download:")
         print("         pip install -r requirements-decider.txt")

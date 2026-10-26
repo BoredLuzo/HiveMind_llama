@@ -8,7 +8,7 @@ Status: beta. Off by default, stdio transport only.
 
 ## Enable it
 
-Settings (`Settings -> Advanced`, or `settings.json`):
+Edit `settings.json` (there is no MCP card in the UI yet):
 
 ```json
 {
@@ -38,17 +38,19 @@ Settings (`Settings -> Advanced`, or `settings.json`):
 | `mcp_servers[].args` | argument list, no shell interpretation |
 | `mcp_servers[].env` | extra environment variables for the child |
 | `mcp_servers[].cwd` | working directory for the child |
-| `mcp_servers[].enabled` | set `false` to keep an entry but skip it |
+| `mcp_servers[].enabled` | set `false` to keep an entry but skip it; the string `"false"` counts as off |
 
 After editing, `POST /mcp/reload` (or restart the engine). `GET /mcp/servers`
 shows what is configured, what is running and which tools came back.
 
 ## How a tool looks
 
-Every tool is named `mcp_<server>_<tool>`, sanitized to `[a-z0-9_]`, for example
-`mcp_files_read_file`. The description is prefixed with `[mcp:files]` and the
-server's `inputSchema` is passed through unchanged, so the model sees the real
-parameters.
+Every tool is named `mcp_<server>_<tool>`, sanitized to `[a-z0-9_]` and capped
+at 64 characters, for example `mcp_files_read_file`. The description is
+prefixed with `[mcp:files]` and the server's `inputSchema` is passed through, so
+the model sees the real parameters. Two caps keep a broken server from blowing
+up a request: a name longer than 64 characters is truncated, and a schema over
+8 kB is replaced by an empty one with a note.
 
 ## Behaviour and limits
 
@@ -88,4 +90,5 @@ Keep in mind:
 | `MCP_SERVER_DOWN` | the process exited or timed out; check `GET /mcp/servers` |
 | `MCP_DISABLED` | `mcp_client_enabled` is false |
 | `command not found` | the executable is not on `PATH`; use an absolute path |
+| `is busy with another call` | a second call arrived while the first is still running; the server is fine |
 | a server works in a terminal but not here | it probably needs a shell, an env var or a `cwd`; set `env` or `cwd` |

@@ -454,7 +454,7 @@ def build_chunk_context(
         else:
             _explore_rule = (
                 "CRITICAL RULE: The codebase analysis below contains SUMMARIES only — NOT full source code. "
-                "You MUST call read_file on ANY file you plan to edit BEFORE using edit_file or patch_file. "
+                "You MUST call read_file on ANY file you plan to edit BEFORE using edit_file or edit_file. "
                 "NEVER edit a file based on the summary alone — you will produce wrong code.\n\n"
             )
         _EXPLORE_CTX_CAP = explore_cap  # CTX-AWARE (2026-08-12)

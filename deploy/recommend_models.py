@@ -122,15 +122,15 @@ def collect(vram_gb: float, ram_gb: float) -> list[dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Start-Konfiguration fuer diese Maschine vorschlagen")
-    ap.add_argument("--json", action="store_true", help="JSON statt Bericht")
+    ap = argparse.ArgumentParser(description="propose a start configuration for this machine")
+    ap.add_argument("--json", action="store_true", help="JSON instead of a report")
     args = ap.parse_args(argv)
 
     vram = _vram_gb()
     ram = _total_ram_gb()
     rows = collect(vram, ram)
     if not rows:
-        print(f"keine Modelle gefunden ({MODELS_JSON}) - erst setup_models.bat laufen lassen")
+        print(f"no models found ({MODELS_JSON}) - run setup_models.bat first")
         return 1
 
     usable = [r for r in rows if r["score"] >= 2]
@@ -151,20 +151,20 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(rec, indent=1, ensure_ascii=False))
         return 0
 
-    print(f"erkannt: VRAM {vram:.1f} GB (frei) · RAM {ram:.1f} GB · {len(rows)} Modelle\n")
-    print(f"{'Modell':<46}{'GB':>6}{'MoE':>5}{'tok/s':>7}  Einschaetzung")
+    print(f"detected: VRAM {vram:.1f} GB (free) · RAM {ram:.1f} GB · {len(rows)} models\n")
+    print(f"{'model':<46}{'GB':>6}{'MoE':>5}{'tok/s':>7}  assessment")
     for r in rows[:14]:
         print(f"{r['tag'][:45]:<46}{r['gb']:>6.1f}{r['moe_cpu_experts']:>5}"
               f"{(('%.1f' % r['measured_tps']) if r['measured_tps'] else '-'):>7}  {r['verdict']}")
-    print("\nVorschlag fuer diese Maschine:")
+    print("\nProposal for this machine:")
     for role in ("direct", "judge", "duo_coder", "planner"):
-        print(f"  {role:<10} {rec[role] or '(kein passendes Modell gefunden)'}")
+        print(f"  {role:<10} {rec[role] or '(no matching model found)'}")
     _roles = [rec[r] for r in ("direct", "judge", "duo_coder", "planner")]
     if len(set(_roles)) == 1:
-        print("\nHinweis: nur ein Modell passt wirklich - der Coder profitiert meist von einem\n"
+        print("\nNote: only one model really fits - the coder usually benefits from a\n"
               "groesseren MoE mit CPU-Experten (RAM-Offload), auch wenn es langsamer laedt.")
-    print("\nSo setzen: UI -> Agents, oder per /settings/agent je Rolle.")
-    print("Gemessene tok/s stammen aus token_stats.json (eigene Runs) - nicht geraten.")
+    print("\nHow to set it: UI -> Agents, or POST /settings/agent per role.")
+    print("Measured tok/s come from token_stats.json (your own runs), not estimates.")
     return 0
 
 

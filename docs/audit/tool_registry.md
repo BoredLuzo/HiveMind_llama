@@ -1,6 +1,6 @@
 # Audit 2 — tool registry (2.3), parse errors (2.4), budget counters (2.5), aliases (2.6), approval list (2.7)
 
-Follow-up to `audit_tool_use.md`. This round is the response to the four open
+Follow-up to `tool_use.md`. This round is the response to the four open
 findings, with the numbers re-measured instead of estimated.
 
 ---

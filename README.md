@@ -8,9 +8,9 @@
 Local multi-agent coding assistant on top of llama.cpp. Runs on your own
 hardware, no cloud, no API keys, nothing leaves your machine.
 
-**Current release: 1.4.3 (2026-10-19)** - Windows installer and Linux script,
+**Current release: 1.4.9 (2026-10-26)** - Windows installer and Linux script,
 voice in and out, hardened tool layer. Download:
-[`HiveMind_v1.4.3_release.zip`](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)
+[`HiveMind_v1.4.9_release.zip`](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)
 | what changed: [CHANGELOG](CHANGELOG.md).
 
 Author: Luzo (BoredLuzo) | https://github.com/BoredLuzo
@@ -192,7 +192,7 @@ Mode-scoped toolset (`tools/definitions.py`):
 | Area | Tools |
 |------|-------|
 | Explore | `read_file`, `get_signatures`, `find_references`, `list_dir`, `find_files`, `search_code`, `subagent_research` |
-| Write | `write_file`, `write_file_append`, `edit_file`, `patch_file`, `replace_lines`, `edit_ast`, `undo_last` |
+| Write | `write_file`, `write_file_append`, `edit_file`, `replace_lines`, `edit_ast`, `undo_last` |
 | Run | `run_bash`, `run_python`, `install_package`, `start_background`, `get_background_output`, `stop_background` |
 | Test | `run_tests` (auto-detects pytest/npm/vitest/jest/cargo/go/maven/dotnet) |
 | Git | `git_status`, `git_commit` |

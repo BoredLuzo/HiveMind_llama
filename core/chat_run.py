@@ -1501,7 +1501,7 @@ async def run_stream(
             "  find_files(pattern, path?)  - glob search: '**/*.py', 'src/*.ts'\n"
             "  list_dir(path)              - list directory contents\n"
             "  search_code(pattern, path?) - regex search across code files\n"
-            "  patch_file(path, old_str, new_str) - surgical edit (preferred for modifications)\n"
+            "  edit_file(path, old_text, new_text) - surgical edit (preferred for modifications)\n"
             "  edit_file(path, edits)      - create new files OR modify existing ones\n"
             "  run_bash(cmd)               - shell command: tests, pip install, npm run, grep...\n"
             "  run_python(code)            - execute python snippet directly\n"
@@ -1509,9 +1509,9 @@ async def run_stream(
             "  git_commit(message)         - commit all changes with message\n\n"
             "Workflow:\n"
             "  1. Explore first (list_dir / find_files / read_file)\n"
-            "  2. Modify existing files with edit_file or patch_file\n"
+            "  2. Modify existing files with edit_file\n"
             "  3. After implementing, run tests (run_bash pytest / npm test)\n"
-            "  4. On failure: patch_file - test again\n"
+            "  4. On failure: re-read the region and edit_file again\n"
             "  Do not ask for confirmation - just act."
         )
         _tool_msgs = _make_messages(_state.pipeline, _tool_sys, user_input, effective_images, False, False)

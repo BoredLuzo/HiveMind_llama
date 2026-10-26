@@ -24,6 +24,8 @@ import json
 import logging
 import os
 import shutil
+import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -38,6 +40,8 @@ MAX_TOOLS_PER_SERVER = 64
 MAX_OUTPUT_CHARS = 200_000
 STDERR_KEEP = 4000
 MAX_LINE_BYTES = 8 * 1024 * 1024
+MAX_TOOL_NAME = 64
+MAX_SCHEMA_CHARS = 8000
 _NAME_OK = "abcdefghijklmnopqrstuvwxyz0123456789_"
 
 
@@ -54,6 +58,17 @@ def _setting(settings: dict | None, key: str, default):
     return default
 
 
+def _as_bool(value) -> bool:
+    """`"false"` is a string, and bool("false") is True - be explicit."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "0", "false", "no", "off", "nein")
+    return bool(value)
+
+
 def _sanitize(text: str, limit: int = 24) -> str:
     out = "".join(c if c in _NAME_OK else "_" for c in str(text).lower())
     out = "_".join(p for p in out.split("_") if p)
@@ -61,7 +76,13 @@ def _sanitize(text: str, limit: int = 24) -> str:
 
 
 def _tool_name(server: str, tool: str) -> str:
-    return f"mcp_{_sanitize(server, 20)}_{_sanitize(tool, 40)}"
+    """`mcp_<server>_<tool>`, never longer than 64 characters.
+
+    OpenAI-compatible function names are capped at 64; 4 + 20 + 1 + 40 was 65
+    and could make a provider reject the whole request.
+    """
+    name = f"mcp_{_sanitize(server, 20)}_{_sanitize(tool, 40)}"
+    return name[:MAX_TOOL_NAME]
 
 
 class ServerSpec:
@@ -77,7 +98,7 @@ class ServerSpec:
         env = raw.get("env")
         self.env = {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}
         self.cwd = str(raw.get("cwd") or "") or None
-        self.enabled = bool(raw.get("enabled", True))
+        self.enabled = _as_bool(raw.get("enabled", True))
 
     def argv(self) -> list[str]:
         if not self.command:
@@ -90,8 +111,24 @@ class ServerSpec:
             exe = found
         argv = [exe, *self.args]
         if sys.platform == "win32" and exe.lower().endswith((".cmd", ".bat")):
-            argv = ["cmd", "/c", *argv]
+            # M5: cmd parses its command line. An argument like
+            # https://x/?a=1&b=2 would split the command, and %VAR% would be
+            # expanded. Quote every argument that holds a metacharacter, escape
+            # the quote itself and always pass /d (no AutoRun).
+            _META = set('&|<>^%!"()')
+            args = []
+            for a in self.args:
+                if any(c in _META or c.isspace() for c in a):
+                    a = '"' + a.replace('"', '\\"') + '"'
+                args.append(a)
+            argv = ["cmd", "/d", "/c", exe, *args]
         return argv
+
+    def signature(self) -> tuple:
+        """What identifies a RUNNING process. A reload with another signature
+        restarts the server instead of keeping the old one (H4)."""
+        return (self.command, tuple(self.args),
+                tuple(sorted(self.env.items())), self.cwd)
 
     def describe(self) -> dict:
         return {"name": self.name, "command": self.command,
@@ -131,6 +168,12 @@ class ServerConn:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.spec.cwd or None,
                 env=env,
+                # POSIX: own process group so the whole tree can be signalled.
+                # Windows: no console window (the engine often runs under
+                # pythonw) and a tree kill via taskkill.
+                start_new_session=(sys.platform != "win32"),
+                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                               if sys.platform == "win32" else 0),
             )
         except (OSError, ValueError) as exc:
             raise McpError(f"could not start {self.spec.name}: {exc}") from exc
@@ -203,7 +246,14 @@ class ServerConn:
         if self.dead:
             raise McpError(self.last_error or f"{self.spec.name} is marked dead")
         limit = float(timeout or self.timeout_s)
-        async with self._lock:
+        try:
+            await asyncio.wait_for(self._lock.acquire(), timeout=limit)
+        except asyncio.TimeoutError:
+            # M2: the connection is busy with another call. Do NOT mark it dead
+            # (that would kill the other run's tool call as well).
+            raise McpError(f"{self.spec.name} is busy with another call "
+                           f"(waited {limit:.1f}s)") from None
+        try:
             proc = self._proc
             if proc is None or proc.stdout is None or proc.returncode is not None:
                 self._die(f"{self.spec.name} exited")
@@ -214,12 +264,14 @@ class ServerConn:
             try:
                 return await asyncio.wait_for(self._read_response(rid), timeout=limit)
             except asyncio.TimeoutError:
-                self._die(f"{self.spec.name} timed out after {limit:.0f}s")
+                self._die(f"{self.spec.name} timed out after {limit:.1f}s")
                 await self._kill()
-                raise McpError(f"{self.spec.name} timed out after {limit:.0f}s "
+                raise McpError(f"{self.spec.name} timed out after {limit:.1f}s "
                                f"({method})") from None
             except McpError:
                 raise
+        finally:
+            self._lock.release()
 
     async def _read_line(self) -> bytes | None:
         """One newline-terminated message, of ANY length.
@@ -239,6 +291,7 @@ class ServerConn:
             if len(self._buf) > MAX_LINE_BYTES:
                 self._die(f"{self.spec.name} sent a message over "
                           f"{MAX_LINE_BYTES // 1024} KiB")
+                await self._kill()
                 raise McpError(f"{self.spec.name} sent a message that is too long")
         line, _sep, self._buf = self._buf.partition(b"\n")
         return line
@@ -277,9 +330,11 @@ class ServerConn:
             return result if isinstance(result, dict) else {"value": result}
 
     # -- tools ---------------------------------------------------------
-    async def call_tool(self, tool: str, arguments: dict) -> str:
+    async def call_tool(self, tool: str, arguments: dict,
+                        timeout: float | None = None) -> str:
         result = await self.request("tools/call",
-                                    {"name": tool, "arguments": arguments or {}})
+                                    {"name": tool, "arguments": arguments or {}},
+                                    timeout=timeout)
         return _render_result(result)
 
     async def close(self) -> None:
@@ -297,10 +352,14 @@ class ServerConn:
                 proc.stdin.close()
         except (OSError, ValueError):
             pass
+        if self._drainer is not None:
+            self._drainer.cancel()
+            self._drainer = None
         if proc.returncode is None:
-            # terminate()/kill() are synchronous on the proactor loop; wrapping
-            # them in wait_for raised "NoneType can't be awaited" and left the
-            # child running.
+            # TREE-KILL (2026-10-26): npx, uvx and cmd /c start a grandchild.
+            # Terminating only the direct child left node/python running and
+            # holding the pipes, so a timeout leaked a process per call.
+            _kill_tree(proc)
             try:
                 proc.terminate()
             except (ProcessLookupError, OSError):
@@ -318,6 +377,22 @@ class ServerConn:
             await asyncio.wait_for(proc.wait(), timeout=3)
         except (asyncio.TimeoutError, ProcessLookupError, OSError):
             pass
+
+
+def _kill_tree(proc) -> None:
+    """Best effort: kill the whole process tree of the child."""
+    pid = getattr(proc, "pid", None)
+    if not pid:
+        return
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           capture_output=True, timeout=10,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except (OSError, subprocess.SubprocessError, ProcessLookupError):
+        pass
 
 
 def _render_result(result: dict) -> str:
@@ -348,6 +423,8 @@ class McpClient:
     """The configured servers, started on demand and cached."""
 
     def __init__(self) -> None:
+        self._lifecycle = asyncio.Lock()
+        self._server_errors: dict[str, str] = {}
         self._conns: dict[str, ServerConn] = {}
         self._defs: list[dict] | None = None
         self._names: dict[str, tuple[str, str]] = {}  # tool name -> (server, tool)
@@ -360,11 +437,22 @@ class McpClient:
         if not isinstance(raw, list):
             return []
         out: list[ServerSpec] = []
-        for i, entry in enumerate(raw[:MAX_SERVERS]):
-            if isinstance(entry, dict):
-                spec = ServerSpec(entry, i)
-                if spec.enabled:
-                    out.append(spec)
+        seen: set[str] = set()
+        for i, entry in enumerate(raw):
+            if not isinstance(entry, dict):
+                continue
+            spec = ServerSpec(entry, i)
+            if not spec.enabled:
+                continue  # disabled entries must not eat a slot (L4)
+            if spec.name in seen:
+                logger.info("[MCP] duplicate server name %s ignored", spec.name)
+                continue
+            if len(out) >= MAX_SERVERS:
+                logger.info("[MCP] more than %d servers configured, %s ignored",
+                            MAX_SERVERS, spec.name)
+                continue
+            seen.add(spec.name)
+            out.append(spec)
         return out
 
     @staticmethod
@@ -394,13 +482,16 @@ class McpClient:
     # -- lifecycle -----------------------------------------------------
     async def _conn(self, spec: ServerSpec, timeout_s: float) -> ServerConn:
         conn = self._conns.get(spec.name)
-        if conn is not None and not conn.dead:
-            # LOOP-GUARD (2026-10-26): the subprocess transport belongs to the
-            # loop that created it. A second loop (a test, a worker) would get
-            # "NoneType has no attribute send" on the first write, so a stale
-            # connection is dropped and rebuilt instead of used.
-            if conn.loop is asyncio.get_running_loop():
+        if conn is not None:
+            reuse = (not conn.dead
+                     and conn.loop is asyncio.get_running_loop()
+                     and conn.spec.signature() == spec.signature())
+            if reuse:
+                conn.timeout_s = timeout_s
                 return conn
+            # H4: command/args/env/cwd changed -> the old process is stale.
+            # M4: a dead connection must be reaped, not just replaced.
+            self._conns.pop(spec.name, None)
             await conn.close()
         conn = ServerConn(spec, timeout_s)
         self._conns[spec.name] = conn
@@ -409,6 +500,12 @@ class McpClient:
 
     async def refresh(self, settings: dict | None = None) -> dict:
         """Start every enabled server and (re)build the tool definitions."""
+        # M3: two overlapping refreshes (startup + a reload click) used to
+        # interleave their cache writes.
+        async with self._lifecycle:
+            return await self._refresh_locked(settings)
+
+    async def _refresh_locked(self, settings: dict | None = None) -> dict:
         settings = settings if settings is not None else _load()
         if not self.enabled(settings):
             await self.close_all()
@@ -438,8 +535,10 @@ class McpClient:
                 conn = await self._conn(spec, timeout_s)
             except McpError as exc:
                 entry["error"] = str(exc)
+                self._server_errors[spec.name] = str(exc)
                 status.append(entry)
                 continue
+            self._server_errors.pop(spec.name, None)
             entry["ok"] = True
             entry["tools"] = len(conn.tools)
             status.append(entry)
@@ -459,6 +558,9 @@ class McpClient:
         return {"enabled": True, "servers": status}
 
     async def close_all(self) -> None:
+        # L6: the caches described tools that no longer exist after a close.
+        self._defs = []
+        self._names = {}
         conns = list(self._conns.values())
         self._conns = {}
         for conn in conns:
@@ -477,11 +579,16 @@ class McpClient:
     def known(self, name: str) -> bool:
         return name in self._names
 
-    async def call(self, name: str, arguments: dict) -> str:
+    async def call(self, name: str, arguments: dict,
+                   timeout: float | None = None) -> str:
         target = self._names.get(name)
         if not target:
-            return (f"[TOOL_ERROR: MCP_UNKNOWN_TOOL]\nNo MCP tool named '{name}'. "
-                    f"Call mcp_reload (or reopen the page) after changing the "
+            hint = ""
+            if self._server_errors:
+                hint = " Server state: " + "; ".join(
+                    f"{k}: {v}" for k, v in list(self._server_errors.items())[:3])
+            return (f"[TOOL_ERROR: MCP_UNKNOWN_TOOL]\nNo MCP tool named '{name}'."
+                    f"{hint} Ask the user to POST /mcp/reload after changing the "
                     f"server list.")
         server, tool = target
         conn = self._conns.get(server)
@@ -490,7 +597,7 @@ class McpClient:
                     f"{': ' + conn.last_error if conn and conn.last_error else ''}. "
                     f"Fix the server config or disable it.")
         try:
-            return await conn.call_tool(tool, arguments)
+            return await conn.call_tool(tool, arguments, timeout=timeout)
         except McpError as exc:
             logger.info("[MCP] %s.%s failed: %s", server, tool, exc)
             return f"[TOOL_ERROR: MCP_CALL_FAILED]\n{exc}"
@@ -500,6 +607,13 @@ def _tool_def(name: str, server: str, tool: dict) -> dict:
     schema = tool.get("inputSchema")
     if not isinstance(schema, dict) or schema.get("type") != "object":
         schema = {"type": "object", "properties": {}}
+    # L8: a broken server can send a schema of megabytes; it would blow up the
+    # request. Keep 8k of JSON and drop the rest.
+    if len(json.dumps(schema, ensure_ascii=False)) > MAX_SCHEMA_CHARS:
+        logger.info("[MCP] schema of %s.%s is too large, truncated",
+                    server, tool.get("name"))
+        schema = {"type": "object", "properties": {},
+                  "description": "(schema too large, parameters omitted)"}
     desc = str(tool.get("description") or "").strip()
     if len(desc) > 400:
         desc = desc[:400].rstrip() + "..."

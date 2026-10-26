@@ -712,7 +712,7 @@ CONTEXT STRUCTURE (in your system prompt):
 WORKFLOW — follow this order:
 1. Review existing code snippets — they show what already exists
 2. If snippets are missing or insufficient for a file: call read_file BEFORE editing
-3. Implement the plan step using edit_file or patch_file (for targeted edits)
+3. Implement the plan step using edit_file or edit_file (for targeted edits)
 4. Verify with run_bash if the project has a test runner
 
 RULES:

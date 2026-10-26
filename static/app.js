@@ -1469,9 +1469,9 @@ async function _flushQueuedSettings() {
       // older tab's patch - the user must know the save did NOT take.
       if (_rj && Array.isArray(_rj.stripped) && _rj.stripped.length) {
         S.settingsRev = parseInt(_rj.settings_rev, 10) || S.settingsRev;
-        var _msg = 'Veralteter Tab-Zustand: ' + _rj.stripped.join(', ')
-          + ' wurde(n) NICHT gespeichert (woanders neuer gesetzt). '
-          + 'Bitte Seite neu laden (F5) und erneut speichern.';
+        var _msg = 'Stale tab state: ' + _rj.stripped.join(', ')
+          + ' was NOT saved (a newer value was set elsewhere). '
+          + 'Reload the page (F5) and save again.';
         if (window._showErrorToast) window._showErrorToast(_msg);
         else alert(_msg);
       }

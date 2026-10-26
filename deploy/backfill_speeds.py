@@ -113,7 +113,7 @@ def write_speeds(samples: dict[str, list[float]], stats_path: Path = STATS) -> d
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Median-Decodierrate je Modell aus den Logs")
+    ap = argparse.ArgumentParser(description="median decode rate per model from the logs")
     ap.add_argument("--dry-run", action="store_true", help="show only, write nothing")
     ap.add_argument("--log-dir", default=str(LOG_DIR))
     ap.add_argument("--stats", default=str(STATS))
