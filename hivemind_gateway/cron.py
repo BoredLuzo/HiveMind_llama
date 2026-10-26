@@ -82,8 +82,16 @@ def next_fire_ts(job: dict, now: float) -> float | None:
     if kind == "at":
         import datetime as _dt
         hh, mm = str(job.get("at_hm") or "00:00").split(":")[:2]
-        target = _dt.datetime.now().replace(hour=int(hh), minute=int(mm),
-                                            second=0, microsecond=0)
+        # PURE-FIX (2026-10-26): the date came from datetime.now(), so the
+        # function was not a function of (job, now) - it only produced the
+        # right answer while `now` happened to be today. Firing a job whose
+        # slot lies tomorrow re-computed the SAME slot (next_ts did not
+        # advance, the daily job went dead) and the cron test flipped between
+        # green and red depending on the hour it ran. Base the target on
+        # `now` instead: same result in production, deterministic in tests.
+        base = _dt.datetime.fromtimestamp(float(now))
+        target = base.replace(hour=int(hh), minute=int(mm),
+                              second=0, microsecond=0)
         ts = target.timestamp()
         if ts <= now:
             ts += 86400
