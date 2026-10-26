@@ -563,7 +563,7 @@ async def run_direct(ctx):
                 _mutate_chat_context(ctx.chat_id, _persist_direct_session)
             except Exception as _persist_exc:
                 _direct_log.warning(
-                    "[Direct] Session-Persistenz fehlgeschlagen (chat=%s): %s",
+                    "[Direct] session persist failed (chat=%s): %s",
                     ctx.chat_id, _persist_exc,
                 )
         _direct_stop_reason = "aborted" if ctx.aborted() else "completed"

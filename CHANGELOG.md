@@ -1,4 +1,39 @@
-## [Unreleased]
+## [1.4.9] - 2026-10-26
+
+### English only
+
+- Tool and installer output is English now: the git tools (`git commit failed`
+  instead of `git commit fehlgeschlagen`), the `/vram`, `/git` and `/chats`
+  errors, the UI's stale-tab notice, the MCP shell prefix and empty result,
+  the decider installer and the speed backfill help. Comments, docstrings and
+  the German intent phrases in `routing/agent_intent.py` stay: those are
+  behaviour, not text.
+
+### Reliability
+
+- `next_fire_ts` is a function of `(job, now)` again. The `at` branch took the
+  calendar date from `datetime.now()` and only compared the timestamp against
+  `now`, so firing a daily job whose slot lies tomorrow re-computed the same
+  slot: the job was dead, and the cron test flipped between green and red
+  depending on the hour it ran.
+- The model manager's `asyncio.Lock` is back. It had been deleted in the
+  working tree while 16 call sites still used it, so every load, evict and
+  health call would have died with `AttributeError` and no suite noticed.
+
+### Tests and housekeeping
+
+- Twelve suites that never ran are registered now. Four of them got a real
+  runner: `chat_search`, `compression_plan_survival`, `smoke_harness` and
+  `vision_gate` executed nothing under `python tests/x.py` and reported
+  success. `test_steer_images` pinned the retired `[USER STEER]` tag.
+- `test_v131_hardening` is gone: it pinned version 1.3.2 and a guard form that
+  has been widened since.
+- `.gitignore` covers scratch scripts, zips, `dist/`, SSE dumps and patch
+  leftovers; the tracked underscore modules are re-included.
+- The ten engineering audits moved to `docs/audit/` with an index, and the
+  seven superseded `RELEASE_NOTES_*.md` files left the tree. Neither is in the
+  release zip.
+
 
 ### Git integration
 
@@ -101,7 +136,7 @@
   render path.
 
 
-## [1.4.8] - 2026-10-22
+## [1.4.8] - 2026-10-25
 
 ### The EDIT→TEST→FIX loop, densified (2026-10-23)
 
@@ -271,6 +306,12 @@
   "stuck in generation" hang); dead voiceEnableDefaults /
   updateComposerToolStatus calls removed.
 
+
+### Telegram
+
+- `/status` shows the engine's active run, so a run started in the browser is
+  visible on the phone.
+- The phone sees WHAT the routing decider decided, not only that it ran.
 
 ## [1.4.7] - 2026-10-21
 
@@ -1726,7 +1767,7 @@ UI polish and streaming fix.
 ## [1.1.4] - 2026-09-13
 
 Tools deep audit: 14 fixes across the tool loop, file ops and external
-tools. Full findings ledger: docs/tools-audit.md.
+tools. Full findings ledger: docs/audit/tool_registry.md.
 
 ### Verify chain (was effectively dead)
 

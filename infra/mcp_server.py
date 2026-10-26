@@ -908,7 +908,7 @@ async def tool_run_python(code: str, timeout: int = 15) -> str:
         result = _decode(out)
         if err.strip():
             result += f"\n[stderr]:\n{_decode(err)}"
-        return result.strip() or "(kein Output)"
+        return result.strip() or "(no output)"
     except asyncio.TimeoutError:
         return _tool_error_response(
             "RUN_PYTHON_TIMEOUT",

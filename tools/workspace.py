@@ -74,7 +74,7 @@ class WorkspaceTransaction:
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(content, encoding="utf-8")
         except Exception as _e:
-            return False, f"Wiederherstellung fehlgeschlagen: {_e}"
+            return False, f"Restore failed: {_e}"
         return True, str(p)
 
     def commit(self):

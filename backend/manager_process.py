@@ -119,7 +119,7 @@ class LlamaProcessMixin:
                 else:
                     logger.warning(
                         f"Port {slot.port} hat keine llama-API — "
-                        f"verwerfe stale Slot fuer {model}"
+                        f"discarding stale slot for {model}"
                     )
                     slot.model = None
                     slot._orphan_port = None

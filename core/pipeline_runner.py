@@ -759,7 +759,7 @@ async def run_pipeline(ctx):
                     _mutate_chat_context(ctx.chat_id, _persist_pipeline_session)
                 except (OSError, ValueError) as _persist_exc:
                     _logging.getLogger("hivemind.pipeline").warning(
-                        "[Pipeline] Session-Persistenz fehlgeschlagen (chat=%s): %s",
+                        "[Pipeline] session persist failed (chat=%s): %s",
                         ctx.chat_id, _persist_exc,
                     )
 

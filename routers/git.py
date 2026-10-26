@@ -557,7 +557,7 @@ async def git_checkout_ep(request: Request):
     ws = _resolve_ws(await _ws_from_body(request))
     target = str(data.get("target", ""))[:120]
     if not target:
-        return {"ok": False, "error": "target fehlt"}
+        return {"ok": False, "error": "target missing"}
     result = await _state.exec_git_checkout(ws, target=target)
     return {"ok": "\u2705" in result, "message": result}
 

@@ -39,7 +39,7 @@ async def abort_stream(req: Request):
     silent = params.get("silent", "false").lower() == "true"
 
     if not chat_id:
-        return JSONResponse({"error": "chat_id fehlt"}, status_code=400)
+        return JSONResponse({"error": "chat_id missing"}, status_code=400)
 
     ev = await _get_abort_event(chat_id)
     ev.set()

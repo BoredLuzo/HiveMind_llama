@@ -22,7 +22,7 @@ speed, and a hardening/simplification pass.
   false replans and stalls.
 - The post-explore briefing teaches the real edit_file contract
   (exact old_text/new_text) instead of a marker format the handler
-  rejects; stale references to the removed patch_file tool are gone.
+  rejects; the prompts now point at edit_file for changes.
 - Verification honesty: run_bash counts as verification only with the
   server's genuine `[exit code: 0]` marker — keyword echoing no longer
   fools the gate.
@@ -36,7 +36,8 @@ speed, and a hardening/simplification pass.
 ## Measured coder performance (+57% prefill, live-measured)
 - The hermes 35B coder runs without draft-mtp and with eager loading
   (`--load-mode none`): prefill 78.5 → 123.3 t/s, decode unchanged.
-  Context 100k costs nothing measurable; moe 35 stays optimal.
+  Context 100k costs nothing measurable (retracted in 1.4.9: the runs were
+  sized at 4096, re-measurement pending); moe 35 stays optimal.
 - `llama_mlock` now actually reaches the load path (was a no-op since
   introduction); `HIVEMIND_MTP_SPEC=0` is honored by every code path.
 - New guard: speculative decoding + eager load = Vulkan OOM

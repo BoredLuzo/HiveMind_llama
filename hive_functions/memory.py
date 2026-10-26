@@ -379,7 +379,7 @@ class Memory:
     def as_context_string(self) -> str:
         if not self._store:
             return ''
-        lines = ['[Gespeicherte Informationen]']
+        lines = ['[Stored information]']
         for key, data in self._store.items():
             lines.append('  ' + key + ': ' + data.get('value', ''))
         return '\n'.join(lines)[:2000]

@@ -719,11 +719,11 @@ class Gateway:
                              reply_to_message_id=p.message_id)
         elif name == "lock":
             await self.reply(p.chat_id,
-                             "/lock kommt mit WP6 (Kill-Switch).",
+                             "/lock ships with WP6 (kill switch).",
                              reply_to_message_id=p.message_id)
         else:
             await self.reply(p.chat_id,
-                             f"/{name} ist nicht in diesem Build.",
+                             f"/{name} is not in this build.",
                              reply_to_message_id=p.message_id)
 
     async def _owner_bridge_call(self, p: gw_auth.ParsedUpdate, coro) -> None:
