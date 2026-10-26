@@ -494,8 +494,19 @@ async def create_chat(req: Request):
     }
     # WORKSPACE PER CHAT (2026-10-03): stored with the chat so a reload
     # cannot silently fall back to the global workspace (audit finding).
+    # WS-GUARD (2026-10-25 audit): a dead path is not stored anymore (it was
+    # silently skipped by the run resolver). Dropped with a log instead of a
+    # 400 — the autosave caller must not lose the MESSAGES over the
+    # workspace field (PUT /{chat_id} keeps its strict 400 contract).
     if data.get("workspace"):
-        chat["workspace"] = str(data["workspace"])
+        _ws_raw = str(data["workspace"]).strip()
+        if _ws_raw and not Path(_ws_raw).exists():
+            logger.warning(
+                "[CHATS-GUARD] workspace '%s' does not exist - dropped "
+                "(chat falls back to the global workspace)", _ws_raw[:120],
+            )
+        else:
+            chat["workspace"] = _ws_raw
     _msgs = chat["messages"]
     _last = _msgs[-1].get("content", "") if _msgs else ""
     chat["_msg_count"] = _user_msg_count(_msgs)
@@ -537,8 +548,16 @@ async def persist_chat(req: Request):
                     chat["messages"] = msgs
                     if data.get("title"):
                         chat["title"] = data["title"]
+                    # WS-GUARD (2026-10-25 audit): dead paths are dropped
+                    # (logged), never stored - see create_chat.
                     if data.get("workspace"):
-                        chat["workspace"] = str(data["workspace"])
+                        _ws_raw = str(data["workspace"]).strip()
+                        if _ws_raw and not Path(_ws_raw).exists():
+                            logger.warning(
+                                "[CHATS-GUARD] persist: workspace '%s' does "
+                                "not exist - dropped", _ws_raw[:120])
+                        else:
+                            chat["workspace"] = _ws_raw
                     chat["updated_at"] = now
                     chat["_msg_count"] = _user_msg_count(msgs)
                     chat["_tokens"] = _chat_tokens(msgs)
@@ -566,7 +585,13 @@ async def persist_chat(req: Request):
         "messages": msgs,
     }
     if data.get("workspace"):
-        chat["workspace"] = str(data["workspace"])
+        _ws_raw = str(data["workspace"]).strip()
+        if _ws_raw and not Path(_ws_raw).exists():
+            logger.warning(
+                "[CHATS-GUARD] persist: workspace '%s' does not exist - dropped",
+                _ws_raw[:120])
+        else:
+            chat["workspace"] = _ws_raw
     _last = msgs[-1].get("content", "") if msgs else ""
     chat["_msg_count"] = _user_msg_count(msgs)
     chat["_tokens"] = _chat_tokens(msgs)

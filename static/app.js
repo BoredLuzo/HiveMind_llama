@@ -11597,7 +11597,9 @@ async function persistCurrentChat(silent) {
       // Update existing — do not overwrite the title (preserve user-named titles)
       var _putRes = await fetch('/chats/' + S.currentChatId, {
         method: 'PUT', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({messages: S.currentChatMessages, workspace: S.workspace || '', base_rev: S.currentRev || 0})
+        // CHAT-WS-PRESERVE: keep the chat's own workspace (global setting
+        // must not re-point an existing chat's run chain).
+        body: JSON.stringify({messages: S.currentChatMessages, workspace: S.currentChatWorkspace || S.workspace || '', base_rev: S.currentRev || 0})
       });
       if (_putRes.status === 409) {
         // SERVER WINS (2026-10-03): adopt the saved messages, keep only
@@ -11725,6 +11727,10 @@ async function loadChat(chatId) {
     // (sonst das globale Setting) — Anzeige nur, das Setting bleibt unveraendert.
     var _wsField = document.getElementById('workspace-input');
     if (_wsField) _wsField.value = (chat.workspace || S.workspace || '');
+    // CHAT-WS-PRESERVE (2026-10-25 audit): remember the chat's OWN workspace;
+    // autosave (PUT /chats, pagehide beacon) used to rewrite chat.workspace
+    // with the GLOBAL setting, silently re-pointing the chat's run chain.
+    S.currentChatWorkspace = String(chat.workspace || '');
 
     // Restore chat DOM from saved messages
     _cpReset();  // PANEL-SCOPE (2026-10-03): snapshots must not merge across chats
@@ -13179,6 +13185,18 @@ function syncGitToggles() {
   updateGitIntegrationUI();
 }
 
+// GIT-WS-SOURCE (2026-10-25 audit): the git panel must act on the project
+// the user is LOOKING AT. The workspace field holds the loaded chat's
+// workspace (loadChat fills it display-only); the git calls used to send the
+// global settings.workspace instead — with a per-chat workspace the panel
+// showed project X while validate/branches/stash/reset operated on the
+// default repo (hard-reset-on-the-wrong-repo risk). WYSIWYG: read the field.
+function _gitWs() {
+  var el = document.getElementById('workspace-input');
+  var v = el ? String(el.value || '').trim() : '';
+  return v || S.workspace || '';
+}
+
 async function testGitConfig() {
   var btn = document.getElementById('git-test-btn');
   var result = document.getElementById('git-test-result');
@@ -13189,7 +13207,7 @@ async function testGitConfig() {
     var res = await fetch('/git/validate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ workspace: S.workspace || '' })
+      body: JSON.stringify({ workspace: _gitWs() })
     });
     var data = await res.json();
     // GIT-TRANSPARENCY (2026-10-25): remote_state is machine-readable -
@@ -13236,7 +13254,11 @@ function updateAgentGitLine() {
     el.innerHTML = '⚠ repo missing or token cannot see it - Create repo / check token';
     el.style.color = '#e0a030';
   } else if (r.state === 'token_invalid' || r.state === 'no_access') {
-    el.innerHTML = '✗ token problem: ' + (r.msg || r.state);
+    // TEXTNODE FIX (2026-10-25 audit): r.msg embeds httpx exception text
+    // (user's own repo URL) - build the message part as a text node instead
+    // of innerHTML (self-XSS only, but still markup injection).
+    el.textContent = '';
+    el.appendChild(document.createTextNode('\u2717 token problem: ' + (r.msg || r.state)));
     el.style.color = 'var(--red)';
   } else {
     el.innerHTML = '• ' + (r.msg || r.state || 'state unknown');
@@ -13245,7 +13267,11 @@ function updateAgentGitLine() {
 }
 
 function jumpToGitConfig() {
-  var tab = document.querySelector('.tab[data-p="config"]');
+  // TAB-SELECTOR FIX (2026-10-25 audit): the tab is data-p="configs"
+  // (index.html) — the old '.tab[data-p="config"]' matched nothing, so the
+  // Agents-tab "Configure →" link was a silent no-op (no tab switch, and
+  // scrollIntoView on a hidden card).
+  var tab = document.querySelector('.tab[data-p="configs"]');
   if (tab) tab.click();
   setTimeout(function() {
     var card = document.getElementById('git-cfg-card');
@@ -13266,7 +13292,7 @@ async function initGitRepo() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        workspace: S.workspace || '',
+        workspace: _gitWs(),
         clone_url: S.gitRepoUrl || '',
         username: S.gitUsername || '',
         email: '',
@@ -13275,6 +13301,18 @@ async function initGitRepo() {
     });
     var data = await res.json();
     if (data.ok) {
+      // GIT-LINE-REFRESH (2026-10-25 audit): a successful Create repo must
+      // update the Agents-tab git line — it kept showing the stale
+      // "repo missing or token cannot see it" from the last Test until a
+      // manual re-test.
+      S._gitRemote = {
+        state: data.github_created ? 'ok' : (S._gitRemote ? S._gitRemote.state : ''),
+        msg: data.github_msg || (S._gitRemote ? S._gitRemote.msg : ''),
+        hint: S._gitRemote ? S._gitRemote.hint : '',
+        valid: !!data.repo_valid,
+        branch: data.branch || (S._gitRemote ? S._gitRemote.branch : '')
+      };
+      updateAgentGitLine();
       if (data.already_existed) {
         if (statusEl) { statusEl.textContent = '\u2713 Repo already exists (branch: ' + (data.branch || '?') + ')'; statusEl.style.color = 'var(--green)'; }
       } else if (data.cloned) {
@@ -13307,7 +13345,7 @@ async function gitStash(action) {
     var res = await fetch('/git/stash', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({workspace: S.workspace || '', action: action})
+      body: JSON.stringify({workspace: _gitWs(), action: action})
     });
     var data = await res.json();
     if (statusEl) { statusEl.textContent = data.message || 'OK'; statusEl.style.color = data.ok ? 'var(--green)' : 'var(--red)'; }
@@ -13324,7 +13362,7 @@ async function gitReset(hard) {
     var res = await fetch('/git/reset', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({workspace: S.workspace || '', target: 'HEAD', hard: hard})
+      body: JSON.stringify({workspace: _gitWs(), target: 'HEAD', hard: hard})
     });
     var data = await res.json();
     if (statusEl) { statusEl.textContent = data.message || 'OK'; statusEl.style.color = data.ok ? 'var(--green)' : 'var(--red)'; }
@@ -13462,7 +13500,7 @@ async function loadGitConfig(s) {
   updateGitIntegrationUI();
   // load the branch list from the server (for the dropdown in the duo panel)
   try {
-    var brRes = await (await fetch('/git/branches?workspace=' + encodeURIComponent(S.workspace || ''))).json();
+    var brRes = await (await fetch('/git/branches?workspace=' + encodeURIComponent(_gitWs()))).json();
     if (brRes.branches && brRes.branches.length && brSel) {
       brSel.innerHTML = '';
       brRes.branches.forEach(function(b) {

@@ -22,9 +22,27 @@ def _workspace() -> str:
     return _ws
 
 
+def _resolve_ws_param(ws_param: str) -> tuple[str | None, str | None]:
+    """WS-PARAM (2026-10-25 audit): /skills listed the DEFAULT workspace's
+    .hivemind/skills even while the active chat ran in another project.
+    An explicit workspace must exist (same contract as the /git endpoints);
+    empty/absent keeps the default resolution."""
+    cand = str(ws_param or "").strip()
+    if not cand:
+        return None, None
+    from pathlib import Path as _P
+    if not _P(cand).is_dir():
+        return None, f"workspace does not exist on this machine: {cand}"
+    return cand, None
+
+
 @router.get("")
-async def list_skills():
-    ws = _workspace()
+async def list_skills(workspace: str = ""):
+    ws, err = _resolve_ws_param(workspace)
+    if err:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": err}, status_code=400)
+    ws = ws or _workspace()
     skills = load_skills(ws, include_disabled=True)
     return {"workspace": ws, "skills": [
         {
@@ -49,7 +67,11 @@ async def toggle_skill(req: Request):
     enabled = bool(body.get("enabled", True))
     if not name:
         return {"ok": False, "reason": "name required"}
-    ws = _workspace()
+    ws, err = _resolve_ws_param(body.get("workspace"))
+    if err:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    ws = ws or _workspace()
     skills = load_skills(ws, include_disabled=True)
     target = next((s for s in skills if s["name"] == name), None)
     if target is None:

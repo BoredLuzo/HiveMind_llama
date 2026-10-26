@@ -271,6 +271,19 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
     # requires CONFIRMED health (_state["ready"]). A running-but-not-ready
     # sidecar is waited on OUTSIDE the lock - _wait_healthy polls up to the
     # remaining start budget and stop()/synthesize share this lock.
+    # EXTERNAL-SIDECAR (env URL) first and LOCK-FREE (2026-10-25 audit): the
+    # check used to run inside the fresh-start lock — with a dead external
+    # sidecar every _start held the engine lock for up to 20 s of /health
+    # polling and stop() starved on it (the same contention 9b067c9 fixed
+    # for the pending path). The env is immutable at runtime; nothing here
+    # needs the lock.
+    env_url = (os.environ.get("HIVEMIND_TTS_URL") or "").strip()
+    if env_url:
+        url = env_url.rstrip("/")
+        if _wait_healthy(url, 20.0, require_proc=False):
+            _state["last_used"] = time.time()
+            return url
+        raise TtsError("TTS_FAILED", f"HIVEMIND_TTS_URL {url} is not answering /health")
     _pending_url, _pending_budget = None, 0.0
     with _lock:
         if is_running():
@@ -295,16 +308,17 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
             stop(force=True)
         # process died while waiting - fall through to a fresh start
     with _lock:
-        # An explicit URL means the sidecar is managed elsewhere (tests, a manual
-        # `uvx pocket-tts serve`, or a future shared instance).
-        env_url = (os.environ.get("HIVEMIND_TTS_URL") or "").strip()
-        if env_url:
-            url = env_url.rstrip("/")
-            if _wait_healthy(url, 20.0, require_proc=False):
-                _state["last_used"] = time.time()
-                return url
-            raise TtsError("TTS_FAILED", f"HIVEMIND_TTS_URL {url} is not answering /health")
-        if _state.get("failures", 0) >= 3:
+        # FAILURE-BUDGET DECAY (2026-10-25 audit): the 3-strikes counter had
+        # no reset path short of a process restart - three slow/hung startups
+        # (cold disk, missing HF token) wedged TTS permanently, even after
+        # the user fixed the cause. Failures older than 10 minutes no longer
+        # count; a healthy start still clears the budget.
+        _fails = int(_state.get("failures", 0))
+        _fails_at = float(_state.get("failures_at") or 0.0)
+        if _fails >= 3 and _fails_at and (time.time() - _fails_at) > 600.0:
+            _fails = 0
+            _state["failures"] = 0
+        if _fails >= 3:
             raise TtsError("TTS_FAILED",
                            "the TTS engine failed to start three times - see logs/")
         uvx = _uvx()
@@ -314,12 +328,18 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
                "--host", "127.0.0.1", "--port", str(port),
                "--default-voice", voice]
         log_path = Path(__file__).resolve().parent.parent / "logs" / "pocket_tts.log"
+        log = None
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log = open(log_path, "a", encoding="utf-8")
             proc = subprocess.Popen(cmd, stdout=log, stderr=log,
                                     stdin=subprocess.DEVNULL)
         except OSError as exc:
+            if log is not None:
+                try:
+                    log.close()
+                except OSError:
+                    pass
             raise TtsError("TTS_FAILED", f"could not start uvx: {exc}") from exc
         _state["log"] = log
         _state.update({"proc": proc, "port": port, "voice": voice,
@@ -329,6 +349,7 @@ def _start(settings: dict | None = None, voice: str = "") -> str:
     logger.info("[TTS] sidecar starting on %s (voice=%s, pid=%s)", url, voice, proc.pid)
     if not _wait_healthy(url, START_TIMEOUT_S):
         _state["failures"] = int(_state.get("failures", 0)) + 1
+        _state["failures_at"] = time.time()
         stop(force=True)
         raise TtsError("TTS_FAILED",
                        "the TTS engine did not answer /health in time - see logs/pocket_tts.log")

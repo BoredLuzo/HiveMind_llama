@@ -204,6 +204,9 @@ SUITES = [
     ("git_init_clone",        "tests/test_git_init_clone.py",               60),
     ("chunk_render_no_write",  "tests/test_chunk_render_no_write_pin.py",      30),
     ("settings_foreign_write", "tests/test_settings_foreign_write_warning.py", 30),
+    ("git_ws_guard_init",      "tests/test_git_ws_guard_and_init.py",          60),
+    ("ws_guards_chats_skills", "tests/test_ws_guards_chats_skills.py",         60),
+    ("tts_start_decay",        "tests/test_tts_start_decay_pin.py",            30),
 ]
 
 

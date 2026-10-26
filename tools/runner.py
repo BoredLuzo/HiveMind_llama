@@ -200,11 +200,18 @@ def _consume_install_budget() -> bool:
 # Phase-1 instrumentation: per-run counters + structured logs
 # for ask_user / destructive_gate (logging only, no behavior impact).
 _TOOL_USE_COUNTS: dict = {}
+_TOOL_USE_RUNS_CAP = 64   # AUDIT 2026-10-25: the run_id buckets were never
+                          # cleaned - a long-lived engine leaked one bucket
+                          # per run forever (bounded now, oldest evicted).
 
 
 def _note_tool_use(run_id: str, tool: str, outcome: str) -> None:
     import logging as _tl
-    _bucket = _TOOL_USE_COUNTS.setdefault(str(run_id), {})
+    _rid = str(run_id)
+    if _rid not in _TOOL_USE_COUNTS and len(_TOOL_USE_COUNTS) >= _TOOL_USE_RUNS_CAP:
+        for _old in list(_TOOL_USE_COUNTS)[: len(_TOOL_USE_COUNTS) - _TOOL_USE_RUNS_CAP + 1]:
+            _TOOL_USE_COUNTS.pop(_old, None)
+    _bucket = _TOOL_USE_COUNTS.setdefault(_rid, {})
     _k = f"{tool}:{outcome}"
     _bucket[_k] = _bucket.get(_k, 0) + 1
     _tl.getLogger("hivemind.tools").info(

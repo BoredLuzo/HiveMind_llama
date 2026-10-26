@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from settings import load_settings, save_settings
 import core.state as _state
@@ -103,10 +104,39 @@ def _resolve_ws(ws_override: str | None) -> str:
     return str(Path(_ws_default()).resolve())
 
 
+async def _ws_reject_reason(request: Request) -> str | None:
+    """SILENT-FALLBACK GUARD (2026-10-25 audit): _ws_from_body/_ws_from_query
+    DROP a workspace candidate that is not a directory on THIS machine, and
+    the endpoints then resolve the DEFAULT workspace — a reset/checkout/stash
+    meant for project X would land on the default repo with no error at all
+    (documented real case: a UI keeps sending a path that does not exist on
+    this machine). Every /git endpoint that accepts a workspace therefore
+    rejects an explicit-but-dead path with 400 instead of guessing. Returns
+    the offending path, or None when no candidate was supplied (empty means
+    "use the default" — unchanged behavior) or the path exists."""
+    cand = ""
+    try:
+        _data = await request.json()
+        if isinstance(_data, dict):
+            cand = str(_data.get("workspace") or "").strip()
+    except Exception:
+        cand = ""
+    if not cand:
+        cand = str(request.query_params.get("workspace") or "").strip()
+    if cand and not Path(cand).is_dir():
+        return cand
+    return None
+
+
 @router.get("/status")
 async def git_status_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE:
         return {"valid": False, "reason": "git_tools.py not loaded", "config": {}}
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
     valid, branch, branches = await asyncio.to_thread(_validate_git_repo, _ws_from_query(request))
     cfg = _get_git_config()
     has_credentials = bool(settings.get("git_username") or settings.get("git_token"))
@@ -120,11 +150,19 @@ async def git_status_ep(request: Request):
 
 
 @router.get("/config")
-async def get_git_config_ep():
+async def get_git_config_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE:
         return {"valid": False, "config": {}}
+    # WS-PARAM (2026-10-25 audit F4): the config GET could not address a
+    # workspace and always reported the default repo's branch/validity -
+    # /git/status honors ?workspace=, this endpoint now does too.
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
     cfg = _get_git_config()
-    valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
+    valid, branch, branches = await asyncio.to_thread(_validate_git_repo, _ws_from_query(request))
     return {"valid": valid, "config": cfg, "branch": branch, "branches": branches}
 
 
@@ -132,6 +170,11 @@ async def get_git_config_ep():
 async def save_git_config_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE:
         return {"valid": False, "reason": "git_tools.py not loaded"}
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"valid": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
     try:
         data = await request.json()
     except Exception:
@@ -140,7 +183,7 @@ async def save_git_config_ep(request: Request):
         if k in data:
             settings[k] = data[k]
     await asyncio.to_thread(save_settings, settings)
-    valid, branch, branches = await asyncio.to_thread(_validate_git_repo)
+    valid, branch, branches = await asyncio.to_thread(_validate_git_repo, _resolve_ws(await _ws_from_body(request)))
     has_credentials = bool(settings.get("git_username") or settings.get("git_token"))
     fully_valid = valid and has_credentials
     return {
@@ -158,6 +201,32 @@ def _gh_owner_name(repo_url: str):
     if not _m:
         return None, None
     return _m.group(1), _m.group(2)
+
+
+def _safe_git_url(url: str) -> bool:
+    """URL-VETTING (2026-10-25 audit): clone_url/remote reach `git clone` and
+    `git remote add`. Two shapes must never reach git: a leading "-" (git
+    parses it as OPTIONS - `--upload-pack=<cmd>` runs a command) and the
+    "::" ext transports (`ext::<shell command>` executes locally). Legit
+    https://, git@, ssh:// and plain local paths stay allowed."""
+    u = str(url or "").strip()
+    if not u or u.startswith("-") or "::" in u:
+        return False
+    return True
+
+
+def _run_git(ws: str, args: list, timeout: int = 5):
+    """subprocess.run wrapper for git_init_ep (2026-10-25 audit): a missing
+    git binary raised FileNotFoundError straight out of the endpoint (500),
+    a hung git raised TimeoutExpired. Returns None on those and logs; callers
+    turn it into {"ok": False, "error": ...}."""
+    try:
+        return subprocess.run(["git", *args], cwd=ws, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as _e:
+        logger.warning("[GIT] git %s failed in %s: %s", args[0] if args else "?", ws, _e)
+        return None
 
 
 _GH_STATE_HINTS = {
@@ -203,6 +272,12 @@ async def _github_repo_state(repo_url: str, token: str) -> tuple[str, str]:
     if _r.status_code == 401:
         return "token_invalid", _GH_STATE_HINTS["token_invalid"]
     if _r.status_code == 403:
+        # RATE-LIMIT (2026-10-25 audit): an unauthenticated check runs into
+        # GitHub's 60 req/h per-IP budget; mapping that 403 onto "token
+        # lacks access" sent users down the wrong remedy path.
+        if _r.headers.get("x-ratelimit-remaining") == "0":
+            return "unreachable", ("GitHub rate limit hit for this IP "
+                                   "(60 unauthenticated requests/hour) - retry later or save a token")
         return "no_access", _GH_STATE_HINTS["no_access"]
     return "unreachable", "github returned HTTP " + str(_r.status_code)
 
@@ -240,12 +315,16 @@ async def _github_ensure_repo(remote_url: str, token: str) -> tuple[bool, str]:
                                       "auto_init": False})
             if _cr.status_code == 201:
                 return True, "github repo created"
-            _body = str((_cr.json() or {}).get("message", ""))[:140] if _cr.text else ""
+            # 422-ALREADY-EXISTS (2026-10-25 audit): GitHub puts "name already
+            # exists" into errors[], not the top-level message - check the
+            # whole body or the precise hint never fires.
+            _body = str(_cr.text or "")[:300]
             if _cr.status_code == 422 and "exist" in _body.lower():
                 return False, ("repo already exists but this token cannot see it - "
                                "add it to the fine-grained token's repository list")
+            _msg = str((_cr.json() or {}).get("message", ""))[:140] if _cr.text else ""
             return False, ("github repo NOT created (HTTP " + str(_cr.status_code)
-                           + ": " + _body + ") - check token permissions")
+                           + ": " + _msg + ") - check token permissions")
     except Exception as _e:
         return False, "github create failed: " + str(_e)[:120]
 
@@ -254,14 +333,12 @@ async def _github_ensure_repo(remote_url: str, token: str) -> tuple[bool, str]:
 async def validate_git_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE:
         return {"valid": False, "reason": "git_tools.py not loaded"}
-    _ws = None
-    try:
-        _data = await request.json()
-        _cand = str((_data or {}).get("workspace") or "").strip()
-        if _cand and Path(_cand).is_dir():
-            _ws = _cand
-    except Exception:
-        pass
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
+    _ws = await _ws_from_body(request)
     valid, branch, branches = await asyncio.to_thread(_validate_git_repo, _ws)
     has_credentials = bool(settings.get("git_username") or settings.get("git_token"))
     fully_valid = valid and has_credentials
@@ -293,6 +370,11 @@ async def git_branches_ep(request: Request):
     # the panel calls this with ?workspace=<project> - honor it, or the
     # branch list shows the DEFAULT workspace's repo (live: pathtracer
     # panel listed Test5's branches)
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
     ws = _resolve_ws(_ws_from_query(request))
     valid, branch, branches = await asyncio.to_thread(_validate_git_repo, ws)
     return {"branches": branches, "current": branch, "valid": valid}
@@ -300,23 +382,38 @@ async def git_branches_ep(request: Request):
 
 @router.post("/init")
 async def git_init_ep(request: Request):
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
     try:
         data = await request.json()
     except Exception:
+        data = {}
+    if not isinstance(data, dict):
         data = {}
     # WORKSPACE-PARAM (2026-09-22): init the user-selected project, not the env
     _ws_cand = str((data or {}).get("workspace") or "").strip()
     if _ws_cand and Path(_ws_cand).is_dir():
         ws = str(Path(_ws_cand).resolve())
     else:
+        # NO-WS GUARD (2026-10-25 audit): with neither a configured workspace
+        # nor an env override, _ws_default() resolves to the HiveMind INSTALL
+        # directory - `git init` there would put settings.json (plaintext
+        # git_token) under version control. The old `if not ws:` guard could
+        # never fire (Path(".").resolve() is always truthy).
+        if not _ws_cand and not str(settings.get("workspace") or "").strip() \
+                and not str(os.environ.get("HIVEMIND_WORKSPACE") or "").strip():
+            return {"ok": False,
+                    "error": "no workspace configured - pick a project folder first"}
         ws = str(Path(_ws_default()).resolve())
     if not ws:
         return {"ok": False, "error": "No workspace configured"}
 
-    check = await asyncio.to_thread(
-        subprocess.run, ["git", "rev-parse", "--git-dir"],
-        cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
-    )
+    check = _run_git(ws, ["rev-parse", "--git-dir"])
+    if check is None:
+        return {"ok": False, "error": "git is not available on this machine (or timed out)"}
     if check.returncode == 0:
         # EXISTING-REPO REMOTE HEAL (live 2026-10-25): a bare local init used
         # to short-circuit here - "Create repo" answered "already exists"
@@ -326,20 +423,22 @@ async def git_init_ep(request: Request):
         _gh_created, _gh_msg = False, ""
         _eh_url = (data.get("clone_url") or settings.get("git_repo_url", "") or "").strip()
         _eh_token = str(settings.get("git_token", "") or "")
+        if _eh_url and not _safe_git_url(_eh_url):
+            return {"ok": False, "error": f"remote URL rejected: {_eh_url[:80]}"}
         if _eh_url and _eh_token:
             _gh_created, _gh_msg = await _github_ensure_repo(_eh_url, _eh_token)
-            _origin = await asyncio.to_thread(
-                subprocess.run, ["git", "remote", "get-url", "origin"],
-                cwd=ws, capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=5)
-            if _origin.returncode != 0:
-                await asyncio.to_thread(
-                    subprocess.run, ["git", "remote", "add", "origin", _eh_url],
-                    cwd=ws, capture_output=True, text=True, encoding="utf-8",
-                    errors="replace", timeout=5)
+        elif _eh_url and not _eh_token:
+            # HEAL-TRANSPARENCY (2026-10-25 audit): URL but no token used to
+            # skip silently and still answer "already existed".
+            _gh_msg = "no token saved - the remote check/Create was skipped"
+        _origin = _run_git(ws, ["remote", "get-url", "origin"])
+        if _origin is not None and _origin.returncode != 0:
+            _attached = _run_git(ws, ["remote", "add", "origin", _eh_url])
+            if _attached is None or _attached.returncode != 0:
+                _gh_msg = (_gh_msg + " | " if _gh_msg else "") + "remote add origin failed"
         valid, branch, branches = await asyncio.to_thread(_validate_git_repo, ws)
         return {"ok": True, "already_existed": True, "branch": branch,
-                "branches": branches,
+                "branches": branches, "repo_valid": valid,
                 "github_created": _gh_created, "github_msg": _gh_msg}
 
     # INIT-IN-PLACE (2026-09-22): the old flow cloned the remote into the
@@ -356,7 +455,10 @@ async def git_init_ep(request: Request):
     # workspace fell through to the return and crashed with UnboundLocalError.
     # Initialize before the branch; both paths reach the return.
     _gh_created, _gh_msg = False, ""
+    _cloned = False
     _ws_files = [f for f in os.listdir(ws) if f != ".git"]
+    if remote_url and not _safe_git_url(remote_url):
+        return {"ok": False, "error": f"remote URL rejected: {remote_url[:80]}"}
     if not _ws_files and remote_url:
         # CREATE-FIRST (live 2026-10-25): an empty workspace plus a remote
         # that does not exist yet used to fail the whole init in the clone
@@ -367,28 +469,23 @@ async def git_init_ep(request: Request):
         if _token:
             _gh_created, _gh_msg = await _github_ensure_repo(remote_url, _token)
         if _gh_created:
-            _init = await asyncio.to_thread(
-                subprocess.run, ["git", "init", "-b", default_branch],
-                cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
-            )
-            if _init.returncode != 0:
-                return {"ok": False, "error": f"git init fehlgeschlagen: {_init.stderr.strip()[:200]}"}
+            _init = _run_git(ws, ["init", "-b", default_branch], timeout=10)
+            if _init is None or _init.returncode != 0:
+                return {"ok": False,
+                        "error": f"git init fehlgeschlagen: {((_init and _init.stderr) or 'git failed').strip()[:200]}"}
         else:
             # empty workspace + remote -> clone INTO the workspace
-            _clone = await asyncio.to_thread(
-                subprocess.run, ["git", "clone", remote_url, "."],
-                cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120
-            )
-            if _clone.returncode != 0:
+            _clone = _run_git(ws, ["clone", remote_url, "."], timeout=120)
+            if _clone is None or _clone.returncode != 0:
                 _extra = f" | {_gh_msg}" if _gh_msg else ""
-                return {"ok": False, "error": f"Clone fehlgeschlagen: {_clone.stderr.strip()[:200]}{_extra}"}
+                return {"ok": False,
+                        "error": f"Clone fehlgeschlagen: {((_clone and _clone.stderr) or 'git failed').strip()[:200]}{_extra}"}
+            _cloned = True
     else:
-        _init = await asyncio.to_thread(
-            subprocess.run, ["git", "init", "-b", default_branch],
-            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
-        )
-        if _init.returncode != 0:
-            return {"ok": False, "error": f"git init fehlgeschlagen: {_init.stderr.strip()[:200]}"}
+        _init = _run_git(ws, ["init", "-b", default_branch], timeout=10)
+        if _init is None or _init.returncode != 0:
+            return {"ok": False,
+                    "error": f"git init fehlgeschlagen: {((_init and _init.stderr) or 'git failed').strip()[:200]}"}
         # GITHUB CREATE (2026-10-07, owner; refactored 2026-10-25): the button
         # says "Create repo" - actually create it on GitHub when it does not
         # exist yet. Shared helper with the other init paths; private by
@@ -398,29 +495,20 @@ async def git_init_ep(request: Request):
                 remote_url, str(settings.get("git_token", "") or ""))
 
     if username:
-        await asyncio.to_thread(
-            subprocess.run, ["git", "config", "user.name", username],
-            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
-        )
+        _run_git(ws, ["config", "user.name", username])
     if email:
-        await asyncio.to_thread(
-            subprocess.run, ["git", "config", "user.email", email],
-            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
-        )
+        _run_git(ws, ["config", "user.email", email])
     if remote_url:
-        await asyncio.to_thread(
-            subprocess.run, ["git", "remote", "remove", "origin"],
-            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
-        )
-        await asyncio.to_thread(
-            subprocess.run, ["git", "remote", "add", "origin", remote_url],
-            cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5
-        )
+        _run_git(ws, ["remote", "remove", "origin"])
+        _attached = _run_git(ws, ["remote", "add", "origin", remote_url])
+        if _attached is None or _attached.returncode != 0:
+            _gh_msg = (_gh_msg + " | " if _gh_msg else "") + "remote add origin failed"
 
     valid, branch, branches = await asyncio.to_thread(
         _validate_git_repo, ws)
-    return {"ok": True, "initialized": True, "branch": branch,
-            "branches": branches, "remote": remote_url,
+    return {"ok": True, "initialized": True, "cloned": _cloned,
+            "branch": branch, "branches": branches, "remote": remote_url,
+            "repo_valid": valid,
             "github_created": _gh_created, "github_msg": _gh_msg}
 
 
@@ -428,6 +516,11 @@ async def git_init_ep(request: Request):
 async def git_reset_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_reset is None:
         return {"ok": False, "error": "git_tools not loaded"}
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
     try:
         data = await request.json()
     except Exception:
@@ -445,6 +538,11 @@ async def git_reset_ep(request: Request):
 async def git_checkout_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_checkout is None:
         return {"ok": False, "error": "git_tools not loaded"}
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
     try:
         data = await request.json()
     except Exception:
@@ -461,6 +559,11 @@ async def git_checkout_ep(request: Request):
 async def git_stash_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_stash is None:
         return {"ok": False, "error": "git_tools not loaded"}
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"ok": False, "error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
     try:
         data = await request.json()
     except Exception:
@@ -476,5 +579,10 @@ async def git_stash_ep(request: Request):
 async def git_detail_ep(request: Request):
     if not _state._GIT_TOOLS_AVAILABLE or _state.exec_git_status_detailed is None:
         return {"valid": False, "error": "git_tools not loaded"}
+    _bad_ws = await _ws_reject_reason(request)
+    if _bad_ws:
+        return JSONResponse(
+            {"error": f"workspace does not exist on this machine: {_bad_ws}"},
+            status_code=400)
     ws = _resolve_ws(_ws_from_query(request))
     return await _state.exec_git_status_detailed(ws)
