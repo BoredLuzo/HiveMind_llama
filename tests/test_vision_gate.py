@@ -459,3 +459,59 @@ def test_downgraded_plan_builds_coder_prompt_without_vision_note():
     # control 2: unproven vision (None) must not claim the model sees the image
     sys_unknown = base + vision_note_for_coder(plan_raw, None)
     assert "[VISION]" not in sys_unknown
+
+
+if __name__ == "__main__":
+    # RUNNER (2026-10-26): the suite is plain `def test_*` functions, so a
+    # bare `python tests/test_vision_gate.py` used to execute nothing and report
+    # success. Collect them in definition order, run, report.
+    import sys as _sys
+    _mod = _sys.modules[__name__]
+    class _Env:
+        """Minimal monkeypatch: only setenv/delenv are used here."""
+
+        def __init__(self):
+            self._saved = {}
+
+        def setenv(self, key, value):
+            if key not in self._saved:
+                self._saved[key] = os.environ.get(key)
+            os.environ[key] = str(value)
+
+        def delenv(self, key, raising=False):
+            if key not in self._saved:
+                self._saved[key] = os.environ.get(key)
+            os.environ.pop(key, None)
+
+        def undo(self):
+            for k, v in self._saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            self._saved.clear()
+
+    _tests = [(n, getattr(_mod, n)) for n in dir(_mod)
+              if n.startswith("test_") and callable(getattr(_mod, n))]
+    _pass = _fail = 0
+    for _name, _fn in _tests:
+        _env = _Env()
+        try:
+            if _fn.__code__.co_argcount:
+                _fn(_env)
+            else:
+                _fn()
+        except AssertionError as _exc:
+            _fail += 1
+            print(f"  FAIL {_name}{f' ({_exc})' if str(_exc) else ''}")
+        except Exception as _exc:  # noqa: BLE001 - a broken test is a failure
+            _fail += 1
+            print(f"  FAIL {_name} ({type(_exc).__name__}: {_exc})")
+        else:
+            _pass += 1
+            print(f"  PASS {_name}")
+        finally:
+            _env.undo()
+    print()
+    print(f"SUMMARY test_vision_gate: {_pass} passed, {_fail} failed")
+    _sys.exit(0 if _fail == 0 else 1)

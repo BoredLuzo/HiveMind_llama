@@ -124,3 +124,29 @@ def test_vision_note_replacement_survives_compression():
     sys_msg = next(m for m in out if m.get("role") == "system")
     assert CODER_VISION_NOTE in sys_msg["content"], \
         "system prompt (with the note) was altered by compression"
+
+
+if __name__ == "__main__":
+    # RUNNER (2026-10-26): the suite is plain `def test_*` functions, so a
+    # bare `python tests/test_compression_plan_survival.py` used to execute nothing and report
+    # success. Collect them in definition order, run, report.
+    import sys as _sys
+    _mod = _sys.modules[__name__]
+    _tests = [(n, getattr(_mod, n)) for n in dir(_mod)
+              if n.startswith("test_") and callable(getattr(_mod, n))]
+    _pass = _fail = 0
+    for _name, _fn in _tests:
+        try:
+            _fn()
+        except AssertionError as _exc:
+            _fail += 1
+            print(f"  FAIL {_name}{f' ({_exc})' if str(_exc) else ''}")
+        except Exception as _exc:  # noqa: BLE001 - a broken test is a failure
+            _fail += 1
+            print(f"  FAIL {_name} ({type(_exc).__name__}: {_exc})")
+        else:
+            _pass += 1
+            print(f"  PASS {_name}")
+    print()
+    print(f"SUMMARY test_compression_plan_survival: {_pass} passed, {_fail} failed")
+    _sys.exit(0 if _fail == 0 else 1)

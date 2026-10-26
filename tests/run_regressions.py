@@ -214,6 +214,11 @@ SUITES = [
     ("remember_tool",           "tests/test_remember_tool.py",                  60),
     ("tree_scout_workspace",    "tests/test_tree_scout_workspace.py",           60),
     ("wait_ready",              "tests/test_wait_ready.py",                     60),
+    ("chat_search",             "tests/test_chat_search.py",                  60),
+    ("compression_plan_survival", "tests/test_compression_plan_survival.py",   60),
+    ("smoke_harness",           "tests/test_smoke_harness.py",                 60),
+    ("vision_gate",             "tests/test_vision_gate.py",                   60),
+    ("steer_images",            "tests/test_steer_images.py",                  60),
 ]
 
 

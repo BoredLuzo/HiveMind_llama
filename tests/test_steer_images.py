@@ -23,7 +23,7 @@ def test_builder_with_images_parts_first():
     assert isinstance(c, list) and len(c) == 3
     assert c[0]["type"] == "image_url" and c[0]["image_url"]["url"].startswith("data:image/jpeg;base64,QUJD")
     assert c[1]["image_url"]["url"].startswith("data:image/png;base64,")  # data-URL kept
-    assert c[2]["type"] == "text" and "[USER STEER] look at this" in c[2]["text"]
+    assert c[2]["type"] == "text" and "[OWNER STEER" in c[2]["text"] and "look at this" in c[2]["text"]
 
 
 def test_builder_empty_images_falls_back_to_string():
@@ -94,3 +94,28 @@ def test_wire_shape_matches_llama_payload():
     # first, text last) - same convention as attach_images_to_last_user
     m = build_steer_user_message("check", ["QQ=="])
     assert [p["type"] for p in m["content"]] == ["image_url", "text"]
+
+
+if __name__ == "__main__":
+    # RUNNER (2026-10-26): plain `def test_*` functions, so a bare
+    # `python tests/test_steer_images.py` used to execute nothing.
+    import sys as _sys
+    _mod = _sys.modules[__name__]
+    _tests = [(n, getattr(_mod, n)) for n in dir(_mod)
+              if n.startswith("test_") and callable(getattr(_mod, n))]
+    _pass = _fail = 0
+    for _name, _fn in _tests:
+        try:
+            _fn()
+        except AssertionError as _exc:
+            _fail += 1
+            print(f"  FAIL {_name}{f' ({_exc})' if str(_exc) else ''}")
+        except Exception as _exc:  # noqa: BLE001 - a broken test is a failure
+            _fail += 1
+            print(f"  FAIL {_name} ({type(_exc).__name__}: {_exc})")
+        else:
+            _pass += 1
+            print(f"  PASS {_name}")
+    print()
+    print(f"SUMMARY test_steer_images: {_pass} passed, {_fail} failed")
+    _sys.exit(0 if _fail == 0 else 1)
