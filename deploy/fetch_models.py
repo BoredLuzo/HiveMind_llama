@@ -582,6 +582,8 @@ def main() -> int:
     ap.add_argument("--print-catalog", action="store_true",
                     help="Print the numbered download catalog and exit (no network, "
                          "no folder touch) — setup_models.bat renders its menu from this")
+    ap.add_argument("--only-keys", default="",
+                    help="comma-separated spec KEYS to install (stable, unlike --only numbers)")
     ap.add_argument("--only", default="",
                     help="Only these models: keys or numbers, comma-separated (e.g. 1,4)")
     ap.add_argument("--yes", action="store_true")
@@ -618,6 +620,15 @@ def main() -> int:
     specs = [s for s in SPECS
                if not (getattr(args, 'essential', False)
                        and s.get('key') in ESSENTIAL_SKIP_KEYS)] or SPECS
+    if getattr(args, 'only_keys', ''):
+        _ok = [k.strip() for k in args.only_keys.split(',') if k.strip()]
+        _found = set(sp.get('key') for sp in SPECS)
+        _missing = [k for k in _ok if k not in _found]
+        if _missing:
+            print('[ERROR] unknown model keys: ' + ', '.join(_missing))
+            raise SystemExit(2)
+        specs = [sp for sp in specs if sp.get('key') in set(_ok)]
+
     if args.only:
         specs = _resolve_only(args.only)
         if specs is None:

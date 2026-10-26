@@ -494,6 +494,32 @@ goto searxng_step
 :searxng_step
 
 REM ======================================================
+REM ======================================================
+REM [6b] Judge/Decider model (OPTIONAL, like Voice)
+REM ======================================================
+REM JUDGE-OPTIONAL (2026-10-26): the decider model routes direct vs
+REM agentic requests. Without it, keyword rules route. Small machines
+REM and essential installs skip it; ask, default N, never fatal.
+echo  ==========================================================
+echo   [judge] Judge/Decider model ^(optional, ~2GB^)
+echo   Routes direct vs agentic requests. Without it, keyword
+echo   rules decide. Skip on small machines.
+echo  ==========================================================
+choice /c YN /n /m "Install the judge/decider model now? [Y/N] "
+if errorlevel 2 (
+    echo   Skipped - add later: setup_models.bat ^> S ^> lfm2.5:2.6b
+    goto judge_done
+)
+"%PY%" deployetch_models.py --models-dir "%MODELS_DIR%" --only-keys lfm2.5:2.6b
+if errorlevel 1 (
+    echo   [WARN] judge model download failed - continue without it;
+    echo   setup_models.bat installs it later. Keyword routing works.
+) else (
+    echo   OK.
+)
+:judge_done
+echo.
+
 REM [7/9] SearXNG (optional)
 REM ======================================================
 echo.
