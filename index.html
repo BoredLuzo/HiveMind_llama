@@ -769,12 +769,13 @@
           <div class="ctx-row">
             <span class="ctx-label">Coder context</span>
             <span class="ctx-field"><input type="number" min="1024" step="1024" id="duo-ctx-agentic" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
-              class="ctx-num"
+              class="ctx-num" title="Context speed (measured, 35B coder): the buffer itself is free, but decode slows as the context FILLS - about 20 tokens/s early in a run vs about 16 late in a long one. Automatic compression keeps it bounded."
               onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxAgentic=v;postSettings({duo_coder_ctx_agentic:v});setDuoSubMode(S.duoAgenticMode?'agentic':'critic');updateCtxScopeHint();refreshVram();_vramEstimate(S.duoCoderModel,v,'vram-est-agentic')"><span class="ctx-unit">tok</span></span>
           </div>
           <div class="ctx-hint">
             Agentic / solo runs and until-finished.
-            <span id="vram-est-agentic" class="ctx-est"></span>
+            <span id="vram-est-agentic" class="ctx-est"></span><br>
+            Speed: the context buffer itself costs nothing &mdash; decode slows as the context <em>fills</em> (~20 tok/s early vs ~16 late in long runs, 35B coder). Compression keeps it bounded automatically.
           </div>
         </div>
 
@@ -2287,6 +2288,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261025-03"></script>
+        <script src="/static/app.js?v=20261026-01"></script>
 </body>
 </html>
