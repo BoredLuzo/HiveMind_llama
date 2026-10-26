@@ -58,18 +58,27 @@ echo.
 echo    LFM2.5 2.6B / 24B-A2B also download their DSpark spec-dec drafter.
 echo    Gemma-4 E4B/E2B QAT also download their MTP drafter.
 echo.
-echo  D = download all missing, S = select single models,
+echo  D = download all missing, E = essential set (skips the judge/
+echo      decider helper model - for small machines),
+echo  S = select single models,
 echo  C = add own model with config, R = register folder only (no download),
 echo  A = abort.
 echo.
-choice /c DSCRA /m "Your choice"
-if errorlevel 5 exit /b 0
-if errorlevel 4 goto import_only
-if errorlevel 3 goto custom_add
-if errorlevel 2 goto select_single
+choice /c DESCRA /m "Your choice"
+if errorlevel 6 exit /b 0
+if errorlevel 5 goto import_only
+if errorlevel 4 goto custom_add
+if errorlevel 3 goto select_single
+if errorlevel 2 goto essential_set
 
 echo.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-missing
+goto done
+
+:essential_set
+echo.
+echo  Essential set: direct/coder core, judge/decider helper skipped.
+"%PY%" deployetch_models.py --models-dir "%MODELS_DIR%" --only-missing --essential
 goto done
 
 :select_single

@@ -67,6 +67,11 @@ def _persist_models_dir(mdir: Path) -> None:
 # pulled Jackrong/DeepSeek-V4-Pro... for the qwen3.5:4b-mtp spec because
 # unsloth names its MTP files WITHOUT "mtp": unsloth/Qwen3.5-4B-MTP-GGUF →
 # "Qwen3.5-4B-Q4_K_M.gguf". Pinned specs never fall back to search.)
+# ESSENTIAL-SET (2026-10-26, ThinkPad feedback): `--essential` downloads the
+# direct/coder core and skips helper models a small machine may not want.
+# Tunable: spec KEYS to skip (the judge/decider today).
+ESSENTIAL_SKIP_KEYS = {"lfm2.5:2.6b"}
+
 SPECS: list[dict] = [
     {
         "key": "gemma-4:e4b-it-qat",
@@ -569,6 +574,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models-dir", default="")
     ap.add_argument("--only-missing", action="store_true")
+    ap.add_argument("--essential", action="store_true",
+                    help="skip helper models (judge/decider) - core only")
     ap.add_argument("--list-only", action="store_true")
     ap.add_argument("--scan-only", action="store_true",
                     help="Only scan local GGUFs + write models.json, NO download, NO network")
@@ -608,7 +615,9 @@ def main() -> int:
         print(f"[OK] models.json written: {n} entries -> {ROOT / 'models.json'}")
         return 0
 
-    specs = SPECS
+    specs = [s for s in SPECS
+               if not (getattr(args, 'essential', False)
+                       and s.get('key') in ESSENTIAL_SKIP_KEYS)] or SPECS
     if args.only:
         specs = _resolve_only(args.only)
         if specs is None:

@@ -1077,6 +1077,309 @@ async def _duo_planner_phase(
         ps.plan_ctx_final = _plan_ctx_final
         ps.duo_timed_out = _duo_timed_out
         ps.plan_tracker = _plan_tracker
+
+
+@dataclasses.dataclass
+class _DuoCriticReviewState:
+    """Critic-review in/out locals (moved verbatim from run_code_duo).
+
+    Holds every local the critic block (input build, tool-loop variant,
+    plain variant, verdict parse, verify-gate patch, duo_critic_done emit)
+    reads from or writes back to the runner loop. Same unpack/pack
+    contract as _DuoPlannerPhaseState.
+    """
+    parts: list = dataclasses.field(default_factory=list)
+    t: float = 0.0
+    verify_last_ok_serial: int = 0
+    critic_issues: list = dataclasses.field(default_factory=list)
+    final_verdict: str = ""
+    approved: bool = False
+    verify_gate_blocked: bool = False
+
+
+async def _duo_critic_review(
+    ctx, ps: _DuoCriticReviewState, *,
+    coder_mdl, coder_out, critic_mdl, _ws_str, _di, _subtask,
+    _duo_critic_sys, _duo_critic_temp, _duo_critic_tok,
+    _critic_profile, _critic_thinking, _critic_tools_enabled,
+    _verify_mutation_serial,
+):
+    # CODE-MOTION (duo-runner-split): the critic section (input build,
+    # tool-capable variant, plain variant, TUNE/JSON verdict parse,
+    # verify-gate patch and the duo_critic_done emit) moved VERBATIM
+    # from run_code_duo. No logic changes.
+    _parts = ps.parts
+    _t = ps.t
+    _verify_last_ok_serial = ps.verify_last_ok_serial
+    critic_issues = ps.critic_issues
+    final_verdict = ps.final_verdict
+    _approved = ps.approved
+    _verify_gate_blocked = ps.verify_gate_blocked
+    try:
+        _critic_task_ref = _subtask if _subtask else ctx.user_input
+        _content_label = "Code" if ctx.duo_config.coding_mode else "Answer"
+        _review_verb   = "Review the code." if ctx.duo_config.coding_mode else "Review the answer."
+        _critic_input = (
+            f"Task: {_critic_task_ref}\n\n"
+            f"{_content_label} (round {_di + 1}):\n{coder_out}\n\n"
+            f"{_review_verb}"
+        )
+        ctx.exec_ctrl.transition(AgentState.CRITIC_REVIEW)
+        ctx.exec_ctrl.reset_stuck_detection()  # BUG-NO-RESET FIX
+
+        # Use tool-capable system prompt when tools are enabled
+        _effective_critic_sys = DUO_CRITIC_TOOLS_SYSTEM if _critic_tools_enabled else _duo_critic_sys
+
+        _critic_msgs = [
+            {"role": "system", "content": _effective_critic_sys},
+            {"role": "user",   "content": _critic_input},
+        ]
+
+        yield await ctx.emit({"type": "duo_critic", "model": critic_mdl, "round": _di + 1})
+        _parts, _t = [], time.time()
+
+        _critic_tc_read_s = float(ctx.settings.get("duo_llm_slow_timeout_s", 300))
+        _critic_tc_timeout = httpx.Timeout(connect=10.0, read=_critic_tc_read_s, write=10.0, pool=5.0)
+        from backend.llama_server_manager import manager as _lsm_c
+        _critic_port = await _lsm_c.ensure_loaded(critic_mdl, num_ctx=resolve_ctx(ctx.settings.get("duo_critic_ctx") or ctx.settings.get("duo_coder_ctx_normal"), critic_mdl, "critic"))
+
+        if _critic_tools_enabled:
+            # ── Critic Tool-Loop ─────────────────────────────────────
+            # Critic can read files and run tests before giving verdict.
+            # Max 3 rounds to keep VRAM pressure low on 8GB GPUs.
+            _critic_tc_msgs  = list(_critic_msgs)
+            _critic_tc_max   = 3
+            try:
+                async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc:
+                  for _ctr in range(_critic_tc_max):
+                    if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
+                        break
+                    # Retry transient server errors (up to 3 attempts per tool round)
+                    for _critic_post_attempt in range(3):
+                        try:
+                            _c_gen_t0 = time.monotonic()  # GEN-TIME: critic POST duration
+                            _critic_tc_payload = {
+                                "model": critic_mdl,
+                                "messages": _critic_tc_msgs,
+                                "tools": _CRITIC_VERIFY_TOOLS,
+                                "stream": False,
+                                "tool_choice": "auto",
+                                "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
+                                "top_p": _critic_profile.get("top_p", 0.95),
+                                "top_k": _critic_profile.get("top_k", 20),
+                                "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
+                                "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
+                                "max_tokens": _duo_critic_tok,
+                            }
+                            if _critic_profile.get("seed") is not None:
+                                _critic_tc_payload["seed"] = int(_critic_profile["seed"])
+                            _cresp = await _chttpc.post(
+                                    f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
+                             json=_critic_tc_payload
+                                    )
+                            if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
+                                await _cresp.aread()
+                                await asyncio.sleep(2.0)
+                                continue
+                            break
+                        except httpx.ConnectError:
+                            if _critic_post_attempt < 2:
+                                await asyncio.sleep(3.0)
+                                continue
+                            raise
+                    if _cresp.status_code != 200:
+                        raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
+                    _cd = _cresp.json()
+                    _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
+                             if "choices" in _cd else _cd.get("message", {}))
+                    _cusage = _cd.get("usage") or {}
+                    if _cusage.get("completion_tokens"):
+                        # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
+                        try:
+                            _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+                        except Exception:
+                            _cc_cached = 0
+                        yield await ctx.emit({"type": "usage_meta", "phase": "critic",
+                            "completion_tokens": int(_cusage["completion_tokens"]),
+                            "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
+                            "cached_tokens": _cc_cached,
+                            "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
+                    _ctc = _cmsg.get("tool_calls", [])
+                    if not _ctc:
+                        # No more tool calls — this is the final verdict
+                        _parts.append(_cmsg.get("content", "").strip())
+                        break
+                    # Execute tool calls, append results
+                    _critic_tc_msgs.append(_cmsg)
+                    for _ctc_call in _ctc:
+                        _cfn   = _ctc_call.get("function", {})
+                        _cname = _cfn.get("name", "")
+                        _cargs = _parse_tool_args(_cfn.get("arguments", {}))
+                        _cres  = await _run_inline_tool(
+                            _cname,
+                            _cargs,
+                            tool_mode="critic_verify",
+                            include_websearch=False,
+                            workspace_lock=_ws_str,  # CRITIC-LOCK (2026-09-13): was None -> reads/searches unconstrained
+                        )
+                        if _cname == "run_bash" and not _run_bash_failed(_cres):
+                            _verify_last_ok_serial = max(_verify_last_ok_serial, _verify_mutation_serial)
+                        _critic_tc_msgs.append({
+                            "role": "tool",
+                            "content": _cres,
+                            "name": _cname,
+                            "tool_call_id": _ctc_call.get("id", _cname),
+                        })
+            except Exception as _cte:
+                _parts.append(json.dumps({"approved": False, "issues": [f"Critic-tool-error: {str(_cte)[:80]}"], "verdict": "tool_error"}))
+        else:
+            # ── Critic Plain Request ──────────────────────────────────
+            _critic_plain_payload = {
+                "model": critic_mdl,
+                "messages": _critic_msgs,
+                "tools": [],
+                "stream": False,
+                "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
+                "top_p": _critic_profile.get("top_p", 0.95),
+                "top_k": _critic_profile.get("top_k", 20),
+                "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
+                "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
+                "max_tokens": _duo_critic_tok,
+            }
+            if _critic_profile.get("seed") is not None:
+                _critic_plain_payload["seed"] = int(_critic_profile["seed"])
+            # MIN-P-EXPLICIT (2026-09-20): see the coder payload — a
+            # declared min_p 0.0 must ship (API default is 0.05).
+            if "min_p" in _critic_profile:
+                _critic_plain_payload["min_p"] = _critic_profile["min_p"]
+            if _critic_profile.get("cache_prompt"):
+                _critic_plain_payload["cache_prompt"] = True
+            _critic_plain_payload = _apply_thinking_kwargs(
+                _critic_plain_payload, _critic_profile, _critic_thinking, coder_tool_think=False
+            )
+            try:
+                async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc_plain:
+                    for _critic_post_attempt in range(3):
+                        try:
+                            _c_gen_t0 = time.monotonic()  # GEN-TIME: Critic-POST-Dauer
+                            _cresp = await _chttpc_plain.post(
+                                f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
+                                json=_critic_plain_payload,
+                            )
+                            if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
+                                await _cresp.aread()
+                                await asyncio.sleep(2.0)
+                                continue
+                            break
+                        except httpx.ConnectError:
+                            if _critic_post_attempt < 2:
+                                await asyncio.sleep(3.0)
+                                continue
+                            raise
+                    if _cresp.status_code != 200:
+                        raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
+                    _cd = _cresp.json()
+                    _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
+                             if "choices" in _cd else _cd.get("message", {}))
+                    _cusage = _cd.get("usage") or {}
+                    if _cusage.get("completion_tokens"):
+                        # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
+                        try:
+                            _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+                        except Exception:
+                            _cc_cached = 0
+                        yield await ctx.emit({"type": "usage_meta", "phase": "critic",
+                            "completion_tokens": int(_cusage["completion_tokens"]),
+                            "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
+                            "cached_tokens": _cc_cached,
+                            "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
+                    _parts.append(_cmsg.get("content", "").strip())
+            except Exception as _cre:
+                _err_d = {"approved": False, "issues": [f"Critic error: {str(_cre)[:80]}"], "verdict": "error"}
+                _parts.append(json.dumps(_err_d))
+
+        _critic_raw = "".join(_parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
+
+        # TUNE-PARSER: 'approved=false issues=[P1;P2] verdict=OK'
+        _critic_verdict: dict = {}
+        if "approved=" in _critic_raw:
+            _critic_verdict = _parse_critic_tune(_critic_raw)
+        else:
+            try:
+                jm = re.search(r"\{[\s\S]*?\}", _critic_raw)
+                if jm: _critic_verdict = json.loads(jm.group())
+            except (json.JSONDecodeError, AttributeError):
+                logger.debug("Critic JSON parse failed for: %.200s", _critic_raw)
+        if _critic_verdict.get("approved") is None:
+            _critic_verdict = {"approved": False, "issues": [_critic_raw[:300]], "verdict": "Parsing error"}
+
+        critic_issues  = _critic_verdict.get("issues", [])
+        final_verdict  = _critic_verdict.get("verdict", "")
+        _approved      = bool(_critic_verdict.get("approved", False))
+        _verify_gate_blocked = False
+        if _verify_mutation_serial > _verify_last_ok_serial:
+            _verify_gate_blocked = True
+            _verify_issue = "Verification missing: run_bash must pass after the latest file changes."
+            if _verify_issue not in critic_issues:
+                critic_issues = list(critic_issues) + [_verify_issue]
+            final_verdict = "verification_required_after_write"
+            _approved = False
+            _critic_verdict["approved"] = False
+            _critic_verdict["issues"] = critic_issues
+            _critic_verdict["verdict"] = final_verdict
+
+        yield await ctx.emit({
+            "type":     "duo_critic_done",
+            "elapsed":  round(time.time() - _t, 1),
+            "verdict":  _critic_verdict,
+            "approved": _approved,
+        })
+    finally:
+        ps.parts = _parts
+        ps.t = _t
+        ps.verify_last_ok_serial = _verify_last_ok_serial
+        ps.critic_issues = critic_issues
+        ps.final_verdict = final_verdict
+        ps.approved = _approved
+        ps.verify_gate_blocked = _verify_gate_blocked
+
+
+async def _duo_final_test(ctx, state, _cs, _n_items, *, _eff_run_ws):
+    # CODE-MOTION (duo-runner-split): P3 final-test-after-all-chunks
+    # moved VERBATIM from run_code_duo (function-level block, same
+    # indent). Reads shared objects only (_cs mutated in place).
+    _final_test_fb = bool(ctx.duo_config.test_feedback_final)
+    if _final_test_fb and _cs.has_written_files and not ctx.aborted():
+        yield await ctx.emit({"type": "status", "content": "\U0001f9ea Final test run after all chunks..."})
+        try:
+            _final_test_result = await _run_test_suite(
+                workspace=_eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", "")),
+                timeout=120,
+                chat_id=ctx.chat_id or "",
+            )
+        except Exception as _fte:
+            _final_test_result = _TestResult(
+                success=False, language="unknown", command="",
+                failure_count=0, error_lines=[str(_fte)],
+                raw_output="", inject_msg=f"\u26a0\ufe0f Final test runner error: {_fte}"
+            )
+        yield await ctx.emit({
+            "type": "test_result",
+            "chunk": "final",
+            "total_chunks": _n_items,
+            "passed": _final_test_result.is_clean(),
+            "language": _final_test_result.language,
+            "failures": _final_test_result.failure_count,
+            "command": _final_test_result.command,
+        })
+        if _final_test_result.is_clean():
+            yield await ctx.emit({"type": "status", "content": f"\u2705 All tests passed ({_final_test_result.language})"})
+        else:
+            yield await ctx.emit({"type": "status",
+                "content": f"\u274c {_final_test_result.failure_count} test failures in the final run"})
+            _cs.completion_notes.append(
+                f"Final test: {_final_test_result.failure_count} failure(s) ({_final_test_result.language})"
+            )
 async def run_code_duo(ctx):
     """Code-duo handler: iterative coder+critic loop."""
     state: dict = {
@@ -6169,224 +6472,29 @@ async def run_code_duo(ctx):
                 _cs.reset_test_retries()
                 _halt_fn(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, _di, _loop_items, _n_items, "chunk_checkpoint")
                 continue
-            _critic_task_ref = _subtask if _subtask else ctx.user_input
-            _content_label = "Code" if ctx.duo_config.coding_mode else "Answer"
-            _review_verb   = "Review the code." if ctx.duo_config.coding_mode else "Review the answer."
-            _critic_input = (
-                f"Task: {_critic_task_ref}\n\n"
-                f"{_content_label} (round {_di + 1}):\n{coder_out}\n\n"
-                f"{_review_verb}"
+            _critic_ps = _DuoCriticReviewState(
+                parts=_parts, verify_last_ok_serial=_verify_last_ok_serial,
+                critic_issues=critic_issues, final_verdict=final_verdict,
             )
-            ctx.exec_ctrl.transition(AgentState.CRITIC_REVIEW)
-            ctx.exec_ctrl.reset_stuck_detection()  # BUG-NO-RESET FIX
-
-            # Use tool-capable system prompt when tools are enabled
-            _effective_critic_sys = DUO_CRITIC_TOOLS_SYSTEM if _critic_tools_enabled else _duo_critic_sys
-
-            _critic_msgs = [
-                {"role": "system", "content": _effective_critic_sys},
-                {"role": "user",   "content": _critic_input},
-            ]
-
-            yield await ctx.emit({"type": "duo_critic", "model": critic_mdl, "round": _di + 1})
-            _parts, _t = [], time.time()
-
-            _critic_tc_read_s = float(ctx.settings.get("duo_llm_slow_timeout_s", 300))
-            _critic_tc_timeout = httpx.Timeout(connect=10.0, read=_critic_tc_read_s, write=10.0, pool=5.0)
-            from backend.llama_server_manager import manager as _lsm_c
-            _critic_port = await _lsm_c.ensure_loaded(critic_mdl, num_ctx=resolve_ctx(ctx.settings.get("duo_critic_ctx") or ctx.settings.get("duo_coder_ctx_normal"), critic_mdl, "critic"))
-
-            if _critic_tools_enabled:
-                # ── Critic Tool-Loop ─────────────────────────────────────
-                # Critic can read files and run tests before giving verdict.
-                # Max 3 rounds to keep VRAM pressure low on 8GB GPUs.
-                _critic_tc_msgs  = list(_critic_msgs)
-                _critic_tc_max   = 3
-                try:
-                    async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc:
-                      for _ctr in range(_critic_tc_max):
-                        if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
-                            break
-                        # Retry transient server errors (up to 3 attempts per tool round)
-                        for _critic_post_attempt in range(3):
-                            try:
-                                _c_gen_t0 = time.monotonic()  # GEN-TIME: critic POST duration
-                                _critic_tc_payload = {
-                                    "model": critic_mdl,
-                                    "messages": _critic_tc_msgs,
-                                    "tools": _CRITIC_VERIFY_TOOLS,
-                                    "stream": False,
-                                    "tool_choice": "auto",
-                                    "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
-                                    "top_p": _critic_profile.get("top_p", 0.95),
-                                    "top_k": _critic_profile.get("top_k", 20),
-                                    "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
-                                    "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
-                                    "max_tokens": _duo_critic_tok,
-                                }
-                                if _critic_profile.get("seed") is not None:
-                                    _critic_tc_payload["seed"] = int(_critic_profile["seed"])
-                                _cresp = await _chttpc.post(
-                                        f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
-                                 json=_critic_tc_payload
-                                        )
-                                if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
-                                    await _cresp.aread()
-                                    await asyncio.sleep(2.0)
-                                    continue
-                                break
-                            except httpx.ConnectError:
-                                if _critic_post_attempt < 2:
-                                    await asyncio.sleep(3.0)
-                                    continue
-                                raise
-                        if _cresp.status_code != 200:
-                            raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
-                        _cd = _cresp.json()
-                        _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
-                                 if "choices" in _cd else _cd.get("message", {}))
-                        _cusage = _cd.get("usage") or {}
-                        if _cusage.get("completion_tokens"):
-                            # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
-                            try:
-                                _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-                            except Exception:
-                                _cc_cached = 0
-                            yield await ctx.emit({"type": "usage_meta", "phase": "critic",
-                                "completion_tokens": int(_cusage["completion_tokens"]),
-                                "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
-                                "cached_tokens": _cc_cached,
-                                "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
-                        _ctc = _cmsg.get("tool_calls", [])
-                        if not _ctc:
-                            # No more tool calls — this is the final verdict
-                            _parts.append(_cmsg.get("content", "").strip())
-                            break
-                        # Execute tool calls, append results
-                        _critic_tc_msgs.append(_cmsg)
-                        for _ctc_call in _ctc:
-                            _cfn   = _ctc_call.get("function", {})
-                            _cname = _cfn.get("name", "")
-                            _cargs = _parse_tool_args(_cfn.get("arguments", {}))
-                            _cres  = await _run_inline_tool(
-                                _cname,
-                                _cargs,
-                                tool_mode="critic_verify",
-                                include_websearch=False,
-                                workspace_lock=_ws_str,  # CRITIC-LOCK (2026-09-13): was None -> reads/searches unconstrained
-                            )
-                            if _cname == "run_bash" and not _run_bash_failed(_cres):
-                                _verify_last_ok_serial = max(_verify_last_ok_serial, _verify_mutation_serial)
-                            _critic_tc_msgs.append({
-                                "role": "tool",
-                                "content": _cres,
-                                "name": _cname,
-                                "tool_call_id": _ctc_call.get("id", _cname),
-                            })
-                except Exception as _cte:
-                    _parts.append(json.dumps({"approved": False, "issues": [f"Critic-tool-error: {str(_cte)[:80]}"], "verdict": "tool_error"}))
-            else:
-                # ── Critic Plain Request ──────────────────────────────────
-                _critic_plain_payload = {
-                    "model": critic_mdl,
-                    "messages": _critic_msgs,
-                    "tools": [],
-                    "stream": False,
-                    "temperature": _duo_critic_temp if _duo_critic_temp is not None else _critic_profile.get("temperature", _duo_critic_temp),
-                    "top_p": _critic_profile.get("top_p", 0.95),
-                    "top_k": _critic_profile.get("top_k", 20),
-                    "presence_penalty": _critic_profile.get("presence_penalty", 1.5),
-                    "repetition_penalty": _critic_profile.get("repetition_penalty", 1.0),
-                    "max_tokens": _duo_critic_tok,
-                }
-                if _critic_profile.get("seed") is not None:
-                    _critic_plain_payload["seed"] = int(_critic_profile["seed"])
-                # MIN-P-EXPLICIT (2026-09-20): see the coder payload — a
-                # declared min_p 0.0 must ship (API default is 0.05).
-                if "min_p" in _critic_profile:
-                    _critic_plain_payload["min_p"] = _critic_profile["min_p"]
-                if _critic_profile.get("cache_prompt"):
-                    _critic_plain_payload["cache_prompt"] = True
-                _critic_plain_payload = _apply_thinking_kwargs(
-                    _critic_plain_payload, _critic_profile, _critic_thinking, coder_tool_think=False
-                )
-                try:
-                    async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc_plain:
-                        for _critic_post_attempt in range(3):
-                            try:
-                                _c_gen_t0 = time.monotonic()  # GEN-TIME: Critic-POST-Dauer
-                                _cresp = await _chttpc_plain.post(
-                                    f"http://127.0.0.1:{_critic_port}/v1/chat/completions",
-                                    json=_critic_plain_payload,
-                                )
-                                if _cresp.status_code in (500, 502, 503, 504) and _critic_post_attempt < 2:
-                                    await _cresp.aread()
-                                    await asyncio.sleep(2.0)
-                                    continue
-                                break
-                            except httpx.ConnectError:
-                                if _critic_post_attempt < 2:
-                                    await asyncio.sleep(3.0)
-                                    continue
-                                raise
-                        if _cresp.status_code != 200:
-                            raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
-                        _cd = _cresp.json()
-                        _cmsg = (_cd.get("choices", [{}])[0].get("message", {})
-                                 if "choices" in _cd else _cd.get("message", {}))
-                        _cusage = _cd.get("usage") or {}
-                        if _cusage.get("completion_tokens"):
-                            # TOKEN-TRACKER (2026-08-25): cached_tokens mitliefern.
-                            try:
-                                _cc_cached = int((_cusage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
-                            except Exception:
-                                _cc_cached = 0
-                            yield await ctx.emit({"type": "usage_meta", "phase": "critic",
-                                "completion_tokens": int(_cusage["completion_tokens"]),
-                                "prompt_tokens": int(_cusage.get("prompt_tokens") or 0),
-                                "cached_tokens": _cc_cached,
-                                "gen_ms": int((time.monotonic() - _c_gen_t0) * 1000)})
-                        _parts.append(_cmsg.get("content", "").strip())
-                except Exception as _cre:
-                    _err_d = {"approved": False, "issues": [f"Critic error: {str(_cre)[:80]}"], "verdict": "error"}
-                    _parts.append(json.dumps(_err_d))
-
-            _critic_raw = "".join(_parts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
-
-            # TUNE-PARSER: 'approved=false issues=[P1;P2] verdict=OK'
-            _critic_verdict: dict = {}
-            if "approved=" in _critic_raw:
-                _critic_verdict = _parse_critic_tune(_critic_raw)
-            else:
-                try:
-                    jm = re.search(r"\{[\s\S]*?\}", _critic_raw)
-                    if jm: _critic_verdict = json.loads(jm.group())
-                except (json.JSONDecodeError, AttributeError):
-                    logger.debug("Critic JSON parse failed for: %.200s", _critic_raw)
-            if _critic_verdict.get("approved") is None:
-                _critic_verdict = {"approved": False, "issues": [_critic_raw[:300]], "verdict": "Parsing error"}
-
-            critic_issues  = _critic_verdict.get("issues", [])
-            final_verdict  = _critic_verdict.get("verdict", "")
-            _approved      = bool(_critic_verdict.get("approved", False))
-            _verify_gate_blocked = False
-            if _verify_mutation_serial > _verify_last_ok_serial:
-                _verify_gate_blocked = True
-                _verify_issue = "Verification missing: run_bash must pass after the latest file changes."
-                if _verify_issue not in critic_issues:
-                    critic_issues = list(critic_issues) + [_verify_issue]
-                final_verdict = "verification_required_after_write"
-                _approved = False
-                _critic_verdict["approved"] = False
-                _critic_verdict["issues"] = critic_issues
-                _critic_verdict["verdict"] = final_verdict
-
-            yield await ctx.emit({
-                "type":     "duo_critic_done",
-                "elapsed":  round(time.time() - _t, 1),
-                "verdict":  _critic_verdict,
-                "approved": _approved,
-            })
+            try:
+                async for _ev in _duo_critic_review(
+                    ctx, _critic_ps,
+                    coder_mdl=coder_mdl, coder_out=coder_out, critic_mdl=critic_mdl,
+                    _ws_str=_ws_str, _di=_di, _subtask=_subtask,
+                    _duo_critic_sys=_duo_critic_sys, _duo_critic_temp=_duo_critic_temp,
+                    _duo_critic_tok=_duo_critic_tok, _critic_profile=_critic_profile,
+                    _critic_thinking=_critic_thinking, _critic_tools_enabled=_critic_tools_enabled,
+                    _verify_mutation_serial=_verify_mutation_serial,
+                ):
+                    yield _ev
+            finally:
+                _parts = _critic_ps.parts
+                _t = _critic_ps.t
+                _verify_last_ok_serial = _critic_ps.verify_last_ok_serial
+                critic_issues = _critic_ps.critic_issues
+                final_verdict = _critic_ps.final_verdict
+                _approved = _critic_ps.approved
+                _verify_gate_blocked = _critic_ps.verify_gate_blocked
 
             _can_finish_round = (_approved or _is_last) and not _verify_gate_blocked
             if _can_finish_round:
@@ -6665,38 +6773,8 @@ async def run_code_duo(ctx):
                 logger.warning("[PROJECT] Save in finally failed: %s", _save_err)
 
     # ── P3: Final Test after all chunks ──────────────────────────
-    _final_test_fb = bool(ctx.duo_config.test_feedback_final)
-    if _final_test_fb and _cs.has_written_files and not ctx.aborted():
-        yield await ctx.emit({"type": "status", "content": "\U0001f9ea Final test run after all chunks..."})
-        try:
-            _final_test_result = await _run_test_suite(
-                workspace=_eff_run_ws(getattr(ctx, "workspace", ""), state.get("_ws_str", "")),
-                timeout=120,
-                chat_id=ctx.chat_id or "",
-            )
-        except Exception as _fte:
-            _final_test_result = _TestResult(
-                success=False, language="unknown", command="",
-                failure_count=0, error_lines=[str(_fte)],
-                raw_output="", inject_msg=f"\u26a0\ufe0f Final test runner error: {_fte}"
-            )
-        yield await ctx.emit({
-            "type": "test_result",
-            "chunk": "final",
-            "total_chunks": _n_items,
-            "passed": _final_test_result.is_clean(),
-            "language": _final_test_result.language,
-            "failures": _final_test_result.failure_count,
-            "command": _final_test_result.command,
-        })
-        if _final_test_result.is_clean():
-            yield await ctx.emit({"type": "status", "content": f"\u2705 All tests passed ({_final_test_result.language})"})
-        else:
-            yield await ctx.emit({"type": "status",
-                "content": f"\u274c {_final_test_result.failure_count} test failures in the final run"})
-            _cs.completion_notes.append(
-                f"Final test: {_final_test_result.failure_count} failure(s) ({_final_test_result.language})"
-            )
+    async for _ev in _duo_final_test(ctx, state, _cs, _n_items, _eff_run_ws=_eff_run_ws):
+        yield _ev
 
     if _loop_detected:
         _written_list = sorted(_written_files or [])
