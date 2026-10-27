@@ -276,6 +276,8 @@ _MOE_EXPERT_COUNTS[_HERMES_V7_MTP] = 35
 # Hermes3.6 Genesis V10 MTP APEX (2026-08-25): identische Launchsettings wie
 # V7 (n-cpu-moe 35, GPU-Offload 99, KV q4_0) — parallel zu V7 nutzbar.
 _HERMES_V10_MTP = "hermes3.6:35b-a3b-uncensored-genesis-v10-mtp-apex-compact"
+# APEX-Mini (2026-10-27): same MTP head as the Compact line.
+_HERMES_APEX_MINI = "hermes3.6:35b-a3b-uncensored-genesis-apex-mini"
 _MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 
 _MOE_KV_CACHE_TYPES: dict[str, str] = {}

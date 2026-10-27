@@ -283,31 +283,27 @@ SPECS: list[dict] = [
         ],
     },
     {
-        "key": "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact",
-        "tag": "hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact",
-        "desc": "Hermes3.6 Genesis Final MTP-APEX-Compact (Coder/Hermes agent, MoE+MTP, ~18GB download)",
-        "repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-Final-GGUF",
+        # APEX-MINI (2026-10-27): replaces the 17 GB "Final MTP-APEX-Compact".
+        # Same architecture (qwen35moe, 262k context, vision), same projector
+        # file name, the bigger quant at 20.2 GB, and the repo ships the chat
+        # template the author tested with - we download it next to the weights
+        # and the profile points at it.
+        "key": "hermes3.6:35b-a3b-uncensored-genesis-apex-mini",
+        "tag": "hermes3.6:35b-a3b-uncensored-genesis-apex-mini",
+        "desc": "Hermes3.6 Genesis APEX-Mini (Coder/Hermes agent, MoE+MTP+Vision, ~20GB download)",
+        "repo": "LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-GGUF",
         "file_regex": [
-            # repo renamed its files (verified 2026-10-18): the actual asset is
-            # "Hermes3.6-35B-A3B-Uncensored-Genesis-APEX-Compact.gguf" - the old
-            # pinned name matched nothing and the installer silently fetched no
-            # weights. Both spellings are accepted so a rename back still works.
-            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-(?:mtp-)?apex-compact\.gguf$",
-            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-final-mtp-apex-compact\.gguf$",
+            r"(?i)^hermes3\.6-35b-a3b-uncensored-genesis-apex-mini\.gguf$",
         ],
-        # The pinned repo names its projector after the BASE family
-        # (mmproj-Qwen3.6-...-Hermes-Final-F16.gguf, verified 2026-10-03) -
-        # the old hermes3.6-named regex matched nothing, a fresh install
-        # got no projector. Dest re-embeds family+size so the writer keys
-        # it as hermes3.6:35b_mmproj instead of a qwen3.6 entry.
         "mmproj_regex": [
-            # actual projector in the repo today:
-            # "mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf"
             r"(?i)^mmproj-hermes3\.6-35b-a3b-uncensored-genesis-f16\.gguf$",
-            r"(?i)^mmproj-qwen3\.6-35b-a3b-uncensored-genesis-hermes-final-f16\.gguf$",
             r"(?i)^mmproj-.*hermes.*f16\.gguf$",
         ],
-        "mmproj_dest": "mmproj-hermes3.6-35b-genesis-final-f16.gguf",
+        "mmproj_dest": "mmproj-hermes3.6-35b-genesis-apex-mini-f16.gguf",
+        "extra_files": [
+            {"path": "chat_template.jinja",
+             "dest": "model_configs/hermes36_apex_mini_chat_template.jinja"},
+        ],
     },
     # ── Qwen3.5 ladder (subagent-lite smallest tier + MTP pair) ───────────
     # unsloth MTP repos name files WITHOUT "mtp" (verified 2026-09-11) — the

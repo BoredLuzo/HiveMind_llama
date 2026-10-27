@@ -1,0 +1,79 @@
+{
+  "model": "hermes3.6:35b-a3b-uncensored-genesis-apex-mini",
+  "capabilities": {
+    "thinking": true,
+    "vision": true,
+    "tool_call": true
+  },
+  "vision_preprocessing": true,
+  "num_ctx": 8192,
+  "num_ctx_analyst": 8192,
+  "num_ctx_duo_coder": 8192,
+  "num_ctx_vision": 8192,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 35,
+  "mtp": true,
+  "gpu_layers": null,
+  "mmproj_filename": "mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf",
+  "vram_gb_override": null,
+  "sampling": {
+    "thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "seed": 42
+    },
+    "non_thinking": {
+      "temperature": 0.95,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_thinking_code_precise": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_thinking_text": {
+      "temperature": 0.95,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_text": {
+      "temperature": 0.95,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    }
+  },
+  "_notes": "APEX-Mini (LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-GGUF, 20.2 GB, 2026-10-27) replaces the 17 GB 'Final MTP-APEX-Compact'. Same architecture (qwen35moe, 262k trained context, vision), mtp on, CPU experts 35. The vendor chat_template.jinja ships with the download and is used here; the old model ran on chat_template22.5.jinja. VRAM: the pre-flight takes the calibrated hermes3.6:35b-a3b table entry (4.66 GB active + 6272 B/token); the file is ~3 GB larger than the Compact, so re-measure active_gpu_gb on the first real load and tighten the entry.",
+  "chat_template": "hermes36_apex_mini_chat_template.jinja"
+}

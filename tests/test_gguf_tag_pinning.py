@@ -50,6 +50,9 @@ CATALOG = {
     "qwen3.6-35b-a3b-ud-q4_k_xl.gguf": ("qwen3.6:35b-a3b-ud", {"qwen3.6:35b"}),
     "hermes3.6-35b-a3b-uncensored-genesis-final-mtp-apex-compact.gguf":
         ("hermes3.6:35b-a3b-uncensored-genesis-final-mtp-apex-compact", set()),
+    # APEX-Mini (2026-10-27): the installer's Hermes entry now points here.
+    "hermes3.6-35b-a3b-uncensored-genesis-apex-mini.gguf":
+        ("hermes3.6:35b-a3b-uncensored-genesis-apex-mini", set()),
     "lfm2.5-2.6b-q4_k_m.gguf": ("lfm2.5:2b-mtp-does-not-exist", None),  # replaced below
 }
 CATALOG["lfm2.5-2.6b-q4_k_m.gguf"] = ("lfm2.5:2.6b", set())
