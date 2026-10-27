@@ -53,6 +53,9 @@
   answers and a prefill penalty that does not reproduce.
 - Reference measurement for `qwen3.5:4b-mtp`: decode 55.5 -> 85.35 t/s
   (+53.8 %), prefill 610 -> 568 (-6.9 %), acceptance 0.911.
+- The trade is named: with speculative decoding the greedy output is not
+  bit-identical to plain decoding (near-tie tokens flip). That is the price for
+  the speed. `HIVEMIND_MTP_SPEC=0` restores byte-identical runs.
 
 ## Installer
 

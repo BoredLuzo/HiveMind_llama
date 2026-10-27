@@ -347,14 +347,19 @@ _DENSE_KV_CACHE_TYPES: dict[str, str] = {
 # while mtp=off was byte-identical across two engine restarts (3/3). The spec
 # path changes the target-logit computation enough to flip near-ties: the
 # "speculative decoding is lossless" guarantee does NOT hold here.
-# Decision: keep n-max at 2 and the coder default mtp OFF (determinism beats
-# the measured +42% decode for unattended coding; +42% decode / -30% prefill
-# measured the same day, hermes 35B, 1024-token generations). Overridable via
-# HIVEMIND_MTP_DRAFT_N_MAX - never ship 3+ (documented corruption).
-# RE-TESTED on the b11889 update (2026-10-26): still 0/3 greedy-identical
-# (same near-tie flip pattern as b11802). The update does NOT fix the
-# determinism divergence - mtp stays off. Re-check after the NEXT build
-# bump (scripts: HiveMind_dev/mtp_quality.py + mtp_control.py).
+# Decision (2026-10-27, revised): mtp is ON for the coder profiles, n-max 2.
+# The reason is a measured speed win that dwarfs the old prefill worry:
+# +55 % decode for -1.6 % prefill (hermes 35B) and +54 % decode for -6.9 %
+# prefill (qwen3.5:4b-mtp), same flags, 256-token answers, b11889, live box.
+# The 2026-10-24 "off" decision rested on two legs; the prefill leg does not
+# reproduce with llama_mlock=false (mmap prefill is fast), the determinism leg
+# stands: greedy output is NOT bit-identical with mtp (0/3 at n-max 2 on
+# b11802 AND b11889, near-tie token flips). So the trade is explicit:
+# roughly half again the decode speed against bit-exact reproducibility when
+# temperature is 0. Anyone who needs byte-identical runs sets
+# HIVEMIND_MTP_SPEC=0. Never ship n-max 3+ (documented corruption, issue
+# #23302). Re-check anchors: scripts/HiveMind_dev/mtp_quality.py +
+# mtp_control.py, or /completion with ignore_eos.
 # SPEC OFF-SWITCH (2026-09-17): HIVEMIND_MTP_SPEC=0 disables the spec-decode
 # flags entirely — draft-mtp also disables llama-server's prompt cache-reuse
 # and has reported heavy prefill regressions on some backends (Vulkan/Metal,

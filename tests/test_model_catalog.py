@@ -140,6 +140,33 @@ if _HERMES.exists():
     check("hermes keeps its 35 CPU experts", _hd.get("moe_cpu_experts") == 35,
           f"(moe={_hd.get('moe_cpu_experts')})")
 
+
+
+# ── Drafter-Skip (2026-10-27, GLM-Audit) ───────────────────────────────
+# `--essential` must NOT skip the drafter sidecars any more: speculative
+# decoding is on again for the profiles that ship an MTP head, and a load
+# without the drafter silently loses ~50 % decode. Only the explicit flag skips.
+_FM = (ROOT / "deploy" / "fetch_models.py").read_text(encoding="utf-8", errors="replace")
+check("essential does not imply --no-drafters",
+      'SKIP_DRAFTERS = bool(getattr(args, "no_drafters", False))' in _FM
+      and 'or getattr(args, "essential", False))' not in _FM)
+check("the skip warns about the decode cost",
+      "lose ~50 % decode" in _FM)
+check("the stale 'spec off everywhere' claim is gone",
+      "speculative decoding is off for every shipped" not in _FM)
+_LCC = (ROOT / "backend" / "llama_config.py").read_text(encoding="utf-8", errors="replace")
+check("llama_config no longer claims a coder mtp-off default",
+      "coder default mtp OFF" not in _LCC)
+_LCC_FLAT = " ".join(_LCC.split()).lower()
+check("llama_config names the determinism trade",
+      "bit-identical" in _LCC_FLAT and "hivemind_mtp_spec=0" in _LCC_FLAT)
+_CH = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8", errors="replace")
+_CH_FLAT = " ".join(_CH.split())
+check("changelog states the determinism price",
+      "not bit-identical" in _CH_FLAT or "byte-identical" in _CH_FLAT)
+check("changelog drops the old essential-skip claim",
+      "`--essential` implies it" not in _CH)
+
 print()
 print(f"SUMMARY model_catalog: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

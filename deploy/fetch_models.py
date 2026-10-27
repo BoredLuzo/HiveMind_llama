@@ -71,10 +71,12 @@ def _persist_models_dir(mdir: Path) -> None:
 # direct/coder core and skips helper models a small machine may not want.
 # Tunable: spec KEYS to skip (the judge/decider today).
 ESSENTIAL_SKIP_KEYS = {"lfm2.5:2.6b"}
-# DRAFTER-SKIP (2026-10-27): speculative decoding is off for every shipped
-# profile (mtp off, measured), so the drafter sidecars are dead weight: 2-4 GB
-# per install that no load path reads. `--no-drafters` skips them, and
-# `--essential` implies it.
+# DRAFTER-SKIP (2026-10-27, corrected): speculative decoding is ON again for
+# the profiles that ship an MTP head, so a drafter sidecar is NOT dead weight.
+# Gemma-4 uses its `mtp-*.gguf` and the DSpark models use their drafter; a load
+# without the file falls back to plain decoding and loses the measured +54 %
+# decode. So the skip is explicit only (`--no-drafters`), never implied by
+# `--essential`, and it says out loud what it costs.
 SKIP_DRAFTERS = False
 
 SPECS: list[dict] = [
@@ -596,8 +598,11 @@ def main() -> int:
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()
     global SKIP_DRAFTERS
-    SKIP_DRAFTERS = bool(getattr(args, "no_drafters", False)
-                         or getattr(args, "essential", False))
+    SKIP_DRAFTERS = bool(getattr(args, "no_drafters", False))
+    if SKIP_DRAFTERS:
+        print("    [WARN] --no-drafters: speculative decoding stays off for "
+              "every model that needs a drafter sidecar")
+        print("           (Gemma-4 MTP and the DSpark models lose ~50 % decode).")
 
     if args.print_catalog:
         for _i, _s in enumerate(SPECS):
