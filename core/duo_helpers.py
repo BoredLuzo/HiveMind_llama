@@ -375,7 +375,9 @@ def _resolve_tool_budget(max_tool_rounds_cfg: int, until_finished: bool,
 
 def _resolve_tool_read_timeout_seconds(settings: dict | None = None,
                                         profile: str = "balanced",
-                                        until_finished: bool = False) -> float:
+                                        until_finished: bool = False,
+                                        num_ctx: int | None = None,
+                                        model: str | None = None) -> float:
     _s = settings or {}
     try:
         _base = float(_s.get("duo_read_timeout", 300))
@@ -385,7 +387,22 @@ def _resolve_tool_read_timeout_seconds(settings: dict | None = None,
         str(profile or "balanced").strip().lower(), 1.0)
     if until_finished:
         _scale = max(_scale, 1.2)
-    return max(45.0, min(1800.0, _base * _scale))
+    _timeout = _base * _scale
+    # PREFILL-AWARE (2026-10-27, live slow run): a cold prefill costs
+    # prompt_tokens / prefill_tps seconds. Measured on an 8 GB RX 6600:
+    # decode 37-48 t/s is fine, prefill falls to ~90 t/s at 24k tokens, so a
+    # 38k prompt needs ~420 s - exactly the rounds that looked "slow" and one
+    # of which ended as a timeout while the server was working. The read
+    # timeout has to cover the prefill of the configured context.
+    if num_ctx:
+        try:
+            from core.budgets import prefill_tps_for as _ptps
+            _rate = max(40.0, min(2000.0, float(_ptps(model or "") or 0)))
+        except (ImportError, TypeError, ValueError):
+            _rate = 100.0
+        _prefill_s = float(num_ctx) / _rate
+        _timeout = max(_timeout, _prefill_s * 1.6 + 60.0)
+    return max(45.0, min(3600.0, _timeout))
 
 
 # ── Prompt builder ─────────────────────────────────────────────────────

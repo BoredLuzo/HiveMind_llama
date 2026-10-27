@@ -662,6 +662,32 @@ check("20f /vram/ps reports the warning", "_slot_warning(m.get" in _VRAM)
 check("20g the status helper never raises into the route",
       "except (ImportError, AttributeError, TypeError, RuntimeError)" in _VRAM)
 
+
+
+# ── 21. Prefill-Kosten (langsamer Live-Run 2026-10-27) ────────────────
+# Measured: decode 37-48 t/s is fine, prefill is ~100 t/s, so a cold 38k
+# prefill costs 420 s. The read timeout has to cover that, and the run has to
+# say what a cold prefill would cost.
+import sys as _sys                                                    # noqa: E402
+if str(ROOT) not in _sys.path:
+    _sys.path.insert(0, str(ROOT))
+from core.duo_helpers import _resolve_tool_read_timeout_seconds as _rt  # noqa: E402
+
+_t_small = _rt({}, "balanced", False, num_ctx=8192)
+_t_huge = _rt({}, "balanced", False, num_ctx=85000)
+check("21a a small context keeps the plain timeout", _t_small < 600,
+      f"({_t_small:.0f}s)")
+check("21b a large context gets a prefill-aware timeout", _t_huge > 1800,
+      f"({_t_huge:.0f}s)")
+check("21c the timeout stays bounded", _rt({}, "balanced", False, num_ctx=500000) <= 3600)
+_HELP = (ROOT / "core" / "duo_helpers.py").read_text(encoding="utf-8", errors="replace")
+check("21d the reason is documented in the code",
+      "PREFILL-AWARE" in _HELP and "prefill_tps_for" in _HELP)
+_DUO_R = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+check("21e the run logs the cold-prefill cost", "[PREFILL-COST]" in _DUO_R)
+check("21f it uses the effective coder ctx, not a made-up attribute",
+      "_cold_ctx = int(_dtool_ctx or 0)" in _DUO_R)
+
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

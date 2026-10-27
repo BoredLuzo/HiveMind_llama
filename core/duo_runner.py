@@ -3864,7 +3864,29 @@ async def run_code_duo(ctx):
                             float(ctx.settings.get("duo_write_chars_per_token", 2.5)))
                 except Exception:
                     pass
+                # PREFILL-COST (2026-10-27, live slow run): the coder ctx is the
+                # cold-prefill cost. Measured on this box: decode 37-48 t/s but
+                # prefill ~100 t/s, so ctx 85000 costs up to 15 min per cache
+                # miss (a 38k prompt measured 420 s). Say it at run start.
+                _cold_ctx = int(_dtool_ctx or 0)
+                _cold_mdl = str(
+                    ((ctx.settings.get("agents") or {}).get("duo_coder") or {})
+                    .get("model") or "")
+                try:
+                    from core.budgets import prefill_tps_for as _ptps_log
+                    _rate_log = max(40.0, min(2000.0, float(
+                        _ptps_log(_cold_mdl) or 0)))
+                except (ImportError, TypeError, ValueError):
+                    _rate_log = 100.0
+                if _cold_ctx >= 16384:
+                    logger.warning(
+                        "[PREFILL-COST] coder ctx=%d @%.0f t/s prefill: a cold "
+                        "prefill costs about %.0fs. Every prefix-cache miss "
+                        "(compression, an edited early message) pays that again.",
+                        _cold_ctx, _rate_log, _cold_ctx / _rate_log)
                 _tool_read_timeout_s = _resolve_tool_read_timeout_seconds(
+                    num_ctx=_cold_ctx,
+                    model=_cold_mdl,
                     profile=_duo_runtime_profile,
                     until_finished=ctx.duo_config.until_finished,
                 )
