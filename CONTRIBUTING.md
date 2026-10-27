@@ -3,6 +3,16 @@
 This file is part of the repository, not of the release zip - users download the
 zip, they do not need the dev setup.
 
+## Releases
+
+Cutting and publishing are two steps and only one of them is automated.
+
+- Preparing is mechanical: version bump, CHANGELOG block, release notes, gate,
+  `deploy\package_release.bat`, tag. An agent may do all of that.
+- Publishing is a decision: `gh release create` plus `deploy\promote_main.bat`
+  only run after the maintainer has tested the build and said so explicitly.
+  A release that ships untested costs more than a late one.
+
 ## Branches
 
 | Branch | Meaning |
