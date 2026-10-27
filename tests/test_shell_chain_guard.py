@@ -47,9 +47,17 @@ def run_bash(cmd: str, ws: Path) -> str:
 
 
 # ── 1. Quelle: der Guard existiert und deckt alle Operatoren ───────────
-for op in ("&&", "||", "|", ";", ">", "<", "`", "$("):
+# The tuple lists single characters now: "&" covers "&&" and "&", "|" covers
+# "|" and "||". Checking for the doubled forms would be a string-only pin.
+for op in ("&", "|", ";", ">", "<", "`", "$(", "\\n", "\\r", "^"):
     check(f"1 operator {op!r} is covered by the chain guard",
           f'"{op}"' in SRC.split("_SHELL_OPS = (")[1].split(")")[0])
+check("1b a single ampersand is refused at runtime",
+      "SHELL_CHAIN_UNSUPPORTED" in run_bash("touch a.py & echo done", Path(
+          tempfile.mkdtemp(prefix="amp_pin_"))))
+check("1c a second command line is refused too",
+      "SHELL_CHAIN_UNSUPPORTED" in run_bash("touch b.py\nrm -rf x", Path(
+          tempfile.mkdtemp(prefix="nl_pin_"))))
 check("2 touch refuses chained commands", "if _touch_match and _HAS_SHELL_CHAIN:" in SRC)
 check("3 rm refuses chained commands",
       'if _rm_match and cmd.strip().startswith("rm ") and _HAS_SHELL_CHAIN:' in SRC)

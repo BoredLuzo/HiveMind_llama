@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio
+from utils.bg_tasks import spawn  # noqa: E402
 import traceback, hashlib, json, logging, os, re, sys, time, uuid
 from datetime import datetime
 from pathlib import Path
@@ -2081,7 +2082,7 @@ async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
         )
     _restore_ka = str(ctx.settings.get("smart_preload_keep_alive", "10m"))
     if _duo_pinned:
-        asyncio.create_task(_unpin_duo_fn(ctx, _duo_pinned, _restore_ka))
+        spawn(_unpin_duo_fn(ctx, _duo_pinned, _restore_ka))
 
     if _project_state is not None and ctx.chat_id:
         try:
@@ -3381,8 +3382,8 @@ async def run_code_duo(ctx):
                 _abort_pause_sig = get_abort_during_pause_signal(ctx.run_id)
                 _chat_abort_ev = await _get_abort_event(ctx.chat_id) if ctx.chat_id else None
                 _wait_tasks = [
-                    asyncio.create_task(_resume_sig.wait()),
-                    asyncio.create_task(_abort_pause_sig.wait()),
+                    spawn(_resume_sig.wait()),
+                    spawn(_abort_pause_sig.wait()),
                 ]
                 if _chat_abort_ev is not None:
                     _wait_tasks.append(asyncio.create_task(_chat_abort_ev.wait()))
@@ -7306,7 +7307,7 @@ async def run_code_duo(ctx):
     # soul_evolve_agent.enabled + Run-Intervall (server.py).
     if _duo_run_count:
         try:
-            asyncio.create_task(ctx.maybe_trigger_soul_evolution(_duo_run_count))
+            spawn(ctx.maybe_trigger_soul_evolution(_duo_run_count))
         except Exception as _se_err:
             logger.warning("[SOUL] Evolution trigger failed: %s", _se_err)
 
@@ -7327,7 +7328,7 @@ async def run_code_duo(ctx):
             "duo_critic": final_verdict,
             "duo_coder_model": coder_mdl,
         }
-        asyncio.create_task(run_peer_ratings(
+        spawn(run_peer_ratings(
             ctx.run_id, ctx.user_input, _duo_rating_out, ctx.use_learned,
             rating_mode="duo",   # Duo-spezifische Rating-Paare
             has_images=bool(ctx.images),
@@ -7522,13 +7523,13 @@ async def run_code_duo(ctx):
     if bool(ctx.settings.get("preload_workers_after_run", False)):
         _wk_slots_run = _worker_slots or []
         if _wk_slots_run:
-            asyncio.create_task(_warm_workers_fn(list(_wk_slots_run), exec_mdl))
-    asyncio.create_task(_refresh_judge_keepalive())
+            spawn(_warm_workers_fn(list(_wk_slots_run), exec_mdl))
+    spawn(_refresh_judge_keepalive())
     # ── Insight Extractor: Post-loop structured learning ──────────────────
     # Fire-and-forget background task — extracts structured insights from the
     # completed agentic loop using the INSIGHT_EXTRACTOR prompt.
     if _written_files and ctx.duo_stop_reason == "completed" and not ctx.aborted():
-        asyncio.create_task(ctx.run_insight_extractor(
+        spawn(ctx.run_insight_extractor(
             task=ctx.user_input,
             written_files=list(_written_files),
             critic_verdict=final_verdict,
@@ -7539,15 +7540,15 @@ async def run_code_duo(ctx):
     # Previously only ran during soul evolution (too infrequent).
     # Now runs after each Duo completion so insights get decayed/merged promptly.
     if ctx.pipeline.memory and ctx.duo_stop_reason == "completed":
-        asyncio.create_task(asyncio.to_thread(
+        spawn(asyncio.to_thread(
             ctx.run_soul_cycle, ctx.pipeline.memory, ctx.settings, list(_recent_focus_paths), ctx.this_file
         ))
     # ── Skill distillation (phase 2): recurring patterns → real skills ──
     # Gated by soul_skill_writing (repurposed as "auto-distillation"). Max 1
     if (ctx.pipeline.memory and ctx.duo_stop_reason == "completed"
             and not ctx.aborted() and ctx.settings.get("soul_skill_writing", False)):
-        asyncio.create_task(ctx.run_skill_distillation(_ws_str))
+        spawn(ctx.run_skill_distillation(_ws_str))
     # Keep the vision slot warm
     _vis_mdl = ctx.vision_cfg.get("model", "") if ctx.vision_cfg.get("enabled") else ""
     if _vis_mdl:
-        asyncio.create_task(_keepalive_vision_fn(_vis_mdl))
+        spawn(_keepalive_vision_fn(_vis_mdl))

@@ -302,15 +302,13 @@ async def get_last_checkpoint(workspace: str) -> str | None:
     """Latest checkpoint commit (full hash) or None."""
     import asyncio as _asyncio
 
-    def _run():
-        return subprocess.run(
-            ["git", "rev-list", "-n", "1", "--grep=", "-i", "HEAD"],
-            cwd=workspace, capture_output=True, text=True, encoding="utf-8", errors="replace")
-
+    # The nested _run() here was dead code (never called) and would have run a
+    # different command than the one below. Removed in the 2026-10-27 audit.
     r = await _asyncio.to_thread(
         subprocess.run,
         ["git", "log", "--pretty=%H %s", "-n", "80"],
-        cwd=workspace, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        cwd=workspace, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=30)
     if r.returncode != 0:
         return None
     marker = _checkpoint_marker().lower()
@@ -524,7 +522,7 @@ def get_git_diff_ctx(workspace: str, max_chars: int = 2000) -> str:
         check = subprocess.run(
             ["git", "rev-parse", "--git-dir"],
             cwd=workspace, capture_output=True,
-            text=True, encoding="utf-8", errors="replace"
+            text=True, encoding="utf-8", errors="replace", timeout=30
         )
         if check.returncode != 0:
             return ""
@@ -532,7 +530,7 @@ def get_git_diff_ctx(workspace: str, max_chars: int = 2000) -> str:
         diff_result = subprocess.run(
             ["git", "diff", "HEAD", "--stat", "--no-color"],
             cwd=workspace, capture_output=True,
-            text=True, encoding="utf-8", errors="replace"
+            text=True, encoding="utf-8", errors="replace", timeout=30
         )
         stat = diff_result.stdout.strip()
         if not stat:
@@ -558,7 +556,7 @@ def get_git_log_oneline(workspace: str, n: int = 5) -> str:
         result = subprocess.run(
             ["git", "log", f"-{n}", "--oneline", "--no-color"],
             cwd=workspace, capture_output=True,
-            text=True, encoding="utf-8", errors="replace"
+            text=True, encoding="utf-8", errors="replace", timeout=30
         )
         return result.stdout.strip()
     except Exception:

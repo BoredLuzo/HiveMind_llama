@@ -1,4 +1,5 @@
 import asyncio
+from utils.bg_tasks import spawn  # noqa: E402
 import time
 from vision.preprocess import _VISION_POISON_MARKERS
 
@@ -708,14 +709,14 @@ async def run_pipeline(ctx):
                 ctx.memory.add_to_session("assistant", synth_out)
 
             run_count = ctx.increment_run_counter()
-            asyncio.create_task(run_peer_ratings(
+            spawn(run_peer_ratings(
                 run_id      = ctx.run_id,
                 user_input  = ctx.user_input,
                 outputs     = {"analyst": analyst_out, "refiner": refiner_out, "critic": critic_out, "synthesizer": synth_out},
                 use_learned = ctx.use_learned,
                 has_images  = bool(ctx.images),
             ))
-            asyncio.create_task(ctx.maybe_trigger_soul_evolution(run_count))
+            spawn(ctx.maybe_trigger_soul_evolution(run_count))
 
             yield await ctx.emit(
                 ctx.done_event(
@@ -765,13 +766,13 @@ async def run_pipeline(ctx):
 
             # FIX: start peer ratings BEFORE "done"
             run_count = ctx.increment_run_counter()
-            asyncio.create_task(run_peer_ratings(
+            spawn(run_peer_ratings(
                 run_id      = ctx.run_id,
                 user_input  = ctx.user_input,
                 outputs     = {"analyst": analyst_out, "refiner": refiner_out, "critic": critic_out, "synthesizer": synth_out},
                 use_learned = ctx.use_learned,
             ))
-            asyncio.create_task(ctx.maybe_trigger_soul_evolution(run_count))
+            spawn(ctx.maybe_trigger_soul_evolution(run_count))
 
             if not ctx.aborted() and ctx.exec_ctrl.stop_reason:
                 yield await ctx.emit({"type": "token", "content": f"\n\n{ctx.exec_ctrl.get_summary()}\n"})
@@ -787,13 +788,13 @@ async def run_pipeline(ctx):
                 )
             )
 
-        asyncio.create_task(asyncio.to_thread(ctx.flush_prefetch_settings, ctx.prefetch_state))
+        spawn(asyncio.to_thread(ctx.flush_prefetch_settings, ctx.prefetch_state))
     finally:
         ctx.prefetch_run_active = False
         ctx.unregister_abort(ctx.run_id)
         ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing — ensure cleanup on finally path
-        asyncio.create_task(_unpin_pipeline_models(ctx, _pinned_models, _restore_keep_alive))
-        asyncio.create_task(_refresh_judge_keepalive())
+        spawn(_unpin_pipeline_models(ctx, _pinned_models, _restore_keep_alive))
+        spawn(_refresh_judge_keepalive())
 
 # -- Pipeline helpers (extracted from run_pipeline closures, mechanical) -------
 

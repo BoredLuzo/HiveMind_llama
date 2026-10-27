@@ -65,9 +65,9 @@
   the manual retry spelled out; HiveMind runs without it, only the browser tool
   needs it.
 - Setup offers an essential model set that leaves out the judge/decider helper.
-- `--no-drafters` skips the drafter sidecars; `--essential` implies it. With
-  speculative decoding off for the shipped profiles those files (60 MB per
-  Gemma, 620 MB LFM, 650 MB MiniCPM) were downloaded and never read.
+- `--no-drafters` skips the drafter sidecars, explicitly only, and warns that it
+  costs roughly half the decode speed for the models that need one (Gemma-4 MTP,
+  the DSpark pair). `--essential` does NOT skip them: the drafters are in use.
 
 ## Load and context
 

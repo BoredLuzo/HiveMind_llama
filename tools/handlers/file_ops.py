@@ -41,10 +41,23 @@ def _atomic_write(path, data: str) -> None:
     THE write path for every file-editing tool (six hand-rolled copies
     collapsed here)."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    # MODE-PRESERVE (2026-10-27, audit): the temp file is created 0o600, so
+    # os.replace used to strip the executable bit and group/other rights from
+    # every rewritten file on POSIX. Windows has no such mode, hence unseen.
+    _prev_mode = None
+    try:
+        _prev_mode = os.stat(path).st_mode & 0o7777
+    except OSError:
+        _prev_mode = None
     _tmp_fd, _tmp_path = _mkstemp_bounded(path.parent, ".tmp")
     try:
         with os.fdopen(_tmp_fd, "w", encoding="utf-8", newline="") as _f:
             _f.write(data)
+        if _prev_mode is not None and os.name != "nt":
+            try:
+                os.chmod(_tmp_path, _prev_mode)
+            except OSError:
+                pass
         os.replace(_tmp_path, str(path))
     except Exception:
         try:

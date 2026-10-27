@@ -296,7 +296,11 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             # like `touch a.py && echo done` therefore created files named
             # "&&", "echo" and "done" in the workspace. Anything with a shell
             # operator is refused with instructions instead of half-run.
-            _SHELL_OPS = ("&&", "||", "|", ";", ">", "<", "`", "$(")
+            # & covers && and the single-ampersand separator (both cmd and sh
+            # chain with it). A newline starts a second command line, ^ is cmd's
+            # escape character. Each of them used to reach the shims as a token
+            # and became a file name.
+            _SHELL_OPS = ("&", "|", ";", ">", "<", "`", "$(", "\n", "\r", "^")
             _HAS_SHELL_CHAIN = any(op in cmd for op in _SHELL_OPS)
             _cd_mkdir = _re_win.match(
                 r'cd\s+("([^"]+)"|(\S+))\s+&&\s+mkdir\s+-p\s+(.*)',
@@ -369,7 +373,7 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     if not _rp.is_absolute():
                         _rp = (workspace / _rt).resolve()
                     # Validate path is within workspace
-                    _checked = _inline_check_workspace(_rp, _workspace_lock)
+                    _checked = _inline_check_workspace(_rp, _workspace_lock, "run_bash")
                     if _checked is not None:
                         _rm_errs.append(f"{_rt}: {_checked}")
                         continue

@@ -204,6 +204,7 @@ SUITES = [
     ("verification_honesty",   "tests/test_verification_honesty.py",          60),
     ("mcp_client",              "tests/test_mcp_client.py",                    90),
     ("write_folder_hint",      "tests/test_write_folder_hint.py",         20),
+    ("settings_atomic",       "tests/test_settings_atomic.py",            40),
     ("branch_model",           "tests/test_branch_model.py",              20),
     ("planner_scaffold_guard", "tests/test_planner_scaffold_guard.py",    30),
     ("shell_chain_guard",    "tests/test_shell_chain_guard.py",         30),
@@ -248,7 +249,16 @@ def main() -> int:
     print("=" * 64)
     for name, rel, timeout in SUITES:
         if not (ROOT / rel).exists():
-            print(f"[SKIP] {name:24s} (file not present - suite not tracked on this checkout)")
+            # SKIP-ONLY-BY-FLAG (2026-10-27, audit): this branch swallowed a
+            # DELETED or renamed suite - coverage shrank, the run stayed green.
+            # A registered suite missing on a full checkout is a defect.
+            if "--allow-missing" in sys.argv:
+                print(f"[SKIP] {name:24s} (--allow-missing: file not present)")
+                continue
+            results.append((name, False, 0.0))
+            failed_total += 1
+            print(f"[FAIL] {name:<20} ({rel} missing - registered but not on disk;"
+                  f" --allow-missing to skip on partial checkouts)")
             continue
         if only and only not in name.lower():
             continue

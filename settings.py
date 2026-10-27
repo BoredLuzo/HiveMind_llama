@@ -4,6 +4,7 @@
 from __future__ import annotations
 import copy
 import json
+import os
 import logging
 import threading
 from datetime import datetime as _dt
@@ -744,9 +745,11 @@ def save_settings(settings: dict, *, saved_at: str | None = None):
 
     FOREIGN-WRITE GUARD (2026-10-25): if the on-disk file changed since this
     process last read/saved it, that is a writer outside this process (hand
-    edit, another install) — say so in the log before overwriting it with the
-    in-memory state. Detection only; the save itself always proceeds (the
-    endpoints rely on it).
+    edit, another install) - say so in the log before overwriting it with the
+    in-memory state. Detection only; the save itself always proceeds.
+
+    Callers that change a key must use mutate_settings() instead: this function
+    writes the dict it is given and cannot see a change made after its read.
     """
     global _last_sync_stat
     _pre_stat = None
@@ -755,26 +758,61 @@ def save_settings(settings: dict, *, saved_at: str | None = None):
         _pre_stat = (_st.st_mtime_ns, _st.st_size)
     except OSError:
         _pre_stat = None
-    if _pre_stat is not None and _last_sync_stat is not None \
-            and _pre_stat != _last_sync_stat:
+    if (_pre_stat is not None and _last_sync_stat is not None
+            and _pre_stat != _last_sync_stat):
         _logger.warning(
-            "[settings] foreign write detected: settings.json changed on disk "
-            "since this process last read/saved it (disk=%s, last_known=%s). "
-            "This save persists the in-memory state and reverts those external "
-            "edits — if a hand-edited value just disappeared, this line is why.",
-            _pre_stat, _last_sync_stat)
+            "[settings] foreign write detected: on-disk %s != last sync %s - "
+            "overwriting with the in-memory state. If a hand edit just "
+            "disappeared, this line is why.", _pre_stat, _last_sync_stat)
+    with _settings_write_lock:
+        _write_settings_unlocked(settings, saved_at=saved_at)
 
+
+def _write_settings_unlocked(settings: dict, *, saved_at: str | None = None) -> None:
+    """One atomic write. Callers hold _settings_write_lock."""
+    global _last_sync_stat
     settings["settings_saved_at"] = saved_at or _now_iso()
     _data = json.dumps(settings, ensure_ascii=False, indent=2)
-    _tmp = SETTINGS_FILE.with_name(f".settings_{threading.get_ident()}.tmp")
-    _tmp.write_text(_data, encoding="utf-8")
-    with _settings_write_lock:
-        _tmp.replace(SETTINGS_FILE)                  # atomar, OS-Garantie
+    # PID in the name: two processes can carry the same thread id, and two
+    # writers sharing one temp file can interleave into invalid JSON.
+    # Replacement can lose a race against a foreign cleaner or a second writer
+    # in the same process; one retry with a fresh name is enough and keeps the
+    # write atomic.
+    for _attempt in range(2):
+        _tmp = SETTINGS_FILE.with_name(
+            f".settings_{os.getpid()}_{threading.get_ident()}_{_attempt}.tmp")
+        _tmp.write_text(_data, encoding="utf-8")
+        try:
+            _tmp.replace(SETTINGS_FILE)          # atomar, OS-Garantie
+            break
+        except PermissionError:
+            if _attempt:
+                raise
     try:
         _st = SETTINGS_FILE.stat()
         _last_sync_stat = (_st.st_mtime_ns, _st.st_size)
     except OSError:
         pass
+
+
+def mutate_settings(fn):
+    """Read, change and write settings as ONE locked step.
+
+    save_settings() is atomic per write, but the read-modify-write around it is
+    not: two callers that each load(), set a key and save() lose one key
+    (measured: a=111 and b=222 ended as a=0, b=222). Everything that changes
+    settings goes through here.
+
+    fn gets the current dict, mutates it and may return a replacement.
+    Returns the dict that was written.
+    """
+    with _settings_write_lock:
+        current = load_settings()
+        result = fn(current)
+        data = result if isinstance(result, dict) else current
+        _write_settings_unlocked(data)
+    return data
+
 
 
 # ── Presets (user config snapshots) ──────────────────────────────────────────

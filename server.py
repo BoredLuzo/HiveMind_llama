@@ -1,6 +1,7 @@
 # HiveMind — Local Multi-Agent AI Coding Assistant
 from __future__ import annotations
 import asyncio
+from utils.bg_tasks import spawn  # noqa: E402
 # Windows: Proactor loop for subprocess compatibility.
 import sys as _sys_early
 from pathlib import Path as _Path_early
@@ -715,7 +716,7 @@ async def _startup():
     # MCP client: start the configured servers in the background (best
     # effort, a slow server must not delay boot).
     try:
-        asyncio.create_task(_mcp_startup_refresh())
+        spawn(_mcp_startup_refresh())
     except (RuntimeError, AttributeError) as _mcp_err:
         _logger.debug("[Hivemind] MCP startup task not scheduled: %s", _mcp_err)
 
@@ -2425,7 +2426,7 @@ async def gateway_stop():
         " }"
     )
     _chk = subprocess.run(["powershell", "-NoProfile", "-Command", _ps],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, timeout=20)
     _verdict = _chk.stdout.strip()
     if _verdict not in ("py", "recycled", "no"):
         _verdict = "ps-error: " + (_chk.stderr.strip()[:120]
@@ -2448,7 +2449,7 @@ async def gateway_stop():
             {"ok": False, "error": "gateway process not found - status reset"},
             status_code=409)
     subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                   capture_output=True)
+                   capture_output=True, timeout=20)
     _sup.clear()
     return {"ok": True}
 

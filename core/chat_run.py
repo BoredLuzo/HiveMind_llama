@@ -7,6 +7,7 @@ and delegates to run_stream_orchestrated (core/stream.py).
 from __future__ import annotations
 
 import asyncio
+from utils.bg_tasks import spawn  # noqa: E402
 import hashlib
 import json
 import logging
@@ -735,7 +736,7 @@ async def run_stream(
             finally:
                 _prefetch_inflight = max(0, _prefetch_inflight - 1)
 
-        asyncio.create_task(_do_prefetch())
+        spawn(_do_prefetch())
 
     logger.warning("[RUN-TRACE] vor run_id-yield")
     yield await emit({"type": "run_id", "run_id": run_id})
@@ -1062,7 +1063,7 @@ async def run_stream(
                     await _api_pf_next(_configured_direct, num_ctx=_get_num_ctx(_configured_direct))
                 except Exception:
                     pass
-            asyncio.create_task(_prefetch_direct_post())
+            spawn(_prefetch_direct_post())
         if _direct_is_vision:
             # VISIBLE TRUTH CHECK (2026-10-04): the direct mode
             # used to strip silently inside chat_stream - the user saw

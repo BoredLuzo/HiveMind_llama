@@ -437,11 +437,32 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool) -> bool:
     if 0 <= free_gb < size_gb + 1.0:
         print(f"    [ERROR] Not enough disk space: {size_gb:.1f} GB needed, only {free_gb:.1f} GB free on {dest_dir}.")
         return False
-    print(f"    Downloading -> {dest} ({size_gb:.1f} GB)...")
-    req = urllib.request.Request(url, headers={"User-Agent": "HiveMind-Installer"})
-    with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as out:
-        total = int(r.headers.get("Content-Length") or f.get("size") or 0)
-        done = 0
+    # RESUME (2026-10-27, audit): an 18 GB download that died at 12.6 GB started
+    # from zero. A partial file is continued with a Range request, and the result
+    # is checked against the expected size before it counts as done.
+    _have = dest.stat().st_size if dest.exists() else 0
+    _expected = int(f.get("size") or 0)
+    if _have and _expected and _have >= _expected:
+        print(f"    Already complete: {dest.name} ({_have / (1024**3):.2f} GB)")
+        return True
+    print(f"    Downloading -> {dest} ({size_gb:.1f} GB)"
+          + (f" - resuming at {_have / (1024**3):.2f} GB" if _have else "") + "...")
+    headers = {"User-Agent": "HiveMind-Installer"}
+    if _have:
+        headers["Range"] = f"bytes={_have}-"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=120)
+    except urllib.error.HTTPError as he:
+        if he.code == 416 and _have:
+            print(f"    Already complete: {dest.name}")
+            return True
+        raise
+    with resp as r, open(dest, "ab" if (_have and r.status == 206) else "wb") as out:
+        if not (_have and r.status == 206):
+            _have = 0        # server ignored the range: start over, do not append
+        total = int(r.headers.get("Content-Length") or 0) + _have
+        done = _have
         while True:
             chunk = r.read(1024 * 512)
             if not chunk:
@@ -449,9 +470,15 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool) -> bool:
             out.write(chunk)
             done += len(chunk)
             if total:
-                sys.stdout.write(f"\r    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({done * 100 // max(total, 1)}%)")
+                _pct = done * 100 // max(total, 1)
+                sys.stdout.write(f"\r    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)")
                 sys.stdout.flush()
     sys.stdout.write("\n")
+    _final = dest.stat().st_size if dest.exists() else 0
+    if _expected and _final and _final != _expected:
+        print(f"    [WARNING] size mismatch: {_final} bytes on disk, {_expected} expected "
+              f"- re-run to resume")
+        return False
     return True
 
 

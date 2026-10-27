@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from settings import save_settings
+from settings import mutate_settings, save_settings
 from core.state import (
     settings,
     _ws_configure,
@@ -35,10 +35,15 @@ async def websearch_config(req: Request):
                "searxng_engines", "searxng_language",
                "duo_websearch_timeout_seconds", "duo_websearch_timeout_fast_seconds",
                "duo_websearch_timeout_critical_seconds"}
-    for k in allowed:
-        if k in data:
-            settings[k] = data[k]
-    save_settings(settings)
+    # RMW under the settings lock: another writer between the read above and
+    # this save would otherwise be lost. `settings` is the core.state singleton,
+    # so the lock-protected dict is copied back into it instead of rebinding.
+    def _apply(_cur):
+        for _k in allowed:
+            if _k in data:
+                _cur[_k] = data[_k]
+
+    settings.update(mutate_settings(_apply))
     _ws_configure(
         host=settings.get("searxng_host", "http://localhost:8888"),
         enabled=settings.get("pipeline_websearch_enabled", False)

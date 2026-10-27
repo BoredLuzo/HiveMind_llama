@@ -1,4 +1,5 @@
 import asyncio
+from utils.bg_tasks import spawn  # noqa: E402
 import logging
 import time
 from datetime import datetime
@@ -570,14 +571,14 @@ async def run_direct(ctx):
         yield await ctx.emit(ctx.done_event(round(time.time() - ctx.t_total, 1), _direct_stop_reason, **ctx.collect_done_metrics()))
         ctx.unregister_abort(ctx.run_id)
         ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing
-        asyncio.create_task(_refresh_judge_keepalive())
+        spawn(_refresh_judge_keepalive())
         if ctx.settings.get("pin_direct_after_response", False):
             async def _pin_direct_bg():
                 try:
                     await _bk_pin(_direct_model, num_ctx=ctx.get_num_ctx(_direct_model, "direct"))
                 except Exception:
                     pass
-            asyncio.create_task(_pin_direct_bg())
+            spawn(_pin_direct_bg())
         run_count = ctx.increment_run_counter()
         def _observed(t):
             if t.exception():
