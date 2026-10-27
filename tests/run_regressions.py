@@ -202,6 +202,7 @@ SUITES = [
     ("gateway_supervisor",     "tests/test_gateway_supervisor.py",              60),
     ("phone_restriction",      "tests/test_phone_restriction.py",               60),
     ("verification_honesty",   "tests/test_verification_honesty.py",          60),
+    ("mcp_client",              "tests/test_mcp_client.py",                    90),
     ("branch_model",           "tests/test_branch_model.py",              20),
     ("planner_scaffold_guard", "tests/test_planner_scaffold_guard.py",    30),
     ("shell_chain_guard",    "tests/test_shell_chain_guard.py",         30),
