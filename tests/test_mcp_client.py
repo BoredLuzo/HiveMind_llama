@@ -729,6 +729,15 @@ check("23f the request default follows",
 check("23g the UI checkbox follows the setting",
       "S.duoUntilFinished = s.until_finished !== false;" in _JS2)
 
+
+
+# ── 24. Doku sagt die Wahrheit ueber den Client ───────────────────────
+_DOC2 = (ROOT / "docs" / "mcp_client.md").read_text(encoding="utf-8", errors="replace")
+check("24a docs no longer claim stdio-only", "stdio transport only" not in _DOC2)
+check("24b docs no longer claim there is no card", "no MCP card" not in _DOC2)
+check("24c docs name both transports", "Two transports" in _DOC2)
+check("24d docs point at the card", "MCP client** card" in _DOC2)
+
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

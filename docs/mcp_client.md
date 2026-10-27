@@ -4,7 +4,7 @@ HiveMind can also be an MCP **server** ([docs/mcp.md](mcp.md)). This page is the
 other direction: HiveMind starts the MCP servers **you** configure and offers
 their tools to the model.
 
-Status: beta. Off by default, stdio transport only.
+Status: beta. Off by default. Two transports: stdio and HTTP.
 
 ## Two transports
 
@@ -26,7 +26,7 @@ the next `POST /mcp/reload` or `mcp_reload` call.
 
 ## Enable it
 
-Edit `settings.json` (there is no MCP card in the UI yet):
+Either use the **MCP client** card in the config page (toggle, server list as JSON, Save, Reload, live status) or edit `settings.json`:
 
 ```json
 {
