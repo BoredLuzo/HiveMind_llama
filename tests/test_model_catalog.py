@@ -120,6 +120,26 @@ check("spark profile is not a MoE/vision model",
       and prof_spark.get("mmproj_filename") is None
       and prof_spark.get("capabilities", {}).get("vision") is False)
 
+
+
+# ── MTP-Policy (2026-10-27, measured) ──────────────────────────────────
+# The hermes coder ran with mtp=false since 2026-10-24, based on 220-token
+# answers on an older build. Re-measured on b11889 with 256 tokens: decode
+# 20.0 -> 31.05 t/s (+55%), prefill 122.1 -> 120.15 (-1.6%), acceptance 0.823.
+# The profile has to keep mtp on or the coder silently loses half its decode.
+_HERMES = ROOT / "model_configs" / "models" / (
+    "hermes3.6_35b-a3b-uncensored-genesis-final-mtp-apex-compact.json")
+if _HERMES.exists():
+    import json as _json
+    _hd = _json.loads(_HERMES.read_text(encoding="utf-8"))
+    check("hermes coder keeps mtp on (measured +55% decode)", _hd.get("mtp") is True,
+          f"(mtp={_hd.get('mtp')})")
+    check("the measurement is recorded in the profile",
+          "decode" in str(_hd.get("_notes") or "").lower()
+          and "prefill" in str(_hd.get("_notes") or "").lower())
+    check("hermes keeps its 35 CPU experts", _hd.get("moe_cpu_experts") == 35,
+          f"(moe={_hd.get('moe_cpu_experts')})")
+
 print()
 print(f"SUMMARY model_catalog: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

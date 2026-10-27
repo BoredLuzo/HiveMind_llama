@@ -237,6 +237,8 @@
   hint, opt-in browser autostart (env-gated, headless restarts never
   spawn windows).
 - **Measured flag tuning** (see above): hermes coder without draft-mtp
+  (reversed in 1.4.11: measured again on b11889 with 256-token answers,
+  MTP gives +55 % decode for -1.6 % prefill)
   and with eager loading; `llama_mlock` actually works now; the
   registry-MTP env bypass closed; speculative models keep mmap (Vulkan
   OOM guard).
