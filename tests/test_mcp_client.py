@@ -10,6 +10,7 @@ the loop that created it.
 """
 import asyncio
 import inspect
+import json
 import re
 import sys
 import tempfile
@@ -535,6 +536,109 @@ check("18h the card hits the real endpoints",
 _m = re.search(r"app\.js\?v=(\d{8}-\d{2})", _HTML)
 check("18i the cache buster follows the change", bool(_m) and _m.group(1) >= "20261027-01",
       f"({_m.group(1) if _m else 'fehlt'})")
+
+
+
+# ── 19. HTTP-Transport (2026-10-27) ────────────────────────────────────
+# A server entry with `url` speaks Streamable HTTP instead of starting a
+# process. The fake server below answers JSON and one SSE response, so both
+# branches are exercised.
+import http.server as _http_server  # noqa: E402
+import threading as _threading  # noqa: E402
+
+
+def _make_http_server(mode: str):
+    class Handler(_http_server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):        # keep the test output clean
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                msg = json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                msg = {}
+            rid = msg.get("id")
+            method = msg.get("method")
+            if method == "initialize":
+                body = {"jsonrpc": "2.0", "id": rid,
+                        "result": {"protocolVersion": "2024-11-05",
+                                   "capabilities": {"tools": {}},
+                                   "serverInfo": {"name": "httpfake", "version": "0"}}}
+            elif method == "notifications/initialized":
+                self.send_response(202)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            elif method == "tools/list":
+                body = {"jsonrpc": "2.0", "id": rid, "result": {"tools": [
+                    {"name": "echo", "description": "echo",
+                     "inputSchema": {"type": "object",
+                                     "properties": {"text": {"type": "string"}}}}]}}
+            elif method == "tools/call":
+                args = (msg.get("params") or {}).get("arguments") or {}
+                body = {"jsonrpc": "2.0", "id": rid, "result": {"content": [
+                    {"type": "text", "text": "http: " + str(args.get("text", ""))}]}}
+            else:
+                body = {"jsonrpc": "2.0", "id": rid,
+                        "error": {"message": "unknown method"}}
+            raw = json.dumps(body).encode("utf-8")
+            if mode == "sse":
+                payload = b"event: message\ndata: " + raw + b"\n\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Mcp-Session-Id", "sess-1")
+                self.end_headers()
+                self.wfile.write(payload)
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+
+    srv = _http_server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    _threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}/mcp"
+
+
+async def _http_flow(mode: str):
+    srv, url = _make_http_server(mode)
+    try:
+        client = MC.McpClient()
+        st = await client.refresh(settings_with({"name": "httpfake", "url": url}))
+        names = [d["function"]["name"] for d in client.tool_defs()]
+        out = await client.call("mcp_httpfake_echo", {"text": "hi"})
+        await client.close_all()
+        return st, names, out
+    finally:
+        srv.shutdown()
+
+
+for _mode in ("json", "sse"):
+    _st, _names, _out = asyncio.run(_http_flow(_mode))
+    _srv = (_st.get("servers") or [{}])[0]
+    check(f"19 [{_mode}] a url server connects", _srv.get("ok") is True,
+          f"({_srv.get('error')})")
+    check(f"19 [{_mode}] its tools appear", "mcp_httpfake_echo" in _names,
+          f"({_names})")
+    check(f"19 [{_mode}] a tool call returns the payload", _out == "http: hi",
+          f"({_out!r})")
+
+_SRC = (ROOT / "infra" / "mcp_client.py").read_text(encoding="utf-8", errors="replace")
+check("19e both transports are selected by kind",
+      'spec.kind == "http"' in _SRC and "class HttpConn:" in _SRC)
+check("19f no process is started for a url server",
+      "server uses 'url', not a process" in _SRC)
+check("19g an SSE body is parsed for the matching id",
+      "def _sse_response(" in _SRC)
+check("19h the session id is carried",
+      "Mcp-Session-Id" in _SRC)
+check("19i a bad url fails cleanly",
+      "url must start with http" in _SRC)
 
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")

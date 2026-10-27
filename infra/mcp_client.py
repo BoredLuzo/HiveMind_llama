@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+
+import httpx
 import logging
 import os
 import shutil
@@ -111,7 +113,7 @@ def _tool_name(server: str, tool: str) -> str:
 class ServerSpec:
     """One configured server. Validates lazily so a typo cannot break a run."""
 
-    __slots__ = ("name", "command", "args", "env", "cwd", "enabled")
+    __slots__ = ("name", "command", "args", "env", "cwd", "url", "enabled")
 
     def __init__(self, raw: dict, index: int) -> None:
         self.name = str(raw.get("name") or f"server{index}")
@@ -121,9 +123,18 @@ class ServerSpec:
         env = raw.get("env")
         self.env = {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}
         self.cwd = str(raw.get("cwd") or "") or None
+        # HTTP transport: a `url` entry speaks Streamable HTTP instead of
+        # starting a process. Both shapes share the rest of the client.
+        self.url = str(raw.get("url") or "").strip()
         self.enabled = _as_bool(raw.get("enabled", True))
 
+    @property
+    def kind(self) -> str:
+        return "http" if self.url else "stdio"
+
     def argv(self) -> list[str]:
+        if self.kind == "http":
+            raise McpError("server uses 'url', not a process")
         if not self.command:
             raise McpError("server has no 'command'")
         exe = self.command
@@ -148,14 +159,19 @@ class ServerSpec:
         return argv
 
     def signature(self) -> tuple:
-        """What identifies a RUNNING process. A reload with another signature
+        """What identifies a LIVE connection. A reload with another signature
         restarts the server instead of keeping the old one (H4)."""
-        return (self.command, tuple(self.args),
+        return (self.kind, self.url, self.command, tuple(self.args),
                 tuple(sorted(self.env.items())), self.cwd)
 
     def describe(self) -> dict:
-        return {"name": self.name, "command": self.command,
-                "args": list(self.args), "enabled": self.enabled}
+        out = {"name": self.name, "enabled": self.enabled, "kind": self.kind}
+        if self.kind == "http":
+            out["url"] = self.url
+        else:
+            out["command"] = self.command
+            out["args"] = list(self.args)
+        return out
 
 
 class ServerConn:
@@ -237,27 +253,8 @@ class ServerConn:
         self.tools = await self._list_tools(limit)
 
     async def _list_tools(self, limit: float) -> list[dict]:
-        """Every page of tools/list, up to MAX_TOOLS_PER_SERVER.
-
-        MCP pages with nextCursor. Asking once (the first version) silently
-        dropped every tool after the first page on servers that paginate.
-        """
-        out: list[dict] = []
-        cursor: str | None = None
-        for _page in range(MAX_TOOL_PAGES):
-            params = {"cursor": cursor} if cursor else {}
-            result = await self.request("tools/list", params, timeout=limit)
-            page = result.get("tools") if isinstance(result, dict) else None
-            for tool in page or []:
-                if isinstance(tool, dict) and tool.get("name"):
-                    out.append(tool)
-            if len(out) >= MAX_TOOLS_PER_SERVER:
-                break
-            nxt = result.get("nextCursor") if isinstance(result, dict) else None
-            cursor = str(nxt) if isinstance(nxt, str) and nxt else None
-            if not cursor:
-                break
-        return out[:MAX_TOOLS_PER_SERVER]
+        """Every page of tools/list (MCP paginates with nextCursor)."""
+        return await _collect_tools(self.request, limit)
 
     # -- json-rpc ------------------------------------------------------
     async def _send(self, payload: dict) -> None:
@@ -440,6 +437,180 @@ def _kill_tree(proc) -> None:
         pass
 
 
+class HttpConn:
+    """One MCP server over Streamable HTTP (POST JSON-RPC, JSON or SSE back).
+
+    Same surface as ServerConn so McpClient does not care which transport a
+    server uses: tools / dead / last_error / spec / loop / timeout_s, start(),
+    request(), call_tool(), close().
+    """
+
+    def __init__(self, spec: ServerSpec, timeout_s: float) -> None:
+        self.spec = spec
+        self.timeout_s = timeout_s
+        self.loop = asyncio.get_running_loop()
+        self.tools: list[dict] = []
+        self.dead = False
+        self.last_error = ""
+        self._session_id = ""
+        self._next_id = 0
+        self._client: httpx.AsyncClient | None = None
+
+    # -- lifecycle -----------------------------------------------------
+    async def start(self) -> None:
+        url = self.spec.url
+        if not url.lower().startswith(("http://", "https://")):
+            raise McpError(f"{self.spec.name}: url must start with http:// or https://")
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout_s,
+                                             follow_redirects=True)
+        try:
+            await self._handshake()
+        except McpError:
+            await self.close()
+            raise
+
+    async def _handshake(self) -> None:
+        limit = min(INIT_TIMEOUT_S, self.timeout_s)
+        info = _client_info()
+        if info["version"]:
+            CLIENT_INFO["version"] = info["version"]
+        await self.request("initialize", {
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": CLIENT_INFO,
+        }, timeout=limit)
+        await self._notify("notifications/initialized")
+        self.tools = await _collect_tools(self.request, limit)
+
+    async def close(self) -> None:
+        self._session_id = ""
+        if self._client is not None:
+            try:
+                await self._client.aclose()
+            except (OSError, RuntimeError):
+                pass
+            self._client = None
+
+    # -- json-rpc ------------------------------------------------------
+    def _die(self, reason: str) -> None:
+        self.dead = True
+        self.last_error = reason
+
+    def _headers(self) -> dict:
+        h = {"Content-Type": "application/json",
+             "Accept": "application/json, text/event-stream"}
+        if self._session_id:
+            h["Mcp-Session-Id"] = self._session_id
+        return h
+
+    async def _post(self, payload: dict, timeout: float) -> httpx.Response:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
+        return await self._client.post(self.spec.url, json=payload,
+                                       headers=self._headers(), timeout=timeout)
+
+    async def _notify(self, method: str, params: dict | None = None) -> None:
+        body: dict = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            body["params"] = params
+        try:
+            await self._post(body, min(INIT_TIMEOUT_S, self.timeout_s))
+        except (httpx.HTTPError, OSError) as exc:
+            raise McpError(f"{self.spec.name}: notify failed: {exc}") from exc
+
+    async def request(self, method: str, params: dict, *,
+                      timeout: float | None = None) -> dict:
+        if self.dead:
+            raise McpError(self.last_error or f"{self.spec.name} is marked dead")
+        limit = float(timeout or self.timeout_s)
+        self._next_id += 1
+        rid = self._next_id
+        payload = {"jsonrpc": "2.0", "id": rid, "method": method,
+                   "params": params or {}}
+        try:
+            resp = await self._post(payload, limit)
+        except httpx.TimeoutException:
+            self._die(f"{self.spec.name} timed out after {limit:.1f}s")
+            raise McpError(f"{self.spec.name} timed out after {limit:.1f}s ({method})") from None
+        except (httpx.HTTPError, OSError) as exc:
+            self._die(f"{self.spec.name} unreachable: {exc}")
+            raise McpError(f"{self.spec.name} unreachable: {exc}") from exc
+
+        sid = resp.headers.get("mcp-session-id")
+        if sid:
+            self._session_id = sid
+        if resp.status_code >= 400:
+            self._die(f"{self.spec.name} answered HTTP {resp.status_code}")
+            raise McpError(f"{self.spec.name}: HTTP {resp.status_code}")
+        ctype = resp.headers.get("content-type", "")
+        if "text/event-stream" in ctype:
+            msg = _sse_response(resp.text, rid)
+        else:
+            try:
+                msg = resp.json()
+            except ValueError:
+                self._die(f"{self.spec.name} sent no JSON")
+                raise McpError(f"{self.spec.name} sent no JSON") from None
+        if not isinstance(msg, dict):
+            raise McpError(f"{self.spec.name} sent an unexpected payload")
+        if "error" in msg:
+            err = msg.get("error") or {}
+            text = err.get("message") if isinstance(err, dict) else str(err)
+            raise McpError(f"{self.spec.name}: {text or 'request failed'}")
+        result = msg.get("result")
+        return result if isinstance(result, dict) else {"value": result}
+
+    async def call_tool(self, tool: str, arguments: dict,
+                        timeout: float | None = None) -> str:
+        result = await self.request("tools/call",
+                                    {"name": tool, "arguments": arguments or {}},
+                                    timeout=timeout)
+        return _render_result(result)
+
+
+def _sse_response(body: str, rid: int) -> dict:
+    """Pick the JSON-RPC answer for `rid` out of an SSE body."""
+    candidates: list[dict] = []
+    for line in str(body or "").splitlines():
+        if not line.startswith("data:"):
+            continue
+        chunk = line[5:].strip()
+        if not chunk:
+            continue
+        try:
+            msg = json.loads(chunk)
+        except ValueError:
+            continue
+        if isinstance(msg, dict):
+            candidates.append(msg)
+    for msg in candidates:
+        if msg.get("id") == rid:
+            return msg
+    if candidates:
+        return candidates[-1]
+    raise McpError("SSE response carried no JSON-RPC message")
+
+
+async def _collect_tools(request_fn, limit: float) -> list[dict]:
+    """Every page of tools/list, up to MAX_TOOLS_PER_SERVER (shared)."""
+    out: list[dict] = []
+    cursor: str | None = None
+    for _page in range(MAX_TOOL_PAGES):
+        params = {"cursor": cursor} if cursor else {}
+        result = await request_fn("tools/list", params, timeout=limit)
+        page = result.get("tools") if isinstance(result, dict) else None
+        for tool in page or []:
+            if isinstance(tool, dict) and tool.get("name"):
+                out.append(tool)
+        if len(out) >= MAX_TOOLS_PER_SERVER:
+            break
+        nxt = result.get("nextCursor") if isinstance(result, dict) else None
+        cursor = str(nxt) if isinstance(nxt, str) and nxt else None
+        if not cursor:
+            break
+    return out[:MAX_TOOLS_PER_SERVER]
+
 def _render_result(result: dict) -> str:
     """MCP content blocks -> plain text for the tool result."""
     blocks = result.get("content") if isinstance(result, dict) else None
@@ -515,7 +686,7 @@ class McpClient:
             return DEFAULT_TIMEOUT_S
 
     # -- lifecycle -----------------------------------------------------
-    async def _conn(self, spec: ServerSpec, timeout_s: float) -> ServerConn:
+    async def _conn(self, spec: ServerSpec, timeout_s: float):
         conn = self._conns.get(spec.name)
         if conn is not None:
             reuse = (not conn.dead
@@ -528,7 +699,7 @@ class McpClient:
             # M4: a dead connection must be reaped, not just replaced.
             self._conns.pop(spec.name, None)
             await conn.close()
-        conn = ServerConn(spec, timeout_s)
+        conn = HttpConn(spec, timeout_s) if spec.kind == "http" else ServerConn(spec, timeout_s)
         self._conns[spec.name] = conn
         await conn.start()
         return conn

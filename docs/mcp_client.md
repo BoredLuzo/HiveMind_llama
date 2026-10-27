@@ -6,6 +6,24 @@ their tools to the model.
 
 Status: beta. Off by default, stdio transport only.
 
+## Two transports
+
+- **stdio** (default): `command` + `args` start a child process. One process per
+  server, killed with its whole tree on timeout or shutdown.
+- **HTTP** (Streamable HTTP): an entry with `url` instead of `command` is called
+  over POST JSON-RPC; answers may come back as JSON or as an SSE stream, and a
+  `Mcp-Session-Id` the server sets is reused. Nothing is started, so there is no
+  process to kill.
+
+```json
+{"name": "remote", "url": "http://127.0.0.1:8931/mcp"}
+```
+
+Both share the same tool list, name prefix, approval gate and mode gate. What
+the HTTP transport does not do: the optional GET stream for server-initiated
+messages stays unused, so a server that pushes notifications is only noticed on
+the next `POST /mcp/reload` or `mcp_reload` call.
+
 ## Enable it
 
 Edit `settings.json` (there is no MCP card in the UI yet):
