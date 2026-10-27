@@ -613,17 +613,11 @@ def goal_allows_scaffold(goal: str) -> bool:
     return any(w in g for w in _SCAFFOLD_ALLOW_WORDS)
 
 
-def drop_scaffold_steps(steps: list[str], goal: str) -> tuple[list[str], list[str]]:
-    """Split plan steps into (kept, dropped) for unrequested scaffolding."""
-    if not steps:
-        return [], []
-    if not str(goal or "").strip():
-        # Without the request we cannot tell requested setup from invented
-        # setup. Stay conservative: keep the plan untouched.
+def _split_scaffold(steps: list[str], goal: str) -> tuple[list[str], list[str]]:
+    """(kept, dropped) for unrequested scaffolding. No planning decisions."""
+    if not steps or not str(goal or "").strip() or goal_allows_scaffold(goal):
         return list(steps), []
     g = str(goal or "").lower()
-    if goal_allows_scaffold(goal):
-        return list(steps), []
     kept, dropped = [], []
     for step in steps:
         s = str(step or "").lower()
@@ -631,11 +625,58 @@ def drop_scaffold_steps(steps: list[str], goal: str) -> tuple[list[str], list[st
             dropped.append(step)
             continue
         kept.append(step)
-    # Never silently empty a plan: if EVERY step was scaffolding, the goal is
-    # better served by the deterministic fallback plan than by nothing.
-    if not kept:
-        return [], list(steps)
     return kept, dropped
+
+
+def _names_a_file(step: str) -> bool:
+    """True when the step says which file it touches (field or a file token)."""
+    s = str(step or "")
+    if planner_field(s, "file").strip():
+        return True
+    return bool(requested_files(s, limit=1))
+
+
+def apply_scaffold_guard(steps: list[str], goal: str) -> tuple[list[str], dict]:
+    """The final plan: what the coder will actually be asked to do.
+
+    Three deterministic rules, in this order:
+      1. Scaffolding the request never mentioned is dropped.
+      2. Steps with no file target are dropped when the request names files -
+         a chunk needs something to change, "clarify the scope" is not work.
+      3. If nothing survives and the request names files, plan exactly those.
+
+    Returns (steps, meta). meta carries scaffold_dropped / meta_dropped /
+    scaffold_replaced so the caller can log and pin it.
+    """
+    meta: dict = {}
+    if not steps:
+        return [], meta
+    if not str(goal or "").strip():
+        return list(steps), meta          # without the request, no guessing
+
+    named = requested_files(goal)
+    kept, dropped = _split_scaffold(steps, goal)
+    if dropped:
+        meta["scaffold_dropped"] = len(dropped)
+
+    if named:
+        work, meta_only = [], []
+        for step in kept:
+            (work if _names_a_file(step) else meta_only).append(step)
+        if meta_only:
+            # Not one step says which file it changes: the plan is prose about
+            # planning, not work. Derive from the request below.
+            kept = work
+            meta["meta_dropped"] = len(meta_only)
+            dropped.extend(meta_only)
+
+    if not kept:
+        derived = subtasks_for_requested_files(goal)
+        if derived:
+            meta["scaffold_replaced"] = len(dropped)
+            return derived, meta
+        return list(steps), {}            # cannot tell: leave the plan alone
+    return kept, meta
 
 
 _FILE_TOKEN = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_./\\-]*\.[A-Za-z0-9]{1,6}\b")
@@ -782,29 +823,12 @@ def parse_planner_output(raw: str, *, step_cap: int = 20,
     quality_meta: dict = {}
     if subtasks:
         subtasks, quality_meta = validate_chunk_plan(subtasks, max_steps=step_cap)
-    _kept, _dropped = drop_scaffold_steps(subtasks, goal)
-    if _dropped and not _kept:
-        # The plan is nothing but scaffolding the request never asked for
-        # (live 2026-10-26: "create two files" became README + src/ + requirements).
-        # If the request names concrete files, plan exactly those instead of
-        # handing the scaffold to the coder.
-        _derived = subtasks_for_requested_files(goal)
-        if _derived:
-            logger.warning(
-                "[PLANNER-SCAFFOLD] plan was %d scaffold step(s); derived %d step(s) "
-                "from the requested files: %s", len(_dropped), len(_derived),
-                ", ".join(requested_files(goal)))
-            quality_meta = dict(quality_meta or {})
-            quality_meta["scaffold_replaced"] = len(_dropped)
-            _kept = _derived
-        else:
-            _dropped = []      # cannot tell: keep the plan untouched
-    if _dropped:
-        logger.warning("[PLANNER-SCAFFOLD] dropped %d unrequested scaffold step(s): %s",
-                       len(_dropped), "; ".join(str(s)[:60] for s in _dropped[:4]))
-        quality_meta = dict(quality_meta or {})
-        quality_meta["scaffold_dropped"] = len(_dropped)
-        subtasks = _kept
+    subtasks, _guard_meta = apply_scaffold_guard(subtasks, goal)
+    if _guard_meta:
+        quality_meta = dict(quality_meta or {}) | _guard_meta
+        logger.warning("[PLANNER-GUARD] %s (plan -> %d step(s): %s)",
+                       ", ".join(f"{k}={v}" for k, v in _guard_meta.items()),
+                       len(subtasks), "; ".join(str(s)[:50] for s in subtasks[:3]))
 
     return subtasks, parse_mode, quality_meta
 

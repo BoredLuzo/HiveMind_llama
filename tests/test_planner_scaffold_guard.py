@@ -32,7 +32,7 @@ def check(name, cond, extra=""):
 
 
 from hive_functions.planner import (  # noqa: E402
-    drop_scaffold_steps, goal_allows_scaffold, parse_planner_output,
+    apply_scaffold_guard, goal_allows_scaffold, parse_planner_output,
 )
 
 SCAFFOLD_PLAN = [
@@ -46,18 +46,19 @@ SCAFFOLD_PLAN = [
 GOAL = "Create two short files: greet.py with greet(name) and main.py that prints it"
 
 # ── 1. Der Filter selbst ───────────────────────────────────────────────
-kept, dropped = drop_scaffold_steps(SCAFFOLD_PLAN, GOAL)
-check("1a scaffold steps are dropped", len(dropped) == 4, f"(dropped={len(dropped)})")
+kept, meta = apply_scaffold_guard(SCAFFOLD_PLAN, GOAL)
+check("1a scaffold steps are dropped", meta.get("scaffold_dropped") == 4,
+      f"(meta={meta})")
 check("1b the requested files survive", len(kept) == 2 and all(
     ("greet.py" in s or "main.py" in s) for s in kept), f"({kept})")
 check("1c no drop when nothing looks like scaffolding",
-      drop_scaffold_steps(["file: a.py | touch: x"], "create a.py")[1] == [])
+      apply_scaffold_guard(["file: a.py | touch: x"], "create a.py")[1] == {})
 
 # ── 2. Ein echter Projekt-Auftrag behaelt das Geruest ──────────────────
 proj_goal = "Set up a new python project with a gitignore and requirements.txt"
-kept2, dropped2 = drop_scaffold_steps(SCAFFOLD_PLAN, proj_goal)
-check("2a a project request keeps the scaffolding", dropped2 == [],
-      f"(dropped={len(dropped2)})")
+kept2, meta2 = apply_scaffold_guard(SCAFFOLD_PLAN, proj_goal)
+check("2a a project request keeps the scaffolding", meta2 == {},
+      f"(meta={meta2})")
 check("2b goal_allows_scaffold detects it", goal_allows_scaffold(proj_goal) is True)
 
 # ── 3. Ein Plan aus NUR Geruest bleibt nicht leer ──────────────────────
@@ -92,8 +93,10 @@ check("5a the filter gets the user request, not the enriched task",
 check("5c the runner hands the raw request in",
       "user_goal=ctx.user_input" in (ROOT / "core" / "duo_runner.py").read_text(
           encoding="utf-8", errors="replace"))
-check("5b the filter is wired after validate_chunk_plan",
-      SRC.index("drop_scaffold_steps(subtasks, goal)") > SRC.index("validate_chunk_plan(subtasks"))
+check("5b the guard is wired after validate_chunk_plan",
+      SRC.index("apply_scaffold_guard(subtasks, goal)") > SRC.index("validate_chunk_plan(subtasks"))
+check("5d the old two-function contract is gone",
+      "def drop_scaffold_steps(" not in SRC)
 
 
 # ── 6. "Completed Tasks" sind keine offenen Schritte ───────────────────
@@ -113,6 +116,28 @@ subs_ck, _, _ = parse_planner_output(
     goal="build the real thing")
 check("6c a [x] line inside Open Tasks is skipped too",
       len(subs_ck) == 1 and "[x]" not in subs_ck[0], f"({subs_ck})")
+
+
+# ── 7. Meta-Schritte sind keine Coder-Arbeit (C) ───────────────────────
+META_PLAN = [
+    "Clarify scope and acceptance criteria for the request",
+    "Identify dependencies and the order of work",
+    "Run verification and fix reported errors",
+]
+kept_m, meta_m = apply_scaffold_guard(META_PLAN, GOAL)
+check("7a an all-meta plan becomes the requested files",
+      len(kept_m) == 2 and all("greet.py" in s or "main.py" in s for s in kept_m),
+      f"({[s[:40] for s in kept_m]})")
+check("7b the meta drop is reported", meta_m.get("meta_dropped") == 3,
+      f"({meta_m})")
+mixed = META_PLAN + ["file: greet.py | touch: add greet | decision: return | risk: none"]
+kept_x, meta_x = apply_scaffold_guard(mixed, GOAL)
+check("7c meta steps fall out next to a real step",
+      len(kept_x) == 1 and "greet.py" in kept_x[0], f"({kept_x})")
+check("7d without a named file the meta steps stay",
+      apply_scaffold_guard(META_PLAN, "improve the codebase a bit")[0] == META_PLAN)
+check("7e a file step without the field still counts",
+      apply_scaffold_guard(["edit greet.py to add greet(name)"], GOAL)[1].get("meta_dropped") is None)
 
 print()
 print(f"SUMMARY planner_scaffold_guard: {passed} passed, {failed} failed")

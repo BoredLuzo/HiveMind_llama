@@ -67,6 +67,18 @@ for line in sys.stdin:
     elif method == "notifications/initialized":
         continue
     elif method == "tools/list":
+        if MODE == "paged":
+            cursor = (msg.get("params") or {}).get("cursor")
+            if cursor == "p2":
+                send({"jsonrpc": "2.0", "id": rid, "result": {"tools": [
+                    {"name": "second_page", "description": "page two",
+                     "inputSchema": {"type": "object", "properties": {}}}]}})
+            else:
+                send({"jsonrpc": "2.0", "id": rid, "result": {
+                    "tools": [{"name": "first_page", "description": "page one",
+                               "inputSchema": {"type": "object", "properties": {}}}],
+                    "nextCursor": "p2"}})
+            continue
         send({"jsonrpc": "2.0", "id": rid, "result": {"tools": [
             {"name": "echo", "description": "Echo the text back",
              "inputSchema": {"type": "object",
@@ -298,8 +310,9 @@ async def _collision_flow():
 st, names = asyncio.run(_collision_flow())
 check("11c colliding tool names are not duplicated",
       len(names) == len(set(names)), f"({sorted(names)})")
+_server_tools = [n for n in names if n != "mcp_reload"]
 check("11d the prefix is the sanitized server name",
-      all(n.startswith("mcp_my_srv_") for n in names), f"({sorted(names)})")
+      all(n.startswith("mcp_my_srv_") for n in _server_tools), f"({sorted(names)})")
 skipped = [s for e in st["servers"] for s in e.get("skipped", [])]
 check("11e the skip is reported in the status", len(skipped) == 4, f"({skipped})")
 
@@ -469,6 +482,33 @@ _inline = _DEFS.split("def _get_inline_tools(", 1)[1].split("\ndef ", 1)[0] \
     if "def _get_inline_tools(" in _DEFS else ""
 check("16j _get_inline_tools no longer extends the raw list itself",
       "_mcp.tool_defs()" not in _inline)
+
+
+
+# ── 17. Pagination und das Reload-Tool (Punkt B) ───────────────────────
+async def _paged_flow():
+    client = MC.McpClient()
+    st = await client.refresh(settings_with(spec("paged", mode="paged")))
+    names = [d["function"]["name"] for d in client.tool_defs()]
+    reload_out = await client.call("mcp_reload", {})
+    names_after = [d["function"]["name"] for d in client.tool_defs()]
+    await client.close_all()
+    return st, names, reload_out, names_after
+
+
+_paged_st, _paged_names, _reload_out, _paged_after = asyncio.run(_paged_flow())
+check("17a every tools/list page is collected",
+      "mcp_paged_first_page" in _paged_names and "mcp_paged_second_page" in _paged_names,
+      f"({_paged_names})")
+check("17b both pages count as tools of the server",
+      (_paged_st.get("servers") or [{}])[0].get("tools") == 2,
+      f"({(_paged_st.get('servers') or [{}])[0].get('tools')})")
+check("17c mcp_reload is offered as a tool", "mcp_reload" in _paged_names)
+check("17d calling it restarts and reports",
+      "[MCP] reloaded" in _reload_out and "ok, 2 tool" in _reload_out,
+      f"({_reload_out[:60]!r})")
+check("17e the tool list survives the reload", _paged_after == _paged_names,
+      f"({len(_paged_after)} vs {len(_paged_names)})")
 
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")

@@ -47,6 +47,7 @@ INIT_TIMEOUT_S = 20.0
 DEFAULT_TIMEOUT_S = 30.0
 MAX_SERVERS = 8
 MAX_TOOLS_PER_SERVER = 64
+MAX_TOOL_PAGES = 10
 MAX_OUTPUT_CHARS = 200_000
 STDERR_KEEP = 4000
 MAX_LINE_BYTES = 8 * 1024 * 1024
@@ -59,13 +60,25 @@ class McpError(Exception):
     """Any MCP failure. Callers turn it into a tool error string."""
 
 
-def _setting(settings: dict | None, key: str, default):
+def _settings(settings: dict | None = None) -> dict:
+    """The one place that knows where settings come from.
+
+    Callers may pass a dict (tests, the router) or nothing (tool layer), in
+    which case the engine's settings are loaded. A failed import is not an
+    error - the client simply stays disabled.
+    """
+    if isinstance(settings, dict):
+        return settings
     try:
-        if isinstance(settings, dict) and key in settings:
-            return settings[key]
-    except TypeError:
-        pass
-    return default
+        from settings import load_settings
+        return load_settings() or {}
+    except (ImportError, OSError, ValueError):
+        return {}
+
+
+def _setting(settings: dict | None, key: str, default):
+    loaded = _settings(settings)
+    return loaded.get(key, default) if key in loaded else default
 
 
 def _as_bool(value) -> bool:
@@ -221,11 +234,30 @@ class ServerConn:
             "clientInfo": CLIENT_INFO,
         }, timeout=limit)
         await self._notify("notifications/initialized")
-        result = await self.request("tools/list", {}, timeout=limit)
-        tools = result.get("tools") if isinstance(result, dict) else None
-        self.tools = [t for t in (tools or []) if isinstance(t, dict) and t.get("name")]
-        if len(self.tools) > MAX_TOOLS_PER_SERVER:
-            self.tools = self.tools[:MAX_TOOLS_PER_SERVER]
+        self.tools = await self._list_tools(limit)
+
+    async def _list_tools(self, limit: float) -> list[dict]:
+        """Every page of tools/list, up to MAX_TOOLS_PER_SERVER.
+
+        MCP pages with nextCursor. Asking once (the first version) silently
+        dropped every tool after the first page on servers that paginate.
+        """
+        out: list[dict] = []
+        cursor: str | None = None
+        for _page in range(MAX_TOOL_PAGES):
+            params = {"cursor": cursor} if cursor else {}
+            result = await self.request("tools/list", params, timeout=limit)
+            page = result.get("tools") if isinstance(result, dict) else None
+            for tool in page or []:
+                if isinstance(tool, dict) and tool.get("name"):
+                    out.append(tool)
+            if len(out) >= MAX_TOOLS_PER_SERVER:
+                break
+            nxt = result.get("nextCursor") if isinstance(result, dict) else None
+            cursor = str(nxt) if isinstance(nxt, str) and nxt else None
+            if not cursor:
+                break
+        return out[:MAX_TOOLS_PER_SERVER]
 
     # -- json-rpc ------------------------------------------------------
     async def _send(self, payload: dict) -> None:
@@ -437,6 +469,9 @@ class McpClient:
 
     def __init__(self) -> None:
         self._lifecycle = asyncio.Lock()
+        # the settings of the last refresh: the reload tool must use the same
+        # configuration, not whatever the engine's settings.json says now
+        self._last_settings: dict | None = None
         self._server_errors: dict[str, str] = {}
         self._conns: dict[str, ServerConn] = {}
         self._defs: list[dict] | None = None
@@ -469,22 +504,10 @@ class McpClient:
 
     @staticmethod
     def enabled(settings: dict | None = None) -> bool:
-        if settings is None:
-            try:
-                from settings import load_settings
-                settings = load_settings() or {}
-            except (ImportError, OSError, ValueError):
-                return False
-        return bool(_setting(settings, "mcp_client_enabled", False))
+        return _as_bool(_setting(settings, "mcp_client_enabled", False))
 
     @staticmethod
     def timeout_s(settings: dict | None = None) -> float:
-        if settings is None:
-            try:
-                from settings import load_settings
-                settings = load_settings() or {}
-            except (ImportError, OSError, ValueError):
-                settings = {}
         try:
             return max(1.0, float(_setting(settings, "mcp_client_timeout_s",
                                            DEFAULT_TIMEOUT_S)))
@@ -518,14 +541,15 @@ class McpClient:
             return await self._refresh_locked(settings)
 
     async def _refresh_locked(self, settings: dict | None = None) -> dict:
-        settings = settings if settings is not None else _load()
+        settings = _settings(settings)
+        self._last_settings = settings
         if not self.enabled(settings):
             await self.close_all()
             self._defs = []
             self._names = {}
             return {"enabled": False, "servers": []}
         timeout_s = self.timeout_s(settings)
-        specs = self._specs(settings)
+        specs = self._specs(_settings(settings))
         # ORPHAN-CLOSE (2026-10-26): a server removed from the config (or set to
         # enabled:false) must not keep its child alive. Before, the process
         # stayed running until the engine shut down.
@@ -567,6 +591,10 @@ class McpClient:
                     continue
                 self._names[name] = (spec.name, tool["name"])
                 self._defs.append(_tool_def(name, spec.name, tool))
+        # RELOAD-TOOL (2026-10-27): the model can ask for a reload itself. Until
+        # now only POST /mcp/reload could, so a server that died mid-run left
+        # the model with "no such tool" and no way out.
+        self._defs.append(RELOAD_TOOL_DEF)
         return {"enabled": True, "servers": status}
 
     async def close_all(self) -> None:
@@ -599,6 +627,19 @@ class McpClient:
 
     async def call(self, name: str, arguments: dict,
                    timeout: float | None = None) -> str:
+        if name == RELOAD_TOOL_NAME:
+            try:
+                status = await self.refresh(self._last_settings)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                return f"[TOOL_ERROR: MCP_RELOAD_FAILED]\n{exc}"
+            rows = status.get("servers") or []
+            if not status.get("enabled"):
+                return "[MCP] the client is disabled (settings: mcp_client_enabled)"
+            lines = [f"- {r['name']}: {'ok, ' + str(r['tools']) + ' tool(s)' if r['ok'] else r['error'][:120]}"
+                     for r in rows]
+            return ("[MCP] reloaded.\n" + ("\n".join(lines) if lines else
+                                          "no servers configured")
+                    + f"\nAvailable tools: {len(self._defs) - 1}")
         target = self._names.get(name)
         if not target:
             hint = ""
@@ -619,6 +660,19 @@ class McpClient:
         except McpError as exc:
             logger.info("[MCP] %s.%s failed: %s", server, tool, exc)
             return f"[TOOL_ERROR: MCP_CALL_FAILED]\n{exc}"
+
+
+RELOAD_TOOL_NAME = "mcp_reload"
+RELOAD_TOOL_DEF = {
+    "type": "function",
+    "function": {
+        "name": RELOAD_TOOL_NAME,
+        "description": ("[mcp] Restart the configured MCP servers and rebuild "
+                        "the tool list. Use it when an MCP tool reports a dead "
+                        "or missing server."),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
 
 
 def _tool_def(name: str, server: str, tool: dict) -> dict:
@@ -643,14 +697,6 @@ def _tool_def(name: str, server: str, tool: dict) -> dict:
             "parameters": schema,
         },
     }
-
-
-def _load() -> dict:
-    try:
-        from settings import load_settings
-        return load_settings() or {}
-    except (ImportError, OSError, ValueError):
-        return {}
 
 
 _client: McpClient | None = None
@@ -681,7 +727,7 @@ async def close_all() -> None:
 
 
 def tool_defs(settings: dict | None = None) -> list[dict]:
-    if not McpClient.enabled(settings):
+    if not McpClient.enabled(settings or _settings()):
         return []
     return get_client().tool_defs()
 

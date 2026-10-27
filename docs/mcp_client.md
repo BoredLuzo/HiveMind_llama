@@ -52,6 +52,39 @@ the model sees the real parameters. Two caps keep a broken server from blowing
 up a request: a name longer than 64 characters is truncated, and a schema over
 8 kB is replaced by an empty one with a note.
 
+## What the server process sees
+
+`command`, `args`, `env` and `cwd` are handed to the child exactly as written.
+Nothing is rewritten and no shell is involved (`.cmd`/`.bat` get `cmd /d /c`).
+The **workspace is the server's own business**: an MCP server decides which
+folder it exposes and which variable it reads for it. HiveMind does not inject
+a workspace.
+
+HiveMind's own server (`infra/mcp_server.py`) has two kinds of tools:
+
+- **Proxy tools** (`read_file`, `write_file`, `run_bash`, `search_code`, ...)
+  reach the running engine over HTTP and inherit **the engine's workspace**.
+  `HIVEMIND_WORKSPACE` does not change where they look.
+- **Local tools** of that server use for its own folder, which it takes from
+  `HIVEMIND_WORKSPACE` (falling back to the folder it runs in).
+
+A working entry:
+
+```json
+{"name": "self", "command": "python", "args": ["-m", "infra.mcp_server"],
+ "cwd": "C:/HiveMind", "env": {"HIVEMIND_WORKSPACE": "C:/work/my-project"}}
+```
+
+So a proxy tool can answer from a folder you did not expect - that folder is
+whatever the engine currently works in, not what the server config says. The
+client passes the server's message through as a normal tool error; it is a
+config question, not a client bug.
+
+Tools are collected over every `tools/list` page (MCP paginates with
+`nextCursor`), up to 64 per server and 10 pages. The tool list also contains
+`mcp_reload`: calling it restarts the configured servers and rebuilds the list,
+so a dead server does not end the run.
+
 ## Behaviour and limits
 
 - One child process per server, started on the first refresh, killed on
