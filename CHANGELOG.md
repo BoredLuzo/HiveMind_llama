@@ -1,3 +1,55 @@
+## [1.4.10] - 2026-10-27
+
+### Chunking plans what you asked for
+
+- A request like "create greet.py and main.py" no longer becomes a project
+  scaffold. Steps that only set up a shell (README, src/, requirements.txt,
+  .gitignore, Dockerfile, ...) are dropped unless the request mentions them or
+  asks for a project. When nothing but scaffolding was planned and the request
+  names files, the plan is built from those files instead.
+- The plan ends where "Completed Tasks" begins: finished work used to come back
+  as extra chunks, so the coder re-ran what it had just done.
+- The "Chunking is off" notice reads the run's own flag now. It used to read
+  the saved setting, so a run started with chunking on announced that its plan
+  was skipped while the chunks ran.
+- A chunk is marked done after its test verdict, not before: a failing test
+  re-processes the chunk instead of recording it as complete.
+- The last chunk needs the critic's approval like every other chunk. It used to
+  pass unreviewed, and it is the one carrying the integration work.
+- `duo_chunking` and `duo_pre_explore` ship off: both are opt-in, and both work
+  when switched on.
+
+### Bash without junk files
+
+- `run_bash` no longer creates files named after shell operators. The Windows
+  shims for `touch`, `rm` and `mkdir` split their arguments on whitespace, so
+  `touch a.py && echo done` also "touched" `&&`, `echo` and `done`. A command
+  that contains a shell operator is refused with an explanation now: one
+  command per call, `write_file` for files.
+
+### Installer
+
+- The judge/decider model is an optional step, asked like Voice: skipping it
+  leaves the decider on its keyword fallback until you install it later.
+- Playwright installs through the venv interpreter with the real error text and
+  the manual retry spelled out; HiveMind runs without it, only the browser tool
+  needs it.
+- Setup offers an essential model set that leaves out the judge/decider helper.
+
+### Load and context
+
+- `POST /vram/load` accepts `num_ctx` (or `ctx`) and reports the value it used
+  plus where it came from: request, profile or the server default.
+- The context card states the honest speed picture where you set it.
+
+### Under the hood
+
+- `duo_runner.py` is split: the planner phase, the critic review, the tool-round
+  execution, the wedge handoff, the context-pressure check and the port/ctx
+  resolution live in named functions instead of one generator. Behaviour is
+  unchanged; the split is covered by the e2e smoke suite and a real run.
+- README no longer pins a release number, so it cannot drift again.
+
 ## [1.4.9] - 2026-10-26
 
 ### Git integration
