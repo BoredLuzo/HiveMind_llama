@@ -101,7 +101,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.4.9"
+HIVEMIND_VERSION = "1.4.10"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -203,6 +203,7 @@ from routers import learning_router
 from routers import soul_router
 from routers import vision_router
 from routers import vram_router
+from routers import mcp_router
 from routers import websearch_router
 from routers import skills_router
 from routers import debug_router, models_router
@@ -628,6 +629,25 @@ async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: in
         yield tok
 
 
+async def _mcp_startup_refresh() -> None:
+    """Start the configured MCP servers once at boot (best effort).
+
+    Runs as a background task so a slow or broken server cannot delay boot.
+    Without it the tool list stayed empty until someone POSTed /mcp/reload.
+    """
+    try:
+        from infra import mcp_client
+        if not mcp_client.enabled():
+            return
+        status = await mcp_client.refresh()
+        _logger.info("[MCP] startup: %s",
+                     ", ".join(f"{s['name']}={'ok' if s['ok'] else s['error'][:40]}"
+                               for s in status.get("servers") or []) or "no servers")
+    except (ImportError, OSError, ValueError, RuntimeError, KeyError,
+            TypeError, AttributeError) as exc:
+        _logger.info("[MCP] startup refresh skipped: %s", exc)
+
+
 @app.on_event("shutdown")
 async def _shutdown():
     """Clean shutdown: terminate all llama-server processes."""
@@ -637,6 +657,15 @@ async def _shutdown():
         await _sm.shutdown()
     except Exception as _se:
         _logger.debug("[Hivemind] Manager-shutdown error: %s", _se)
+    try:
+        # MCP children are separate processes; without this they survive the
+        # engine and pile up on the next start.
+        from infra import mcp_client as _mc
+        await _mc.close_all()
+        _logger.info("[Hivemind] MCP client: server processes closed")
+    except (ImportError, OSError, ValueError, RuntimeError,
+            AttributeError) as _mce:
+        _logger.debug("[Hivemind] MCP shutdown error: %s", _mce)
     if _force_kill_all:
         try:
             _fk = _force_kill_all()
@@ -682,6 +711,13 @@ async def _startup():
         _browser_timer = threading.Timer(1.5, _open_browser)
         _browser_timer.daemon = True   # never block interpreter exit
         _browser_timer.start()
+
+    # MCP client: start the configured servers in the background (best
+    # effort, a slow server must not delay boot).
+    try:
+        asyncio.create_task(_mcp_startup_refresh())
+    except (RuntimeError, AttributeError) as _mcp_err:
+        _logger.debug("[Hivemind] MCP startup task not scheduled: %s", _mcp_err)
 
     # AGENT-MODEL-SANITIZE (2026-10-06, owner rule): persisted/default agent
     # models that are NOT on disk must not surface anywhere (UI selectors,
@@ -2418,6 +2454,7 @@ async def gateway_stop():
 
 # -- Router Registration --
 app.include_router(automap_router)
+app.include_router(mcp_router)
 app.include_router(chats_router)
 app.include_router(config_router)
 app.include_router(context_router)

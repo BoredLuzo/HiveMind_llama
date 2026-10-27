@@ -8,11 +8,6 @@
 Local multi-agent coding assistant on top of llama.cpp. Runs on your own
 hardware, no cloud, no API keys, nothing leaves your machine.
 
-**Current release: see the [releases page](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)** - Windows installer and Linux script,
-voice in and out, hardened tool layer. Download:
-[`HiveMind_v1.4.9_release.zip`](https://github.com/BoredLuzo/HiveMind_llama/releases/latest)
-| what changed: [CHANGELOG](CHANGELOG.md).
-
 Author: Luzo (BoredLuzo) | https://github.com/BoredLuzo
 
 
@@ -461,6 +456,8 @@ token - whisper and parakeet are public repos.
 ## API
 
 - OpenAI-compatible `/v1/chat/completions` (agent tool-loop mode).
+- MCP client (beta): external MCP servers as tools (`settings: mcp_client_enabled`,
+  off by default) - see [docs/mcp_client.md](docs/mcp_client.md).
 - MCP server (Model Context Protocol, `infra/mcp_server.py`), stdio + HTTP on - see [docs/mcp.md](docs/mcp.md) for the tiers, limits and the editor-context endpoint.
   port 8090 (`start_mcp.bat`), tiered read/write/exec permissions.
 - `/automap/*` for routing profiles, `/model_configs/*` for base/learned/

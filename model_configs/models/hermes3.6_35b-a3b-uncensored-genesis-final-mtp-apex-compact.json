@@ -14,7 +14,7 @@
   "reasoning": "on",
   "distilled": false,
   "moe_cpu_experts": 35,
-  "mtp": false,
+  "mtp": true,
   "gpu_layers": null,
   "mmproj_filename": "mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf",
   "vram_gb_override": null,
@@ -73,5 +73,6 @@
       "repetition_penalty": 1.0,
       "seed": 42
     }
-  }
+  },
+  "_notes": "mtp on (2026-10-27, b11889, RX 6600, ctx 16384, 256-token decode): decode 20.0 -> 31.05 t/s (+55 %), prefill 122.1 -> 120.15 t/s (-1.6 %), acceptance 0.823. The 2026-10-24 'mtp off' decision measured 220-token answers on an older build and saw a 30 % prefill penalty that does not reproduce here. Re-check anchor: same flags, 256 tokens, ignore_eos."
 }

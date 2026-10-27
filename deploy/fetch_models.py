@@ -71,6 +71,11 @@ def _persist_models_dir(mdir: Path) -> None:
 # direct/coder core and skips helper models a small machine may not want.
 # Tunable: spec KEYS to skip (the judge/decider today).
 ESSENTIAL_SKIP_KEYS = {"lfm2.5:2.6b"}
+# DRAFTER-SKIP (2026-10-27): speculative decoding is off for every shipped
+# profile (mtp off, measured), so the drafter sidecars are dead weight: 2-4 GB
+# per install that no load path reads. `--no-drafters` skips them, and
+# `--essential` implies it.
+SKIP_DRAFTERS = False
 
 SPECS: list[dict] = [
     {
@@ -574,6 +579,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models-dir", default="")
     ap.add_argument("--only-missing", action="store_true")
+    ap.add_argument("--no-drafters", action="store_true",
+                    help="skip the drafter sidecars (speculative decoding is off)")
     ap.add_argument("--essential", action="store_true",
                     help="skip helper models (judge/decider) - core only")
     ap.add_argument("--list-only", action="store_true")
@@ -588,6 +595,9 @@ def main() -> int:
                     help="Only these models: keys or numbers, comma-separated (e.g. 1,4)")
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()
+    global SKIP_DRAFTERS
+    SKIP_DRAFTERS = bool(getattr(args, "no_drafters", False)
+                         or getattr(args, "essential", False))
 
     if args.print_catalog:
         for _i, _s in enumerate(SPECS):
@@ -679,6 +689,10 @@ def main() -> int:
         # the sidecar filename.
         for _sc in (spec.get("sidecar") or []):
             _sc_name = Path(_sc["path"]).name.lower()
+            if SKIP_DRAFTERS:
+                print(f"    Drafter skipped (--no-drafters): {Path(_sc['path']).name}"
+                      f" [{_sc.get('note', '')}]")
+                continue
             if args.only_missing and _sc_name in local_files:
                 print(f"    Sidecar present: {Path(_sc['path']).name} — skipping (--only-missing)")
                 continue
