@@ -81,10 +81,10 @@ _MOE_TABLE: dict[str, dict] = {
         "active_gpu_gb":            4.66,
         "measured_bytes_per_token": 6272,
         "calibrated_n_cpu_moe":     35,
-    
+    },
     "mellum2.1:12b-a2.5b-thinking": {
         "active_gpu_gb": 4.0,
-    },},
+    },
     "qwen3.6:35b-a3b-ud": {
         "active_gpu_gb":            4.66,
         "measured_bytes_per_token": 6272,
@@ -145,6 +145,55 @@ _MOE_TABLE: dict[str, dict] = {
 }
 
 
+def _profile_moe_cfg(model_name: str) -> dict | None:
+    """MoE sizing from the LOCAL model profile when the static table is silent.
+
+    A profile carries `moe_cpu_experts` and, for models whose VRAM was measured
+    on this box, `vram_gb_override`. Both come from the same JSON the loader
+    reads, so a model that exists only locally (a test candidate, a fine-tune)
+    gets a correct pre-flight estimate without editing this table.
+
+    Without moe_cpu_experts the model is not MoE and the dense path stays
+    authoritative, so this can never make a dense estimate worse.
+    """
+    try:
+        from model_configs.models_registry import get_profile as _get_profile
+    except ImportError:
+        return None
+    try:
+        prof = _get_profile(model_name) or {}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    try:
+        moe = int(prof.get("moe_cpu_experts") or 0)
+    except (TypeError, ValueError):
+        moe = 0
+    if moe <= 0:
+        return None
+    try:
+        override = float(prof.get("vram_gb_override") or 0)
+    except (TypeError, ValueError):
+        override = 0.0
+    if override <= 0:
+        return None
+    cfg: dict = {"active_gpu_gb": round(override, 2),
+                 "source": "profile",
+                 "n_cpu_moe": moe}
+    try:
+        kv_bpt = float(prof.get("kv_bytes_per_token") or 0)
+    except (TypeError, ValueError):
+        kv_bpt = 0.0
+    if kv_bpt > 0:
+        cfg["measured_bytes_per_token"] = int(kv_bpt)
+    return cfg
+
+
+# Fallback KV cost for a MoE that carries no KV numbers anywhere (12 KB/token,
+# the 35B-A3B q4_0 class measured on this box). Only used when neither the
+# table nor the profile says anything better.
+MOE_DEFAULT_BYTES_PER_TOKEN = 12288
+
+
 def moe_cfg_for(model_name: str) -> dict | None:
     """_MOE_TABLE resolution shared by vram_of_moe and the /vram/estimate route:
     exact, -ud-stripped, then prefix (GGUF auto-discovery appends quant/finetune
@@ -155,6 +204,15 @@ def moe_cfg_for(model_name: str) -> dict | None:
         for table_key in _MOE_TABLE:
             if key.startswith(table_key):
                 return _MOE_TABLE[table_key]
+    if cfg is None:
+        # No table entry: a local profile may still describe the MoE. This is
+        # the path that used to require a hand-written table line for every new
+        # MoE model (and the pre-flight then blocked the load).
+        cfg = _profile_moe_cfg(key)
+        if cfg:
+            _logger.info("moe_cfg_for(%s): no table entry, using the profile "
+                         "(active_gpu_gb=%s, n_cpu_moe=%s)",
+                         key, cfg["active_gpu_gb"], cfg.get("n_cpu_moe"))
     return cfg
 
 
@@ -173,9 +231,17 @@ def vram_of_moe(model_name: str, num_ctx: int = 4096) -> float:
         overhead_gb = (num_ctx * cfg["measured_bytes_per_token"]) / (1024 ** 3)
         return round(base + overhead_gb, 2)
 
-    kv_per_tok = 2 * cfg["kv_heads"] * cfg["layers"] * 128 * 0.5
-    extra_ctx = num_ctx - 4096
-    overhead_gb = (extra_ctx * kv_per_tok) / (1024 ** 3)
+    if "kv_heads" in cfg and "layers" in cfg:
+        kv_per_tok = 2 * cfg["kv_heads"] * cfg["layers"] * 128 * 0.5
+        extra_ctx = num_ctx - 4096
+        overhead_gb = (extra_ctx * kv_per_tok) / (1024 ** 3)
+        return round(base + overhead_gb, 2)
+
+    # No KV shape recorded (a sparse table entry, or a profile-derived one).
+    # A dense ctx delta is meaningless for a MoE (the weights live on the CPU),
+    # so use the 35B-A3B q4_0 class default of 12 KB/token. Conservative for
+    # smaller MoE, honest for this box, and no KeyError on the load path.
+    overhead_gb = (num_ctx * MOE_DEFAULT_BYTES_PER_TOKEN) / (1024 ** 3)
     return round(base + overhead_gb, 2)
 
 

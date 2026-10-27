@@ -259,8 +259,11 @@ Field notes:
 - `chat_template` / `jinja` / `reasoning` / `distilled` — template file under
   `model_configs\`, `--jinja`, and `--reasoning` handling.
 - `moe_cpu_experts` / `mtp` / `gpu_layers` / `mmproj_filename` /
-  `vram_gb_override` — llama.cpp launch overrides (`--n-cpu-moe`,
-  `--spec-type draft-mtp`, `--n-gpu-layers`, projector, VRAM estimate).
+  `vram_gb_override` / `kv_bytes_per_token` — llama.cpp launch overrides
+  (`--n-cpu-moe`, `--spec-type draft-mtp`, `--n-gpu-layers`, projector, VRAM
+  estimate). For a MoE whose VRAM was measured, `vram_gb_override` (active GPU
+  part) plus `kv_bytes_per_token` give the pre-flight a correct estimate without
+  a table entry.
 - `sampling` — optional per-mode values (`thinking`, `non_thinking`,
   `sampling_thinking_code`, `sampling_thinking_text`, `sampling_text`) that beat
   the family profiles; only entered fields are stored.
