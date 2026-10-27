@@ -89,6 +89,11 @@ DEFAULT_SETTINGS = {
     # cost of a larger VRAM compute buffer. Test lever for slow post-compression
     # prefill; revert to 256 if a load OOMs on tight GPUs.
     "llama_ubatch_size":       256,
+    # HOST-RAM / VRAM TREND (2026-10-27): llama.cpp keeps context checkpoints
+    # and a host-side prompt cache per slot, and both grow with how much a slot
+    # has processed. A long run got slower the longer it ran. 0 disables.
+    "llama_ctx_checkpoints":   4,
+    "llama_cache_ram_mib":     1024,
     # VRAM pre-flight gate (2026-10-11): when True (default), loads estimated
     # not to fit are refused before llama-server starts (estimate can be
     # wrong for foreign models - turning this OFF makes the engine attempt

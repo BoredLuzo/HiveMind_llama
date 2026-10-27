@@ -688,6 +688,24 @@ check("21e the run logs the cold-prefill cost", "[PREFILL-COST]" in _DUO_R)
 check("21f it uses the effective coder ctx, not a made-up attribute",
       "_cold_ctx = int(_dtool_ctx or 0)" in _DUO_R)
 
+
+
+# ── 22. Degradation über die Run-Dauer sichtbar machen ────────────────
+_ATL = (ROOT / "core" / "agentic_tool_loop.py").read_text(encoding="utf-8", errors="replace")
+check("22a the round log carries free VRAM", "vram_free=" in _ATL)
+check("22b the VRAM query is guarded",
+      "get_live_gpu_free_mib as _vfree" in _ATL)
+_SET = (ROOT / "settings.py").read_text(encoding="utf-8", errors="replace")
+check("22c checkpoints are a setting", '"llama_ctx_checkpoints":' in _SET)
+check("22d the host prompt cache is a setting", '"llama_cache_ram_mib":' in _SET)
+_SRV = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+check("22e both are synced into the backend at startup",
+      "_lc_init.CTX_CHECKPOINTS = _cp_val" in _SRV
+      and "_lc_init.CACHE_RAM_MIB = _cram_val" in _SRV)
+_DOC = (ROOT / "docs" / "settings.md").read_text(encoding="utf-8", errors="replace")
+check("22f settings docs list the knobs",
+      "llama_ctx_checkpoints" in _DOC and "llama_cache_ram_mib" in _DOC)
+
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

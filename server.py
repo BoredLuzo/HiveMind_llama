@@ -432,6 +432,20 @@ def _sync_backend_runtime_config() -> None:
         _ubatch_val = int(settings.get("llama_ubatch_size", 256) or 256)
         _lc_init.LLAMA_UBATCH = _ubatch_val
         _lsm_init.LLAMA_UBATCH = _ubatch_val
+        # CHECKPOINT/CACHE-RAM SEAM (2026-10-27): a long run got slower the
+        # longer it ran; both knobs bound what llama.cpp keeps per slot.
+        try:
+            _cp_val = int(settings.get("llama_ctx_checkpoints", 4))
+            _cram_val = int(settings.get("llama_cache_ram_mib", 1024))
+            _lc_init.CTX_CHECKPOINTS = _cp_val
+            _lc_init.CACHE_RAM_MIB = _cram_val
+            _lsm_init.CTX_CHECKPOINTS = _cp_val
+            _lsm_init.CACHE_RAM_MIB = _cram_val
+            import backend.manager_load as _ml_cp
+            _ml_cp.CTX_CHECKPOINTS = _cp_val
+            _ml_cp.CACHE_RAM_MIB = _cram_val
+        except (ImportError, AttributeError, TypeError, ValueError):
+            pass
         try:
             import backend.manager_load as _ml_init
             _ml_init.CACHE_REUSE = _cache_reuse_val

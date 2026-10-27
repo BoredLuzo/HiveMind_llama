@@ -455,9 +455,22 @@ class AgenticToolLoop(ToolLoop):
                                         (time.monotonic() - _gen_t0), 1)
                                     _pre_n = int((locals().get("_dr_prompt_timings")
                                                   or {}).get("prompt_n") or 0)
+                                    # VRAM-TREND (2026-10-27): the live run got
+                                    # slower the longer it ran. Free VRAM in
+                                    # this line makes the trend visible: falling
+                                    # = checkpoint/KV growth, flat = throttling
+                                    # or engine-side work.
+                                    _free_mib = None
+                                    try:
+                                        from backend.llama_vram_table import \
+                                            get_live_gpu_free_mib as _vfree
+                                        _free_mib = _vfree()
+                                    except (ImportError, OSError, AttributeError):
+                                        _free_mib = None
                                     logger.info(
                                         "[CACHE] round=%s prompt=%d cached=%d reuse=%.0f%% "
-                                        "gen=%.1fs decode=%.1ft/s prefill_n=%d tok_out=%d",
+                                        "gen=%.1fs decode=%.1ft/s prefill_n=%d tok_out=%d "
+                                        "vram_free=%s",
                                         getattr(self.round_state, "exec_model", "?"),
                                         _pt, _cached,
                                         (100.0 * _cached / _pt) if _pt else 0.0,
@@ -465,6 +478,8 @@ class AgenticToolLoop(ToolLoop):
                                         float(getattr(self.round_state, "decode_tps", 0.0) or 0.0),
                                         _pre_n,
                                         int(_dr_usage_final.get("completion_tokens") or 0),
+                                        f"{int(_free_mib)}MiB" if _free_mib is not None
+                                        else "n/a",
                                     )
                             except Exception:
                                 pass
