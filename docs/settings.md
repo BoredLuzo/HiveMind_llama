@@ -244,7 +244,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `tts_timeout_s` | int | `120` |  |
 | `tts_voice` | str | `anna` |  |
 | `tts_volume` | float | `1.0` |  |
-| `until_finished` | bool | `False` |  |
+| `until_finished` | bool | `True` |  |
 | `vision_agent_enabled` | bool | `False` |  |
 | `vision_agent_model` | str | `` |  |
 | `vision_preprocess_load_timeout_seconds` | int | `120` |  |

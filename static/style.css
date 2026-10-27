@@ -1530,3 +1530,52 @@ textarea.fld-input{resize:vertical;line-height:1.5}
 .mode-routing .ctx-row { padding: 3px 0; }
 .rt-status b { color: #dbe4ef; font-weight: 600; }
 .rt-status br + br { display: none; }
+
+/* STAT TIPS (2026-10-27): the perf bar showed numbers nobody could read. Every
+   field carries a small bubble; pure CSS, no JS, keyboard-reachable via focus. */
+.ctx-perf-item[data-tip] {
+  position: relative;
+  cursor: help;
+}
+.ctx-perf-item[data-tip]::after {
+  content: attr(data-tip-title) "\A" attr(data-tip);
+  white-space: pre-wrap;
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 60;
+  width: max-content;
+  max-width: 300px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: rgba(18, 18, 22, .97);
+  border: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+  color: #e8e8ec;
+  font-size: 11px;
+  line-height: 1.45;
+  font-weight: 500;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+.ctx-perf-item[data-tip]::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  bottom: calc(100% + 1px);
+  border: 5px solid transparent;
+  border-top-color: rgba(18, 18, 22, .97);
+  opacity: 0;
+  transition: opacity .12s ease;
+  z-index: 61;
+}
+.ctx-perf-item[data-tip]:hover::after,
+.ctx-perf-item[data-tip]:hover::before,
+.ctx-perf-item[data-tip]:focus-visible::after,
+.ctx-perf-item[data-tip]:focus-visible::before {
+  opacity: 1;
+  transform: translateY(0);
+}
+.ctx-perf-item[data-tip]::after em { font-style: normal; color: #9aa0aa; }

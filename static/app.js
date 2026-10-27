@@ -1021,7 +1021,9 @@ async function loadSettings() {
   if (_ttTog) _ttTog.checked = S.duoToolThinkingAlways;
   var _ttmRb = document.getElementById('ttm_' + S.duoToolThinkingMode);
   if (_ttmRb) _ttmRb.checked = true;
-    S.duoUntilFinished = s.until_finished || false;
+    // UNTIL-FINISHED ON BY DEFAULT (2026-10-27, owner): a coding run should
+    // finish the job. An explicit false from settings still wins.
+    S.duoUntilFinished = s.until_finished !== false;
     var _dufTog = document.getElementById('duo-until-finished-toggle');
     if (_dufTog) _dufTog.checked = S.duoUntilFinished;
     S.askUserTimeoutSeconds = s.ask_user_timeout_until_finished_seconds || 300;
@@ -6204,21 +6206,21 @@ function _pbbEnsure() {
       + '<span class="pbb-chev">\u25be</span><span id="pbb-summary">--</span></div>'
     + '<div id="pbb-body">'
       + '<div class="ctx-perf">'
-        + '<span class="ctx-perf-item live" id="pbb-ctx">ctx: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-ctxreuse">reuse: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-tok">out: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-rate">tok/s: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-decode">decode: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-ctx" data-tip-title="Context window" data-tip="How much of the model&#39;s context this run has used, and its share of the window. &#39;est&#39; means the number was estimated from characters before the server reported real token counts." role="note">ctx: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-ctxreuse" data-tip-title="Prefix cache reuse" data-tip="Share of the prompt the server could keep from its cache instead of reading it again. High values mean cheap rounds." role="note">reuse: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-tok" data-tip-title="Output tokens" data-tip="Tokens generated in this run so far, across all rounds." role="note">out: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-rate" data-tip-title="Generation rate" data-tip="Tokens per second including prompt processing - the honest end-to-end figure." role="note">tok/s: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-decode" data-tip-title="Decode rate" data-tip="Tokens per second while the model is writing, prompt processing excluded. This is the number the model itself reports." role="note">decode: --</span>'
 
       + '</div>'
       + '<div class="ctx-perf">'
-        + '<span class="ctx-perf-item ok" id="pbb-in">in: --</span>'
-        + '<span class="ctx-perf-item ok" id="pbb-cached">cached: --</span>'
-        + '<span class="ctx-perf-item ok" id="pbb-new">recomputed: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-reqs">reqs: --</span>'
+        + '<span class="ctx-perf-item ok" id="pbb-in" data-tip-title="Prompt tokens (last request)" data-tip="Tokens sent with the most recent request, whole conversation included." role="note">in: --</span>'
+        + '<span class="ctx-perf-item ok" id="pbb-cached" data-tip-title="Cached tokens" data-tip="Tokens the server served from its prompt cache instead of computing them again." role="note">cached: --</span>'
+        + '<span class="ctx-perf-item ok" id="pbb-new" data-tip-title="Recomputed tokens" data-tip="Prompt tokens the server had to process again. Large values after a compression or an edited earlier message: that is what makes a round slow." role="note">recomputed: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-reqs" data-tip-title="Requests" data-tip="Model requests made in this run." role="note">reqs: --</span>'
       + '</div>'
       + '<div class="ctx-perf">'
-        + '<span class="ctx-perf-item live" id="pbb-tools">tools: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-tools" data-tip-title="Tool calls" data-tip="Tool calls in this run: count, total time, and the tool that is running right now (or the last one)." role="note">tools: --</span>'
       + '</div></div>';
   try {
     if ((localStorage.getItem('hivemind-pbb-collapsed') || '') === '1')

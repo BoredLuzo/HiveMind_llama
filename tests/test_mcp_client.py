@@ -706,6 +706,29 @@ _DOC = (ROOT / "docs" / "settings.md").read_text(encoding="utf-8", errors="repla
 check("22f settings docs list the knobs",
       "llama_ctx_checkpoints" in _DOC and "llama_cache_ram_mib" in _DOC)
 
+
+
+# ── 23. Stats-Tooltips und until_finished-Default (2026-10-27) ────────
+_HTML2 = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
+_JS2 = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+_CSS2 = (ROOT / "static" / "style.css").read_text(encoding="utf-8", errors="replace")
+_TIPS = ("pbb-ctx", "pbb-ctxreuse", "pbb-tok", "pbb-rate", "pbb-decode",
+         "pbb-in", "pbb-cached", "pbb-new", "pbb-reqs", "pbb-tools")
+_missing_tips = [i for i in _TIPS if f'id="{i}" data-tip-title=' not in _JS2]
+check("23a every perf field carries a tooltip", not _missing_tips,
+      f"(ohne: {_missing_tips})")
+check("23b the bubble is styled", ".ctx-perf-item[data-tip]::after" in _CSS2)
+check("23c the bubble is keyboard reachable", "focus-visible::after" in _CSS2)
+check("23d the cache buster moved", "app.js?v=20261027-02" in _HTML2
+      and "style.css?v=20261027-01" in _HTML2)
+from settings import DEFAULT_SETTINGS as _D2                              # noqa: E402
+check("23e until_finished is on by default", _D2.get("until_finished") is True)
+_SRV2 = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+check("23f the request default follows",
+      '_body_or_settings("until_finished",          default=True)' in _SRV2)
+check("23g the UI checkbox follows the setting",
+      "S.duoUntilFinished = s.until_finished !== false;" in _JS2)
+
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

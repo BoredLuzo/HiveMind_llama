@@ -1536,7 +1536,7 @@ async def stream(req: Request):
         except (OSError, ValueError) as _flush_import_exc:
             logger.warning("[STREAM] dom import failed (chat=%s): %s",
                            chat_id, _flush_import_exc)
-    until_finished         = _as_bool(_body_or_settings("until_finished",          default=False))
+    until_finished         = _as_bool(_body_or_settings("until_finished",          default=True))
     duo_runtime_profile    = body.get("duo_runtime_profile") or settings.get("duo_runtime_profile") or "balanced"
     duo_runtime_profile_lock_override = _as_bool(_body_or_settings(
         "duo_runtime_profile_lock_override", default=False

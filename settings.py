@@ -114,7 +114,9 @@ DEFAULT_SETTINGS = {
     # UI state only: remembers the Duo "pair" selector position. The same
     # request also sets agents.duo_coder.model, which IS what the engine reads.
     "duo_pair":                "focused",
-    "until_finished":          False,
+    # ON by default (2026-10-27, owner): a coding run should finish the job
+    # instead of stopping at the round limit. Turn off for a quick answer.
+    "until_finished":          True,
     "duo_runtime_profile":     "balanced",
     "duo_profile_speed_model": "",
     "duo_profile_quality_model": "",
