@@ -451,6 +451,8 @@ def _approval_gate_on() -> bool:
 
 def _approval_active_for(name: str) -> bool:
     """Settings + tool-set gate shared by staging and the pause path."""
+    if _approval_gate_on() and name.startswith("mcp_"):
+        return True   # H7: every dynamic MCP tool is potentially mutating
     return _approval_gate_on() and name in _APPROVAL_TOOLS
 
 
@@ -519,12 +521,17 @@ async def _safe_emit(ev) -> None:
         pass
 
 
-async def _check_action_approval(name: str, args: dict, workspace):
+async def _check_action_approval(name: str, args: dict, workspace,
+                                 gated: bool = False):
     """Returns None to let the tool run, ("NOTE", text) to run with a user
-    message appended to the result, or ("DENY", tool_error) when denied."""
+    message appended to the result, or ("DENY", tool_error) when denied.
+
+    `gated=True` treats the tool as mutating even when it is not in
+    _APPROVAL_TOOLS: MCP tools have dynamic names and are all potentially
+    mutating, so the set cannot list them."""
     import logging as _appr_log
     _lg = _appr_log.getLogger("hivemind.tools")
-    if not _approval_gate_on() or name not in _APPROVAL_TOOLS:
+    if not _approval_gate_on() or (name not in _APPROVAL_TOOLS and not gated):
         return None
     # NO gate-mode bypass (2026-09-18, live bug): until_finished duo runs set
     # the ask_user gate to "throttled_autonomous" — approvals must still fire
@@ -827,7 +834,7 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
         except Exception as _pps_err:
             import logging as _pps_log
             _pps_log.getLogger("hivemind.tools").warning(
-                "[PROJECT] Pre-Pause-Save fehlgeschlagen: %s", _pps_err)
+                "[PROJECT] pre-pause save failed: %s", _pps_err)
 
     # GATE-RETIRED (2026-09-19): the throttled_autonomous / throttled_retries
     # branches never surfaced a UI (until_finished runs simply never asked —
@@ -956,6 +963,14 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
         except Exception:
             pass
     return answer
+
+
+try:  # MCP mode gate without an import cycle at module load
+    from tools.definitions import MCP_TOOL_MODES as _MCP_TOOL_MODES
+    from tools.definitions import mcp_allowed_in_mode as _mcp_allowed_in_mode
+except (ImportError, AttributeError, TypeError):  # pragma: no cover
+    _MCP_TOOL_MODES = frozenset()
+    _mcp_allowed_in_mode = lambda _mode: False  # noqa: E731
 
 
 _INLINE_TOOL_HANDLER_MAP = {
@@ -1396,7 +1411,14 @@ async def _run_inline_tool(
                 f"Note: write_file with full content is only for creating NEW files.\n"
                 f"      To disable this guard set duo_write_guard_enabled=false."
             )
-    if tool_mode:
+    if (tool_mode and bool(name) and name.startswith("mcp_")
+            and not _mcp_allowed_in_mode(tool_mode)):
+        return _tool_error_response(
+            "TOOL_NOT_ALLOWED",
+            f"Tool '{name}' is an MCP tool and mode '{tool_mode}' has no MCP "
+            f"access. Modes with MCP access: {', '.join(sorted(_MCP_TOOL_MODES))}.",
+            tool=name, mode=tool_mode)
+    if tool_mode and not (bool(name) and name.startswith("mcp_")):
         _allowed = _tool_names_for_mode(tool_mode, include_websearch=include_websearch)
         if name not in _allowed:
             return _tool_error_response(
@@ -1415,7 +1437,22 @@ async def _run_inline_tool(
     # legacy handler can never be resurrected by a hallucinated call. Internal
     # delegations (write_file -> edit_file) stay untouched: those names are
     # offered.
-    if name and name not in _OFFERED_TOOL_NAMES_UNION:
+    _is_mcp_tool = bool(name) and name.startswith("mcp_")
+    if _is_mcp_tool:
+        # MCP-CLIENT (beta, 2026-10-26): the tool names are dynamic, so they
+        # are not part of any static mode allowlist. Accept them only while the
+        # client is enabled; the phone gate above still blocks phone runs.
+        try:
+            from infra import mcp_client as _mcp_mod
+            if not _mcp_mod.enabled():
+                return _tool_error_response(
+                    "MCP_DISABLED",
+                    f"Tool '{name}' belongs to an MCP server, but the MCP client "
+                    f"is disabled (settings: mcp_client_enabled).",
+                    tool=name)
+        except (ImportError, AttributeError, TypeError):
+            pass
+    if name and name not in _OFFERED_TOOL_NAMES_UNION and not _is_mcp_tool:
         import logging as _lg_dead_mod
         _lg_dead = _lg_dead_mod.getLogger("hivemind.tools")
         _lg_dead.warning("[TOOL-DEAD] '%s' is not offered by any tool mode - rejected",
@@ -1448,6 +1485,38 @@ async def _run_inline_tool(
                         corrected_ext = _fuzzy_resolve_path(_with_ext, str(workspace))
                         if corrected_ext:
                             args["path"] = corrected_ext
+    if bool(name) and name.startswith("mcp_"):
+        # MCP-CLIENT (beta): one branch, no handler entry - the tool set is
+        # dynamic and must not disturb the static handler map or its pins.
+        # H7: an MCP tool can write or exec, so it goes through the same
+        # approval gate as the built-in mutating tools.
+        _mcp_note = ""
+        if _approval_gate_on():
+            _mcp_appr = await _check_action_approval(name, args or {}, workspace,
+                                                     gated=True)
+            if _mcp_appr is not None:
+                _kind, _payload = _mcp_appr
+                if _kind == "DENY":
+                    return _payload
+                if _kind == "INPUT_ONLY":
+                    return (f"[USER INPUT - tool NOT executed]: {_payload}\n"
+                            "React to this message: adjust the approach and call "
+                            "again if needed.")
+                _mcp_note = _payload
+        try:
+            from infra import mcp_client as _mcp_call
+            _mcp_result = await _mcp_call.call(name, args or {})
+        except (ImportError, AttributeError, TypeError) as _mcp_exc:
+            _mcp_result = (f"[TOOL_ERROR: MCP_UNAVAILABLE]\n"
+                           f"MCP client not available: {_mcp_exc}")
+        # L1: the payload belongs to the server. Path normalisation would
+        # rewrite Windows paths inside legitimate data, so only our own error
+        # header is passed through unchanged as well.
+        if _mcp_note:
+            _mcp_result = f"{_mcp_result}\n[USER NOTE]: {_mcp_note}"
+        if _resolve_hint:
+            _mcp_result = _resolve_hint + _mcp_result
+        return _mcp_result
     handler = _INLINE_TOOL_HANDLER_MAP.get(name)
     if handler is not None:
         # ── A-P1-9: Web-Search-Call-Budget (Governor analog ask_user) ──

@@ -71,6 +71,13 @@ def _persist_models_dir(mdir: Path) -> None:
 # direct/coder core and skips helper models a small machine may not want.
 # Tunable: spec KEYS to skip (the judge/decider today).
 ESSENTIAL_SKIP_KEYS = {"lfm2.5:2.6b"}
+# DRAFTER-SKIP (2026-10-27, corrected): speculative decoding is ON again for
+# the profiles that ship an MTP head, so a drafter sidecar is NOT dead weight.
+# Gemma-4 uses its `mtp-*.gguf` and the DSpark models use their drafter; a load
+# without the file falls back to plain decoding and loses the measured +54 %
+# decode. So the skip is explicit only (`--no-drafters`), never implied by
+# `--essential`, and it says out loud what it costs.
+SKIP_DRAFTERS = False
 
 SPECS: list[dict] = [
     {
@@ -574,6 +581,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--models-dir", default="")
     ap.add_argument("--only-missing", action="store_true")
+    ap.add_argument("--no-drafters", action="store_true",
+                    help="skip the drafter sidecars (speculative decoding is off)")
     ap.add_argument("--essential", action="store_true",
                     help="skip helper models (judge/decider) - core only")
     ap.add_argument("--list-only", action="store_true")
@@ -588,6 +597,12 @@ def main() -> int:
                     help="Only these models: keys or numbers, comma-separated (e.g. 1,4)")
     ap.add_argument("--yes", action="store_true")
     args = ap.parse_args()
+    global SKIP_DRAFTERS
+    SKIP_DRAFTERS = bool(getattr(args, "no_drafters", False))
+    if SKIP_DRAFTERS:
+        print("    [WARN] --no-drafters: speculative decoding stays off for "
+              "every model that needs a drafter sidecar")
+        print("           (Gemma-4 MTP and the DSpark models lose ~50 % decode).")
 
     if args.print_catalog:
         for _i, _s in enumerate(SPECS):
@@ -679,6 +694,10 @@ def main() -> int:
         # the sidecar filename.
         for _sc in (spec.get("sidecar") or []):
             _sc_name = Path(_sc["path"]).name.lower()
+            if SKIP_DRAFTERS:
+                print(f"    Drafter skipped (--no-drafters): {Path(_sc['path']).name}"
+                      f" [{_sc.get('note', '')}]")
+                continue
             if args.only_missing and _sc_name in local_files:
                 print(f"    Sidecar present: {Path(_sc['path']).name} — skipping (--only-missing)")
                 continue

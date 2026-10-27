@@ -87,11 +87,33 @@ def _write_error_code(exc: BaseException) -> str | None:
     return None
 
 
+# FOLDER-HINT (2026-10-27, ThinkPad feedback): a write to Desktop or Documents
+# that fails with a real EACCES/WinError 32 is almost always one of two Windows
+# features, not a path problem. Naming them saves the model a round of flailing.
+_PROTECTED_FOLDER_HINTS = (
+    "Common cause on Windows: Controlled Folder Access (Windows Security -> "
+    "Ransomware protection) blocks non-whitelisted programs in Desktop, Documents "
+    "and Pictures, and a folder synced by OneDrive can hold a file lock. "
+    "Allow python.exe of the HiveMind venv there, or pick a workspace outside "
+    "those folders (for example C:\\HiveMind_ws)."
+)
+
+
+def _protected_folder_hint(parent: str) -> str:
+    """Extra sentence for Desktop/Documents/Pictures, empty elsewhere."""
+    p = str(parent or "").replace("\\", "/").lower()
+    for marker in ("/desktop", "/documents", "/pictures", "/onedrive"):
+        if marker in p:
+            return " " + _PROTECTED_FOLDER_HINTS
+    return ""
+
+
 _WRITE_ERROR_TEXT = {
     "WRITE_FILE_PERMISSION": (
         "the engine process has no write permission for '{parent}'. This is an "
         "environment restriction, not a path typo - choose a workspace inside a "
-        "writable folder or start HiveMind outside the restricting sandbox"),
+        "writable folder or start HiveMind outside the restricting sandbox."
+        "{hint}"),
     "WRITE_FILE_READ_ONLY": (
         "'{parent}' is on a read-only filesystem - pick a writable workspace"),
     "WRITE_FILE_NO_SPACE": (
@@ -572,7 +594,9 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
         return _tool_error_response(
             _wcode,
             "Cannot write '{p}': ".format(p=p)
-            + _WRITE_ERROR_TEXT[_wcode].format(parent=p.parent),
+            + _WRITE_ERROR_TEXT[_wcode].format(
+                parent=p.parent,
+                hint=_protected_folder_hint(str(p.parent))),
             tool="write_file")
     _lint = await _auto_lint_result(p, workspace)
     _lines = content.count("\n") + 1

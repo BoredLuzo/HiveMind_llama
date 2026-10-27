@@ -579,6 +579,10 @@ DEFAULT_SETTINGS = {
     # (e.g. an IDE exposing editor context). Nothing reads it yet; kept so
     # preset snapshots stay stable until the client lands.
     "mcp_servers":             [],
+    # MCP client (beta): use external MCP servers over stdio. Off by default;
+    # phone runs stay blocked by the phone restriction gate.
+    "mcp_client_enabled":      False,
+    "mcp_client_timeout_s":    30,
     "soul_evolve_agent": {
         "enabled":     False,
         "model": "",

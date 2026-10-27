@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**243 settings keys.**
+**245 settings keys.**
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -171,6 +171,8 @@ its comment) in `settings.py`, then re-run the generator.
 | `max_concurrent_models` | null | `None` |  |
 | `max_iterations` | int | `2` |  |
 | `max_model_size_gb` | null | `None` |  |
+| `mcp_client_enabled` | bool | `False` |  |
+| `mcp_client_timeout_s` | int | `30` |  |
 | `mcp_servers` | list | `[]` |  |
 | `mode` | str | `simple` |  |
 | `model_capability_overrides` | object | `{}` |  |

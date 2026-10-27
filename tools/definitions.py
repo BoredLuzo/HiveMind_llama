@@ -600,6 +600,33 @@ def _apply_budget_texts(tools: list, budgets) -> list:
     return out
 
 
+# MCP-CLIENT (beta, 2026-10-26): the tool names are dynamic, so a static
+# allowlist can never contain them. These modes are allowed to use them: they
+# already hold write and exec rights, so an MCP tool adds no new capability
+# class. Read-only modes (duo_readonly, pre_explore, critic_verify) and the
+# direct chat are deliberately excluded.
+MCP_TOOL_MODES = frozenset({"duo_full", "tool_agent", "mcp_agent",
+                            "openai_agent", "direct_full"})
+
+
+def mcp_allowed_in_mode(mode: str | None) -> bool:
+    """True if this mode may see and call MCP tools."""
+    if not mode:
+        return True          # no mode filter at all (tests, ad-hoc calls)
+    return mode in MCP_TOOL_MODES
+
+
+def _mcp_tool_defs() -> list:
+    """Cached specs of the configured MCP servers. Never starts a process."""
+    try:
+        from infra import mcp_client as _mcp
+        if _mcp.enabled():
+            return _mcp.tool_defs()
+    except (ImportError, AttributeError, TypeError):
+        pass
+    return []
+
+
 def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
                       budget_chars: int | None = None) -> list:
     tools = list(_INLINE_CODING_TOOLS)
@@ -607,6 +634,11 @@ def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
         tools.extend(_websearch.get_tool_defs())
     if mode:
         tools = _filter_tools_for_mode(tools, mode, include_websearch=include_websearch)
+    # MCP CLIENT (beta): exactly one place. The names are dynamic, so a static
+    # mode allowlist cannot hold them and they are added AFTER the filter.
+    # (_mcp_tool_defs is cache-only; servers start on /mcp/reload or at boot.)
+    if not mode or mcp_allowed_in_mode(mode):
+        tools.extend(_mcp_tool_defs())
     if budget_chars:
         try:
             from core.budgets import active as _b_active
