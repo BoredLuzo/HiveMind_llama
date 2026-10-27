@@ -1118,6 +1118,8 @@ async function loadSettings() {
     S.duoWedgeHandoff  = s.duo_wedge_handoff_enabled !== false;
     S.duoPartialCompr  = s.duo_partial_compression === true;
     S.duoCompressLocal = s.duo_compress_local_only === true;
+    // MCP client (beta): off unless enabled in settings.
+    S.mcpClientEnabled = s.mcp_client_enabled === true;
     S.settingsRev = parseInt(s.settings_rev || 0, 10) || S.settingsRev || 0;
     var _dcmsEl = document.getElementById('duo-compress-model-sel');
     if (_dcmsEl) {
@@ -1131,6 +1133,7 @@ async function loadSettings() {
     _syncFlagCheck('duo-wedge-handoff-toggle', S.duoWedgeHandoff);
     _syncFlagCheck('duo-partial-compression-toggle', S.duoPartialCompr);
     _syncFlagCheck('duo-compress-local-only-toggle', S.duoCompressLocal);
+_syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     // Planner / Coder TTL
     S.duoPlannerTtl = parseInt(s.duo_planner_ttl_seconds || 0) || 0;
     S.duoCoderTtl = parseInt(s.duo_coder_ttl_seconds || 0) || 0;
@@ -2470,6 +2473,69 @@ function onFlagToggle(key, checked) {
   S['_flag_' + key] = !!checked;
   postSettings(patch);
 }
+
+
+// MCP CLIENT (beta, 2026-10-27): the client lived only in settings.json. The
+// card keeps the server list as JSON on purpose - the shape (command, args,
+// env, cwd) is the server's contract, not something a form should hide.
+function mcpSetStatus(text, isError) {
+  var el = document.getElementById('mcp-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = isError ? 'var(--red)' : 'var(--muted)';
+}
+
+function mcpLoadStatus() {
+  var el = document.getElementById('mcp-servers-json');
+  fetch('/mcp/servers').then(function (r) { return r.json(); }).then(function (d) {
+    if (el && !el.value.trim() && Array.isArray(d.configured)) {
+      el.value = d.configured.length ? JSON.stringify(d.configured, null, 2) : '';
+    }
+    var running = (d.running || []).map(function (s) {
+      return s.name + (s.ok ? ' (' + s.tools + ' tools)' : ' - ' + (s.error || 'down'));
+    });
+    var txt = 'Enabled: ' + (d.enabled ? 'yes' : 'no');
+    if (d.enabled) txt += ' | ' + (running.length ? running.join(', ') : 'no server running');
+    mcpSetStatus(txt, false);
+  }).catch(function () { mcpSetStatus('status unavailable', true); });
+}
+
+function saveMcpServers() {
+  var el = document.getElementById('mcp-servers-json');
+  if (!el) return;
+  var raw = el.value.trim();
+  var list = [];
+  if (raw) {
+    try {
+      list = JSON.parse(raw);
+    } catch (e) {
+      mcpSetStatus('invalid JSON: ' + e.message, true);
+      return;
+    }
+    if (!Array.isArray(list)) {
+      mcpSetStatus('expected a JSON list of servers', true);
+      return;
+    }
+  }
+  postSettings({mcp_servers: list});
+  mcpSetStatus('saved - press Reload to start the servers', false);
+}
+
+function reloadMcpServers() {
+  mcpSetStatus('reloading...', false);
+  fetch('/mcp/reload', {method: 'POST'}).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.ok) { mcpSetStatus('reload failed: ' + (d.error || 'unknown'), true); return; }
+    var names = (d.servers || []).map(function (s) {
+      return s.name + (s.ok ? ':' + s.tools : ':down');
+    });
+    mcpSetStatus('reloaded - ' + (names.length ? names.join(', ') : 'no servers'), false);
+    mcpLoadStatus();
+  }).catch(function () { mcpSetStatus('reload failed', true); });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  if (document.getElementById('mcp-client-toggle')) mcpLoadStatus();
+});
 
 function onDuoPairChange(val) {
   if (val.startsWith('model:')) {

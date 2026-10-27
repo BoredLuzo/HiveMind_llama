@@ -510,6 +510,32 @@ check("17d calling it restarts and reports",
 check("17e the tool list survives the reload", _paged_after == _paged_names,
       f"({len(_paged_after)} vs {len(_paged_names)})")
 
+
+
+# ── 18. Die Karte in der UI (2026-10-27) ───────────────────────────────
+# The beta had no UI at all: mcp_client_enabled could only be set by editing
+# settings.json. These pins keep the card wired.
+_HTML = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
+_APPJS = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+check("18a the card exists", 'id="mcp-client-toggle"' in _HTML)
+check("18b the toggle posts mcp_client_enabled",
+      "onFlagToggle('mcp_client_enabled'" in _HTML)
+check("18c the server list is editable", 'id="mcp-servers-json"' in _HTML)
+check("18d the card offers reload and save",
+      "reloadMcpServers()" in _HTML and "saveMcpServers()" in _HTML)
+check("18e app.js syncs the toggle",
+      "_syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled)" in _APPJS)
+check("18f app.js has the three functions",
+      all(f"function {n}(" in _APPJS for n in
+          ("mcpLoadStatus", "saveMcpServers", "reloadMcpServers")))
+check("18g the JSON is validated before saving",
+      "expected a JSON list of servers" in _APPJS)
+check("18h the card hits the real endpoints",
+      "'/mcp/servers'" in _APPJS and "'/mcp/reload'" in _APPJS)
+_m = re.search(r"app\.js\?v=(\d{8}-\d{2})", _HTML)
+check("18i the cache buster follows the change", bool(_m) and _m.group(1) >= "20261027-01",
+      f"({_m.group(1) if _m else 'fehlt'})")
+
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

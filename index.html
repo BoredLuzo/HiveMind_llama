@@ -1569,6 +1569,30 @@
       <div class="fld-hint" style="margin-top:6px">Flags apply on the next run (Write/No-Op guards also live). Balance check: compression runs at 70% context; with an 8k coder budget a 32k context has ~10k headroom per cycle — raise the context instead of the budget if you see frequent compressions.</div>
     </div>
 
+
+    <!-- MCP client (beta): external MCP servers as tools -->
+    <div class="cfg-card">
+      <div class="cfg-card-title">MCP client <span class="cfl-badge" style="color:var(--purple);border-color:rgba(168,85,247,.5)">BETA</span></div>
+      <div class="tgl-row">
+        <span class="tgl-text">Use external MCP servers</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="mcp-client-toggle" onchange="onFlagToggle('mcp_client_enabled', this.checked)">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Off by default. Tools appear as <code>mcp_&lt;server&gt;_&lt;tool&gt;</code> in the write modes; phone runs stay read-only.</div>
+      <div class="fld-hint" style="margin-top:8px">Servers (JSON list, each <code>{"name", "command", "args", "env", "cwd"}</code>):</div>
+      <textarea id="mcp-servers-json" spellcheck="false" rows="6"
+                style="width:100%;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;margin-top:4px"
+                placeholder='[{"name": "files", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/work"]}]'></textarea>
+      <div class="tgl-row" style="margin-top:8px;gap:8px">
+        <button class="btn" type="button" onclick="saveMcpServers()">Save servers</button>
+        <button class="btn" type="button" onclick="reloadMcpServers()">Reload</button>
+        <span id="mcp-status" class="fld-hint" style="margin:0"></span>
+      </div>
+      <div class="fld-hint" style="margin-top:6px">A server that dies mid-run comes back through <code>mcp_reload</code> (the model can call it) or the Reload button.</div>
+    </div>
+
     <!-- Learning Preset Mode -->
     <div class="cfg-card">
       <div class="cfg-card-title">Learning Preset Mode <span class="cfl-badge" style="color:var(--purple);border-color:rgba(136,88,192,.4)">BETA</span></div>
@@ -2288,6 +2312,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261026-01"></script>
+        <script src="/static/app.js?v=20261027-01"></script>
 </body>
 </html>
