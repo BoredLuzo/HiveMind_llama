@@ -35,6 +35,8 @@ speed, and a hardening/simplification pass.
 
 ## Measured coder performance (+57% prefill, live-measured)
 - The hermes 35B coder runs without draft-mtp and with eager loading
+  (reversed in 1.4.10: re-measured on b11889 with 256-token answers, MTP
+  gives +55 % decode for -1.6 % prefill; the determinism trade is named)
   (`--load-mode none`): prefill 78.5 → 123.3 t/s, decode unchanged.
   Context 100k costs nothing measurable (retracted in 1.4.9: the runs were
   sized at 4096, re-measurement pending); moe 35 stays optimal.
