@@ -582,7 +582,8 @@ def main() -> int:
     ap.add_argument("--models-dir", default="")
     ap.add_argument("--only-missing", action="store_true")
     ap.add_argument("--no-drafters", action="store_true",
-                    help="skip the drafter sidecars (speculative decoding is off)")
+                    help="skip the drafter sidecars (costs ~50%% decode for the "
+                         "models that need one)")
     ap.add_argument("--essential", action="store_true",
                     help="skip helper models (judge/decider) - core only")
     ap.add_argument("--list-only", action="store_true")

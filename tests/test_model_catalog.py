@@ -150,6 +150,11 @@ _FM = (ROOT / "deploy" / "fetch_models.py").read_text(encoding="utf-8", errors="
 check("essential does not imply --no-drafters",
       'SKIP_DRAFTERS = bool(getattr(args, "no_drafters", False))' in _FM
       and 'or getattr(args, "essential", False))' not in _FM)
+_FM_FLAT = " ".join(_FM.split())
+# argparse formats help strings with %, so the source carries "%%" and the
+# rendered text says "~50%".
+check("the --no-drafters help text names the cost",
+      "costs ~50%% decode" in _FM_FLAT)
 check("the skip warns about the decode cost",
       "lose ~50 % decode" in _FM)
 check("the stale 'spec off everywhere' claim is gone",
