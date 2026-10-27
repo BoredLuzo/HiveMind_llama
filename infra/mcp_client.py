@@ -32,7 +32,17 @@ from pathlib import Path
 logger = logging.getLogger("hivemind.mcp_client")
 
 PROTOCOL_VERSION = "2024-11-05"
-CLIENT_INFO = {"name": "hivemind", "version": "1.4.9"}
+def _client_info() -> dict:
+    """Name and version for the handshake. The version is read from the engine
+    so it cannot drift (a hardcoded "1.4.9" survived two releases)."""
+    try:
+        from server import HIVEMIND_VERSION as _ver
+    except (ImportError, AttributeError):
+        _ver = ""
+    return {"name": "hivemind", "version": str(_ver or "")}
+
+
+CLIENT_INFO = {"name": "hivemind", "version": ""}
 INIT_TIMEOUT_S = 20.0
 DEFAULT_TIMEOUT_S = 30.0
 MAX_SERVERS = 8
@@ -202,6 +212,9 @@ class ServerConn:
         # the configured timeout wins, so a hanging server cannot hold a run
         # for the full 20 s default
         limit = min(INIT_TIMEOUT_S, self.timeout_s)
+        info = _client_info()
+        if info["version"]:
+            CLIENT_INFO["version"] = info["version"]
         await self.request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
@@ -428,7 +441,6 @@ class McpClient:
         self._conns: dict[str, ServerConn] = {}
         self._defs: list[dict] | None = None
         self._names: dict[str, tuple[str, str]] = {}  # tool name -> (server, tool)
-        self._warned: set[str] = set()
 
     # -- configuration ------------------------------------------------
     @staticmethod
@@ -569,15 +581,21 @@ class McpClient:
             except (OSError, ValueError, McpError):
                 pass
 
+    # -- status --------------------------------------------------------
+    def status(self) -> list[dict]:
+        """What is running right now, without touching a process."""
+        return sorted(
+            ({"name": name, "ok": not conn.dead, "tools": len(conn.tools),
+              "error": conn.last_error}
+             for name, conn in self._conns.items()),
+            key=lambda entry: entry["name"])
+
     # -- tool layer ----------------------------------------------------
-    def tool_defs(self, settings: dict | None = None) -> list[dict]:
+    def tool_defs(self) -> list[dict]:
         """OpenAI-style specs. Never starts a process: the caller refreshes."""
         if self._defs is None:
             return []
         return list(self._defs)
-
-    def known(self, name: str) -> bool:
-        return name in self._names
 
     async def call(self, name: str, arguments: dict,
                    timeout: float | None = None) -> str:
@@ -665,7 +683,11 @@ async def close_all() -> None:
 def tool_defs(settings: dict | None = None) -> list[dict]:
     if not McpClient.enabled(settings):
         return []
-    return get_client().tool_defs(settings)
+    return get_client().tool_defs()
+
+
+def status() -> list[dict]:
+    return get_client().status()
 
 
 async def call(name: str, arguments: dict) -> str:

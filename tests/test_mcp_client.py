@@ -9,6 +9,8 @@ Every client runs inside ONE event loop: a subprocess transport belongs to
 the loop that created it.
 """
 import asyncio
+import inspect
+import re
 import sys
 import tempfile
 import time
@@ -432,6 +434,41 @@ check("16f no path normalisation on the MCP payload", "_normalize_meta_paths(_mc
 check("16g schemas are capped", "MAX_SCHEMA_CHARS" in SRC_CLIENT)
 check("16h the router reports running servers", '"running"' in
       (ROOT / "routers" / "mcp.py").read_text(encoding="utf-8", errors="replace"))
+
+
+
+# ── Audit-Cleanup (2026-10-27) ─────────────────────────────────────────
+# 1. tool_defs() must not accept a settings argument it ignores, and the
+#    client has to expose its running state instead of the router reading
+#    _conns.
+from infra.mcp_client import McpClient as _MC  # noqa: E402
+check("16a tool_defs takes no settings argument",
+      len(inspect.signature(_MC.tool_defs).parameters) == 1)
+check("16b status() is the public view of the running servers",
+      hasattr(_MC, "status") and len(inspect.signature(_MC.status).parameters) == 1)
+_ROUTER = (ROOT / "routers" / "mcp.py").read_text(encoding="utf-8", errors="replace")
+check("16c the router does not reach into _conns", "_conns" not in _ROUTER)
+check("16d the router asks for status()", "mcp_client.status()" in _ROUTER)
+
+# 2. No dead members.
+_SRC = (ROOT / "infra" / "mcp_client.py").read_text(encoding="utf-8", errors="replace")
+check("16e known() is gone", "def known(" not in _SRC)
+check("16f _warned is gone", "_warned" not in _SRC)
+
+# 3. The handshake version follows the engine, it is not pinned.
+check("16g the handshake version comes from server.py",
+      "from server import HIVEMIND_VERSION" in _SRC)
+check("16h no hardcoded engine version in the client",
+      not re.search(r'"version": "1\.4\.', _SRC))
+
+# 4. MCP tools are added exactly once, after the mode filter.
+_DEFS = (ROOT / "tools" / "definitions.py").read_text(encoding="utf-8", errors="replace")
+check("16i MCP tools are extended in one place",
+      _DEFS.count("tools.extend(_mcp_tool_defs())") == 1)
+_inline = _DEFS.split("def _get_inline_tools(", 1)[1].split("\ndef ", 1)[0] \
+    if "def _get_inline_tools(" in _DEFS else ""
+check("16j _get_inline_tools no longer extends the raw list itself",
+      "_mcp.tool_defs()" not in _inline)
 
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")

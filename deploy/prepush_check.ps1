@@ -106,10 +106,18 @@ $need = @("_*.py", "*.zip", "*.sse", "dist/")
 $missingGi = @($need | Where-Object { -not $gi.Contains($_) })
 Check "l) .gitignore covers scratch patterns" ($missingGi.Count -eq 0) ($missingGi -join ", ")
 
-# -- m) release notes file for the current version ---------------------------
-$notesOk = (Test-Path "RELEASE_NOTES_$($srv).md") -or (Test-Path "RELEASE_NOTES_$($srv -replace '\.', '.').md")
-Check "m) release notes exist for $srv (or the release uses the changelog)" $true `
-    ($(if (Test-Path "RELEASE_NOTES_$srv.md") { "RELEASE_NOTES_$srv.md" } else { "none, changelog only" }))
+# -- m) release notes for the current version, and they name it -----------------
+# A notes file is optional (a release may rely on the changelog only), but if it
+# exists it must carry the version and must not be empty.
+$notesFile = "RELEASE_NOTES_$($srv).md"
+if (Test-Path $notesFile) {
+    $notesBody = Get-Content $notesFile -Raw
+    Check "m) release notes match $srv" `
+        ($notesBody.Length -gt 200 -and $notesBody.Contains($srv)) `
+        ("$notesFile, {0} chars" -f $notesBody.Length)
+} else {
+    Check "m) release notes for $srv (optional)" $true "none, changelog only"
+}
 
 Write-Host "=========================================================="
 if ($script:fail -eq 0) {

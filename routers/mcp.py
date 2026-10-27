@@ -17,17 +17,11 @@ async def mcp_servers() -> dict:
     """Configured servers plus what the running client knows right now."""
     settings = load_settings() or {}
     configured = settings.get("mcp_servers")
-    client = mcp_client.get_client()
-    running = []
-    for name, conn in getattr(client, "_conns", {}).items():
-        running.append({"name": name, "ok": not conn.dead,
-                        "tools": len(conn.tools),
-                        "error": conn.last_error})
     return {
         "enabled": mcp_client.enabled(settings),
         "configured": configured if isinstance(configured, list) else [],
         "timeout_s": mcp_client.timeout_s(settings),
-        "running": sorted(running, key=lambda r: r["name"]),
+        "running": mcp_client.status(),
         "tools": [t["function"]["name"] for t in mcp_client.tool_defs(settings)],
     }
 
