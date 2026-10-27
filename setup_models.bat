@@ -78,7 +78,7 @@ goto done
 :essential_set
 echo.
 echo  Essential set: direct/coder core, judge/decider helper skipped.
-"%PY%" deployetch_models.py --models-dir "%MODELS_DIR%" --only-missing --essential
+"%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-missing --essential
 goto done
 
 :select_single

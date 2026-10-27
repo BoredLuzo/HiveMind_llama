@@ -49,6 +49,29 @@ def main():
             fail(f"{b.name} crlf", "mixed line endings (bare LF present)")
         if ascii_ok and b"\r\n" in raw:
             ok(f"{b.name} ({len(raw)} B, ascii+crlf)")
+
+    # CONTROL CHARS (2026-10-27, live): a \f inside "deploy\fetch_models.py"
+    # landed as form feed 0x0C in install.bat and setup_models.bat. The judge
+    # model download therefore always failed ("file not found") and the
+    # installer only warned. ASCII+CRLF alone does not catch that.
+    _bad_cc = []
+    for _b in bats:
+        _raw = _b.read_bytes()
+        for _c in (0x00, 0x07, 0x08, 0x0B, 0x0C, 0x1A):
+            if bytes([_c]) in _raw:
+                _bad_cc.append(f"{_b.name}:0x{_c:02x}")
+    if _bad_cc:
+        fail("no control characters in bat files", str(_bad_cc))
+    else:
+        ok("no control characters in bat files")
+
+    # The judge step must call the real script.
+    _inst = (ROOT / "install.bat").read_text(encoding="ascii", errors="replace")
+    if "deploy\\fetch_models.py --models-dir" in _inst and "--only-keys lfm2.5:2.6b" in _inst:
+        ok("install.bat calls deploy\\fetch_models.py for the judge")
+    else:
+        fail("install.bat calls deploy\\fetch_models.py for the judge",
+             "path or model key missing")
     print(f"\n=== Results: {passed} passed, {failed} failed ===")
     return failed
 

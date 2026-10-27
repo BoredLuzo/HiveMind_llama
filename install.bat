@@ -510,7 +510,7 @@ if errorlevel 2 (
     echo   Skipped - add later: setup_models.bat ^> S ^> lfm2.5:2.6b
     goto judge_done
 )
-"%PY%" deployetch_models.py --models-dir "%MODELS_DIR%" --only-keys lfm2.5:2.6b
+"%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-keys lfm2.5:2.6b
 if errorlevel 1 (
     echo   [WARN] judge model download failed - continue without it;
     echo   setup_models.bat installs it later. Keyword routing works.
