@@ -5655,7 +5655,12 @@ async def run_code_duo(ctx):
                         _inuse_slot = None
                         try:
                             from backend.llama_server_manager import manager as _lsm_inuse
-                            _inuse_slot = _lsm_inuse._find_loaded(exec_mdl)
+                            # _find_loaded is a coroutine: without await this
+                            # was a truthy coroutine object, mark_in_flight
+                            # raised AttributeError, the except swallowed it and
+                            # the in-use guard was silently OFF (live
+                            # 2026-10-27: RuntimeWarning was never awaited).
+                            _inuse_slot = await _lsm_inuse._find_loaded(exec_mdl)
                             if _inuse_slot is not None:
                                 _inuse_slot.mark_in_flight()
                         except (ImportError, AttributeError, TypeError):

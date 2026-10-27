@@ -445,11 +445,26 @@ class AgenticToolLoop(ToolLoop):
                             try:
                                 _pt = int(_dr_usage_final.get("prompt_tokens") or 0)
                                 if _pt > 0:
+                                    # ROUND-TIMING (2026-10-27, live slow run):
+                                    # the round took minutes while the model
+                                    # reported ~1000 tokens. gen_s is the model
+                                    # call; if a round is much longer than
+                                    # gen_s + prefill, the time is OUTSIDE the
+                                    # model (tool execution, loop, waits).
+                                    _gen_s = round(
+                                        (time.monotonic() - _gen_t0), 1)
+                                    _pre_n = int((locals().get("_dr_prompt_timings")
+                                                  or {}).get("prompt_n") or 0)
                                     logger.info(
-                                        "[CACHE] round=%s prompt=%d cached=%d reuse=%.0f%%",
+                                        "[CACHE] round=%s prompt=%d cached=%d reuse=%.0f%% "
+                                        "gen=%.1fs decode=%.1ft/s prefill_n=%d tok_out=%d",
                                         getattr(self.round_state, "exec_model", "?"),
                                         _pt, _cached,
                                         (100.0 * _cached / _pt) if _pt else 0.0,
+                                        _gen_s,
+                                        float(getattr(self.round_state, "decode_tps", 0.0) or 0.0),
+                                        _pre_n,
+                                        int(_dr_usage_final.get("completion_tokens") or 0),
                                     )
                             except Exception:
                                 pass

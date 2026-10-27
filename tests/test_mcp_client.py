@@ -640,6 +640,28 @@ check("19h the session id is carried",
 check("19i a bad url fails cleanly",
       "url must start with http" in _SRC)
 
+
+
+# ── 20. Regressionen aus dem langsamen Live-Run (2026-10-27) ──────────
+# The log showed "RuntimeWarning: coroutine '_find_loaded' was never awaited"
+# and a 20x decode drop after an hour. Both are pinned here.
+_DUO = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+check("20a the in-use guard awaits _find_loaded",
+      "await _lsm_inuse._find_loaded(exec_mdl)" in _DUO)
+check("20b no bare _find_loaded call remains",
+      "= _lsm_inuse._find_loaded(" not in _DUO)
+_LOAD = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+check("20c the loader measures VRAM headroom after a load",
+      "[VRAM-TIGHT]" in _LOAD and "get_live_gpu_free_mib" in _LOAD)
+check("20d the tight-fit warning is recorded on the slot",
+      "slot.last_warning =" in _LOAD)
+_SLOT = (ROOT / "backend" / "llama_slots.py").read_text(encoding="utf-8", errors="replace")
+check("20e ModelSlot carries the warning field", "self.last_warning" in _SLOT)
+_VRAM = (ROOT / "routers" / "vram.py").read_text(encoding="utf-8", errors="replace")
+check("20f /vram/ps reports the warning", "_slot_warning(m.get" in _VRAM)
+check("20g the status helper never raises into the route",
+      "except (ImportError, AttributeError, TypeError, RuntimeError)" in _VRAM)
+
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

@@ -2055,6 +2055,25 @@ class LlamaLoadMixin:
 
             slot._ready_event.set()
             logger.info(f"Slot {slot.slot_id}: {model} ready on port {slot.port}")
+            # VRAM-HEADROOM (2026-10-27, live): a load that only just fits is
+            # the slow case - the driver pages VRAM once the KV cache grows, and
+            # decode drops by an order of magnitude an hour into the run. The
+            # pre-flight estimate cannot see compute buffers or the desktop, so
+            # measure the real headroom after the server is up.
+            try:
+                from .llama_vram_table import get_live_gpu_free_mib as _free_mib
+                _head = _free_mib()
+                if _head is not None and _head < 700:
+                    logger.warning(
+                        "[VRAM-TIGHT] %s @ctx=%s leaves only %d MiB free after load "
+                        "(< 700). Decode will slow down as the context fills; "
+                        "lower duo_coder_ctx_agentic or the preset ctx.",
+                        model, slot.num_ctx, int(_head))
+                    slot.last_warning = (
+                        f"tight VRAM: {int(_head)} MiB free after load - expect "
+                        f"slow decode as the context fills")
+            except (ImportError, OSError, AttributeError, TypeError) as _hx:
+                logger.debug("[VRAM-TIGHT] headroom check skipped: %s", _hx)
             # SWA-FIX: populate swa_window from /props for fresh loads
             # (startup_cleanup only covers orphan slots)
             try:

@@ -58,6 +58,22 @@ async def get_prefetch_stats():
     }
 
 
+def _slot_warning(model: str) -> str:
+    """VRAM headroom warning recorded at load time, or "".
+
+    Best effort: a missing manager or an unknown model must never fail /ps,
+    which is why this does not raise.
+    """
+    if not model:
+        return ""
+    try:
+        from backend.llama_server_manager import manager as _mgr
+        slot = _mgr._find_loaded_sync(model)
+        return getattr(slot, "last_warning", "") or "" if slot else ""
+    except (ImportError, AttributeError, TypeError, RuntimeError):
+        return ""
+
+
 @router.get("/ps")
 async def ollama_ps():
     try:
@@ -73,6 +89,9 @@ async def ollama_ps():
                 "size_vram_gb": round(vram / 1024**3, 2),
                 "size_total_gb": round(total / 1024**3, 2),
                 "expires_at": m.get("expires_at", ""),
+                # VRAM-HEADROOM (2026-10-27): a load that only just fits runs
+                # slow once the KV cache grows. The loader records it here.
+                "warning": _slot_warning(m.get("name", "")),
             })
         return {"models": result, "count": len(result)}
     except Exception as e:

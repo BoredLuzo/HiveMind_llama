@@ -56,6 +56,9 @@ class ModelSlot:
         # still be in flight - live run 17:57:36 killed exactly that slot for
         # another role's load and the round died with ConnectError.
         self.in_flight: int = 0
+        # VRAM-HEADROOM (2026-10-27): set when a fresh load left almost no free
+        # VRAM. Surfaced by /vram/ps so the UI can say "this will be slow".
+        self.last_warning: str = ""
     def set_pinned(self, val: bool) -> None:
         # PIN EXPIRY (2026-10-02): set/clear the pin and stamp the time so
         # LRU eviction can reclaim pins older than 30 minutes.
