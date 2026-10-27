@@ -11,6 +11,10 @@ zip, they do not need the dev setup.
 | `dev` | **Integration.** All work happens here; `main` is fast-forwarded from `dev` when a release is cut. |
 | anything else | scratch branches, kept for history, never merged by accident. |
 
+After publishing a release, run `deploy\promote_main.bat`: it
+fast-forwards `main` to `dev` and pushes, then switches back.
+It never merges, so a stray commit on `main` stops it.
+
 Release flow:
 
 ```bat
