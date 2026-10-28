@@ -1,4 +1,4 @@
-"""Tool-Definitionen, Allowlists und Filter-Funktionen (aus server.py extrahiert)."""
+"""Tool definitions, allowlists and filters (extracted from server.py)."""
 from __future__ import annotations
 
 _WEBSEARCH_AVAILABLE: bool = False
@@ -6,7 +6,7 @@ _websearch = None
 
 
 def init_websearch(available: bool, module=None):
-    """Initialisiert die Websearch-Integration (von server.py aufzurufen)."""
+    """Initialize the websearch integration (called from server.py)."""
     global _WEBSEARCH_AVAILABLE, _websearch
     _WEBSEARCH_AVAILABLE = available
     _websearch = module

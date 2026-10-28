@@ -68,6 +68,8 @@ _NAME_OK = "abcdefghijklmnopqrstuvwxyz0123456789_"
 # after the first attempt, with these pauses before each retry. tools/call is
 # the exception - see HttpConn._post_retry for what is retried there and why.
 HTTP_RETRY_DELAYS_S = (0.5, 1.5, 3.0)
+HTTP_RETRY_JITTER = (0.8, 1.2)      # +-20 % around each ladder rung
+CANCEL_TIMEOUT_S = 2.0              # notifications/cancelled after a timeout
 MAX_HTTP_RETRIES = 3
 HTTP_RETRY_STATUSES = (502, 503, 504)
 _HTTP_RETRYABLE = (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError)
@@ -673,7 +675,8 @@ class HttpConn:
         def _pause_for(retry_no: int) -> float:
             # +-20 % jitter around the ladder rung for this retry
             rung = min(retry_no, len(HTTP_RETRY_DELAYS_S))
-            return HTTP_RETRY_DELAYS_S[rung - 1] * random.uniform(0.8, 1.2)
+            return HTTP_RETRY_DELAYS_S[rung - 1] * random.uniform(
+                *HTTP_RETRY_JITTER)
 
         attempts = 0
         while True:
@@ -739,7 +742,7 @@ class HttpConn:
                               "method": "notifications/cancelled",
                               "params": {"requestId": rid,
                                          "reason": "client timeout"}},
-                             min(2.0, self.timeout_s))
+                             min(CANCEL_TIMEOUT_S, self.timeout_s))
         except (httpx.HTTPError, OSError) as exc:
             logger.info("[MCP] cancellation for %s failed: %s",
                         self.spec.name, exc)

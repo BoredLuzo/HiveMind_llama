@@ -344,8 +344,6 @@ async def web_search(query: str, max_results: int = _MAX_RESULTS_DEFAULT) -> str
             )
         except Exception as e:
             return f"[web_search: error - {type(e).__name__}: {str(e)[:200]}]"
-    else:
-        return f"[web_search: All attempts failed for '{query}']"
 
     results = data.get("results", [])
     results = _cap_per_host(results, cap=2)
@@ -564,8 +562,6 @@ async def web_fetch(url: str, max_chars: int = 4000) -> str:
             return f"[web_fetch: HTTP {_code} - {url}]"
         except Exception as e:
             return f"[web_fetch: {type(e).__name__}: {str(e)[:200]}]"
-    else:
-        return f"[web_fetch: all attempts failed - {url}]"
 
     # Only run HTML extraction for real web pages. Raw files (source code,
     # configs, JSON, ...) must NOT go through trafilatura/HTML-stripping:

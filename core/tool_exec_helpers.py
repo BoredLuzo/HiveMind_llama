@@ -713,7 +713,7 @@ def _ws_is_near_dup(a: set, b: set) -> bool:
         return True
     if inter / max(1, min(len(a), len(b))) >= _WS_DUP_CONTAIN:
         return True
-    # shared op ener ("nintendo 64 technical ...") is the same topic even when
+    # shared opener ("nintendo 64 technical ...") is the same topic even when
     # the tail differs a lot
     return len(a & b) >= 3 and inter / max(1, len(a)) >= 0.5
 
