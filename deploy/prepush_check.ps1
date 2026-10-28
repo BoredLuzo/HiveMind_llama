@@ -16,9 +16,14 @@ $ErrorActionPreference = "Continue"
 if (-not $Repo) {
     $candidate = Split-Path -Parent $PSScriptRoot
     if (Test-Path (Join-Path $candidate ".git")) { $Repo = $candidate }
-    elseif (Test-Path "C:\Users\NtheP\Desktop\HiveMind\repo_gateway\.git") {
-        $Repo = "C:\Users\NtheP\Desktop\HiveMind\repo_gateway"
-    } else {
+    elseif (Get-Command git -ErrorAction SilentlyContinue) {
+        # PRIVATE-PATH (2026-10-28, release audit): the fallback hardcoded a
+        # C:\Users\<name>\... worktree and shipped in the 1.4.10/1.4.11 zips.
+        # Resolve the worktree from git instead of a personal path.
+        $top = git rev-parse --show-toplevel 2>$null
+        if ($top -and (Test-Path (Join-Path $top ".git"))) { $Repo = $top }
+    }
+    if (-not $Repo) {
         Write-Host "[FATAL] repo not found" -ForegroundColor Red
         exit 1
     }
