@@ -349,10 +349,10 @@ async def ollama_load(req: Request):
         # num_ctx like /vram/estimate already does. CTX-SOURCE (2026-10-27):
         # the resolver (_get_num_ctx_with_source) is profile-aware now, so
         # the source is reported precisely (request > settings > profile >
-        # table > llama-server default) and logged below - a profile num_ctx
-        # that silently degrades to 4096 is visible in the log.
-        _load_ctx = None
-        _ctx_src = "llama-server default"
+        # table > default) and logged below - a profile num_ctx that
+        # silently degrades to 4096 is visible in the log. DEAD-INIT
+        # (2026-10-28, audit): the two initializers below were written but
+        # always overwritten before any read.
         try:
             _load_ctx = int(data.get("num_ctx") or data.get("ctx") or 0) or None
         except (TypeError, ValueError):
@@ -363,11 +363,11 @@ async def ollama_load(req: Request):
             _load_ctx, _ctx_src = _get_num_ctx_with_source(model)
         if _load_ctx is None:
             # neither a caller value nor a profile/settings/table match: the
-            # loader then leaves --ctx-size out and llama-server uses its own
-            # default. Report that number instead of null, so "the ctx used"
-            # is not a lie.
+            # loader applies CONTEXT_SIZE_DEFAULT (4096) as --ctx-size, so
+            # report THAT instead of null or a wrong "llama-server default"
+            # label (the engine chooses it, not llama-server).
             _load_ctx = 4096
-            _ctx_src = "llama-server default"
+            _ctx_src = "default"
         logger.info("[VRAM-LOAD] %s ctx=%d ctx_source=%s",
                     model, _load_ctx, _ctx_src)
         await _bk_load(model, keep_alive=keep_alive, num_ctx=_load_ctx)

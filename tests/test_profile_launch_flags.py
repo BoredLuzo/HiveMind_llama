@@ -49,6 +49,10 @@ def _gp_kv(m):
         "spark-fixture:4b": {"kv_cache_type": "q8_0"},
         # explicit profile beats the curated family table
         "minicpm5:2b-sharp": {"kv_cache_type": "q4_0"},
+        # -ud REGRESSION (2026-10-28): a substring strip turned
+        # "study-ud-model:7b" into "study-model:7b" and pulled THIS foreign
+        # profile. It must NOT match.
+        "study-model:7b": {"kv_cache_type": "q8_0"},
     }
     return profiles.get(m, {})
 
@@ -149,4 +153,24 @@ check("2g core.state resolver falls through to profile/table",
       and "from hive_functions.num_ctx_config import get_num_ctx" in _st)
 
 print(f"\nprofile_launch_flags: {passed} passed, {failed} failed")
+
+# SECTION 3: -ud suffix handling (2026-10-28) - one trailing -ud strip,
+# applied to the profile AND the family table lookup.
+check("3a -ud name reaches the family table entry",
+      LC.dense_kv_cache_type("k2-horizon:3.7b-ud", "q4_0") == "q8_0",
+      f"({LC.dense_kv_cache_type('k2-horizon:3.7b-ud', 'q4_0')})")
+check("3b -ud substring no longer pulls a foreign profile",
+      LC.dense_kv_cache_type("study-ud-model:7b", "q4_0") == "q4_0",
+      f"({LC.dense_kv_cache_type('study-ud-model:7b', 'q4_0')})")
+_moe_orig = LC._MOE_KV_CACHE_TYPES.copy()
+LC._MOE_KV_CACHE_TYPES.clear()
+LC._MOE_KV_CACHE_TYPES.update({"k2-horizon:3.7b": "q5_k_m"})
+try:
+    check("3c moe -ud name reaches its table entry",
+          LC.moe_kv_cache_types("k2-horizon:3.7b-ud") == "q5_k_m",
+          f"({LC.moe_kv_cache_types('k2-horizon:3.7b-ud')})")
+finally:
+    LC._MOE_KV_CACHE_TYPES.clear()
+    LC._MOE_KV_CACHE_TYPES.update(_moe_orig)
+
 sys.exit(1 if failed else 0)

@@ -283,6 +283,18 @@ _MOE_EXPERT_COUNTS[_HERMES_V10_MTP] = 35
 _MOE_KV_CACHE_TYPES: dict[str, str] = {}
 
 
+def _strip_ud_suffix(model_key: str) -> str:
+    """Strip ONE trailing "-ud" (Unsloth Dynamic) quant suffix.
+
+    SUBSTRING-BUG (2026-10-28, audit): the old replace("-ud", "") mangled
+    every name CONTAINING "-ud" ("study-ud-model:7b" -> "study-model:7b")
+    and pulled another model's profile. Only the suffix counts, and it
+    counts for the family table too (live: "k2-horizon:3.7b-ud" never hit
+    the table entry "k2-horizon:3.7b" because the raw name was searched)."""
+    k = str(model_key or "").strip()
+    return k[:-3] if k.lower().endswith("-ud") else k
+
+
 def moe_kv_cache_types(model_key: str) -> str:
     """MoE KV quantization for --cache-type-k/-cache-type-v.
 
@@ -290,8 +302,8 @@ def moe_kv_cache_types(model_key: str) -> str:
     ("kv_cache_type") > q4_0 default. The profile key is the escape hatch
     for models that degrade on q4_0 KV at long context; the aggressive
     default stays."""
-    k = str(model_key or "").replace("-ud", "")
-    v = _MOE_KV_CACHE_TYPES.get(str(model_key or "")) or _MOE_KV_CACHE_TYPES.get(k)
+    k = _strip_ud_suffix(model_key)
+    v = _MOE_KV_CACHE_TYPES.get(k)
     if not v:
         try:
             from model_configs.models_registry import get_profile as _gp
@@ -309,10 +321,12 @@ def dense_kv_cache_type(model_key: str, global_default: str = "") -> str:
     moe_kv_cache_types so the profile key applies to dense models too -
     previously only the MoE path consulted it (live 2026-10-27: a
     spark-x2.6:4b profile with q8_0 silently ran the global q4_0).
-    global_default="" (an f16/empty global) means "no quantization flags"
-    unless the profile says otherwise."""
-    k = str(model_key or "").replace("-ud", "")
-    low = str(model_key or "").lower()
+    global_default is what the loader passes: the install-wide KV_CACHE_TYPE
+    constant (q4_0). That constant is deliberately NOT a setting - per-model
+    escape hatches live in the model profile ("kv_cache_type"), which wins
+    over everything here; "f16" in a profile forces explicit f16 flags."""
+    k = _strip_ud_suffix(model_key)
+    low = k.lower()
     v = None
     try:
         from model_configs.models_registry import get_profile as _gp
