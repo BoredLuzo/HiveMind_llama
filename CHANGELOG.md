@@ -1,3 +1,33 @@
+## [1.4.13] - unreleased
+
+## Speed diagnosis and load safety
+
+- The 35B coder loads with `load_mode: none` now: llama-bench tg128 measured
+  2.92 t/s with mmap+mlock vs 13.77 t/s with none (live 15-16 t/s), because
+  the expert pages page in from NVMe under RAM pressure. The profile-level
+  `load_mode` override bypasses the SPEC+NONE guard on purpose - measured
+  live at 14.6-17.7 t/s without OOM when the slot is exclusive.
+- A RAM-GUARD in the loader rejects `load_mode: none` when free RAM is
+  unknown or below GGUF size + 8 GB (live: three stacked 18.3 GB hermes
+  commits froze the machine at 56 GB commit) and falls back to plain mmap.
+- The load-mode decision lives in one pure function
+  (`backend/manager_load._resolve_load_mode`), unit-tested.
+- MiniCPM-V 4.7 is vision-capable again (see 1.4.12 notes - wired during
+  the 1.4.12 window, bench and live verified).
+- Spark-X2.6 on Vulkan runs ~6 t/s (bench-verified twice, one unexplained
+  21 t/s reading) - prefer Qwen3.5-4B-MTP for coding.
+
+## Fixes since the 1.4.12 upload
+
+- Presets: a load applies the llama startup flags immediately, warns about
+  models missing locally, re-saving keeps custom prompts, the autoload
+  guard survives daylight-saving stamp compares.
+- MCP client: servers that never started no longer show as running,
+  handshake error statuses fail loudly, `GET /mcp/servers` redacts
+  env/header values.
+- A trailing `-ud` in a model name reaches the KV family table again.
+- One context resolver (chat, load, duo) instead of three copies.
+
 ## [1.4.12] - 2026-10-28
 
 ## New coder model in the installer
