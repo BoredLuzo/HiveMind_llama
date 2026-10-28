@@ -32,7 +32,10 @@ def check(name, cond, extra=""):
 _GET_ONLY = {"settings_rev", "git_token_saved", "moe_pins", "moe_autodetect",
              "moe_expert_defaults", "ctx_defaults"}
 _EXPECTED_EXCLUDED = {"git_token", "_registry", "models_dir",
-                      "image_processing_mode", "vision_agent_mode"}
+                      "image_processing_mode", "vision_agent_mode",
+                      # BOOKKEEPING (2026-10-28): written by the apply path
+                      # itself, never stored in a snapshot
+                      "active_preset", "settings_saved_at", "preset_applied_at"}
 
 saved = copy.deepcopy(rc.settings)
 try:

@@ -73,7 +73,13 @@ _UI_REV_PROTECTED_KEYS = {
 # vision_agent_mode have no backend reader (the truth lives in
 # vision_model.json via /vision/config).
 _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
-                      "image_processing_mode", "vision_agent_mode"}
+                      "image_processing_mode", "vision_agent_mode",
+                      # BOOKKEEPING (2026-10-28, preset audit): these three are
+                      # written by the apply path itself (active_preset, both
+                      # stamps). In the snapshot they froze the saving moment
+                      # into every exported file and came back as stale state
+                      # on load.
+                      "active_preset", "settings_saved_at", "preset_applied_at"}
 
 # PRESET-CTX-OVERLAY (2026-09-04): nur diese Keys darf der Client beim
 # Preset-Save explizit uebergeben (verhindert das Race zwischen debounced
@@ -210,6 +216,29 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
                 continue
         settings[key] = copy.deepcopy(value)
     apply_settings_to_pipeline(settings)
+    # PRESET-LOAD-SYNC (2026-10-28, preset audit): a preset load used to skip
+    # a live-sync that POST /settings performs, so a loaded value only took
+    # effect after an engine restart: vram_preflight_gate kept the old
+    # backend flag (the triple-sync below is the same one post_settings
+    # does). Deliberately NOT synced here: _refresh_safe_profile_policy() —
+    # it would reset agent budgets to profile defaults and defeat the merge
+    # protection pinned by tests/test_preset_agent_merge.py.
+    if "vram_preflight_gate" in settings:
+        try:
+            import backend.llama_config as _lc_pf
+            import backend.manager_load as _ml_pf
+            import backend.llama_server_manager as _lsm_pf
+            _pf_val = bool(settings.get("vram_preflight_gate", True))
+            _lc_pf.VRAM_PREFLIGHT_GATE = _pf_val
+            _ml_pf.VRAM_PREFLIGHT_GATE = _pf_val
+            _lsm_pf.VRAM_PREFLIGHT_GATE = _pf_val
+        except Exception:
+            pass
+    # PRESET-STALE-TAB (2026-10-28): bump the settings revision like
+    # post_settings does, or a second tab holding an older snapshot could
+    # overwrite freshly loaded preset values through POST /settings.
+    global _settings_rev
+    _settings_rev += 1
     settings["active_preset"] = name
     if _state._WEBSEARCH_AVAILABLE:
         _ws_configure(
@@ -239,9 +268,17 @@ def preset_autoload_stale(applied_at, saved_at) -> bool:
     behavior."""
     if not applied_at or not saved_at:
         return False
-    # ISO stamps from one clock format compare chronologically as strings;
-    # str() coercion cannot raise, so there is no failure mode to guard.
-    return str(saved_at) > str(applied_at)
+    # DST-PROOF (2026-10-28, preset audit): the plain string compare flipped
+    # the order once per year across a daylight-saving boundary (a 1h window
+    # where '+02:00' stamps sorted after '+01:00' ones, reverting user edits
+    # from the autoload). Parse the offsets; unparseable stamps fall back to
+    # the historical string compare, which cannot raise.
+    try:
+        from datetime import datetime
+        return (datetime.fromisoformat(str(saved_at))
+                > datetime.fromisoformat(str(applied_at)))
+    except (TypeError, ValueError):
+        return str(saved_at) > str(applied_at)
 
 
 @router.get("/settings")
@@ -695,8 +732,12 @@ async def save_preset_ep(name: str, req: Request):
         _body = {}
     presets[name] = _preset_snapshot(extra=_body)
     if _state.pipeline:
+        # PROMPT-CLOBBER-FIX (2026-10-28, preset audit): src_preset was always
+        # None, so every re-save of an existing preset overwrote its saved
+        # custom prompts with the built-in base prompts. Re-saving a preset
+        # must copy FROM itself; only a NEW preset starts from the base.
         copy_prompts_to_preset(
-            src_preset=None, dst_preset=name,
+            src_preset=(name if name in presets else None), dst_preset=name,
             agent_keys=list(_state.pipeline.agents.keys()), base_prompts=PROMPTS
         )
     save_presets(presets)
