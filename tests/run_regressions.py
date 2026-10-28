@@ -202,6 +202,7 @@ SUITES = [
     ("gateway_supervisor",     "tests/test_gateway_supervisor.py",              60),
     ("phone_restriction",      "tests/test_phone_restriction.py",               60),
     ("verification_honesty",   "tests/test_verification_honesty.py",          60),
+    ("profile_launch_flags",   "tests/test_profile_launch_flags.py",         60),
     ("mcp_client",              "tests/test_mcp_client.py",                    90),
     ("write_folder_hint",      "tests/test_write_folder_hint.py",         20),
     ("settings_atomic",       "tests/test_settings_atomic.py",            40),

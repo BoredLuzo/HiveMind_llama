@@ -13,7 +13,7 @@ from .llama_config import (
     BINARY_MIN_BUILD, MODELS_DIR,
     NO_MMAP_MIN_BUILD,
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS,
-    _DENSE_KV_CACHE_TYPES,
+    dense_kv_cache_type,
     moe_kv_cache_types, llama_gpu_layers_auto, resolve_gpu_layers,
     CACHE_REUSE, CACHE_RAM_MIB, CTX_CHECKPOINTS, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
@@ -1242,21 +1242,29 @@ class LlamaLoadMixin:
             )
 
         # ── KV cache quantization ────────────────────────────────────────────
-        if KV_CACHE_TYPE and KV_CACHE_TYPE.lower() not in ("f16", "") and _moe_count <= 0:
-            if type(self)._kv_flag_supported:
-                _kv_base = str(_moe_model_key or "").lower().split(":")[0]
-                _dense_kv = _DENSE_KV_CACHE_TYPES.get(
-                    str(_moe_model_key or "").lower(),
-                    _DENSE_KV_CACHE_TYPES.get(_kv_base, KV_CACHE_TYPE),
-                )
-                cmd += ["--cache-type-k", _dense_kv, "--cache-type-v", _dense_kv]
-                logger.info(f"KV cache quantization active: {_dense_kv}")
-            else:
-                logger.warning(
-                    f"--cache-type-k {KV_CACHE_TYPE} not supported by "
-                    f"{LLAMA_BIN.name} — falling back to f16. "
-                    "Use a newer binary for q4_0 support."
-                )
+        # DENSE-PROFILE-KV (2026-10-27): dense_kv_cache_type consults the
+        # model profile first — the MoE path always did via
+        # moe_kv_cache_types, dense only read the static family table, so a
+        # profile q8_0 (spark-x2.6:4b) silently ran the global q4_0. No
+        # profile value -> previous chain (family table -> global; an
+        # f16/empty global still means "no quantization flags" for
+        # profile-less models).
+        if _moe_count <= 0:
+            _kv_global_active = bool(KV_CACHE_TYPE) and KV_CACHE_TYPE.lower() not in ("f16", "")
+            _dense_kv = dense_kv_cache_type(
+                _moe_model_key,
+                global_default=KV_CACHE_TYPE if _kv_global_active else "",
+            )
+            if _dense_kv:
+                if type(self)._kv_flag_supported:
+                    cmd += ["--cache-type-k", _dense_kv, "--cache-type-v", _dense_kv]
+                    logger.info(f"KV cache quantization active: {_dense_kv}")
+                else:
+                    logger.warning(
+                        f"--cache-type-k {_dense_kv} not supported by "
+                        f"{LLAMA_BIN.name} — falling back to f16. "
+                        "Use a newer binary for q4_0 support."
+                    )
 
         # ── MoE-Offloading ────────────────────────────────────────────────────
         if _moe_count > 0 and GPU_BACKEND != "cpu":

@@ -158,41 +158,39 @@ _GIT_CONFIG_KEYS = [
 ]
 
 
-def _get_num_ctx(model: str, agent_role: str | None = None) -> int | None:
-
-
-    override = settings.get("ctx_overrides")
-    if not isinstance(override, dict):
-        return None
-
+def _ctx_override_lookup(ov: dict, model_name: str,
+                         agent_role: str | None) -> int | None:
+    """ctx_overrides lookup: legacy flat shape (role key, model keys, base,
+    default) and nested {"roles": {}, "models": {}} shape. Returns int|None.
+    (Extracted 2026-10-27 so the settings layer is shared by the
+    source-reporting resolver below.)"""
     def _int(v):
         try:
             return int(v)
         except (TypeError, ValueError):
             return None
 
-    model_name = str(model or "")
     base = model_name.rsplit("#", 1)[0] if "#" in model_name else model_name
     base_name = model_name.split(":")[0] if model_name else ""
 
     # Legacy flat shape
     if agent_role:
-        _r = _int(override.get(agent_role))
+        _r = _int(ov.get(agent_role))
         if _r:
             return _r
     for mk in (model_name, base, base_name):
         if mk:
-            _m = _int(override.get(mk))
+            _m = _int(ov.get(mk))
             if _m:
                 return _m
 
     # Nested shape
-    roles = override.get("roles")
+    roles = ov.get("roles")
     if agent_role and isinstance(roles, dict):
         _r = _int(roles.get(agent_role))
         if _r:
             return _r
-    models = override.get("models")
+    models = ov.get("models")
     if isinstance(models, dict):
         for mk in (model_name, base_name):
             if mk:
@@ -200,7 +198,53 @@ def _get_num_ctx(model: str, agent_role: str | None = None) -> int | None:
                 if _m:
                     return _m
 
-    return _int(override.get("default"))
+    return _int(ov.get("default"))
+
+
+def _get_num_ctx_with_source(model: str,
+                             agent_role: str | None = None) -> tuple[int | None, str | None]:
+    """(num_ctx, source) for a model - the resolver behind _get_num_ctx.
+
+    Source chain: "settings" (ctx_overrides win) > "profile"
+    (model_configs profile num_ctx / num_ctx_<role>) > "table"
+    (num_ctx_config static tables) > (None, None) = caller decides.
+
+    LOAD-ROUTE FIX (2026-10-27): this resolver used to read ONLY
+    ctx_overrides and returned None otherwise, so a new/local model's
+    profile num_ctx never reached /vram/load (live: a cybertiel profile
+    with num_ctx 65536 started the server at the 4096 llama-server
+    default, ctx_source "llama-server default") while the chat path
+    resolved the profile fine via server.py's own wrapper. The load
+    route and the chat_run preflights share this resolver - all of them
+    are profile-aware now."""
+    model_name = str(model or "")
+    override = settings.get("ctx_overrides")
+    if isinstance(override, dict):
+        _hit = _ctx_override_lookup(override, model_name, agent_role)
+        if _hit:
+            return _hit, "settings"
+    try:
+        from model_configs.models_registry import get_num_ctx as _reg_ctx
+        _v = _reg_ctx(model_name, agent_role)
+        if _v:
+            return int(_v), "profile"
+    except (ImportError, AttributeError, TypeError, ValueError):
+        # a broken registry layer must not kill the chain: the table layer
+        # and the caller's default still resolve (fallbacks by design, not
+        # error swallowing - every layer's failure degrades exactly one rung)
+        pass
+    try:
+        from hive_functions.num_ctx_config import get_num_ctx as _table_ctx
+        _v = _table_ctx(model_name, agent_role)
+        if _v:
+            return int(_v), "table"
+    except (ImportError, AttributeError, TypeError, ValueError):
+        pass
+    return None, None
+
+
+def _get_num_ctx(model: str, agent_role: str | None = None) -> int | None:
+    return _get_num_ctx_with_source(model, agent_role)[0]
 
 
 def detect_vision_need(images, query):

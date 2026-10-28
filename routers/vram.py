@@ -14,7 +14,7 @@ from vram.loader import _bk_load, _bk_evict
 import vram.loader as _vldr
 from core.duo_helpers import DEFAULT_VRAM_BUDGET_GB
 import core.state as _state
-from core.state import settings, registry_get, _get_num_ctx
+from core.state import settings, registry_get, _get_num_ctx, _get_num_ctx_with_source
 
 try:
     from backend.llama_vram_table import VRAM_GB as _VRAM_LOOKUP_GB
@@ -345,11 +345,12 @@ async def ollama_load(req: Request):
         keep_alive = data.get("keep_alive", "-1")
         if not model:
             return JSONResponse({"error": "model missing"}, status_code=400)
-        # CTX-PARAM (2026-10-26, measurement finding): the load path sized
-        # the server from _get_num_ctx ONLY (hardcoded table + settings
-        # overrides) - a profile's num_ctx never reached llama-server and
-        # neither did any caller value. Accept an explicit num_ctx like
-        # /vram/estimate already does; absent = old behavior.
+        # CTX-PARAM (2026-10-26, measurement finding): accept an explicit
+        # num_ctx like /vram/estimate already does. CTX-SOURCE (2026-10-27):
+        # the resolver (_get_num_ctx_with_source) is profile-aware now, so
+        # the source is reported precisely (request > settings > profile >
+        # table > llama-server default) and logged below - a profile num_ctx
+        # that silently degrades to 4096 is visible in the log.
         _load_ctx = None
         _ctx_src = "llama-server default"
         try:
@@ -359,15 +360,16 @@ async def ollama_load(req: Request):
         if _load_ctx is not None:
             _ctx_src = "request"
         if _load_ctx is None:
-            _load_ctx = _get_num_ctx(model)
-            if _load_ctx is not None:
-                _ctx_src = "profile/settings"
+            _load_ctx, _ctx_src = _get_num_ctx_with_source(model)
         if _load_ctx is None:
-            # neither a caller value nor a profile/settings override: the
+            # neither a caller value nor a profile/settings/table match: the
             # loader then leaves --ctx-size out and llama-server uses its own
             # default. Report that number instead of null, so "the ctx used"
             # is not a lie.
             _load_ctx = 4096
+            _ctx_src = "llama-server default"
+        logger.info("[VRAM-LOAD] %s ctx=%d ctx_source=%s",
+                    model, _load_ctx, _ctx_src)
         await _bk_load(model, keep_alive=keep_alive, num_ctx=_load_ctx)
         return {"ok": True, "model": model, "keep_alive": keep_alive,
                 "num_ctx": _load_ctx, "ctx_source": _ctx_src}

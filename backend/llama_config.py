@@ -301,6 +301,31 @@ def moe_kv_cache_types(model_key: str) -> str:
     return str(v or "q4_0").strip().lower()
 
 
+def dense_kv_cache_type(model_key: str, global_default: str = "") -> str:
+    """Dense KV quantization for --cache-type-k/-cache-type-v.
+
+    Resolution: model profile ("kv_cache_type") > static family table
+    (full key, then base before the colon) > global_default. Mirrors
+    moe_kv_cache_types so the profile key applies to dense models too -
+    previously only the MoE path consulted it (live 2026-10-27: a
+    spark-x2.6:4b profile with q8_0 silently ran the global q4_0).
+    global_default="" (an f16/empty global) means "no quantization flags"
+    unless the profile says otherwise."""
+    k = str(model_key or "").replace("-ud", "")
+    low = str(model_key or "").lower()
+    v = None
+    try:
+        from model_configs.models_registry import get_profile as _gp
+        v = (_gp(k) or {}).get("kv_cache_type")
+    except (ImportError, AttributeError, TypeError, ValueError):
+        # registry unavailable/malformed -> the family table and the global
+        # default still resolve (same fallback contract as moe_kv_cache_types)
+        v = None
+    if not v:
+        v = _DENSE_KV_CACHE_TYPES.get(low) or _DENSE_KV_CACHE_TYPES.get(low.split(":")[0])
+    return str(v or global_default or "").strip().lower()
+
+
 def llama_gpu_layers_auto() -> bool:
     """llama_gpu_layers_auto setting: omit --n-gpu-layers so llama.cpp
     auto-fits the layers to free VRAM (it refuses while the flag pins 99:
