@@ -78,6 +78,28 @@
 - The release zip no longer ships a personal path inside
   `deploy/prepush_check.ps1` (the 1.4.10 and 1.4.11 releases carried it and
   were removed from GitHub).
+- MiniCPM-V 4.7 is vision-capable again: the projector needs llama.cpp
+  b11574+ and the shipped binary is newer, so the model profile carries
+  `mmproj_filename` + vision again and the status line names the model that
+  actually receives the image (it warns instead of lying when the direct
+  model has no vision profile).
+- A preset load now applies the llama startup flags it carries
+  (`llama_cache_reuse`, `llama_cache_ram_mib`, `llama_ctx_checkpoints`,
+  `llama_ubatch_size`, `llama_mlock`) instead of waiting for a restart, and
+  warns about models the preset references that do not exist locally.
+- One context resolver: the chat path (server.py) and the duo path
+  (`num_ctx_config`) delegate to `core.state` instead of keeping their own
+  copies of the settings > profile > table chain.
+- MCP client audit fixes: a server whose start fails no longer shows as
+  "ok" in `GET /mcp/servers` and every reload retries it; error statuses on
+  the handshake confirmation fail the start instead of being waved through;
+  a changed `token_env` applies after a reload; `close_all` forgets dead
+  servers; `GET /mcp/servers` no longer ships env values or literal
+  Authorization headers to the browser.
+- `moe_kv_cache_types`/`dense_kv_cache_type`: a trailing `-ud` suffix is
+  stripped once and reaches the family table - before, names containing
+  `-ud` mid-string pulled a foreign profile and `-ud` names never hit the
+  table.
 - `update.bat` ignored `server_port` in settings.json (read without JSON
   parsing), so its running-instance guard always checked port 8001.
 - Re-saving a preset destroyed its saved custom prompts; a re-save keeps

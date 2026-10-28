@@ -97,6 +97,17 @@ diagnosable, presets became safe to re-save, and several silent bugs are gone.
   off by default, both saying how to install them later.
 - The release zip no longer ships a personal path inside
   `deploy/prepush_check.ps1` (the two withdrawn releases carried it).
+- MiniCPM-V 4.7 is vision-capable again (projector wired, correct model
+  named in the run status).
+- A preset load applies its llama startup flags immediately and warns
+  about models that do not exist locally.
+- One context resolver everywhere (chat, load, duo) instead of three
+  copies that could disagree.
+- MCP client: failed servers no longer show as running, handshake error
+  statuses fail loudly, a changed `token_env` applies on reload, and
+  `GET /mcp/servers` no longer ships env/header values to the browser.
+- A trailing `-ud` in a model name reaches the KV family table again and
+  can no longer pull a foreign profile.
 - `update.bat` ignored `server_port` in settings.json (the file was read
   without JSON parsing), so the "instance running" guard always checked
   port 8001 - wrongly blocking an update behind a running engine, or not
