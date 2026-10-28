@@ -28,7 +28,7 @@ async def mcp_servers() -> dict:
             if isinstance(entry, dict):
                 try:
                     out.append(ServerSpec(entry, i).describe())
-                except Exception:
+                except (KeyError, TypeError, ValueError, AttributeError):
                     out.append({"name": str(entry.get("name") or f"server{i}"),
                                 "enabled": False, "kind": "unknown"})
     return {

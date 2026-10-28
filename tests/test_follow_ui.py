@@ -133,7 +133,8 @@ SRC = (ROOT / "hivemind_gateway" / "bridge.py").read_text(encoding="utf-8", erro
 MAIN = (ROOT / "hivemind_gateway" / "main.py").read_text(encoding="utf-8", errors="replace")
 CMDS = (ROOT / "hivemind_gateway" / "commands.py").read_text(encoding="utf-8", errors="replace")
 check("run path uses the resolved mode", "_eff_mode, _mode_src = self.effective_phone_mode(_s)" in SRC)
-check("stream mode only set for a phone override", 'sel_mode = _eff_mode if _mode_src == "phone" else ""' in SRC)
+check("stream mode comes from the chat pin (empty = follow the frontend)",
+      'sel_mode = _conf.get("mode", "")' in SRC and "stream_mode = sel_mode" in SRC)
 check("/follow exists in the dispatch", 'elif name == "follow":' in MAIN)
 check("/follow is documented", '"/follow"' in CMDS or "'/follow'" in CMDS or "/follow <on|off>" in CMDS)
 check("/mode baseline is refreshed per run", 'self.state.data["mode_engine_seen"] = str(' in SRC)
