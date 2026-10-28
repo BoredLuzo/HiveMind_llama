@@ -179,9 +179,10 @@ check("the registry-MTP block honors the env off-switch",
 check("llama_mlock reaches the load path (dynamic read, canonical module)",
       "_llama_cfg.MLOCK_MODEL" in ml_src and "MLOCK_MODEL" not in ml_src.split("from .llama_config import")[1].split(")")[0]
       and "_lc_init.MLOCK_MODEL = bool(settings.get" in srv_src)
-check("speculative models keep mmap even with mlock off (OOM guard)",
-      "_speculation_planned" in ml_src
-      and '"mmap+mlock" if (_mlock_now or _spec_planned) else "none"' in ml_src)
+check("speculative models keep mmap+mlock even with mlock off (OOM guard)",
+      "_resolve_load_mode(" in ml_src
+      and 'if spec_planned or mlock_now:' in ml_src
+      and 'return "mmap+mlock"' in ml_src)
 
 # behavioral: _speculation_planned
 import backend.manager_load as ML

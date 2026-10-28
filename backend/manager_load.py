@@ -174,6 +174,94 @@ def _probe_all(llama_bin: str) -> tuple[int, bool, bool, bool, bool, bool]:
     return build_num, device_ok, kv_ok, moe_ok, load_mode_ok, dspark_ok
 
 
+_LOAD_MODES = ("none", "mmap", "mlock", "mmap+mlock", "dio")
+_RAM_HEADROOM_GB = 8.0
+
+
+def _free_ram_gb() -> float:
+    """Free physical RAM in GB; -1.0 when the platform cannot report it."""
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class _MSX(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            _msx = _MSX()
+            _msx.dwLength = ctypes.sizeof(_MSX)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(_msx))
+            return _msx.ullAvailPhys / (1024 ** 3)
+        except (OSError, AttributeError, ValueError):
+            return -1.0
+    try:
+        return (os.sysconf("SC_AVPHYS_PAGES")
+                * os.sysconf("SC_PAGE_SIZE") / (1024 ** 3))
+    except (ValueError, OSError, AttributeError):
+        return -1.0
+
+
+def _gguf_size_gb(model: str) -> float:
+    """GGUF size in GB; 0.0 when unresolvable (the guard then requires the
+    full 8 GB headroom against free RAM alone)."""
+    try:
+        from backend.llama_models import resolve_model_path as _rmp
+        _ggf = _rmp(model)
+        if _ggf:
+            return Path(_ggf).stat().st_size / (1024 ** 3)
+    except (ImportError, OSError):
+        pass
+    return 0.0
+
+
+def _ram_guard_blocks(model: str, free_ram_gb: float) -> bool:
+    """True when a none load must be rejected: free RAM unknown, or below
+    GGUF size + 8 GB headroom. RATIONALE (live 2026-10-28): a none load
+    commits the FULL model as private memory; three stacked hermes commits
+    (engine slot + two bench processes) pushed the commit to 56 GB on a
+    32 GB machine - SSD at 100 %, system frozen."""
+    if free_ram_gb is None or free_ram_gb < 0:
+        logger.warning("RAM-GUARD: free RAM unknown - load-mode none "
+                       "rejected, falling back to mmap")
+        return True
+    _gg = _gguf_size_gb(model)
+    if free_ram_gb < _gg + 8.0:
+        logger.warning("RAM-GUARD: --load-mode none rejected (model %.1f GB, "
+                       "only %.1f GB RAM free) - falling back to mmap",
+                       _gg, free_ram_gb)
+        return True
+    return False
+
+
+def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
+                       profile_lm: str, free_ram_gb: float) -> str:
+    """The one load-mode decision (pure; unit-tested in
+    tests/test_load_mode_ram_guard.py).
+
+    Order: the SPEC+NONE-CRASH-GUARD (2026-10-24) and the mlock intent keep
+    mmap+mlock; a valid profile override is honored; the remaining default
+    is none. The RAM-GUARD rejects none whenever free RAM is unknown or
+    below GGUF size + 8 GB headroom - the fallback is plain mmap (NOT
+    mlock: locking 18 GB with tight RAM pages and sinks itself; plain mmap
+    lets Windows drop the file-backed pages).
+    """
+    if spec_planned or mlock_now:
+        return "mmap+mlock"
+    profile = profile_lm if profile_lm in _LOAD_MODES else ""
+    if profile and not (profile == "none"
+                        and _ram_guard_blocks(model, free_ram_gb)):
+        return profile
+    if _ram_guard_blocks(model, free_ram_gb):
+        return "mmap"
+    return "none"
+
+
 
 class LlamaLoadMixin:
 
@@ -1145,18 +1233,6 @@ class LlamaLoadMixin:
         # (2026-08-17, Hermes-35B-MoE auf Windows-Vulkan):
         #   --load-mode mlock      → GGML_ASSERT(addr) in llama-mmap.cpp (crasht)
         if type(self)._load_mode_supported:
-            # SPEC+NONE-CRASH-GUARD (audit 2026-10-24, live): load-mode none
-            # (eager load) TOGETHER with speculative decoding crashed Vulkan
-            # with vk::Queue::submit ErrorOutOfDeviceMemory on the 35B - the
-            # draft buffers on top of the eager upload exceed the device
-            # budget. Speculative models keep mmap regardless of mlock.
-            # LOAD-MODE-OVERRIDE (2026-10-28, speed bench): mmap costs 4.7x
-            # decode on the 35B (llama-bench tg128: 2.92 t/s with mmap+mlock
-            # vs 13.77 t/s with load-mode none) - the expert pages page in
-            # from NVMe under RAM pressure. A model profile can now force a
-            # load mode explicitly; with the slot exclusive the eager upload
-            # fits the device (PRE-FLIGHT checks the fit per load). Without
-            # an override the guards above keep the historical behavior.
             _spec_planned = self._speculation_planned(model)
             _mlock_now = _llama_cfg.MLOCK_MODEL
             _profile_lm = ""
@@ -1165,59 +1241,24 @@ class LlamaLoadMixin:
                 _profile_lm = str((_gp_lm(model) or {}).get("load_mode") or "").strip().lower()
             except (ImportError, AttributeError, TypeError, ValueError):
                 _profile_lm = ""
-            if _profile_lm in ("none", "mmap", "mlock", "mmap+mlock", "dio"):
-                # RAM-GUARD (2026-10-28, live): a none load commits the FULL
-                # model as private memory. Live: three stacked hermes commits
-                # (engine slot + two bench processes) pushed the commit to
-                # 56 GB on a 32 GB machine - SSD at 100 %, system frozen.
-                # none requires free RAM >= model size + 8 GB headroom,
-                # otherwise fall back to the historical mmap path and say so.
-                _free_gb = 0.0
-                if os.name == "nt":
-                    try:
-                        import ctypes as _ct
-
-                        class _MSX(_ct.Structure):
-                            _fields_ = [("dwLength", _ct.c_ulong),
-                                        ("dwMemoryLoad", _ct.c_ulong),
-                                        ("ullTotalPhys", _ct.c_ulonglong),
-                                        ("ullAvailPhys", _ct.c_ulonglong),
-                                        ("ullTotalPageFile", _ct.c_ulonglong),
-                                        ("ullAvailPageFile", _ct.c_ulonglong),
-                                        ("ullTotalVirtual", _ct.c_ulonglong),
-                                        ("ullAvailVirtual", _ct.c_ulonglong),
-                                        ("ullAvailExtendedVirtual",
-                                         _ct.c_ulonglong)]
-                        _msx = _MSX()
-                        _msx.dwLength = _ct.sizeof(_MSX)
-                        _ct.windll.kernel32.GlobalMemoryStatusEx(
-                            _ct.byref(_msx))
-                        _free_gb = _msx.ullAvailPhys / (1024 ** 3)
-                    except (OSError, AttributeError, ValueError) as _exc:
-                        logger.warning("RAM-GUARD: free RAM unknown (%s) - "
-                                       "rejecting none override", _exc)
-                _gg_gb = 0.0
-                try:
-                    from backend.llama_models import resolve_model_path as _rmp_g
-                    _ggf = _rmp_g(model)
-                    if _ggf:
-                        _gg_gb = Path(_ggf).stat().st_size / (1024 ** 3)
-                except (ImportError, OSError):
-                    pass
-                if _free_gb < _gg_gb + 8.0:
-                    logger.warning(
-                        "RAM-GUARD: --load-mode none rejected (model %.1f GB, "
-                        "only %.1f GB RAM free) - falling back to mmap",
-                        _gg_gb, _free_gb)
-                    _profile_lm = "mmap+mlock" if _spec_planned else "mmap"
-                if _profile_lm in ("none", "mmap", "mlock", "mmap+mlock", "dio"):
-                    _load_mode = _profile_lm
-                    logger.info("--load-mode %s via profile override (model=%s)",
-                                _load_mode, model)
-                else:
-                    _load_mode = "mmap+mlock" if (_mlock_now or _spec_planned) else "none"
+            # RESOLVER-ONE (2026-10-28): the full decision (SPEC+NONE guard,
+            # mlock intent, profile override, RAM-GUARD) lives in the pure
+            # module function - unit-tested, one place for both load paths.
+            _load_mode = _resolve_load_mode(
+                model, spec_planned=_spec_planned, mlock_now=_mlock_now,
+                profile_lm=_profile_lm, free_ram_gb=_free_ram_gb())
+            if _load_mode == _profile_lm and _profile_lm:
+                # LOAD-MODE-OVERRIDE (2026-10-28, speed bench): mmap costs 4.7x
+                # decode on the 35B (llama-bench tg128: 2.92 t/s with mmap+mlock
+                # vs 13.77 t/s with load-mode none) - the expert pages page in
+                # from NVMe under RAM pressure. A model profile can force a load
+                # mode explicitly; with the slot exclusive the eager upload fits
+                # the device (PRE-FLIGHT checks the fit per load).
+                logger.info("--load-mode %s via profile override (model=%s)",
+                            _load_mode, model)
             else:
-                _load_mode = "mmap+mlock" if (_mlock_now or _spec_planned) else "none"
+                logger.info("--load-mode %s (mlock=%s, spec=%s)",
+                            _load_mode, bool(_mlock_now), _spec_planned)
             # MEMLOCK-GUARD (2026-09-19): Docker default RLIMIT_MEMLOCK is
             # 64 MiB — llama.cpp fails the model load when it cannot lock
             # the weights. One-time warning; fix via --ulimit memlock=-1 in
