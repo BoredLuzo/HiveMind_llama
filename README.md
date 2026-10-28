@@ -711,6 +711,11 @@ fully local alternative to cloud coding tools.
   faster than a hosted API on any gaming GPU, while the large MoE coders are
   slower than hosted models of the same class. Interactive chat feels the
   difference, long unattended runs do not.
+- Model architecture matters more than size on Vulkan: Spark-X2.6-4B (hybrid
+  attention, no MTP) runs ~6 t/s on an RX 6600 (llama-bench b11889, verified
+  twice; one early 21 t/s reading remains unexplained), while Qwen3.5-4B-MTP
+  benches 60 t/s on the same card and flags. Prefer the MTP models for coding.
+
 - A run keeps its progress: finished chunks are checkpointed, so an engine
   restart resumes at the next chunk. Pause, timeout and throttle state is not
   persisted, and a crash mid-chunk repeats that chunk.
