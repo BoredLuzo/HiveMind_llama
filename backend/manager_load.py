@@ -1166,9 +1166,56 @@ class LlamaLoadMixin:
             except (ImportError, AttributeError, TypeError, ValueError):
                 _profile_lm = ""
             if _profile_lm in ("none", "mmap", "mlock", "mmap+mlock", "dio"):
-                _load_mode = _profile_lm
-                logger.info("--load-mode %s via profile override (model=%s)",
-                            _load_mode, model)
+                # RAM-GUARD (2026-10-28, live): a none load commits the FULL
+                # model as private memory. Live: three stacked hermes commits
+                # (engine slot + two bench processes) pushed the commit to
+                # 56 GB on a 32 GB machine - SSD at 100 %, system frozen.
+                # none requires free RAM >= model size + 8 GB headroom,
+                # otherwise fall back to the historical mmap path and say so.
+                _free_gb = 0.0
+                if os.name == "nt":
+                    try:
+                        import ctypes as _ct
+
+                        class _MSX(_ct.Structure):
+                            _fields_ = [("dwLength", _ct.c_ulong),
+                                        ("dwMemoryLoad", _ct.c_ulong),
+                                        ("ullTotalPhys", _ct.c_ulonglong),
+                                        ("ullAvailPhys", _ct.c_ulonglong),
+                                        ("ullTotalPageFile", _ct.c_ulonglong),
+                                        ("ullAvailPageFile", _ct.c_ulonglong),
+                                        ("ullTotalVirtual", _ct.c_ulonglong),
+                                        ("ullAvailVirtual", _ct.c_ulonglong),
+                                        ("ullAvailExtendedVirtual",
+                                         _ct.c_ulonglong)]
+                        _msx = _MSX()
+                        _msx.dwLength = _ct.sizeof(_MSX)
+                        _ct.windll.kernel32.GlobalMemoryStatusEx(
+                            _ct.byref(_msx))
+                        _free_gb = _msx.ullAvailPhys / (1024 ** 3)
+                    except (OSError, AttributeError, ValueError) as _exc:
+                        logger.warning("RAM-GUARD: free RAM unknown (%s) - "
+                                       "rejecting none override", _exc)
+                _gg_gb = 0.0
+                try:
+                    from backend.llama_models import resolve_model_path as _rmp_g
+                    _ggf = _rmp_g(model)
+                    if _ggf:
+                        _gg_gb = Path(_ggf).stat().st_size / (1024 ** 3)
+                except (ImportError, OSError):
+                    pass
+                if _free_gb < _gg_gb + 8.0:
+                    logger.warning(
+                        "RAM-GUARD: --load-mode none rejected (model %.1f GB, "
+                        "only %.1f GB RAM free) - falling back to mmap",
+                        _gg_gb, _free_gb)
+                    _profile_lm = "mmap+mlock" if _spec_planned else "mmap"
+                if _profile_lm in ("none", "mmap", "mlock", "mmap+mlock", "dio"):
+                    _load_mode = _profile_lm
+                    logger.info("--load-mode %s via profile override (model=%s)",
+                                _load_mode, model)
+                else:
+                    _load_mode = "mmap+mlock" if (_mlock_now or _spec_planned) else "none"
             else:
                 _load_mode = "mmap+mlock" if (_mlock_now or _spec_planned) else "none"
             # MEMLOCK-GUARD (2026-09-19): Docker default RLIMIT_MEMLOCK is
