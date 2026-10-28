@@ -96,7 +96,16 @@ check("the header is a real f-string again",
 check("the header line is an f-string",
       any('f"(fetched today: {_ws_today}' in line for line in src_ws.splitlines()))
 
-# ── live behaviour (only when the network and SearXNG are reachable) ───────
+# ── live behaviour (opt-in: needs a running SearXNG AND outbound network) ──
+# LIVE-OPT-IN (2026-10-28, audit): these checks ran on every suite pass and went
+# red on a machine without Docker (no SearXNG) while the Wikipedia fallback
+# answered with a plain hint - a code-independent red. Same pattern as
+# test_wedge_ui_toggle: the durable checks are the source pins above, the live
+# ones only run when someone asks for them.
+import os as _os  # noqa: E402
+_LIVE = _os.environ.get("HIVEMIND_TEST_LIVE_WEBSEARCH") == "1"
+if not _LIVE:
+    print("  .. live checks skipped (set HIVEMIND_TEST_LIVE_WEBSEARCH=1 to run them)")
 from tools import websearch  # noqa: E402
 
 
@@ -107,11 +116,14 @@ async def _live():
     return out
 
 
-try:
-    out = asyncio.run(_live())
-except (OSError, RuntimeError, ValueError, KeyError, asyncio.TimeoutError) as exc:
+if _LIVE:
+    try:
+        out = asyncio.run(_live())
+    except (OSError, RuntimeError, ValueError, KeyError, asyncio.TimeoutError) as exc:
+        out = ""
+        print(f"  .. live check skipped ({type(exc).__name__}: {exc})")
+else:
     out = ""
-    print(f"  .. live check skipped ({type(exc).__name__}: {exc})")
 
 if out:
     check("the looping query now returns an encyclopedia page",
