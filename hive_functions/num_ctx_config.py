@@ -116,8 +116,12 @@ _ROLE_TO_OVERRIDE_KEY = {
 
 def _live_ctx_override(model_name: str, role: str) -> int | None:
     """Read the user's per-agent/per-model context override from the running
-    settings (ctx_overrides → roles/models/default), mirroring server.py."""
+    settings. RESOLVER-ONE (2026-10-28, audit): this was a full copy of the
+    ctx_overrides lookup; the canonical one lives in
+    core.state._ctx_override_lookup (legacy flat + nested shapes, '#' suffix
+    handling). Only the duo-role -> override-key mapping stays here."""
     try:
+        from core.state import _ctx_override_lookup
         from core import state as _st
         ov = getattr(_st, "settings", None)
         if not isinstance(ov, dict):
@@ -125,30 +129,8 @@ def _live_ctx_override(model_name: str, role: str) -> int | None:
         ov = ov.get("ctx_overrides")
         if not isinstance(ov, dict):
             return None
-        base = str(model_name or "").split(":")[0] if model_name else ""
         role_key = _ROLE_TO_OVERRIDE_KEY.get(role) or role
-
-        def _int(v):
-            try:
-                iv = int(v)
-                return iv if iv > 0 else None
-            except Exception:
-                return None
-
-        flat = _int(ov.get(role_key)) or _int(ov.get(model_name)) or (base and _int(ov.get(base)))
-        if flat:
-            return flat
-        roles = ov.get("roles")
-        if role_key and isinstance(roles, dict):
-            rv = _int(roles.get(role_key))
-            if rv:
-                return rv
-        models = ov.get("models")
-        if isinstance(models, dict):
-            mv = _int(models.get(model_name)) or (base and _int(models.get(base)))
-            if mv:
-                return mv
-        return _int(ov.get("default"))
+        return _ctx_override_lookup(ov, str(model_name or ""), role_key)
     except Exception:
         return None
 

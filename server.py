@@ -560,56 +560,26 @@ def _ctx_int(value) -> int | None:
         return None
 
 
-def _ctx_override_from_settings(model: str, agent_role: str | None = None) -> int | None:
-    ov = settings.get("ctx_overrides")
-    if not isinstance(ov, dict):
-        return None
-
-    model_name = str(model or "")
-    base_name = model_name.split(":")[0] if model_name else ""
-
-    # Legacy flat shape support: {"duo_coder": 8192, "qwen3.5": 6144}
-    if agent_role:
-        flat_role = _ctx_int(ov.get(agent_role))
-        if flat_role:
-            return flat_role
-    for mk in (model_name, base_name):
-        if mk:
-            flat_model = _ctx_int(ov.get(mk))
-            if flat_model:
-                return flat_model
-
-    roles = ov.get("roles")
-    if agent_role and isinstance(roles, dict):
-        role_ctx = _ctx_int(roles.get(agent_role))
-        if role_ctx:
-            return role_ctx
-
-    models = ov.get("models")
-    if isinstance(models, dict):
-        for mk in (model_name, base_name):
-            if not mk:
-                continue
-            model_ctx = _ctx_int(models.get(mk))
-            if model_ctx:
-                return model_ctx
-
-    return _ctx_int(ov.get("default"))
+# CTX-RESOLVER-ONE (2026-10-28, audit): this used to be a second full
+# resolver (own ctx_overrides reader + hive table lookup) next to
+# core.state._get_num_ctx_with_source - the chat path and the load path
+# could disagree. One resolver now: core.state, which layers
+# settings-overrides > model profile > family table and reports the source.
+def _get_num_ctx(model: str, agent_role: str | None = None) -> int | None:
+    from core.state import _get_num_ctx_with_source
+    return _get_num_ctx_with_source(model, agent_role)[0]
 
 
+# the family tables live in hive_functions/num_ctx_config.py - without it
+# the resolver falls back to the model profiles only, which can overflow
+# the KV cache on models without a profile entry.
 try:
-    from hive_functions.num_ctx_config import get_num_ctx as _get_num_ctx_impl
-    def _get_num_ctx(model: str, agent_role: str | None = None) -> int | None:
-        base_ctx = _get_num_ctx_impl(model, agent_role)
-        return _ctx_override_from_settings(model, agent_role) or base_ctx
+    import hive_functions.num_ctx_config  # noqa: F401
 except ImportError:
-    import logging as _ncc_log
-    _ncc_log.getLogger("hivemind").warning(
-        "num_ctx_config.py not found ─ num_ctx limits disabled! "
+    logging.getLogger("hivemind").warning(
+        "num_ctx_config.py not found - num_ctx limits disabled! "
         "KV-cache overflow possible. Please put num_ctx_config.py into the main directory."
     )
-    def _get_num_ctx(model: str, agent_role: str | None = None) -> int | None:
-        return _ctx_override_from_settings(model, agent_role)
 
 
 async def _pipeline_chat_stream(model: str, msgs: list, temp: float, max_tok: int,

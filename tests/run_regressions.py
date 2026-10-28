@@ -205,6 +205,7 @@ SUITES = [
     ("profile_launch_flags",   "tests/test_profile_launch_flags.py",         60),
     ("model_filter",            "tests/test_model_filter.py",                  30),
     ("preset_prompts_refix",    "tests/test_preset_prompts_refix.py",          30),
+    ("mcp_audit_fixes",         "tests/test_mcp_audit_fixes.py",               60),
     ("mcp_client",              "tests/test_mcp_client.py",                    90),
     ("write_folder_hint",      "tests/test_write_folder_hint.py",         20),
     ("settings_atomic",       "tests/test_settings_atomic.py",            40),

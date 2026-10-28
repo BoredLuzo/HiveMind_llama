@@ -754,6 +754,15 @@ class HttpConn:
             # an unauthorized notification must not pass silently: the whole
             # session would run on a rejected token
             raise _auth_error(self.spec.name, resp.status_code)
+        if resp.status_code >= 400:
+            # NOTIFY-STATUS (2026-10-28, mcp audit): 500/404 on the
+            # initialized notification used to be waved through and the
+            # session started anyway. A server that rejects the handshake
+            # confirmation is broken - fail the start loudly.
+            self._die(f"{self.spec.name} answered HTTP {resp.status_code} "
+                      f"on {method}")
+            raise McpError(f"{self.spec.name}: HTTP {resp.status_code} "
+                           f"on {method}")
 
     async def request(self, method: str, params: dict, *,
                       timeout: float | None = None) -> dict:
@@ -928,6 +937,17 @@ class McpClient:
                      and conn.loop is asyncio.get_running_loop()
                      and conn.spec.signature() == spec.signature())
             if reuse:
+                # START-FAILURE-REUSE (2026-10-28, mcp audit): a reused
+                # connection must re-resolve token_env - otherwise a fixed
+                # environment variable never takes effect (the old bearer
+                # stayed cached and every call kept failing with 401).
+                try:
+                    if spec.kind == "http":
+                        conn._bearer = _resolve_bearer(spec)
+                except McpError as exc:
+                    conn._die(str(exc))
+                    self._conns.pop(spec.name, None)
+                    raise
                 conn.timeout_s = timeout_s
                 return conn
             # H4: command/args/env/cwd changed -> the old process is stale.
@@ -940,7 +960,18 @@ class McpClient:
         # default, so the handshake cannot re-run the rejection dance
         conn.protocol_version = self._negotiated.get(spec.name, "")
         self._conns[spec.name] = conn
-        await conn.start()
+        try:
+            await conn.start()
+        except McpError as exc:
+            # START-FAILURE-STATUS (2026-10-28, mcp audit): a failed start()
+            # used to leave the connection in _conns with dead=False - the
+            # status endpoint reported "ok: true, tools: 0" for a server that
+            # never started, and a second refresh reused the zombie instead
+            # of retrying. Mark dead and drop it; the refresh status row and
+            # _server_errors still carry the reason.
+            conn._die(str(exc))
+            self._conns.pop(spec.name, None)
+            raise
         if conn.protocol_version:
             self._negotiated[spec.name] = conn.protocol_version
         return conn
@@ -1015,6 +1046,10 @@ class McpClient:
         self._defs = []
         self._names = {}
         self._negotiated.clear()
+        # SERVER-ERRORS-CLEAR (2026-10-28, mcp audit): _server_errors fed the
+        # MCP_UNKNOWN_TOOL hint - after close_all it kept naming servers that
+        # are gone.
+        self._server_errors.clear()
         conns = list(self._conns.values())
         self._conns = {}
         for conn in conns:

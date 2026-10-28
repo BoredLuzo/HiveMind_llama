@@ -32,13 +32,14 @@ both HTTP only (`stdio` servers ignore them):
 An explicit `Authorization` inside `headers` wins over `token_env`. A
 configured `token_env` whose variable is missing or empty **fails the start**
 with the variable name in the message - the server never starts
-unauthenticated by accident. Tokens are never logged; the status output
-(`GET /mcp/servers`, `mcp_reload`) only reports `has_auth: true`, never the
-value. If the server answers 401 or 403, the tool call returns
+unauthenticated by accident. Tokens are never logged. `GET /mcp/servers`
+reports the server list redacted (no env values, no header values); the
+reload response reports `has_auth: true` per HTTP server, never the value.
+If the server answers 401 or 403, the tool call returns
 `[TOOL_ERROR: MCP_AUTH_FAILED]` (token missing, wrong or expired) and the
 connection stays alive - a wrong token is a configuration mistake, not a
-broken transport, so a fixed token works on the next call.
-
+broken transport. A changed `token_env` variable takes effect on the next
+reload (`POST /mcp/reload` or the `mcp_reload` tool), which re-resolves it.
 A hosted server via `token_env`, and one with an extra version header:
 
 ```json
@@ -82,7 +83,7 @@ Either use the **MCP client** card in the config page (toggle, server list as JS
 | Key | Meaning |
 |---|---|
 | `mcp_client_enabled` | master switch, default `false` |
-| `mcp_client_timeout_s` | per request, default 30 s (also caps the handshake) |
+| `mcp_client_timeout_s` | per request, default 30 s (the handshake is additionally capped at 20 s) |
 | `mcp_servers[].name` | short name, becomes part of the tool name |
 | `mcp_servers[].command` | executable, resolved via `PATH` |
 | `mcp_servers[].args` | argument list, no shell interpretation |
@@ -155,6 +156,10 @@ so a dead server does not end the run.
   means the request was delivered and the server may already have executed
   the tool. A tool call that runs into its timeout sends
   `notifications/cancelled` (HTTP only) so the server can stop the work.
+- Status codes are honored on the handshake confirmation too: a 401/403 on
+  `notifications/initialized` fails the start as `MCP_AUTH_FAILED`, 5xx is
+  retried with the same ladder, and any other 4xx fails the start instead
+  of being waved through.
 - Protocol versions are negotiated: the first offer is `2024-11-05`, or the
   version the server accepted on a previous connect (a rebuilt connection
   offers the stored version). Whatever version string the server answers
@@ -165,7 +170,7 @@ so a dead server does not end the run.
   `[image content omitted]`.
 - At most 8 servers and 64 tools per server.
 - `command` and `args` are executed **without a shell**. Only `.cmd` and `.bat`
-  are wrapped in `cmd /c` because Windows cannot exec them directly.
+  are wrapped in `cmd /d /c` because Windows cannot exec them directly.
 - Phone runs cannot use MCP tools: the phone restriction gate rejects anything
   outside its safe set, and MCP tools are not in it.
 - Nothing starts while the client is disabled. A stored `mcp_servers` list
