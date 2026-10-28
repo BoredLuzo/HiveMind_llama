@@ -520,6 +520,50 @@ if errorlevel 1 (
 :judge_done
 echo.
 
+REM ======================================================
+REM [6c] Decider encoder (OPTIONAL): semantic routing on the CPU
+REM ======================================================
+REM DECIDER-ENCODER (2026-10-28): the judge above is an LLM on the GPU. The
+REM decider is a GLiNER2 encoder on the CPU (no VRAM, ~0.5-1.2 s per call)
+REM that classifies direct vs agentic before a model runs. deploy\fetch_decider.py
+REM existed since 1.4.4 but no installer step called it, so fresh installs
+REM never had it. Optional, default N, never fatal.
+echo  ==========================================================
+echo   [decider] Semantic routing encoder ^(optional, ~2.5GB deps^)
+echo   Classifies direct vs agentic on the CPU, no VRAM. Needs
+echo   torch + gliner2. Without it the LLM judge decides as before.
+echo   ==========================================================
+choice /c YN /n /m "Install the decider encoder now? [Y/N] "
+if errorlevel 2 (
+    echo   Skipped - add later: pip install -r requirements-decider.txt
+    echo                        python deploy\fetch_decider.py
+    goto decider_done
+)
+echo   Installing dependencies ^(torch CPU, one to three minutes^)...
+"%PY%" -m pip install --quiet -r requirements-decider.txt
+if errorlevel 1 (
+    echo   [WARN] dependency install failed - decider stays off;
+    echo          retry later with: pip install -r requirements-decider.txt
+    goto decider_done
+)
+echo   Fetching the encoder checkpoint...
+"%PY%" deploy\fetch_decider.py --dir "%~dp0models\decider\gliner25-decide"
+if errorlevel 1 (
+    echo   [WARN] encoder download failed - decider stays off;
+    echo          retry later with: python deploy\fetch_decider.py
+    goto decider_done
+)
+REM Point the setting at the downloaded folder and start in shadow mode, so
+REM the first runs only LOG what the encoder would decide.
+"%PY%" -c "from settings import load_settings, save_settings; s = load_settings(); s['routing_decider_model'] = 'models/decider/gliner25-decide'; s['routing_decider'] = 'shadow'; save_settings(s); print('  decider: shadow mode, model models/decider/gliner25-decide')"
+if errorlevel 1 (
+    echo   [WARN] could not write the decider settings - set them by hand:
+    echo          routing_decider_model = models/decider/gliner25-decide
+    echo          routing_decider       = shadow
+)
+:decider_done
+echo.
+
 REM [7/9] SearXNG (optional)
 REM ======================================================
 echo.

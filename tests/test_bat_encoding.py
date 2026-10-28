@@ -72,6 +72,16 @@ def main():
     else:
         fail("install.bat calls deploy\\fetch_models.py for the judge",
              "path or model key missing")
+
+    # DECIDER-ENCODER (2026-10-28): the installer asked for the judge but never
+    # for the semantic decider, and deploy/fetch_decider.py was dead weight.
+    if ("deploy\\fetch_decider.py" in _inst
+            and "requirements-decider.txt" in _inst
+            and "routing_decider" in _inst):
+        ok("install.bat offers the decider encoder")
+    else:
+        fail("install.bat offers the decider encoder",
+             "fetch_decider.py, requirements or the setting missing")
     print(f"\n=== Results: {passed} passed, {failed} failed ===")
     return failed
 
