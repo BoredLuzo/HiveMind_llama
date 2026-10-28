@@ -78,6 +78,14 @@
 - The release zip no longer ships a personal path inside
   `deploy/prepush_check.ps1` (the 1.4.10 and 1.4.11 releases carried it and
   were removed from GitHub).
+- `update.bat` ignored `server_port` in settings.json (read without JSON
+  parsing), so its running-instance guard always checked port 8001.
+- Re-saving a preset destroyed its saved custom prompts; a re-save keeps
+  them now and only a new preset starts from the base prompts.
+- Applying a preset live-syncs `vram_preflight_gate`, bumps the settings
+  revision against stale tabs, and no longer freezes bookkeeping keys into
+  the snapshot. The preset auto-load guard parses ISO stamps, so a
+  daylight-saving boundary can no longer revert newer user edits.
 
 ## [1.4.11] - 2026-10-27
 

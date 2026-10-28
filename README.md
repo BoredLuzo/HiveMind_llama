@@ -193,7 +193,7 @@ Mode-scoped toolset (`tools/definitions.py`):
 | Git | `git_status`, `git_commit` |
 | Task | `task_complete`, `ask_user` (pause + resume) |
 | Browser | `browser` (headless Chromium: navigate, snapshot, screenshot, click, type, evaluate, console, close) |
-| Misc | `get_datetime`, `hivemind_pipeline` (OpenAI-compatible agent endpoint) |
+| Misc | `get_datetime`, `remember` (durable key/value memory), `hivemind_pipeline` (OpenAI-compatible agent endpoint) |
 | Web | `web_search`, `web_fetch` (SearXNG, added when available) |
 
 Tool scoping per phase: `duo_full`, `duo_readonly`, `pre_explore`,
@@ -354,7 +354,13 @@ Per-model overrides live in `model_configs/models/<tag>.json`.
   hard-pause when the agent asks too often (>5/10min).
 - Graceful stop (finish at chunk boundary, then force) and multi-state pause,
   both persisted for resume.
-- Context meter with pressure warnings at 60% and 85%.
+- Context meter with pressure warnings at 60% and 85%, tooltips on every
+  perf field, and a model filter that accepts several search terms.
+- Presets: full settings snapshots (all keys, agent cards and per-preset
+  prompts) saved under one name and restored in one click; loading merges
+  instead of replacing, so keys a preset never knew keep their current
+  value. Saved in `presets.json` plus the `custom_prompts\` folder - copy
+  both to move presets between installs.
 - Windows toast notifications when runs stop or need input; wake-lock during
   runs (`keep_awake_during_run`).
 
@@ -487,9 +493,13 @@ token - whisper and parakeet are public repos.
 
 `install.bat` asks before every download step: Python 3.14 (only if missing),
 uv, venv in `.venv\`, dependencies, GPU backend choice, llama.cpp nightly into
-`llama\`, then it opens `setup_models.bat` for the models and optionally
-installs SearXNG when Docker is present. Afterwards run `start_hivemind.bat`
-and open http://localhost:8001.
+`llama\`, then it opens `setup_models.bat` for the models. Inside the models
+step, two optional extras ask before installing anything: the judge model and
+the routing decider (a small CPU classifier that routes direct answer vs. code
+run, see `routing_decider` in `docs/settings.md`) - both off by default, both
+saying how to add them later. Afterwards SearXNG is installed when Docker is
+present, and the Telegram gateway can be set up (`docs/gateway_setup.md`).
+Then run `start_hivemind.bat` and open http://localhost:8001.
 
 `setup_models.bat [custom models folder]`:
 
@@ -534,9 +544,11 @@ results usually mean a stale container from an older version:
 
 Search runs through your local SearXNG, so quality depends on the engines that
 instance can actually serve: on stock instances google sits CAPTCHA-suspended and
-wikipedia answers little under broad language tags, so HiveMind defaults to
-`searxng_engines = "bing,duckduckgo"`, `searxng_language = "all"`, safesearch on,
-and caps results per hostname. If everything looks like junk, open
+broad language tags bury good hits under localized shop pages. HiveMind therefore
+defaults to `searxng_engines = ""` (use every engine the instance has enabled -
+the bundled `searxng-config` enables duckduckgo and mojeek, bing/google/brave
+stay off) and `searxng_language = "en"`, safesearch on, and caps results per
+hostname. If everything looks like junk, open
 `http://localhost:8888/search?q=test` and adjust both keys to the engines that
 work for you.
 
@@ -552,6 +564,8 @@ work for you.
 | `setup_models.bat` | download / register / add custom models |
 | `start_mcp.bat` | MCP HTTP server for IDEs, port 8090 |
 | `searxng.bat` | SearXNG manager |
+| `watchdog_engine.bat` | keeps the engine up: restarts it headless when port 8001 dies; `watchdog_engine.bat stop` ends the loop |
+| `start_gateway.bat` / `start_gateway_headless.bat` | Telegram gateway (mirrors chats to your phone, voice notes in, approvals out) |
 
 ### Updating
 

@@ -66,9 +66,13 @@ REM -- 1. Is an instance running on the configured port? ---------------------
 REM Port resolution mirrors run.py: HIVEMIND_PORT env > settings.json > 8001.
 REM The check uses Get-NetTCPConnection, which is locale-proof (the old
 REM netstat "LISTENING" findstr broke on localized Windows output).
+REM PORT-PARSE-FIX (2026-10-28, release audit): settings.json was read with
+REM -Raw but never ConvertFrom-Json'd - $j stayed a string, $j.server_port
+REM was always null and the guard checked 8001 even for a user port (it
+REM blocked the update while an instance ran on 8001).
 set "HM_PORT=8001"
 if defined HIVEMIND_PORT set "HM_PORT=%HIVEMIND_PORT%"
-for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$j = Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue; $e = $env:HIVEMIND_PORT; if ($e) { $e } elseif ($j -and $j.server_port) { $j.server_port } else { '8001' }"`) do set "HM_PORT=%%P"
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$j = Get-Content 'settings.json' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json; $e = $env:HIVEMIND_PORT; if ($e) { $e } elseif ($j -and $j.server_port) { $j.server_port } else { '8001' }"`) do set "HM_PORT=%%P"
 if not defined HM_PORT set "HM_PORT=8001"
 
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"

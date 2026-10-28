@@ -1,6 +1,28 @@
 # Release 1.4.12
 
-Scope: v1.4.11..v1.4.12. Themes: the Hermes coder in the installer is the new APEX-Mini, the MCP client learns auth and retries, long runs became diagnosable, and several silent bugs are gone.
+Scope: v1.4.9..v1.4.12. The 1.4.10 and 1.4.11 releases were withdrawn
+(they shipped a maintainer path inside `deploy/prepush_check.ps1`), so this
+release is the upgrade target from 1.4.9 and contains everything those two
+had, plus the 1.4.12 work below. Themes: the Hermes coder in the installer is
+the new APEX-Mini, the MCP client learns auth and retries, long runs became
+diagnosable, presets became safe to re-save, and several silent bugs are gone.
+
+## If you come from 1.4.9: what 1.4.10 and 1.4.11 already brought
+
+- **Chunking** (opt-in, `duo_chunking`) plans only what the request names, a
+  chunk is done after its test verdict, the last chunk needs the critic's
+  approval like every other, and both chunking and pre-explore ship off.
+- **MCP client** (beta, off by default): use external MCP servers as tools
+  over stdio or Streamable HTTP, with a config card in the UI, paginated tool
+  lists and an `mcp_reload` tool the model can call itself.
+- **Coder speed**: speculative decoding (draft-MTP) is back on - measured
+  +55% decode on the 35B coder, +54% on qwen3.5:4b-mtp, for ~2% prefill.
+  Greedy output is not bit-identical with it; `HIVEMIND_MTP_SPEC=0` restores
+  that.
+- **Settings writes no longer lose keys** (read-modify-write is locked now),
+  and the installer's judge/decider model became an optional step.
+- `POST /vram/load` reports the context it used and where it came from.
+
 
 ## New coder model in the installer
 
@@ -74,4 +96,21 @@ Scope: v1.4.11..v1.4.12. Themes: the Hermes coder in the installer is the new AP
 - The judge model and the routing decider are optional installer steps now,
   off by default, both saying how to install them later.
 - The release zip no longer ships a personal path inside
-  `deploy/prepush_check.ps1`.
+  `deploy/prepush_check.ps1` (the two withdrawn releases carried it).
+- `update.bat` ignored `server_port` in settings.json (the file was read
+  without JSON parsing), so the "instance running" guard always checked
+  port 8001 - wrongly blocking an update behind a running engine, or not
+  guarding a custom port at all.
+- Re-saving a preset destroyed its saved custom prompts (they were
+  overwritten with the built-in base prompts). A re-save now keeps them;
+  only a new preset starts from the base.
+- Applying a preset now live-syncs `vram_preflight_gate` into the backend
+  (it used to take effect only after a restart), bumps the settings
+  revision against stale-tab overwrites, and stops freezing bookkeeping
+  keys (`active_preset`, save/apply stamps) into every snapshot.
+- The preset auto-load guard compared ISO stamps as strings and flipped
+  once per year across a daylight-saving boundary, reverting newer user
+  edits on boot. Stamp offsets are parsed now.
+- The README no longer names retired search defaults (`bing,duckduckgo`,
+  `all`) and documents the Telegram gateway, the routing decider, the
+  watchdog and presets.
