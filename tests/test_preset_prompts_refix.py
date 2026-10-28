@@ -119,7 +119,34 @@ try:
     leaked = {"active_preset", "settings_saved_at", "preset_applied_at"} & set(snap)
     check("bookkeeping keys never enter a snapshot", not leaked, f"({sorted(leaked)})")
 
-    # 4. DST-proof autoload guard: real chronology beats string order
+    # 4. PRESET-LOAD-SYNC: llama startup flags apply immediately
+    S.PRESETS_FILE.write_text(json.dumps({
+        "PF2": {"llama_cache_ram_mib": 2048, "llama_ctx_checkpoints": 6},
+    }), encoding="utf-8")
+    _ram0, _cp0 = LC.CACHE_RAM_MIB, LC.CTX_CHECKPOINTS
+    ok = asyncio.run(rc._apply_preset_internal("PF2", persist=False))
+    check("apply syncs llama_cache_ram_mib into both modules",
+          ok is True and LC.CACHE_RAM_MIB == 2048
+          and LSM.CACHE_RAM_MIB == 2048,
+          f"(config={LC.CACHE_RAM_MIB}, manager={LSM.CACHE_RAM_MIB})")
+    check("apply syncs llama_ctx_checkpoints into both modules",
+          LC.CTX_CHECKPOINTS == 6 and LSM.CTX_CHECKPOINTS == 6)
+    LC.CACHE_RAM_MIB, LSM.CACHE_RAM_MIB, LC.CTX_CHECKPOINTS, LSM.CTX_CHECKPOINTS = (
+        _ram0, _ram0 if isinstance(_ram0, int) else _cp0, _cp0, _cp0)
+
+    # 5. PRESET-MODEL-CHECK: a missing model surfaces as a warning
+    S.PRESETS_FILE.write_text(json.dumps({
+        "PM": {"agents": {"direct": {"model": "not-a-model-xyz"}},
+               "duo_coder_model": "also-missing-xyz"},
+    }), encoding="utf-8")
+    _warns: list = []
+    asyncio.run(rc._apply_preset_internal("PM", persist=False, warnings=_warns))
+    _joined = " | ".join(_warns)
+    check("missing models surface as load warnings",
+          "not found locally" in _joined and "not-a-model-xyz" in _joined
+          and "also-missing-xyz" in _joined, f"({_joined[:100]})")
+
+    # 6. DST-proof autoload guard: real chronology beats string order
     check("a newer save across the DST boundary wins (parsed chronology)",
           rc.preset_autoload_stale("2026-10-27T00:30:00+02:00",
                                    "2026-10-27T00:10:00+01:00") is True,

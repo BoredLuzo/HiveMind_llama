@@ -3270,7 +3270,9 @@ async function loadPresets() {
         sel.appendChild(opt);
       });
     }
-  } catch(e) {}
+  } catch(e) {
+    showStatus('Could not load presets: ' + e);
+  }
 }
 
 function renderPresets(presets) {
@@ -3362,9 +3364,13 @@ async function savePresetAs(name) {
     var _agCards = _agentCardsPayload();
     if (_agCards && Object.keys(_agCards).length) body.agents = _agCards;
   } catch (e) { /* keep the server-side snapshot */ }
-  await fetch('/presets/' + encodeURIComponent(name), {
+  var r = await fetch('/presets/' + encodeURIComponent(name), {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   });
+  // SAVE-FEEDBACK (2026-10-28, preset audit): the response used to be
+  // ignored - a failed save looked exactly like a saved preset.
+  if (!r.ok) { showStatus('Preset "' + name + '" save failed (' + r.status + ')'); return; }
+  showStatus('Preset "' + name + '" saved');
   await loadPresets();
 }
 
@@ -3417,7 +3423,8 @@ async function loadPreset(name) {
 
 async function delPreset(name) {
   if (!confirm('Delete preset "' + name + '"?')) return;
-  await fetch('/presets/' + encodeURIComponent(name), { method: 'DELETE' });
+  var r = await fetch('/presets/' + encodeURIComponent(name), { method: 'DELETE' });
+  if (!r.ok) { showStatus('Preset "' + name + '" delete failed (' + r.status + ')'); }
   if (S.activePreset === name) { S.activePreset = null; _setPresetHeader(); }
   var pe = document.getElementById('prompt-editor-section');
   if (pe) pe.style.display = 'none';
@@ -3453,10 +3460,11 @@ async function savePrompt() {
   if (!S.editingPreset) return;
   var agent = document.getElementById('prompt-agent-sel').value;
   var ta = document.getElementById('prompt-textarea');
-  await fetch('/presets/' + encodeURIComponent(S.editingPreset) + '/prompts/' + agent, {
+  var r = await fetch('/presets/' + encodeURIComponent(S.editingPreset) + '/prompts/' + agent, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content: ta ? ta.value : '' })
   });
+  if (!r.ok) { showStatus('Prompt save failed (' + r.status + ')'); return; }
   var cb = document.getElementById('custom-badge');
   if (cb) cb.style.display = 'inline';
 }
@@ -6206,21 +6214,21 @@ function _pbbEnsure() {
       + '<span class="pbb-chev">\u25be</span><span id="pbb-summary">--</span></div>'
     + '<div id="pbb-body">'
       + '<div class="ctx-perf">'
-        + '<span class="ctx-perf-item live" id="pbb-ctx" data-tip-title="Context window" data-tip="How much of the model&#39;s context this run has used, and its share of the window. &#39;est&#39; means the number was estimated from characters before the server reported real token counts." role="note">ctx: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-ctxreuse" data-tip-title="Prefix cache reuse" data-tip="Share of the prompt the server could keep from its cache instead of reading it again. High values mean cheap rounds." role="note">reuse: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-tok" data-tip-title="Output tokens" data-tip="Tokens generated in this run so far, across all rounds." role="note">out: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-rate" data-tip-title="Generation rate" data-tip="Tokens per second including prompt processing - the honest end-to-end figure." role="note">tok/s: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-decode" data-tip-title="Decode rate" data-tip="Tokens per second while the model is writing, prompt processing excluded. This is the number the model itself reports." role="note">decode: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-ctx" data-tip-title="Context window" data-tip="How much of the model&#39;s context this run has used, and its share of the window. &#39;est&#39; means the number was estimated from characters before the server reported real token counts." role="note" tabindex="0">ctx: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-ctxreuse" data-tip-title="Prefix cache reuse" data-tip="Share of the prompt the server could keep from its cache instead of reading it again. High values mean cheap rounds." role="note" tabindex="0">reuse: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-tok" data-tip-title="Output tokens" data-tip="Tokens generated in this run so far, across all rounds." role="note" tabindex="0">out: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-rate" data-tip-title="Generation rate" data-tip="Tokens per second including prompt processing - the honest end-to-end figure." role="note" tabindex="0">tok/s: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-decode" data-tip-title="Decode rate" data-tip="Tokens per second while the model is writing, prompt processing excluded. This is the number the model itself reports." role="note" tabindex="0">decode: --</span>'
 
       + '</div>'
       + '<div class="ctx-perf">'
-        + '<span class="ctx-perf-item ok" id="pbb-in" data-tip-title="Prompt tokens (last request)" data-tip="Tokens sent with the most recent request, whole conversation included." role="note">in: --</span>'
-        + '<span class="ctx-perf-item ok" id="pbb-cached" data-tip-title="Cached tokens" data-tip="Tokens the server served from its prompt cache instead of computing them again." role="note">cached: --</span>'
-        + '<span class="ctx-perf-item ok" id="pbb-new" data-tip-title="Recomputed tokens" data-tip="Prompt tokens the server had to process again. Large values after a compression or an edited earlier message: that is what makes a round slow." role="note">recomputed: --</span>'
-        + '<span class="ctx-perf-item live" id="pbb-reqs" data-tip-title="Requests" data-tip="Model requests made in this run." role="note">reqs: --</span>'
+        + '<span class="ctx-perf-item ok" id="pbb-in" data-tip-title="Prompt tokens (last request)" data-tip="Tokens sent with the most recent request, whole conversation included." role="note" tabindex="0">in: --</span>'
+        + '<span class="ctx-perf-item ok" id="pbb-cached" data-tip-title="Cached tokens" data-tip="Tokens the server served from its prompt cache instead of computing them again." role="note" tabindex="0">cached: --</span>'
+        + '<span class="ctx-perf-item ok" id="pbb-new" data-tip-title="Recomputed tokens" data-tip="Prompt tokens the server had to process again. Large values after a compression or an edited earlier message: that is what makes a round slow." role="note" tabindex="0">recomputed: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-reqs" data-tip-title="Requests" data-tip="Model requests made in this run." role="note" tabindex="0">reqs: --</span>'
       + '</div>'
       + '<div class="ctx-perf">'
-        + '<span class="ctx-perf-item live" id="pbb-tools" data-tip-title="Tool calls" data-tip="Tool calls in this run: count, total time, and the tool that is running right now (or the last one)." role="note">tools: --</span>'
+        + '<span class="ctx-perf-item live" id="pbb-tools" data-tip-title="Tool calls" data-tip="Tool calls in this run: count, total time, and the tool that is running right now (or the last one)." role="note" tabindex="0">tools: --</span>'
       + '</div></div>';
   try {
     if ((localStorage.getItem('hivemind-pbb-collapsed') || '') === '1')
