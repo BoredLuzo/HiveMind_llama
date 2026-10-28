@@ -761,7 +761,7 @@ check("23a every perf field carries a tooltip", not _missing_tips,
       f"(ohne: {_missing_tips})")
 check("23b the bubble is styled", ".ctx-perf-item[data-tip]::after" in _CSS2)
 check("23c the bubble is keyboard reachable", "focus-visible::after" in _CSS2)
-check("23d the cache buster moved", "app.js?v=20261027-02" in _HTML2
+check("23d the cache buster moved", "app.js?v=20261028-01" in _HTML2
       and "style.css?v=20261027-01" in _HTML2)
 from settings import DEFAULT_SETTINGS as _D2                              # noqa: E402
 check("23e until_finished is on by default", _D2.get("until_finished") is True)

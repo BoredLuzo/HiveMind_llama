@@ -12745,11 +12745,20 @@ async function refreshAvailableModels() {
   }
 }
 
+function _modelMatchesFilter(name, filter) {
+  // MULTI-TOKEN (2026-10-28, live): one includes() matched the WHOLE query,
+  // so "qwen mtp" showed "no match" although qwen3.5:4b-mtp exists - no
+  // model name contains a space. Every whitespace-separated token must hit.
+  var tokens = (filter || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+  var n = (name || '').toLowerCase();
+  return tokens.every(function(t){ return n.includes(t); });
+}
+
 function _renderAvailableModels(models, filter) {
   var list = document.getElementById('available-models-list');
   if (!list) return;
-  var f = (filter || '').toLowerCase().trim();
-  var filtered = f ? models.filter(function(m){return m.name.toLowerCase().includes(f);}) : models;
+  var f = (filter || '').trim();
+  var filtered = f ? models.filter(function(m){return _modelMatchesFilter(m.name, f);}) : models;
   if (!filtered.length) {
     list.innerHTML = '<div class="vram-empty">' + (f ? 'no match' : 'No models found') + '</div>';
     return;
