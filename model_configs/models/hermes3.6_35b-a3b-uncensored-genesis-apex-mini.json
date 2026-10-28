@@ -75,5 +75,6 @@
     }
   },
   "_notes": "APEX-Mini (LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-GGUF, 20.2 GB, 2026-10-27) replaces the 17 GB 'Final MTP-APEX-Compact'. Same architecture (qwen35moe, 262k trained context, vision), mtp on, CPU experts 35. The vendor chat_template.jinja ships with the download and is used here; the old model ran on chat_template22.5.jinja. VRAM: the pre-flight takes the calibrated hermes3.6:35b-a3b table entry (4.66 GB active + 6272 B/token); the file is ~3 GB larger than the Compact, so re-measure active_gpu_gb on the first real load and tighten the entry.",
-  "chat_template": "hermes36_apex_mini_chat_template.jinja"
+  "chat_template": "hermes36_apex_mini_chat_template.jinja",
+  "load_mode": "none"
 }

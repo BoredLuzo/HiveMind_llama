@@ -1150,9 +1150,27 @@ class LlamaLoadMixin:
             # with vk::Queue::submit ErrorOutOfDeviceMemory on the 35B - the
             # draft buffers on top of the eager upload exceed the device
             # budget. Speculative models keep mmap regardless of mlock.
+            # LOAD-MODE-OVERRIDE (2026-10-28, speed bench): mmap costs 4.7x
+            # decode on the 35B (llama-bench tg128: 2.92 t/s with mmap+mlock
+            # vs 13.77 t/s with load-mode none) - the expert pages page in
+            # from NVMe under RAM pressure. A model profile can now force a
+            # load mode explicitly; with the slot exclusive the eager upload
+            # fits the device (PRE-FLIGHT checks the fit per load). Without
+            # an override the guards above keep the historical behavior.
             _spec_planned = self._speculation_planned(model)
             _mlock_now = _llama_cfg.MLOCK_MODEL
-            _load_mode = "mmap+mlock" if (_mlock_now or _spec_planned) else "none"
+            _profile_lm = ""
+            try:
+                from model_configs.models_registry import get_profile as _gp_lm
+                _profile_lm = str((_gp_lm(model) or {}).get("load_mode") or "").strip().lower()
+            except (ImportError, AttributeError, TypeError, ValueError):
+                _profile_lm = ""
+            if _profile_lm in ("none", "mmap", "mlock", "mmap+mlock", "dio"):
+                _load_mode = _profile_lm
+                logger.info("--load-mode %s via profile override (model=%s)",
+                            _load_mode, model)
+            else:
+                _load_mode = "mmap+mlock" if (_mlock_now or _spec_planned) else "none"
             # MEMLOCK-GUARD (2026-09-19): Docker default RLIMIT_MEMLOCK is
             # 64 MiB — llama.cpp fails the model load when it cannot lock
             # the weights. One-time warning; fix via --ulimit memlock=-1 in
