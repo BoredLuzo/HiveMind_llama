@@ -542,12 +542,15 @@ check("18i the cache buster follows the change", bool(_m) and _m.group(1) >= "20
 # ── 19. HTTP-Transport (2026-10-27) ────────────────────────────────────
 # A server entry with `url` speaks Streamable HTTP instead of starting a
 # process. The fake server below answers JSON and one SSE response, so both
-# branches are exercised.
+# branches are exercised. Block 25 extends it with auth, protocol-version and
+# retry modes; every request is recorded in srv.state.
 import http.server as _http_server  # noqa: E402
 import threading as _threading  # noqa: E402
 
 
 def _make_http_server(mode: str):
+    state = {"requests": [], "initialize": 0, "tools_list": 0, "tools_call": 0}
+
     class Handler(_http_server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -562,22 +565,55 @@ def _make_http_server(mode: str):
                 msg = {}
             rid = msg.get("id")
             method = msg.get("method")
+            state["requests"].append({
+                "method": method,
+                "authorization": self.headers.get("Authorization"),
+                "x-api-version": self.headers.get("X-Api-Version"),
+                "offered_pv": (msg.get("params") or {}).get("protocolVersion")
+                              if method == "initialize" else None,
+            })
             if method == "initialize":
-                body = {"jsonrpc": "2.0", "id": rid,
-                        "result": {"protocolVersion": "2024-11-05",
-                                   "capabilities": {"tools": {}},
-                                   "serverInfo": {"name": "httpfake", "version": "0"}}}
+                state["initialize"] += 1
+                offered = (msg.get("params") or {}).get("protocolVersion")
+                if mode == "verreject" and offered == "2024-11-05":
+                    body = {"jsonrpc": "2.0", "id": rid,
+                            "error": {"code": -32602,
+                                      "message": "requested protocolVersion "
+                                                 "2024-11-05 is not supported, "
+                                                 "server advertises 2025-03-26"}}
+                else:
+                    pv = ("2025-03-26" if mode == "ver0326"
+                          else offered if mode == "verreject" else "2024-11-05")
+                    body = {"jsonrpc": "2.0", "id": rid,
+                            "result": {"protocolVersion": pv,
+                                       "capabilities": {"tools": {}},
+                                       "serverInfo": {"name": "httpfake",
+                                                      "version": "0"}}}
             elif method == "notifications/initialized":
                 self.send_response(202)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
             elif method == "tools/list":
+                state["tools_list"] += 1
+                if mode == "t503once" and state["tools_list"] == 1:
+                    self.send_response(503)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 body = {"jsonrpc": "2.0", "id": rid, "result": {"tools": [
                     {"name": "echo", "description": "echo",
                      "inputSchema": {"type": "object",
                                      "properties": {"text": {"type": "string"}}}}]}}
             elif method == "tools/call":
+                state["tools_call"] += 1
+                if mode == "auth401once" and state["tools_call"] == 1:
+                    self.send_response(401)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if mode == "slowcall":
+                    time.sleep(3)          # longer than every test timeout
                 args = (msg.get("params") or {}).get("arguments") or {}
                 body = {"jsonrpc": "2.0", "id": rid, "result": {"content": [
                     {"type": "text", "text": "http: " + str(args.get("text", ""))}]}}
@@ -585,22 +621,28 @@ def _make_http_server(mode: str):
                 body = {"jsonrpc": "2.0", "id": rid,
                         "error": {"message": "unknown method"}}
             raw = json.dumps(body).encode("utf-8")
-            if mode == "sse":
-                payload = b"event: message\ndata: " + raw + b"\n\n"
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Content-Length", str(len(payload)))
-                self.send_header("Mcp-Session-Id", "sess-1")
-                self.end_headers()
-                self.wfile.write(payload)
-            else:
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
+            try:
+                if mode == "sse":
+                    payload = b"event: message\ndata: " + raw + b"\n\n"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.send_header("Mcp-Session-Id", "sess-1")
+                    self.end_headers()
+                    self.wfile.write(payload)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+            except (BrokenPipeError, ConnectionResetError):
+                # a client that ran into its timeout is gone; the sleeping
+                # handler must not spill a traceback into the test output
+                pass
 
     srv = _http_server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    srv.state = state
     _threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv, f"http://127.0.0.1:{srv.server_address[1]}/mcp"
 
@@ -737,6 +779,242 @@ check("24a docs no longer claim stdio-only", "stdio transport only" not in _DOC2
 check("24b docs no longer claim there is no card", "no MCP card" not in _DOC2)
 check("24c docs name both transports", "Two transports" in _DOC2)
 check("24d docs point at the card", "MCP client** card" in _DOC2)
+
+
+# ── 25. Auth, protocol version, HTTP retry (2026-10-28) ───────────────
+# Uses the fake HTTP server from block 19 with the new modes: auth401once
+# (401 on the first tools/call), t503once (503 on the first tools/list),
+# slowcall (tools/call sleeps past every timeout), ver0326 (answers
+# protocolVersion 2025-03-26) and verreject (refuses the 2024-11-05 offer).
+import os as _os                                                          # noqa: E402
+import logging as _logging                                                # noqa: E402
+
+_TOKEN = "supersecret123"
+_TOKEN_ENV = "HIVEMIND_TEST_MCP_TOKEN"
+
+
+async def _auth_flow():
+    srv, url = _make_http_server("json")
+    _os.environ[_TOKEN_ENV] = _TOKEN
+    try:
+        client = MC.McpClient()
+        st = await client.refresh(settings_with(
+            {"name": "httpfake", "url": url, "token_env": _TOKEN_ENV,
+             "headers": {"X-Api-Version": "2022-11-28"}}))
+        out = await client.call("mcp_httpfake_echo", {"text": "hi"})
+        described = (st.get("servers") or [{}])[0]
+        running = client.status()
+        await client.close_all()
+        return srv.state, out, described, running
+    finally:
+        _os.environ.pop(_TOKEN_ENV, None)
+        srv.shutdown()
+
+
+_state_a, _out_a, _desc_a, _status_a = asyncio.run(_auth_flow())
+_auths = [r.get("authorization") for r in _state_a["requests"]]
+check("25a token_env sends Authorization: Bearer <value>",
+      bool(_auths) and all(a == f"Bearer {_TOKEN}" for a in _auths),
+      f"({_auths})")
+check("25a2 headers reach the server verbatim",
+      all(r.get("x-api-version") == "2022-11-28" for r in _state_a["requests"]),
+      f"({[r.get('x-api-version') for r in _state_a['requests']]})")
+check("25d describe() reports has_auth, never the value",
+      _desc_a.get("has_auth") is True
+      and _TOKEN not in json.dumps(_desc_a)
+      and _TOKEN not in json.dumps(_status_a),
+      f"(has_auth={_desc_a.get('has_auth')})")
+
+
+async def _no_token_flow(env_value):
+    srv, url = _make_http_server("json")
+    _os.environ.pop(_TOKEN_ENV, None)
+    if env_value is not None:
+        _os.environ[_TOKEN_ENV] = env_value
+    try:
+        client = MC.McpClient()
+        st = await client.refresh(settings_with(
+            {"name": "httpfake", "url": url, "token_env": _TOKEN_ENV}))
+        return st, srv.state
+    finally:
+        _os.environ.pop(_TOKEN_ENV, None)
+        srv.shutdown()
+
+
+_st_b, _state_b = asyncio.run(_no_token_flow(None))
+check("25b a token_env without its variable fails the start, no request sent",
+      _st_b["servers"][0]["ok"] is False
+      and _TOKEN_ENV in _st_b["servers"][0]["error"]
+      and _state_b["requests"] == [],
+      f"({_st_b['servers'][0]['error'][:70]!r})")
+_st_b2, _state_b2 = asyncio.run(_no_token_flow(""))
+check("25b2 an empty token_env variable fails the same way",
+      _st_b2["servers"][0]["ok"] is False
+      and _TOKEN_ENV in _st_b2["servers"][0]["error"]
+      and _state_b2["requests"] == [],
+      f"({_st_b2['servers'][0]['error'][:70]!r})")
+
+
+async def _auth401_flow():
+    srv, url = _make_http_server("auth401once")
+    try:
+        client = MC.McpClient()
+        st = await client.refresh(settings_with({"name": "httpfake", "url": url}))
+        first = await client.call("mcp_httpfake_echo", {"text": "hi"})
+        conn = client._conns.get("httpfake")
+        dead_after_401 = conn.dead if conn else None
+        second = await client.call("mcp_httpfake_echo", {"text": "again"})
+        await client.close_all()
+        return st, first, dead_after_401, second
+    finally:
+        srv.shutdown()
+
+
+_st_c, _first_c, _dead_c, _second_c = asyncio.run(_auth401_flow())
+check("25c a 401 becomes MCP_AUTH_FAILED with the cause",
+      _first_c.startswith("[TOOL_ERROR: MCP_AUTH_FAILED]")
+      and ("missing" in _first_c and "expired" in _first_c),
+      f"({_first_c[:80]!r})")
+check("25c2 the connection is NOT marked dead after a 401",
+      _st_c["servers"][0]["ok"] is True and _dead_c is False,
+      f"(dead={_dead_c})")
+check("25c3 a second call works once the server answers 200",
+      _second_c == "http: again", f"({_second_c[:50]!r})")
+
+
+async def _version_flow():
+    srv, url = _make_http_server("ver0326")
+    try:
+        client = MC.McpClient()
+        st = await client.refresh(settings_with({"name": "httpfake", "url": url}))
+        conn = client._conns.get("httpfake")
+        pv_first = conn.protocol_version if conn else None
+        # a reload that changes the signature rebuilds the connection; it
+        # must OFFER the stored version instead of the default
+        st2 = await client.refresh(settings_with(
+            {"name": "httpfake", "url": url, "headers": {"X-Test": "1"}}))
+        offers = [r.get("offered_pv") for r in srv.state["requests"]
+                  if r["method"] == "initialize"]
+        conn2 = client._conns.get("httpfake")
+        await client.close_all()
+        return st, st2, pv_first, offers, conn2.protocol_version if conn2 else None
+    finally:
+        srv.shutdown()
+
+
+_st_e, _st_e2, _pv_e, _offers_e, _pv_e2 = asyncio.run(_version_flow())
+check("25e a newer protocolVersion is accepted and stored on the connection",
+      _st_e["servers"][0]["ok"] is True and _pv_e == "2025-03-26",
+      f"(pv={_pv_e})")
+check("25e2 a rebuilt connection offers the stored version",
+      _offers_e == ["2024-11-05", "2025-03-26"] and _pv_e2 == "2025-03-26"
+      and _st_e2["servers"][0]["ok"] is True,
+      f"(offers={_offers_e})")
+
+
+class _LogGrab(_logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.messages: list[str] = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+async def _version_reject_flow():
+    srv, url = _make_http_server("verreject")
+    grab = _LogGrab()
+    logger = _logging.getLogger("hivemind.mcp_client")
+    old_level = logger.level
+    logger.setLevel(_logging.INFO)
+    logger.addHandler(grab)
+    try:
+        client = MC.McpClient()
+        st = await client.refresh(settings_with({"name": "httpfake", "url": url}))
+        out = await client.call("mcp_httpfake_echo", {"text": "hi"})
+        conn = client._conns.get("httpfake")
+        offers = [r.get("offered_pv") for r in srv.state["requests"]
+                  if r["method"] == "initialize"]
+        await client.close_all()
+        return st, out, conn.protocol_version if conn else None, offers, grab.messages
+    finally:
+        logger.removeHandler(grab)
+        logger.setLevel(old_level)
+        srv.shutdown()
+
+
+_st_f, _out_f, _pv_f, _offers_f, _logs_f = asyncio.run(_version_reject_flow())
+check("25f a rejected version gets exactly one retry with the advertised one",
+      _offers_f == ["2024-11-05", "2025-03-26"] and _pv_f == "2025-03-26",
+      f"(offers={_offers_f}, pv={_pv_f})")
+check("25f2 the retry is logged with its version",
+      any("initialize retried with protocolVersion=2025-03-26" in m
+          for m in _logs_f), f"({_logs_f[:2]})")
+check("25f3 the connection is usable after the retry",
+      _st_f["servers"][0]["ok"] is True and _out_f == "http: hi",
+      f"({_out_f[:40]!r})")
+
+
+async def _retry_503_flow():
+    srv, url = _make_http_server("t503once")
+    try:
+        client = MC.McpClient()
+        st = await client.refresh(settings_with({"name": "httpfake", "url": url},
+                                                timeout_s=5.0))
+        names = [d["function"]["name"] for d in client.tool_defs()]
+        await client.close_all()
+        return st, names, srv.state
+    finally:
+        srv.shutdown()
+
+
+_st_g, _names_g, _state_g = asyncio.run(_retry_503_flow())
+check("25g a 503 on tools/list is retried and succeeds on the second attempt",
+      _state_g["tools_list"] == 2 and _st_g["servers"][0]["ok"] is True
+      and "mcp_httpfake_echo" in _names_g,
+      f"(tools_list={_state_g['tools_list']}, "
+      f"err={_st_g['servers'][0]['error'][:50]!r})")
+
+
+async def _slow_call_flow():
+    srv, url = _make_http_server("slowcall")
+    try:
+        client = MC.McpClient()
+        await client.refresh(settings_with({"name": "httpfake", "url": url},
+                                           timeout_s=5.0))
+        out = await client.call("mcp_httpfake_echo", {"text": "hi"}, timeout=0.6)
+        conn = client._conns.get("httpfake")
+        dead = conn.dead if conn else None
+        await client.close_all()
+        return out, dead, srv.state
+    finally:
+        srv.shutdown()
+
+
+_out_h, _dead_h, _state_h = asyncio.run(_slow_call_flow())
+check("25h a read timeout on tools/call is NOT retried",
+      _state_h["tools_call"] == 1 and "timed out" in _out_h,
+      f"(calls={_state_h['tools_call']}, out={_out_h[:60]!r})")
+check("25h2 the final timeout marks the connection dead",
+      _dead_h is True, f"(dead={_dead_h})")
+check("25h3 the timed-out call is cancelled on the server",
+      any(r["method"] == "notifications/cancelled"
+          for r in _state_h["requests"]),
+      f"({[r['method'] for r in _state_h['requests']]})")
+
+
+_DOC3 = (ROOT / "docs" / "mcp_client.md").read_text(encoding="utf-8", errors="replace")
+check("25i docs document headers and token_env",
+      "token_env" in _DOC3 and '"headers"' in _DOC3 and "Bearer" in _DOC3,
+      "(docs/mcp_client.md)")
+check("25i2 docs describe the retry policy truthfully",
+      "ConnectError" in _DOC3 and "502" in _DOC3
+      and "tools/call" in _DOC3,
+      "(retry section)")
+check("25i3 docs name the auth flag and the version fallback",
+      "has_auth" in _DOC3 and "2025-03-26" in _DOC3,
+      "(auth + version section)")
+
 
 print()
 print(f"SUMMARY mcp_client: {passed} passed, {failed} failed")

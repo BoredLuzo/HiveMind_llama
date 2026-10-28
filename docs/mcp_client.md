@@ -19,6 +19,38 @@ Status: beta. Off by default. Two transports: stdio and HTTP.
 {"name": "remote", "url": "http://127.0.0.1:8931/mcp"}
 ```
 
+### HTTP auth
+
+Hosted MCP endpoints usually want a token. Two optional per-server fields,
+both HTTP only (`stdio` servers ignore them):
+
+- `headers`: an object of header name → value, sent with every request
+  exactly as written, e.g. `{"X-Api-Version": "2022-11-28"}`.
+- `token_env`: the name of an environment variable. When it is set and not
+  empty, every request carries `Authorization: Bearer <value>`.
+
+An explicit `Authorization` inside `headers` wins over `token_env`. A
+configured `token_env` whose variable is missing or empty **fails the start**
+with the variable name in the message - the server never starts
+unauthenticated by accident. Tokens are never logged; the status output
+(`GET /mcp/servers`, `mcp_reload`) only reports `has_auth: true`, never the
+value. If the server answers 401 or 403, the tool call returns
+`[TOOL_ERROR: MCP_AUTH_FAILED]` (token missing, wrong or expired) and the
+connection stays alive - a wrong token is a configuration mistake, not a
+broken transport, so a fixed token works on the next call.
+
+A hosted server via `token_env`, and one with an extra version header:
+
+```json
+[
+  {"name": "github", "url": "https://api.githubcopilot.com/mcp",
+   "token_env": "GITHUB_MCP_TOKEN"},
+  {"name": "custom", "url": "https://mcp.example.com/mcp",
+   "headers": {"X-Api-Version": "2022-11-28"},
+   "token_env": "CUSTOM_MCP_TOKEN"}
+]
+```
+
 Both share the same tool list, name prefix, approval gate and mode gate. What
 the HTTP transport does not do: the optional GET stream for server-initiated
 messages stays unused, so a server that pushes notifications is only noticed on
@@ -56,6 +88,8 @@ Either use the **MCP client** card in the config page (toggle, server list as JS
 | `mcp_servers[].args` | argument list, no shell interpretation |
 | `mcp_servers[].env` | extra environment variables for the child |
 | `mcp_servers[].cwd` | working directory for the child |
+| `mcp_servers[].headers` | HTTP only: extra headers sent with every request (auth, API version pins) |
+| `mcp_servers[].token_env` | HTTP only: name of an environment variable; set and non-empty → `Authorization: Bearer <value>`, missing/empty → the server fails to start |
 | `mcp_servers[].enabled` | set `false` to keep an entry but skip it; the string `"false"` counts as off |
 
 After editing, `POST /mcp/reload` (or restart the engine). `GET /mcp/servers`
@@ -109,7 +143,24 @@ so a dead server does not end the run.
   shutdown, on a timeout and when the client is disabled.
 - A server that hangs, crashes or prints garbage never breaks a run: the call
   returns `[TOOL_ERROR: MCP_*]` and the connection is marked dead until the
-  next reload.
+  next reload. The exception is HTTP 401/403: the connection stays alive (see
+  "HTTP auth" above).
+- HTTP requests are retried: up to 3 retries after the first attempt on
+  connect errors (`ConnectError`), read timeouts (`ReadTimeout`), broken
+  responses (`RemoteProtocolError`) and HTTP 502/503/504. Pauses
+  0.5 s / 1.5 s / 3.0 s with ±20 % jitter, capped by
+  the call timeout - when the remaining budget cannot afford the next pause,
+  the last error wins and names the attempt count. **`tools/call` is the
+  exception**: only connect errors are retried there, because a read timeout
+  means the request was delivered and the server may already have executed
+  the tool. A tool call that runs into its timeout sends
+  `notifications/cancelled` (HTTP only) so the server can stop the work.
+- Protocol versions are negotiated: the first offer is `2024-11-05`, or the
+  version the server accepted on a previous connect (a rebuilt connection
+  offers the stored version). Whatever version string the server answers
+  with is accepted, including newer ones. A server that rejects the offer
+  gets exactly one retry with the version its error advertised (else
+  `2025-03-26`); a failed negotiation closes the connection.
 - Output is capped at 200k characters per call; image blocks are reported as
   `[image content omitted]`.
 - At most 8 servers and 64 tools per server.
@@ -140,6 +191,8 @@ Keep in mind:
 | `MCP_UNKNOWN_TOOL` | the name is not in the current list; reload after an edit |
 | `MCP_SERVER_DOWN` | the process exited or timed out; check `GET /mcp/servers` |
 | `MCP_DISABLED` | `mcp_client_enabled` is false |
+| `MCP_AUTH_FAILED` | the server rejected the token (HTTP 401/403): missing, wrong or expired; check `token_env` / `headers` |
+| `token_env '...' is set but the environment variable is empty or missing` | set the variable before starting the engine, or remove `token_env` from the entry |
 | `command not found` | the executable is not on `PATH`; use an absolute path |
 | `is busy with another call` | a second call arrived while the first is still running; the server is fine |
 | a server works in a terminal but not here | it probably needs a shell, an env var or a `cwd`; set `env` or `cwd` |
