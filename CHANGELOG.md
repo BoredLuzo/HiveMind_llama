@@ -1,4 +1,4 @@
-## [1.4.12] - 2026-10-27
+## [1.4.12] - 2026-10-28
 
 ## New coder model in the installer
 
@@ -10,6 +10,45 @@
   estimate carry over unchanged.
 - The old tag keeps its profile, so presets and installs that already have the
   larger file keep working. New installs get the Mini.
+
+## MCP client: auth, version negotiation, retries
+
+- HTTP server entries can authenticate: `headers` are sent verbatim, and
+  `token_env` names an environment variable whose value goes out as
+  `Authorization: Bearer ...`. A `token_env` whose variable is missing or
+  empty fails the start with the variable name in the message - the server
+  never starts unauthenticated by accident. An explicit `Authorization`
+  header wins over `token_env`. Tokens never appear in logs; the reload
+  response reports `has_auth`, never the value.
+- HTTP 401/403 answer as `[TOOL_ERROR: MCP_AUTH_FAILED]` and keep the
+  connection alive: a wrong token is a config mistake, not a dead server,
+  so a fixed token works on the next call.
+- Protocol versions are negotiated. The version a server accepted is stored
+  and re-offered after a reload; a server that rejects the first offer gets
+  exactly one retry with the version its error advertised. Newer version
+  strings are accepted.
+- HTTP requests retry connect errors, read timeouts and 502/503/504 with
+  0.5/1.5/3.0 s backoff (±20 % jitter, capped by the call timeout).
+  `tools/call` is the exception: only connect errors are retried there,
+  because a read timeout means the tool may already have executed. A timed
+  out tool call sends `notifications/cancelled`.
+
+## Model profiles and the load log
+
+- A model profile's `kv_cache_type` applies to dense models now (profile >
+  family table > global), mirroring the MoE path - a profiled q8_0 no longer
+  silently ran the global q4_0.
+- `[VRAM-LOAD]` logs where the context came from (`ctx_source`:
+  request/settings/profile/table), so a wrong context is traceable instead
+  of guessed.
+
+## UI
+
+- `until_finished` defaults to on: a coding run finishes the job instead of
+  stopping at the round limit.
+- The context stats explain themselves: every perf field carries a tooltip.
+- The model filter accepts several search terms: "qwen mtp" finds
+  `qwen3.5:4b-mtp` now, before it only matched the whole query string.
 
 ## Long runs stay diagnosable
 
@@ -30,6 +69,15 @@
   added. A slot could therefore be evicted in the middle of a round.
 - A load that only just fits now reports how much VRAM is left afterwards and
   warns that decoding will slow down as the context grows.
+- The installer's judge download never ran: the path carried a 0x0C byte where
+  the `\f` of `deploy\fetch_models.py` should have been. Fixed at byte level
+  and pinned by an encoding test.
+- The judge model and the routing decider are optional steps inside installer
+  step 6 now, both off by default, both saying how to install them later;
+  previously no installer step called the decider fetch at all.
+- The release zip no longer ships a personal path inside
+  `deploy/prepush_check.ps1` (the 1.4.10 and 1.4.11 releases carried it and
+  were removed from GitHub).
 
 ## [1.4.11] - 2026-10-27
 
