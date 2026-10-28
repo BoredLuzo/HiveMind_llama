@@ -18,7 +18,9 @@ send() (the owner choke point).
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
+import hashlib
 import json
 import logging
 import time
@@ -522,6 +524,13 @@ class RunBridge:
                 (_s or {}).get("mode") or "")
             self.state.save()
         _appr_mode = self._effective_approval_mode(_s)
+        # CHAT-RUNCONF: this chat answers with the parameters it started
+        # with (see _chat_runconf). sel_mode below comes from the pin, not
+        # from the live phone mode.
+        _conf = self._chat_runconf(chat_id, _s)
+        sel_mode = _conf.get("mode", "")
+        if _conf.get("mode"):
+            _eff_label = f"{_conf['mode']} (chat)"
         _agents = (_s.get("agents") or {}) if isinstance(_s, dict) else {}
         _coder_mdl = (_agents.get("duo_coder") or {}).get("model") or ""
         _planner_mdl = _s.get("duo_planner_model") or _coder_mdl
@@ -593,7 +602,8 @@ class RunBridge:
         denied = 0
 
         try:
-            ov = self._stream_overrides()
+            ov = self._stream_overrides(
+                (_conf or {}).get("run_overrides"))
             # source marker: lets the engine suppress desktop toasts for
             # phone runs (the phone surface answers approvals/questions)
             ov["source"] = "telegram"
@@ -605,7 +615,7 @@ class RunBridge:
                 # P9 (2026-10-05): the phone model selection now applies
                 # to simple/direct runs too (engine lifts direct_model).
                 ov["direct_model"] = _ov_model
-            sel_mode = _eff_mode if _mode_src == "phone" else ""
+            # sel_mode comes from the chat pin (see _chat_runconf)
             stream_mode = sel_mode
             if sel_mode == "agentic":
                 # composite: engine mode "auto" + an EXPLICIT agentic request.
@@ -1223,6 +1233,7 @@ class RunBridge:
         if arg in ("off", "aus", "default"):
             self.state.data["mode"] = ""
             self.state.data["mode_engine_seen"] = ""
+            self._invalidate_chat_runconf()
             self.state.save()
             return ("Mode (Telegram): engine default\n\n"
                     "Runs now follow the engine settings again.")
@@ -1234,6 +1245,7 @@ class RunBridge:
         # baseline is filled on the next run (we do not fetch settings here);
         # effective_phone_mode() clears the override once the UI changes modes
         self.state.data["mode_engine_seen"] = ""
+        self._invalidate_chat_runconf()
         self.state.save()
         why = ("File-capable - use this for tasks."
                if name != "simple" else
@@ -1247,11 +1259,13 @@ class RunBridge:
 
     PENDING_TTL_S = 600
 
-    def _stream_overrides(self) -> dict:
-        """Model/ctx keys from the last /setModel flow - merged into the
-        run's settings snapshot by the engine (chat_run.py:154). Empty
-        unless configured."""
-        ov = self.state.data.get("run_overrides") or {}
+    def _stream_overrides(self, ov_store=None) -> dict:
+        """Model/ctx keys for a run: from the chat's pinned run config
+        (chat_runconf, ov_store) or the owner's current defaults. Merged
+        into the run's settings snapshot by the engine (chat_run.py:154).
+        Empty unless configured."""
+        ov = (ov_store if ov_store is not None
+              else self.state.data.get("run_overrides")) or {}
         out: dict = {}
         model = ov.get("model")
         if model:
@@ -1286,6 +1300,33 @@ class RunBridge:
         if self.cfg.force_approval_gate:
             out["duo_action_approval_enabled"] = True
         return out
+
+    def _chat_runconf(self, chat_id: str, engine_settings: dict) -> dict:
+        """The phone-side parameters this chat started with.
+
+        Owner rule (2026-10-28): UI runs use the UI settings, phone chats
+        use the phone settings, and ANSWERING inside an existing chat keeps
+        the parameters that chat started with. Only a phone command
+        (/mode, /setModel, /ctx, /planner) changes them - it drops the pin
+        (_invalidate_chat_runconf) and the next run re-snapshots the new
+        defaults. The engine settings stay shared with the UI; only these
+        overrides are pinned per chat."""
+        store = self.state.data.setdefault("chat_runconf", {})
+        conf = store.get(chat_id)
+        if conf is None:
+            _eff, _src = self.effective_phone_mode(engine_settings)
+            conf = {"run_overrides": copy.deepcopy(
+                        self.state.data.get("run_overrides") or {}),
+                    "mode": (_eff if _src == "phone" else "")}
+            store[chat_id] = conf
+            self.state.save()
+        return conf
+
+    def _invalidate_chat_runconf(self) -> None:
+        """A phone command changed the phone defaults - drop every chat pin
+        so the next run re-snapshots them (the command wins over the pin)."""
+        if self.state.data.pop("chat_runconf", None) is not None:
+            self.state.save()
 
     def _pending(self) -> dict | None:
         p = self.state.data.get("pending_setup")
@@ -1339,6 +1380,7 @@ class RunBridge:
         ov = self.state.data.setdefault("run_overrides", {})
         ov["model"] = name
         self.state.data["pending_setup"] = None
+        self._invalidate_chat_runconf()
         self.state.save()
         out = f"✅ Model set: {name}"
         if not can_think:
@@ -1361,12 +1403,14 @@ class RunBridge:
         if a in ("0", "off", "aus"):
             ov.pop("coder_ctx", None)
             ov.pop("planner_ctx", None)
+            self._invalidate_chat_runconf()
             self.state.save()
             return "ctx override cleared - engine defaults apply."
         if not a.isdigit():
             return "❌ /ctx <number> (tokens) or /ctx off."
         ov["coder_ctx"] = int(a)
         ov["planner_ctx"] = int(a)
+        self._invalidate_chat_runconf()
         self.state.save()
         return (f"✅ ctx: {a} tokens (coder + planner target) - applies "
                 "to upcoming duo/agentic phone runs.")
@@ -1381,6 +1425,7 @@ class RunBridge:
                     + ".\n/planner <number from /models> | /planner off")
         if a in ("off", "aus"):
             ov.pop("planner_model", None)
+            self._invalidate_chat_runconf()
             self.state.save()
             return "planner model cleared - inherits the coder model."
         try:
@@ -1395,6 +1440,7 @@ class RunBridge:
         if not (1 <= idx <= len(models)):
             return f"❌ {idx} out of range 1–{len(models)}. List: /models"
         ov["planner_model"] = models[idx - 1]
+        self._invalidate_chat_runconf()
         self.state.save()
         return f"✅ planner model: {models[idx - 1]} (duo runs)."
 

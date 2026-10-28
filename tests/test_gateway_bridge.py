@@ -464,6 +464,42 @@ async def t_mode():
     await br.start_text_run("q3")
     check("off clears mode", "follow the engine settings again" in out
           and br.hive.stream_bodies[-1]["mode"] == "")
+
+    # CHAT-RUNCONF (2026-10-28): a chat keeps the phone parameters it
+    # started with; answering inherits them; a phone command re-snapshots.
+    st.data["run_overrides"] = {"model": "m-one"}
+    out = br.mode_text("agentic")
+    await br.start_text_run("start the chat")
+    _b1 = br.hive.stream_bodies[-1]
+    check("runconf: chat 1 starts with m-one + agentic",
+          _b1["overrides"].get("duo_coder_model") == "m-one"
+          and _b1["overrides"].get("duo_agentic_mode") is True)
+    # the owner changes the phone defaults WITHOUT a command (plain edit)
+    st.data["run_overrides"] = {"model": "m-two"}
+    st.data["mode"] = "auto"
+    await br.start_text_run("answer in the same chat")
+    _b2 = br.hive.stream_bodies[-1]
+    check("runconf: answering inherits the starting parameters",
+          _b2["overrides"].get("duo_coder_model") == "m-one"
+          and _b2["overrides"].get("duo_agentic_mode") is True,
+          f"(model={_b2['overrides'].get('duo_coder_model')!r}, "
+          f"agentic={_b2['overrides'].get('duo_agentic_mode')})")
+    # an explicit phone command re-snapshots: the command wins
+    out = br.mode_text("auto")
+    await br.start_text_run("same chat after /mode auto")
+    _b3 = br.hive.stream_bodies[-1]
+    check("runconf: a phone command re-snapshots the chat",
+          _b3["overrides"].get("duo_coder_model") == "m-two"
+          and _b3["overrides"].get("duo_agentic_mode") is False)
+    # a NEW chat starts from the current phone defaults
+    st.data["tg_chat"] = {"hive_chat_id": "chat02", "created_at": "x"}
+    await br.start_text_run("new chat")
+    _b4 = br.hive.stream_bodies[-1]
+    check("runconf: a new chat starts from the current defaults",
+          _b4["overrides"].get("duo_coder_model") == "m-two"
+          and _b4["overrides"].get("duo_agentic_mode") is False)
+    check("runconf: both chats are pinned separately",
+          set((st.data.get("chat_runconf") or {})) == {"chat01", "chat02"})
     # bare /mode = status only
     out = br.mode_text("")
     check("bare /mode shows status", "Mode (Telegram)" in out)
