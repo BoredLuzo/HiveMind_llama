@@ -224,16 +224,20 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
     # it would reset agent budgets to profile defaults and defeat the merge
     # protection pinned by tests/test_preset_agent_merge.py.
     if "vram_preflight_gate" in settings:
+        # SILENT-EXCEPT (2026-10-28): the imports are the only failure mode
+        # (the assignments cannot raise); a missing module is logged instead
+        # of swallowed - the no-new-silent-excepts guard counts this file.
         try:
             import backend.llama_config as _lc_pf
             import backend.manager_load as _ml_pf
             import backend.llama_server_manager as _lsm_pf
+        except ImportError as exc:
+            logger.warning("[PRESET] vram_preflight_gate sync skipped: %s", exc)
+        else:
             _pf_val = bool(settings.get("vram_preflight_gate", True))
             _lc_pf.VRAM_PREFLIGHT_GATE = _pf_val
             _ml_pf.VRAM_PREFLIGHT_GATE = _pf_val
             _lsm_pf.VRAM_PREFLIGHT_GATE = _pf_val
-        except Exception:
-            pass
     # PRESET-STALE-TAB (2026-10-28): bump the settings revision like
     # post_settings does, or a second tab holding an older snapshot could
     # overwrite freshly loaded preset values through POST /settings.
