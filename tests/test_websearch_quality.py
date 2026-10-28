@@ -28,6 +28,7 @@ Run: python tests/test_websearch_quality.py
 import asyncio
 import re
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -96,34 +97,57 @@ check("the header is a real f-string again",
 check("the header line is an f-string",
       any('f"(fetched today: {_ws_today}' in line for line in src_ws.splitlines()))
 
-# ── live behaviour (opt-in: needs a running SearXNG AND outbound network) ──
-# LIVE-OPT-IN (2026-10-28, audit): these checks ran on every suite pass and went
-# red on a machine without Docker (no SearXNG) while the Wikipedia fallback
-# answered with a plain hint - a code-independent red. Same pattern as
-# test_wedge_ui_toggle: the durable checks are the source pins above, the live
-# ones only run when someone asks for them.
+# ── live behaviour (needs outbound network; SearXNG is optional) ───────────
+# FLAKE-GUARD (2026-10-28): these checks went red once because the Wikipedia
+# fallback answered with a hint instead of results - minutes later the same call
+# returned both expected strings. They test the code, not Wikipedia's mood, so:
+# retry once, and when the answer is a hint ("not reachable", "no results"),
+# print why and skip instead of failing. Forcing is possible either way:
+#   HIVEMIND_TEST_LIVE_WEBSEARCH=0  -> skip the live part entirely
+#   HIVEMIND_TEST_LIVE_WEBSEARCH=1  -> assert even on a hint (old behaviour)
 import os as _os  # noqa: E402
-_LIVE = _os.environ.get("HIVEMIND_TEST_LIVE_WEBSEARCH") == "1"
-if not _LIVE:
-    print("  .. live checks skipped (set HIVEMIND_TEST_LIVE_WEBSEARCH=1 to run them)")
 from tools import websearch  # noqa: E402
 
+_LIVE_ENV = _os.environ.get("HIVEMIND_TEST_LIVE_WEBSEARCH", "")
+_LIVE = _LIVE_ENV != "0"
+_LIVE_FORCE = _LIVE_ENV == "1"
+_HINT_MARKERS = ("not reachable", "no results", "rate limit", "429",
+                 "no usable", "timed out")
 
-async def _live():
+
+def _looks_like_hint(text: str) -> bool:
+    low = (text or "").lower()
+    return any(m in low for m in _HINT_MARKERS)
+
+
+def _live_search(query: str) -> str:
+    """One search, retried once; returns "" when the answer is a hint."""
+    for attempt in (1, 2):
+        try:
+            out = asyncio.run(_live_one(query))
+        except (OSError, RuntimeError, ValueError, KeyError,
+                asyncio.TimeoutError) as exc:
+            out = ""
+            print(f"  .. live attempt {attempt} failed "
+                  f"({type(exc).__name__}: {exc})")
+        if out and (not _looks_like_hint(out) or _LIVE_FORCE):
+            return out
+        if out:
+            print(f"  .. live answer is a hint, not a result: "
+                  f"{out.strip().splitlines()[0][:90]}")
+        elif attempt == 1:
+            time.sleep(1.5)
+    return ""
+
+
+async def _live_one(query: str) -> str:
     websearch.configure(host="http://localhost:8888", enabled=True)
-    out = await websearch.web_search(
-        "Nintendo 64 technical specifications RDP processor RAM memory site:wikipedia.org", 3)
-    return out
+    return await websearch.web_search(query, 3)
 
 
-if _LIVE:
-    try:
-        out = asyncio.run(_live())
-    except (OSError, RuntimeError, ValueError, KeyError, asyncio.TimeoutError) as exc:
-        out = ""
-        print(f"  .. live check skipped ({type(exc).__name__}: {exc})")
-else:
-    out = ""
+out = _live_search(
+    "Nintendo 64 technical specifications RDP processor RAM memory "
+    "site:wikipedia.org") if _LIVE else ""
 
 if out:
     check("the looping query now returns an encyclopedia page",
