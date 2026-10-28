@@ -252,30 +252,30 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
             except (TypeError, ValueError):
                 pass
         # PRESET-MODEL-CHECK (2026-10-28, preset audit): missing models used
-        # to fail silently at the first run, and registry_sync wrote them
-        # into the target's registry.json without a word. Check every model
-        # the preset just set and surface the missing ones as warnings (the
-        # load endpoint forwards them to the UI).
-        try:
-            from backend.llama_models import resolve_model_path as _rmp
-            _missing: list[str] = []
-            for _role, _cfg in (settings.get("agents") or {}).items():
-                _m = (_cfg or {}).get("model") if isinstance(_cfg, dict) else None
-                if _m and not _rmp(str(_m)):
-                    _missing.append(f"{_role}: {_m}")
-            for _k in ("direct_model", "duo_planner_model",
-                       "duo_coder_model", "duo_critic_model"):
-                _m = settings.get(_k)
-                if _m and not _rmp(str(_m)):
-                    _missing.append(f"{_k}: {_m}")
-            if _missing:
-                _w = ("models not found locally (these will fail until they "
-                      "exist in the models folder): " + "; ".join(_missing))
-                if warnings is not None:
-                    warnings.append(_w)
-                logger.warning("[PRESET] %s", _w)
-        except ImportError:
-            logger.warning("[PRESET] model check skipped (llama_models unavailable)")
+    # to fail silently at the first run, and registry_sync wrote them
+    # into the target's registry.json without a word. Check every model
+    # the preset just set and surface the missing ones as warnings (the
+    # load endpoint forwards them to the UI).
+    try:
+        from backend.llama_models import resolve_model_path as _rmp
+        _missing: list[str] = []
+        for _role, _cfg in (settings.get("agents") or {}).items():
+            _m = (_cfg or {}).get("model") if isinstance(_cfg, dict) else None
+            if _m and not _rmp(str(_m)):
+                _missing.append(f"{_role}: {_m}")
+        for _k in ("direct_model", "duo_planner_model",
+                   "duo_coder_model", "duo_critic_model"):
+            _m = settings.get(_k)
+            if _m and not _rmp(str(_m)):
+                _missing.append(f"{_k}: {_m}")
+        if _missing:
+            _w = ("models not found locally (these will fail until they "
+                  "exist in the models folder): " + "; ".join(_missing))
+            if warnings is not None:
+                warnings.append(_w)
+            logger.warning("[PRESET] %s", _w)
+    except ImportError:
+        logger.warning("[PRESET] model check skipped (llama_models unavailable)")
     # PRESET-LOAD-SYNC (2026-10-28, preset audit): a preset load used to skip
     # a live-sync that POST /settings performs, so a loaded value only took
     # effect after an engine restart: vram_preflight_gate kept the old
