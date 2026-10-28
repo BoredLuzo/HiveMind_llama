@@ -967,12 +967,23 @@ async def run_stream(
         if _direct_is_vision:
             if _configured_direct and bool((_model_profile(_configured_direct) or {}).get("vision", False)):
                 _direct_disp = _configured_direct
+                yield await emit({"type": "status",
+                    "content": f"Multimodal model ({_direct_disp}) processes the image directly -- no vision preprocessing"})
+                _logger.info("[Vision-Trigger] Image direct to multimodal model - prepro skipped (direct=%r, avail=%s)",
+                             _configured_direct, _multimodal_available[:3] if _multimodal_available else "configured")
             else:
-                _direct_disp = _multimodal_available[0] if _multimodal_available else "multimodal model"
-            yield await emit({"type": "status",
-                "content": f"Multimodal model ({_direct_disp}) processes the image directly -- no vision preprocessing"})
-            _logger.info("[Vision-Trigger] Image direct to multimodal model - prepro skipped (direct=%r, avail=%s)",
-                         _configured_direct, _multimodal_available[:3] if _multimodal_available else "configured")
+                # VISION-LIE (2026-10-28, live): this branch fired when ANY
+                # multimodal model existed while the run's own direct model
+                # has no vision profile - the status claimed "multimodal
+                # model (gemma-4) processes the image" and the image went to
+                # a text model, which answered "I see no image". Say what
+                # actually happens instead.
+                yield await emit({"type": "status",
+                    "content": f"⚠ Direct model ({_configured_direct or 'engine default'}) has no vision profile - "
+                               f"the image will most likely be ignored. Switch to a vision model "
+                               f"(available: {', '.join(_multimodal_available[:3]) or 'none configured'})"})
+                _logger.warning("[Vision-Trigger] direct=%r has no vision profile, image may be ignored (avail=%s)",
+                                _configured_direct, _multimodal_available[:3])
         else:
             yield await emit({"type": "status", "content": "Vision model (" + _vision_model_name + ") describes images..."})
             _vp_t0 = time.monotonic()

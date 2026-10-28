@@ -445,14 +445,12 @@ BINARY_MIN_BUILD: dict[str, int] = {
     "qwen3":     8260,
     "lfm2.5":    9518,
     "ling-3.0-tiny": 10488,
-    # ("minicpm-v-4.7" is deliberately NOT gated here: build 11574 is needed
-    # for the minicpmv4_7 VISION projector only — b11456 fails the mmproj load
-    # with "unknown projector type" and runs TEXT fine (verified 2026-10-14:
-    # probe load healthy, 4754 MiB @n-cpu-moe 35). The model is registered
-    # text-only (capabilities.vision=false, no mmproj) until the binary is
-    # upgraded — on upgrade RESTORE this entry to 11574 AND re-add
-    # "minicpm-v-4.7" to _MMPROJ_REQUIRED_BASES/_VISION_CAPABLE_BASES
-    # (llama_manager_utils) plus mmproj_filename/vision in the model profile.
+    # minicpmv4_7 VISION projector needs b11574+ (b11456 failed the mmproj
+    # load with "unknown projector type" and ran TEXT fine — verified
+    # 2026-10-14). Restored 2026-10-28 on b11889: the model is vision-capable
+    # again (mmproj_filename + vision in the model profile, both base sets in
+    # llama_manager_utils).
+    "minicpm-v-4-7": 11574,
 }
 
 # ── Windows-Vulkan mlock/mmap-Regression (b10300+) ───────────────────────────

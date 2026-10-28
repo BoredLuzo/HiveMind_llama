@@ -34,10 +34,11 @@ _MMPROJ_REQUIRED_BASES: set[str] = {
     "llava",
     "moondream",
     "minicpm-v",
-    # ("minicpm-v-4.7" deliberately absent: b11456 cannot load the
-    # minicpmv4_7 projector ("unknown projector type") — a --mmproj attempt
-    # hard-exits the server. Registered text-only until a binary upgrade;
-    # see BINARY_MIN_BUILD note in llama_config for the re-enable checklist.)
+    # minicpmv4_7 re-enabled (2026-10-28): the projector needs build >= 11574
+    # (b11456 failed with "unknown projector type"); the shipped binary is
+    # b11889. BINARY_MIN_BUILD in llama_config gates the model itself.
+    "minicpm-v-4-7",
+    "minicpm-v-4.7",
     "bunny",
     "obsidian",
     "qwen3-vl",
@@ -48,7 +49,8 @@ _VISION_CAPABLE_BASES: set[str] = {
     "qwen3.6",
     "hermes3.6",
     "hermes",
-    # ("minicpm-v-4.7" deliberately absent — see _MMPROJ_REQUIRED_BASES note.)
+    "minicpm-v-4-7",
+    "minicpm-v-4.7",
     "gemma-4",  # gemma-3 arch: embedded vision tower, served with mmproj (2026-10-01)
 }
 

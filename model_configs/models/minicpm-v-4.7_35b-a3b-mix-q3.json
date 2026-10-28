@@ -2,7 +2,7 @@
   "model": "minicpm-v-4-7:35b-a3b-mix",
   "capabilities": {
     "thinking": true,
-    "vision": false,
+    "vision": true,
     "tool_call": true
   },
   "vision_preprocessing": false,
@@ -16,7 +16,7 @@
   "moe_cpu_experts": 35,
   "mtp": false,
   "gpu_layers": null,
-  "mmproj_filename": null,
+  "mmproj_filename": "mmproj-MiniCPM-V-4.7-35B-A3B-F16.gguf",
   "vram_gb_override": null,
   "dspark_draft_filename": "dspark-MiniCPM-V-4_7-35B-A3B-Q6_K.gguf",
   "dspark_draft_n_max": 2,
