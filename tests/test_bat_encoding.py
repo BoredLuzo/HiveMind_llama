@@ -73,15 +73,32 @@ def main():
         fail("install.bat calls deploy\\fetch_models.py for the judge",
              "path or model key missing")
 
-    # DECIDER-ENCODER (2026-10-28): the installer asked for the judge but never
-    # for the semantic decider, and deploy/fetch_decider.py was dead weight.
-    if ("deploy\\fetch_decider.py" in _inst
-            and "requirements-decider.txt" in _inst
-            and "routing_decider" in _inst):
-        ok("install.bat offers the decider encoder")
+    # DECIDER + JUDGE FLOW (2026-10-28, audit): the decider step used to end in
+    # both branches with "goto searxng_step" and thereby jumped OVER the judge
+    # block - the judge question was dead code, and a second decider step added
+    # later sat in the same dead region. Pins: both steps exist, both are
+    # opt-in (choice /d N), the decider hands over to the judge, and the judge
+    # falls through to SearXNG.
+    _dec_i = _inst.find(":decider_model_step")
+    _jud_i = _inst.find(":judge_step")
+    if _dec_i >= 0 and _jud_i > _dec_i and "goto judge_step" in _inst:
+        ok("install.bat asks for the decider, then the judge")
     else:
-        fail("install.bat offers the decider encoder",
-             "fetch_decider.py, requirements or the setting missing")
+        fail("install.bat asks for the decider, then the judge",
+             "label order or the handover goto is missing")
+    if _inst.count("choice /c YN /n /d N") >= 2:
+        ok("decider and judge are opt-in (Enter = skip)")
+    else:
+        fail("decider and judge are opt-in (Enter = skip)",
+             "a choice without /d N means the user cannot accept the default")
+    if ":searxng_step" in _inst and _inst.find(":searxng_step") > _jud_i:
+        ok("the judge falls through to SearXNG")
+    else:
+        fail("the judge falls through to SearXNG", "label above the judge block")
+    if ":decider_done" not in _inst:
+        ok("no duplicate decider block")
+    else:
+        fail("no duplicate decider block", ":decider_done still present")
     print(f"\n=== Results: {passed} passed, {failed} failed ===")
     return failed
 

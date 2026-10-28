@@ -15,6 +15,8 @@ echo    [3/9] llama.cpp backend - downloaded for the chosen backend
 echo    [4/9] Windows tools     - optional POSIX tools (grep/sed/find)
 echo    [5/9] Desktop shortcut  - optional, with the HiveMind icon
 echo    [6/9] Models            - downloaded into your chosen folder
+echo          (judge + decider are optional extras inside this step,
+echo           both off by default)
 echo    [7/9] SearXNG           - optional web search (requires Docker)
 echo    [8/9] Voice             - optional speech to text / text to speech
 echo    [9/9] Telegram gateway  - optional: message HiveMind from
@@ -455,57 +457,55 @@ REM No folder prompt here - setup_models.bat asks ONCE (download target;
 REM existing GGUFs in that folder get registered automatically).
 call setup_models.bat
 
-REM [6b] Routing decider model (optional pre-download) -----------------------
-REM OPT-IN MODEL (2026-10-16): the decider is OFF by default; when enabled
-REM later, the engine downloads fastino/GLiNER2.5-Decide (~1-2 GB) from the
-REM Hugging Face hub on first use. Pre-warming here makes that first enable
-REM %  instant. Skippable like every other optional; a failure here never
-REM %  aborts the install.
+REM [6b] Routing decider (OPTIONAL, opt-in) ----------------------------------
+REM OPT-IN (2026-10-16, clarified 2026-10-28): the decider is OFF by default
+REM (`routing_decider: "off"`). It is a small GLiNER2 encoder on the CPU that
+REM picks direct answer vs. code run before a model starts. Pre-warming here
+REM only saves the download later; the engine can also fetch it on first use.
+REM Enter = skip. A failure here never aborts the install.
 :decider_model_step
 echo.
-echo   Routing decider (optional): a small CPU classifier that picks
-echo   direct answer vs. code run. OFF by default - enable it later in
-echo   Settings -^> Routing. It needs the gliner2 package + CPU torch
-echo   (~2.5 GB env) plus the model (~1-2 GB, Hugging Face).
-choice /c YN /n /m "Install the decider environment + model now? [Y/N] "
+echo   Routing decider (optional, off by default): a small CPU classifier
+echo   that picks direct answer vs. code run. It needs gliner2 + CPU torch
+echo   (~2.5 GB env) plus the model (~1-2 GB). Enable it later in
+echo   Settings -^> Routing. Without it, keyword rules decide.
+choice /c YN /n /d N /m "Pre-install the decider environment + model? [y/N] "
 if errorlevel 2 (
-    echo   Skipped - install later with: uv pip install --python
-    echo   .venv\Scripts\python.exe gliner2 torch huggingface_hub
-    goto searxng_step
+    echo   Skipped (default). Enable later: Settings -^> Routing -^> Decider.
+    echo   The engine downloads the encoder on first use if it is missing.
+    goto judge_step
 )
 REM DECIDER-ENV (2026-10-21, audit): the model weights alone are useless
-REM %  without the gliner2 package and CPU torch - the first version of this
-REM %  step downloaded only the weights and the decider still fell back to
-REM %  rules. CPU wheel index keeps torch lean (~200 MB instead of the CUDA
-REM %  monolith); failures degrade gracefully (rules fallback at runtime).
+REM without the gliner2 package and CPU torch - the first version of this
+REM step downloaded only the weights and the decider still fell back to
+REM rules. CPU wheel index keeps torch lean (~200 MB instead of the CUDA
+REM monolith); failures degrade gracefully (rules fallback at runtime).
 uv pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu torch --quiet
 if errorlevel 1 uv pip install --python "%PY%" torch --quiet
 uv pip install --python "%PY%" gliner2 transformers huggingface_hub --quiet
 "%PY%" -c "from huggingface_hub import snapshot_download; snapshot_download('fastino/GLiNER2.5-Decide')"
 if not errorlevel 1 (
-    echo   Decider environment + model ready - enabling the decider later
-    echo   is instant (Settings -^> Routing -^> Decider: on).
+    echo   Decider environment + model ready - enabling it later is instant.
 ) else (
     echo   [NOTE] Pre-download failed (offline or wheel missing).
-    echo          The engine falls back to keyword rules until installed.
+    echo          Keyword rules decide until it is installed.
 )
-goto searxng_step
+goto judge_step
 
-:searxng_step
-
+:judge_step
 REM ======================================================
+REM [6c] Judge model (OPTIONAL, opt-in)
 REM ======================================================
-REM [6b] Judge/Decider model (OPTIONAL, like Voice)
-REM ======================================================
-REM JUDGE-OPTIONAL (2026-10-26): the decider model routes direct vs
-REM agentic requests. Without it, keyword rules route. Small machines
-REM and essential installs skip it; ask, default N, never fatal.
+REM JUDGE-OPTIONAL (2026-10-26): the judge is the small LLM that labels a
+REM request direct vs agentic (the CPU decider above can take that over
+REM later). Without either, keyword rules route. Small machines and the
+REM essential set skip it; Enter = skip, never fatal.
 echo  ==========================================================
 echo   [judge] Judge/Decider model ^(optional, ~2GB^)
 echo   Routes direct vs agentic requests. Without it, keyword
 echo   rules decide. Skip on small machines.
 echo  ==========================================================
-choice /c YN /n /m "Install the judge/decider model now? [Y/N] "
+choice /c YN /n /d N /m "Install the judge model now? [y/N] "
 if errorlevel 2 (
     echo   Skipped - add later: setup_models.bat ^> S ^> lfm2.5:2.6b
     goto judge_done
@@ -520,50 +520,7 @@ if errorlevel 1 (
 :judge_done
 echo.
 
-REM ======================================================
-REM [6c] Decider encoder (OPTIONAL): semantic routing on the CPU
-REM ======================================================
-REM DECIDER-ENCODER (2026-10-28): the judge above is an LLM on the GPU. The
-REM decider is a GLiNER2 encoder on the CPU (no VRAM, ~0.5-1.2 s per call)
-REM that classifies direct vs agentic before a model runs. deploy\fetch_decider.py
-REM existed since 1.4.4 but no installer step called it, so fresh installs
-REM never had it. Optional, default N, never fatal.
-echo  ==========================================================
-echo   [decider] Semantic routing encoder ^(optional, ~2.5GB deps^)
-echo   Classifies direct vs agentic on the CPU, no VRAM. Needs
-echo   torch + gliner2. Without it the LLM judge decides as before.
-echo   ==========================================================
-choice /c YN /n /m "Install the decider encoder now? [Y/N] "
-if errorlevel 2 (
-    echo   Skipped - add later: pip install -r requirements-decider.txt
-    echo                        python deploy\fetch_decider.py
-    goto decider_done
-)
-echo   Installing dependencies ^(torch CPU, one to three minutes^)...
-"%PY%" -m pip install --quiet -r requirements-decider.txt
-if errorlevel 1 (
-    echo   [WARN] dependency install failed - decider stays off;
-    echo          retry later with: pip install -r requirements-decider.txt
-    goto decider_done
-)
-echo   Fetching the encoder checkpoint...
-"%PY%" deploy\fetch_decider.py --dir "%~dp0models\decider\gliner25-decide"
-if errorlevel 1 (
-    echo   [WARN] encoder download failed - decider stays off;
-    echo          retry later with: python deploy\fetch_decider.py
-    goto decider_done
-)
-REM Point the setting at the downloaded folder and start in shadow mode, so
-REM the first runs only LOG what the encoder would decide.
-"%PY%" -c "from settings import load_settings, save_settings; s = load_settings(); s['routing_decider_model'] = 'models/decider/gliner25-decide'; s['routing_decider'] = 'shadow'; save_settings(s); print('  decider: shadow mode, model models/decider/gliner25-decide')"
-if errorlevel 1 (
-    echo   [WARN] could not write the decider settings - set them by hand:
-    echo          routing_decider_model = models/decider/gliner25-decide
-    echo          routing_decider       = shadow
-)
-:decider_done
-echo.
-
+:searxng_step
 REM [7/9] SearXNG (optional)
 REM ======================================================
 echo.
