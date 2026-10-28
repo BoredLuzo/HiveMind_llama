@@ -447,6 +447,18 @@ async def t_mode():
     check("bare /mode lists explanations",
           "agentic" in br.mode_text("") and "NO file tools" in br.mode_text(""))
 
+    # PHONE-AUTO-DECIDER (2026-10-28): /mode auto must give the decision to
+    # the engine decider. mode="auto" alone lost against the PERSISTED
+    # duo_agentic_mode=true (decider off) - the live smalltalk "was geht"
+    # ran the pathtracer planner instead of being answered.
+    out = br.mode_text("auto")
+    check("auto mode set", "auto" in out)
+    await br.start_text_run("was geht")
+    check("/mode auto travels as auto",
+          br.hive.stream_bodies[-1]["mode"] == "auto")
+    check("/mode auto overrides the persisted agentic flag",
+          br.hive.stream_bodies[-1]["overrides"].get("duo_agentic_mode") is False)
+
     # off -> follow settings again
     out = br.mode_text("off")
     await br.start_text_run("q3")

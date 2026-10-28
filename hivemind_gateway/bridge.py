@@ -614,6 +614,18 @@ class RunBridge:
                 stream_mode = "auto"
                 ov["duo_agentic_mode"] = True
                 ov["agentic_force"] = True
+            elif sel_mode == "auto":
+                # PHONE-AUTO-DECIDER (2026-10-28): /mode auto must hand the
+                # routing decision to the engine's decider for every message.
+                # mode="auto" alone does not win: chat_run short-circuits auto
+                # into the agentic loop while the PERSISTED duo_agentic_mode
+                # is true and the routing decider is off - that exact
+                # combination sent the smalltalk "was geht" through the
+                # pathtracer planner. An explicit False keeps the phone
+                # choice in charge without touching the owner's saved
+                # preference (same pattern as the voice decider below).
+                stream_mode = "auto"
+                ov["duo_agentic_mode"] = False
             elif from_voice and not sel_mode:
                 # VOICE-DECIDER (2026-10-21): a spoken note carries no mode.
                 # Without this it ran as settings["mode"] (code_duo) - so
