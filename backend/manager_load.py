@@ -174,50 +174,24 @@ def _probe_all(llama_bin: str) -> tuple[int, bool, bool, bool, bool, bool]:
     return build_num, device_ok, kv_ok, moe_ok, load_mode_ok, dspark_ok
 
 
+# PREFLIGHT-ONE (2026-10-28): the RAM/process guards live in
+# backend/llama_preflight.py - shared by the loader and all bench scripts.
+# LAZY-IMPORT (2026-10-28): the guards are re-exported lazily inside the
+# functions - a top-level import is a circular import (llama_preflight
+# reaches backend.llama_models, which reaches this module).
+
 _LOAD_MODES = ("none", "mmap", "mlock", "mmap+mlock", "dio")
 _RAM_HEADROOM_GB = 8.0
 
 
 def _free_ram_gb() -> float:
-    """Free physical RAM in GB; -1.0 when the platform cannot report it."""
-    if os.name == "nt":
-        try:
-            import ctypes
-
-            class _MSX(ctypes.Structure):
-                _fields_ = [("dwLength", ctypes.c_ulong),
-                            ("dwMemoryLoad", ctypes.c_ulong),
-                            ("ullTotalPhys", ctypes.c_ulonglong),
-                            ("ullAvailPhys", ctypes.c_ulonglong),
-                            ("ullTotalPageFile", ctypes.c_ulonglong),
-                            ("ullAvailPageFile", ctypes.c_ulonglong),
-                            ("ullTotalVirtual", ctypes.c_ulonglong),
-                            ("ullAvailVirtual", ctypes.c_ulonglong),
-                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
-            _msx = _MSX()
-            _msx.dwLength = ctypes.sizeof(_MSX)
-            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(_msx))
-            return _msx.ullAvailPhys / (1024 ** 3)
-        except (OSError, AttributeError, ValueError):
-            return -1.0
-    try:
-        return (os.sysconf("SC_AVPHYS_PAGES")
-                * os.sysconf("SC_PAGE_SIZE") / (1024 ** 3))
-    except (ValueError, OSError, AttributeError):
-        return -1.0
+    from backend.llama_preflight import free_ram_gb as _impl
+    return _impl()
 
 
 def _gguf_size_gb(model: str) -> float:
-    """GGUF size in GB; 0.0 when unresolvable (the guard then requires the
-    full 8 GB headroom against free RAM alone)."""
-    try:
-        from backend.llama_models import resolve_model_path as _rmp
-        _ggf = _rmp(model)
-        if _ggf:
-            return Path(_ggf).stat().st_size / (1024 ** 3)
-    except (ImportError, OSError):
-        pass
-    return 0.0
+    from backend.llama_preflight import gguf_size_gb as _impl
+    return _impl(model)
 
 
 def _ram_guard_blocks(model: str, free_ram_gb: float) -> bool:
@@ -226,17 +200,31 @@ def _ram_guard_blocks(model: str, free_ram_gb: float) -> bool:
     commits the FULL model as private memory; three stacked hermes commits
     (engine slot + two bench processes) pushed the commit to 56 GB on a
     32 GB machine - SSD at 100 %, system frozen."""
-    if free_ram_gb is None or free_ram_gb < 0:
-        logger.warning("RAM-GUARD: free RAM unknown - load-mode none "
-                       "rejected, falling back to mmap")
-        return True
-    _gg = _gguf_size_gb(model)
-    if free_ram_gb < _gg + 8.0:
-        logger.warning("RAM-GUARD: --load-mode none rejected (model %.1f GB, "
-                       "only %.1f GB RAM free) - falling back to mmap",
-                       _gg, free_ram_gb)
-        return True
-    return False
+    from backend.llama_preflight import ram_guard_blocks as _impl
+    return _impl(model, free_ram_gb)
+
+
+def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
+                       profile_lm: str, free_ram_gb: float) -> str:
+    """The one load-mode decision (pure; unit-tested in
+    tests/test_load_mode_ram_guard.py).
+
+    Order: the SPEC+NONE-CRASH-GUARD (2026-10-24) and the mlock intent keep
+    mmap+mlock; a valid profile override is honored; the remaining default
+    is none. The RAM-GUARD rejects none whenever free RAM is unknown or
+    below GGUF size + 8 GB headroom - the fallback is plain mmap (NOT
+    mlock: locking 18 GB with tight RAM pages and sinks itself; plain mmap
+    lets Windows drop the file-backed pages).
+    """
+    if spec_planned or mlock_now:
+        return "mmap+mlock"
+    from backend.llama_preflight import ram_guard_blocks as _impl
+    profile = profile_lm if profile_lm in _LOAD_MODES else ""
+    if profile and not _impl(model, free_ram_gb):
+        return profile
+    if _impl(model, free_ram_gb):
+        return "mmap"
+    return "none"
 
 
 def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
