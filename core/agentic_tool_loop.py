@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """AgenticToolLoop  ToolLoop subclass with duo_runner's POST+retry logic."""
 from __future__ import annotations
-import asyncio, json, logging, time
+import asyncio, json, logging, os, re, time
 import httpx
 
 from core.tool_loop import ToolLoop, ToolLoopConfig, _build_tool_call_grammar, _grammar_compatible, _USE_GBNF_GRAMMAR
@@ -600,8 +600,9 @@ class AgenticToolLoop(ToolLoop):
                                     "coder", getattr(self.round_state, "chat_id", ""),
                                     _tel_msgs, payload.get("tools"),
                                     extra={"prompt_tokens": (_dr_usage_final or {}).get("prompt_tokens")})
-                        except Exception:
-                            pass
+                        except (OSError, ValueError) as _diag_exc:
+                            logger.debug("[LONG-RUN-DIAG] slot log read: %s",
+                                         _diag_exc)
                         _tel_hashes, _tel_fdi = _tel.message_hashes(_tel_msgs)
                         # CPT-EMA (2026-10-14): real
                         # chars/token per model from each real response —
@@ -617,13 +618,62 @@ class AgenticToolLoop(ToolLoop):
                                 _tel_chars,
                                 int((_dr_usage_final or {}).get("prompt_tokens") or 0),
                             )
-                        except Exception:
-                            pass
+                        except (OSError, ValueError) as _diag_exc:
+                            logger.debug("[LONG-RUN-DIAG] slot log read: %s",
+                                         _diag_exc)
                         _tel_tools = []
                         for _tk in sorted(result["dr_tool_calls_acc"].keys()):
                             _tfn = str(((result["dr_tool_calls_acc"][_tk].get("function")) or {}).get("name", "") or "")
                             if _tfn:
                                 _tel_tools.append(_tfn)
+                        # LONG-RUN-DIAG (2026-10-28): the fields the
+                        # hour-long-decode question needs next to the t/s -
+                        # the slot ubatch (constant per CMD), free system
+                        # RAM, and the draft acceptance the server logs only
+                        # on verbose slots (empty on regular slots).
+                        _diag_ub = None
+                        _diag_free_ram = None
+                        _diag_accept = None
+                        try:
+                            from backend.llama_config import (
+                                LLAMA_UBATCH as _lc_ub)
+                            _diag_ub = int(_lc_ub)
+                        except (ImportError, AttributeError, TypeError,
+                                ValueError):
+                            pass
+                        if os.name == "nt":
+                            try:
+                                import ctypes as _ct
+
+                                class _MSX(_ct.Structure):
+                                    _fields_ = [
+                                        ("dwLength", _ct.c_ulong),
+                                        ("dwMemoryLoad", _ct.c_ulong),
+                                        ("ullTotalPhys", _ct.c_ulonglong),
+                                        ("ullAvailPhys", _ct.c_ulonglong)]
+                                _msx = _MSX()
+                                _msx.dwLength = _ct.sizeof(_MSX)
+                                _ct.windll.kernel32.GlobalMemoryStatusEx(
+                                    _ct.byref(_msx))
+                                _diag_free_ram = round(
+                                    _msx.ullAvailPhys / (1024 ** 3), 2)
+                            except (OSError, AttributeError, ValueError):
+                                pass
+                        try:
+                            from pathlib import Path as _P
+                            _slots = sorted(
+                                _P("logs").glob("llama_server_*.log"),
+                                key=lambda f: f.stat().st_mtime, reverse=True)
+                            if _slots:
+                                _txt = _slots[0].read_text(
+                                    encoding="utf-8", errors="replace")[-40000:]
+                                _am = re.findall(
+                                    r"draft acceptance = ([\d.]+)", _txt)
+                                if _am:
+                                    _diag_accept = float(_am[-1])
+                        except (OSError, ValueError) as _diag_exc:
+                            logger.debug("[LONG-RUN-DIAG] slot log read: %s",
+                                         _diag_exc)
                         _tel.append_round({
                             "phase": "coder",
                             "model": getattr(self.round_state, "exec_model", None),
@@ -645,6 +695,10 @@ class AgenticToolLoop(ToolLoop):
                             "completion_tokens": (_dr_usage_final or {}).get("completion_tokens"),
                             "gen_ms": (_dr_usage_final or {}).get("gen_ms"),
                             "decode_tps": (_dr_usage_final or {}).get("decode_tps"),
+                            # LONG-RUN-DIAG fields (see block above)
+                            "ub": _diag_ub,
+                            "free_ram_gb": _diag_free_ram,
+                            "draft_acceptance": _diag_accept,
                             "finish_reason": _dr_finish_reason,
                             # SLOT-ATTRIBUTION (2026-10-15, task 3 addendum):
                             # tok/s must never be averaged across models or
