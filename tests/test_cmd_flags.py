@@ -47,16 +47,29 @@ def duplicate_flags(argv):
     return dups
 
 
-# 1. loader CMD literal
+# 1. template resolution: BEHAVIOURAL (the earlier version grepped a source
+# slice, which started matching the two mutually exclusive branches inside
+# _append_chat_template and reported a duplicate that cannot happen).
 src = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
-start = src.index('cmd += [')
-block = src[start:start + 2000]
-flags = re.findall(r'"(--[a-z0-9-]+)"', block)
-dups = [f for f in set(flags) if flags.count(f) > 1]
-check("loader CMD: no duplicated flag in the literal", not dups, f"({dups})")
-check("loader CMD carries --ubatch-size once",
-      flags.count("--ubatch-size") == 1 or "--ubatch-size" not in flags,
-      f"(count {flags.count('--ubatch-size')})")
+check("loader carries --ubatch-size exactly once as a literal",
+      src.count('"--ubatch-size"') == 1,
+      f"(count {src.count('"--ubatch-size"')})")
+try:
+    from backend.manager_load import _append_chat_template as _act
+    c_reg = ["srv"]
+    _act(c_reg, "hermes3.6", "chat_template22.5.jinja")
+    check("registry template -> exactly ONE --chat-template-file",
+          c_reg.count("--chat-template-file") == 1, f"({c_reg})")
+    c_chain = ["srv"]
+    _act(c_chain, "hermes3.6", "")
+    check("no registry template -> exactly ONE from the fallback chain",
+          c_chain.count("--chat-template-file") == 1, f"({c_chain})")
+    c_other = ["srv"]
+    _act(c_other, "groot", "")
+    check("base outside the chain -> no template flag",
+          "--chat-template-file" not in c_other, f"({c_other})")
+except ImportError as e:
+    check("_append_chat_template importable", False, f"({e})")
 
 # 2. the sweep: base + variant, one --spec-type per variant
 def _pick(env_name: str, *candidates):

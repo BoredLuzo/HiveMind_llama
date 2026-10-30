@@ -294,7 +294,6 @@ from core.duo.preflight import (  # noqa: F401
     _build_plan_pin_msg,
     _build_touched_context,
     _drain_thinking_rescue,
-    _est_tokens,
     _git_checkpoint_at_chunk_start,
     _git_checkpoints_enabled,
     _inject_plan_into_coder_msgs,
@@ -305,7 +304,7 @@ from core.duo.preflight import (  # noqa: F401
     _resolve_fallback_model,
     _strip_stale_ctx_notices,
     coder_briefing_text,
-)
+ _est_tokens,)
 
 
 @dataclasses.dataclass
@@ -335,7 +334,7 @@ class _DuoPlannerPhaseState:
     plan_tracker: object = None
 
 async def _duo_planner_phase(
-    ctx, state, ps: _DuoPlannerPhaseState, *,
+    ctx, ps: _DuoPlannerPhaseState, *,
     coder_mdl, critic_mdl, exec_mdl, _ws_str, _explore_ctx, _xtools_ws,
     _coder_ctx, _contracts_raw, _matched_skills, _planner_step_cap,
     _project_state, _duo_runtime_profile, _duo_deadline_at, _duo_run_timeout_s,
@@ -1408,6 +1407,9 @@ class _DuoExecRoundState:
     cached_port_ref: list | None = None
 
 
+# NOTE (2026-10-30): the ~40-keyword-argument wall below is known readability
+# debt, deliberately not refactored; tests/test_duo_split_integrity.py guards
+# the ps.<field> state round-trip through this helper by AST.
 async def _duo_exec_round_task(
     ctx, state, ps: _DuoExecRoundState, *,
     _dr_tcs, _dtool_msgs, _duo_state, _tool_exec_hooks, _tool_ctx_lru,
@@ -1650,10 +1652,9 @@ async def _duo_ctx_pressure_check(
 ):
     # CODE-MOTION (duo-runner-split): the CTX-pressure warn-once check moved
     # VERBATIM from run_code_duo's tool loop; only the unpack/pack wrapper
-    # is new. No logic changes. est_tokens arrives under its own name (its
-    # single body read was renamed to it) because the module also imports
-    # a dead _est_tokens helper from preflight - keeping the name would
-    # shadow-capture that import instead of the runner local.
+    # is new. No logic changes. est_tokens arrives under its own name: the
+    # runner keeps the value in its local _est_tokens and passes it as a
+    # plain keyword, so the helper's parameter name stays unambiguous.
     _ctx_pressure_warned = ps.ctx_pressure_warned
     try:
         # ── CTX Pressure Check ─────────────────────────────
@@ -2495,7 +2496,7 @@ async def run_code_duo(ctx):
             )
             try:
                 async for _ev in _duo_planner_phase(
-                    ctx, state, _plan_ps,
+                    ctx, _plan_ps,
                     coder_mdl=coder_mdl, critic_mdl=critic_mdl, exec_mdl=exec_mdl,
                     _ws_str=_ws_str, _explore_ctx=_explore_ctx, _xtools_ws=_xtools_ws,
                     _coder_ctx=_coder_ctx, _contracts_raw=_contracts_raw,

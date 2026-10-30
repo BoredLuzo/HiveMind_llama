@@ -235,7 +235,8 @@ SUITES = [
     ("load_mode_ram_guard",     "tests/test_load_mode_ram_guard.py",           30),
     ("load_preflight",          "tests/test_load_preflight.py",                60),
     ("preflight_failclosed",    "tests/test_preflight_failclosed.py",          60),
-    ("langrun_guard_failclosed", "tests/test_langrun_guard_failclosed.py",     30),    ("ctx_full_storm",          "tests/test_ctx_full_storm.py",               30),
+    ("langrun_guard_failclosed", "tests/test_langrun_guard_failclosed.py",     30),
+    ("ctx_full_storm",          "tests/test_ctx_full_storm.py",               30),
     ("perf_logging",           "tests/test_perf_logging.py",                30),
     ("duo_ubatch",             "tests/test_duo_ubatch.py",                  30),
     ("cmd_flags",              "tests/test_cmd_flags.py",                  30),
@@ -244,6 +245,9 @@ SUITES = [
     ("side_fallback",          "tests/test_side_fallback.py",              30),
     ("duo_split_integrity",    "tests/test_duo_split_integrity.py",        30),
     ("cache_budget",           "tests/test_cache_budget.py",               30),
+    ("tail_cap",               "tests/test_tail_cap.py",                    30),
+    ("compression_empty_summary", "tests/test_compression_empty_summary.py", 30),
+    ("vram_profile_sizing",     "tests/test_vram_profile_sizing.py",       30),
 
 ]
 

@@ -15,7 +15,7 @@ from .llama_manager_utils import (
     _prefetch_key, _tcp_alive, _kill_port_sync, _nm,
 )
 from .llama_slots import ModelSlot
-from .llama_config import DEFAULT_IDLE_TIMEOUT_SECONDS
+from .llama_config import DEFAULT_IDLE_TIMEOUT_SECONDS, ubatch_extra_mib
 from typing import Optional
 from .llama_models import resolve_model_path, list_available_models, resolve_mmproj_path, _strip_alias
 from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
@@ -111,17 +111,15 @@ class LlamaEvictMixin:
             # + KV live in system RAM. Accept the load; a GPU-based check here
             # would block every load on a CPU-only host.
             return CanFitResult(True, 0.0, 0.0, 0.0, "cpu-backend")
-        # UBATCH-COMPUTE-BUFFER (2026-10-30, audit fix): the table has no
-        # ubatch term. Measured on the real server (Groot ncmoe 28, ctx
-        # 32768): dedicated peak 5188 MiB at ub 512 vs 5333 at ub 1024, i.e.
-        # ~0.28 MiB of compute buffer per ubatch unit above 256. This is the
-        # gate that can BLOCK a load, so the surcharge belongs here - it
-        # previously only reached the eviction heuristic.
+        # UBATCH-COMPUTE-BUFFER (2026-10-30): the table has no ubatch term;
+        # the measured surcharge lives in llama_config.ubatch_extra_mib (one
+        # definition, shared with the eviction heuristic). This is the gate
+        # that can BLOCK a load, so the surcharge belongs here.
         try:
             from .llama_config import LLAMA_UBATCH as _ub_now
         except (ImportError, AttributeError):
             _ub_now = 256
-        _ub_extra_mib = max(0, int(_ub_now) - 256) * 0.28
+        _ub_extra_mib = ubatch_extra_mib(int(_ub_now))
         needed_mib = round(vram_of_moe(_strip_alias(model_name), num_ctx) * 1024
                            + _ub_extra_mib, 1)
         free_mib = get_live_gpu_free_mib()

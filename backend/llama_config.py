@@ -203,6 +203,24 @@ def resolve_ubatch_sizes(settings: dict | None = None) -> tuple[int, int]:
     return ub, batch
 
 
+# UBATCH-COMPUTE-BUFFER (2026-10-30, audit): the VRAM table (llama_vram_table)
+# has no ubatch term. Measured on the real server (Groot, ncmoe 28, ctx
+# 32768): dedicated peak 5188 MiB at ub 512 vs 5333 at ub 1024 = +145 MiB
+# for +512 ubatch, i.e. ~0.28 MiB of compute buffer per ubatch unit above
+# 256. ONE helper so the VRAM pre-flight gate (manager_evict.can_fit) and
+# the eviction heuristic (manager_load) cannot drift apart.
+def ubatch_extra_mib(ubatch: int) -> float:
+    """VRAM compute-buffer surcharge (MiB) for a ubatch above 256.
+
+    Shared by the load gate (can_fit — this can BLOCK a load) and the
+    eviction heuristic; both must see the same number.
+    """
+    try:
+        return max(0, int(ubatch) - 256) * 0.28
+    except (TypeError, ValueError):
+        return 0.0
+
+
 # ── MoE (Mixture of Experts) ──────────────────────────────────────────────────
 
 # Per-model CPU-experts override: {model_key: n_cpu_moe}. 0/missing = from _MOE_EXPERT_COUNTS.

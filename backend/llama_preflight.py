@@ -9,10 +9,16 @@ or benchmark starts:
 plus the tree-kill helper for bench timeouts.
 Pure helpers + thin process queries, no GPU calls - unit-testable.
 """
+import logging
 import os
 import subprocess
 import time
 from pathlib import Path
+
+# LOG-CHANNEL (2026-10-30, audit): the loader logs guards under the
+# "[PRE-FLIGHT]" tag (manager_load) — this module must use the same tag so
+# one grep finds the whole guard trail; plain print() bypassed log routing.
+logger = logging.getLogger("hivemind.preflight")
 
 _RAM_HEADROOM_GB = 8.0
 LOAD_MODES = ("none", "mmap", "mlock", "mmap+mlock", "dio")
@@ -112,8 +118,8 @@ def llama_process_count() -> int:
             if attempt == 1:
                 time.sleep(0.3)
                 continue
-            print(f"[PREFLIGHT] process query failed twice ({_pc_err}) - "
-                  f"treating as UNKNOWN and blocking (fail-closed)")
+            logger.warning(f"[PRE-FLIGHT] process query failed twice ({_pc_err}) - "
+                           f"treating as UNKNOWN and blocking (fail-closed)")
             return -1
     return -1
 
@@ -136,13 +142,27 @@ def kill_process_tree(pid: int, timeout_s: float = 10.0) -> bool:
                            capture_output=True, timeout=timeout_s)
         except (OSError, subprocess.SubprocessError):
             return False
+    # VERIFY-FIX (2026-10-30, audit): the wait loop ran the invalid form
+    # "tasklist -FI <pid>" — tasklist exits 1 on bad arguments exactly like
+    # on "no such process", so the check returned True immediately while the
+    # tree was still alive. The valid form is "tasklist /FI "PID eq <pid>""
+    # and, because tasklist exits 0 even for "no match", the process counts
+    # as gone only when the query exits non-zero OR the pid is missing from
+    # its output.
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        if subprocess.run(["tasklist" if os.name == "nt" else "ps", "-FI"
-                           if os.name == "nt" else "-p", str(pid)]
-                          if os.name == "nt" else ["ps", "-p", str(pid)],
-                          capture_output=True, text=True).returncode != 0:
-            return True
+        try:
+            if os.name == "nt":
+                out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                                     capture_output=True, text=True, timeout=10,
+                                     encoding="utf-8", errors="replace")
+            else:
+                out = subprocess.run(["ps", "-p", str(pid)],
+                                     capture_output=True, text=True, timeout=10)
+            if out.returncode != 0 or str(pid) not in (out.stdout or ""):
+                return True
+        except (OSError, subprocess.SubprocessError):
+            return True  # query itself broken -> taskkill above was best effort
         time.sleep(0.2)
     return False
 

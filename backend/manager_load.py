@@ -15,6 +15,7 @@ from .llama_config import (
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS,
     dense_kv_cache_type,
     moe_kv_cache_types, llama_gpu_layers_auto, resolve_gpu_layers,
+    ubatch_extra_mib,
     CACHE_REUSE, CACHE_RAM_MIB, CTX_CHECKPOINTS, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN, MTP_DRAFT_P_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
@@ -278,6 +279,57 @@ def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
         return "mmap"
     return "none"
 
+
+# CHAT-TEMPLATE-ONE (2026-10-30, audit S2): the template resolution lived
+# twice in _start_process — a registry `if` plus a copy-paste hermes3.6 `if`
+# that ALSO appended --chat-template-file. A hermes3.6 model with a registry
+# template (the shipped APEX-Mini profile sets "chat_template") got the flag
+# TWICE and llama-server's last-wins rule let the sharp fallback file beat
+# the profile. One helper now: a registry template always wins and is never
+# stacked; only without one does the sharp -> 22.5 -> qwen3.6 fallback chain
+# apply, and only for the qwen*/hermes bases.
+_TEMPLATE_CHAIN_BASES = ("qwen3.5", "qwen3.6", "qwen3.8", "hermes3.6")
+
+
+def _append_chat_template(cmd: list, model_base: str, reg_template: str) -> None:
+    """Append exactly ONE --chat-template-file to the server cmd.
+
+    Registry template (explicit path or basename, model_configs-relative)
+    has priority; only when it is unset does the fallback chain
+    sharp_v22.5.0 -> chat_template22.5 -> qwen3.6 template fire.
+    """
+    _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
+    # Registry-Template (expliziter Pfad oder Basisname) hat Vorrang.
+    if reg_template:
+        _reg_template_path = Path(reg_template)
+        if not _reg_template_path.is_absolute():
+            _reg_template_path = _templates_dir / _reg_template_path
+        if _reg_template_path.exists():
+            cmd += ["--chat-template-file", str(_reg_template_path)]
+            logger.info(f"--chat-template-file (Registry): {_reg_template_path}")
+        else:
+            logger.warning(f"Registry chat template does not exist: {_reg_template_path}")
+        return  # never stack a second --chat-template-file over the registry one
+    if model_base not in _TEMPLATE_CHAIN_BASES:
+        return
+    # Bases — reasoning_effort-Steuerung (<|think_*|>), preserve_reasoning,
+    # \n\n → KV-Cache/MTP-Draft-Gewinne) und message.reasoning-Extraktion.
+    # Fallback-Kette (Repo-relativ): v22.5 → Repo-Fallback qwen3.6_template.
+    # SHARP-TEMPLATE (2026-10-30): the froggeric/Sharp lineage ships
+    # as v22.5.0 (HF peculiar-ragdoll/Qwen-Sharp-Chat-Templates). It is
+    # the same family as our 22.5 file with the newer tool/thinking
+    # section, so it is preferred; 22.5 stays as the fallback.
+    _template_sharp = _templates_dir / "chat_template_sharp_v22.5.0.jinja"
+    _template_v25 = _templates_dir / "chat_template22.5.jinja"
+    if _template_sharp.exists():
+        _template_path = _template_sharp
+    elif _template_v25.exists():
+        _template_path = _template_v25
+    else:
+        _template_path = _templates_dir / "qwen3.6_chat_template.jinja"
+    if _template_path.exists():
+        cmd += ["--chat-template-file", str(_template_path)]
+        logger.info(f"--chat-template-file: {_template_path}")
 
 
 class LlamaLoadMixin:
@@ -989,11 +1041,10 @@ class LlamaLoadMixin:
                 # (guaranteed 45s wait, e.g. target 5775 with only ~5.06 GB free).
                 # The 256 target is what the resolution accepts.
                 # UBATCH-COMPUTE-BUFFER (2026-10-30): the table's vram_of()
-                # has no ubatch term. Measured on the real server (Groot,
-                # ncmoe 28, ctx 32768): dedicated peak 5188 MiB at ub 512 vs
-                # 5333 at ub 1024 = +145 MiB for +512 ubatch, i.e. ~0.28 MiB
-                # of compute buffer per ubatch unit above 256.
-                _ub_extra_mib = max(0, int(LLAMA_UBATCH) - 256) * 0.28
+                # has no ubatch term — the measured surcharge comes from
+                # llama_config.ubatch_extra_mib (shared with can_fit, so the
+                # gate and the eviction heuristic cannot drift).
+                _ub_extra_mib = ubatch_extra_mib(int(LLAMA_UBATCH))
                 _need_mib = (new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
                              + _ub_extra_mib)
 
@@ -1318,6 +1369,35 @@ class LlamaLoadMixin:
             else:
                 logger.info("--load-mode %s (mlock=%s, spec=%s)",
                             _load_mode, bool(_mlock_now), _spec_planned)
+            # PROCESS-COUNT GUARD (2026-10-30, audit): llama_preflight
+            # documents "no second llama process alongside" but nothing in
+            # the engine ever called it - the check was test-only. Enforced
+            # here for load_mode none, the freeze scenario: a none load
+            # commits the FULL model as private memory, and stacked commits
+            # (engine slot + foreign llama processes) pagged a 32 GB machine
+            # on 2026-10-28. WARNING only, never a hard block: the count
+            # query cannot tell the manager's own slot processes from
+            # foreign ones, so refusing would forbid ordinary multi-slot
+            # none loads (profiles like APEX-Mini ship load_mode none).
+            if _load_mode == "none":
+                try:
+                    from backend.llama_preflight import llama_process_count as _lpc
+                    _llama_procs = _lpc()
+                except (ImportError, OSError):
+                    _llama_procs = -1
+                if _llama_procs != 0:
+                    _proc_state = ("UNKNOWN (process query failed - fail-closed)"
+                                   if _llama_procs < 0 else
+                                   f"{_llama_procs} llama-server/bench process(es) "
+                                   f"already running")
+                    logger.warning(
+                        "[PROCESS-GUARD] load-mode none for %s while %s - none "
+                        "commits the FULL model as private memory; stacked "
+                        "commits froze this box on 2026-10-28. Continuing "
+                        "(the manager itself may run several slots); evict "
+                        "peers or switch the profile load_mode if RAM runs low.",
+                        model, _proc_state,
+                    )
             # MEMLOCK-GUARD (2026-09-19): Docker default RLIMIT_MEMLOCK is
             # 64 MiB — llama.cpp fails the model load when it cannot lock
             # the weights. One-time warning; fix via --ulimit memlock=-1 in
@@ -1731,50 +1811,9 @@ class LlamaLoadMixin:
         if _use_jinja:
             cmd += ["--jinja"]
             logger.info(f"--jinja enabled for {model}")
-        # Registry-Template (expliziter Pfad oder Basisname) hat Vorrang.
-        if _reg_template:
-            _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
-            _reg_template_path = Path(_reg_template)
-            if not _reg_template_path.is_absolute():
-                _reg_template_path = _templates_dir / _reg_template_path
-            if _reg_template_path.exists():
-                cmd += ["--chat-template-file", str(_reg_template_path)]
-                logger.info(f"--chat-template-file (Registry): {_reg_template_path}")
-            else:
-                logger.warning(f"Registry chat template does not exist: {_reg_template_path}")
-        elif _model_base in ("qwen3.5", "qwen3.6", "qwen3.8"):
-            # Bases — reasoning_effort-Steuerung (<|think_*|>), preserve_reasoning,
-            # \n\n → KV-Cache/MTP-Draft-Gewinne) und message.reasoning-Extraktion.
-            # Fallback-Kette (Repo-relativ): v22.5 → Repo-Fallback qwen3.6_template.
-            _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
-            # SHARP-TEMPLATE (2026-10-30): the froggeric/Sharp lineage ships
-            # as v22.5.0 (HF peculiar-ragdoll/Qwen-Sharp-Chat-Templates). It is
-            # the same family as our 22.5 file with the newer tool/thinking
-            # section, so it is preferred; 22.5 stays as the fallback.
-            _template_sharp = _templates_dir / "chat_template_sharp_v22.5.0.jinja"
-            _template_v25 = _templates_dir / "chat_template22.5.jinja"
-            if _template_sharp.exists():
-                _template_path = _template_sharp
-            elif _template_v25.exists():
-                _template_path = _template_v25
-            else:
-                _template_path = _templates_dir / "qwen3.6_chat_template.jinja"
-            if _template_path.exists():
-                cmd += ["--chat-template-file", str(_template_path)]
-                logger.info(f"--chat-template-file: {_template_path}")
-        if _model_base == "hermes3.6":
-            _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
-            _template_sharph = _templates_dir / "chat_template_sharp_v22.5.0.jinja"
-            _template_v25h = _templates_dir / "chat_template22.5.jinja"
-            if _template_sharph.exists():
-                _template_path = _template_sharph
-            elif _template_v25h.exists():
-                _template_path = _template_v25h
-            else:
-                _template_path = _templates_dir / "qwen3.6_chat_template.jinja"
-            if _template_path.exists():
-                cmd += ["--chat-template-file", str(_template_path)]
-                logger.info(f"--chat-template-file: {_template_path}")
+        # CHAT-TEMPLATE-ONE (2026-10-30, audit S2): one helper, one flag —
+        # registry template wins, fallback chain only for qwen*/hermes bases.
+        _append_chat_template(cmd, _model_base, _reg_template)
 
         # ── HARTER PRE-FLIGHT-VRAM-GATE ───────────────────────────────────────
         _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id)
