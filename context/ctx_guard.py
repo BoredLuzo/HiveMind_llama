@@ -273,13 +273,22 @@ def plan_partial_cut_index(
 
 
 def allow_force_compress(round_now: int, last_force_round: int,
-                         min_gap: int = 3) -> bool:
+                         min_gap: int = 3, emergency: bool = False) -> bool:
     """CTX-FULL-Sturm-Guard (2026-10-30, live 22.10.: 40 Force-Kompressionen
     in 56 s). Eine Force-Kompression darf nur alle min_gap Runden feuern;
-     dazwischen faellt der Aufrufer auf den bestehenden Tiny-Budget-Fallback
-    zurueck, statt den Loop zu stuermen. Rein rechnerisch getestet in
-    tests/test_ctx_full_storm.py.
+    dazwischen faellt der Aufrufer auf den bestehenden Tiny-Budget-Fallback
+    zurueck, statt den Loop zu stuermen.
+
+    NOTFALL UEBERSTEUERT IMMER (Audit 30.10): ist der Kontext wirklich voll
+    (guard > 90 % ctx oder bereits >= 2 Runden ohne lebensfaehiges Budget),
+    darf die Bremse NICHT blocken - sonst ginge ein Request mit
+    max_tokens 512 gegen ein head <= 0 raus, wird vom Server abgeschnitten
+    oder mit 400 beantwortet und vergiftet die Tool-Call-History (genau das
+    Szenario, gegen das der MIN-VIABLE-GUARD gebaut wurde).
+    Rein rechnerisch getestet in tests/test_ctx_full_storm.py.
     """
+    if emergency:
+        return True
     if last_force_round < 0:
         return True
     return (round_now - last_force_round) >= int(min_gap)

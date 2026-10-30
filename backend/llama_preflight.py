@@ -90,25 +90,32 @@ def llama_process_count() -> int:
     prints OEM-codepage headers on a German Windows - text=True alone
     raised UnicodeDecodeError in the reader thread and the count silently
     stayed 0 (2026-10-29, live)."""
-    count = 0
-    if os.name == "nt":
+    # RETRY (audit 2026-10-30): a single transient tasklist timeout used to
+    # block a legitimate load hard ("unknown" -> block). One retry after a
+    # short pause separates a hiccup from a broken tool.
+    for attempt in (1, 2):
+        count = 0
         try:
-            for image in ("llama-server.exe", "llama-bench.exe"):
-                out = subprocess.run(
-                    ["tasklist", "/FI", f"IMAGENAME eq {image}"],
-                    capture_output=True, text=True, timeout=30,
-                    encoding="utf-8", errors="replace")
-                count += (out.stdout or "").count(image.split(".")[0])
-        except (OSError, subprocess.SubprocessError):
+            if os.name == "nt":
+                for image in ("llama-server.exe", "llama-bench.exe"):
+                    out = subprocess.run(
+                        ["tasklist", "/FI", f"IMAGENAME eq {image}"],
+                        capture_output=True, text=True, timeout=30,
+                        encoding="utf-8", errors="replace")
+                    count += (out.stdout or "").count(image.split(".")[0])
+            else:
+                out = subprocess.run(["pgrep", "-f", "llama-(server|bench)"],
+                                     capture_output=True, text=True, timeout=30)
+                count += len([x for x in out.stdout.splitlines() if x.strip()])
+            return count
+        except (OSError, subprocess.SubprocessError) as _pc_err:
+            if attempt == 1:
+                time.sleep(0.3)
+                continue
+            print(f"[PREFLIGHT] process query failed twice ({_pc_err}) - "
+                  f"treating as UNKNOWN and blocking (fail-closed)")
             return -1
-    else:
-        try:
-            out = subprocess.run(["pgrep", "-f", "llama-(server|bench)"],
-                                 capture_output=True, text=True, timeout=30)
-            count += len([x for x in out.stdout.splitlines() if x.strip()])
-        except (OSError, subprocess.SubprocessError):
-            return -1
-    return count
+    return -1
 
 def kill_process_tree(pid: int, timeout_s: float = 10.0) -> bool:
     """Kill a process and its whole tree; returns True when it ended.

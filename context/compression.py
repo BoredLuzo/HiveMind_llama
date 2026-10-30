@@ -639,11 +639,16 @@ async def _compress_tool_context(
                 continue
             _c = _m.get("content") or ""
             if len(_c) > _cap:
+                # KEEP-THE-END (Audit 30.10): test/build errors, tracebacks
+                # and diffs stand at the END of a tool output; keeping the
+                # head would hide exactly the part the next round needs.
+                # Head is dropped with a visible marker instead.
+                _dropped = len(_c) - _cap
                 _recent_tail_msgs[_i] = dict(_m)
                 _recent_tail_msgs[_i]["content"] = (
-                    _c[:_cap]
-                    + f"\n[... tool output truncated: kept {_cap} of {len(_c)} chars "
-                    f"(duo_compress_tail_tool_max_chars)]"
+                    f"[... first {_dropped} of {len(_c)} chars dropped "
+                    f"(duo_compress_tail_tool_max_chars={_cap})]\n"
+                    + _c[-_cap:]
                 )
                 _capped += 1
         if _capped:

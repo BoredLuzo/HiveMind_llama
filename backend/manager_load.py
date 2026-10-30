@@ -1096,6 +1096,19 @@ class LlamaLoadMixin:
         ]
         if _gpu_layers is not None:
             cmd += ["--n-gpu-layers", str(_gpu_layers)]
+        # UBATCH-VRAM-NOTE (audit 2026-10-30): the VRAM pre-flight does NOT
+        # model the ubatch compute buffer. Measured on the 35B MoE: ub 512
+        # stays at ~5.5 GiB dedicated (no growth vs 256), but ub 1024 spilled
+        # into shared memory (80 -> 340 MiB) and 2048 peaked at 2348 MiB.
+        # So values above 512 are allowed but called out once per load.
+        if int(LLAMA_UBATCH) > 512:
+            logger.warning(
+                "[LOAD-DIAG] duo_ubatch=%d > 512: the compute buffer grows and "
+                "may spill into shared GPU memory (measured: ub 1024 -> +260 MiB "
+                "shared, ub 2048 -> 2348 MiB shared). The VRAM pre-flight does "
+                "not account for this.",
+                int(LLAMA_UBATCH),
+            )
         cmd += [
             "--parallel",     str(max(1, n_parallel)),
             "--flash-attn",   "on",

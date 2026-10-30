@@ -5600,7 +5600,17 @@ async def run_code_duo(ctx):
                                 # degrades to the tiny-budget fallback instead
                                 # of looping.
                                 from context.ctx_guard import allow_force_compress as _afc
-                                if not _afc(_dr, _last_force_compress_round, 3):
+                                # NOTFALL (Audit 30.10): >90 % ctx oder >=2
+                                # Runden ohne lebensfaehiges Budget -> die
+                                # Bremse darf nicht blocken (head <= 0 wuerde
+                                # einen 512-Token-Request gegen die Wand
+                                # schicken und die History vergiften).
+                                _ctx_emergency = (
+                                    _guard_tokens > int(_dtool_ctx * 0.90)
+                                    or _ctx_full_skips >= 2
+                                )
+                                if not _afc(_dr, _last_force_compress_round, 3,
+                                            emergency=_ctx_emergency):
                                     logger.warning(
                                         "[CTX-FULL] storm guard: force compression throttled "
                                         "(last=%d round=%d) - clamping output budget instead",

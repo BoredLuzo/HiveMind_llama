@@ -50,4 +50,17 @@ check("storm replay: exactly 3 FORCE in 8 rounds (was 8)", seq.count("FORCE") ==
 print(f"    sequence: {seq}")
 
 print(f"\nctx_full_storm: {passed} passed, {failed} failed")
+# --- NOTFALL (Audit 30.10) ---------------------------------------------
+# The brake must NEVER block when the context is really full: a throttled
+# round would send max_tokens 512 against head <= 0, the server truncates or
+# answers 400 and the tool-call history is poisoned.
+check("emergency overrides an active brake",
+      allow_force_compress(6, 5, 3, emergency=True))
+check("emergency overrides a just-fired compression",
+      allow_force_compress(5, 5, 3, emergency=True))
+check("no emergency -> brake still applies",
+      not allow_force_compress(6, 5, 3, emergency=False))
+check("emergency is opt-in (default False keeps the brake)",
+      not allow_force_compress(6, 5, 3))
+
 sys.exit(1 if failed else 0)
