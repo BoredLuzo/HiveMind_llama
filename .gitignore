@@ -191,3 +191,11 @@ dist/
 *.orig
 *.rej
 reports/
+
+# Test artifacts (2026-10-30): tests create throwaway files (sparse ggufs,
+# temp lists). They must never be committed - a sparse 3 GB dummy reached
+# the history once and had to be rewritten out.
+tests/_tmp_*
+tests/**/_tmp_*
+*_tmp_*.gguf
+/tmp_test/
