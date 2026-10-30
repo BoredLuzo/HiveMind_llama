@@ -501,16 +501,16 @@ REM request direct vs agentic (the CPU decider above can take that over
 REM later). Without either, keyword rules route. Small machines and the
 REM essential set skip it; Enter = skip, never fatal.
 echo  ==========================================================
-echo   [judge] Judge/Decider model ^(optional, ~2GB^)
+echo   [judge] Judge/Decider model ^(optional, ~1GB^)
 echo   Routes direct vs agentic requests. Without it, keyword
 echo   rules decide. Skip on small machines.
 echo  ==========================================================
 choice /c YN /n /d N /m "Install the judge model now? [y/N] "
 if errorlevel 2 (
-    echo   Skipped - add later: setup_models.bat ^> S ^> lfm2.5:2.6b
+    echo   Skipped - add later: setup_models.bat ^> S ^> lfm3:1.7b-qad
     goto judge_done
 )
-"%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-keys lfm2.5:2.6b
+"%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-keys lfm3:1.7b-qad
 if errorlevel 1 (
     echo   [WARN] judge model download failed - continue without it;
     echo   setup_models.bat installs it later. Keyword routing works.

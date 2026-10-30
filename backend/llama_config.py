@@ -502,6 +502,7 @@ _GPU_LAYERS_TABLE: dict[str, int] = {
     "lfm2.5:8b-a1b": 24,   # full GPU offload (1B active MoE, ~5GB VRAM)
     "lfm2.5:2.6b": 99,     # dense 2.6B — passt komplett auf GPU (~2GB VRAM)
     "lfm2.5:2.6b-instruct": 99,
+    "lfm3:1.7b-qad": 99,   # dense 1.7B Q4_0 (~1GB) — fits the GPU entirely
 }
 
 
@@ -528,6 +529,7 @@ BINARY_MIN_BUILD: dict[str, int] = {
     "qwen35":    8300,
     "qwen3":     8260,
     "lfm2.5":    9518,
+    "lfm3":      12001,  # arch "lfm3" needs PR #31252 (b11889: unknown model architecture)
     "ling-3.0-tiny": 10488,
     # minicpmv4_7 VISION projector needs b11574+ (b11456 failed the mmproj
     # load with "unknown projector type" and ran TEXT fine — verified

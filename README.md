@@ -88,7 +88,7 @@ CPU hosts: every compression re-prefills the whole prompt, which dominates the
 cost - tune `llama_ubatch_size` (512/1024) and the thread defaults, and watch the
 `[CACHE]` lines in `logs/hivemind.log`.
 
-First-run smoke test: start `run.py`, load a small model (`lfm2.5:2.6b`), send a
+First-run smoke test: start `run.py`, load a small model (`lfm3:1.7b-qad`), send a
 short message and check `logs/hivemind.log` for `[PRE-FLIGHT] ... -> OK`. No
 binary found? Point `HIVEMIND_LLAMA_BIN` at the extracted llama-server.
 

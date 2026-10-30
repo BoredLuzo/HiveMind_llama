@@ -28,7 +28,7 @@ _FALLBACK_MODEL_PREFERENCE = (
     # GGUFs nowadays but WITHOUT the mtp/reasoning launch flags — a fallback
     # to "qwen3.5:4b" ran the coder without spec-decode and reasoning off.
     "qwen3.5:4b-mtp", "qwen3.5:2b-mtp", "qwen3.5:4b", "qwen3.5:2b-ud",
-    "qwen3.5:2b", "lfm2.5:2.6b",
+    "qwen3.5:2b", "lfm3:1.7b-qad", "lfm2.5:2.6b",
     "ministral:3b-instruct-2410", "gemma-4:e4b-it-obliterated", "qwen3.5:0.8b-ud",
 )
 BRIEFING_FULL = "full"

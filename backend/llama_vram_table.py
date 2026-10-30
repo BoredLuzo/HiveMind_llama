@@ -26,6 +26,7 @@ _VRAM_TABLE: dict[str, float] = {
     # LFM2.5 dense 2.6B (Q4_K_M ~1.6GB weights + KV@4096) — Subagent-Ladder Default
     "lfm2.5:2.6b":       1.9,
     "lfm2.5:2.6b-instruct": 1.9,
+    "lfm3:1.7b-qad": 1.0,
     "qwen3.5:4b":        2.8,
     "qwen3.5:4b-ud":     3.0,
     "qwen3.5:4b-d":      3.2,
@@ -84,6 +85,10 @@ _MOE_TABLE: dict[str, dict] = {
     },
     "mellum2.1:12b-a2.5b-thinking": {
         "active_gpu_gb": 4.0,
+        # SWA-MoE: 7/28 full-attention layers, measured 4.1 KB/token q4_0
+        # (was only in _CTX_KV_KB_PER_TOKEN, which the MoE delegation
+        # never reaches — audit 2026-10-30).
+        "measured_bytes_per_token": 4100,
     },
     "qwen3.6:35b-a3b-ud": {
         "active_gpu_gb":            4.66,
@@ -286,6 +291,15 @@ def vram_of(model_name: str) -> float:
     if not name:
         return 4.0
 
+    # 0. PROFILE-FIRST (2026-10-30, audit fix): a model whose profile carries
+    #    moe_cpu_experts + vram_gb_override is sized by its own profile
+    #    (active_gpu_gb = the measured non-KV resident part). Without this,
+    #    profile-sized MoEs fell through to the dense heuristic (~0.6 GB/B),
+    #    which overstates a 35B-A3B by gigabytes and blocked loads that fit.
+    _cfg = moe_cfg_for(model_name)
+    if _cfg and _cfg.get("source") == "profile" and _cfg.get("active_gpu_gb"):
+        return round(float(_cfg["active_gpu_gb"]), 2)
+
     # 1. Exakter Match
     if name in _VRAM_TABLE:
         return _VRAM_TABLE[name]
@@ -322,7 +336,8 @@ def vram_of(model_name: str) -> float:
 
 # MODEL-KV-KB-T (2026-10-11): KV KB per token (q4_0) for models whose geometry
 # the generic formula gets wrong (hybrid attention, SWA-MoE, dense-large-KV).
-# Checked before the formula in vram_of_with_ctx.
+# Dense models only: MoE-sized models are delegated to vram_of_moe
+# before this table is consulted (2026-10-30).
 _CTX_KV_KB_PER_TOKEN: dict[str, float] = {
     "qwen3.5":             9.2,   # hybrid: 8/33 layers carry KV (measured 990 MiB @112640)
     "k2-horizon:7b":       41.5,  # dense: all 36 layers, 8 kv-heads x 128 (gguf metadata)
@@ -335,6 +350,19 @@ _CTX_KV_KB_PER_TOKEN: dict[str, float] = {
 
 def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
 
+
+    # MOE-DELEGATION (2026-10-30, audit fix): any model with a MoE sizing
+    # (static table row or local profile) is sized by vram_of_moe — the SAME
+    # function the load gate uses (manager_load "same resolution vram_of_moe
+    # uses"). Without this, a profile-sized MoE that is missing from
+    # _CTX_KV_KB_PER_TOKEN fell through to the DENSE ctx formula and produced
+    # absurd estimates (Groot 19B: 29+ GiB @131k) that block loads that fit.
+    # Sits ABOVE the ctx<=4096 early return so a table MoE answers its
+    # active_gpu_gb at small ctx too (else 21.0@4096 vs 4.68@4097 — a
+# non-monotonic cliff manager_health sums into free_gb). The guard against
+    # the dense fallback inside vram_of_moe avoids recursion.
+    if moe_cfg_for(model_name):
+        return vram_of_moe(model_name, num_ctx)
 
     base_vram = vram_of(model_name)
 

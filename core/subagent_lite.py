@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 
-_LADDER_DEFAULT = ["lfm2.5:2.6b", "qwen3.5:0.8b-ud"]
+_LADDER_DEFAULT = ["lfm3:1.7b-qad", "lfm2.5:2.6b", "qwen3.5:0.8b-ud"]
 _ALLOWED_TOOLS = ("read_file", "list_dir", "search_code")
 
 _last_block_ts = 0.0

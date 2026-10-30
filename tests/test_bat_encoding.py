@@ -67,7 +67,7 @@ def main():
 
     # The judge step must call the real script.
     _inst = (ROOT / "install.bat").read_text(encoding="ascii", errors="replace")
-    if "deploy\\fetch_models.py --models-dir" in _inst and "--only-keys lfm2.5:2.6b" in _inst:
+    if "deploy\\fetch_models.py --models-dir" in _inst and "--only-keys lfm3:1.7b-qad" in _inst:
         ok("install.bat calls deploy\\fetch_models.py for the judge")
     else:
         fail("install.bat calls deploy\\fetch_models.py for the judge",
