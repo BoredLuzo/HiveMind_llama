@@ -270,6 +270,46 @@ Field notes:
 
 The wizard writes every field, so hand-editing is only needed for the ones above.
 
+### Sizing a model (VRAM estimate and `--n-cpu-moe`)
+
+The pre-flight compares a **VRAM estimate** against the free GPU memory before
+every load. For a model that is not in the built-in table two numbers decide
+whether that estimate is right:
+
+- `vram_gb_override` — the part that stays **resident on the GPU**: attention
+  and SSM layers, embeddings/output, the shared expert and the router
+  (for a 35B-A3B class model roughly 2.5-3 GB), **plus** the KV cache and the
+  compute buffer. Typical example: 2.6 GB always-resident + 0.8 GB KV at 64k
+  with q8_0 + ~0.9 GB buffers ≈ **4.3 GB**.
+- `kv_bytes_per_token` — the KV growth per token, so the estimate scales with
+  the context you actually request.
+
+`moe_cpu_experts` (`--n-cpu-moe N`) then controls how many expert blocks stay
+in system RAM: every +1 frees roughly one expert block on the GPU (0.2-0.5 GB
+depending on the model) and moves it to CPU. **Both fields are required for a
+profile to be used for sizing** — set only `moe_cpu_experts` and the estimate
+silently falls back to the dense heuristic (~0.6 GB per billion parameters),
+which for a 35B-A3B is several GB too high.
+
+A starting value for an 8 GB card, from the Cyber-Tiel model card:
+
+```
+--n-cpu-moe = 40 - floor((VRAM_GB - 4.3) / 0.49)     # 33 on 8 GB
+```
+
+Then step the value down and watch tokens/second: fewer CPU experts means
+faster decode until the GPU runs out. Never push the MTP head's block to the
+CPU — for the qwen35moe builds it is the **last** block (40 of 0..40); a value
+of 41 disables the draft head instead of speeding anything up.
+
+**What a model needs, minimum:** the GGUF, a profile JSON under
+`model_configs/models/` (name, `num_ctx`, `jinja`, `reasoning`,
+`moe_cpu_experts`), and a `models.json` alias if the file name does not match
+the tag. Vision models additionally need their `mmproj_filename`; models with
+an MTP head need `mtp: true` (the flags are only passed when the binary
+supports them). Everything else has a sane default.
+
+
 A config named after the base only (example name: `gemma-4.json`) applies to
 all tags of that base; the exact-tag form (example: `gemma-4_e4b-it.json`)
 applies to that one tag. Both example names are conventions, not shipped

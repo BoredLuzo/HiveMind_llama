@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from settings import mutate_settings, save_settings
+from settings import mutate_settings
 from core.state import (
     settings,
     _ws_configure,
