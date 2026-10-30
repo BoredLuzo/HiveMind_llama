@@ -324,7 +324,8 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `qwen3.5:4b-mtp` | unsloth/Qwen3.5-4B-MTP-GGUF | duo coder/planner default (MTP) | 2.8 GB + 0.7 GB mmproj |
 | `qwen3.5:2b-mtp` | unsloth/Qwen3.5-2B-MTP-GGUF | refiner (MTP) | 1.3 GB + 0.7 GB mmproj |
 | `qwen3.5:0.8b-ud` | unsloth/Qwen3.5-0.8B-GGUF | subagent-lite, smallest ladder tier | 0.6 GB + 0.2 GB mmproj |
-| `lfm2.5:2.6b` | LiquidAI/LFM2.5-2.6B-GGUF | subagent / judge (+ DSpark drafter) | 1.7 GB + 0.2 GB drafter |
+| `lfm3-omni:2b` | LiquidAI/LFM3-Omni-2B-GGUF | subagent / vision worker (needs b12001+) | 1.0 GB + 0.3 GB mmproj |
+| `lfm3:1.7b-qad` | LiquidAI/LFM3-1.7B-GGUF | text-only subagent (lowest latency tier) | 1.0 GB |
 | `lfm2.5:24b-a2b` | LiquidAI/LFM2.5-24B-A2B-GGUF | coder / writer (MoE 24B/2B active, + DSpark drafter) | 13.5 GB + 0.6 GB drafter |
 | `spark-x2.6:4b` | XHToken/Spark-X2.6-4B-GGUF | fast judge / direct helper (dense 4B) | 3.0 GB |
 | `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL) | 2.2 GB |

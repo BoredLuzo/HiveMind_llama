@@ -9,7 +9,8 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   qwen3.6:35b-a3b-ud      UD-Q4_K_XL    — Coder/Planner (MoE, needs ~16GB RAM)
   qwen3.6:…-genesis-final-apex-compact     APEX-Compact  — Coder/Hermes agent (MoE+MTP)
   (catalog is authoritative - this block lists only the highlights)
-  lfm2.5:2.6b             Q4_K_M        — Subagent/Worker + Judge
+  lfm3-omni:2b            Q4_0          — Subagent/Vision-Worker (+mmproj)
+  lfm3:1.7b-qad           QAD Q4_0      — text-only subagent
   lfm2.5:24b-a2b          Q4_K_M        — Coder/Writer (MoE, + DSpark drafter)
   spark-x2.6:4b           Q4_K_M        — Judge/direct helper (dense 4B)
   qwen3.5:0.8b-ud         UD-Q4_K_XL    — Subagent ladder (smallest tier)
@@ -70,7 +71,7 @@ def _persist_models_dir(mdir: Path) -> None:
 # ESSENTIAL-SET (2026-10-26, ThinkPad feedback): `--essential` downloads the
 # direct/coder core and skips helper models a small machine may not want.
 # Tunable: spec KEYS to skip (the judge/decider today).
-ESSENTIAL_SKIP_KEYS = {"lfm2.5:2.6b"}
+ESSENTIAL_SKIP_KEYS = {"lfm3-omni:2b"}
 # DRAFTER-SKIP (2026-10-27, corrected): speculative decoding is ON again for
 # the profiles that ship an MTP head, so a drafter sidecar is NOT dead weight.
 # Gemma-4 uses its `mtp-*.gguf` and the DSpark models use their drafter; a load
@@ -142,24 +143,34 @@ SPECS: list[dict] = [
         "mmproj_dest": "mmproj-qwen3.6-35b-a3b-f16.gguf",
     },
     {
-        "key": "lfm2.5:2.6b",
-        "tag": "lfm2.5:2.6b",
-        "desc": "LFM2.5 2.6B (Subagent/Worker, ~2GB VRAM)",
-        "repo": "LiquidAI/LFM2.5-2.6B-GGUF",
+        # LFM3 (2026-10-30, second attempt): b12001 carries arch `lfm3`
+        # (PR #31252); b11889 answered "unknown model architecture: 'lfm3'".
+        # Preferred entry is OMNI 2B (text + vision through its own mmproj),
+        # the lean text-only 1.7B QAD follows. The 2.6B line is gone.
+        "key": "lfm3-omni:2b",
+        "tag": "lfm3-omni:2b",
+        "desc": "LFM3-Omni 2B Q4_0 (Subagent/Vision-Worker, ~1GB + mmproj 270MB)",
+        "repo": "LiquidAI/LFM3-Omni-2B-GGUF",
         "file_regex": [
-            r"(?i)^lfm2\.5-2\.6b-q4_k_m\.gguf$",
+            r"(?i)^lfm3-omni-2b-q4_0\.gguf$",
+            r"(?i)^lfm3-omni-2b-q4_k_m\.gguf$",
+        ],
+        "mmproj_regex": [
+            r"(?i)^mmproj-lfm3-omni-2b-q4_0\.gguf$",
+            r"(?i)^mmproj-lfm3-omni-2b-q4_k_m\.gguf$",
+        ],
+        "mmproj_dest": "mmproj-LFM3-Omni-2B-Q4_0.gguf",
+    },
+    {
+        "key": "lfm3:1.7b-qad",
+        "tag": "lfm3:1.7b-qad",
+        "desc": "LFM3 1.7B QAD Q4_0 (text-only subagent, ~1GB)",
+        "repo": "LiquidAI/LFM3-1.7B-GGUF",
+        "file_regex": [
+            r"(?i)^lfm3-1\.7b-qad-q4_0\.gguf$",
+            r"(?i)^lfm3-1\.7b-q4_k_m\.gguf$",
         ],
         "mmproj_regex": [],
-        # DSpark speculative-decoding drafter (sidecar GGUF, paired with the
-        # target model). It is NOT registered as a standalone model (see
-        # write_models_json / llama_models dspark exclusion).
-        "sidecar": [
-            {
-                "repo": "LiquidAI/LFM2.5-2.6B-DSpark-GGUF",
-                "path": "LFM2.5-2.6B-DSpark-Q4_K_M.gguf",
-                "note": "DSpark spec-dec drafter (Q4_K_M, ~190MB)",
-            },
-        ],
     },
     # ── Spark-X2.6 4B (XHToken, 2026-10) ──────────────────────────────────
     # Dense 4B, Apache-2.0, embedded chat template (jinja), thinking via the
@@ -281,6 +292,20 @@ SPECS: list[dict] = [
                 "note": "DSpark spec-dec drafter (~650MB)",
             },
         ],
+    },
+    {
+        # GROOT 19B-A3B (2026-10-30, user request): qwen35moe like Hermes,
+        # 128 experts (8 used), ctx 262144, nextn head present. Profile:
+        # model_configs/models/groot_19b-a3b-261023.json (ctx 131072,
+        # ncmoe 28, KV q4_0, ub 512, mmap+mlock, MTP off).
+        "key": "groot:19b-a3b-261023",
+        "tag": "groot:19b-a3b-261023",
+        "desc": "Groot 19B-A3B-261023 Q4_K_M (Agent-Coder, 128 Experten, ~11.7GB)",
+        "repo": "GrootTeam/Groot-19B-A3B-261023-GGUF",
+        "file_regex": [
+            r"(?i)^groot-19b-a3b-261023-q4_k_m\.gguf$",
+        ],
+        "mmproj_regex": [],
     },
     {
         # APEX-MINI (2026-10-27): replaces the 17 GB "Final MTP-APEX-Compact".

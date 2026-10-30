@@ -18,9 +18,35 @@
   compression per 3 rounds; the rounds in between fall back to the
   existing tiny-output-budget clamp. Regression test replays the storm
   (3 FORCE in 8 rounds instead of 8).
+  **The brake never blocks a hard limit**: when the guard is above 90 % of
+  ctx or two rounds in a row got no viable output budget, the compression
+  fires regardless (`emergency=True`). Without that, a throttled round would
+  send `max_tokens 512` against `head <= 0`, the server would truncate or
+  answer 400 and the tool-call history would be poisoned - exactly the case
+  the MIN-VIABLE-GUARD exists for. Four regression checks cover it.
 - Log retention: slot logs beyond the newest 10 per port are MOVED to
   `logs/archive/` - nothing is deleted before an archive copy exists, and
   an archive collision gets a numeric suffix instead of overwriting.
+
+## Engine build
+
+- Default llama.cpp build is now **b12001** (auto-discovery picks the highest
+  build number under `llama/`; b11889 stays installed). `--help` diff
+  b11889 -> b12001: none of the flags used by the loader was removed or
+  renamed, the `--spec-type` value list is identical, and b12001 is the first
+  installed build that knows arch `lfm3` (PR #31252).
+  Measured A/B (warm-up discarded, `-r 5`, ub 512, `-p 2048 -n 0` and
+  `-p 0 -n 128`, medians with stddev):
+
+  | model | build | tg128 | pp2048 |
+  |---|---|---|---|
+  | Hermes 35B (ncmoe 35) | b11889 | 17.30 +- 0.12 | 134.1 +- 2.2 |
+  | Hermes 35B (ncmoe 35) | b12001 | 17.29 +- 0.13 | 133.8 +- 2.7 |
+  | Groot 19B (ncmoe 28) | b11889 | 15.17 +- 0.03 | 168.6 +- 2.1 |
+  | Groot 19B (ncmoe 28) | b12001 | 15.16 +- 0.06 | 169.6 +- 1.3 |
+
+  Both stay inside the 3 % rule, so b12001 became the default. A 10-round
+  mini run on Groot with b12001 held 14.84 t/s (min 14.28, max 15.20).
 
 ## Models
 
@@ -34,6 +60,11 @@
   Profile: ctx 131072, KV q4_0, ub 512, mmap+mlock, jinja, thinking on.
   Sampler per model card (thinking temp 1.0/presence 1.5, code temp 0.6/
   presence 0.0). Hermes stays the default and is unchanged.
+- **Downloader**: LFM2.5 2.6B is replaced by **LFM3-Omni 2B** (with mmproj)
+  and the text-only **LFM3 1.7B QAD**. This works from b12001 on - b11889
+  answered "unknown model architecture: 'lfm3'". Measured on b12001:
+  LFM3-1.7B-QAD tg128 152.15 +- 0.27 t/s, pp2048 1477 +- 1.2 t/s (1 GB,
+  fully on the GPU).
 - **Side calls get an explicit sampler**: summaries, titles and memory calls
   now send temp 0.7, top_p 0.8, top_k 20, min_p 0, presence_penalty 1.5 and
   `chat_template_kwargs.enable_thinking=false` instead of inheriting the
@@ -59,6 +90,10 @@
   ~22.2k tokens, at 8000 chars ~12.6k, at 16000 ~18.6k. The kept tail was
   the after-size driver (12-18 raw messages, single read_file dumps reach
   20k+ chars).
+  **It keeps the END of a tool output, not the head**: test/build errors,
+  tracebacks and diffs stand at the end, so the head is dropped with a
+  visible marker (`[... first N of M chars dropped ...]`). `tool_call_id`
+  pairing and message order are verified offline.
 
 ## Diagnostics (passive, opt-in)
 

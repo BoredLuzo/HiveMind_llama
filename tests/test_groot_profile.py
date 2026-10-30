@@ -81,8 +81,10 @@ if MODELS.exists():
     check("models.json alias present", bool(alias), str(alias)[-40:] if alias else "")
     check("alias points at the Q4_K_M gguf",
           bool(alias) and alias.lower().endswith("groot-19b-a3b-261023-q4_k_m.gguf"))
-    check("no loadable alias for the unsupported lfm3 arch",
-          not any(k.startswith("lfm3") for k in m),
+    # b12001 knows arch lfm3 (PR #31252); b11889 did not. The alias is
+    # legitimate now - it just needs the right build.
+    check("lfm3 alias present (needs b12001+, arch lfm3)",
+          "lfm3:1.7b-qad" in m,
           f"({[k for k in m if k.startswith('lfm3')]})")
 
 # side-call sampler constant + wiring
