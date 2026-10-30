@@ -1,0 +1,89 @@
+{
+  "model": "groot:19b-a3b-261023",
+  "capabilities": {
+    "thinking": true,
+    "vision": false,
+    "tool_call": true
+  },
+  "vision_preprocessing": false,
+  "num_ctx": 131072,
+  "num_ctx_analyst": 16384,
+  "num_ctx_duo_coder": 131072,
+  "num_ctx_vision": 8192,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 28,
+  "mtp": false,
+  "gpu_layers": null,
+  "mmproj_filename": null,
+  "vram_gb_override": null,
+  "ubatch": 512,
+  "load_mode": "mmap+mlock",
+  "kv_cache_type": "q4_0",
+  "sampling": {
+    "thinking": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 1.5,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "non_thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_thinking_code_precise": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_thinking_text": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 1.5,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_text": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    }
+  },
+  "side_call_sampling": {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+    "enable_thinking": false
+  },
+  "_notes": "Groot 19B-A3B-261023, Q4_K_M (11,657,618,560 B, sha256 0716cae1...0796 = HF). Header: arch qwen35moe, 41 blocks, 128 experts (8 used), ctx 262144, nextn_predict_layers=1 (MTP head present), full_attention_interval=4, head_count_kv=2 x 256 -> 576 B/token/layer with q4_0. Expert stacks 9.33 GiB, 216-249 MiB/block. ncmoe 28 = measured pick: tg 22.27 / pp2048 233.4 t/s, dedicated 5268 MiB, shared 197 MiB (only value under the 200 MiB shared limit; 32 and 36 spilled with 224/222 MiB and were slower). CAVEAT: a repeat run of the same ncmoe 28 config measured 18.69 +- 3.95 t/s (stddev over 3 reps), so the 28/32 ranking is inside the noise - 28 is kept because of the shared-memory limit, not because of a proven speed win. mtp stays FALSE: the MTP A/B could not be completed (the '--spec-type none' server exited during load without an error line) - open, see inventory. Sampler per model card: thinking temp 1.0/top_p 0.95/top_k 20/min_p 0/presence 1.5; code temp 0.6/presence 0.0; side calls temp 0.7/top_p 0.8/top_k 20/min_p 0/presence 1.5 + enable_thinking=false. Smoke 2026-10-30: thinking lands in reasoning_content, tool call parses, 10 rounds at 21.70 t/s, dedicated peak 5675 MiB at ctx 131072."
+}
