@@ -248,6 +248,7 @@ SUITES = [
     ("tail_cap",               "tests/test_tail_cap.py",                    30),
     ("compression_empty_summary", "tests/test_compression_empty_summary.py", 30),
     ("vram_profile_sizing",     "tests/test_vram_profile_sizing.py",       30),
+    ("tool_call_miss_log",      "tests/test_tool_call_miss_log.py",         30),
 
 ]
 

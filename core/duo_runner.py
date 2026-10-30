@@ -5915,6 +5915,56 @@ async def run_code_duo(ctx):
                         if _validated_tcs:
                             _dr_dropped_tool_retries = 0
                         if not _dr_tcs:
+                            # TOOL-CALL-MISS (2026-10-30, live Groot run): 7/7
+                            # coder rounds emitted tool calls as plain text and
+                            # nothing parsed; nine offline probes against the
+                            # same slot parsed fine, so the request state of the
+                            # failing round is the only remaining evidence.
+                            # One WARNING per miss - never per token.
+                            if _is_tool_round:
+                                try:
+                                    import hashlib as _hl
+                                    _miss_usage = _result.get("dr_usage_final") or {}
+                                    _miss_tools = _tool_payload.get("tools") or []
+                                    _miss_tools_json = json.dumps(
+                                        _miss_tools, sort_keys=True, ensure_ascii=False)
+                                    _miss_content = str(_dr_msg.get("content") or "")
+                                    _miss_reason = "".join(
+                                        _result.get("dr_thinking_parts") or [])
+                                    logger.warning(
+                                        "[TOOL-CALL-MISS] round=%s model=%s "
+                                        "thinking=%s ctk=%s tools=%d schema_chars=%d "
+                                        "hash=%s tool_choice=%s slot_ctx=%s req_ctx=%s "
+                                        "prompt_tokens=%s cached=%s finish=%s "
+                                        "completion=%s max_tokens=%s "
+                                        "temp=%s presence=%s top_p=%s top_k=%s min_p=%s seed=%s "
+                                        "content[0:500]=%r reasoning[0:500]=%r",
+                                        _dr, coder_mdl, _thinking,
+                                        _tool_payload.get("chat_template_kwargs"),
+                                        len(_miss_tools), len(_miss_tools_json),
+                                        _hl.sha256(_miss_tools_json.encode(
+                                            "utf-8")).hexdigest()[:12],
+                                        _tool_payload.get("tool_choice"),
+                                        _dtool_opts.get("num_ctx"),
+                                        _coder_ctx_eff,
+                                        _miss_usage.get("prompt_tokens"),
+                                        _miss_usage.get("cached_tokens"),
+                                        _result.get("dr_finish_reason"),
+                                        _miss_usage.get("completion_tokens"),
+                                        _tool_payload.get("max_tokens"),
+                                        _tool_payload.get("temperature"),
+                                        _tool_payload.get("presence_penalty"),
+                                        _tool_payload.get("top_p"),
+                                        _tool_payload.get("top_k"),
+                                        _tool_payload.get("min_p"),
+                                        _tool_payload.get("seed"),
+                                        _miss_content[:500],
+                                        _miss_reason[:500],
+                                    )
+                                except (TypeError, ValueError,
+                                        AttributeError, KeyError) as _miss_err:
+                                    logger.debug(
+                                        "[TOOL-CALL-MISS] log failed: %s", _miss_err)
                             # explored. Now: prompt targeted repair, own
                             # counter against endless loops.
                             if _drop_notices:
