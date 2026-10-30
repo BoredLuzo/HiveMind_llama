@@ -88,6 +88,9 @@ DEFAULT_SETTINGS = {
     # offloading (fewer RAM-streaming passes over the expert weights), at the
     # cost of a larger VRAM compute buffer. Test lever for slow post-compression
     # prefill; revert to 256 if a load OOMs on tight GPUs.
+    # Canonical key (the older llama_ubatch_size below stays as the alias).
+    # 256 is the shipped tight-GPU baseline; 512/1024 is the measured opt-in.
+    "duo_ubatch":              256,
     "llama_ubatch_size":       256,
     # HOST-RAM / VRAM TREND (2026-10-27): llama.cpp keeps context checkpoints
     # and a host-side prompt cache per slot, and both grow with how much a slot

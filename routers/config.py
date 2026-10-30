@@ -225,7 +225,8 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
     # does; imports isolated so a missing module logs instead of failing
     # the apply (no-new-silent-excepts guard).
     _flag_keys = {"llama_cache_reuse", "llama_cache_ram_mib",
-                  "llama_ctx_checkpoints", "llama_ubatch_size", "llama_mlock"}
+                  "llama_ctx_checkpoints", "llama_ubatch_size", "duo_ubatch",
+                  "llama_mlock"}
     if _applied_keys & _flag_keys:
         try:
             import backend.llama_config as _lc_flags
@@ -245,10 +246,15 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
             _lc_flags.MLOCK_MODEL = bool(settings.get("llama_mlock", True))
             _lsm_flags.MLOCK_MODEL = _lc_flags.MLOCK_MODEL
             try:
-                _lc_flags.LLAMA_UBATCH = int(settings.get("llama_ubatch_size", 256) or 256)
+                # RESOLVER-PARITY (2026-10-31): boot uses resolve_ubatch_sizes
+                # (duo_ubatch wins, clamp [64,4096], 32-alignment). Reading
+                # only llama_ubatch_size here silently dropped an explicit
+                # duo_ubatch on every preset load.
+                _ub_val, _ = _lc_flags.resolve_ubatch_sizes(settings)
+                _lc_flags.LLAMA_UBATCH = _ub_val
                 # manager_load holds a by-value import from boot - sync it
                 # too (same trap as the CACHE_REUSE fix, server.py:398)
-                _ml_flags.LLAMA_UBATCH = _lc_flags.LLAMA_UBATCH
+                _ml_flags.LLAMA_UBATCH = _ub_val
             except (TypeError, ValueError):
                 pass
         # PRESET-MODEL-CHECK (2026-10-28, preset audit): missing models used

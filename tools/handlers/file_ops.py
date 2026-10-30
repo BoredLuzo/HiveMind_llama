@@ -574,7 +574,15 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
             tool="write_file")
     if existed and _old_n >= 30:
         _new_n = len([l for l in content.replace("\r\n", "\n").splitlines() if l.strip()])
-        if (_new_n <= 3 or (_old_n >= 100 and _new_n <= 10)) and not args.get("confirm_shrink"):
+        # PROPORTIONAL SHRINK (2026-10-31, live): a 11616-byte file was
+        # replaced by a 1716-byte skeleton (~40 -> 9 content lines). The
+        # absolute arms let that through at _old_n < 100; a quarter of the
+        # previous body is the same "almost always truncated" signal at any
+        # size (confirm_shrink still allows a deliberate collapse).
+        if ((_new_n <= 3
+             or (_old_n >= 100 and _new_n <= 10)
+             or (_old_n >= 30 and _new_n <= _old_n // 4))
+                and not args.get("confirm_shrink")):
             return _tool_error_response(
                 "WRITE_FILE_SUSPICIOUS_SHRINK",
                 f"This overwrite would shrink '{p}' from {_old_n} to {_new_n} content "
@@ -809,7 +817,10 @@ async def _inline_tool_edit_file(args: dict, workspace: Path, workspace_lock: st
             tool="edit_file")
     _after_n = len([l for l in working.splitlines() if l.strip()])
     if (not args.get("confirm_shrink") and _pre_n >= 30
-            and (_after_n <= 3 or (_pre_n >= 100 and _after_n <= _pre_n // 10))):
+            and (_after_n <= 3
+                 or (_pre_n >= 100 and _after_n <= _pre_n // 10)
+                 # same proportional arm as write_file (2026-10-31)
+                 or _after_n <= _pre_n // 4)):
         return _tool_error_response(
             "EDIT_FILE_SUSPICIOUS_SHRINK",
             f"This replacement would shrink '{p}' from {_pre_n} to {_after_n} content "

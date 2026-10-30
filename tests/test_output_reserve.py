@@ -12,8 +12,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from context.ctx_guard import (
     clamp_request_max_tokens as _clamp,
+    min_viable_tool_budget as _mvb,
     resolve_compress_threshold as _thr,
 )
+from core.duo_helpers import should_compress_after_truncated_drop as _scd
 
 passed = 0
 failed = 0
@@ -64,6 +66,20 @@ check("T2: ungekappt 12000 -> P2 bindet (26912)",
 # UI-Override bleibt exakt.
 check("T3: UI-Override exakt",
       _thr(ctx_tokens=39936, ui_threshold=20000) == 20000)
+
+# ── Viable floor (2026-10-31, live 2404-token truncation) ───────────────
+check("V1: 1024 request -> floor 1024", _mvb(1024) == 1024)
+check("V2: 16000 request -> 4096 cap", _mvb(16000) == 4096)
+check("V3: 6000 request -> 3000", _mvb(6000) == 3000)
+check("V4: 0 request -> floor 1024", _mvb(0) == 1024)
+check("V5: 2048 request -> 1024", _mvb(2048) == 1024)
+
+# ── truncated edit_file policy: compress, never retry the same budget ──
+check("D1: length + edit_file -> compress", _scd("length", ["edit_file"]))
+check("D2: stop + edit_file -> no force", not _scd("stop", ["edit_file"]))
+check("D3: length + write_file -> no force", not _scd("length", ["write_file"]))
+check("D4: length + mixed -> compress", _scd("length", ["write_file", "edit_file"]))
+check("D5: no reason -> no force", not _scd(None, None))
 
 print()
 print(f"{'='*50}")

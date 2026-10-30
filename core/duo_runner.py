@@ -43,6 +43,7 @@ from context.ctx_guard import (
     should_use_partial as _ctx_should_use_partial,
     plan_partial_cut_index as _ctx_plan_partial_cut_index,
     clamp_request_max_tokens as _clamp_request_max_tokens,
+    min_viable_tool_budget as _min_viable_tool_budget,
 )
 
 
@@ -147,6 +148,7 @@ from core.duo_helpers import (
     DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
+    should_compress_after_truncated_drop as _should_compress_after_truncated_drop,
     _run_parallel_pre_explore, _build_symbol_reference_hints,
     _compress_fail_streak_update, _explore_size_tolerance, _collect_new_explore_paths,
     read_loop_key,
@@ -5578,7 +5580,14 @@ async def run_code_duo(ctx):
                         # tool call can never finish -> sending it truncates JSON
                         # args mid-write and poisons history (llama 500 on the next
                         # request). Compress first instead of generating garbage.
-                        if int(_max_tokens_round) >= 1024:
+                        # VIABLE-FLOOR (2026-10-31, live): the old fixed
+                        # 1024 let a 2404-token budget through for an
+                        # edit-heavy round; the edit was cut, dropped and
+                        # retried with the same budget. Scale the floor with
+                        # the round's own request instead.
+                        _min_viable_budget = _min_viable_tool_budget(
+                            int(_dtool_opts.get("num_predict", 1024) or 1024))
+                        if int(_max_tokens_round) >= _min_viable_budget:
                             _ctx_full_skips = 0
                         else:
                             _ctx_full_skips += 1
@@ -5970,6 +5979,28 @@ async def run_code_duo(ctx):
                             if _drop_notices:
                                 _dr_think_only_retries = 0
                                 _dr_dropped_tool_retries += 1
+                                if _should_compress_after_truncated_drop(
+                                        _result.get("dr_finish_reason"),
+                                        _drop_names):
+                                    # A truncated edit_file cannot be applied
+                                    # half-way, so the drop is right - but a
+                                    # retry with the SAME clamped budget
+                                    # truncates again by construction. Give
+                                    # the next round fresh headroom instead.
+                                    _force_compress_next = True
+                                    _dtool_msgs.append({"role": "user", "content": (
+                                        "[OUTPUT LIMIT] The edit_file was cut at "
+                                        f"this round's output budget "
+                                        f"({int(_max_tokens_round)} tokens) and was "
+                                        "NOT applied half-way. Compressing first; "
+                                        "then split the edit into smaller edit_file "
+                                        "calls (or use write_file_append).")})
+                                    logger.warning(
+                                        "[TOOL-TRUNCATION] edit_file dropped at "
+                                        "finish=length (budget=%d) - forcing "
+                                        "compression instead of an identical retry",
+                                        int(_max_tokens_round))
+                                    continue
                                 if _dr_dropped_tool_retries >= 3:
                                     _ld_setter(3089); _loop_detected = True
                                     yield await ctx.emit({"type": "status",

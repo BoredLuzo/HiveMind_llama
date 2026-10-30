@@ -407,6 +407,20 @@ def _resolve_tool_read_timeout_seconds(settings: dict | None = None,
 
 # ── Prompt builder ─────────────────────────────────────────────────────
 
+def should_compress_after_truncated_drop(finish_reason, dropped_names) -> bool:
+    """True when a dropped tool call was an edit_file cut at the output limit.
+
+    A truncated edit_file cannot be salvaged: applying half an old_text/new_text
+    pair corrupts the file. Dropping it is correct, but retrying it with the
+    SAME clamped budget truncates again by construction (live 2026-10-31: a
+    2404-token budget against a ~16k request). The caller compresses first.
+    write_file keeps its own salvage + append flow and must not be diverted.
+    """
+    if str(finish_reason or "") != "length":
+        return False
+    return any(str(n or "") == "edit_file" for n in (dropped_names or []))
+
+
 def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ctx: bool) -> str:
     from hive_functions.prompts import PROMPTS
     parts = [

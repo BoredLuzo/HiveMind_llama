@@ -208,6 +208,29 @@ def test_edit_shrink_guard():
             ok("small file edits never trigger the guard")
         else:
             fail("small false positive")
+        # PROPORTIONAL SHRINK (2026-10-31): 40 -> 9 content lines is missed
+        # by the absolute arms (9 > 3, 40 < 100) but is the same truncated-
+        # write signal the live 11616 -> 1716 byte collapse produced.
+        mid = "\n".join(f"line {i} content here" for i in range(1, 41)) + "\n"
+        asyncio.run(_inline_tool_write_file(
+            {"path": "mid.py", "content": mid, "_tool_name": "write_file"}, ws, None))
+        cut = "\n".join(f"line {i} content here" for i in range(10, 41))
+        r_prop = asyncio.run(_inline_tool_edit_file(
+            {"path": "mid.py", "old_text": cut, "new_text": "# tiny",
+             "_tool_name": "edit_file"}, ws, None))
+        disk_p = (ws / "mid.py").read_text(encoding="utf-8")
+        if "SUSPICIOUS_SHRINK" in r_prop and disk_p.count("line ") == 40:
+            ok("proportional guard BLOCKS 40->9 collapse, file intact")
+        else:
+            fail("proportional shrink", f"r={str(r_prop)[:60]} n={disk_p.count('line ')}")
+        r_prop_ok = asyncio.run(_inline_tool_edit_file(
+            {"path": "mid.py", "old_text": cut, "new_text": "# tiny",
+             "confirm_shrink": True, "_tool_name": "edit_file"}, ws, None))
+        disk_p2 = (ws / "mid.py").read_text(encoding="utf-8")
+        if "SUSPICIOUS_SHRINK" not in r_prop_ok and disk_p2.count("line ") == 9:
+            ok("confirm_shrink ALLOWS the proportional collapse")
+        else:
+            fail("proportional confirm", f"r={str(r_prop_ok)[:60]} n={disk_p2.count('line ')}")
     finally:
         import shutil as _sh
         _sh.rmtree(str(ws), ignore_errors=True)

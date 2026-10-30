@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**247 settings keys.**
+**248 settings keys.**
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -130,6 +130,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_tree_scout_enabled` | bool | `True` |  |
 | `duo_tree_scout_max_depth` | int | `4` |  |
 | `duo_tree_scout_max_files` | int | `200` |  |
+| `duo_ubatch` | int | `256` |  |
 | `duo_until_finished_cap` | int | `999999` |  |
 | `duo_use_pipeline` | bool | `False` |  |
 | `duo_websearch_enabled` | bool | `False` |  |

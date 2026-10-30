@@ -3,7 +3,7 @@
 
 Measured on the 35B MoE (b11889, pp 8192, fresh process per variant):
   ub 256 -> 77.64 t/s, shared 164 MiB
-  ub 512 -> 119.96 t/s, shared 206 MiB   <- default
+  ub 512 -> 119.96 t/s, shared 206 MiB   <- measured opt-in
   ub 1024 -> aborted (shared 80 -> 340 MiB)
   ub 2048 -> 193.59 t/s but shared peak 2348 MiB (spills to system RAM)
 Prefill was 89-94 % of wall time in the 80k run, so this is the only knob
@@ -36,11 +36,11 @@ def check(name, cond, extra=""):
 
 
 # default
-check("module default is 1024", LLAMA_UBATCH_DEFAULT == 1024, f"({LLAMA_UBATCH_DEFAULT})")
-check("module constant matches the default", LLAMA_UBATCH == 1024, f"({LLAMA_UBATCH})")
+check("module default is 256", LLAMA_UBATCH_DEFAULT == 256, f"({LLAMA_UBATCH_DEFAULT})")
+check("module constant matches the default", LLAMA_UBATCH == 256, f"({LLAMA_UBATCH})")
 ub, b = resolve_ubatch_sizes({})
-check("no settings -> ub 1024", ub == 1024, f"({ub})")
-check("no settings -> batch 1024 (== ub)", b == 1024, f"({b})")
+check("no settings -> ub 256", ub == 256, f"({ub})")
+check("no settings -> batch 1024 (>= ub)", b == 1024, f"({b})")
 check("batch >= ubatch (llama.cpp requirement)", b >= ub)
 
 # duo_ubatch wins over the alias
@@ -77,6 +77,10 @@ check("server syncs duo_ubatch via the resolver",
 check("-b follows the ubatch in the loader CMD",
       'str(max(1024, int(LLAMA_UBATCH)))' in mgr)
 check("-ubatch-size uses the same value", "str(int(LLAMA_UBATCH))" in mgr)
+# PRESET-SYNC (2026-10-31): a preset load must not drop an explicit duo_ubatch.
+cfg = (root / "routers" / "config.py").read_text(encoding="utf-8")
+check("preset sync uses the resolver", "resolve_ubatch_sizes(settings)" in cfg)
+check("duo_ubatch triggers the preset flag sync", '"duo_ubatch"' in cfg)
 
 print(f"\nduo_ubatch: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

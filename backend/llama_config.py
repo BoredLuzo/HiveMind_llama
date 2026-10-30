@@ -172,10 +172,12 @@ VRAM_PREFLIGHT_GATE = True
 #     Hermes 512 -> 91.7 t/s, 1024 -> 113.6 t/s (+23.9 %),
 #     shared delta vs the 512 run: +52 MiB only.
 #   Groot (ub 512 vs 1024, 4.2k/10.5k depth): +27.7 % / +17.1 %, +58 MiB.
-# Default 1024 (2026-10-30): the prefill gain is large and the shared delta
-# against the 512 reference is small. 2048 stays out (real spill).
-LLAMA_UBATCH = 1024
-LLAMA_UBATCH_DEFAULT = 1024
+# Default 256 (2026-10-31, user decision): the shipped baseline stays at the
+# tight-GPU value. 512/1024 are measured OPT-INS (Hermes 512 -> 91.7 t/s,
+# 1024 -> 113.6 t/s at 18k prompt; Groot +27.7 %/+17.1 %) and cost a larger
+# compute buffer. The live install sets duo_ubatch 1024 explicitly.
+LLAMA_UBATCH = 256
+LLAMA_UBATCH_DEFAULT = 256
 LLAMA_UBATCH_MIN = 64
 LLAMA_UBATCH_MAX = 4096
 LLAMA_BATCH_DEFAULT = 1024
@@ -185,7 +187,7 @@ def resolve_ubatch_sizes(settings: dict | None = None) -> tuple[int, int]:
     """(ubatch, batch) from settings - pure, unit-tested.
 
     duo_ubatch wins; llama_ubatch_size is kept as the older alias; neither
-    set -> 1024. The value is clamped to [64, 4096] and rounded down to a
+    set -> 256. The value is clamped to [64, 4096] and rounded down to a
     multiple of 32 (llama.cpp prefers aligned ubatches). batch is always
     >= ubatch (llama.cpp rejects ubatch > batch) and never below 1024.
     """

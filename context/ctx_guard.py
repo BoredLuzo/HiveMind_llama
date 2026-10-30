@@ -199,6 +199,23 @@ def clamp_request_max_tokens(
     return max(1, int(min_output or 256))
 
 
+def min_viable_tool_budget(max_output: int, floor: int = 1024,
+                           cap: int = 4096) -> int:
+    """Smallest output budget a tool round may ship before compressing.
+
+    A fixed 1024 floor let a 2404-token budget through although an edit-heavy
+    round needs several thousand tokens (live 2026-10-31: an 11.6 KB edit_file
+    was truncated at 2404, dropped, and retried with the same budget). Half of
+    the round's own request keeps short answers possible while forcing
+    compression before a doomed edit; capped at 4096 so a large request does
+    not block every round near the threshold.
+    """
+    req = int(max_output or 0)
+    if req <= 0:
+        return int(floor)
+    return max(int(floor), min(int(cap), req // 2))
+
+
 def _msg_chars(msg) -> int:
     c = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(c, list):
