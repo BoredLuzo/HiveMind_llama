@@ -22,9 +22,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+from core.duo.preflight import _est_tokens  # noqa: E402
 from core.duo_runner import (  # noqa: E402
     BRIEFING_FULL, BRIEFING_OFF, BRIEFING_PLAN_ONLY, _briefing_limit_tokens,
-    _est_tokens, coder_briefing_text,
+    coder_briefing_text,
 )
 
 passed = 0

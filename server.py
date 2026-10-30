@@ -2324,10 +2324,13 @@ async def gateway_start():
                     " }"
                 )
                 import subprocess as _sp_start
+                # TIMEOUT (audit 2026-10-30): this probe ran unbounded - a
+                # hung PowerShell (profile load, AV scan) blocked the settings
+                # endpoint forever. 20 s matches the other PowerShell probe.
                 _chk = await asyncio.to_thread(
                     _sp_start.run,
                     ["powershell", "-NoProfile", "-Command", _ps],
-                    capture_output=True, text=True)
+                    capture_output=True, text=True, timeout=20)
                 _alive = _chk.stdout.strip() == "py"
             if _alive:
                 return JSONResponse({"ok": False,
