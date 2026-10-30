@@ -115,6 +115,16 @@ class LlamaClient:
                                  thinking=think, thinking_budget=thinking_budget)
         _vision = self._has_images(messages)
         port = await manager.ensure_loaded(model, num_ctx=ctx, vision=_vision)
+        # SAMPLER-PROOF (2026-10-30): log what really goes on the wire - the
+        # only way to show top_k/min_p/presence_penalty arrive at the server.
+        self._log.info(
+            "[SAMPLER] kind=side model=%s port=%s temp=%s top_p=%s top_k=%s "
+            "min_p=%s presence=%s thinking=%s",
+            model, port, payload.get("temperature"), payload.get("top_p"),
+            payload.get("top_k"), payload.get("min_p"),
+            payload.get("presence_penalty"),
+            (payload.get("chat_template_kwargs") or {}).get("enable_thinking"),
+        )
         max_attempts = 45
         for attempt in range(max_attempts):
             try:
@@ -420,10 +430,25 @@ def _convert_messages(messages: list) -> list:
     return result
 
 
+# SIDE-CALL SAMPLER (2026-10-30, user decision): summaries, titles and
+# memory calls are not creative work - the model cards ask for a narrow
+# distribution (top_p 0.8) plus a mild repetition brake. These keys are sent
+# EXPLICITLY (llama-server defaults would otherwise apply: top_k 40,
+# min_p 0.05, presence 0) and logged once per request as [SAMPLER].
+SIDE_CALL_SAMPLING = {
+    "temperature": 0.7,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+}
+
+
 def _build_payload(messages: list, temperature: float, max_tokens: int,
                    stream: bool, cache_prompt: bool = True,
                    thinking: bool | None = None,
-                   thinking_budget: int | None = None) -> dict:
+                   thinking_budget: int | None = None,
+                   sampler: dict | None = None) -> dict:
 
 
     payload = {
@@ -436,6 +461,9 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
         "frequency_penalty": 0.1,
         "cache_prompt":      cache_prompt,
     }
+    # explicit sampler keys (side calls); a caller may override any of them
+    for _k, _v in {**SIDE_CALL_SAMPLING, **(sampler or {})}.items():
+        payload[_k] = _v
     if thinking is not None:
         payload["thinking"] = thinking
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = bool(thinking)

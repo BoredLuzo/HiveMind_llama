@@ -240,6 +240,7 @@ SUITES = [
     ("duo_ubatch",             "tests/test_duo_ubatch.py",                  30),
     ("cmd_flags",              "tests/test_cmd_flags.py",                  30),
     ("preflight_matrix",       "tests/test_preflight_matrix.py",           60),
+    ("groot_profile",          "tests/test_groot_profile.py",               30),
 
 ]
 

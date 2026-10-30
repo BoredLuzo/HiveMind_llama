@@ -22,6 +22,23 @@
   `logs/archive/` - nothing is deleted before an archive copy exists, and
   an archive collision gets a numeric suffix instead of overwriting.
 
+## Models
+
+- **Groot 19B-A3B-261023** (`groot:19b-a3b-261023`, Q4_K_M, 11,657,618,560 B)
+  added through the normal mechanism - profile
+  `model_configs/models/groot_19b-a3b-261023.json` + `models.json` alias.
+  Header: `qwen35moe`, 41 blocks, **128 experts (8 used)**, ctx 262144,
+  `nextn_predict_layers=1` (MTP head present, **off - the A/B could not be completed, see inventory**), KV
+  `2 x 256` per layer (576 B/token with q4_0). Expert stacks 9.33 GiB,
+  216-249 MiB per block; `ncmoe 28` keeps ~2.9 GiB of experts on the GPU (the only swept value that stays under the 200 MiB shared-memory limit; the 28-vs-32 ranking is inside the measurement noise, see inventory).
+  Profile: ctx 131072, KV q4_0, ub 512, mmap+mlock, jinja, thinking on.
+  Sampler per model card (thinking temp 1.0/presence 1.5, code temp 0.6/
+  presence 0.0). Hermes stays the default and is unchanged.
+- **Side calls get an explicit sampler**: summaries, titles and memory calls
+  now send temp 0.7, top_p 0.8, top_k 20, min_p 0, presence_penalty 1.5 and
+  `chat_template_kwargs.enable_thinking=false` instead of inheriting the
+  server defaults (top_k 40 / min_p 0.05). Every such call logs
+  `[SAMPLER] kind=side ...` with the values that actually go on the wire.
 ## Prefill throughput
 
 - New setting **`duo_ubatch`** (default **512**; `llama_ubatch_size` stays as
