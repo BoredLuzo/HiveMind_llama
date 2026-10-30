@@ -142,9 +142,6 @@ SPECS: list[dict] = [
         "mmproj_dest": "mmproj-qwen3.6-35b-a3b-f16.gguf",
     },
     {
-        # LFM2.5 2.6B stays: the LFM3 replacement was rolled back (2026-10-30)
-        # because b11889 does not know arch 'lfm3' - "unknown model
-        # architecture: 'lfm3'" on the real file. See inventory.
         "key": "lfm2.5:2.6b",
         "tag": "lfm2.5:2.6b",
         "desc": "LFM2.5 2.6B (Subagent/Worker, ~2GB VRAM)",
@@ -153,6 +150,9 @@ SPECS: list[dict] = [
             r"(?i)^lfm2\.5-2\.6b-q4_k_m\.gguf$",
         ],
         "mmproj_regex": [],
+        # DSpark speculative-decoding drafter (sidecar GGUF, paired with the
+        # target model). It is NOT registered as a standalone model (see
+        # write_models_json / llama_models dspark exclusion).
         "sidecar": [
             {
                 "repo": "LiquidAI/LFM2.5-2.6B-DSpark-GGUF",
@@ -281,20 +281,6 @@ SPECS: list[dict] = [
                 "note": "DSpark spec-dec drafter (~650MB)",
             },
         ],
-    },
-    {
-        # GROOT 19B-A3B (2026-10-30, user request): qwen35moe like Hermes,
-        # 128 experts (8 used), ctx 262144, nextn head present. Profile:
-        # model_configs/models/groot_19b-a3b-261023.json (ctx 131072,
-        # ncmoe 32, KV q4_0, ub 512, mmap+mlock, MTP off by default).
-        "key": "groot:19b-a3b-261023",
-        "tag": "groot:19b-a3b-261023",
-        "desc": "Groot 19B-A3B-261023 Q4_K_M (Agent-Coder, 128 Experten, ~11.7GB)",
-        "repo": "GrootTeam/Groot-19B-A3B-261023-GGUF",
-        "file_regex": [
-            r"(?i)^groot-19b-a3b-261023-q4_k_m\.gguf$",
-        ],
-        "mmproj_regex": [],
     },
     {
         # APEX-MINI (2026-10-27): replaces the 17 GB "Final MTP-APEX-Compact".
