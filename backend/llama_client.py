@@ -169,6 +169,17 @@ class LlamaClient:
                     time.perf_counter() - t0,
                     attempt + 1,
                 )
+                # PERF-TRACE (2026-10-30): one grep-able line per side call -
+                # without it the compression/summary calls were invisible in
+                # the cache-loss analysis.
+                try:
+                    from utils.perf_log import perf_line as _perf_line
+                    self._log.info(_perf_line(
+                        kind="side", model=model, port=port,
+                        usage=data.get("usage") or {},
+                        timings=data.get("timings") or {}))
+                except (ImportError, AttributeError, TypeError) as _perf_err:
+                    self._log.debug("perf line skipped: %s", _perf_err)
                 return data["choices"][0]["message"]["content"]
             except _TRANSIENT_HTTP_EXCEPTIONS as e:
                 if attempt < max_attempts - 1:

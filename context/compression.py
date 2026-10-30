@@ -400,6 +400,7 @@ async def _compress_tool_context(
     read_timeout: float = 180.0,
     local_only: bool = False,
     aggressive_retry: bool = False,
+    tail_tool_max_chars: int = 0,
 ) -> list:
 
 
@@ -626,6 +627,30 @@ async def _compress_tool_context(
             "content": goal_pin.get("content", "") + "\n\n" + _summary_msg["content"]
         }
     _compressed = [_system_msg, _summary_msg]
+    # TAIL-TOOL-CAP (2026-10-30, user decision "after typisch <= 15k"):
+    # kept-tail tool outputs are the after-size driver (12-18 raw messages,
+    # single read_file dumps reach 20k+ chars). Cap each kept tool output;
+    # 0 = off. Setting: duo_compress_tail_tool_max_chars.
+    _cap = max(0, int(tail_tool_max_chars or 0))
+    if _cap:
+        _capped = 0
+        for _i, _m in enumerate(_recent_tail_msgs):
+            if _m.get("role") != "tool":
+                continue
+            _c = _m.get("content") or ""
+            if len(_c) > _cap:
+                _recent_tail_msgs[_i] = dict(_m)
+                _recent_tail_msgs[_i]["content"] = (
+                    _c[:_cap]
+                    + f"\n[... tool output truncated: kept {_cap} of {len(_c)} chars "
+                    f"(duo_compress_tail_tool_max_chars)]"
+                )
+                _capped += 1
+        if _capped:
+            logger.warning(
+                "[CTX-COMPRESS] tail-tool-cap: %d kept tool output(s) truncated to %d chars",
+                _capped, _cap,
+            )
     _compressed.extend(_recent_tail_msgs)
     return _compressed, _condensed_files, _compress_usage
 

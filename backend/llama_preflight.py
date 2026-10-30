@@ -50,8 +50,13 @@ def free_ram_gb() -> float:
 
 
 def gguf_size_gb(model: str) -> float:
-    """GGUF size in GB; 0.0 when unresolvable (the guard then requires the
-    full headroom against free RAM alone)."""
+    """GGUF size in GB; 0.0 when unresolvable. Accepts an alias OR a direct
+    path - the bench scripts pass paths, the loader passes aliases.
+    FAIL-CLOSED (2026-10-30): 0.0 makes ram_guard_blocks BLOCK - an unknown
+    model cannot be size-checked, so it must not start."""
+    _p = Path(model)
+    if _p.suffix.lower() == ".gguf" and _p.exists():
+        return _p.stat().st_size / (1024 ** 3)
     try:
         from backend.llama_models import resolve_model_path as _rmp
         _ggf = _rmp(model)
@@ -64,35 +69,45 @@ def gguf_size_gb(model: str) -> float:
 
 def ram_guard_blocks(model: str, free_ram_gb: float | None,
                      headroom_gb: float = _RAM_HEADROOM_GB) -> bool:
-    """True when a none load must be rejected: free RAM unknown, or below
-    GGUF size + headroom. RATIONALE (live 2026-10-28): a none load commits
-    the FULL model as private memory; three stacked hermes commits (engine
-    slot + two bench processes) pushed the commit to 56 GB on a 32 GB
-    machine - SSD at 100 %, system frozen."""
+    """True when a none load must be rejected: free RAM unknown, model size
+    unknown (fail-closed, 2026-10-30), or below GGUF size + headroom.
+    RATIONALE (live 2026-10-28): a none load commits the FULL model as
+    private memory; three stacked hermes commits (engine slot + two bench
+    processes) pushed the commit to 56 GB on a 32 GB machine - SSD at
+    100 %, system frozen."""
     if free_ram_gb is None or free_ram_gb < 0:
         return True
-    return free_ram_gb < gguf_size_gb(model) + headroom_gb
+    _size = gguf_size_gb(model)
+    if _size <= 0.0:
+        return True  # unknown model -> cannot verify size -> block
+    return free_ram_gb < _size + headroom_gb
 
 
 def llama_process_count() -> int:
-    """Number of running llama-server/llama-bench processes (0 = free)."""
+    """Number of running llama-server/llama-bench processes. FAIL-CLOSED
+    (2026-10-30): -1 when the query fails (tasklist broken) - the caller
+    must treat anything != 0 as 'not free'. errors="replace": tasklist
+    prints OEM-codepage headers on a German Windows - text=True alone
+    raised UnicodeDecodeError in the reader thread and the count silently
+    stayed 0 (2026-10-29, live)."""
     count = 0
     if os.name == "nt":
         try:
             for image in ("llama-server.exe", "llama-bench.exe"):
                 out = subprocess.run(
                     ["tasklist", "/FI", f"IMAGENAME eq {image}"],
-                    capture_output=True, text=True, timeout=30)
+                    capture_output=True, text=True, timeout=30,
+                    encoding="utf-8", errors="replace")
                 count += (out.stdout or "").count(image.split(".")[0])
         except (OSError, subprocess.SubprocessError):
-            pass
+            return -1
     else:
         try:
             out = subprocess.run(["pgrep", "-f", "llama-(server|bench)"],
                                  capture_output=True, text=True, timeout=30)
             count += len([x for x in out.stdout.splitlines() if x.strip()])
         except (OSError, subprocess.SubprocessError):
-            pass
+            return -1
     return count
 
 def kill_process_tree(pid: int, timeout_s: float = 10.0) -> bool:
@@ -104,7 +119,8 @@ def kill_process_tree(pid: int, timeout_s: float = 10.0) -> bool:
     if os.name == "nt":
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                           capture_output=True, timeout=timeout_s)
+                           capture_output=True, text=True, timeout=timeout_s,
+                           encoding="utf-8", errors="replace")
         except (OSError, subprocess.SubprocessError):
             return False
     else:

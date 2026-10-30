@@ -33,3 +33,29 @@ replaced three times on GitHub and is superseded by this release).
 - Gateway: `/mode auto` on the phone hands every message to the engine
   decider, and an answering phone chat keeps the run parameters it
   started with.
+
+## Benchmarks behind the defaults (2026-10-30)
+
+Raw runs, RX 6600, b11889, ub 256/512/1024/2048 at pp 8192, fresh process per
+variant:
+
+| ub | pp8192 t/s | Dedicated peak | Shared peak |
+|---|---|---|---|
+| 256 (live) | 77.64 | 5493 MiB | 164 MiB |
+| 512 | 119.96 | 5466 MiB | 206 MiB |
+| 1024 | aborted | - | 80 -> 340 MiB |
+| 2048 | 193.59 | 5816 MiB | 2348 MiB |
+
+At pp 20480 the same comparison gives 118.49 t/s (ub 2048) vs 62.16 t/s
+(ub 256). ub 1024/2048 were rejected for the default despite higher
+throughput: both spill into shared GPU memory (the 2048 peak of 2348 MiB is
+system RAM over PCIe), which is exactly the slow path this release avoids.
+**Recommended engine ubatch: 512** - nearly the 2048 prefill rate without
+shared-memory spill (changing it stays a manual setting).
+
+MTP A/B on Qwen3.5-4B-MTP (median of 6 rounds, prosa + tools): draft off
+97.04 t/s, draft-max 3 95.38, draft-max 2 92.16. A/B on the 35B MoE with
+tg128 x 3 reps, interleaved: hermes ncmoe 35 -> 18.84 t/s vs ncmoe 41 ->
+17.58; MiniCPM-V 4.7 ncmoe 35 -> 19.49 vs ncmoe 41 -> 18.32. Both models
+keep `moe_cpu_experts: 35` (clear wins, dedicated peak 2.6-5.4 GiB, shared
+flat at ~114 MiB).

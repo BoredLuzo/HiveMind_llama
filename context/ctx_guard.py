@@ -270,3 +270,16 @@ def plan_partial_cut_index(
     # Nicht genug entfernbar, ohne den Mindest-Tail zu verletzen — oder kein
     # kondensierbares Element vor dem Cut: Aufrufer faellt auf full zurueck.
     return -1
+
+
+def allow_force_compress(round_now: int, last_force_round: int,
+                         min_gap: int = 3) -> bool:
+    """CTX-FULL-Sturm-Guard (2026-10-30, live 22.10.: 40 Force-Kompressionen
+    in 56 s). Eine Force-Kompression darf nur alle min_gap Runden feuern;
+     dazwischen faellt der Aufrufer auf den bestehenden Tiny-Budget-Fallback
+    zurueck, statt den Loop zu stuermen. Rein rechnerisch getestet in
+    tests/test_ctx_full_storm.py.
+    """
+    if last_force_round < 0:
+        return True
+    return (round_now - last_force_round) >= int(min_gap)

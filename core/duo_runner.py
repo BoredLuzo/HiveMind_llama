@@ -4501,6 +4501,7 @@ async def run_code_duo(ctx):
                     _limit_warned = False  # round-limit warning: inject only once
                     _replan_bonus_granted = False  # extra rounds: grant once per run
                     _ctx_full_skips = 0  # consecutive min-viable-budget skips (stop guard)
+                    _last_force_compress_round = -10  # STORM-GUARD (2026-10-30): last CTX-FULL force round
                     _replan_count = 0              # hard cap: max replans per run
                     _grace_round_active = False  # budget exhaustion grace round
                     _grace_round_used   = False  # hard exit if model ignores grace prompt
@@ -5137,6 +5138,7 @@ async def run_code_duo(ctx):
                                 done_tasks=_done_tasks,
                                 goal_pin=_goal_pin_msg,
                                 keep_recent_msgs=(18 if ctx.duo_config.until_finished else 12),
+                                tail_tool_max_chars=int(ctx.settings.get("duo_compress_tail_tool_max_chars", 8000) or 0),
                                 plan_state=_plan_state,
                                 plan_anchor_text=_plan_anchor_text,
                                 last_test_status=_last_test_status,
@@ -5269,6 +5271,7 @@ async def run_code_duo(ctx):
                                     messages=_msgs_before_compress,
                                     target_tokens=_rule_target,
                                     keep_recent_msgs=(18 if ctx.duo_config.until_finished else 12),
+                                tail_tool_max_chars=int(ctx.settings.get("duo_compress_tail_tool_max_chars", 8000) or 0),
                                 )
                                 _est_rule = _estimate_ctx_tokens(_rule_msgs)
                                 if _est_rule < _est_tokens_before_compress * 0.90:
@@ -5589,16 +5592,33 @@ async def run_code_duo(ctx):
                                 _ld_setter(3726); _loop_detected = True
                                 break
                             if (_can_compress or _guard_tokens > int(_dtool_ctx * 0.90)) and _total_tool_rounds > 0:
-                                logger.warning(
-                                    "[CTX-FULL] insufficient headroom for a safe tool round "
-                                    "(max_tokens=%d est=%d real=%d skip=%d/4) - compressing first",
-                                    int(_max_tokens_round), int(_est_now), int(_guard_tokens),
-                                    _ctx_full_skips,
-                                )
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"⛽ Context too full for a safe tool round — compressing first. ({_ctx_full_skips}/4)"})
-                                _force_compress_next = True
-                                continue
+                                # STORM-GUARD (2026-10-30, live 22.10.: 40 force
+                                # compressions in 56 s because local-only
+                                # compression never got ahead of the tool-output
+                                # inflow): a force compression may fire only
+                                # every MIN_GAP rounds; in between the run
+                                # degrades to the tiny-budget fallback instead
+                                # of looping.
+                                from context.ctx_guard import allow_force_compress as _afc
+                                if not _afc(_dr, _last_force_compress_round, 3):
+                                    logger.warning(
+                                        "[CTX-FULL] storm guard: force compression throttled "
+                                        "(last=%d round=%d) - clamping output budget instead",
+                                        _last_force_compress_round, _dr,
+                                    )
+                                    _max_tokens_round = max(int(_max_tokens_round), 512)
+                                else:
+                                    logger.warning(
+                                        "[CTX-FULL] insufficient headroom for a safe tool round "
+                                        "(max_tokens=%d est=%d real=%d skip=%d/4) - compressing first",
+                                        int(_max_tokens_round), int(_est_now), int(_guard_tokens),
+                                        _ctx_full_skips,
+                                    )
+                                    yield await ctx.emit({"type": "status",
+                                        "content": f"⛽ Context too full for a safe tool round — compressing first. ({_ctx_full_skips}/4)"})
+                                    _force_compress_next = True
+                                    _last_force_compress_round = _dr
+                                    continue
                             # Compression exhausted & not at emergency level: keep
                             # the old tiny-budget behaviour instead of looping.
                             _max_tokens_round = max(int(_max_tokens_round), 512)

@@ -1,5 +1,55 @@
 ## [1.4.13] - unreleased
 
+## Stability (2026-10-30)
+
+- Preflight is **fail-closed**: an unknown model (alias or path that does
+  not resolve) and a failing `tasklist` now BLOCK the guard instead of
+  passing it. `gguf_size_gb() == 0` and `llama_process_count() == -1` are
+  the two block signals; both were fail-open before (a bench with an
+  unknown model could start with only the bare 8 GB headroom check, and a
+  broken tasklist reported "0 processes").
+- `langrun_load.py` aborts on `llama_process_count() <= 0` (was `== 0`, so
+  an unknown count -1 passed and the load run started against an unknown
+  engine state).
+- **Context-compression storm guard**: the CTX-FULL path fired a force
+  compression on every round when the tool-output inflow kept `est` above
+  the SWA zone (live 2026-10-22: 40 compressions in 56 s, `after` stuck at
+  4411). `context.ctx_guard.allow_force_compress` throttles to one force
+  compression per 3 rounds; the rounds in between fall back to the
+  existing tiny-output-budget clamp. Regression test replays the storm
+  (3 FORCE in 8 rounds instead of 8).
+- Log retention: slot logs beyond the newest 10 per port are MOVED to
+  `logs/archive/` - nothing is deleted before an archive copy exists, and
+  an archive collision gets a numeric suffix instead of overwriting.
+
+## Compression cost
+
+- New setting `duo_compress_tail_tool_max_chars` (default 8000) caps each
+  tool output kept in the compression tail. Offline measurement on a
+  61.7k-token list (local-only mode, no model): uncapped after-size
+  ~22.2k tokens, at 8000 chars ~12.6k, at 16000 ~18.6k. The kept tail was
+  the after-size driver (12-18 raw messages, single read_file dumps reach
+  20k+ chars).
+
+## Diagnostics (passive, opt-in)
+
+- One `[PERF] kind=main|side ... p_tok= cache_n= prompt_n= prompt_ms=
+  pred_n= tps=` line per llama request (`utils/perf_log.py`), wired into
+  the coder main loop and into `backend/llama_client` (side calls:
+  summaries, titles, memory). Missing fields print `-`, never `0`.
+- `[DECODE-DROP]` warning when a round decodes below 50 % of the median of
+  the previous rounds after >= 5 rounds - **warning only, no restart**
+  (a restart would destroy the evidence).
+- The memory/GPU sampler (`HiveMind_dev/memwatch.py`) is opt-in via
+  `HiveMind_system_sampler=1`.
+
+## Documentation
+
+- README: the Vulkan speed note now cites raw log lines only - Spark 5.62
+  t/s (`llama_server_8102_20261028-155559.log:27`) vs Qwen3.5-4B-MTP 55.29
+  t/s (build b11456, `llama_server_8103_20261020-131700.log:26`). The
+  earlier ~6/~60 t/s numbers had no archived raw line.
+
 ## Speed diagnosis and load safety
 
 - The 35B coder loads with `load_mode: none` now: llama-bench tg128 measured

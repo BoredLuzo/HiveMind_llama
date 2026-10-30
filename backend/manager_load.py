@@ -204,6 +204,32 @@ def _ram_guard_blocks(model: str, free_ram_gb: float) -> bool:
     return _impl(model, free_ram_gb)
 
 
+def _archive_old_slot_logs(log_dir, port: int, keep: int = 10) -> None:
+    """Move slot logs beyond the newest `keep` per port into log_dir/archive.
+
+    RULE (Bench-Phase-A, 2026-10-29): no log file is ever deleted before an
+    archive copy exists - the archive itself is only pruned by hand.
+    Unit-tested in tests/test_log_archive.py.
+    """
+    archive_dir = Path(log_dir) / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    old_logs = sorted(Path(log_dir).glob(f"llama_server_{port}_*.log"))
+    if keep:
+        old_logs = old_logs[:-keep]
+    for stale in old_logs:
+        import shutil as _shutil
+        dest = archive_dir / stale.name
+        if dest.exists():
+            # COLLISION RULE (Phase-A-Rest P10, 2026-10-29): an archive
+            # entry is NEVER overwritten - the incoming file gets a numeric
+            # suffix so both copies survive.
+            n = 1
+            while (archive_dir / f"{stale.stem}_{n}{stale.suffix}").exists():
+                n += 1
+            dest = archive_dir / f"{stale.stem}_{n}{stale.suffix}"
+        _shutil.move(str(stale), str(dest))
+
+
 def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
                        profile_lm: str, free_ram_gb: float) -> str:
     """The one load-mode decision (pure; unit-tested in
@@ -1949,14 +1975,12 @@ class LlamaLoadMixin:
                      f"llama_server_{slot.port}_{time.strftime('%Y%m%d-%H%M%S')}.log")
         _log_file = open(_log_path, "w", encoding="utf-8", errors="replace")
         # SLOT-LOG-CLEANUP (2026-10-10): keep the newest 10 datiert logs
-        # per port, delete older ones (one file per start accumulates).
+        # per port (one file per start accumulates). 2026-10-29: older logs
+        # are MOVED to logs/archive/ - no deletion without an archive copy.
         try:
-            _old_logs = sorted(_log_path.parent.glob(
-                f"llama_server_{slot.port}_*.log"))[:-10]
-            for _stale in _old_logs:
-                _stale.unlink(missing_ok=True)
-        except Exception:
-            pass
+            _archive_old_slot_logs(_log_path.parent, slot.port)
+        except OSError as _cleanup_exc:
+            logger.warning("SLOT-LOG-CLEANUP failed: %s", _cleanup_exc)
         _log_file_closed = False
         try:
             _log_file.write(

@@ -712,9 +712,11 @@ fully local alternative to cloud coding tools.
   slower than hosted models of the same class. Interactive chat feels the
   difference, long unattended runs do not.
 - Model architecture matters more than size on Vulkan: Spark-X2.6-4B (hybrid
-  attention, no MTP) runs ~6 t/s on an RX 6600 (llama-bench b11889, verified
-  twice; one early 21 t/s reading remains unexplained), while Qwen3.5-4B-MTP
-  benches 60 t/s on the same card and flags. Prefer the MTP models for coding.
+  sliding-window attention, no MTP) runs ~5.6 t/s on an RX 6600 (slot log
+  `llama_server_8102_20261028-155559.log:27`: 5.62 t/s over 64 tokens), while
+  Qwen3.5-4B-MTP reaches ~55 t/s on the same card (slot log
+  `llama_server_8103_20261020-131700.log:26`, build b11456: 55.29 t/s over
+  600 tokens with draft-max 2). Prefer the MTP models for coding.
 
 - A run keeps its progress: finished chunks are checkpointed, so an engine
   restart resumes at the next chunk. Pause, timeout and throttle state is not

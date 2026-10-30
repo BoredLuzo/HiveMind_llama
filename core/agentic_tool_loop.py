@@ -481,6 +481,50 @@ class AgenticToolLoop(ToolLoop):
                                         f"{int(_free_mib)}MiB" if _free_mib is not None
                                         else "n/a",
                                     )
+                                    # PERF-TRACE (2026-10-30, user decision):
+                                    # one grep-able line per main request - the
+                                    # only passive source that separates cache
+                                    # loss (prompt_n high, cache_n ~0) from
+                                    # depth cost and side-call noise.
+                                    try:
+                                        from utils.perf_log import perf_line as _pl
+                                        logger.info(_pl(
+                                            kind="main",
+                                            model=getattr(self.round_state, "exec_model", "?"),
+                                            port=getattr(self.round_state, "port", ""),
+                                            usage=_dr_usage_final,
+                                            timings={"prompt_n": _pre_n,
+                                                     "prompt_ms": (locals().get("_dr_prompt_timings") or {}).get("prompt_ms"),
+                                                     "predicted_n": _dr_usage_final.get("completion_tokens"),
+                                                     "predicted_per_second": getattr(self.round_state, "decode_tps", None)},
+                                        ))
+                                    except (ImportError, AttributeError, TypeError) as _perf_err:
+                                        logger.debug("[PERF] skipped: %s", _perf_err)
+                                    # DECODE-DROP-WATCH (2026-10-30): warn only,
+                                    # NEVER auto-restart (a restart would destroy
+                                    # the evidence). Triggers when the newest
+                                    # round is below 50 % of the median of the
+                                    # previous rounds after >= 5 rounds.
+                                    try:
+                                        _dt = float(getattr(self.round_state, "decode_tps", 0.0) or 0.0)
+                                        if _dt > 0:
+                                            _hist = getattr(self, "_decode_hist", None)
+                                            if _hist is None:
+                                                _hist = []
+                                                self._decode_hist = _hist
+                                            _prev = _hist[-8:]
+                                            _hist.append(_dt)
+                                            if len(_prev) >= 5:
+                                                _sorted = sorted(_prev)
+                                                _med = _sorted[len(_sorted) // 2]
+                                                if _med > 0 and _dt < 0.5 * _med:
+                                                    logger.warning(
+                                                        "[DECODE-DROP] round decode %.2f t/s < 50%% of median %.2f t/s "
+                                                        "(last %d rounds) — warning only, no restart",
+                                                        _dt, _med, len(_prev),
+                                                    )
+                                    except (TypeError, ValueError, IndexError):
+                                        pass
                             except Exception:
                                 pass
                         _sse_choices = _sse_chunk.get("choices") or [{}]

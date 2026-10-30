@@ -231,6 +231,13 @@ SUITES = [
     ("smoke_harness",           "tests/test_smoke_harness.py",                 60),
     ("vision_gate",             "tests/test_vision_gate.py",                   60),
     ("steer_images",            "tests/test_steer_images.py",                  60),
+    ("log_archive",             "tests/test_log_archive.py",                   30),
+    ("load_mode_ram_guard",     "tests/test_load_mode_ram_guard.py",           30),
+    ("load_preflight",          "tests/test_load_preflight.py",                60),
+    ("preflight_failclosed",    "tests/test_preflight_failclosed.py",          60),
+    ("langrun_guard_failclosed", "tests/test_langrun_guard_failclosed.py",     30),    ("ctx_full_storm",          "tests/test_ctx_full_storm.py",               30),
+    ("perf_logging",           "tests/test_perf_logging.py",                30),
+
 ]
 
 
