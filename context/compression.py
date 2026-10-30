@@ -574,6 +574,18 @@ async def _compress_tool_context(
                 _summary = _data["choices"][0].get("message", {}).get("content", "").strip()
             else:
                 _summary = _data.get("message", {}).get("content", "").strip()
+            # EMPTY-SUMMARY-FALLBACK (2026-10-30): a model that ignores
+            # enable_thinking answers with an empty content (only a think
+            # block). That is NOT an exception, so the fallback below never
+            # fired and the coder got an empty summary block. Treat it like
+            # a failed call.
+            if not _summary:
+                logger.warning(
+                    "[CTX-COMPRESS] LLM summary came back empty "
+                    "(model=%s, thinking not suppressed) - using local fallback",
+                    model)
+                _summary = _build_local_fallback_summary(
+                    original_task, written_files, done_tasks, explore_ctx)
         except Exception as _compress_err:
             logger.warning(
                 "Context compression failed (%s: %s) - using fallback summary",

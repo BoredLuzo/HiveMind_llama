@@ -985,7 +985,14 @@ class LlamaLoadMixin:
                 # the 768 value was structurally unreachable under external GPU load
                 # (guaranteed 45s wait, e.g. target 5775 with only ~5.06 GB free).
                 # The 256 target is what the resolution accepts.
-                _need_mib = new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
+                # UBATCH-COMPUTE-BUFFER (2026-10-30): the table's vram_of()
+                # has no ubatch term. Measured on the real server (Groot,
+                # ncmoe 28, ctx 32768): dedicated peak 5188 MiB at ub 512 vs
+                # 5333 at ub 1024 = +145 MiB for +512 ubatch, i.e. ~0.28 MiB
+                # of compute buffer per ubatch unit above 256.
+                _ub_extra_mib = max(0, int(LLAMA_UBATCH) - 256) * 0.28
+                _need_mib = (new_vram * 1024 + VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB
+                             + _ub_extra_mib)
 
                 _should_evict = False
                 if _live_free is None:
@@ -1101,12 +1108,12 @@ class LlamaLoadMixin:
         # stays at ~5.5 GiB dedicated (no growth vs 256), but ub 1024 spilled
         # into shared memory (80 -> 340 MiB) and 2048 peaked at 2348 MiB.
         # So values above 512 are allowed but called out once per load.
-        if int(LLAMA_UBATCH) > 512:
+        if int(LLAMA_UBATCH) > 1024:
             logger.warning(
-                "[LOAD-DIAG] duo_ubatch=%d > 512: the compute buffer grows and "
-                "may spill into shared GPU memory (measured: ub 1024 -> +260 MiB "
-                "shared, ub 2048 -> 2348 MiB shared). The VRAM pre-flight does "
-                "not account for this.",
+                "[LOAD-DIAG] duo_ubatch=%d > 1024: the compute buffer grows past "
+                "what the measured band covers (+145 MiB dedicated at 1024 vs 512, "
+                "+2348 MiB shared at 2048). The VRAM pre-flight now adds a "
+                "0.28 MiB/ubatch surcharge above 256, but 2048 spilled hard.",
                 int(LLAMA_UBATCH),
             )
         cmd += [

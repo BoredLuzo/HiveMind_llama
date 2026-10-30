@@ -38,6 +38,24 @@
   `[SIDE-FALLBACK] model=... using N chars of reasoning`.
 - Groot profile: `ncmoe 32`, `ub 1024`, `mtp true` (measured, see Models).
 
+## Pre-flight and side calls (2026-10-30, final pass)
+
+- The VRAM pre-flight now adds a **compute-buffer surcharge for the ubatch**
+  (0.28 MiB per ubatch unit above 256, measured on the live server: Groot
+  dedicated 5188 MiB at ub 512 vs 5333 at 1024). The load-time warning for a
+  large ubatch fires above **1024** instead of 512.
+- **Empty side-call content is skipped, not substituted**: a model that
+  ignores `enable_thinking` (LFM2.5 2.6B) returns `content = ""` with only a
+  think block. `LlamaClient.chat()` and `core/fix_agent.py` log
+  `[SIDE-SKIP]` and return "" - reasoning text is never persisted as a
+  title, memory entry or insight. The compression path has its own local
+  fallback summary for an empty answer (previously it only fired on an
+  exception, so an empty summary block reached the coder).
+- Final Groot profile measured end to end (live server, b12001, ncmoe 32,
+  ub 1024, MTP nmax2, ctx 131072): 10 tool-call rounds at **31.65 t/s mean**
+  (min 25.00, max 33.91), 10/10 tool calls parsed, dedicated peak 6079 MiB,
+  shared peak 1874 MiB, no crash.
+
 ## Engine build
 
 - Default llama.cpp build is now **b12001** (auto-discovery picks the highest

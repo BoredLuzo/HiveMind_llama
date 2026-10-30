@@ -7,9 +7,11 @@ spends all 800 max_tokens in the think block and returns
 (summary, title, memory) would receive an empty string and silently produce
 nothing.
 
-Fix: `LlamaClient.chat()` falls back to the reasoning tail (last 1500 chars)
-when content is empty, and logs `[SIDE-FALLBACK]`. `core/fix_agent.py` has
-its own POST and carries the same fallback.
+Policy (2026-10-30, revised): reasoning is NOT substituted. Titles, memory
+writes and insights persist what they get, and a think-block fragment must
+never become stored knowledge. `LlamaClient.chat()` logs `[SIDE-SKIP]` and
+returns "" when content is empty; `core/fix_agent.py` does the same. The
+compression path has its own local fallback summary for an empty answer.
 
 This test exercises the decision logic without a model (the response dict is
 fed straight into the same branch).
@@ -35,39 +37,38 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name} {extra}")
 
 
-def pick(msg, limit=1500):
-    """Mirror of the branch in llama_client.chat / fix_agent."""
-    content = msg.get("content") or ""
-    if content.strip():
+def pick(msg):
+    """Mirror of the branch in llama_client.chat / fix_agent (skip policy)."""
+    content = (msg.get("content") or "").strip()
+    if content:
         return content, False
     reason = (msg.get("reasoning_content") or msg.get("reasoning") or "").strip()
-    if reason:
-        return reason[-limit:], True
-    return "", False
+    return "", bool(reason)   # (result, would_skip_reasoning)
 
 
 # 1. the measured LFM2.5 shape: empty content, reasoning present
-content, used = pick({"content": "", "reasoning_content": "x" * 300})
-check("empty content + reasoning -> reasoning used", used and len(content) == 300)
+content, skipped = pick({"content": "", "reasoning_content": "x" * 300})
+check("empty content + reasoning -> EMPTY result (not persisted)",
+      content == "" and skipped)
 check("content alone wins when present",
       pick({"content": "real", "reasoning_content": "x" * 50}) == ("real", False))
-check("whitespace-only content counts as empty",
+check("whitespace-only content counts as empty and is skipped",
       pick({"content": "   ", "reasoning_content": "y" * 10})[1] is True)
-check("reasoning under the alias 'reasoning' also works",
+check("alias 'reasoning' is recognised for the skip log",
       pick({"content": "", "reasoning": "z" * 20})[1] is True)
 check("nothing at all -> empty, no crash", pick({"content": ""}) == ("", False))
-check("long reasoning is capped at 1500 chars",
-      len(pick({"content": "", "reasoning_content": "q" * 5000})[0]) == 1500)
-check("the CAP keeps the TAIL (last chars)", 
-      pick({"content": "", "reasoning_content": "A" * 1600 + "TAIL"})[0].endswith("TAIL"))
+check("no reasoning chars leak into the result",
+      pick({"content": "", "reasoning_content": "SECRET" * 100})[0] == "")
 
 # 2. wiring: both call sites carry the fallback
 llc = (ROOT / "backend" / "llama_client.py").read_text(encoding="utf-8")
 fa = (ROOT / "core" / "fix_agent.py").read_text(encoding="utf-8")
-check("llama_client: fallback wired", "[SIDE-FALLBACK]" in llc and "reasoning_content" in llc)
-check("llama_client: logs the model and the char count",
-      "using %d chars of reasoning" in llc)
-check("fix_agent: fallback wired", "reasoning_content" in fa)
+check("llama_client: SIDE-SKIP wired", "[SIDE-SKIP]" in llc and "reasoning_content" in llc)
+check("llama_client: returns '' on empty content", 'return ""' in llc)
+check("llama_client: no reasoning substitution left", "SIDE-FALLBACK" not in llc)
+check("fix_agent: SIDE-SKIP wired", "[SIDE-SKIP]" in fa)
+check("fix_agent: no reasoning substitution left",
+      "final_text = ((msg.get" not in fa)
 check("fix_agent: no bare content-only return left",
       not re.search(r"final_text = \(msg\.get\(\"content\"\) or \"\"\)\.strip\(\)\n\s*if not tcs",
                     fa))

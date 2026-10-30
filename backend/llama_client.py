@@ -190,24 +190,25 @@ class LlamaClient:
                         timings=data.get("timings") or {}))
                 except (ImportError, AttributeError, TypeError) as _perf_err:
                     self._log.debug("perf line skipped: %s", _perf_err)
-                # EMPTY-CONTENT-FALLBACK (2026-10-30): some models ignore
-                # chat_template_kwargs.enable_thinking and spend the whole
-                # max_tokens budget inside the think block, so `content`
+                # EMPTY-CONTENT-POLICY (2026-10-30, revised): some models
+                # ignore chat_template_kwargs.enable_thinking and spend the
+                # whole max_tokens budget inside the think block, so `content`
                 # comes back empty (measured: LFM2.5 2.6B - 800/800 tokens,
-                # 0 chars content, 125+ chars reasoning). Every side call
-                # (summary, title, memory) would then receive "". The
-                # reasoning tail is the only signal left - use it, and log it.
+                # 0 chars content, 125+ chars reasoning).
+                # POLICY: the reasoning text is NOT substituted. Titles,
+                # memory writes and insights persist what they get, and a
+                # think-block fragment must never end up as stored knowledge.
+                # Log it and return "" - the caller skips the result.
                 _msg = data["choices"][0]["message"]
                 _content = _msg.get("content") or ""
                 if not _content.strip():
                     _reason = (_msg.get("reasoning_content")
                                or _msg.get("reasoning") or "").strip()
-                    if _reason:
-                        self._log.warning(
-                            "[SIDE-FALLBACK] model=%s returned empty content, "
-                            "using %d chars of reasoning (thinking not suppressed)",
-                            model, min(len(_reason), 1500))
-                        _content = _reason[-1500:]
+                    self._log.warning(
+                        "[SIDE-SKIP] model=%s returned empty content "
+                        "(reasoning_chars=%d, thinking not suppressed) - result skipped",
+                        model, len(_reason))
+                    return ""
                 return _content
             except _TRANSIENT_HTTP_EXCEPTIONS as e:
                 if attempt < max_attempts - 1:

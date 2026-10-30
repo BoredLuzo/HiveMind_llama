@@ -12,8 +12,10 @@ replaced three times on GitHub and is superseded by this release).
 - A RAM-GUARD in the loader rejects `load_mode: none` when free RAM is
   below GGUF size + 8 GB (live: three stacked hermes commits froze the
   machine at 56 GB commit, SSD at 100 %) and falls back to plain mmap.
-- Spark-X2.6 on Vulkan runs ~6 t/s (bench-verified twice, one
-  unexplained 21 t/s reading) - prefer Qwen3.5-4B-MTP for coding.
+- Spark-X2.6 on Vulkan runs ~5.6 t/s (single live request, 64 tokens,
+  b11889 slot log `llama_server_8102_20261028-155559.log:27`); an early
+  21 t/s reading and the older "~6 t/s, verified twice" note had no archived
+  raw line and are dropped. Prefer Qwen3.5-4B-MTP for coding.
 - MiniCPM-V 4.7 is vision-capable again (projector wired, bench and
   live verified).
 
@@ -36,8 +38,14 @@ replaced three times on GitHub and is superseded by this release).
 
 ## Benchmarks behind the defaults (2026-10-30)
 
-Raw runs, RX 6600, b11889, ub 256/512/1024/2048 at pp 8192, fresh process per
-variant:
+**Method labels - do not compare rows across tables.**
+`llama-bench` = fresh process per variant, `-p 8192 -n 64` unless stated;
+"live server" = real llama-server with the profile flags, values from the
+response `timings`. All on an RX 6600.
+
+Table 1 - `llama-bench`, **b11889**, ub 256/512/1024/2048, pp 8192,
+`-n 64`, absolute shared memory (the idle baseline of ~470 MiB was not
+subtracted here - see the note below the table):
 
 | ub | pp8192 t/s | Dedicated peak | Shared peak |
 |---|---|---|---|
@@ -47,11 +55,26 @@ variant:
 | 2048 | 193.59 | 5816 MiB | 2348 MiB |
 
 At pp 20480 the same comparison gives 118.49 t/s (ub 2048) vs 62.16 t/s
-(ub 256). ub 1024/2048 were rejected for the default despite higher
-throughput: both spill into shared GPU memory (the 2048 peak of 2348 MiB is
-system RAM over PCIe), which is exactly the slow path this release avoids.
-**Recommended engine ubatch: 512** - nearly the 2048 prefill rate without
-shared-memory spill (changing it stays a manual setting).
+(ub 256), again `llama-bench` on b11889.
+
+**Correction (same day):** the absolute shared numbers above were the wrong
+yardstick. Measured idle baseline on this machine: dedicated 1386 MiB,
+shared **470 MiB**. Judged as a delta against that baseline / against the
+neighbouring variant on the **live server**, the picture changes:
+
+| setting | live-server result | shared delta | verdict |
+|---|---|---|---|
+| ub 512 -> 1024 (Hermes, 18 011 tok) | prefill 91.7 -> 113.6 t/s (**+23.9 %**) | +52 MiB vs the 512 run | **1024 is the default** |
+| ub 512 -> 1024 (Groot, 4.2k/10.5k) | prefill +27.7 % / +17.1 % | +58 MiB | ok |
+| ncmoe 28 -> 32 (Groot, ctx 131072) | tg 14.89 -> 18.21 (shallow) | 1624 -> 1360 MiB (**-264**) | **32 in the profile** |
+| MTP off -> nmax2 (Groot) | tools 15.12 -> 24.30 (**+60.7 %**), prose -4.9 % | +91 MiB | **on** |
+
+Final Groot profile (ncmoe 32, ub 1024, MTP nmax2, ctx 131072) on the live
+server, 10 rounds with tool calls, build **b12001**: **31.65 t/s mean**
+(min 25.00, max 33.91), 10/10 tool calls parsed, dedicated peak 6079 MiB,
+shared peak 1874 MiB, no crash. Same-model comparison across builds:
+`llama-bench` tg128 gave 15.17 (b11889) vs 15.16 (b12001) - the 31.65 comes
+from the live profile (MTP + ub 1024 + ncmoe 32) and a different method.
 
 MTP A/B on Qwen3.5-4B-MTP (median of 6 rounds, prosa + tools): draft off
 97.04 t/s, draft-max 3 95.38, draft-max 2 92.16. A/B on the 35B MoE with
