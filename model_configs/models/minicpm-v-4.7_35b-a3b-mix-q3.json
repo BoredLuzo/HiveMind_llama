@@ -69,5 +69,6 @@
       "presence_penalty": 0.0,
       "repetition_penalty": 1.03
     }
-  }
+  },
+  "chat_template": "chat_template_sharp_v22.5.0.jinja"
 }

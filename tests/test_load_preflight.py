@@ -56,7 +56,14 @@ check("process count survives OEM-codepage tasklist output",
 # 2b. gguf size via PATH (bench scripts pass paths, not aliases) -
 # a path used to resolve to 0.0 and silently weaken the guard to 8 GB
 import pathlib as _pl
-_ggufs = list(_pl.Path(r"C:\Users\NtheP\Desktop\Models").glob("Hermes3.6*.gguf"))
+
+import os
+
+_ROOT = Path(__file__).resolve().parent.parent
+_MODELS = Path(os.environ.get("HIVEMIND_MODELS_DIR", _ROOT.parent / "Models"))
+
+_ggufs = list(_pl.Path(os.environ.get("HIVEMIND_MODELS_DIR",
+        _pl.Path(__file__).resolve().parent.parent.parent / "Models")).glob("Hermes3.6*.gguf"))
 if _ggufs:
     _sz = LP.gguf_size_gb(str(_ggufs[0]))
     check("gguf_size_gb resolves a direct PATH", _sz > 10.0, f"({_sz:.1f} GB)")

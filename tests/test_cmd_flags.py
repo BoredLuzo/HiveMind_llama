@@ -8,9 +8,13 @@ A/B ran with BOTH `--spec-type draft-mtp` (base) and `--spec-type none`
   2. the bench sweep builds exactly one --spec-type per variant,
   3. the generic helper catches duplicates when they exist.
 """
+import os
 import re
 import sys
 from pathlib import Path
+
+
+
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -55,7 +59,25 @@ check("loader CMD carries --ubatch-size once",
       f"(count {flags.count('--ubatch-size')})")
 
 # 2. the sweep: base + variant, one --spec-type per variant
-sweep = Path(r"C:/Users/NtheP/Desktop/HiveMind_dev/bench_sonnet_sweep.py")
+def _pick(env_name: str, *candidates):
+    """First existing candidate (or the env override) - no user name needed."""
+    _v = os.environ.get(env_name)
+    if _v:
+        return Path(_v)
+    for _c in candidates:
+        if _c.exists():
+            return _c
+    return candidates[0]
+
+
+_ROOT = Path(__file__).resolve().parent.parent
+_INSTALL = _pick("HIVEMIND_INSTALL_DIR", _ROOT.parent / "live", _ROOT / "live")
+_MODELS = _pick("HIVEMIND_MODELS_DIR", _ROOT.parent.parent / "Models",
+                _ROOT.parent / "Models")
+_DEV = _pick("HIVEMIND_DEV_DIR", _ROOT.parent.parent / "HiveMind_dev",
+             _ROOT.parent / "HiveMind_dev")
+
+sweep = _DEV / "bench_sonnet_sweep.py"
 if sweep.exists():
     sw = sweep.read_text(encoding="utf-8")
     base_block = sw[sw.index("BASE_SERVER_CMD = ["):sw.index("]", sw.index("BASE_SERVER_CMD = ["))]

@@ -89,5 +89,6 @@ check("11 fail-closed: unknown model never gets none",
                          mlock_now=False, profile_lm="none",
                          free_ram_gb=30.0) == "mmap")
 
+_gg.unlink(missing_ok=True)   # BEFORE exit: otherwise a 3 GB sparse
+                              # dummy accumulates in %TEMP% per run
 sys.exit(1 if failed else 0)
-_gg.unlink(missing_ok=True)

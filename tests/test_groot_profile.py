@@ -17,6 +17,7 @@ later edit cannot silently drift them:
 Offline only - no model load, no generation.
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -37,8 +38,26 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name} {extra}")
 
 
-PROFILE = Path(r"C:/Users/NtheP/Desktop/HiveMind/live/model_configs/models/groot_19b-a3b-261023.json")
-MODELS = Path(r"C:/Users/NtheP/Desktop/HiveMind/live/models.json")
+def _pick(env_name: str, *candidates):
+    """First existing candidate (or the env override) - no user name needed."""
+    _v = os.environ.get(env_name)
+    if _v:
+        return Path(_v)
+    for _c in candidates:
+        if _c.exists():
+            return _c
+    return candidates[0]
+
+
+_ROOT = Path(__file__).resolve().parent.parent
+_INSTALL = _pick("HIVEMIND_INSTALL_DIR", _ROOT.parent / "live", _ROOT / "live")
+_MODELS = _pick("HIVEMIND_MODELS_DIR", _ROOT.parent.parent / "Models",
+                _ROOT.parent / "Models")
+_DEV = _pick("HIVEMIND_DEV_DIR", _ROOT.parent.parent / "HiveMind_dev",
+             _ROOT.parent / "HiveMind_dev")
+
+PROFILE = _INSTALL / "model_configs" / "models" / "groot_19b-a3b-261023.json"
+MODELS = _INSTALL / "models.json"
 
 if not PROFILE.exists():
     print("  SKIP groot profile (live/ not present)")
@@ -91,11 +110,23 @@ if MODELS.exists():
 
 # side-call sampler constant + wiring
 from backend.llama_client import SIDE_CALL_SAMPLING, _build_payload  # noqa: E402
+
+
+
 check("SIDE_CALL_SAMPLING values",
       SIDE_CALL_SAMPLING == {"temperature": 0.7, "top_p": 0.8, "top_k": 20,
                              "min_p": 0.0, "presence_penalty": 1.5})
+# the sampler is OPT-IN (audit fix 2026-10-30): only callers that pass it
+# get it - the main chat path keeps its own temperature
 pl = _build_payload([{"role": "user", "content": "x"}], temperature=0.7,
-                    max_tokens=8, stream=False, thinking=False)
+                    max_tokens=8, stream=False, thinking=False,
+                    sampler=SIDE_CALL_SAMPLING)
+_main = _build_payload([{"role": "user", "content": "x"}], temperature=0.9,
+                       max_tokens=8, stream=False, thinking=False)
+check("main chat payload keeps its own sampler (no side-call override)",
+      _main.get("temperature") == 0.9 and "top_k" not in _main
+      and "presence_penalty" not in _main,
+      f"(temp {_main.get('temperature')}, top_k {_main.get('top_k')})")
 for k, v in SIDE_CALL_SAMPLING.items():
     check(f"payload carries {k}={v}", pl.get(k) == v, f"({pl.get(k)})")
 check("payload disables thinking via chat_template_kwargs",

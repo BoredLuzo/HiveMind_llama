@@ -112,7 +112,8 @@ class LlamaClient:
         req_id = self._req_id("chat")
         t0 = time.perf_counter()
         payload = _build_payload(messages, temperature, max_tokens, stream=False,
-                                 thinking=think, thinking_budget=thinking_budget)
+                                 thinking=think, thinking_budget=thinking_budget,
+                                 sampler=SIDE_CALL_SAMPLING)
         _vision = self._has_images(messages)
         port = await manager.ensure_loaded(model, num_ctx=ctx, vision=_vision)
         # SAMPLER-PROOF (2026-10-30): log what really goes on the wire - the
@@ -480,9 +481,15 @@ def _build_payload(messages: list, temperature: float, max_tokens: int,
         "frequency_penalty": 0.1,
         "cache_prompt":      cache_prompt,
     }
-    # explicit sampler keys (side calls); a caller may override any of them
-    for _k, _v in {**SIDE_CALL_SAMPLING, **(sampler or {})}.items():
-        payload[_k] = _v
+    # SIDE-CALL SAMPLER, OPT-IN ONLY (2026-10-30, audit fix): this used to
+    # be applied unconditionally, which silently rewrote the sampler of the
+    # MAIN chat path (chat_stream -> _build_payload) to temp 0.7 / top_p 0.8
+    # / presence 1.5 and overrode the user's temperature. Side calls pass
+    # sampler=SIDE_CALL_SAMPLING explicitly; every other caller keeps the
+    # sampler it asked for.
+    if sampler:
+        for _k, _v in sampler.items():
+            payload[_k] = _v
     if thinking is not None:
         payload["thinking"] = thinking
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = bool(thinking)

@@ -292,3 +292,25 @@ def allow_force_compress(round_now: int, last_force_round: int,
     if last_force_round < 0:
         return True
     return (round_now - last_force_round) >= int(min_gap)
+
+# ── Cache-Budget vs. Kompressionsschwelle ────────────────────────────────
+# Measured 2026-10-30: a prompt-cache entry costs ~18 KiB per token
+# (llama.dll eviction line: 526 MiB for 29 383 tokens). The compression
+# threshold is floor*ctx (0.70 * 85000 = 59 500 tokens), so the entry that
+# the run needs to keep is ~1.05 GiB - larger than the shipped
+# --cache-ram 1024 MiB. The consequence is a guaranteed full re-prefill at
+# exactly the compression point (measured: 9-11 min per loss).
+PROMPT_CACHE_KIB_PER_TOKEN = 18.0
+
+
+def cache_ram_required_mib(compress_threshold_tokens: int,
+                           kib_per_token: float = PROMPT_CACHE_KIB_PER_TOKEN,
+                           headroom: float = 1.25) -> int:
+    """--cache-ram needed to hold the entry the run will reach.
+
+    headroom 1.25 keeps room for the second (post-compression) entry.
+    Pure function; unit-tested in tests/test_cache_budget.py.
+    """
+    tokens = max(0, int(compress_threshold_tokens or 0))
+    mib = tokens * float(kib_per_token) / 1024.0 * float(headroom)
+    return int(round(mib))

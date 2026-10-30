@@ -16,7 +16,7 @@ from .llama_config import (
     dense_kv_cache_type,
     moe_kv_cache_types, llama_gpu_layers_auto, resolve_gpu_layers,
     CACHE_REUSE, CACHE_RAM_MIB, CTX_CHECKPOINTS, LLAMA_UBATCH, VRAM_PREFLIGHT_GATE,
-    MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
+    MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN, MTP_DRAFT_P_MIN,
     DSPARK_SPEC_TYPE, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN, DSPARK_MIN_BUILD,
     _MTP_MODELS,
     _GPU_LAYERS_TABLE,
@@ -204,6 +204,32 @@ def _ram_guard_blocks(model: str, free_ram_gb: float) -> bool:
     return _impl(model, free_ram_gb)
 
 
+_BIN_HELP_CACHE: dict[str, str] = {}
+
+
+def _binary_help(bin_path=None) -> str:
+    """Cached `llama-server --help` text (one subprocess per binary path).
+
+    FLAG-PROBING (2026-10-30): a flag the binary does not know aborts the
+    load. `--spec-draft-p-min` exists from b12001 on, b11889 would refuse it,
+    so capability is read from the help text instead of assumed.
+    """
+    key = str(bin_path or LLAMA_BIN)
+    if key not in _BIN_HELP_CACHE:
+        try:
+            _BIN_HELP_CACHE[key] = subprocess.run(
+                [key, "--help"], capture_output=True, text=True, timeout=30,
+                encoding="utf-8", errors="replace").stdout or ""
+        except (OSError, subprocess.SubprocessError):
+            _BIN_HELP_CACHE[key] = ""
+    return _BIN_HELP_CACHE[key]
+
+
+def _help_supports(flag: str) -> bool:
+    """True when the loaded binary lists `flag` in its help."""
+    return bool(flag) and flag in _binary_help()
+
+
 def _archive_old_slot_logs(log_dir, port: int, keep: int = 10) -> None:
     """Move slot logs beyond the newest `keep` per port into log_dir/archive.
 
@@ -228,29 +254,6 @@ def _archive_old_slot_logs(log_dir, port: int, keep: int = 10) -> None:
                 n += 1
             dest = archive_dir / f"{stale.stem}_{n}{stale.suffix}"
         _shutil.move(str(stale), str(dest))
-
-
-def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
-                       profile_lm: str, free_ram_gb: float) -> str:
-    """The one load-mode decision (pure; unit-tested in
-    tests/test_load_mode_ram_guard.py).
-
-    Order: the SPEC+NONE-CRASH-GUARD (2026-10-24) and the mlock intent keep
-    mmap+mlock; a valid profile override is honored; the remaining default
-    is none. The RAM-GUARD rejects none whenever free RAM is unknown or
-    below GGUF size + 8 GB headroom - the fallback is plain mmap (NOT
-    mlock: locking 18 GB with tight RAM pages and sinks itself; plain mmap
-    lets Windows drop the file-backed pages).
-    """
-    if spec_planned or mlock_now:
-        return "mmap+mlock"
-    from backend.llama_preflight import ram_guard_blocks as _impl
-    profile = profile_lm if profile_lm in _LOAD_MODES else ""
-    if profile and not _impl(model, free_ram_gb):
-        return profile
-    if _impl(model, free_ram_gb):
-        return "mmap"
-    return "none"
 
 
 def _resolve_load_mode(model: str, *, spec_planned: bool, mlock_now: bool,
@@ -1126,6 +1129,28 @@ class LlamaLoadMixin:
             "--split-mode",   "none",
         ]
 
+        # CACHE-BUDGET-WARN (2026-10-30): the prompt-cache entry grows with
+        # the context and is ~18 KiB per token. If --cache-ram cannot hold
+        # the entry the run will reach at its compression threshold, every
+        # compression turns into a full re-prefill (measured 9-11 min each).
+        try:
+            from context.ctx_guard import (cache_ram_required_mib as _crm,
+                                           resolve_compress_threshold as _rct)
+            _floor = float(os.environ.get("HIVEMIND_COMPRESS_FLOOR", "0.70") or 0.70)
+            _thr = _rct(ctx_tokens=int(num_ctx or 0), num_predict=4096,
+                        auto_floor=_floor, overflow_reserve=1024)
+            _need_cache = _crm(_thr)
+            if int(CACHE_RAM_MIB) < _need_cache:
+                logger.warning(
+                    "[CACHE-RAM] %d MiB < %d MiB needed for ctx %d "
+                    "(compression at %d tokens, ~18 KiB/token): every compression "
+                    "will re-prefill the whole prompt. Raise llama_cache_ram_mib "
+                    "or lower the coder ctx.",
+                    int(CACHE_RAM_MIB), _need_cache, int(num_ctx or 0), _thr,
+                )
+        except (ImportError, ValueError, TypeError) as _cb_err:
+            logger.debug("cache-budget check skipped: %s", _cb_err)
+
         if CACHE_REUSE and int(CACHE_REUSE) > 0:
             cmd += ["--cache-reuse", str(int(CACHE_REUSE))]
             logger.info("Prompt cache reuse active: --cache-reuse %d", int(CACHE_REUSE))
@@ -1306,8 +1331,7 @@ class LlamaLoadMixin:
                     "set llama_mlock=false in settings."
                 )
             cmd += ["--load-mode", _load_mode]
-            logger.info("--load-mode %s (mlock=%s, spec=%s)",
-                        _load_mode, bool(_mlock_now), _spec_planned)
+            # log line already emitted above (profile-override vs normal path)
         elif (type(self)._binary_build_number or 0) >= NO_MMAP_MIN_BUILD:
             cmd += ["--no-mmap"]
             logger.info("--no-mmap aktiv (Build %d >= %d, Windows-Vulkan mmap-Fix)",
@@ -1467,14 +1491,35 @@ class LlamaLoadMixin:
         # enable-list itself, so =0 appended --spec-type draft-mtp to
         # EVERY model instead of switching it off.
         if os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off") and _is_mtp:
+            # profile overrides (mtp_draft_n_max / mtp_draft_p_min) win over
+            # the module defaults; the values are clamped to sane ranges so a
+            # typo cannot produce a 0-token draft or an 8-token greedy draft
+            # (the card's sweep shows n_max 8 / p_min 0 collapses to 0.57x).
+            _draft_nmax, _draft_pmin = MTP_DRAFT_N_MAX, MTP_DRAFT_P_MIN
+            try:
+                from model_configs.models_registry import get_profile as _gp
+                _prof = _gp(_mtp_model_key) or {}
+                if _prof.get("mtp_draft_n_max") is not None:
+                    _draft_nmax = int(_prof["mtp_draft_n_max"])
+                if _prof.get("mtp_draft_p_min") is not None:
+                    _draft_pmin = float(_prof["mtp_draft_p_min"])
+            except (ImportError, ValueError, TypeError) as _prof_err:
+                logger.debug("MTP profile override skipped: %s", _prof_err)
+            _draft_nmax = max(1, min(4, int(_draft_nmax)))
+            _draft_pmin = max(0.0, min(0.95, float(_draft_pmin)))
             cmd += [
                 "--spec-type", MTP_SPEC_TYPE,
-                "--spec-draft-n-max", str(MTP_DRAFT_N_MAX),
+                "--spec-draft-n-max", str(_draft_nmax),
                 "--spec-draft-n-min", str(MTP_DRAFT_N_MIN),
             ]
+            # --spec-draft-p-min exists from b12001 on; on older binaries the
+            # flag would abort the load, so gate it on the help text we read.
+            if _help_supports("--spec-draft-p-min"):
+                cmd += ["--spec-draft-p-min", f"{_draft_pmin:g}"]
             logger.info(
-                "MTP active: %s (draft-max=%d, draft-min=%d)",
-                MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
+                "MTP active: %s (draft-max=%d, draft-min=%d, draft-p-min=%s%s)",
+                MTP_SPEC_TYPE, _draft_nmax, MTP_DRAFT_N_MIN, f"{_draft_pmin:g}",
+                "" if _help_supports("--spec-draft-p-min") else " [flag unsupported - omitted]",
             )
 
         # ── DSpark external drafter (Speculative-Decoding Sidecar) ──────────
@@ -1702,8 +1747,15 @@ class LlamaLoadMixin:
             # \n\n → KV-Cache/MTP-Draft-Gewinne) und message.reasoning-Extraktion.
             # Fallback-Kette (Repo-relativ): v22.5 → Repo-Fallback qwen3.6_template.
             _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
+            # SHARP-TEMPLATE (2026-10-30): the froggeric/Sharp lineage ships
+            # as v22.5.0 (HF peculiar-ragdoll/Qwen-Sharp-Chat-Templates). It is
+            # the same family as our 22.5 file with the newer tool/thinking
+            # section, so it is preferred; 22.5 stays as the fallback.
+            _template_sharp = _templates_dir / "chat_template_sharp_v22.5.0.jinja"
             _template_v25 = _templates_dir / "chat_template22.5.jinja"
-            if _template_v25.exists():
+            if _template_sharp.exists():
+                _template_path = _template_sharp
+            elif _template_v25.exists():
                 _template_path = _template_v25
             else:
                 _template_path = _templates_dir / "qwen3.6_chat_template.jinja"
@@ -1712,8 +1764,11 @@ class LlamaLoadMixin:
                 logger.info(f"--chat-template-file: {_template_path}")
         if _model_base == "hermes3.6":
             _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
+            _template_sharph = _templates_dir / "chat_template_sharp_v22.5.0.jinja"
             _template_v25h = _templates_dir / "chat_template22.5.jinja"
-            if _template_v25h.exists():
+            if _template_sharph.exists():
+                _template_path = _template_sharph
+            elif _template_v25h.exists():
                 _template_path = _template_v25h
             else:
                 _template_path = _templates_dir / "qwen3.6_chat_template.jinja"

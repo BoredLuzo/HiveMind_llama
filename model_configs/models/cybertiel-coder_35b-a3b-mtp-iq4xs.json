@@ -1,0 +1,83 @@
+{
+  "model": "cybertiel:35b-a3b-mtp-iq4xs",
+  "capabilities": {
+    "thinking": true,
+    "vision": true,
+    "tool_call": true
+  },
+  "vision_preprocessing": true,
+  "num_ctx": 65536,
+  "num_ctx_analyst": 32768,
+  "num_ctx_duo_coder": 65536,
+  "num_ctx_vision": 16384,
+  "jinja": true,
+  "reasoning": "on",
+  "distilled": false,
+  "moe_cpu_experts": 33,
+  "mtp": true,
+  "gpu_layers": null,
+  "mmproj_filename": "mmproj-Cyber-Tiel-Coder-35B-A3B-BF16.gguf",
+  "vram_gb_override": 3.5,
+  "kv_cache_type": "q8_0",
+  "sampling": {
+    "thinking": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.05,
+      "seed": 42
+    },
+    "non_thinking": {
+      "temperature": 0.95,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_thinking_code": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_thinking_code_precise": {
+      "temperature": 0.6,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_thinking_text": {
+      "temperature": 0.95,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    },
+    "sampling_text": {
+      "temperature": 0.95,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "seed": 42
+    }
+  },
+  "_source": "Cyber-Tiel-Coder-35B-A3B-GGUF-MTP README (2026-10-26): vendor ladder for 8 GB VRAM -> n-cpu-moe 33 (never 41: the MTP head is block 40), KV q8_0, agentic sampling temp 0.6 / top-p 0.95 / top-k 20 / min-p 0, mtp on with n-max in the robust 1-3 band. UD-IQ4_XS = smallest fully-recommended tier.",
+  "kv_bytes_per_token": 12207,
+  "mtp_draft_n_max": 1,
+  "mtp_draft_p_min": 0.0,
+  "_notes": "Cyber-Tiel-Coder 35B-A3B MTP UD-IQ4_XS (16.9 GB) + mmproj BF16. Config follows the model card: ncmoe 33 = 40 - floor((8-4.3)/0.49) for an 8 GB card, q8_0 KV, ctx 65536, MTP draft-mtp with draft-n-max 1 / draft-p-min 0.0 (the card's peak setting: 94.3 tok/s, 1.21x, 82 % accepted). Sharp chat template is baked into the GGUF - no --chat-template-file. Measured 2026-10-30 (b12001): llama-bench tg128 11.48 +- 0.13 t/s, live server decode 10.43-11.87 t/s, tool call parsed OK on the first start. Slower than Hermes (17.02) and Groot (~31 live) - different quant and q8_0 KV, not a like-for-like comparison."
+}

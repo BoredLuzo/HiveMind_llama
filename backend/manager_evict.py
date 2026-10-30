@@ -111,7 +111,19 @@ class LlamaEvictMixin:
             # + KV live in system RAM. Accept the load; a GPU-based check here
             # would block every load on a CPU-only host.
             return CanFitResult(True, 0.0, 0.0, 0.0, "cpu-backend")
-        needed_mib = round(vram_of_moe(_strip_alias(model_name), num_ctx) * 1024, 1)
+        # UBATCH-COMPUTE-BUFFER (2026-10-30, audit fix): the table has no
+        # ubatch term. Measured on the real server (Groot ncmoe 28, ctx
+        # 32768): dedicated peak 5188 MiB at ub 512 vs 5333 at ub 1024, i.e.
+        # ~0.28 MiB of compute buffer per ubatch unit above 256. This is the
+        # gate that can BLOCK a load, so the surcharge belongs here - it
+        # previously only reached the eviction heuristic.
+        try:
+            from .llama_config import LLAMA_UBATCH as _ub_now
+        except (ImportError, AttributeError):
+            _ub_now = 256
+        _ub_extra_mib = max(0, int(_ub_now) - 256) * 0.28
+        needed_mib = round(vram_of_moe(_strip_alias(model_name), num_ctx) * 1024
+                           + _ub_extra_mib, 1)
         free_mib = get_live_gpu_free_mib()
         source = "live"
         if free_mib is None:

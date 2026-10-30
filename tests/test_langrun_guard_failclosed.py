@@ -11,13 +11,35 @@ DESIRED: count <= 0 aborts (0 = none, -1 = unknown). REWORK ONLY AFTER
 USER'S WORD — this test is deliberately RED until then and NOT registered
 in run_regressions.py.
 """
+import os
 import re
 import sys
 from pathlib import Path
 
+
+
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-SCRIPT = Path(r"C:\Users\NtheP\Desktop\HiveMind_dev\langrun_load.py")
+def _pick(env_name: str, *candidates):
+    """First existing candidate (or the env override) - no user name needed."""
+    _v = os.environ.get(env_name)
+    if _v:
+        return Path(_v)
+    for _c in candidates:
+        if _c.exists():
+            return _c
+    return candidates[0]
+
+
+_ROOT = Path(__file__).resolve().parent.parent
+_INSTALL = _pick("HIVEMIND_INSTALL_DIR", _ROOT.parent / "live", _ROOT / "live")
+_MODELS = _pick("HIVEMIND_MODELS_DIR", _ROOT.parent.parent / "Models",
+                _ROOT.parent / "Models")
+_DEV = _pick("HIVEMIND_DEV_DIR", _ROOT.parent.parent / "HiveMind_dev",
+             _ROOT.parent / "HiveMind_dev")
+
+SCRIPT = _DEV / "langrun_load.py"
 
 passed = failed = 0
 

@@ -30,12 +30,14 @@
 
 ## Side calls
 
-- **Empty-content fallback**: models that ignore
-  `chat_template_kwargs.enable_thinking` (measured: LFM2.5 2.6B, 800/800
-  tokens spent in the think block, `content = ""`) made every side call
-  receive an empty string. `LlamaClient.chat()` and `core/fix_agent.py` now
-  fall back to the reasoning tail (last 1500 chars) and log
-  `[SIDE-FALLBACK] model=... using N chars of reasoning`.
+- **Empty-content policy** (supersedes the earlier wording in this file):
+  models that ignore `chat_template_kwargs.enable_thinking` (measured:
+  LFM2.5 2.6B, 800/800 tokens in the think block, `content = ""`) made every
+  side call receive an empty string. `LlamaClient.chat()` and
+  `core/fix_agent.py` now **log `[SIDE-SKIP]` and return ""** - reasoning is
+  never substituted, because titles, memory entries and insights persist what
+  they receive. (An earlier draft of these notes described a reasoning
+  fallback; that code does not exist.)
 - Groot profile: `ncmoe 32`, `ub 1024`, `mtp true` (measured, see Models).
 
 ## Pre-flight and side calls (2026-10-30, final pass)
@@ -157,7 +159,11 @@
   unknown or below GGUF size + 8 GB (live: three stacked 18.3 GB hermes
   commits froze the machine at 56 GB commit) and falls back to plain mmap.
 - The load-mode decision lives in one pure function
-  (`backend/manager_load._resolve_load_mode`), unit-tested.
+  (`backend/manager_load._resolve_load_mode`), unit-tested. It is
+  evaluated **before** any profile override: a speculative model
+  (`mtp: true`) resolves to `mmap+mlock` even if its profile says
+  `none`, so the 35B profiles run on mmap+mlock unless
+  `HIVEMIND_MTP_SPEC=0` is set.
 - MiniCPM-V 4.7 is vision-capable again (see 1.4.12 notes - wired during
   the 1.4.12 window, bench and live verified).
 - Spark-X2.6 on Vulkan runs ~6 t/s (bench-verified twice, one unexplained

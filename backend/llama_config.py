@@ -185,7 +185,7 @@ def resolve_ubatch_sizes(settings: dict | None = None) -> tuple[int, int]:
     """(ubatch, batch) from settings - pure, unit-tested.
 
     duo_ubatch wins; llama_ubatch_size is kept as the older alias; neither
-    set -> 512. The value is clamped to [64, 4096] and rounded down to a
+    set -> 1024. The value is clamped to [64, 4096] and rounded down to a
     multiple of 32 (llama.cpp prefers aligned ubatches). batch is always
     >= ubatch (llama.cpp rejects ubatch > batch) and never below 1024.
     """
@@ -451,6 +451,19 @@ MTP_ENABLED = os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "of
 MTP_DRAFT_N_MAX = int(os.environ.get("HIVEMIND_MTP_DRAFT_N_MAX", "2") or 2)
 
 MTP_DRAFT_N_MIN = 1
+
+# DRAFT-P-MIN (2026-10-30): llama.cpp gates speculative drafts on a minimum
+# probability. The CyberTiel model card's sweep (its own box, UD-Q4_K_XL)
+# shows the setting matters more than the draft length:
+#   n_max 1 / p_min 0.0 -> 94.3 tok/s (1.21x, 82 % accepted)
+#   n_max 3 / p_min 0.0 -> 91.4 (1.17x)
+#   n_max 8 / p_min 0.0 -> 44.9 (0.57x)      <- long greedy drafts lose badly
+#   n_max 1 / p_min 0.5 -> 91.0 (1.16x, 88 % accepted)  <- robust
+#   n_max 8 / p_min 0.5 -> 78.1 (1.00x)
+# Default 0.0 with n_max 2 (the live value); a profile may override both via
+# "mtp_draft_n_max" / "mtp_draft_p_min". Only passed when the binary's help
+# lists --spec-draft-p-min (b12001 does, b11889 does not).
+MTP_DRAFT_P_MIN = float(os.environ.get("HIVEMIND_MTP_DRAFT_P_MIN", "0.0") or 0.0)
 
 
 # ── DSpark external-drafter (Speculative-Decoding Sidecar) ────────────────────
