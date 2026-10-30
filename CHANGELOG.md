@@ -28,6 +28,16 @@
   `logs/archive/` - nothing is deleted before an archive copy exists, and
   an archive collision gets a numeric suffix instead of overwriting.
 
+## Side calls
+
+- **Empty-content fallback**: models that ignore
+  `chat_template_kwargs.enable_thinking` (measured: LFM2.5 2.6B, 800/800
+  tokens spent in the think block, `content = ""`) made every side call
+  receive an empty string. `LlamaClient.chat()` and `core/fix_agent.py` now
+  fall back to the reasoning tail (last 1500 chars) and log
+  `[SIDE-FALLBACK] model=... using N chars of reasoning`.
+- Groot profile: `ncmoe 32`, `ub 1024`, `mtp true` (measured, see Models).
+
 ## Engine build
 
 - Default llama.cpp build is now **b12001** (auto-discovery picks the highest
@@ -54,10 +64,10 @@
   added through the normal mechanism - profile
   `model_configs/models/groot_19b-a3b-261023.json` + `models.json` alias.
   Header: `qwen35moe`, 41 blocks, **128 experts (8 used)**, ctx 262144,
-  `nextn_predict_layers=1` (MTP head present, **off - the A/B could not be completed, see inventory**), KV
+  `nextn_predict_layers=1` (MTP **on**: tools +60.7 %, prose -4.9 %), KV
   `2 x 256` per layer (576 B/token with q4_0). Expert stacks 9.33 GiB,
-  216-249 MiB per block; `ncmoe 28` keeps ~2.9 GiB of experts on the GPU (the only swept value that stays under the 200 MiB shared-memory limit; the 28-vs-32 ranking is inside the measurement noise, see inventory).
-  Profile: ctx 131072, KV q4_0, ub 512, mmap+mlock, jinja, thinking on.
+  216-249 MiB per block; `ncmoe 32` (real-server sweep 24/28/32, shared judged as delta to the 470 MiB idle baseline: 32 is the fastest AND has the smallest delta).
+  Profile: ctx 131072, KV q4_0, ub 1024, mmap+mlock, jinja, thinking on.
   Sampler per model card (thinking temp 1.0/presence 1.5, code temp 0.6/
   presence 0.0). Hermes stays the default and is unchanged.
 - **Downloader**: LFM2.5 2.6B is replaced by **LFM3-Omni 2B** (with mmproj)
@@ -72,7 +82,7 @@
   `[SAMPLER] kind=side ...` with the values that actually go on the wire.
 ## Prefill throughput
 
-- New setting **`duo_ubatch`** (default **512**; `llama_ubatch_size` stays as
+- New setting **`duo_ubatch`** (default **1024** since 2026-10-30; `llama_ubatch_size` stays as
   the older alias). `--batch-size` follows the ubatch and never drops below
   1024, so `ubatch <= batch` always holds. Prefill was 89-94 % of wall time
   in the 80k run, which makes this the only knob with a measurable effect on
@@ -80,7 +90,11 @@
   per variant): ub 256 -> 77.64 t/s, **ub 512 -> 119.96 t/s** (shared 206
   MiB), ub 1024 -> aborted (shared 80 -> 340 MiB), ub 2048 -> 193.59 t/s
   but shared peak 2348 MiB (spills to system RAM). 512 is the fastest value
-  that stays off the shared-memory path.
+  that stays off the shared-memory path. **Revised the same day:** the
+  absolute shared number was the wrong yardstick (idle baseline is
+  ~470 MiB). Judged as a delta against the 512 run on the real server
+  at 18 011 prompt tokens: 91.7 -> 113.6 t/s (+23.9 %) for +52 MiB of
+  extra shared memory, so 1024 is the default now. 2048 stays out.
 
 ## Compression cost
 

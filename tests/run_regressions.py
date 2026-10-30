@@ -241,6 +241,7 @@ SUITES = [
     ("cmd_flags",              "tests/test_cmd_flags.py",                  30),
     ("preflight_matrix",       "tests/test_preflight_matrix.py",           60),
     ("groot_profile",          "tests/test_groot_profile.py",               30),
+    ("side_fallback",          "tests/test_side_fallback.py",              30),
 
 ]
 

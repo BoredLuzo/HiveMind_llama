@@ -214,6 +214,12 @@ async def _run_fix_loop(*, path: str, handover: str, model: str,
             msg = await _post_chat(live_port, model, messages)
             tcs = msg.get("tool_calls") or []
             final_text = (msg.get("content") or "").strip()
+            # EMPTY-CONTENT-FALLBACK (2026-10-30): same as
+            # llama_client.chat - a model that ignores enable_thinking burns
+            # its budget in the think block and returns "" here.
+            if not final_text:
+                final_text = ((msg.get("reasoning_content")
+                               or msg.get("reasoning") or "").strip())[-1500:]
             if not tcs or rnd >= max_rounds:
                 break
             messages.append(msg)

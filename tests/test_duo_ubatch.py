@@ -36,11 +36,11 @@ def check(name, cond, extra=""):
 
 
 # default
-check("module default is 512", LLAMA_UBATCH_DEFAULT == 512, f"({LLAMA_UBATCH_DEFAULT})")
-check("module constant matches the default", LLAMA_UBATCH == 512, f"({LLAMA_UBATCH})")
+check("module default is 1024", LLAMA_UBATCH_DEFAULT == 1024, f"({LLAMA_UBATCH_DEFAULT})")
+check("module constant matches the default", LLAMA_UBATCH == 1024, f"({LLAMA_UBATCH})")
 ub, b = resolve_ubatch_sizes({})
-check("no settings -> ub 512", ub == 512, f"({ub})")
-check("no settings -> batch 1024", b == 1024, f"({b})")
+check("no settings -> ub 1024", ub == 1024, f"({ub})")
+check("no settings -> batch 1024 (== ub)", b == 1024, f"({b})")
 check("batch >= ubatch (llama.cpp requirement)", b >= ub)
 
 # duo_ubatch wins over the alias
@@ -62,11 +62,11 @@ check("clamp low (16 -> 64)", resolve_ubatch_sizes({"duo_ubatch": 16})[0] == 64)
 check("clamp high (9999 -> 4096)", resolve_ubatch_sizes({"duo_ubatch": 9999})[0] == 4096)
 check("align down (500 -> 480)", resolve_ubatch_sizes({"duo_ubatch": 500})[0] == 480,
       f"({resolve_ubatch_sizes({'duo_ubatch': 500})[0]})")
-check("invalid string -> default 512",
-      resolve_ubatch_sizes({"duo_ubatch": "auto"})[0] == 512)
+check("invalid string -> default",
+      resolve_ubatch_sizes({"duo_ubatch": "auto"})[0] == LLAMA_UBATCH_DEFAULT)
 check("zero -> default (not a valid chunk)",
-      resolve_ubatch_sizes({"duo_ubatch": 0})[0] == 512)
-check("None -> default", resolve_ubatch_sizes(None)[0] == 512)
+      resolve_ubatch_sizes({"duo_ubatch": 0})[0] == LLAMA_UBATCH_DEFAULT)
+check("None -> default", resolve_ubatch_sizes(None)[0] == LLAMA_UBATCH_DEFAULT)
 
 # the wiring exists in both places
 root = Path(__file__).resolve().parent.parent

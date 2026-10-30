@@ -47,12 +47,14 @@ else:
     check("model tag", p.get("model") == "groot:19b-a3b-261023", p.get("model"))
     check("ctx 131072 (card allows >= 128K)", p.get("num_ctx") == 131072, p.get("num_ctx"))
     check("KV q4_0", p.get("kv_cache_type") == "q4_0")
-    check("ub 512", p.get("ubatch") == 512, p.get("ubatch"))
+    check("ub 1024 (real-server prefill +23.9 % vs 512, shared delta +52 MiB)",
+          p.get("ubatch") == 1024, p.get("ubatch"))
     check("mmap+mlock like Hermes", p.get("load_mode") == "mmap+mlock")
-    check("MTP off by default", p.get("mtp") is False)
+    # enabled 2026-10-30 by user decision: tools +60.7 %, prose -4.9 %
+    check("MTP enabled (tools +60.7 %, prose -4.9 %)", p.get("mtp") is True)
     check("jinja on", p.get("jinja") is True)
-    check("ncmoe in the measured band (28..36)",
-          28 <= int(p.get("moe_cpu_experts") or 0) <= 36,
+    check("ncmoe 32 (real server: fastest + smallest shared delta vs baseline)",
+          int(p.get("moe_cpu_experts") or 0) == 32,
           f"({p.get('moe_cpu_experts')})")
     check("thinking capable", (p.get("capabilities") or {}).get("thinking") is True)
 

@@ -161,14 +161,21 @@ VRAM_PREFLIGHT_GATE = True
 # Prompt-processing chunk (--ubatch-size). Higher = faster prefill for MoE with
 # CPU expert offloading, but larger VRAM compute buffer. Runtime-overridable via
 # settings key duo_ubatch (falls back to the older llama_ubatch_size).
-# MEASURED 2026-10-30 (hermes 35B, b11889, pp 8192, fresh process):
-#   ub 256 -> 77.6 t/s (live value at the time, shared 164 MiB)
-#   ub 512 -> 119.96 t/s (shared 206 MiB)   <- default since this measurement
-#   ub 1024 -> aborted, shared climbed 80 -> 340 MiB
-#   ub 2048 -> 193.6 t/s but shared peak 2348 MiB (spills to system RAM)
-# Default 512 = the fastest value that stays off the shared-memory path.
-LLAMA_UBATCH = 512
-LLAMA_UBATCH_DEFAULT = 512
+# MEASURED 2026-10-30 (build b11889/b12001, RX 6600):
+#   bench, pp 8192, fresh process: 256 -> 77.6 | 512 -> 119.96 |
+#     1024 -> aborted (absolute shared 80 -> 340 MiB) | 2048 -> 193.6
+#     (absolute shared peak 2348 MiB).
+#   BUT the absolute shared number was the wrong yardstick (idle baseline is
+#   ~470 MiB, and every real run sits 900-1600 MiB above it). Judged as a
+#   DELTA to the idle baseline / to the neighbouring variant, on the REAL
+#   server at 18 011 prompt tokens:
+#     Hermes 512 -> 91.7 t/s, 1024 -> 113.6 t/s (+23.9 %),
+#     shared delta vs the 512 run: +52 MiB only.
+#   Groot (ub 512 vs 1024, 4.2k/10.5k depth): +27.7 % / +17.1 %, +58 MiB.
+# Default 1024 (2026-10-30): the prefill gain is large and the shared delta
+# against the 512 reference is small. 2048 stays out (real spill).
+LLAMA_UBATCH = 1024
+LLAMA_UBATCH_DEFAULT = 1024
 LLAMA_UBATCH_MIN = 64
 LLAMA_UBATCH_MAX = 4096
 LLAMA_BATCH_DEFAULT = 1024
