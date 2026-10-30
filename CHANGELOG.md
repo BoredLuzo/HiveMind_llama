@@ -22,6 +22,18 @@
   `logs/archive/` - nothing is deleted before an archive copy exists, and
   an archive collision gets a numeric suffix instead of overwriting.
 
+## Prefill throughput
+
+- New setting **`duo_ubatch`** (default **512**; `llama_ubatch_size` stays as
+  the older alias). `--batch-size` follows the ubatch and never drops below
+  1024, so `ubatch <= batch` always holds. Prefill was 89-94 % of wall time
+  in the 80k run, which makes this the only knob with a measurable effect on
+  total run time. Measured on the 35B MoE (b11889, pp 8192, fresh process
+  per variant): ub 256 -> 77.64 t/s, **ub 512 -> 119.96 t/s** (shared 206
+  MiB), ub 1024 -> aborted (shared 80 -> 340 MiB), ub 2048 -> 193.59 t/s
+  but shared peak 2348 MiB (spills to system RAM). 512 is the fastest value
+  that stays off the shared-memory path.
+
 ## Compression cost
 
 - New setting `duo_compress_tail_tool_max_chars` (default 8000) caps each

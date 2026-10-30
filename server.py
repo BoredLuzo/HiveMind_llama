@@ -427,9 +427,13 @@ def _sync_backend_runtime_config() -> None:
         except Exception:
             pass
         # UBATCH-SEAM (2026-09-08): same three-module sync as CACHE_REUSE —
-        # llama_ubatch_size overrides --ubatch-size (prefill throughput lever
-        # for MoE + CPU expert offload; larger = faster prefill, more VRAM).
-        _ubatch_val = int(settings.get("llama_ubatch_size", 256) or 256)
+        # duo_ubatch overrides --ubatch-size (prefill throughput lever for
+        # MoE + CPU expert offload). Default 512: measured 2026-10-30 at
+        # 119.96 t/s pp8192 vs 77.64 at 256, still off the shared-memory
+        # path (206 vs 2348 MiB at ub 2048). llama_ubatch_size stays as the
+        # older alias; -b follows via resolve_ubatch_sizes.
+        from backend.llama_config import resolve_ubatch_sizes as _rus
+        _ubatch_val, _batch_val = _rus(settings)
         _lc_init.LLAMA_UBATCH = _ubatch_val
         _lsm_init.LLAMA_UBATCH = _ubatch_val
         # CHECKPOINT/CACHE-RAM SEAM (2026-10-27): a long run got slower the

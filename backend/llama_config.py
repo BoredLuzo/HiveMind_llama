@@ -160,8 +160,40 @@ VRAM_PREFLIGHT_GATE = True
 
 # Prompt-processing chunk (--ubatch-size). Higher = faster prefill for MoE with
 # CPU expert offloading, but larger VRAM compute buffer. Runtime-overridable via
-# settings key llama_ubatch_size (server._sync_backend_runtime_config).
-LLAMA_UBATCH = 256
+# settings key duo_ubatch (falls back to the older llama_ubatch_size).
+# MEASURED 2026-10-30 (hermes 35B, b11889, pp 8192, fresh process):
+#   ub 256 -> 77.6 t/s (live value at the time, shared 164 MiB)
+#   ub 512 -> 119.96 t/s (shared 206 MiB)   <- default since this measurement
+#   ub 1024 -> aborted, shared climbed 80 -> 340 MiB
+#   ub 2048 -> 193.6 t/s but shared peak 2348 MiB (spills to system RAM)
+# Default 512 = the fastest value that stays off the shared-memory path.
+LLAMA_UBATCH = 512
+LLAMA_UBATCH_DEFAULT = 512
+LLAMA_UBATCH_MIN = 64
+LLAMA_UBATCH_MAX = 4096
+LLAMA_BATCH_DEFAULT = 1024
+
+
+def resolve_ubatch_sizes(settings: dict | None = None) -> tuple[int, int]:
+    """(ubatch, batch) from settings - pure, unit-tested.
+
+    duo_ubatch wins; llama_ubatch_size is kept as the older alias; neither
+    set -> 512. The value is clamped to [64, 4096] and rounded down to a
+    multiple of 32 (llama.cpp prefers aligned ubatches). batch is always
+    >= ubatch (llama.cpp rejects ubatch > batch) and never below 1024.
+    """
+    s = settings or {}
+    raw = s.get("duo_ubatch")
+    if raw in (None, "", 0, "0"):
+        raw = s.get("llama_ubatch_size")
+    try:
+        ub = int(raw) if raw not in (None, "") else LLAMA_UBATCH_DEFAULT
+    except (TypeError, ValueError):
+        ub = LLAMA_UBATCH_DEFAULT
+    ub = max(LLAMA_UBATCH_MIN, min(LLAMA_UBATCH_MAX, ub))
+    ub = (ub // 32) * 32 or LLAMA_UBATCH_DEFAULT
+    batch = max(LLAMA_BATCH_DEFAULT, ub)
+    return ub, batch
 
 
 # ── MoE (Mixture of Experts) ──────────────────────────────────────────────────

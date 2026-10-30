@@ -237,6 +237,7 @@ SUITES = [
     ("preflight_failclosed",    "tests/test_preflight_failclosed.py",          60),
     ("langrun_guard_failclosed", "tests/test_langrun_guard_failclosed.py",     30),    ("ctx_full_storm",          "tests/test_ctx_full_storm.py",               30),
     ("perf_logging",           "tests/test_perf_logging.py",                30),
+    ("duo_ubatch",             "tests/test_duo_ubatch.py",                  30),
 
 ]
 

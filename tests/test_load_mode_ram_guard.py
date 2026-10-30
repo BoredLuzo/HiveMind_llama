@@ -10,6 +10,7 @@ Covers the RAM-GUARD behaviour the live audit demanded (2026-10-28):
   - spec/mlock intents keep the historical mmap+mlock path.
 """
 import sys
+import tempfile as _tempfile
 
 sys.path.insert(0, str(Path := __import__("pathlib").Path(__file__).parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -20,7 +21,7 @@ from backend.manager_load import (  # noqa: E402
 # fail-closed era (2026-10-30): an unknown model blocks the guard, so every
 # none-path test needs a model with a KNOWN size - a sparse dummy gguf.
 import pathlib as _pl
-_gg = _pl.Path(__file__).parent / "_tmp_dummy_guard.gguf"
+_gg = _pl.Path(_tempfile.gettempdir()) / "_tmp_dummy_guard.gguf"
 with open(_gg, "wb") as _f:
     _f.truncate(3 * 1024 * 1024 * 1024)  # sparse 3 GB -> gguf_size 3.0
 _M = str(_gg)

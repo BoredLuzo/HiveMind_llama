@@ -29,7 +29,7 @@ def check(name, cond, extra=""):
 # 1. RAM guard conditions (fail-closed era: unknown model blocks)
 free = LP.free_ram_gb()
 check("free RAM measurable", free > 0, f"({free:.1f} GB)")
-_gg = Path(__file__).parent / "_tmp_dummy.gguf"
+_gg = Path(__import__("tempfile").gettempdir()) / "_tmp_dummy.gguf"
 with open(_gg, "wb") as f:
     f.truncate(64 * 1024 * 1024)  # sparse 64 MB -> known size 0.06 GB
 try:

@@ -1099,8 +1099,8 @@ class LlamaLoadMixin:
         cmd += [
             "--parallel",     str(max(1, n_parallel)),
             "--flash-attn",   "on",
-            "--batch-size",   "1024",
-            "--ubatch-size",  str(LLAMA_UBATCH),
+            "--batch-size",   str(max(1024, int(LLAMA_UBATCH))),
+            "--ubatch-size",  str(int(LLAMA_UBATCH)),
             "--threads",      str(_def_threads),
             "--threads-batch",str(_def_threads_batch),
             "--split-mode",   "none",
