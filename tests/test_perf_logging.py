@@ -84,4 +84,20 @@ else:
     print("  SKIP memwatch switch (file outside repo)")
 
 print(f"\nperf_logging: {passed} passed, {failed} failed")
+# --- switches (2026-10-30): env only, no UI row -------------------------
+import os as _os
+from utils.perf_log import perf_enabled, decode_warn_enabled
+_os.environ.pop("HiveMind_perf_log", None)
+_os.environ.pop("HiveMind_decode_drop_warn", None)
+check("default: perf on", perf_enabled() is True)
+check("default: decode-warn on", decode_warn_enabled() is True)
+_os.environ["HiveMind_perf_log"] = "0"
+check("HiveMind_perf_log=0 silences", perf_enabled() is False)
+_os.environ["HiveMind_perf_log"] = "1"
+check("HiveMind_perf_log=1 re-enables", perf_enabled() is True)
+_os.environ["HiveMind_decode_drop_warn"] = "off"
+check("decode_drop_warn=off silences", decode_warn_enabled() is False)
+_os.environ.pop("HiveMind_decode_drop_warn", None)
+_os.environ.pop("HiveMind_perf_log", None)
+
 sys.exit(1 if failed else 0)

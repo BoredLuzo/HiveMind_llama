@@ -59,3 +59,25 @@ def perf_line(*, kind: str, model: str = "", port="", usage: dict | None = None,
         _int(t.get("predicted_n")),
         _num(t.get("predicted_per_second"), 2),
     )
+
+
+def _env_on(name: str, default: bool = True) -> bool:
+    """Env switch reader: '0'/'false'/'off'/'no' disables; unset keeps the
+    default. Used for the passive diagnostics so they can be silenced
+    without a UI change."""
+    import os
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() not in ("0", "false", "off", "no")
+
+
+def perf_enabled() -> bool:
+    """[PERF] lines: HiveMind_perf_log=0 silences them (default on)."""
+    return _env_on("HiveMind_perf_log", True)
+
+
+def decode_warn_enabled() -> bool:
+    """[DECODE-DROP] warnings: HiveMind_decode_drop_warn=0 silences them
+    (default on). Warning only in either case - never a restart."""
+    return _env_on("HiveMind_decode_drop_warn", True)

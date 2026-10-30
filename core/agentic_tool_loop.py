@@ -487,17 +487,19 @@ class AgenticToolLoop(ToolLoop):
                                     # loss (prompt_n high, cache_n ~0) from
                                     # depth cost and side-call noise.
                                     try:
-                                        from utils.perf_log import perf_line as _pl
-                                        logger.info(_pl(
-                                            kind="main",
-                                            model=getattr(self.round_state, "exec_model", "?"),
-                                            port=getattr(self.round_state, "port", ""),
-                                            usage=_dr_usage_final,
-                                            timings={"prompt_n": _pre_n,
-                                                     "prompt_ms": (locals().get("_dr_prompt_timings") or {}).get("prompt_ms"),
-                                                     "predicted_n": _dr_usage_final.get("completion_tokens"),
-                                                     "predicted_per_second": getattr(self.round_state, "decode_tps", None)},
-                                        ))
+                                        from utils.perf_log import perf_line as _pl, \
+                                            perf_enabled as _perf_on
+                                        if _perf_on():
+                                            logger.info(_pl(
+                                                kind="main",
+                                                model=getattr(self.round_state, "exec_model", "?"),
+                                                port=getattr(self.round_state, "port", ""),
+                                                usage=_dr_usage_final,
+                                                timings={"prompt_n": _pre_n,
+                                                         "prompt_ms": (locals().get("_dr_prompt_timings") or {}).get("prompt_ms"),
+                                                         "predicted_n": _dr_usage_final.get("completion_tokens"),
+                                                         "predicted_per_second": getattr(self.round_state, "decode_tps", None)},
+                                            ))
                                     except (ImportError, AttributeError, TypeError) as _perf_err:
                                         logger.debug("[PERF] skipped: %s", _perf_err)
                                     # DECODE-DROP-WATCH (2026-10-30): warn only,
@@ -506,8 +508,9 @@ class AgenticToolLoop(ToolLoop):
                                     # round is below 50 % of the median of the
                                     # previous rounds after >= 5 rounds.
                                     try:
+                                        from utils.perf_log import decode_warn_enabled as _ddw_on
                                         _dt = float(getattr(self.round_state, "decode_tps", 0.0) or 0.0)
-                                        if _dt > 0:
+                                        if _ddw_on() and _dt > 0:
                                             _hist = getattr(self, "_decode_hist", None)
                                             if _hist is None:
                                                 _hist = []
@@ -523,7 +526,7 @@ class AgenticToolLoop(ToolLoop):
                                                         "(last %d rounds) — warning only, no restart",
                                                         _dt, _med, len(_prev),
                                                     )
-                                    except (TypeError, ValueError, IndexError):
+                                    except (ImportError, TypeError, ValueError, IndexError):
                                         pass
                             except Exception:
                                 pass
