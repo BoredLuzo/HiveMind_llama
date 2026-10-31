@@ -22,6 +22,8 @@ Modes (argv[1]):
   die      - exits during initialize (start failure test)
   noanswer - initialize works, textDocument/hover is never answered
              (request timeout test)
+  staleversion - publishes a delayed OLD-version diagnostic after didChange
+             before the fresh one (tests the client's version guard)
 """
 import json
 import sys
@@ -30,7 +32,8 @@ import time
 MODE = sys.argv[1] if len(sys.argv) > 1 else "normal"
 DIAG_DELAY_S = {"normal": 0.15, "slowdiag": 0.6}.get(MODE, 0.0)
 
-state = {"shutdown": False, "texts": {}, "probe_id": 9000}
+state = {"shutdown": False, "texts": {}, "probe_id": 9000,
+         "versions": {}, "languages": {}}
 cfg_pending = set()
 cfg_answered = 0
 
@@ -77,10 +80,11 @@ def notify(method, params):
     send({"jsonrpc": "2.0", "method": method, "params": params})
 
 
-def publish(uri):
-    text = state["texts"].get(uri, "")
+def publish(uri, version=None, text=None):
+    if text is None:
+        text = state["texts"].get(uri, "")
     name = str(uri).rsplit("/", 1)[-1]
-    notify("textDocument/publishDiagnostics", {
+    params = {
         "uri": uri,
         "diagnostics": [{
             "range": {"start": {"line": 0, "character": 0},
@@ -88,7 +92,11 @@ def publish(uri):
                               "character": min(5, max(1, len(text)))}},
             "severity": 1,
             "source": "fake-lsp",
-            "message": f"fake diag {name}|{len(text)}"}]})
+            "data": {"language": state["languages"].get(uri, "")},
+            "message": f"fake diag {name}|{len(text)}"}]}
+    if version is not None:
+        params["version"] = version
+    notify("textDocument/publishDiagnostics", params)
 
 
 def publish_open(uri):
@@ -107,7 +115,7 @@ def publish_open(uri):
         return
     if DIAG_DELAY_S:
         time.sleep(DIAG_DELAY_S)
-    publish(uri)
+    publish(uri, version=state["versions"].get(uri))
 
 
 while True:
@@ -164,15 +172,29 @@ while True:
         doc = params.get("textDocument") or {}
         uri = doc.get("uri")
         state["texts"][uri] = doc.get("text", "")
+        state["versions"][uri] = int(doc.get("version") or 1)
+        state["languages"][uri] = str(doc.get("languageId") or "")
         publish_open(uri)
     elif method == "textDocument/didChange":
         doc = params.get("textDocument") or {}
         uri = doc.get("uri")
+        _old_text = state["texts"].get(uri, "")
+        _old_version = state["versions"].get(uri, 0)
         changes = params.get("contentChanges") or [{}]
         state["texts"][uri] = changes[0].get("text", "")
+        state["versions"][uri] = int(doc.get("version")
+                                     or _old_version + 1)
+        if MODE == "staleversion":
+            # old-version result lands after the change; the client must
+            # ignore it and keep waiting for the new version
+            time.sleep(0.05)
+            publish(uri, version=_old_version, text=_old_text)
+            time.sleep(0.25)
+            publish(uri, version=state["versions"][uri])
+            continue
         if DIAG_DELAY_S:
             time.sleep(DIAG_DELAY_S)
-        publish(uri)
+        publish(uri, version=state["versions"].get(uri))
     elif method == "textDocument/definition":
         pos = params.get("position") or {}
         line = pos.get("line") or 0

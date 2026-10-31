@@ -79,6 +79,25 @@ def language_for_path(path: str | Path) -> str | None:
     return EXTENSION_LANGUAGE.get(Path(str(path)).suffix.lower())
 
 
+# LSP document language ids that differ from the server-selection language.
+# TSX/JSX are served by the TypeScript server, but tsserver wants the React
+# language ids in didOpen for the JSX-aware mode.
+_DOCUMENT_LANGUAGE_OVERRIDES: dict[str, str] = {
+    ".tsx": "typescriptreact",
+    ".jsx": "javascriptreact",
+}
+
+
+def document_language_for_path(path: str | Path) -> str | None:
+    """The languageId sent in textDocument/didOpen.
+
+    Usually identical to language_for_path(); TSX/JSX use the React ids
+    while server selection still finds typescript-language-server under the
+    base "typescript"/"javascript" keys."""
+    suffix = Path(str(path)).suffix.lower()
+    return _DOCUMENT_LANGUAGE_OVERRIDES.get(suffix) or EXTENSION_LANGUAGE.get(suffix)
+
+
 def split_command(text: str) -> list[str]:
     """One command string -> argv list.
 

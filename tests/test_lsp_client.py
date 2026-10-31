@@ -76,6 +76,11 @@ check("1a extension -> language id",
       and LR.language_for_path("k.css") == "css"
       and LR.language_for_path("l.lua") == "lua")
 check("1b unknown extension maps to None", LR.language_for_path("logo.png") is None)
+check("1b2 tsx/jsx keep the server language but use the React document id",
+      LR.language_for_path("a.tsx") == "typescript"
+      and LR.language_for_path("b.jsx") == "javascript"
+      and LR.document_language_for_path("a.tsx") == "typescriptreact"
+      and LR.document_language_for_path("b.jsx") == "javascriptreact")
 
 _r = LR.resolve("python")
 check("1c resolve returns an existing binary or None",
@@ -247,6 +252,52 @@ check("4b didChange pushes the new content and fresh diagnostics arrive",
 check("4c the document version advanced to 2", list(version.values()) == [2],
       f"({version})")
 check("4d the server exits cleanly after the change flow", rc4 == 0, f"(rc={rc4})")
+
+
+# ── 4e. stale publication race (version guard) ─────────────────────────
+async def _stale_flow():
+    ws, sample = new_ws()
+    mgr = LC.LspManager(ws, settings=make_settings("staleversion"))
+    out = {}
+    try:
+        out["start"] = await mgr.start_language("python")
+        out["first"] = await mgr.diagnostics("sample.py", wait_s=1.0)
+        _new = "def main():\n    return 42\n\nprint(main())\n"
+        sample.write_text(_new, encoding="utf-8")
+        out["second"] = await mgr.diagnostics("sample.py", wait_s=1.0)
+        out["new_len"] = len(_new)
+    finally:
+        await mgr.close_all()
+    return out
+
+
+_st = asyncio.run(_stale_flow())
+check("4e the stale pre-change publication is ignored",
+      _st["first"] and _st["second"]
+      and _st["second"][0]["message"].endswith(f"|{_st['new_len']}"),
+      f"({_st['second'][0]['message'] if _st['second'] else '[]'})")
+
+
+# ── 4f. TSX sends the React document language id ──────────────────────
+async def _tsx_flow():
+    ws = Path(tempfile.mkdtemp(prefix="hm_lsp_tsx_"))
+    sample = ws / "sample.tsx"
+    sample.write_text("const x: number = 1;\n", encoding="utf-8")
+    mgr = LC.LspManager(ws, settings={
+        "lsp_servers": {"typescript": [sys.executable, str(FAKE), "normal"]}})
+    try:
+        out = {"start": await mgr.start_language("typescript")}
+        out["diag"] = await mgr.diagnostics("sample.tsx", wait_s=1.0)
+        return out
+    finally:
+        await mgr.close_all()
+
+
+_tsx = asyncio.run(_tsx_flow())
+check("4f TSX diagnostics arrive and the server saw typescriptreact",
+      _tsx["start"] and _tsx["diag"]
+      and _tsx["diag"][0].get("data", {}).get("language") == "typescriptreact",
+      f"({_tsx['diag'][0].get('data') if _tsx['diag'] else '[]'})")
 
 
 # ── 5. Server->client requests are answered -----------------------------

@@ -68,7 +68,7 @@ CLIENT_CAPABILITIES: dict = {
         "synchronization": {"dynamicRegistration": False, "didSave": True,
                             "willSave": False, "willSaveWaitUntil": False},
         "publishDiagnostics": {"relatedInformation": True,
-                               "versionSupport": False,
+                               "versionSupport": True,
                                "codeDescriptionSupport": False,
                                "dataSupport": False},
         "hover": {"contentFormat": ["markdown", "plaintext"]},
@@ -244,6 +244,10 @@ class _LspConnection:
         # wait can tell "fresh publication for THIS document" from noise
         self.diagnostics: dict[str, list[dict]] = {}
         self._diag_gen: dict[str, int] = {}
+        # Document version the publication was computed for (None when the
+        # server does not send one). Lets collect_diagnostics ignore a
+        # delayed publication for the pre-didChange text.
+        self._diag_version: dict[str, int | None] = {}
         self.open_docs: dict[str, int] = {}   # uri -> sync version
         self._doc_text: dict[str, str] = {}
         self.init_params: dict = {}
@@ -445,8 +449,24 @@ class _LspConnection:
             diags = params.get("diagnostics")
             if isinstance(uri, str):
                 uri = canonical_uri(uri)
+                _ver = params.get("version")
+                if isinstance(_ver, bool) or not isinstance(_ver, int):
+                    _ver = None
+                _prev = self._diag_version.get(uri)
+                if _ver is not None and isinstance(_prev, int) and _ver < _prev:
+                    # STALE-PUBLICATION (2026-10-31): a check started before
+                    # the last didChange can land afterwards. Never let it
+                    # overwrite the newer document's diagnostics or satisfy
+                    # a freshness wait.
+                    logger.debug("[LSP:%s] ignoring stale diagnostics v%s < v%s",
+                                 self.language_id, _ver, _prev)
+                    return
                 self.diagnostics[uri] = ([d for d in diags if isinstance(d, dict)]
                                          if isinstance(diags, list) else [])
+                if _ver is not None:
+                    self._diag_version[uri] = _ver
+                elif uri not in self._diag_version:
+                    self._diag_version[uri] = None
                 self._diag_gen[uri] = self._diag_gen.get(uri, 0) + 1
         # everything else ($/progress, window/logMessage, telemetry, ...)
         # is ignored by design
@@ -544,14 +564,19 @@ class _LspConnection:
                            f"- too large to sync with a language server")
         return text
 
-    async def ensure_open(self, path: Path,
-                          uri: str | None = None) -> tuple[str, bool]:
+    async def ensure_open(self, path: Path, uri: str | None = None,
+                          language_id: str | None = None) -> tuple[str, bool]:
         """didOpen on first use, didChange (+didSave) when the file changed
         on disk since. Full sync: the change carries the whole text.
         Returns (uri, changed) - changed=True iff a sync was sent, so the
-        diagnostics wait only runs after an actual open/change."""
+        diagnostics wait only runs after an actual open/change.
+
+        language_id overrides the document language for TSX/JSX
+        (typescriptreact/javascriptreact) while the server connection stays
+        keyed by the base language from the registry."""
         if uri is None:
             uri = path_to_uri(path)
+        doc_language = language_id or self.language_id
         text = self._read_doc(path)
         if uri in self.open_docs:
             if text != self._doc_text.get(uri):
@@ -568,24 +593,34 @@ class _LspConnection:
         self.open_docs[uri] = 1
         self._doc_text[uri] = text
         await self.notify("textDocument/didOpen", {
-            "textDocument": {"uri": uri, "languageId": self.language_id,
+            "textDocument": {"uri": uri, "languageId": doc_language,
                              "version": 1, "text": text}})
         return uri, True
 
-    async def collect_diagnostics(self, path: Path, wait_s: float) -> list[dict]:
+    async def collect_diagnostics(self, path: Path, wait_s: float,
+                                  language_id: str | None = None) -> list[dict]:
         """Open/refresh the document, then - only when a sync was actually
         sent - wait up to wait_s for a diagnostics publication NEWER than
         this call (per-URI generation counter: the publication may arrive
         between didOpen and the wait, it still counts as fresh). For an
         unchanged already-open document the stored diagnostics are current,
-        so they return without waiting."""
+        so they return without waiting.
+
+        Version-aware servers: a publication for an older document version
+        is discarded in _dispatch; the wait additionally requires the
+        expected version, which closes the pre-didChange race.
+        """
         uri = canonical_uri(path_to_uri(path))
         gen0 = self._diag_gen.get(uri, 0)
-        _uri, changed = await self.ensure_open(path, uri)
+        _uri, changed = await self.ensure_open(path, uri, language_id)
         if changed:
+            expected = self.open_docs.get(uri)
             deadline = self.loop.time() + wait_s
-            while self.loop.time() < deadline \
-                    and self._diag_gen.get(uri, 0) <= gen0:
+            while self.loop.time() < deadline:
+                if self._diag_gen.get(uri, 0) > gen0:
+                    got = self._diag_version.get(uri)
+                    if got is None or expected is None or got >= expected:
+                        break
                 await asyncio.sleep(DIAG_POLL_S)
         return [dict(d) for d in self.diagnostics.get(uri, [])]
 
@@ -802,7 +837,8 @@ class LspManager:
         if lang is None:
             return None, None
         conn = await self._conn(lang)
-        uri, _changed = await conn.ensure_open(p)
+        uri, _changed = await conn.ensure_open(
+            p, language_id=registry.document_language_for_path(p))
         return conn, uri
 
     # -- features ------------------------------------------------------
@@ -814,7 +850,9 @@ class LspManager:
         if lang is None:
             return []
         conn = await self._conn(lang)
-        return await conn.collect_diagnostics(p, max(0.0, float(wait_s)))
+        return await conn.collect_diagnostics(
+            p, max(0.0, float(wait_s)),
+            language_id=registry.document_language_for_path(p))
 
     async def definition(self, path, line: int, character: int) -> list[dict]:
         conn, uri = await self._open_for(path)

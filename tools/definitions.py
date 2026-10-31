@@ -628,6 +628,24 @@ def git_tools_enabled(settings: dict | None = None) -> bool:
                for _k in _GIT_CREDENTIAL_KEYS)
 
 
+def lsp_tools_enabled(settings: dict | None = None) -> bool:
+    """True if the lsp_* schemas should ship.
+
+    Same rule as the handler gate: settings["lsp_enabled"], default on.
+    Unreadable settings -> True (a settings read error must not silently
+    remove the tools)."""
+    try:
+        if settings is None:
+            from settings import load_settings
+            settings = load_settings() or {}
+    except (ImportError, AttributeError, TypeError, ValueError, OSError):
+        return True
+    raw = settings.get("lsp_enabled", True)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw or "").strip().lower() not in ("0", "false", "off", "no")
+
+
 def _filter_tools_for_mode(tools: list, mode: str, include_websearch: bool = False) -> list:
     allowed = _tool_names_for_mode(mode, include_websearch=include_websearch)
     out = [t for t in tools if t.get("function", {}).get("name") in allowed]
@@ -651,6 +669,9 @@ _TOOL_PRIORITY = [
     # tier 1 — the working set
     "run_tests", "search_code", "list_dir", "find_files", "get_signatures",
     "undo_last", "ask_user", "get_datetime", "write_file_append",
+    # LSP: the two tools a small-ctx run needs most. Without priority they
+    # were dropped first by the schema fitter (audit 2026-10-31, P2-5).
+    "lsp_status", "lsp_diagnostics",
     # tier 2 — everything else (web, git, background, browser, research...)
 ]
 
@@ -792,6 +813,9 @@ def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
     # (_mcp_tool_defs is cache-only; servers start on /mcp/reload or at boot.)
     if not mode or mcp_allowed_in_mode(mode):
         tools.extend(_mcp_tool_defs())
+    if not lsp_tools_enabled():
+        tools = [t for t in tools
+                 if not str(t.get("function", {}).get("name", "")).startswith("lsp_")]
     if budget_chars:
         try:
             from core.budgets import active as _b_active

@@ -99,6 +99,15 @@ never starts a cold server; diagnostics attach once one is warm. A cold
 clean. Pyright's `file:///c%3A/...` URIs are canonicalized, so its real
 diagnostics are actually visible.
 
+The second LSP pass closes the remaining audit P2s: diagnostics now carry the
+document version, so a delayed publication for the old text cannot satisfy a
+freshness wait; `.tsx`/`.jsx` open as `typescriptreact`/`javascriptreact`
+while still using the TypeScript server; `lsp_status`/`lsp_diagnostics` are
+tier-1 in the schema fitter, and `lsp_enabled=false` removes the schemas
+instead of offering tools that only answer `LSP_DISABLED`. Rename plans now
+include the 1-based edit lines. A real-pyright smoke suite covers the whole
+client path and skips on machines without pyright.
+
 ## Code panel, startup update check, compression
 
 The code panel no longer rebuilds every line on every stream tick. Plain
@@ -132,10 +141,11 @@ manifest and prunes files that left the repository.
 
 ## Tests
 
-238/238 suites, ruff clean. New coverage: MCP phase 2 (137 checks:
+239/239 suites, ruff clean. New coverage: MCP phase 2 (137 checks:
 annotations, the four new tools, resources containment/secret denylist,
-prompts, backward compatibility), LSP client/tools (51 + 71 checks), the
-startup update checker (36 checks) and whole-turn compression (15 checks).
+prompts, backward compatibility), LSP client/tools (54 + 76 checks), the
+startup update checker (36 checks), whole-turn compression (15 checks) and
+the real-pyright LSP smoke suite (5 checks; skipped when pyright is absent).
 The existing MCP suites still pass (28 + 175 + 73 + 23).
 
 ## Known limits

@@ -217,7 +217,9 @@ point each language at a custom command. With a server already running, a
 successful write/edit also gets a compact `[LSP auto-diagnostics …]` block
 (errors first, capped at 8 lines); a write never starts a cold server, so the
 block appears once a server is warm. `lsp_auto_diagnostics` (default true)
-turns that off. Typical installs:
+turns that off. With `lsp_enabled=false` the `lsp_*` schemas are removed
+entirely; TSX/JSX are sent as `typescriptreact`/`javascriptreact`, and a
+rename plan lists the 1-based edit lines. Typical installs:
 
 ```text
 npm install -g pyright                                # Python (pyright-langserver)

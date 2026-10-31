@@ -443,11 +443,26 @@ def _summarize_rename(workspace: Path, edit: dict, new_name: str) -> str:
     the plan is returned so the agent (or user) applies it deliberately via
     edit_file - a rename must never touch files as a side effect."""
     files: dict = {}
+
+    def _add(path: str, edits) -> None:
+        rec = files.setdefault(str(path), {"n": 0, "lines": []})
+        if not isinstance(edits, list):
+            return
+        rec["n"] += len(edits)
+        for _e in edits:
+            if not isinstance(_e, dict):
+                continue
+            _rng = _e.get("range")
+            if not isinstance(_rng, dict):
+                continue
+            _line = _line_col(_rng)[0]
+            if _line > 0:
+                rec["lines"].append(_line)
+
     changes = edit.get("changes")
     if isinstance(changes, dict):
         for path, edits in changes.items():
-            n = len(edits) if isinstance(edits, list) else 0
-            files[str(path)] = files.get(str(path), 0) + n
+            _add(str(path), edits)
     doc_changes = edit.get("documentChanges")
     if isinstance(doc_changes, list):
         for dc in doc_changes:
@@ -456,14 +471,21 @@ def _summarize_rename(workspace: Path, edit: dict, new_name: str) -> str:
             td = dc.get("textDocument") if isinstance(
                 dc.get("textDocument"), dict) else {}
             path = str(dc.get("path") or td.get("path") or "(unknown file)")
-            edits = dc.get("edits")
-            n = len(edits) if isinstance(edits, list) else 0
-            files[path] = files.get(path, 0) + n
-    total = sum(files.values())
+            _add(path, dc.get("edits"))
+    total = sum(int(rec["n"]) for rec in files.values())
     if not files or total == 0:
         return "(the server returned an empty rename plan - nothing to apply)"
-    per_file = "\n".join(f"  - {_rel(workspace, p)}: {n} edit(s)"
-                         for p, n in sorted(files.items()))
+    per_file = []
+    for p, rec in sorted(files.items()):
+        _extra = ""
+        _lines = rec["lines"]
+        if _lines:
+            _shown = ", ".join(str(n) for n in _lines[:8])
+            if len(_lines) > 8:
+                _shown += f", +{len(_lines) - 8} more"
+            _extra = f" @ line {_shown}"
+        per_file.append(f"  - {_rel(workspace, p)}: {rec['n']} edit(s){_extra}")
+    per_file = "\n".join(per_file)
     return (f"Rename plan for '{new_name}': {total} edit(s) across "
             f"{len(files)} file(s) - NOT applied:\n{per_file}\n"
             "The files are untouched; apply the changes yourself "

@@ -52,8 +52,10 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   (titles only) and approval-gated `lsp_rename` (returns a summarized plan,
   writes nothing). A missing server answers `LSP_UNAVAILABLE` with an install
   hint; a server starts lazily on the first tool call.
-- Diagnostics are read-tier; rename is mutating and gated. The schemas shrink
-  under tight context budgets before the core tools do.
+- Diagnostics are read-tier; rename is mutating and gated. `lsp_status` and
+  `lsp_diagnostics` are tier-1 in the schema fitter (small-ctx runs keep them);
+  with `lsp_enabled=false` every `lsp_*` schema is removed instead of being
+  offered and then answering `LSP_DISABLED`.
 - **Agentic runs get diagnostics after writes**: when a language server is
   already warm, a successful write/edit appends a compact
   `[LSP auto-diagnostics …]` block (8-line cap); a cold server is never started
@@ -66,6 +68,12 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   dropping them. Pyright's percent-encoded, lower-case drive URIs
   (`file:///c%3A/...`) are canonicalized before diagnostics are stored, so
   real pyright results reach the tool layer.
+- **Remaining LSP P2s**: diagnostics carry the document version; a delayed
+  publication for the pre-change text is discarded instead of satisfying the
+  wait. `.tsx`/`.jsx` send `typescriptreact`/`javascriptreact` in `didOpen`
+  while still using the TypeScript server. `lsp_rename` now includes the
+  1-based edit lines in its plan. A real-pyright smoke suite checks the
+  client end to end and skips cleanly when pyright is not installed.
 
 ### Code panel, startup update check, compression
 - **Code panel performance**: streamed plain text now appends to one text node

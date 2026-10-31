@@ -406,6 +406,19 @@ out, _m = run("lsp_rename",
 check("8e documentChanges are counted too",
       "2 edit(s) across 1 file(s)" in out, f"({out[:90]})")
 out, _m = run("lsp_rename",
+              {"path": "sample.py", "line": 1, "character": 5,
+               "new_name": "n2"}, ws3,
+              setup=lambda m: setattr(m, "rename_result", {
+                  "changes": {str(sample3): [
+                      {"newText": "x",
+                       "range": {"start": {"line": 4, "character": 0},
+                                 "end": {"line": 4, "character": 3}}},
+                      {"newText": "y",
+                       "range": {"start": {"line": 9, "character": 2},
+                                 "end": {"line": 9, "character": 5}}}]}}))
+check("8e2 rename plan includes the 1-based edit lines",
+      "sample.py: 2 edit(s) @ line 5, 10" in out, f"({out[:140]})")
+out, _m = run("lsp_rename",
               {"path": "sample.py", "line": 1, "character": 99,
                "new_name": "n3"}, ws3)
 check("8f a refused rename (null) says so without error",
@@ -587,6 +600,29 @@ check("13a cap eviction closes the evicted managers",
 check("13b the fresh manager stays cached", _remaining_n == 1,
       f"({_remaining_n})")
 LH._MANAGERS.clear()
+
+# ── 14. schema gating + priority (audit P2-5) ───────────────────────────
+import settings as _settings_mod
+from core.budgets import schema_budget_for as _schema_budget
+
+with unittest.mock.patch.object(_settings_mod, "load_settings",
+                                return_value={"lsp_enabled": False}):
+    _off = D._get_inline_tools(mode="duo_full")
+check("14a lsp_enabled=false removes every lsp schema",
+      not any(t["function"]["name"].startswith("lsp_") for t in _off))
+
+with unittest.mock.patch.object(_settings_mod, "load_settings",
+                                return_value={"lsp_enabled": True}):
+    _on = D._get_inline_tools(mode="duo_full")
+check("14b lsp_enabled=true keeps the lsp schemas",
+      any(t["function"]["name"] == "lsp_diagnostics" for t in _on))
+
+_fit = D.fit_tools_to_budget(_on, _schema_budget(8192, "m"))
+_fit_names = {t["function"]["name"] for t in _fit}
+check("14c lsp_status survives the 8k schema fit",
+      "lsp_status" in _fit_names, f"({sorted(n for n in _fit_names if n.startswith('lsp_'))})")
+check("14d lsp_diagnostics survives the 8k schema fit",
+      "lsp_diagnostics" in _fit_names)
 
 restore_settings()
 print()
