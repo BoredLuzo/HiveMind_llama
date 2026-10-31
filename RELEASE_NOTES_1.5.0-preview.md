@@ -66,6 +66,19 @@ panel, and the branch fields write the key the backend reads.
 - LFM3 1.7B QAD replaced the retired LFM2.5-2.6B line in 1.4.14; the installer
   prose no longer mentions the 2.6B drafter.
 
+## Language servers (LSP)
+
+The harness now speaks LSP through one generic client instead of per-language
+integrations. It auto-detects pyright-langserver (Python),
+typescript-language-server (TS/JS), gopls, rust-analyzer, clangd and the
+bash/lua/json/yaml/html/css servers; `lsp_servers` overrides a command, and
+`lsp_enabled` is the only switch. The agent can ask for diagnostics,
+definition, references, hover, document/workspace symbols and code actions,
+and can request a project-wide rename plan (approval-gated, nothing is
+written). A missing server returns `LSP_UNAVAILABLE` with the install command;
+servers start lazily on first use, never at boot. Diagnostics are read-tier,
+so the model can stop reading whole files to find type errors.
+
 ## Maintainability
 
 The final pass removed the dead settings keys that old exports kept

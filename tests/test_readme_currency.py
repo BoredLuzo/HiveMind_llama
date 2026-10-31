@@ -78,7 +78,8 @@ check("the catalog names the authoritative file",
 # ── (b) settings defaults ───────────────────────────────────────────────────
 from settings import DEFAULT_SETTINGS                              # noqa: E402
 
-_PROSE_DEFAULTS = {"empty", "empty (off)", "auto", "see settings.md"}
+_PROSE_DEFAULTS = {"empty", "empty (off)", "auto", "see settings.md",
+                     "model/profile"}  # ctx default comes from the profile
 _rows = re.findall(r"^\|\s*`([a-z0-9_]+)`\s*\|\s*([^|]+?)\s*\|", _RD, re.M)
 _bad = []
 for key, claim in _rows:

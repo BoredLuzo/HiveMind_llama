@@ -200,6 +200,29 @@ Mode-scoped toolset (`tools/definitions.py`):
 Tool scoping per phase: `duo_full`, `duo_readonly`, `pre_explore`,
 `critic_verify`, `tool_agent`, `mcp_agent`, `openai_agent`.
 
+### Language servers (LSP)
+
+Beyond the built-in analysis tools, the coding modes can use the language
+servers already installed on the machine. `lsp_status` reports what was
+found, `lsp_diagnostics` returns compiler/linter diagnostics for a file,
+`lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols` and
+`lsp_workspace_symbols` answer navigation questions, `lsp_code_actions`
+lists the server's quickfixes for a range (titles only) and `lsp_rename`
+returns a summarized project-wide rename plan — nothing is written; apply
+the plan with `edit_file`. A server process starts lazily on the first tool
+call, never at boot, and `lsp_enabled` (default on) is the single switch:
+there are no per-language flags. A language whose server is missing answers
+`LSP_UNAVAILABLE` with an install hint; `lsp_servers` in settings.json can
+point each language at a custom command. Typical installs:
+
+```text
+pip install pyright                                   # Python (pyright-langserver)
+npm install -g typescript typescript-language-server   # TypeScript / JavaScript
+go install golang.org/x/tools/gopls@latest             # Go
+rustup component add rust-analyzer                     # Rust
+apt install clangd      # or: winget install LLVM.LLVM  # C / C++ (clangd)
+```
+
 ## VRAM & models
 
 - llama.cpp backend: Vulkan (AMD/Intel), CUDA (NVIDIA), CPU. Multi-slot worker

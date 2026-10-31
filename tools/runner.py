@@ -39,7 +39,16 @@ from tools.handlers import (
     _inline_tool_stop_background,
     _inline_tool_get_datetime,
     _inline_tool_remember,
-    _inline_tool_task_complete)
+    _inline_tool_task_complete,
+    _inline_tool_lsp_status,
+    _inline_tool_lsp_diagnostics,
+    _inline_tool_lsp_definition,
+    _inline_tool_lsp_references,
+    _inline_tool_lsp_hover,
+    _inline_tool_lsp_symbols,
+    _inline_tool_lsp_workspace_symbols,
+    _inline_tool_lsp_code_actions,
+    _inline_tool_lsp_rename)
 
 from tools.browser import browser_tool as _browser_tool
 
@@ -363,6 +372,9 @@ def _parse_approval_answer(text: str) -> str:
 #     write_file, edit_file, write_file_append, edit_ast, replace_lines,
 #     patch_file                                             - file mutations
 #     git_commit                                             - shared history
+#     lsp_rename        (2026-10-31) - planned multi-file rename; the
+#                       handler returns the plan only, the applying
+#                       edit_file calls are gated again
 #   DELIBERATELY NOT GATED:
 #     read_file / search_code / list_dir / find_files / get_signatures /
 #       find_references / git_status  - read-only, no side effect
@@ -389,6 +401,12 @@ _APPROVAL_TOOLS = frozenset({
     # belt-and-braces in case it is ever offered again).
     "edit_ast", "replace_lines", "patch_file",
     "git_commit",
+    # LSP-RENAME (2026-10-31): a project-wide rename is a multi-file
+    # mutation, so it shows the approval card like the write tools. The
+    # handler itself never writes - it returns the summarized WorkspaceEdit
+    # and the agent applies it via edit_file (each of THOSE writes is gated
+    # again, so nothing bypasses the gate).
+    "lsp_rename",
 })
 
 # Pending approvals keyed by run_id (2026-09-18): the approval_request SSE
@@ -1056,6 +1074,17 @@ _INLINE_TOOL_HANDLER_MAP = {
     "ask_user": _handle_ask_user,
     "task_complete": _inline_tool_task_complete,
     "browser": _browser_tool,
+    # LSP-TOOLS (2026-10-31): language-server features (infra/lsp_client).
+    # All read-only except lsp_rename (approval-gated, see _APPROVAL_TOOLS).
+    "lsp_status": _inline_tool_lsp_status,
+    "lsp_diagnostics": _inline_tool_lsp_diagnostics,
+    "lsp_definition": _inline_tool_lsp_definition,
+    "lsp_references": _inline_tool_lsp_references,
+    "lsp_hover": _inline_tool_lsp_hover,
+    "lsp_symbols": _inline_tool_lsp_symbols,
+    "lsp_workspace_symbols": _inline_tool_lsp_workspace_symbols,
+    "lsp_code_actions": _inline_tool_lsp_code_actions,
+    "lsp_rename": _inline_tool_lsp_rename,
 }
 
 

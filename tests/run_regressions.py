@@ -253,6 +253,8 @@ SUITES = [
     ("runtime_flags",           "tests/test_runtime_flags.py",              60),
     ("deadline_and_416",        "tests/test_deadline_and_416.py",           30),
     ("mcp_security_gate",       "tests/test_mcp_security_gate.py",          60),
+    ("lsp_client",              "tests/test_lsp_client.py",                  90),
+    ("lsp_tools",               "tests/test_lsp_tools.py",                   60),
 
 ]
 

@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**254 settings keys.**
+**260 settings keys.**
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -174,6 +174,12 @@ its comment) in `settings.py`, then re-run the generator.
 | `llama_gpu_layers_auto` | bool | `False` | Auto-fit (audit B3): omit --n-gpu-layers so llama.cpp fits the layers to the free VRAM itself — it refuses while the flag pins 99. Default keeps the explicit full-offload behavior. |
 | `llama_mlock` | bool | `True` |  |
 | `llama_ubatch_size` | int | `256` |  |
+| `lsp_client_timeout_s` | int | `30` | Per-request timeout in seconds for one LSP request; also caps the initialize handshake. A hung server is killed and lazily restarted on the next call. |
+| `lsp_diagnostics_wait_s` | float | `2.0` | How long lsp_diagnostics waits for the server's diagnostics publication after open/change before returning what it has. |
+| `lsp_enabled` | bool | `True` | lsp_enabled is the ONLY switch - there are deliberately no per-language on/off flags. True = the lsp_* tools exist; a language server process still starts LAZILY on the first tool call, never at boot. A language without a found server command answers LSP_UNAVAILABLE (with an… |
+| `lsp_max_diagnostics` | int | `50` | Output caps for the lsp_* tools (results per call). |
+| `lsp_max_results` | int | `50` | cap for locations/symbols/actions lists |
+| `lsp_servers` | object | `{}` | Optional command override per language id, read by the LSP client: {"python": "pyright-langserver --stdio", "rust": ["rust-analyzer"]} A configured command REPLACES the default candidates for that language and must resolve (otherwise the language reports as missing - no silent… |
 | `max_concurrent_models` | null | `None` |  |
 | `max_iterations` | int | `2` |  |
 | `max_model_size_gb` | null | `None` |  |

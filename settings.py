@@ -615,6 +615,34 @@ DEFAULT_SETTINGS = {
     # phone runs stay blocked by the phone restriction gate.
     "mcp_client_enabled":      False,
     "mcp_client_timeout_s":    30,
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Q2) LANGUAGE SERVERS (LSP, 2026-10-31)
+    # ════════════════════════════════════════════════════════════════════════
+    # lsp_enabled is the ONLY switch - there are deliberately no per-language
+    # on/off flags. True = the lsp_* tools exist; a language server process
+    # still starts LAZILY on the first tool call, never at boot. A language
+    # without a found server command answers LSP_UNAVAILABLE (with an
+    # install hint) instead of silently degrading; lsp_status lists what is
+    # installed without starting anything.
+    "lsp_enabled":             True,
+    # Optional command override per language id, read by the LSP client:
+    #   {"python": "pyright-langserver --stdio", "rust": ["rust-analyzer"]}
+    # A configured command REPLACES the default candidates for that language
+    # and must resolve (otherwise the language reports as missing - no
+    # silent fallback to a different server).
+    "lsp_servers":             {},
+    # Per-request timeout in seconds for one LSP request; also caps the
+    # initialize handshake. A hung server is killed and lazily restarted on
+    # the next call.
+    "lsp_client_timeout_s":    30,
+    # How long lsp_diagnostics waits for the server's diagnostics
+    # publication after open/change before returning what it has.
+    "lsp_diagnostics_wait_s":  2.0,
+    # Output caps for the lsp_* tools (results per call).
+    "lsp_max_diagnostics":     50,
+    "lsp_max_results":         50,   # cap for locations/symbols/actions lists
+
     "soul_evolve_agent": {
         "enabled":     False,
         "model": "",

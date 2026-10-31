@@ -32,6 +32,19 @@ installs update only through `update.bat --zip`.
   version negotiation. Integration: `mcp_*` call budget, documented mode-less
   exception, destructive gate scans MCP args.
 
+### Language servers (LSP)
+- One generic LSP client (`infra/lsp_client.py`) with a broad auto-detected
+  registry (pyright, typescript-language-server, gopls, rust-analyzer, clangd,
+  bash/lua/json/yaml/html/css servers). No per-language on/off flags:
+  `lsp_enabled` is the only switch, `lsp_servers` an optional command override.
+- Tools: `lsp_status`, `lsp_diagnostics`, `lsp_definition`, `lsp_references`,
+  `lsp_hover`, `lsp_symbols`, `lsp_workspace_symbols`, `lsp_code_actions`
+  (titles only) and approval-gated `lsp_rename` (returns a summarized plan,
+  writes nothing). A missing server answers `LSP_UNAVAILABLE` with an install
+  hint; a server starts lazily on the first tool call.
+- Diagnostics are read-tier; rename is mutating and gated. The schemas shrink
+  under tight context budgets before the core tools do.
+
 ### Settings, presets, UI, docs
 - Missing defaults are persisted: `duo_compress_tail_tool_max_chars`,
   `duo_planner_enabled`, `duo_coder_always_vision`, the telegram mirror/

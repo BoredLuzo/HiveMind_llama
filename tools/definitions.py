@@ -358,6 +358,125 @@ _INLINE_CODING_TOOLS = [
                                     "(mention paths/keywords to investigate)"}
         }, "required": ["task"]}
     }},
+    # ── LSP TOOLS (2026-10-31): language-server features via infra/lsp_client.
+    # One broad, generic surface - NO per-language flags; the only switch is
+    # settings.lsp_enabled. Positions are 1-based (converted to LSP 0-based
+    # in tools/handlers/lsp.py). A missing server answers LSP_UNAVAILABLE
+    # with an install hint; lsp_status never starts a process.
+    {"type": "function", "function": {
+        "name": "lsp_status",
+        "description": (
+            "Report the language servers available for the workspace "
+            "(language, command, found). Run this first when an lsp_* tool "
+            "answers LSP_UNAVAILABLE. Never starts a server process."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []}
+    }},
+    {"type": "function", "function": {
+        "name": "lsp_diagnostics",
+        "description": (
+            "Get compiler/linter diagnostics for one file from its language "
+            "server, formatted [SEVERITY] path:line:col message (source). "
+            "Use after edits to catch type errors before run_tests. Starts "
+            "the server lazily on first use."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "File path (source file)"}
+        }, "required": ["path"]}
+    }},
+    {"type": "function", "function": {
+        "name": "lsp_definition",
+        "description": (
+            "Jump to the definition of the symbol at a 1-based line/character "
+            "position. Returns file:line:col locations from the language "
+            "server. More precise than search_code for 'where is X defined'."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path":      {"type": "string", "description": "File path"},
+            "line":      {"type": "integer", "description": "Line number (1-based)"},
+            "character": {"type": "integer", "description": "Column number (1-based)"}
+        }, "required": ["path", "line", "character"]}
+    }},
+    {"type": "function", "function": {
+        "name": "lsp_references",
+        "description": (
+            "Find all references to the symbol at a 1-based line/character "
+            "position across the workspace (file:line:col each). Use for "
+            "'who calls/uses X' when text-based find_references is too noisy."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path":      {"type": "string", "description": "File path"},
+            "line":      {"type": "integer", "description": "Line number (1-based)"},
+            "character": {"type": "integer", "description": "Column number (1-based)"}
+        }, "required": ["path", "line", "character"]}
+    }},
+    {"type": "function", "function": {
+        "name": "lsp_hover",
+        "description": (
+            "Hover information (type signature, docs) for the symbol at a "
+            "1-based line/character position. Answers 'what type is this / "
+            "what does this API do' without opening more files."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path":      {"type": "string", "description": "File path"},
+            "line":      {"type": "integer", "description": "Line number (1-based)"},
+            "character": {"type": "integer", "description": "Column number (1-based)"}
+        }, "required": ["path", "line", "character"]}
+    }},
+    {"type": "function", "function": {
+        "name": "lsp_symbols",
+        "description": (
+            "Document outline: classes, functions, methods, variables with "
+            "kinds and line ranges, from the language server. Like "
+            "get_signatures but server-accurate and multi-language."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "File path"}
+        }, "required": ["path"]}
+    }},
+    {"type": "function", "function": {
+        "name": "lsp_workspace_symbols",
+        "description": (
+            "Search symbols (classes, functions, ...) across the whole "
+            "workspace by query. Answers 'where is the class/interface named "
+            "X' project-wide; per-file structure is lsp_symbols."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "Symbol name or prefix (e.g. 'Handler')"}
+        }, "required": ["query"]}
+    }},
+    {"type": "function", "function": {
+        "name": "lsp_code_actions",
+        "description": (
+            "List quickfixes/refactorings the language server offers for a "
+            "range (titles + kinds only). NOTHING is applied - pick one and "
+            "implement it with edit_file. Useful after lsp_diagnostics."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path":       {"type": "string", "description": "File path"},
+            "start_line": {"type": "integer", "description": "Range start line (1-based)"},
+            "start_char": {"type": "integer", "description": "Range start column (1-based)"},
+            "end_line":   {"type": "integer", "description": "Range end line (1-based)"},
+            "end_char":   {"type": "integer", "description": "Range end column (1-based)"}
+        }, "required": ["path", "start_line", "start_char", "end_line", "end_char"]}
+    }},
+    {"type": "function", "function": {
+        # MUTATING (approval-gated in runner._APPROVAL_TOOLS): but the write
+        # never happens in the handler - it returns the summarized rename
+        # plan and the agent applies it with edit_file.
+        "name": "lsp_rename",
+        "description": (
+            "Prepare a project-wide rename of the symbol at a 1-based "
+            "position. Returns the planned edits per file WITHOUT writing "
+            "anything - apply the plan with edit_file. Approval-gated."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path":      {"type": "string", "description": "File path"},
+            "line":      {"type": "integer", "description": "Line number (1-based)"},
+            "character": {"type": "integer", "description": "Column number (1-based)"},
+            "new_name":  {"type": "string", "description": "New symbol name"}
+        }, "required": ["path", "line", "character", "new_name"]}
+    }},
 ]
 
 
@@ -377,6 +496,21 @@ _READ_ONLY_INLINE_TOOL_NAMES = {
     "ask_user",
 }
 
+# ── LSP MODE-GATE GROUPS (2026-10-31) ───────────────────────────────────────
+# One broad, generic language-server surface, NO per-language flags. The
+# inspect tools and lsp_code_actions (returns action titles only, applies
+# nothing) are read-tier; lsp_rename is mutating (approval-gated in
+# runner._APPROVAL_TOOLS) and reaches exactly the full tiers - which get it
+# automatically because the lsp tools are part of _INLINE_CODING_TOOLS /
+# _INLINE_TOOL_NAMES. Read tiers that already list get_signatures/
+# find_references get the read group + code actions explicitly below.
+_LSP_READ_TOOLS = frozenset({
+    "lsp_status", "lsp_diagnostics", "lsp_definition", "lsp_references",
+    "lsp_hover", "lsp_symbols", "lsp_workspace_symbols",
+})
+_LSP_CODE_ACTIONS = frozenset({"lsp_code_actions"})
+_LSP_READ_TIER_EXTRAS = _LSP_READ_TOOLS | _LSP_CODE_ACTIONS
+
 _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # CONSOLIDATION (2026-09-17): replace_lines/edit_ast stay ALLOWED here for
     # old recorded sessions, but are no longer advertised (not in
@@ -390,9 +524,16 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     "fix_agent": {"read_file", "get_signatures", "list_dir", "find_files",
                   "search_code", "edit_file", "write_file",
                   "write_file_append", "undo_last", "get_datetime"},
-    "duo_readonly": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
-    "pre_explore": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
-    "critic_verify": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"run_bash"},
+    # LSP (2026-10-31): read tiers with get_signatures/find_references get
+    # the LSP inspect tools + code actions (titles only). The full tiers
+    # (duo_full, tool_agent, mcp_agent, openai_agent, direct_full) get all
+    # lsp_* tools incl. lsp_rename via _INLINE_TOOL_NAMES.
+    "duo_readonly": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"}
+                    | _LSP_READ_TIER_EXTRAS,
+    "pre_explore": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"}
+                   | _LSP_READ_TIER_EXTRAS,
+    "critic_verify": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"run_bash"}
+                     | _LSP_READ_TIER_EXTRAS,
     "tool_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
     "mcp_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
     "openai_agent": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "hivemind_pipeline"},
@@ -407,7 +548,8 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # always dialog-level and must survive the web discard.
     "direct": {"web_search", "web_fetch",
                "ask_user", "task_complete", "get_datetime"},
-    "direct_python": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "run_python"},
+    "direct_python": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "run_python"}
+                     | _LSP_READ_TIER_EXTRAS,
     "direct_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
 }
 
