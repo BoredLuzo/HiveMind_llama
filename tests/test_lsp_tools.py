@@ -91,7 +91,7 @@ class FakeManager:
         self.calls.append(("start_language", language_id))
         return self.start_ok
 
-    async def diagnostics(self, path, wait_s=2.0):
+    async def diagnostics(self, path, wait_s=2.0, **kwargs):
         self.calls.append(("diagnostics", str(path), wait_s))
         return list(self.diag_result)
 
@@ -452,7 +452,7 @@ check("9c empty actions -> clear note",
 
 # ── 10. transport errors and workspace confinement ──────────────────────────
 class BoomManager(FakeManager):
-    async def diagnostics(self, path, wait_s=2.0):
+    async def diagnostics(self, path, wait_s=2.0, **kwargs):
         raise LC.LspError("python: server exploded")
 
 
