@@ -481,6 +481,24 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool) -> bool:
             # means the upstream file shrank or changed: the partial file is
             # NOT complete (audit 2026-10-30).
             if not _expected:
+                # HEAD-CHECK (2026-10-31, audit): without a catalog size the
+                # old code could only warn. Ask the server for Content-Length.
+                _remote = 0
+                try:
+                    with urllib.request.urlopen(
+                            urllib.request.Request(url, method="HEAD"),
+                            timeout=30) as _hr:
+                        _remote = int(_hr.headers.get("Content-Length") or 0)
+                except (urllib.error.URLError, OSError, ValueError):
+                    _remote = 0
+                if _remote and _have < _remote:
+                    print(f"    [WARNING] 416 with {_have} of {_remote} bytes "
+                          f"(HEAD) - deleting partial file")
+                    try:
+                        dest.unlink()
+                    except OSError:
+                        pass
+                    return False
                 print(f"    [WARNING] 416 with an unknown expected size - "
                       f"keeping {dest.name} as-is; verify it before use")
             if _expected and _have < _expected:

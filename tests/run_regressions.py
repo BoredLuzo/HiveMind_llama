@@ -252,6 +252,7 @@ SUITES = [
     ("tool_round_default",      "tests/test_tool_round_default.py",         30),
     ("runtime_flags",           "tests/test_runtime_flags.py",              60),
     ("deadline_and_416",        "tests/test_deadline_and_416.py",           30),
+    ("mcp_security_gate",       "tests/test_mcp_security_gate.py",          60),
 
 ]
 

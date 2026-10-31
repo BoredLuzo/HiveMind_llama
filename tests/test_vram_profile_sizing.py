@@ -152,6 +152,15 @@ try:
         check("5d prefix MoE: lfm2.5:24b-a2b uses its table row",
               vram_of("lfm2.5:24b-a2b") == 5.91,
               f" ({vram_of('lfm2.5:24b-a2b')})")
+        # the synthetic profile above patches every name; restore the real
+        # registry first or it masks the table-prefix rule
+        _restore()
+        # PREFIX-MARKER (2026-10-31): a bare row must not swallow a future
+        # dense sibling; the exact catalog tag still resolves.
+        check("5e bare LFM row does not prefix a dense sibling",
+              moe_cfg_for("lfm2.5:24b-instruct") is None)
+        check("5f exact LFM MoE tag still resolves",
+              moe_cfg_for("lfm2.5:24b-a2b") is not None)
 finally:
     _restore()
 

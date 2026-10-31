@@ -13,6 +13,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from context.ctx_guard import (
     clamp_request_max_tokens as _clamp,
     min_viable_tool_budget as _mvb,
+    clamp_coder_ctx_to_slot as _clamp_ctx,
     resolve_compress_threshold as _thr,
 )
 from core.duo_helpers import (
@@ -85,6 +86,11 @@ check("D4: length + mixed -> compress", _scd("length", ["write_file", "edit_file
 check("D5: no reason -> no force", not _scd(None, None))
 check("B1: timeout bucket is 'timeout'", _bucket("timeout") == "timeout", _bucket("timeout"))
 check("B2: hard_stop stays a load error", _bucket("hard_stop") == "runtime_load_error")
+check("B3: graceful_stop is a normal stop", _bucket("graceful_stop") == "none")
+
+# CTX-FLOOR: after a downshift the run keeps the actual slot ctx.
+check("V6: requested > actual pins to actual", _clamp_ctx(70000, 17500) == 17500)
+check("V7: requested <= actual stays", _clamp_ctx(16384, 32768) == 16384)
 
 print()
 print(f"{'='*50}")

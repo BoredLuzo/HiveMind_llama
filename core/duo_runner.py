@@ -43,6 +43,7 @@ from context.ctx_guard import (
     should_use_partial as _ctx_should_use_partial,
     plan_partial_cut_index as _ctx_plan_partial_cut_index,
     clamp_request_max_tokens as _clamp_request_max_tokens,
+    clamp_coder_ctx_to_slot as _clamp_coder_ctx_to_slot,
     min_viable_tool_budget as _min_viable_tool_budget,
 )
 
@@ -4441,6 +4442,18 @@ async def run_code_duo(ctx):
                     _dtool_ctx = _slotctx_ps.dtool_ctx
                     _cached_coder_port_ctx = _slotctx_ps.cached_coder_port_ctx
                     _actual_ctx = _slotctx_ps.actual_ctx
+                    # CTX-FLOOR (2026-10-31, audit): the next chunk rebuilt
+                    # _dtool_opts from the requested ctx and killed the warm
+                    # slot ("ctx mismatch"). Pin the effective coder ctx to
+                    # what the slot actually runs; the UI value stays the
+                    # target for the next load.
+                    _pinned_ctx = _clamp_coder_ctx_to_slot(_coder_ctx_eff, _actual_ctx)
+                    if _pinned_ctx != _coder_ctx_eff:
+                        _coder_ctx_override = _pinned_ctx
+                        _coder_ctx_eff = _pinned_ctx
+                        logger.warning(
+                            "[CTX-DOWNSHIFT] coder ctx pinned to the actual slot "
+                            "ctx %d for the rest of the run", _pinned_ctx)
                     _slot_degraded = _slotctx_ps.slot_degraded
                     _slot_ctx_floor_stop = _slotctx_ps.slot_ctx_floor_stop
                     _dtool_ctx_requested = _slotctx_ps.dtool_ctx_requested
@@ -5648,10 +5661,11 @@ async def run_code_duo(ctx):
                                             emergency=_ctx_emergency):
                                     logger.warning(
                                         "[CTX-FULL] storm guard: force compression throttled "
-                                        "(last=%d round=%d) - clamping output budget instead",
+                                        "(last=%d round=%d) - skipping this round instead of "
+                                        "shipping a doomed budget",
                                         _last_force_compress_round, _dr,
                                     )
-                                    _max_tokens_round = max(int(_max_tokens_round), 512)
+                                    continue
                                 else:
                                     logger.warning(
                                         "[CTX-FULL] insufficient headroom for a safe tool round "

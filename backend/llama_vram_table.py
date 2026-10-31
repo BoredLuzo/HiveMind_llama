@@ -150,6 +150,11 @@ _MOE_TABLE: dict[str, dict] = {
 }
 
 
+# exact catalog tag for the LFM2.5 MoE (the bare "lfm2.5:24b" row stays
+# exact-only now that prefix matching requires a MoE marker).
+_MOE_TABLE.setdefault("lfm2.5:24b-a2b", _MOE_TABLE["lfm2.5:24b"])
+
+
 def _profile_moe_cfg(model_name: str) -> dict | None:
     """MoE sizing from the LOCAL model profile when the static table is silent.
 
@@ -209,7 +214,15 @@ def moe_cfg_for(model_name: str) -> dict | None:
     key = model_name.strip().lower()
     cfg = _MOE_TABLE.get(key) or _MOE_TABLE.get(key.replace("-ud", ""))
     if not cfg:
+        # PREFIX-WITH-MARKER (2026-10-31, audit): prefix matching is for the
+        # GGUF auto-discovery suffixes on MoE families. A bare row such as
+        # "lfm2.5:24b" must not swallow a future dense sibling; only rows
+        # that name the MoE shape may prefix-match.
         for table_key in _MOE_TABLE:
+            if table_key == key:
+                continue
+            if not any(m in table_key for m in ("a3b", "a2b", "a2.5b", "35b")):
+                continue
             if key.startswith(table_key):
                 return _MOE_TABLE[table_key]
     if cfg is None:

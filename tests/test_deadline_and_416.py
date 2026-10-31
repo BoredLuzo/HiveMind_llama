@@ -54,6 +54,10 @@ check("416 with a short file is not complete",
       "upstream file changed" in _fm and "dest.unlink()" in _fm)
 check("416 with an unknown size warns",
       "unknown expected size" in _fm)
+check("416 with an unknown size asks the server (HEAD)",
+      'method="HEAD"' in _fm)
+check("throttled ctx-full round is skipped, not shipped",
+      "skipping this round instead of" in _duo)
 
 print(f"\ndeadline_and_416: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

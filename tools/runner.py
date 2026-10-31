@@ -539,6 +539,18 @@ async def _check_action_approval(name: str, args: dict, workspace,
     # only control.
     run_id = _current_run_id.get()
     if not run_id:
+        # IDE/MCP BRIDGE (2026-10-31, audit S1): /internal/tool/exec sets only
+        # the external-dispatch flag, never a run id. With the gate on this
+        # used to fall through to allow - a silent fail-open for run_bash,
+        # run_python, install_package and start_background. There is no
+        # interactive run to ask, so deny with a clear reason.
+        if _is_external_dispatch():
+            return ("DENY", _tool_error_response(
+                "APPROVAL_UNAVAILABLE",
+                f"'{name}' is gated by duo_action_approval_enabled, but this call "
+                "arrived through the IDE/MCP bridge without an interactive run. "
+                "Run it from the engine UI or disable the gate.",
+                tool=name))
         return None
     if _repo_approval_granted(workspace, name, args or {}):
         return None

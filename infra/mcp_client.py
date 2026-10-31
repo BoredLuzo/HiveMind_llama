@@ -625,6 +625,13 @@ class HttpConn:
         self.tools = await _collect_tools(self.request, limit)
 
     async def close(self) -> None:
+        # SESSION-CLOSE (2026-10-31, audit C3): the server kept the session
+        # (and its resources) alive after the client was gone.
+        if self._session_id and self._client is not None:
+            try:
+                await self._client.delete(self.spec.url, headers=self._headers())
+            except (OSError, RuntimeError, httpx.HTTPError):
+                pass
         self._session_id = ""
         if self._client is not None:
             try:
@@ -832,7 +839,12 @@ def _sse_response(body: str, rid: int) -> dict:
         if msg.get("id") == rid:
             return msg
     if candidates:
-        return candidates[-1]
+        # ID-MISMATCH (2026-10-31, audit S5): returning candidates[-1] handed
+        # a notification or another request's answer to the caller, which
+        # surfaced as {"value": None} instead of an error.
+        raise McpError(
+            f"SSE response id mismatch: want {rid}, "
+            f"got {[c.get('id') for c in candidates[-3:]]}")
     raise McpError("SSE response carried no JSON-RPC message")
 
 

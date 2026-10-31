@@ -216,6 +216,19 @@ def min_viable_tool_budget(max_output: int, floor: int = 1024,
     return max(int(floor), min(int(cap), req // 2))
 
 
+def clamp_coder_ctx_to_slot(requested: int, actual: int) -> int:
+    """After a graceful downshift the run must keep asking for the slot ctx.
+
+    The configured value stays the target for the NEXT load; within this run a
+    larger request only triggers kill/reload storms (live 2026-10-30: nine
+    server starts in ten minutes, every round a fresh prefill).
+    """
+    req, act = int(requested or 0), int(actual or 0)
+    if act > 0 and req > act:
+        return act
+    return req
+
+
 def _msg_chars(msg) -> int:
     c = msg.get("content") if isinstance(msg, dict) else None
     if isinstance(c, list):

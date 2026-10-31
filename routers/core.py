@@ -264,7 +264,12 @@ async def approval_decide(run_id: str, req: Request):
 # Der Endpunkt ist der Weg, den MCP/IDE nehmen. Shell-Rechte duerfen dort nicht
 # allein am Fehlen eines Tokens haengen.
 _INTERNAL_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
-_INTERNAL_EXEC_TOOLS = {"run_bash", "shell", "run_python"}
+# EXEC-CLASS (2026-10-31, MCP audit S2): start_background runs the same
+# arbitrary shell as run_bash and install_package runs a package manager.
+# They were missing here, so /internal/tool/exec let both through without
+# HIVEMIND_INTERNAL_TOKEN ("read/write tools stay available").
+_INTERNAL_EXEC_TOOLS = {"run_bash", "shell", "run_python",
+                        "start_background", "install_package"}
 
 
 def _internal_host_allowed(host_header: str) -> bool:

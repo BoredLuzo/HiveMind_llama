@@ -625,7 +625,8 @@ def _resolve_duo_run_timeout_seconds(profile: str) -> float:
 
 def _bucket_stop_reason(stop_reason: str) -> str:
     sr = str(stop_reason or "unknown").strip().lower()
-    if sr in {"completed", "aborted", "memory_list", "memory_forget", "memory_write", "self_query_completed"}:
+    if sr in {"completed", "aborted", "graceful_stop", "memory_list",
+              "memory_forget", "memory_write", "self_query_completed"}:
         return "none"
     if sr in {"request_timeout", "request_error", "stream_incomplete", "server_error_event"}:
         return "transport_error"
