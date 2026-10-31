@@ -52,9 +52,9 @@ try:
     check("values land in llama_config",
           lc.LLAMA_UBATCH == 1024 and lc.MLOCK_MODEL is False)
     check("values land in manager_load",
-          getattr(ml, "LLAMA_UBATCH", 1024) == 1024)
+          hasattr(ml, "LLAMA_UBATCH") and ml.LLAMA_UBATCH == 1024)
     check("values land in llama_server_manager",
-          getattr(lsm, "LLAMA_UBATCH", 1024) == 1024)
+          hasattr(lsm, "LLAMA_UBATCH") and lsm.LLAMA_UBATCH == 1024)
 finally:
     for _m, _vals in _saved.items():
         for _f, _v in _vals.items():

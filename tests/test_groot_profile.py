@@ -57,10 +57,15 @@ _DEV = _pick("HIVEMIND_DEV_DIR", _ROOT.parent.parent / "HiveMind_dev",
              _ROOT.parent / "HiveMind_dev")
 
 PROFILE = _INSTALL / "model_configs" / "models" / "groot_19b-a3b-261023.json"
+if not PROFILE.exists():
+    # the repo copy is the same file; a checkout without live/ must still
+    # run the sizing pins (audit 2026-10-31: they silently SKIPped).
+    PROFILE = ROOT / "model_configs" / "models" / "groot_19b-a3b-261023.json"
 MODELS = _INSTALL / "models.json"
 
 if not PROFILE.exists():
-    print("  SKIP groot profile (live/ not present)")
+    print("  FAIL groot profile (neither install dir nor repo copy found)")
+    failed += 1
 else:
     p = json.loads(PROFILE.read_text(encoding="utf-8"))
     check("model tag", p.get("model") == "groot:19b-a3b-261023", p.get("model"))
