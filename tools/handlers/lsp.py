@@ -119,7 +119,7 @@ def _get_manager(workspace: Path):
 # LSP_UNAVAILABLE message only - NOT a per-language flag: a language without
 # an entry simply gets the generic advice.
 _INSTALL_HINTS: dict = {
-    "python": "pip install pyright  (or: pip install python-lsp-server)",
+    "python": "npm install -g pyright  (or: pip install python-lsp-server)",
     "typescript": "npm install -g typescript typescript-language-server",
     "javascript": "npm install -g typescript typescript-language-server",
     "go": "go install golang.org/x/tools/gopls@latest",
@@ -157,7 +157,7 @@ def _err_unavailable(tool: str, language: str | None = None) -> str:
                   f"(tried: {tried}). Install one, e.g.: {hint}. ")
     else:
         detail = ("No language server found for any known language. "
-                  "Install one, e.g.: pip install pyright (python) or "
+                  "Install one, e.g.: npm install -g pyright (python) or "
                   "npm install -g typescript typescript-language-server "
                   "(ts/js). ")
     return _tool_error_response(

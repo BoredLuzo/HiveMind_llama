@@ -216,7 +216,7 @@ there are no per-language flags. A language whose server is missing answers
 point each language at a custom command. Typical installs:
 
 ```text
-pip install pyright                                   # Python (pyright-langserver)
+npm install -g pyright                                # Python (pyright-langserver)
 npm install -g typescript typescript-language-server   # TypeScript / JavaScript
 go install golang.org/x/tools/gopls@latest             # Go
 rustup component add rust-analyzer                     # Rust
