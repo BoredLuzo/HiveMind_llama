@@ -276,7 +276,7 @@
         <div class="opt-row">
           <div class="opt-row-left">
             <span class="opt-name">Tool rounds</span>
-            <span class="opt-hint">Coder may use tools (0 = off)</span>
+            <span class="opt-hint">Coder may use tools (0 = off; 50 = every chunk)</span>
           </div>
           <select id="duo-tool-rounds-sel" onchange="S.duoToolRounds=parseInt(this.value);postSettings({duo_tool_rounds:S.duoToolRounds});updateAgenticHint()"
             style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:64px;flex-shrink:0">
@@ -284,6 +284,8 @@
             <option value="1">1</option>
             <option value="2">2</option>
             <option value="3">3</option>
+            <option value="10">10</option>
+            <option value="50">All (50)</option>
           </select>
         </div>
 
@@ -690,7 +692,7 @@
             <span class="opt-name">Branch</span>
             <span class="opt-hint" id="git-branch-hint">Configure git in Settings</span>
           </div>
-          <select id="git-branch-sel" onchange="postSettings({git_branch:this.value})"
+          <select id="git-branch-sel" onchange="postSettings({git_default_branch:this.value})"
             style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:120px;flex-shrink:0">
             <option value="">main</option>
           </select>
@@ -1457,7 +1459,7 @@
         <div class="fld">
           <div class="fld-label">Branch</div>
           <input class="fld-input" type="text" id="git-branch-inp" placeholder="main"
-            onchange="postSettings({git_branch:this.value})">
+            onchange="postSettings({git_default_branch:this.value})">
         </div>
       </div>
       <div class="fld-row" style="margin-bottom:6px">

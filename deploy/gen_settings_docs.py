@@ -37,12 +37,32 @@ its comment) in `settings.py`, then re-run the generator.
 
 
 def _comments() -> dict[str, str]:
-    """The trailing comment of every '"key": value,  # note' line."""
+    """Note for a key: its trailing comment, else the comment block above.
+
+    BLOCK-COMMENTS (2026-10-31, audit): only trailing notes reached the doc,
+    so 237 of 248 keys had an empty Note column even where settings.py
+    explains them in a block right above. Section banners (box-drawing only)
+    are skipped.
+    """
+    lines = SRC.read_text(encoding="utf-8").splitlines()
     out: dict[str, str] = {}
-    for line in SRC.read_text(encoding="utf-8").splitlines():
+    for i, line in enumerate(lines):
         m = re.match(r'\s*"([a-z0-9_]+)":\s*[^#]*,\s*(?:#\s*(.*))?$', line)
-        if m and m.group(2):
-            out[m.group(1)] = m.group(2).strip()
+        if not m:
+            continue
+        note = (m.group(2) or "").strip()
+        if not note:
+            block = []
+            j = i - 1
+            while j >= 0 and lines[j].strip().startswith("#"):
+                text = lines[j].strip().lstrip("#").strip()
+                if text and set(text) - {"\u2550", " "}:
+                    block.append(text)
+                j -= 1
+            if block:
+                note = " ".join(reversed(block)).strip()
+        if note:
+            out[m.group(1)] = note[:280]
     return out
 
 

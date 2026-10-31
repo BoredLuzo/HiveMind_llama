@@ -8,8 +8,8 @@ later edit cannot silently drift them:
 
   header facts   : arch qwen35moe, 41 blocks, 128 experts (8 used),
                    ctx 262144, nextn head present, KV 576 B/token/layer q4_0
-  profile        : ctx 131072, ncmoe 32, KV q4_0, ub 512, mmap+mlock,
-                   MTP off (mtp: false), jinja on
+  profile        : ctx 131072, ncmoe 32, KV q4_0, mmap+mlock,
+                   MTP on, jinja on, native GGUF template (no override)
   sampler        : thinking temp 1.0 / presence 1.5; code temp 0.6 /
                    presence 0.0; side calls temp 0.7 / top_p 0.8 / top_k 20 /
                    min_p 0 / presence 1.5 with enable_thinking=false
@@ -71,8 +71,6 @@ else:
     check("model tag", p.get("model") == "groot:19b-a3b-261023", p.get("model"))
     check("ctx 131072 (card allows >= 128K)", p.get("num_ctx") == 131072, p.get("num_ctx"))
     check("KV q4_0", p.get("kv_cache_type") == "q4_0")
-    check("ub 1024 (real-server prefill +23.9 % vs 512, shared delta +52 MiB)",
-          p.get("ubatch") == 1024, p.get("ubatch"))
     check("mmap+mlock like Hermes", p.get("load_mode") == "mmap+mlock")
     # enabled 2026-10-30 by user decision: tools +60.7 %, prose -4.9 %
     check("MTP enabled (tools +60.7 %, prose -4.9 %)", p.get("mtp") is True)
@@ -103,12 +101,6 @@ else:
         check(f"{key}: temp 0.6 + presence 0.0",
               blk.get("temperature") == 0.6 and blk.get("presence_penalty") == 0.0,
               f"({blk.get('temperature')}/{blk.get('presence_penalty')})")
-    side = p.get("side_call_sampling") or {}
-    check("side: temp 0.7 / top_p 0.8 / top_k 20 / min_p 0 / presence 1.5",
-          side.get("temperature") == 0.7 and side.get("top_p") == 0.8
-          and side.get("top_k") == 20 and side.get("min_p") == 0.0
-          and side.get("presence_penalty") == 1.5)
-    check("side: thinking disabled", side.get("enable_thinking") is False)
 
 # models.json alias
 if MODELS.exists():

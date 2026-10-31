@@ -204,6 +204,9 @@ DEFAULT_SETTINGS = {
     # call, no slot evict.
     "duo_mask_before_compress":  True,
     "duo_compress_overflow_reserve": 1024,
+    # Chars kept from tool output when a compression tail-caps it (read by
+    # duo_runner with an 8000 fallback; not persisted before 2026-10-31).
+    "duo_compress_tail_tool_max_chars": 8000,
     "duo_max_compressions":      40,
     "duo_compress_model":        "auto",
     "duo_compress_llm_timeout_s": 180,
@@ -260,6 +263,8 @@ DEFAULT_SETTINGS = {
     "disable_thinking_in_planner": False,
     # PLANNER-OUTPUT-BUDGET (0.99.2, User-Entscheidung): sichtbares Aufgabenbudget
     "duo_planner_max_tokens":  8000,
+    # Planner on/off for the request path (server.py reads this key).
+    "duo_planner_enabled":     False,
     # Thinking → hermes-MoE thought until the 600s wall timeout and delivered empty
     # output. 4k was too tight for complex plans → 8k default (2026-08-31).
     "duo_planner_thinking_budget": 8000,
@@ -277,6 +282,8 @@ DEFAULT_SETTINGS = {
     "duo_soft_planner_wall_timeout_s": 300,
     "duo_planner_ttl_seconds": 0,    # 0 = auto (450s), >0 = Override
     "duo_coder_ttl_seconds":   0,    # 0 = auto (420s), >0 = Override
+    # Send images to the coder even when the task looks text-only.
+    "duo_coder_always_vision": False,
     # CODER LIFETIME (2026-10-17): keep = the slot stays warm after the
     # run (idle TTL decides), evict = release it at the run end so the next
     # prompt can load any model/mode. Owner request.
@@ -585,14 +592,24 @@ DEFAULT_SETTINGS = {
     "duo_max_tool_errors": 12,
 
     # ════════════════════════════════════════════════════════════════════════
+    # P) TELEGRAM GATEWAY
+    # ════════════════════════════════════════════════════════════════════════
+    # Gateway-owned keys (phone UI and /gate write them). Defaults match the
+    # gateway fallbacks: off, no mirror, approvals "deny", restricted.
+    "telegram_gateway_enabled":   False,
+    "telegram_mirror_enabled":    False,
+    "telegram_approval_mode":     "deny",
+    "telegram_phone_restricted":  True,
+
+    # ════════════════════════════════════════════════════════════════════════
     # Q) MCP & AGENT-SUB-KONFIGURATIONEN
     # ════════════════════════════════════════════════════════════════════════
     #   {"name": "...", "command": "npx", "args": ["-y", "@playwright/mcp@latest"]}   (stdio)
     #   {"name": "...", "url": "http://localhost:9000/mcp"}                            (streamable HTTP)
     # as additional tools.
-    # RESERVED (2026-10-21): config for MCP *clients* HiveMind may call
-    # (e.g. an IDE exposing editor context). Nothing reads it yet; kept so
-    # preset snapshots stay stable until the client lands.
+    # External MCP servers (client direction): every entry is a stdio or
+    # streamable-HTTP server; infra/mcp_client.py reads this list, and
+    # docs/mcp_client.md documents the shape.
     "mcp_servers":             [],
     # MCP client (beta): use external MCP servers over stdio. Off by default;
     # phone runs stay blocked by the phone restriction gate.
@@ -795,13 +812,23 @@ def _write_settings_unlocked(settings: dict, *, saved_at: str | None = None) -> 
     for _attempt in range(2):
         _tmp = SETTINGS_FILE.with_name(
             f".settings_{os.getpid()}_{threading.get_ident()}_{_attempt}.tmp")
-        _tmp.write_text(_data, encoding="utf-8")
         try:
-            _tmp.replace(SETTINGS_FILE)          # atomar, OS-Garantie
+            with open(_tmp, "w", encoding="utf-8") as _fh:
+                _fh.write(_data)
+                _fh.flush()
+                os.fsync(_fh.fileno())       # data before the atomic replace
+            _tmp.replace(SETTINGS_FILE)      # atomar, OS-Garantie
             break
         except PermissionError:
             if _attempt:
                 raise
+        finally:
+            # a failed write must not leave .settings_*.tmp behind
+            if _tmp.exists():
+                try:
+                    _tmp.unlink()
+                except OSError:
+                    pass
     try:
         _st = SETTINGS_FILE.stat()
         _last_sync_stat = (_st.st_mtime_ns, _st.st_size)
@@ -836,7 +863,17 @@ def load_presets() -> dict:
             # utf-8-sig: tolerate a UTF-8 BOM. External Windows editors add one;
             # strict utf-8 json.loads then failed, load_presets() silently
             # returned {} and every preset load 404'd.
-            return json.loads(PRESETS_FILE.read_text(encoding="utf-8-sig"))
+            data = json.loads(PRESETS_FILE.read_text(encoding="utf-8-sig"))
+            # PRESET-HYGIENE (2026-10-31, audit): old exports carry the apply
+            # bookkeeping; it is skipped on load but stays as stale dust in
+            # every re-export.
+            if isinstance(data, dict):
+                for _p in data.values():
+                    if isinstance(_p, dict):
+                        for _k in ("active_preset", "settings_saved_at",
+                                   "preset_applied_at"):
+                            _p.pop(_k, None)
+            return data
         except Exception:
             pass
     return dict(DEFAULT_PRESETS)

@@ -268,6 +268,10 @@ Field notes:
 - `sampling` — optional per-mode values (`thinking`, `non_thinking`,
   `sampling_thinking_code`, `sampling_thinking_text`, `sampling_text`) that beat
   the family profiles; only entered fields are stored.
+- `mtp_draft_n_max` / `mtp_draft_p_min` — MTP draft limits for
+  `--spec-draft-n-max` / `--spec-draft-p-min` when `mtp: true`.
+- `kv_cache_type` (`q4_0`/`q8_0`/`f16`) and `load_mode`
+  (`none`/`mmap`/`mlock`/`mmap+mlock`) — KV quantization and loader mode.
 
 The wizard writes every field, so hand-editing is only needed for the ones above.
 
@@ -384,9 +388,10 @@ Multimodal: gemma-4 has a built-in vision encoder; qwen3.5/3.6/hermes use an
 `mmproj` projector (auto-downloaded with the model). Non-multimodal models fall
 back to the vision-agent preprocessing path.
 
-Chat templates: qwen3.5/3.6/hermes models launch with the bundled
-`model_configs/chat_template22.5.jinja`; gemma-4 uses its own built-in template.
-Per-model overrides live in `model_configs/models/<tag>.json`.
+Chat templates: a profile's `chat_template` wins; without one, qwen3.5/3.6/
+hermes models launch with the bundled `model_configs/chat_template_sharp_v22.5.0.jinja`
+(22.5 is the fallback). Groot uses its own GGUF template; gemma-4 uses its
+built-in one. Per-model overrides live in `model_configs/models/<tag>.json`.
 
 ## UI and control
 

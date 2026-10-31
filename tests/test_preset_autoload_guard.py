@@ -55,7 +55,7 @@ check("the autoload consults the guard",
       and "settings.get(\"settings_saved_at\")" in cfg_src)
 check("a preset application stamps applied_at == saved_at in one write",
       'settings["preset_applied_at"] = _stamp' in cfg_src
-      and "save_settings, settings, saved_at=_stamp" in cfg_src)
+      and "save_settings, copy.deepcopy(settings), saved_at=_stamp" in cfg_src)
 check("every plain save stamps settings_saved_at",
       'settings["settings_saved_at"] = saved_at or _now_iso()' in set_src)
 

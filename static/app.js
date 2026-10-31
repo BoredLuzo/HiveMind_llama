@@ -956,6 +956,17 @@ async function loadSettings() {
     var dtrSel = document.getElementById('duo-tool-rounds-sel');
     if (dtrSel) {
       S.duoToolRounds = parseInt(s.duo_tool_rounds ?? 50);
+      // a saved 50 (the new default) had no option and showed blank
+      var _hasOpt = false;
+      for (var _oi = 0; _oi < dtrSel.options.length; _oi++) {
+        if (dtrSel.options[_oi].value === String(S.duoToolRounds)) _hasOpt = true;
+      }
+      if (!_hasOpt) {
+        var _o = document.createElement('option');
+        _o.value = String(S.duoToolRounds);
+        _o.textContent = String(S.duoToolRounds);
+        dtrSel.appendChild(_o);
+      }
       dtrSel.value = String(S.duoToolRounds);
     }
     var dpipeEl = document.getElementById('duo-pipeline-toggle');
@@ -13462,7 +13473,7 @@ async function loadGitConfig(s) {
   S.gitUsername = s.git_username || '';
   S.gitToken = '';
   S.gitTokenSaved = !!s.git_token_saved;
-  S.gitBranch = s.git_branch || 'main';
+  S.gitBranch = s.git_default_branch || s.git_branch || 'main';
   // GIT-TOOLS-GATE (2026-10-17): the git tools follow the credentials; this
   // select is the explicit override (auto | true | false). JSON booleans and
   // strings both occur, so normalise before syncing the select.
@@ -13800,8 +13811,20 @@ function _updateDuoRoleStatus(elId, label, model) {
     // llama backend panel uses inline styles (no .tgl-row markup), so the
     // DOM scan would miss it.
     var _pfGate = document.getElementById('vram-preflight-gate-toggle');
-    if (_pfGate) _push('backend', 'VRAM Pre-Flight Gate', _pfGate, 'Llama backend', null,
+    if (_pfGate) _push('agents', 'VRAM Pre-Flight Gate', _pfGate, 'Llama backend', null,
       'vram preflight gate refuse loads estimate ctx cascade backend');
+    // KEY-SEARCH (2026-10-31, audit): these keys have no DOM field; search
+    // must still find them by their setting names.
+    _push('agents', 'Llama ubatch / batch size', null, 'Llama backend', null,
+      'ubatch batch prefill chunk duo_ubatch llama_ubatch_size 256 512 1024');
+    _push('agents', 'Llama cache / checkpoints', null, 'Llama backend', null,
+      'cache reuse ram mib ctx checkpoints llama_cache_reuse llama_cache_ram_mib llama_ctx_checkpoints');
+    _push('agents', 'Run timeout (duo)', null, 'Duo timeout', null,
+      'duo_run_timeout_seconds critical timeout wall budget 420 900');
+    _push('configs', 'MCP client timeout', null, 'MCP', null,
+      'mcp_client_timeout_s timeout seconds server call');
+    _push('configs', 'Git default branch', null, 'Git', null,
+      'git_default_branch branch main push');
 
     // NAMING ROUND (2026-10-05, user): generic row texts ("Active") get the
     // enclosing card/section title as prefix; duplicate labels are deduped;
@@ -13869,6 +13892,13 @@ function _updateDuoRoleStatus(elId, label, model) {
         if (!row || _dead(row)) return;
         var txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
         if (txt.length >= 3) _push(pid, txt.slice(0, 80), row, 'Checkbox');
+      });
+      // OPT-NAME ROWS (2026-10-31, audit): the Duo panel uses .opt-name
+      // labels without checkbox markup; "Tool rounds", "Chunking",
+      // "Until Finished" etc. were not searched at all.
+      panel.querySelectorAll('.opt-name').forEach(function(opt) {
+        var t = (opt.textContent || '').replace(/\s+/g, ' ').trim();
+        if (t.length >= 3 && !_dead(opt)) _push(pid, t, opt, 'Duo option');
       });
       // dynamic agent cards: ONE entry per agent with comprehensive
       // keywords. The old 5-entries-per-agent approach produced noise

@@ -202,6 +202,13 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
                 _merged[_role] = _dst
             settings["agents"] = _merged
     _applied_keys: set[str] = set()
+    # PRESET-ALIAS-MIGRATION (2026-10-31, audit): presets saved before
+    # duo_ubatch existed only carry llama_ubatch_size; the resolver gives
+    # duo_ubatch priority, so such a preset could never set the effective
+    # ubatch. Mirror the alias onto the canonical key on apply.
+    if "duo_ubatch" not in p and "llama_ubatch_size" in p:
+        settings["duo_ubatch"] = copy.deepcopy(p["llama_ubatch_size"])
+        _applied_keys.add("duo_ubatch")
     for key, value in p.items():
         if key in {"agents", "prompts", "active_preset"}:
             continue
@@ -300,7 +307,8 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
         # survive reboots. Both stamps land in ONE write.
         _stamp = _now_iso()
         settings["preset_applied_at"] = _stamp
-        await asyncio.to_thread(save_settings, settings, saved_at=_stamp)
+        settings["settings_saved_at"] = _stamp
+        await asyncio.to_thread(save_settings, copy.deepcopy(settings), saved_at=_stamp)
     registry_sync_from_pipeline()
     return True
 
@@ -597,6 +605,18 @@ async def post_settings(req: Request):
         # mask echo or empty field: never destroy the stored credential
         data.pop("git_token", None)
     settings.update(data)
+    # UI-SAVE-FLAG-SYNC (2026-10-31, audit F6): a ubatch/cache/checkpoint
+    # change through POST /settings used to wait for a restart while the same
+    # change via a preset applied immediately.
+    _flag_keys = {"llama_cache_reuse", "llama_cache_ram_mib",
+                  "llama_ctx_checkpoints", "llama_ubatch_size", "duo_ubatch",
+                  "llama_mlock"}
+    if _flag_keys & set(data):
+        try:
+            from backend.runtime_flags import apply_runtime_flags as _apply_flags
+            _apply_flags(settings)
+        except ImportError:
+            pass
     # VRAM-PREFLIGHT-GATE (2026-10-11): live-sync the toggle into the
     # backend modules (same triple-sync as the startup path) so the
     # switch takes effect without a restart.
@@ -629,7 +649,7 @@ async def post_settings(req: Request):
             language=settings.get("searxng_language"),
         )
     try:
-        await asyncio.to_thread(save_settings, settings)
+        await asyncio.to_thread(save_settings, copy.deepcopy(settings))
     except Exception as e:
         logger.warning("[settings] save_settings failed: %s", e, exc_info=True)
         return JSONResponse({"error": f"Save failed: {str(e)[:120]}"}, status_code=500)
@@ -704,7 +724,7 @@ async def set_agent(req: Request):
     # settings, do not load. The model is loaded lazily on first real use
     # (pipeline/duo runners call ensure_loaded).
     try:
-        await asyncio.to_thread(save_settings, settings)
+        await asyncio.to_thread(save_settings, copy.deepcopy(settings))
     except Exception as e:
         logger.warning("[settings/agent] save_settings failed: %s", e, exc_info=True)
         return JSONResponse({"error": f"Save failed: {str(e)[:120]}"}, status_code=500)
@@ -723,7 +743,7 @@ async def set_all_model(req: Request):
     for key in settings["agents"]:
         settings["agents"][key]["model"] = m
     try:
-        await asyncio.to_thread(save_settings, settings)
+        await asyncio.to_thread(save_settings, copy.deepcopy(settings))
     except Exception as e:
         logger.warning("[settings/all_model] save_settings failed: %s", e, exc_info=True)
         return JSONResponse({"error": f"Save failed: {str(e)[:120]}"}, status_code=500)
@@ -833,7 +853,7 @@ async def del_preset(name: str):
         # exists.
         if str(settings.get("active_preset") or "") == name:
             settings["active_preset"] = None
-            await asyncio.to_thread(save_settings, settings)
+            await asyncio.to_thread(save_settings, copy.deepcopy(settings))
     return {"ok": True}
 
 
@@ -861,7 +881,7 @@ async def startup_preset_autoload() -> None:
         "[PRESET] startup auto-load: preset '%s' not found — clearing active_preset",
         _ap_name)
     settings["active_preset"] = None
-    await asyncio.to_thread(save_settings, settings)
+    await asyncio.to_thread(save_settings, copy.deepcopy(settings))
 
 
 @router.get("/presets/{name}/prompts/{agent}")
