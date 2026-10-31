@@ -853,12 +853,18 @@ def save_presets(presets: dict):
     with _presets_write_lock:
         _tmp = PRESETS_FILE.with_name(
             f".presets_{os.getpid()}_{threading.get_ident()}.tmp")
-        _tmp.write_text(_data, encoding="utf-8")
         try:
-            _tmp.replace(PRESETS_FILE)
-        except PermissionError:
-            time.sleep(0.1)
-            _tmp.replace(PRESETS_FILE)
+            _tmp.write_text(_data, encoding="utf-8")
+            try:
+                _tmp.replace(PRESETS_FILE)
+            except PermissionError:
+                time.sleep(0.1)
+                _tmp.replace(PRESETS_FILE)
+        finally:
+            try:
+                _tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def get_custom_prompt(preset_name: str, agent_key: str) -> str | None:

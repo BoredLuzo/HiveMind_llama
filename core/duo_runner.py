@@ -1459,6 +1459,8 @@ async def _duo_exec_round_task(
                 cache_horizon=_round_cache_horizon,
                 tool_ctx_lru=_tool_ctx_lru,
                 duo_deadline_at=_duo_deadline_at,
+                grace_extensions_ref=state.setdefault(
+                    "_grace_extensions_ref", [0]),
                 verify_mutation_serial=_verify_mutation_serial,
                 verify_last_ok_serial=_verify_last_ok_serial,
                 last_run_bash_failure=_last_run_bash_failure,
@@ -1520,9 +1522,17 @@ async def _duo_exec_round_task(
                 _exec_task.cancel()
                 _timed_out = True
                 try:
-                    await _exec_task
-                except (asyncio.CancelledError, RuntimeError):
-                    pass
+                    # BOUNDED-WAIT (2026-10-31, audit): a handler blocked in
+                    # asyncio.to_thread delivers CancelledError only after the
+                    # thread returns; a bare await could freeze the run (and
+                    # the SSE stream) behind the deadline.
+                    await asyncio.wait_for(
+                        asyncio.shield(_exec_task), timeout=10.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError,
+                        RuntimeError):
+                    logger.warning(
+                        "[RUN-DEADLINE] tool round did not stop within 10s - "
+                        "abandoning it")
                 yield await ctx.emit({"type": "status",
                     "content": "⏱ Run deadline reached — tool round cancelled."})
                 break
@@ -5351,6 +5361,7 @@ async def run_code_duo(ctx):
                                             break
                             else:
                                 _ctx_compressions += 1
+                                _ctx_full_skips = 0
                                 _llm_compress_fails = 0
                                 _rule_compress_fails = 0
                                 if _ctx_compressions < _MAX_COMPRESSIONS:
@@ -6001,6 +6012,11 @@ async def run_code_duo(ctx):
                             if _drop_notices:
                                 _dr_think_only_retries = 0
                                 _dr_dropped_tool_retries += 1
+                                if _dr_dropped_tool_retries >= 3:
+                                    _ld_setter(3089); _loop_detected = True
+                                    yield await ctx.emit({"type": "status",
+                                        "content": f"⚠ Tool-call args {_dr_dropped_tool_retries}x malformed/truncated — loop aborted."})
+                                    break
                                 if _should_compress_after_truncated_drop(
                                         _result.get("dr_finish_reason"),
                                         _drop_names):
@@ -6023,11 +6039,6 @@ async def run_code_duo(ctx):
                                         "compression instead of an identical retry",
                                         int(_max_tokens_round))
                                     continue
-                                if _dr_dropped_tool_retries >= 3:
-                                    _ld_setter(3089); _loop_detected = True
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"⚠ Tool-call args {_dr_dropped_tool_retries}x malformed/truncated — loop aborted."})
-                                    break
                                 if _dr < _max_tool_rounds - 1:
                                     # write_file_append; edit_file → small SEARCH/REPLACE).
                                     yield await ctx.emit({"type": "status",
@@ -6248,6 +6259,15 @@ async def run_code_duo(ctx):
                             break
                         _last_too_large_path = _last_too_large_ref[0]
                         _cached_coder_port = _cached_port_ref[0]
+                        # DEADLINE-CANCEL (2026-10-31, audit): a cancelled
+                        # round carries no result object, and every field
+                        # below used to be dereferenced unconditionally
+                        # (AttributeError instead of a clean timeout).
+                        if _exec_result is None:
+                            _duo_timed_out = True
+                            yield await ctx.emit({"type": "status",
+                                "content": "⏱ Run deadline reached — ending the run."})
+                            break
                         _verify_mutation_serial = _exec_result.verify_mutation_serial
                         _verify_last_ok_serial = _exec_result.verify_last_ok_serial
                         _last_run_bash_failure = _exec_result.last_run_bash_failure
@@ -6408,7 +6428,16 @@ async def run_code_duo(ctx):
                                         # duo_timed_out (same shape as the wedge handoff).
                                         _av_grace = time.monotonic() + 300.0
                                         if _av_grace > _duo_deadline_at:
-                                            _duo_deadline_at = _av_grace
+                                            _gref = state.setdefault(
+                                                "_grace_extensions_ref", [0])
+                                            if int(_gref[0]) < 1:
+                                                _gref[0] = int(_gref[0]) + 1
+                                                _duo_deadline_at = _av_grace
+                                            else:
+                                                logger.warning(
+                                                    "[DEADLINE-GRACE] auto-verify "
+                                                    "succeeded, but the one allowed "
+                                                    "extension is spent - deadline stays")
                                     elif _av_res is not None and (
                                             not _av_res.command
                                             or NO_TESTS_RE.search(str(_av_res.raw_output or ""))):

@@ -140,7 +140,8 @@ _INLINE_CODING_TOOLS = [
         "parameters": {"type": "object", "properties": {
             "path":     {"type": "string", "description": "File path"},
             "old_text": {"type": "string", "description": "Exact text to replace — copied verbatim from read_file, unique in the file"},
-            "new_text": {"type": "string", "description": "Replacement text"}
+            "new_text": {"type": "string", "description": "Replacement text"},
+            "confirm_shrink": {"type": "boolean", "description": "Only when a replacement intentionally removes most of the file; the guard blocks a >75 % collapse otherwise"}
         }, "required": ["path", "old_text", "new_text"]}
     }},
     {"type": "function", "function": {

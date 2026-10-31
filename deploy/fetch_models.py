@@ -480,6 +480,9 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool) -> bool:
             # above already returned when _have >= _expected, so a 416 here
             # means the upstream file shrank or changed: the partial file is
             # NOT complete (audit 2026-10-30).
+            if not _expected:
+                print(f"    [WARNING] 416 with an unknown expected size - "
+                      f"keeping {dest.name} as-is; verify it before use")
             if _expected and _have < _expected:
                 print(f"    [WARNING] 416 with {_have} of {_expected} bytes on "
                       f"disk - upstream file changed; deleting partial file")

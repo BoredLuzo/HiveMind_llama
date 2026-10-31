@@ -15,11 +15,11 @@ an empty workspace. The audit found three independent causes, all fixed:
   entered the tool loop; the model improvised `write_file`/`{"updates": ...}`
   syntax that nothing parses. The default is now **50** (an explicit `0`
   still disables the loop). With tools on, the same model emitted 16 parsed
-  calls in one run (94 % of attempts) and 18/18 in a small qwen3.5:4b-MTP run.
+  calls in one run (17 tool attempts: 16 parsed + 1 truncated) and 18/18 in a small qwen3.5:4b-MTP run.
 - **A truncated `edit_file` retried itself.** `write_file` already salvaged
   the partial content with a `<<<TRUNCATION_MARKER>>>`; `edit_file` cannot be
   applied half-way, so it is dropped - but the retry shipped the *same*
-  clamped budget (live: 2404 tokens against an ~16k request, deterministic
+  clamped budget (live: 2404 tokens against a 20 455-token prompt, deterministic
   truncation). A dropped `edit_file` at `finish=length` now forces a
   compression first and tells the model to split the edit.
 - **The viability floor was fixed at 1024.** A 2404-token budget passed as
@@ -42,11 +42,12 @@ answers, not for tool attempts.
 ## Deadline: enforced inside a round, grace bounded
 
 The deadline was checked only at round heads. One long generation plus a
-compression could run past it (live: 900 s configured, 1056 s alive). The
+compression could run past it (live: 900 s configured, the coder phase ran 1064 s). The
 heartbeat now cancels the executor at the deadline (which also drops the
 server-side generation) and reports `timeout` in its own stop-reason bucket
 instead of `runtime_load_error`. A successful write grants at most **one**
-+300 s grace extension.
++300 s grace extension per run (auto-verify shares the ledger; the wedge
+handoff keeps its documented exemption).
 
 ## MoE sizing: the stored split is authoritative everywhere
 

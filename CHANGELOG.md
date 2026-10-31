@@ -9,7 +9,7 @@
   salvaged partial content with a marker; an `edit_file` cut at the output
   limit is dropped (a half edit would corrupt the file) and now forces a
   compression instead of retrying with the same clamped budget (live: a
-  2404-token budget against an ~16k request, deterministic truncation).
+  2404-token budget against a 20 455-token prompt, deterministic truncation).
 - `min_viable_tool_budget`: a tool round must keep `max(1024, min(4096,
   request//2))` output tokens; the fixed 1024 floor let the 2404 budget ship.
 - `write_file`/`edit_file` shrink guards are proportional: >=30 content lines
@@ -24,8 +24,10 @@
 - The run deadline is enforced **inside** a tool round: the heartbeat cancels
   the executor (and the server-side generation). A cancelled round reports
   `timeout` in its own stop-reason bucket.
-- A successful write grants at most **one** +300 s grace extension; the
-  unbounded extension let a 900 s run stay alive past 1056 s.
+- A successful write grants at most **one** +300 s grace extension per run
+  (auto-verify shares the ledger; the wedge handoff keeps its documented
+  exemption); the unbounded extension let a 900 s run's coder phase reach
+  1064 s.
 
 ### MoE sizing
 - `vram_of()` uses the stored MoE split (`active_gpu_gb` + `n_cpu_moe`) for

@@ -1,10 +1,10 @@
 """Push settings values into the llama module globals (2026-10-31).
 
 The llama-server startup flags live as by-value imports in llama_config,
-llama_server_manager and manager_load. server.py and routers/config.py used to
-sync them in four hand-rolled blocks; those drifted (ubatch ignored
-duo_ubatch, three int() casts were unguarded, a preset load was 30 lines).
-One helper, guarded casts, one log line.
+llama_server_manager and manager_load. The preset path synced them in a
+30-line hand-rolled block that drifted (ubatch ignored duo_ubatch, three
+int() casts were unguarded). One helper, guarded casts, one log line.
+server.py keeps its own boot block (it runs before this module is imported).
 """
 from __future__ import annotations
 
@@ -53,10 +53,10 @@ def apply_runtime_flags(settings: dict) -> dict:
         mod.CTX_CHECKPOINTS = checkpoints
         mod.MLOCK_MODEL = mlock
         mod.LLAMA_UBATCH = ubatch
-        if hasattr(mod, "LLAMA_BATCH"):
-            mod.LLAMA_BATCH = batch
+        # LLAMA_BATCH is not a module global; --batch-size is derived from
+        # LLAMA_UBATCH in the loader. `batch` stays in the return value.
     logger.info(
         "[FLAGS] cache_reuse=%d cache_ram=%d checkpoints=%d mlock=%s "
-        "ubatch=%d batch=%d", cache_reuse, cache_ram, checkpoints, mlock,
+        "ubatch=%d (batch %d)", cache_reuse, cache_ram, checkpoints, mlock,
         ubatch, batch)
     return applied

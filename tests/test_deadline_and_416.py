@@ -29,16 +29,31 @@ check("in-round deadline cancel exists", "[RUN-DEADLINE]" in _duo
       and "_exec_task.cancel()" in _duo)
 check("cancelled round is reported as timeout",
       "_timed_out = True" in _duo and "ps.timed_out = _timed_out" in _duo)
+# P0 from the 2026-10-31 re-audit: cancel produced _exec_result=None and the
+# consumer block dereferenced it outside every guard.
+check("cancel path never dereferences None",
+      "if _exec_result is None:" in _duo
+      and "_duo_timed_out = True" in _duo)
+check("cancel wait is bounded", "asyncio.wait_for(" in _duo
+      and "timeout=10.0" in _duo)
 
 _trs = (ROOT / "core" / "tool_exec_helpers.py").read_text(encoding="utf-8")
-check("grace extension is counted", "grace_extensions" in _trs)
+check("grace ledger is shared per run (not per round)",
+      "grace_extensions_ref" in _trs
+      and '"_grace_extensions_ref", [0]' in _duo)
 _te = (ROOT / "core" / "tool_executor.py").read_text(encoding="utf-8")
-check("grace is capped at one extension",
-      ">= 1" in _te and "one allowed" in _te)
+check("grace is capped at one extension", "_gcount >= 1" in _te
+      and "one allowed" in _te)
+
+_defs = (ROOT / "tools" / "definitions.py").read_text(encoding="utf-8")
+check("edit_file schema offers confirm_shrink",
+      "confirm_shrink" in _defs)
 
 _fm = (ROOT / "deploy" / "fetch_models.py").read_text(encoding="utf-8")
 check("416 with a short file is not complete",
       "upstream file changed" in _fm and "dest.unlink()" in _fm)
+check("416 with an unknown size warns",
+      "unknown expected size" in _fm)
 
 print(f"\ndeadline_and_416: {passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
