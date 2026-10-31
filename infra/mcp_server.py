@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hmac
 import json
+import mimetypes
 import os
 import re
 import sys
@@ -15,6 +17,8 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 # ── Sys.path-Bootstrap (MCP-Audit 2.2, gefixt 2026-08-24) ──────────────────────
 _ROOT = str(Path(__file__).resolve().parent.parent)
@@ -79,21 +83,35 @@ _CONN_SEM = asyncio.Semaphore(MCP_MAX_CONNECTIONS)
 _HTTP_SEM = asyncio.Semaphore(MCP_MAX_CONCURRENCY)
 MCP_HTTP_TOKEN = os.environ.get("MCP_HTTP_TOKEN", "").strip()
 
+# ── Phase 2 (2026-10-31): resources + bounded-output limits ──────────────────
+# resources/* caps: the workspace listing and every read are bounded so a huge
+# tree or a huge file cannot blow up an IDE window or the transport.
+MCP_RESOURCE_MAX_BYTES = max(1024, int(os.environ.get("MCP_RESOURCE_MAX_BYTES", str(256 * 1024))))
+MCP_RESOURCE_MAX_ENTRIES = max(1, int(os.environ.get("MCP_RESOURCE_MAX_ENTRIES", "200")))
+MCP_RESOURCE_MAX_DEPTH = max(1, int(os.environ.get("MCP_RESOURCE_MAX_DEPTH", "8")))
+# run_tests output cap (the tail is kept - failures are at the end).
+MCP_TEST_OUTPUT_MAX_CHARS = max(500, int(os.environ.get("MCP_TEST_OUTPUT_MAX_CHARS", "8000")))
+
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ── Governance-Tiers (Tier 1.5, 2026-08-24) ───────────────────────────────────
+# Phase 2 (2026-10-31): git_diff/model_status are read tier; git_commit is a
+# mutating tool and sits in the write tier (MCP_ALLOW_WRITE) exactly like the
+# other mutating tools; run_tests executes project code and sits in the exec
+# tier (MCP_ALLOW_EXEC, stdio only).
 _TIER_READ = {
     "read_file", "list_dir", "find_files", "search_code",
     "get_signatures", "find_references", "memory_get", "git_status",
+    "git_diff", "model_status",
 }
 _TIER_WRITE = {
     "write_file", "write_file_append", "patch_file", "edit_file",
-    "replace_lines", "edit_ast", "memory_set",
+    "replace_lines", "edit_ast", "memory_set", "git_commit",
 }
-_TIER_EXEC = {"shell", "run_bash", "run_python"}
+_TIER_EXEC = {"shell", "run_bash", "run_python", "run_tests"}
 # Exec/Shell is never available over HTTP; query is opt-in via MCP_ALLOW_QUERY=1.
 _HTTP_FORBIDDEN = _TIER_EXEC
 
@@ -993,6 +1011,347 @@ async def tool_run_python(code: str, timeout: int = 15) -> str:
         Path(tmp).unlink(missing_ok=True)
 
 
+# ── Phase 2 tools (2026-10-31): git_diff, git_commit, run_tests, model_status ─
+
+async def _run_git(argv: list[str], cwd: Path, timeout: float = 60.0) -> tuple[int, str, str]:
+    """One git invocation, argv-only (no shell), bounded by a timeout.
+
+    Returns (returncode, stdout, stderr) decoded via _decode().
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "git", *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(cwd),
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.kill()
+        raise
+    return (proc.returncode if proc.returncode is not None else -1,
+            _decode(out), _decode(err))
+
+
+def _git_root(workspace: str, tool: str) -> tuple[Path | None, str]:
+    """The git root for a tool call: WORKSPACE, or a directory inside it.
+
+    Returns (root, "") or (None, TOOL_ERROR envelope)."""
+    raw = str(workspace or "").strip()
+    try:
+        base = _resolve_path(raw) if raw else WORKSPACE.resolve()
+    except ToolPathError as exc:
+        return None, _tool_error_response(
+            "PATH_OUTSIDE_WORKSPACE", str(exc), tool=tool, retryable=False,
+            details={"path": getattr(exc, "path", "")[:200]})
+    if not base.is_dir():
+        return None, _tool_error_response(
+            "NOT_A_DIRECTORY", f"workspace is not a directory: {base}",
+            tool=tool, retryable=False)
+    return base, ""
+
+
+_GIT_REF_RE = re.compile(r"^[A-Za-z0-9._/\-^~]{1,128}$")
+
+
+def _clean_git_ref(ref: str) -> str | None:
+    """A git commit-ish is data, never an option: no leading dash, no shell
+    metacharacters (the argv is built without a shell, but git would still
+    parse a leading '-' as a flag)."""
+    r = str(ref or "").strip()
+    if not r or r.startswith("-") or not _GIT_REF_RE.match(r):
+        return None
+    return r
+
+
+async def tool_git_diff(path: str = "", ref: str = "", workspace: str = "",
+                        max_chars: int = 8000) -> str:
+    """Read-only git diff, argv-only, bounded output."""
+    base, err_env = _git_root(workspace, "git_diff")
+    if base is None:
+        return err_env
+    argv = ["diff", "--no-color", "--no-ext-diff"]
+    ref_raw = str(ref or "").strip()
+    if ref_raw:
+        ref_clean = _clean_git_ref(ref_raw)
+        if ref_clean is None:
+            return _tool_error_response(
+                "INVALID_ARGUMENT",
+                "ref looks invalid (use a commit-ish like HEAD~1 or a range "
+                "like main..HEAD, no leading dash).",
+                tool="git_diff", retryable=False)
+        argv.append(ref_clean)
+    if str(path or "").strip():
+        try:
+            p = _resolve_path(path)
+        except ToolPathError as exc:
+            return _tool_error_response(
+                "PATH_OUTSIDE_WORKSPACE", str(exc), tool="git_diff",
+                retryable=False, details={"path": getattr(exc, "path", "")[:200]})
+        try:
+            rel = p.relative_to(base).as_posix()
+        except ValueError:
+            return _tool_error_response(
+                "INVALID_ARGUMENT", f"path is outside the git root {base}",
+                tool="git_diff", retryable=False)
+        if rel != ".":
+            argv += ["--", rel]
+    try:
+        cap = max(500, min(20000, int(max_chars or 8000)))
+    except (TypeError, ValueError):
+        cap = 8000
+    try:
+        code, out, errtxt = await _run_git(argv, base)
+    except (asyncio.TimeoutError, OSError, ValueError) as exc:
+        return _tool_error_response(
+            "GIT_DIFF_FAILED",
+            f"git diff failed: {type(exc).__name__}: {str(exc)[:200]}",
+            tool="git_diff", retryable=True)
+    if code != 0:
+        return _tool_error_response(
+            "GIT_DIFF_FAILED",
+            f"git diff exited {code}: {(errtxt or out).strip()[:300]}",
+            tool="git_diff", retryable=True, details={"exit_code": code})
+    diff = out.strip()
+    if not diff:
+        return f"(no diff{' vs ' + ref_clean if ref_raw else ''})"
+    if len(diff) > cap:
+        diff = diff[:cap] + f"\n... [truncated at {cap} chars - raise max_chars if needed]"
+    return diff
+
+
+async def tool_git_commit(message: str, paths: list | None = None,
+                          workspace: str = "") -> str:
+    """Mutating: commit EXPLICITLY listed paths only.
+
+    Runs `git add -- <paths>` + `git commit -m <message> -- <paths>`.
+    A whole-index sweep (`git add -A`) is impossible by construction: the
+    paths argument is required and the workspace root itself is refused.
+    """
+    msg = " ".join(str(message or "").split())[:500]
+    if not msg:
+        return _tool_error_response(
+            "INVALID_ARGUMENT", "message is required.", tool="git_commit",
+            retryable=False)
+    raw_paths = [str(p or "").strip() for p in (paths if isinstance(paths, list) else [])
+                 if str(p or "").strip()]
+    if not raw_paths:
+        return _tool_error_response(
+            "INVALID_ARGUMENT",
+            "paths is required: list the files/directories to commit "
+            "explicitly (the whole index is never staged).",
+            tool="git_commit", retryable=False)
+    if len(raw_paths) > 50:
+        return _tool_error_response(
+            "INVALID_ARGUMENT", "too many paths (max 50 per commit).",
+            tool="git_commit", retryable=False)
+    base, err_env = _git_root(workspace, "git_commit")
+    if base is None:
+        return err_env
+    rel_paths: list[str] = []
+    missing: list[str] = []
+    for raw in raw_paths:
+        try:
+            p = _resolve_path(raw)
+        except ToolPathError as exc:
+            return _tool_error_response(
+                "PATH_OUTSIDE_WORKSPACE", str(exc), tool="git_commit",
+                retryable=False, details={"path": getattr(exc, "path", "")[:200]})
+        if p == base:
+            return _tool_error_response(
+                "INVALID_ARGUMENT",
+                "committing the workspace root itself is not allowed - "
+                "list explicit paths.",
+                tool="git_commit", retryable=False)
+        try:
+            rel = p.relative_to(base).as_posix()
+        except ValueError:
+            return _tool_error_response(
+                "INVALID_ARGUMENT", f"path is outside the git root {base}: {raw[:120]}",
+                tool="git_commit", retryable=False)
+        if p.exists():
+            rel_paths.append(rel)
+        else:
+            missing.append(rel)
+    if not rel_paths:
+        return "ℹ️ git_commit: none of the listed paths exist - nothing to commit."
+    code, _out, errtxt = await _run_git(["rev-parse", "--git-dir"], base)
+    if code != 0:
+        return _tool_error_response(
+            "GIT_COMMIT_FAILED", f"{base} is not a git repository.",
+            tool="git_commit", retryable=False)
+    add_code, _a_out, add_err = await _run_git(["add", "--", *rel_paths], base)
+    if add_code != 0:
+        return _tool_error_response(
+            "GIT_COMMIT_FAILED", f"git add failed: {add_err.strip()[:300]}",
+            tool="git_commit", retryable=True)
+    c_code, c_out, c_err = await _run_git(["commit", "-m", msg, "--", *rel_paths], base)
+    if c_code != 0:
+        err_low = (c_err or c_out).lower()
+        if ("nothing to commit" in err_low or "no changes" in err_low
+                or "nothing added to commit" in err_low):
+            return "ℹ️ git_commit: no changes in the listed paths - no commit."
+        return _tool_error_response(
+            "GIT_COMMIT_FAILED",
+            f"git commit failed: {(c_err or c_out).strip()[:300]}",
+            tool="git_commit", retryable=True)
+    h_code, h_out, _h_err = await _run_git(["rev-parse", "--short", "HEAD"], base)
+    short = h_out.strip() if h_code == 0 else "?"
+    note = f" (skipped, do not exist: {', '.join(missing[:5])})" if missing else ""
+    return f"✅ Committed: [{short}] {msg} ({len(rel_paths)} path(s)){note}"
+
+
+_TEST_CMD_RE = re.compile(
+    r"^(python3?|py|pytest|pip|npm|npx|yarn|pnpm|node|cargo|go|dotnet|mvn|"
+    r"gradle|make|ctest)\b", re.IGNORECASE)
+# Parens are allowed (python -c "print(...)"), they cannot chain or
+# substitute on their own; the real shell operators stay blocked.
+_TEST_CMD_META = set(_GIT_META_CHARS) | set("$%")
+
+
+def _is_safe_test_cmd(cmd: str) -> bool:
+    """run_tests accepts a plain single test command - no chaining, no
+    substitution, no redirects (same meta-class as _is_safe_git, stricter
+    prefix allowlist)."""
+    c = (cmd or "").strip()
+    if not c or not _TEST_CMD_RE.match(c):
+        return False
+    return not any(ch in _TEST_CMD_META for ch in c)
+
+
+def _detect_test_cmd(base: Path) -> str:
+    """Auto-detect the test command from project markers (no execution)."""
+    if ((base / "pyproject.toml").exists() or (base / "pytest.ini").exists()):
+        return "python -m pytest -q"
+    tests_dir = base / "tests"
+    if tests_dir.is_dir() and any(tests_dir.glob("test_*.py")):
+        return "python -m pytest -q"
+    pkg = base / "package.json"
+    if pkg.exists():
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8"))
+            scripts = data.get("scripts") if isinstance(data, dict) else None
+            if isinstance(scripts, dict) and isinstance(scripts.get("test"), str):
+                return "npm test"
+        except (OSError, ValueError):
+            return ""
+    if (base / "Cargo.toml").exists():
+        return "cargo test"
+    if (base / "go.mod").exists():
+        return "go test ./..."
+    return ""
+
+
+async def tool_run_tests(cmd: str = "", path: str = ".", timeout: int = 120) -> str:
+    """Exec tier: run the project's test suite (auto-detected or explicit cmd)
+    with a bounded timeout and a bounded output (tail kept - failures are at
+    the end)."""
+    try:
+        base = _resolve_path(path)
+    except ToolPathError as exc:
+        return _tool_error_response(
+            "PATH_OUTSIDE_WORKSPACE", str(exc), tool="run_tests", retryable=False,
+            details={"path": getattr(exc, "path", "")[:200]})
+    if not base.is_dir():
+        return _tool_error_response(
+            "NOT_A_DIRECTORY", f"Path is not a directory: {base}",
+            tool="run_tests", retryable=False)
+    try:
+        timeout = max(10, min(300, int(timeout or 120)))
+    except (TypeError, ValueError):
+        timeout = 120
+    run_cmd = str(cmd or "").strip() or _detect_test_cmd(base)
+    if not run_cmd:
+        return ("ℹ️ run_tests: no test suite detected (looked for pytest, "
+                "npm test, cargo test, go test). Pass an explicit 'cmd'.")
+    if not _is_safe_test_cmd(run_cmd):
+        return _tool_error_response(
+            "INVALID_ARGUMENT",
+            "cmd must be a single plain test command (pytest / npm test / "
+            "cargo test / go test / python -m pytest ...), without shell "
+            "metacharacters or chaining.",
+            tool="run_tests", retryable=False)
+    t0 = time.monotonic()
+    try:
+        if IS_WINDOWS:
+            proc = await asyncio.create_subprocess_exec(
+                "cmd.exe", "/c", run_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(base),
+            )
+        else:
+            proc = await asyncio.create_subprocess_shell(
+                run_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(base),
+            )
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.kill()
+        return _tool_error_response(
+            "RUN_TESTS_TIMEOUT", f"Tests timed out after {timeout}s.",
+            tool="run_tests", retryable=True)
+    except (OSError, ValueError) as exc:
+        return _tool_error_response(
+            "RUN_TESTS_FAILED",
+            f"Test run failed: {type(exc).__name__}: {str(exc)[:200]}",
+            tool="run_tests", retryable=True)
+    elapsed = time.monotonic() - t0
+    output = _decode(out) + (f"\n[stderr]: {_decode(err)}" if err.strip() else "")
+    output = output.strip()
+    if len(output) > MCP_TEST_OUTPUT_MAX_CHARS:
+        output = ("[...output truncated (kept the tail)...]\n"
+                  + output[-MCP_TEST_OUTPUT_MAX_CHARS:])
+    rc = proc.returncode if proc.returncode is not None else -1
+    status = "passed" if rc == 0 else f"FAILED (exit {rc})"
+    return (f"[TEST-RUN] cmd: {run_cmd}\nstatus: {status} ({elapsed:.1f}s)\n\n"
+            + (output or "(no output)"))
+
+
+async def tool_model_status() -> str:
+    """Read-only snapshot: configured roles, loaded models + VRAM, ports.
+
+    Loads NOTHING: it only reads runtime_models.json/settings.json and asks
+    Ollama's /api/ps (a status endpoint), never a generate/load call.
+    """
+    lines = [f"engine: {HIVEMIND_URL}",
+             f"ollama: {OLLAMA_URL}",
+             f"mcp http: http://{MCP_HTTP_BIND}:{HTTP_PORT}/mcp"]
+    try:
+        reg = json.loads((Path(__file__).resolve().parent.parent
+                          / "runtime_models.json").read_text(encoding="utf-8"))
+        if isinstance(reg, dict):
+            roles = ", ".join(f"{k}={v}" for k, v in sorted(reg.items())
+                              if str(v or "").strip())
+            lines.append(f"configured roles: {roles or '(none configured)'}")
+    except (OSError, ValueError):
+        lines.append("configured roles: (runtime_models.json not readable)")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{OLLAMA_URL}/api/ps")
+        data = resp.json()
+        models = data.get("models") if isinstance(data, dict) else None
+        if isinstance(models, list) and models:
+            for m in models[:32]:
+                if not isinstance(m, dict):
+                    continue
+                vram_gb = float(m.get("size_vram") or 0) / (1024 ** 3)
+                total_gb = float(m.get("size") or 0) / (1024 ** 3)
+                lines.append(f"loaded: {m.get('name', '?')}  "
+                             f"vram={vram_gb:.2f}GB / model={total_gb:.2f}GB")
+        else:
+            lines.append("loaded models: (none resident)")
+    except (httpx.HTTPError, OSError, ValueError):
+        lines.append(f"loaded models: unknown (Ollama not reachable at {OLLAMA_URL})")
+    if ROUTER_MODEL:
+        lines.append(f"mcp router model: {ROUTER_MODEL}")
+    return "\n".join(lines)
+
+
 # ── Tool-Dispatch ──────────────────────────────────────────────────────────────
 
 TOOL_FNS = {
@@ -1015,6 +1374,13 @@ TOOL_FNS = {
     "memory_set":  lambda a: tool_memory_set(**a),
     "git_status":  lambda a: _dispatch_tool("git_status", a, lambda x: tool_git_status(**x)),
     "run_python":  lambda a: _dispatch_tool("run_python", a, lambda x: tool_run_python(**x)),
+    # Phase 2 (2026-10-31): local handlers only - these four are deliberately
+    # NOT in _MCP_SHARED_TOOL_NAMES (no engine round-trip; git_commit must keep
+    # its explicit-paths rule, the engine variant would sweep the index).
+    "git_diff":     lambda a: _dispatch_tool("git_diff", a, lambda x: tool_git_diff(**x)),
+    "git_commit":   lambda a: _dispatch_tool("git_commit", a, lambda x: tool_git_commit(**x)),
+    "run_tests":    lambda a: _dispatch_tool("run_tests", a, lambda x: tool_run_tests(**x)),
+    "model_status": lambda a: _dispatch_tool("model_status", a, lambda x: tool_model_status(**x)),
 }
 
 TOOL_SCHEMAS = [
@@ -1249,7 +1615,363 @@ TOOL_SCHEMAS = [
             "required": ["code"],
         },
     },
+    {
+        "name": "git_diff",
+        "description": ("Read-only git diff of the workspace. Optional ref "
+                        "(commit-ish like HEAD~1 or a range main..HEAD) and "
+                        "path filter. Output is bounded (max_chars)."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path":      {"type": "string", "description": "Limit the diff to this file or directory (inside the workspace)"},
+                "workspace": {"type": "string", "description": "Git root to diff (must be inside the workspace; default: workspace root)"},
+                "ref":       {"type": "string", "description": "Commit-ish to diff against (default: working tree vs HEAD)"},
+                "max_chars": {"type": "integer", "default": 8000, "description": "Output cap in characters (500-20000)"},
+            },
+        },
+    },
+    {
+        "name": "git_commit",
+        "description": ("Commit EXPLICITLY listed paths (git add -- <paths> + "
+                        "git commit -- <paths>). The whole index is never "
+                        "staged. Mutating: needs MCP_ALLOW_WRITE=1."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message":   {"type": "string", "description": "Commit message (first line is the subject)"},
+                "paths":     {"type": "array", "items": {"type": "string"},
+                              "description": "Explicit files/directories to commit (workspace-relative or absolute inside the workspace)"},
+                "workspace": {"type": "string", "description": "Git root (must be inside the workspace; default: workspace root)"},
+            },
+            "required": ["message", "paths"],
+        },
+    },
+    {
+        "name": "run_tests",
+        "description": ("Run the project's test suite (auto-detects pytest / "
+                        "npm test / cargo test / go test) or an explicit cmd. "
+                        "Bounded timeout and output. Exec tier: "
+                        "MCP_ALLOW_EXEC=1, stdio only."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "cmd":     {"type": "string", "description": "Explicit test command (optional; auto-detected when omitted)"},
+                "path":    {"type": "string", "description": "Project directory to run in (inside the workspace; default: workspace root)"},
+                "timeout": {"type": "integer", "default": 120, "description": "Timeout in seconds (10-300)"},
+            },
+        },
+    },
+    {
+        "name": "model_status",
+        "description": ("Report configured model roles, currently loaded "
+                        "models with VRAM (Ollama /api/ps) and the ports. "
+                        "Read-only: loads nothing."),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
+
+
+# ── Tool annotations (MCP 2024-11-05, Phase 2) ────────────────────────────────
+# Hints only - clients may ignore them, so existing behaviour is unchanged.
+# destructiveHint is only meaningful when readOnlyHint is false; read-only
+# tools always carry destructiveHint=false explicitly.
+
+def _annotations(read_only: bool, *, destructive: bool = False,
+                 idempotent: bool | None = None, open_world: bool = False) -> dict:
+    if idempotent is None:
+        idempotent = read_only
+    return {
+        "readOnlyHint": bool(read_only),
+        "destructiveHint": bool(destructive) and not read_only,
+        "idempotentHint": bool(idempotent),
+        "openWorldHint": bool(open_world),
+    }
+
+
+TOOL_ANNOTATIONS = {
+    "query":             _annotations(False, open_world=True),
+    "shell":             _annotations(False, destructive=True, open_world=True),
+    "run_bash":          _annotations(False, destructive=True, open_world=True),
+    "read_file":         _annotations(True),
+    "write_file":        _annotations(False, destructive=True),
+    "write_file_append": _annotations(False),
+    "patch_file":        _annotations(False, destructive=True),
+    "edit_file":         _annotations(False, destructive=True),
+    "replace_lines":     _annotations(False, destructive=True),
+    "list_dir":          _annotations(True),
+    "find_files":        _annotations(True),
+    "search_code":       _annotations(True),
+    "get_signatures":    _annotations(True),
+    "find_references":   _annotations(True),
+    "edit_ast":          _annotations(False, destructive=True),
+    "memory_get":        _annotations(True),
+    "memory_set":        _annotations(False, idempotent=True),
+    "git_status":        _annotations(True),
+    "run_python":        _annotations(False, destructive=True, open_world=True),
+    "git_diff":          _annotations(True),
+    "git_commit":        _annotations(False),
+    "run_tests":         _annotations(False),
+    "model_status":      _annotations(True),
+}
+
+for _tool in TOOL_SCHEMAS:
+    _tool["annotations"] = dict(TOOL_ANNOTATIONS.get(_tool.get("name", ""))
+                                or _annotations(False))
+
+
+# ── MCP resources (Phase 2, 2026-10-31) ───────────────────────────────────────
+# The workspace is the root: resources/list + resources/read expose bounded,
+# text-only workspace files with strict path containment. Not the whole disk.
+# Dirs that hold private or junk data are pruned; a small denylist keeps
+# likely-secret files (settings.json can carry preset API keys, .env, key
+# files) out of BOTH the listing and the read.
+
+_RESOURCE_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv",
+                       ".idea", ".vscode", "dist", "build", "llama",
+                       "chats", "sessions", "logs", "learning_logs"}
+
+_RESOURCE_SECRET_RE = re.compile(
+    r"(^|/)(\.env|\.env\..*|settings\.json|gateway\.toml|\.git-credentials|"
+    r"\.netrc|.*\.pem|.*\.key|id_rsa.*|id_ed25519.*|id_ecdsa.*|"
+    r"credentials.*|secrets?\..*)$",
+    re.IGNORECASE)
+
+
+class _ResourceError(Exception):
+    """A resources/* failure that maps to a JSON-RPC error (code carried)."""
+
+    def __init__(self, message: str, *, code: int = -32002) -> None:
+        super().__init__(message)
+        self.code = int(code)
+
+
+def _is_blocked_secret(rel_posix: str) -> bool:
+    return bool(_RESOURCE_SECRET_RE.search(str(rel_posix or "")))
+
+
+def _guess_mime(p: Path) -> str:
+    return mimetypes.guess_type(p.name)[0] or "text/plain"
+
+
+def _walk_workspace_files(base: Path, max_entries: int,
+                          max_depth: int) -> tuple[list[Path], bool]:
+    """Files under base, breadth-first and sorted; junk/hidden dirs pruned.
+
+    Returns (files, truncated). Never raises for unreadable directories.
+    """
+    out: list[Path] = []
+    queue: list[tuple[Path, int]] = [(base, 0)]
+    while queue and len(out) < max_entries:
+        d, depth = queue.pop(0)
+        try:
+            entries = sorted(d.iterdir(), key=lambda x: x.name.lower())
+        except OSError:
+            continue
+        subdirs: list[tuple[Path, int]] = []
+        for item in entries:
+            if item.name.startswith(".") or item.name.lower() in _RESOURCE_SKIP_DIRS:
+                continue
+            try:
+                if item.is_dir():
+                    if depth + 1 < max_depth:
+                        subdirs.append((item, depth + 1))
+                elif item.is_file():
+                    if len(out) >= max_entries:
+                        break
+                    out.append(item)
+            except OSError:
+                continue
+        queue.extend(subdirs)
+    return out, len(out) >= max_entries
+
+
+def _list_resources() -> list[dict]:
+    try:
+        root = WORKSPACE.resolve()
+        files, _truncated = _walk_workspace_files(
+            root, MCP_RESOURCE_MAX_ENTRIES, MCP_RESOURCE_MAX_DEPTH)
+    except (OSError, ValueError):
+        return []
+    out: list[dict] = []
+    for p in files:
+        try:
+            rel = p.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        if _is_blocked_secret(rel):
+            continue
+        try:
+            size = int(p.stat().st_size)
+        except OSError:
+            size = 0
+        out.append({"uri": p.as_uri(), "name": rel,
+                    "mimeType": _guess_mime(p), "size": size})
+    return out
+
+
+RESOURCE_TEMPLATES = [
+    {
+        "uriTemplate": "hivemind://workspace/{path}",
+        "name": "workspace-file",
+        "description": ("Read a workspace file by its relative path, e.g. "
+                        "hivemind://workspace/docs/mcp.md. Same containment, "
+                        "denylist and size limits as resources/list."),
+        "mimeType": "text/plain",
+    },
+]
+
+
+def _read_resource(uri: str) -> dict:
+    """One TextResourceContents for `uri`. Raises _ResourceError with the
+    JSON-RPC code to answer (-32602 for bad input, -32002 for resource
+    problems)."""
+    raw = str(uri or "").strip()
+    if not raw:
+        raise _ResourceError("params.uri must be a non-empty string", code=-32602)
+    parts = urlparse(raw)
+    scheme = (parts.scheme or "").lower()
+    if scheme == "file":
+        # url2pathname unquotes %xx and maps "/C:/x" -> "C:\x" on Windows.
+        p = Path(url2pathname(parts.path))
+    elif scheme == "hivemind" and parts.netloc.lower() == "workspace":
+        rel = unquote(parts.path).lstrip("/")
+        if not rel:
+            raise _ResourceError("empty hivemind://workspace path", code=-32602)
+        p = WORKSPACE / rel
+    else:
+        raise _ResourceError(
+            f"unsupported resource URI scheme: {scheme or '(none)'} "
+            "(use file:// or hivemind://workspace/<path>)", code=-32602)
+    try:
+        resolved = p.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise _ResourceError(f"cannot resolve resource path: {exc}", code=-32602)
+    try:
+        root = WORKSPACE.resolve()
+        rel = resolved.relative_to(root).as_posix()
+    except ValueError:
+        raise _ResourceError("resource is outside the workspace", code=-32602) from None
+    except (OSError, ValueError) as exc:
+        raise _ResourceError(f"cannot resolve resource path: {exc}", code=-32602)
+    if not resolved.is_file():
+        raise _ResourceError(f"resource not found: {raw[:200]}")
+    if _is_blocked_secret(rel):
+        raise _ResourceError(
+            "resource is blocked as a potential secret (denylist)")
+    try:
+        size = resolved.stat().st_size
+    except OSError as exc:
+        raise _ResourceError(f"cannot stat resource: {exc}")
+    if size > MCP_RESOURCE_MAX_BYTES:
+        raise _ResourceError(
+            f"resource too large: {size} bytes > {MCP_RESOURCE_MAX_BYTES} "
+            "(MCP_RESOURCE_MAX_BYTES)")
+    try:
+        data = resolved.read_bytes()
+    except OSError as exc:
+        raise _ResourceError(f"cannot read resource: {exc}")
+    if b"\x00" in data[:8192]:
+        raise _ResourceError(
+            "resource looks binary (NUL bytes) - text resources only")
+    return {"uri": raw, "mimeType": _guess_mime(resolved),
+            "text": data.decode("utf-8", errors="replace")}
+
+
+# ── MCP prompts (Phase 2, 2026-10-31) ─────────────────────────────────────────
+# Static templates with inert argument substitution. A prompt NEVER executes
+# anything by itself - it only hands the IDE's model a task description.
+
+PROMPT_DEFINITIONS = [
+    {
+        "name": "review_diff",
+        "description": ("Review the current uncommitted changes (git_status "
+                        "+ git_diff) and report findings by severity."),
+        "arguments": [
+            {"name": "ref", "description": "Optional commit-ish/range to review (default: working tree vs HEAD)", "required": False},
+        ],
+    },
+    {
+        "name": "explain_file",
+        "description": "Explain one workspace file: purpose, structure, key functions and risks.",
+        "arguments": [
+            {"name": "path", "description": "File path inside the workspace", "required": True},
+        ],
+    },
+    {
+        "name": "fix_tests",
+        "description": "Run the test suite, fix the failures with minimal edits and re-run until green.",
+        "arguments": [
+            {"name": "scope", "description": "Optional test scope/filter (e.g. 'tests/test_mcp_hardening.py')", "required": False},
+        ],
+    },
+]
+
+_PROMPT_ARG_MAX = 300
+
+
+def _prompt_arg(args: dict, key: str, default: str = "") -> str:
+    val = str((args or {}).get(key, "") or default)
+    val = " ".join(val.split())          # flatten newlines: one text block
+    return val[:_PROMPT_ARG_MAX]
+
+
+class _PromptError(ValueError):
+    """Bad prompts/get input (unknown name, missing required argument)."""
+
+
+def _build_prompt(name: str, args: dict) -> tuple[str, str]:
+    """Returns (description, prompt text). Raises _PromptError for bad input."""
+    if name == "review_diff":
+        ref = _prompt_arg(args, "ref", "HEAD")
+        text = (
+            "Review the current changes in this workspace.\n"
+            "1. Run git_status (cmd: \"git status --short\") to see modified, "
+            "staged and untracked files.\n"
+            f"2. Run git_diff with ref '{ref}' to read the diff. If the diff is "
+            "truncated, raise max_chars.\n"
+            "3. Review for: correctness bugs, security problems (path "
+            "traversal, injection, secret handling), missing error handling, "
+            "leftover debug code, missing tests.\n"
+            "4. Report findings as a numbered list ordered by severity, each "
+            "with file:line, a one-sentence problem statement and a suggested "
+            "fix.\n"
+            "Do not modify any file - this is a review only."
+        )
+        return PROMPT_DEFINITIONS[0]["description"], text
+    if name == "explain_file":
+        path = _prompt_arg(args, "path")
+        if not path:
+            raise _PromptError("prompt 'explain_file' requires argument 'path'")
+        text = (
+            f"Explain the file {path} in this workspace.\n"
+            f"1. Use get_signatures on {path} for its structure, then "
+            f"read_file on the relevant line ranges (start_line/end_line for "
+            "large files).\n"
+            "2. Explain: what the file is for, its key classes/functions, and "
+            "how it connects to the rest of the workspace (find_references / "
+            "search_code where helpful).\n"
+            "3. End with anything surprising, risky or worth a follow-up. "
+            "Keep the whole answer under 300 words."
+        )
+        return PROMPT_DEFINITIONS[1]["description"], text
+    if name == "fix_tests":
+        scope = _prompt_arg(args, "scope")
+        scope_clause = f" with scope '{scope}'" if scope else ""
+        text = (
+            "Run the project's tests and fix the failures.\n"
+            f"1. Call run_tests{scope_clause}.\n"
+            "2. For each failure: read the failing code, apply the smallest "
+            "correct fix (edit_file or patch_file), then call run_tests "
+            "again.\n"
+            "3. Repeat until the suite passes or a failure needs a human "
+            "decision.\n"
+            "4. Summarize: what you changed (files + why), what still fails "
+            "and why you did not touch it.\n"
+            "Never weaken a test just to make it pass; if a test is wrong, "
+            "say so instead."
+        )
+        return PROMPT_DEFINITIONS[2]["description"], text
+    raise _PromptError(f"Unknown prompt: {name}")
 
 
 # ── Router ─────────────────────────────────────────────────────────────────────
@@ -1358,7 +2080,10 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
             "protocolVersion": (_req_ver if _req_ver in _SUPPORTED_PROTOCOL_VERSIONS
                                 else _PROTOCOL_VERSION_DEFAULT),
             "serverInfo": {"name": "hivemind-mcp", "version": "2.0.0"},
-            "capabilities": {"tools": {}},
+            # Phase 2 (2026-10-31): resources + prompts advertised. Adding
+            # capability keys is backward compatible - older clients ignore
+            # what they do not know.
+            "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
         })
 
     if method == "ping":
@@ -1439,6 +2164,44 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
                 "elapsed_s": round(time.time() - t0, 2),
                 **({"tool_error": err_meta} if isinstance(err_meta, dict) else {}),
             },
+        })
+
+    if method == "resources/list":
+        return ok({"resources": _list_resources()})
+
+    if method == "resources/templates/list":
+        return ok({"resourceTemplates": [dict(t) for t in RESOURCE_TEMPLATES]})
+
+    if method == "resources/read":
+        _rp = req.get("params")
+        _uri = _rp.get("uri") if isinstance(_rp, dict) else None
+        if not isinstance(_uri, str) or not _uri.strip():
+            return err(-32602, "params.uri must be a non-empty string")
+        try:
+            _contents = _read_resource(_uri)
+        except _ResourceError as e:
+            return err(e.code, str(e))
+        return ok({"contents": [_contents]})
+
+    if method == "prompts/list":
+        return ok({"prompts": [dict(p) for p in PROMPT_DEFINITIONS]})
+
+    if method == "prompts/get":
+        _pp = req.get("params")
+        _pname = _pp.get("name") if isinstance(_pp, dict) else None
+        if not isinstance(_pname, str) or not _pname.strip():
+            return err(-32602, "params.name must be a non-empty string")
+        _pargs = _pp.get("arguments", {}) if isinstance(_pp, dict) else {}
+        if not isinstance(_pargs, dict):
+            return err(-32602, "params.arguments must be an object")
+        try:
+            _pdesc, _ptext = _build_prompt(_pname, _pargs)
+        except _PromptError as e:
+            return err(-32602, str(e))
+        return ok({
+            "description": _pdesc,
+            "messages": [{"role": "user",
+                          "content": {"type": "text", "text": _ptext}}],
         })
 
     if method.startswith("notifications/"):

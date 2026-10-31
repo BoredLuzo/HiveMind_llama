@@ -1745,6 +1745,19 @@ async def _run_inline_tool(
                         _result += "\n\n[Diff — what changed]\n```diff\n" + _diff + "\n```"
                 except Exception:
                     pass
+                # POST-WRITE-LSP (2026-10-31): attach compact diagnostics
+                # when a language server is already warm. Silent by design -
+                # a broken/missing server must never turn a successful
+                # write into a tool error, and a cold server is only warmed
+                # for the next write.
+                try:
+                    from tools.handlers.lsp import auto_diagnostics_block as _lsp_auto
+                    _lsp_note = await _lsp_auto(workspace, args["path"])
+                    if _lsp_note:
+                        _result += "\n\n" + _lsp_note
+                except (ImportError, OSError, RuntimeError, ValueError,
+                        AttributeError, TypeError):
+                    pass
 
         # ── ProjectState: record build steps ──
         _ps = _current_project_state.get()

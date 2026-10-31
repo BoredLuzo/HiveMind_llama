@@ -11,7 +11,7 @@ HiveMind is usable from an IDE in two directions. Both are local-only by default
 HTTP transport. It exposes read tools always, write and exec tools only as an
 opt-in.
 
-| Transport | Read | Write | Exec (`shell`, `run_bash`, `run_python`) | `query` |
+| Transport | Read | Write | Exec (`shell`, `run_bash`, `run_python`, `run_tests`) | `query` |
 |---|---|---|---|---|
 | HTTP (`127.0.0.1:8090/mcp`) | on | `MCP_ALLOW_WRITE=1` | **never** | `MCP_ALLOW_QUERY=1` |
 | stdio | on | `MCP_ALLOW_WRITE=1` | `MCP_ALLOW_EXEC=1` | `MCP_ALLOW_QUERY=1` |
@@ -19,9 +19,28 @@ opt-in.
 The `query` tool is opt-in (`MCP_ALLOW_QUERY=1`) on **both** transports.
 
 Tools: `read_file`, `list_dir`, `find_files`, `search_code`, `get_signatures`,
-`find_references`, `git_status`, `memory_get`, plus the write tier
-(`write_file`, `write_file_append`, `patch_file`, `edit_ast`, `memory_set`) and
-the exec tier (`shell`, `run_bash`, `run_python`).
+`find_references`, `git_status`, `git_diff`, `model_status`, `memory_get`,
+plus the write tier (`write_file`, `write_file_append`, `patch_file`,
+`edit_file`, `edit_ast`, `replace_lines`, `memory_set`, `git_commit`) and the
+exec tier (`shell`, `run_bash`, `run_python`, `run_tests`).
+
+Phase 2 additions (2026-10-31):
+
+- **`git_diff`** (read): bounded `git diff` with optional `ref` (commit-ish or
+  `A..B` range) and `path` filter. The ref is validated (no leading dash, no
+  shell metacharacters) and the call runs argv-only, never through a shell.
+- **`git_commit`** (write tier, mutating): commits **explicitly listed paths
+  only** — `git add -- <paths>` + `git commit -m <message> -- <paths>`. The
+  whole index is never staged (`git add -A` is impossible by construction),
+  the workspace root itself is refused, and the paths must resolve inside the
+  workspace. Gated exactly like the other mutating tools (`MCP_ALLOW_WRITE=1`).
+- **`run_tests`** (exec tier, stdio only): auto-detects pytest / `npm test` /
+  `cargo test` / `go test` or runs an explicit `cmd` (prefix allowlist, no
+  shell chaining/substitution — `;|&<>\`$%` are refused). Bounded timeout
+  (10–300 s) and bounded output (tail kept, `MCP_TEST_OUTPUT_MAX_CHARS`).
+- **`model_status`** (read): configured model roles (`runtime_models.json`),
+  currently loaded models with VRAM (Ollama `GET /api/ps`) and the ports.
+  Read-only: it loads nothing.
 
 ### Hardening (2026-10-21)
 
@@ -49,6 +68,45 @@ the exec tier (`shell`, `run_bash`, `run_python`).
   token is set. Binding to a non-loopback address without a token prints a
   warning at startup.
 
+### Annotations, resources, prompts (phase 2, 2026-10-31)
+
+**Tool annotations.** Every `tools/list` entry now carries `annotations`
+(`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`). Read
+tools are `readOnlyHint=true` + `idempotentHint=true`; the write/edit class
+adds `destructiveHint=true`; shell/exec and `query` add `openWorldHint=true`;
+`git_commit`, `run_tests`, `write_file_append` and `memory_set` are mutating
+but not destructive. They are hints — clients may ignore them, and the tier
+gates above are unchanged, so existing clients keep working.
+
+**Resources** (server direction). The `initialize` capabilities now include
+`resources` and `prompts` alongside `tools`.
+
+- `resources/list` — workspace files only (the workspace root is the allowlist,
+  never the disk). Hidden dirs and junk/privacy dirs (`.git`, `__pycache__`,
+  `node_modules`, `.venv`, `chats`, `sessions`, `logs`, …) are pruned; capped
+  at `MCP_RESOURCE_MAX_ENTRIES` (200) entries and `MCP_RESOURCE_MAX_DEPTH`
+  (8) levels. Entries are standard `file://` URIs with `name`, `mimeType`,
+  `size`.
+- `resources/read` — bounded text only: at most `MCP_RESOURCE_MAX_BYTES`
+  (256 KB), UTF-8, NUL-byte detection rejects binary content. Path containment
+  is strict (a URI resolving outside the workspace is `-32602`), and a small
+  denylist (`settings.json`, `gateway.toml`, `.env*`, `*.key`, `*.pem`,
+  `id_rsa*`, credentials/secrets files) is blocked in **both** the listing and
+  the read with a clear `-32002` error — `settings.json` can carry preset API
+  keys, so auto-discovery surfaces never see them.
+- `resources/templates/list` — one template, `hivemind://workspace/{path}`, to
+  read a file by its workspace-relative path. (This method is a 2025-revision
+  addition; serving it on the 2024-11-05 baseline is harmless for old clients
+  and useful for new ones.)
+- Not found / too large / binary / secret-denied answer `-32002` with the
+  reason; a missing, non-string or wrong-scheme URI answers `-32602`.
+
+**Prompts.** `prompts/list` + `prompts/get` with three static templates:
+`review_diff` (review the uncommitted changes), `explain_file` (argument:
+`path`), `fix_tests` (optional `scope`). Arguments are flattened and capped
+(300 chars) plain-text substitutions — a prompt never executes anything by
+itself. Unknown prompts and missing required arguments answer `-32602`.
+
 ### Env reference
 
 | Variable | Default | Purpose |
@@ -74,6 +132,10 @@ the exec tier (`shell`, `run_bash`, `run_python`).
 | `MCP_SHARED_TOOL_MODE` | `mcp_agent` | `tool_mode` sent with the forward |
 | `MCP_SHARED_TOOL_MODEL` | `qwen3:8b` | `model_for_limits` sent with the forward |
 | `MCP_SHARED_INCLUDE_WEBSEARCH` | `1` | `include_websearch` flag sent with the forward |
+| `MCP_RESOURCE_MAX_BYTES` | `262144` | max bytes per `resources/read` |
+| `MCP_RESOURCE_MAX_ENTRIES` | `200` | max entries per `resources/list` |
+| `MCP_RESOURCE_MAX_DEPTH` | `8` | max directory depth for the listing walk |
+| `MCP_TEST_OUTPUT_MAX_CHARS` | `8000` | `run_tests` output cap (tail kept) |
 
 ## 2. IDE → HiveMind (editor context, port 8001)
 

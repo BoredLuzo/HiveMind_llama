@@ -213,11 +213,17 @@ the plan with `edit_file`. A server process starts lazily on the first tool
 call, never at boot, and `lsp_enabled` (default on) is the single switch:
 there are no per-language flags. A language whose server is missing answers
 `LSP_UNAVAILABLE` with an install hint; `lsp_servers` in settings.json can
-point each language at a custom command. Typical installs:
+point each language at a custom command. With a server already running, a
+successful write/edit also gets a compact `[LSP auto-diagnostics …]` block
+(errors first, capped at 8 lines); a write never starts a cold server, so the
+block appears once a server is warm. `lsp_auto_diagnostics` (default true)
+turns that off. Typical installs:
 
 ```text
 npm install -g pyright                                # Python (pyright-langserver)
 npm install -g typescript typescript-language-server   # TypeScript / JavaScript
+npm install -g vscode-langservers-extracted            # HTML / CSS / JSON
+npm install -g yaml-language-server bash-language-server
 go install golang.org/x/tools/gopls@latest             # Go
 rustup component add rust-analyzer                     # Rust
 apt install clangd      # or: winget install LLVM.LLVM  # C / C++ (clangd)
@@ -354,6 +360,14 @@ there; `--ctx-checkpoints` is the only restore path. Keep retained messages
 byte-identical (do not truncate them in place); prefer dropping whole old
 messages.
 
+When the summary plus the kept raw tail is still above the compression
+threshold, the compressor now drops the oldest **whole** tail turns (never an
+assistant `tool_calls` message without its tool results), keeps the newest
+four messages, and adds a `[CONTEXT DROPPED: …]` marker. The rule-based
+fallback does the same after masking old tool outputs. This is the last
+deterministic lever before the next round; it also releases the read guard for
+dropped `read_file` paths.
+
 | Setting | Default | Effect |
 |---|---|---|
 | `duo_coder_ctx_agentic` | model/profile | Coder context ceiling. A larger ctx does **not** make prefill faster per token; it makes full re-prefills rarer and slower at depth. On 8 GB, 65k-100k is the practical range; 150k risks shared-memory spill. |
@@ -376,8 +390,10 @@ Rules of thumb:
 - **Hysteresis**: trigger at 85-90 % of ctx, compress to an absolute target of
   8-12k. The cost per compression is the target prefill; the trigger only
   decides how often you pay it. Overhead per 1k new context is
-  `(target / prefill_rate) / (trigger - target)`. Today the target comes from
-  `keep_recent_msgs` + summary, not from a dedicated absolute setting.
+  `(target / prefill_rate) / (trigger - target)`. The ceiling is the resolved
+  compression threshold; if the summary plus kept tail exceeds it, whole tail
+  turns are dropped until it fits. There is no separate absolute target
+  setting.
 - **No-op guard**: a compression that saves only a few percent is pure loss;
   skip it and trim tool output instead. This is not automatic yet.
 - **8 GB starting point**: ctx 65536-100000, `duo_compress_auto_floor=0.85`,
@@ -699,6 +715,16 @@ never touched; new settings keys pick up their defaults on the next start, and
 Rollback: copy the *contents* of `update_backup_<version>\` back over the folder.
 Once it runs, the backup can be deleted. Manual alternative: extract a release
 zip NEXT TO (not over) the installation and copy the files across.
+
+At startup `start_hivemind.bat` also runs a lightweight update check. It asks
+GitHub for newer releases (including pre-releases when the installed version
+is a pre-release), caches the answer for 24 hours, and prints one short
+`[Y/n]` notice. Nothing is downloaded or installed without an explicit `Y`;
+`HIVEMIND_NO_UPDATE_CHECK=1` disables the check, and
+`HIVEMIND_UPDATE_CHECK_PRERELEASES=1` also offers pre-releases on a stable
+install. The check is silent when offline. An accepted update downloads the
+release ZIP, verifies GitHub's sha256 digest and applies it through
+`update.bat --zip`; restart the launcher afterwards.
 
 ## Configuration
 

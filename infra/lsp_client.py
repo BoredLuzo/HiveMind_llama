@@ -36,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -139,7 +140,35 @@ def uri_to_path(uri: str) -> str:
     parsed = urlparse(str(uri))
     if parsed.scheme != "file":
         return str(uri)
-    return url2pathname(parsed.path)
+    raw = url2pathname(parsed.path)
+    # Pyright encodes the drive colon ("file:///c%3A/..."), which
+    # url2pathname turns into "\\c:\\...". Strip the extra separator so the
+    # path is a real Windows drive path again.
+    if sys.platform == "win32" and re.match(r"^[/\\][A-Za-z]:[/\\]", raw):
+        raw = raw[1:]
+    return raw
+
+
+def canonical_uri(uri: str) -> str:
+    """Canonical key for a document URI.
+
+    Servers disagree on casing and encoding: pyright publishes
+    ``file:///c%3A/Users/...`` while the client opens
+    ``file:///C:/Users/...``. Both name the same file; without
+    normalization the diagnostics land under a key nobody reads.
+    Non-file schemes and unresolvable paths are returned unchanged."""
+    text = str(uri or "")
+    parsed = urlparse(text)
+    if parsed.scheme != "file":
+        return text
+    try:
+        raw = uri_to_path(text)
+        path = Path(raw)
+        if not path.is_absolute():
+            return text
+        return path_to_uri(path)
+    except (OSError, ValueError):
+        return text
 
 
 # URI keys in LSP result objects -> the local-path key we return instead.
@@ -415,6 +444,7 @@ class _LspConnection:
             uri = params.get("uri")
             diags = params.get("diagnostics")
             if isinstance(uri, str):
+                uri = canonical_uri(uri)
                 self.diagnostics[uri] = ([d for d in diags if isinstance(d, dict)]
                                          if isinstance(diags, list) else [])
                 self._diag_gen[uri] = self._diag_gen.get(uri, 0) + 1
@@ -500,6 +530,10 @@ class _LspConnection:
                     or f"{self.language_id} server is gone"))
 
     # -- documents -----------------------------------------------------
+    def has_publication(self, uri: str) -> bool:
+        """True after the server published diagnostics for this URI once."""
+        return self._diag_gen.get(canonical_uri(uri), 0) > 0
+
     def _read_doc(self, path: Path) -> str:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
@@ -545,7 +579,7 @@ class _LspConnection:
         between didOpen and the wait, it still counts as fresh). For an
         unchanged already-open document the stored diagnostics are current,
         so they return without waiting."""
-        uri = path_to_uri(path)
+        uri = canonical_uri(path_to_uri(path))
         gen0 = self._diag_gen.get(uri, 0)
         _uri, changed = await self.ensure_open(path, uri)
         if changed:
@@ -729,6 +763,23 @@ class LspManager:
         """One row per known language: language, command, found. Never
         starts a process - the status tool can call it freely."""
         return registry.available(dict(self._override))
+
+    def is_started(self, language_id: str) -> bool:
+        """True when a live server for this language is already running."""
+        conn = self._conns.get(str(language_id).strip().lower())
+        return conn is not None and not conn.dead
+
+    def has_diagnostics(self, path) -> bool:
+        """True when the server has published at least one diagnostics set
+        for this document (empty set counts - the server did answer)."""
+        p = self._resolve_path(path)
+        lang = self._language_for(p)
+        if lang is None:
+            return False
+        conn = self._conns.get(lang)
+        if conn is None or conn.dead:
+            return False
+        return conn.has_publication(canonical_uri(path_to_uri(p)))
 
     def _resolve_path(self, path) -> Path:
         p = Path(str(path)).expanduser()

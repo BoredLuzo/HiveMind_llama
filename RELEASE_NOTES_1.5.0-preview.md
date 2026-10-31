@@ -37,6 +37,16 @@ aligns the stdio/HTTP caps, bounds body reads and connections, and negotiates
 the protocol version. Integration adds an `mcp_*` call budget and scans MCP
 arguments in the destructive gate.
 
+Phase 2 completes the tool surface: every tool now carries MCP annotations,
+and the server exposes `git_diff`, `git_commit` (explicit paths only - no
+`git add -A`), `run_tests` (stdio-only, output capped) and `model_status`
+(loads nothing). It also speaks MCP resources (`resources/list`,
+`resources/read`, `resources/templates/list`) and prompts (`review_diff`,
+`explain_file`, `fix_tests`). Resources stay inside the configured workspace,
+are text-only, cap at 256 KB and hide secrets such as `settings.json`,
+`gateway.toml`, `.env*` and private keys. The advertised protocol remains
+2024-11-05; 2025 sessions/GET-SSE stay deliberately unadvertised.
+
 ## Settings and presets
 
 The code read several settings that were never shipped as defaults
@@ -79,6 +89,38 @@ written). A missing server returns `LSP_UNAVAILABLE` with the install command;
 servers start lazily on first use, never at boot. Diagnostics are read-tier,
 so the model can stop reading whole files to find type errors.
 
+The agentic audit found two process leaks, both fixed: engine shutdown now
+closes every cached language-server manager, and cache eviction closes the
+evicted managers instead of orphaning their processes. A successful write or
+edit also attaches a compact `[LSP auto-diagnostics …]` block when a server is
+already warm (8-line cap; `lsp_auto_diagnostics=false` disables it); a write
+never starts a cold server; diagnostics attach once one is warm. A cold
+`lsp_diagnostics` answers "still analyzing" instead of claiming the file is
+clean. Pyright's `file:///c%3A/...` URIs are canonicalized, so its real
+diagnostics are actually visible.
+
+## Code panel, startup update check, compression
+
+The code panel no longer rebuilds every line on every stream tick. Plain
+streamed text appends to one text node, finished file/diff HTML is cached per
+tab, paints coalesce per animation frame, very large files fall back to plain
+text, and diff rendering is capped. Long agentic runs should stay responsive
+while a 20k-line file is being written.
+
+`start_hivemind.bat` now checks GitHub at startup and offers a newer release
+with one `[Y/n]` prompt. The answer is cached for 24 hours, the check is silent
+offline, pre-releases are offered to preview installs, and an accepted update
+downloads the ZIP, verifies GitHub's sha256 digest and applies it through
+`update.bat --zip`. Set `HIVEMIND_NO_UPDATE_CHECK=1` to skip it.
+
+Compression now drops whole old tail turns when the summary plus the kept raw
+tail still exceeds the threshold. It never splits an assistant tool call from
+its tool results, keeps the newest four messages, adds a `[CONTEXT DROPPED: …]`
+marker and releases the read guard for dropped read paths. The rule-based
+fallback gets the same behavior and now accepts
+`duo_compress_tail_tool_max_chars` (the caller had always passed it, but the
+parameter was missing, so the fallback would have raised before compressing).
+
 ## Maintainability
 
 The final pass removed the dead settings keys that old exports kept
@@ -90,8 +132,11 @@ manifest and prunes files that left the repository.
 
 ## Tests
 
-233/233 suites, ruff clean. The new MCP suite covers the token gates, the
-read-only exception, the SSE id mismatch and the session DELETE.
+238/238 suites, ruff clean. New coverage: MCP phase 2 (137 checks:
+annotations, the four new tools, resources containment/secret denylist,
+prompts, backward compatibility), LSP client/tools (51 + 71 checks), the
+startup update checker (36 checks) and whole-turn compression (15 checks).
+The existing MCP suites still pass (28 + 175 + 73 + 23).
 
 ## Known limits
 

@@ -136,6 +136,24 @@ echo  Press any key to continue... & pause >nul & exit /b 1
 echo.
 :deps_ok
 
+REM STARTUP UPDATE CHECK (2026-10-31): one short notice when GitHub has a
+REM newer build, then an explicit [Y/n]. The check is cached for 24h and is
+REM silent when offline. HIVEMIND_NO_UPDATE_CHECK=1 skips it entirely;
+REM HIVEMIND_UPDATE_CHECK_PRERELEASES=1 also offers pre-releases on stable
+REM installs. Exit code 10 means update.bat applied a build - stop this
+REM batch here instead of continuing to parse a file that may just have
+REM been replaced.
+if not defined HIVEMIND_NO_UPDATE_CHECK (
+    "%PY%" "%~dp0tools\update_check.py"
+    if errorlevel 10 (
+        echo.
+        echo  [INFO] Update installed. Start HiveMind again to use it.
+        echo.
+        pause >nul
+        exit /b 0
+    )
+)
+
 REM Hints when llama.cpp / models are missing:
 if not exist "llama" (
     echo  [NOTE] Folder 'llama\' is missing - run install.bat first or

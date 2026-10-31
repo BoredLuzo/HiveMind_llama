@@ -5145,9 +5145,16 @@ function _tgPanelStream(st) {
   // chip, tab). _tgLivePath marks the live stream for the panel-open jump.
   if (_fkey) _tgLivePath = _fkey;
   if (doRender) _tgPanelLastRender = now;
-  // follow the stream while the user sits at the bottom
+  // follow the stream while the user sits at the bottom (after the paint
+  // callback queued by _cpRequestShow, so scrollHeight is current)
   if (doRender && _cpFollowStream && body && document.body.classList.contains('code-panel-open')) {
-    body.scrollTop = body.scrollHeight;
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(function() {
+        if (_cpFollowStream) body.scrollTop = body.scrollHeight;
+      });
+    } else {
+      body.scrollTop = body.scrollHeight;
+    }
   }
 }
 
@@ -9065,6 +9072,7 @@ function handleEvent(d) {
       if (_cpEntryKey && _cpFiles[_cpEntryKey]) {
         var _cpEntry = _cpFiles[_cpEntryKey];
         _cpEntry.diffText = _dsBody;
+        _cpEntry._diffCache = null;
         _cpEntry.diffs = _cpEntry.diffs || [];
         _cpEntry.diffs.push({ id: _cpCallId, name: _trToolName, text: _dsBody });
         // PER-CALL CHIP STAMP (2026-09-20): tool_call events carry no
@@ -12937,6 +12945,80 @@ async function saveVramBudget() {
 var _cpFiles = {};          // path → {content, op, tab, pre}
 var _cpActive = null;       // currently shown path
 var _cpLastShowAt = 0;      // ms timestamp of the last explicit _cpShowFile
+// PERF (2026-10-31): the panel used to rebuild every line (number span +
+// syntax-highlight regexes) on every 120ms stream tick and on every tab
+// switch. Three cheap guards keep large sessions responsive:
+//   - streamed plain text appends to one text node instead of rebuilding,
+//   - finished file/diff HTML is cached per tab (tab switches are free),
+//   - very large files fall back to plain text instead of thousands of spans.
+var _CP_LARGE_CHARS = 200000;
+var _CP_LARGE_LINES = 6000;
+var _CP_DIFF_MAX_LINES = 3000;
+var _cpPaintRaf = 0;
+var _cpPaintJob = null;
+var _cpPaintSeq = 0;
+
+function _cpTextIsLarge(text) {
+  if (text.length > _CP_LARGE_CHARS) return true;
+  if (text.length < (_CP_LARGE_CHARS / 2)) return false;
+  var n = 0, at = -1;
+  while ((at = text.indexOf('\n', at + 1)) !== -1) {
+    if (++n > _CP_LARGE_LINES) return true;
+  }
+  return false;
+}
+
+function _cpRequestShow(path, plain, streamOnly) {
+  // Coalesce stream ticks into one paint per frame. A full render (final
+  // file_change, tab click) bumps _cpPaintSeq and invalidates the queued
+  // plain paint, so the panel never falls back to streaming text afterwards.
+  _cpPaintJob = {path: path, plain: plain, streamOnly: !!streamOnly, seq: ++_cpPaintSeq};
+  if (_cpPaintRaf) return;
+  var run = function() {
+    _cpPaintRaf = 0;
+    var job = _cpPaintJob;
+    _cpPaintJob = null;
+    if (job && job.seq === _cpPaintSeq && _cpActive === job.path) {
+      _cpShowFile(job.path, job.plain, job.streamOnly);
+    }
+  };
+  if (window.requestAnimationFrame) _cpPaintRaf = window.requestAnimationFrame(run);
+  else _cpPaintRaf = setTimeout(run, 16);
+}
+
+function _cpRenderStreamText(body, text) {
+  // Plain stream paint: one <pre> + one text node. Prefix growth appends the
+  // delta; a changed fragment resets the node. No line numbers or syntax
+  // spans while streaming - the final render adds them once.
+  text = String(text || '');
+  var pre = body._cpPre;
+  if (!pre || pre.parentNode !== body) {
+    body.innerHTML = '';
+    pre = document.createElement('pre');
+    body.appendChild(pre);
+    body._cpPre = pre;
+    body._cpText = '';
+    body._cpTextNode = null;
+  }
+  if (!text) {
+    pre.textContent = '';
+    body._cpTextNode = null;
+  } else if (text.indexOf(body._cpText || '') === 0) {
+    var delta = text.slice((body._cpText || '').length);
+    if (delta) {
+      if (!body._cpTextNode || body._cpTextNode.parentNode !== pre) {
+        pre.textContent = text;
+        body._cpTextNode = pre.firstChild;
+      } else {
+        body._cpTextNode.appendData(delta);
+      }
+    }
+  } else {
+    pre.textContent = text;
+    body._cpTextNode = pre.firstChild;
+  }
+  body._cpText = text;
+}
 
 function toggleCodePanel(forceOpen) {
   var open = forceOpen !== undefined ? forceOpen : !document.body.classList.contains('code-panel-open');
@@ -12949,8 +13031,12 @@ function toggleCodePanel(forceOpen) {
   // call _cpShowFile right before opening (fresh timestamp).
   if (open && !_wasOpen && _tgLivePath && _cpFiles[_tgLivePath]
       && Date.now() - (_cpLastShowAt || 0) > 300) {
-    _cpFiles[_tgLivePath].view = 'file';
-    _cpShowFile(_tgLivePath, true);
+    var _live = _cpFiles[_tgLivePath];
+    _live.view = 'file';
+    // An edit/append stream is a FRAGMENT in streamText while content still
+    // holds the old disk state; opening the panel mid-stream must show the
+    // fragment, not the stale file.
+    _cpShowFile(_tgLivePath, true, !!_live.streamText);
   }
 }
 
@@ -12994,11 +13080,12 @@ function _cpFindEntry(p) {
   return null;
 }
 
-function _cpShowFile(path, plain) {
+function _cpShowFile(path, plain, streamOnly) {
   var entry = _cpFiles[path];
   if (!entry) return;
   _cpActive = path;
   _cpLastShowAt = Date.now();
+  _cpPaintSeq++;  // an immediate paint supersedes any queued stream paint
   // Update tab highlights
   Object.keys(_cpFiles).forEach(function(p) {
     var t = _cpFiles[p].tab;
@@ -13018,25 +13105,62 @@ function _cpShowFile(path, plain) {
              || entry.diffs[entry.diffs.length - 1])
           : entry.diffs[entry.diffs.length - 1])
       : null;
-    _cpRenderDiff(body, _d ? _d.text : entry.diffText);
+    var _dt = String((_d ? _d.text : entry.diffText) || '');
+    if (entry._diffCache && entry._diffCache.text === _dt) {
+      body.innerHTML = entry._diffCache.html;
+    } else {
+      _cpRenderDiff(body, _dt);
+      entry._diffCache = {text: _dt, html: body.innerHTML};
+    }
     _cpUpdateViewToggle();
     return;
   }
-  var hl = plain ? function(l) { return _escHtml(l); } : _cpSyntaxHighlight;
   // LIVESTREAM FILE VIEW (2026-09-20): while an edit/append is streaming,
   // disk truth is not in yet (file_change ships after execution) — render
   // the streamed fragment instead of an empty panel.
-  _cpRenderPre(body, entry.content || entry.streamText || '', plain);
+  var text = streamOnly
+    ? (entry.streamText || '')
+    : (entry.content || entry.streamText || '');
+  if (plain) {
+    _cpRenderPre(body, text, true);
+  } else if (entry._fileCache && entry._fileCache.text === text) {
+    body.innerHTML = entry._fileCache.html;
+    body._cpPre = null;
+    body._cpText = '';
+  } else {
+    _cpRenderPre(body, text, false);
+    entry._fileCache = {text: text, html: body.innerHTML};
+  }
   _cpUpdateViewToggle();
 }
 
 function _cpRenderPre(body, text, plain) {
-  var hl = plain ? function(l) { return _escHtml(l); } : _cpSyntaxHighlight;
+  text = String(text || '');
+  if (plain) {
+    _cpRenderStreamText(body, text);
+    return;
+  }
+  var _large = _cpTextIsLarge(text);
+  if (_large) {
+    // Large files: line-number spans + regex highlighting cost seconds and
+    // allocate a huge HTML string. Plain text stays scrollable; the final
+    // line count is not worth a frozen panel.
+    body.innerHTML = '<div style="font-family:IBM Plex Mono,monospace;font-size:9px;'
+      + 'color:var(--tx2);opacity:.55;margin-bottom:6px">'
+      + 'large file &middot; plain view (line numbers/syntax highlighting off)</div>'
+      + '<pre>' + _escHtml(text) + '</pre>';
+    body._cpPre = null;
+    body._cpText = '';
+    return;
+  }
+  var hl = _cpSyntaxHighlight;
   var lines = text.split('\n');
   var lineNums = lines.map(function(l, i) {
     return '<span style="color:var(--tx2);user-select:none;margin-right:14px;display:inline-block;min-width:28px;text-align:right;opacity:.45">'+(i+1)+'</span>'+hl(l);
   }).join('\n');
   body.innerHTML = '<pre>' + lineNums + '</pre>';
+  body._cpPre = null;
+  body._cpText = '';
 }
 
 // View toggle lives in the panel header, pinned right next to the close
@@ -13109,16 +13233,31 @@ function _cpUpdateViewToggle() {
 }
 
 function _cpRenderDiff(body, diffText) {
-  var html = diffText.split('\n').map(function(l) {
+  var lines = String(diffText || '').split('\n');
+  var _dropped = 0;
+  if (lines.length > _CP_DIFF_MAX_LINES) {
+    _dropped = lines.length - _CP_DIFF_MAX_LINES;
+    lines = lines.slice(0, _CP_DIFF_MAX_LINES);
+  }
+  var html = lines.map(function(l) {
+    var _cut = false;
+    if (l.length > 400) { l = l.slice(0, 400) + '\u2026'; _cut = true; }
     var e = _escHtml(l);
     var st = '';
     if (/^(\+\+\+|---)/.test(l)) st = 'color:var(--tx2);opacity:.55';
     else if (/^@@/.test(l)) st = 'color:#f0ad4e;opacity:.8';
     else if (/^\+/.test(l)) st = 'color:#22c55e;background:rgba(34,197,94,.06);display:inline-block;width:100%';
     else if (/^-/.test(l)) st = 'color:#e06060;background:rgba(224,96,96,.06);display:inline-block;width:100%';
+    if (_cut) st += (st ? ';' : '') + 'opacity:.7';
     return st ? '<span style="' + st + '">' + e + '</span>' : e;
   }).join('\n');
+  if (_dropped) {
+    html += '\n<span style="color:var(--tx2);opacity:.55">'
+      + '\u2026 ' + _dropped + ' more diff line(s) not rendered</span>';
+  }
   body.innerHTML = '<pre>' + html + '</pre>';
+  body._cpPre = null;
+  body._cpText = '';
 }
 
 function _cpAddOrUpdateFile(path, content, op, render) {
@@ -13181,11 +13320,14 @@ function _cpAddOrUpdateFile(path, content, op, render) {
   var _isFrag = (opLabel === 'edit' || opLabel === 'append');
   if (_isFrag && render !== undefined) {
     _e.streamText = content;
+    _e._fileCache = null;
   } else if (_isFrag) {
     _e.content = content;   // final event: disk truth
     _e.streamText = '';
+    _e._fileCache = null;
   } else {
     _e.content = content;   // write: the file is being born (stream or final)
+    _e._fileCache = null;
   }
   _cpEnsureViewToggle();
   // Auto-show this file (panel contents update invisibly along).
@@ -13197,16 +13339,15 @@ function _cpAddOrUpdateFile(path, content, op, render) {
   if (render !== false && !_viewDiff) {
     if (_isFrag && render === 'plain') {
       // stream tick: render the fragment live without touching file state
-      if (_cpActive === path) {
-        var _sBody = document.getElementById('code-panel-body');
-        if (_sBody) _cpRenderPre(_sBody, _e.streamText, true);
-      }
+      if (_cpActive === path) _cpRequestShow(path, true, true);
     } else {
       // NO AUTO-SWITCH (2026-09-21): the write stream updates its tab
       // silently; only an explicit click shows it. While this file IS the
-      // active tab, render the stream in place.
+      // active tab, render the stream in place. Stream ticks coalesce into
+      // one paint per frame; the final file_change paints immediately.
       if (_cpActive === path) {
-        _cpShowFile(path, render === 'plain' ? true : undefined);
+        if (render === 'plain') _cpRequestShow(path, true);
+        else _cpShowFile(path);
       }
     }
   }

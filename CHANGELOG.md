@@ -1,9 +1,11 @@
 ## [1.5.0-preview] - 2026-10-31
 
-Preview scope: the MCP hardening and settings/preset work on top of 1.4.14.
-Groot stays **experimental**; the live validation on the ThinkPad is the next
-step. A GitHub pre-release is not offered by `/releases/latest`, so other
-installs update only through `update.bat --zip`.
+Preview scope: the MCP hardening/phase-2 work, the settings/preset pass, the
+generic LSP client and the code-panel/compression/update-check improvements on
+top of 1.4.14. Groot stays **experimental**; the live validation on the
+ThinkPad is the next step. A GitHub pre-release is not offered by
+`/releases/latest`, so other installs update only through `update.bat --zip`
+(or the new startup check, which includes pre-releases for preview installs).
 
 ### MCP (both directions)
 - **Exec and mutating tools over HTTP need the shared secret.**
@@ -31,6 +33,14 @@ installs update only through `update.bat --zip`.
   log-name sanitizer, 2 MB stdio cap, body-read timeout + connection cap,
   version negotiation. Integration: `mcp_*` call budget, documented mode-less
   exception, destructive gate scans MCP args.
+- **Phase 2 (2026-10-31)**: all 23 tools carry MCP annotations
+  (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`).
+  New tools: `git_diff` (read, bounded), `git_commit` (write tier, explicit
+  paths only, no `git add -A`), `run_tests` (exec tier, stdio-only, bounded
+  output) and `model_status` (read, loads nothing). The server also speaks
+  `resources/list`/`read`/`templates/list` (workspace-contained, text-only,
+  secret denylist, 256 KB cap) and `prompts/list`/`get`
+  (`review_diff`, `explain_file`, `fix_tests`); protocol stays 2024-11-05.
 
 ### Language servers (LSP)
 - One generic LSP client (`infra/lsp_client.py`) with a broad auto-detected
@@ -44,6 +54,38 @@ installs update only through `update.bat --zip`.
   hint; a server starts lazily on the first tool call.
 - Diagnostics are read-tier; rename is mutating and gated. The schemas shrink
   under tight context budgets before the core tools do.
+- **Agentic runs get diagnostics after writes**: when a language server is
+  already warm, a successful write/edit appends a compact
+  `[LSP auto-diagnostics …]` block (8-line cap); a cold server is never started
+  by a write (only an explicit LSP call starts one). `lsp_auto_diagnostics` turns
+  it off. A cold explicit `lsp_diagnostics` now says "still analyzing" instead
+  of falsely reporting a clean file.
+- **Lifecycle fixes from the agentic audit**: engine shutdown closes every
+  cached LSP manager (previously pyright/gopls/rust-analyzer survived the
+  engine), and manager-cache eviction closes the evicted servers instead of
+  dropping them. Pyright's percent-encoded, lower-case drive URIs
+  (`file:///c%3A/...`) are canonicalized before diagnostics are stored, so
+  real pyright results reach the tool layer.
+
+### Code panel, startup update check, compression
+- **Code panel performance**: streamed plain text now appends to one text node
+  instead of rebuilding every line every 120 ms; finished file/diff HTML is
+  cached per tab; paints coalesce per animation frame; files over 200k chars
+  (or 6000 lines) fall back to plain text; diff rendering caps at 3000 lines
+  and 400 chars per line.
+- **Startup update check**: `start_hivemind.bat` asks GitHub for newer
+  releases (pre-releases only for preview installs by default), caches the
+  answer for 24h, prints one `[Y/n]` notice and installs an accepted ZIP
+  through `update.bat --zip` after verifying GitHub's sha256 digest.
+  `HIVEMIND_NO_UPDATE_CHECK=1` disables it; a failed check never blocks
+  startup.
+- **Whole-message compression**: when the summary plus the kept raw tail (or
+  the rule-based result) is still above the compression threshold, the
+  compressor drops the oldest whole tail turns, never splitting an assistant
+  `tool_calls` message from its tool results, keeps the newest four messages,
+  marks the drop and releases the read guard for dropped read paths. The
+  rule-based fallback also accepts `duo_compress_tail_tool_max_chars` now
+  (the caller already passed it; the parameter was missing).
 
 ### Settings, presets, UI, docs
 - Missing defaults are persisted: `duo_compress_tail_tool_max_chars`,

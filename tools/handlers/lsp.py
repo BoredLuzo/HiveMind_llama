@@ -41,6 +41,7 @@ _LSP_FALLBACKS: dict = {
     "lsp_servers": {},
     "lsp_client_timeout_s": 30,
     "lsp_diagnostics_wait_s": 2.0,
+    "lsp_auto_diagnostics": True,
     "lsp_max_diagnostics": 50,
     "lsp_max_results": 50,
 }
@@ -109,7 +110,19 @@ def _get_manager(workspace: Path):
             "lsp_client_timeout_s": settings.get("lsp_client_timeout_s"),
         })
         if len(_MANAGERS) >= _MANAGERS_CAP:
-            _MANAGERS.clear()   # a stale loop's manager is dead weight only
+            # Closing the evicted managers is not optional: clearing the
+            # dict alone orphaned their language-server processes (audit
+            # 2026-10-31, P1-2). close_all() is async; schedule it and let
+            # the new manager start immediately.
+            _evicted = [(k, m) for k, m in list(_MANAGERS.items())
+                        if isinstance(k, tuple) and len(k) == 2
+                        and k[1] == id(loop)]
+            _MANAGERS.clear()
+            for _key, _old in _evicted:
+                try:
+                    asyncio.create_task(_old.close_all())
+                except RuntimeError:
+                    pass
         _MANAGERS[key] = mgr
     return mgr
 
@@ -487,6 +500,83 @@ async def _inline_tool_lsp_status(args: dict, workspace: Path,
     return head + "\n" + "\n".join(lines)
 
 
+def _truthy(value, default: bool = True) -> bool:
+    """Settings values can arrive as bool, 0/1 or "false"/"off" strings."""
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "off", "no", "")
+    if value is None:
+        return bool(default)
+    return bool(value)
+
+
+# (path, mtime_ns, size) of the last automatic diagnostics run, so a retry
+# of the same write does not pay the wait twice.
+_AUTO_DIAG_CACHE: dict[str, tuple[int, int]] = {}
+
+
+async def auto_diagnostics_block(workspace: Path, path: str,
+                                 *, max_lines: int = 8) -> str:
+    """Compact diagnostics for a file the agent just wrote, or "".
+
+    Called from the shared write dispatcher. It is deliberately cheap:
+    - only when lsp_enabled and lsp_auto_diagnostics are on;
+    - only when a server for that language is already running; a write
+      never starts a language server (that would surprise the run and leak
+      a process into tests/headless flows);
+    - short wait (max 1.5s), hard line cap, every failure is silent.
+    """
+    if not _lsp_enabled():
+        return ""
+    settings = _lsp_settings()
+    if not _truthy(settings.get("lsp_auto_diagnostics"), True):
+        return ""
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    p = _inline_resolve_path(workspace, raw)
+    language = _registry.language_for_path(p)
+    if language is None:
+        return ""
+    try:
+        sig = (p.stat().st_mtime_ns, p.stat().st_size)
+    except OSError:
+        return ""
+    key = str(p).lower() if os.name == "nt" else str(p)
+    if _AUTO_DIAG_CACHE.get(key) == sig:
+        return ""
+    loop = asyncio.get_running_loop()
+    try:
+        ws_key = str(Path(workspace).resolve())
+    except OSError:
+        ws_key = str(workspace)
+    mgr = _MANAGERS.get((ws_key.lower() if os.name == "nt" else ws_key,
+                         id(loop)))
+    if mgr is None or not mgr.is_started(language):
+        return ""
+    wait_s = min(_coerce_float(settings.get("lsp_diagnostics_wait_s"), 2.0),
+                 1.5)
+    try:
+        diags = await mgr.diagnostics(p, wait_s=wait_s)
+    except (_lsp.LspError, OSError, asyncio.TimeoutError):
+        return ""
+    if not mgr.has_diagnostics(p):
+        return ""  # server is still analyzing; the explicit tool can retry
+    _AUTO_DIAG_CACHE[key] = sig
+    if len(_AUTO_DIAG_CACHE) > 128:
+        _AUTO_DIAG_CACHE.clear()
+    if not diags:
+        return ""
+    cap = max(1, min(int(max_lines or 8), 20))
+    body = _fmt_diagnostics(_rel(workspace, p), diags, cap)
+    errors = sum(1 for d in diags
+                 if isinstance(d, dict) and d.get("severity") == 1)
+    if len(diags) > cap:
+        body += f"\n(+{len(diags) - cap} more diagnostic(s))"
+    return (f"[LSP auto-diagnostics after writing {_rel(workspace, p)}: "
+            f"{len(diags)} finding(s), {errors} error(s) - fix before "
+            f"verification]\n" + body)
+
+
 async def _inline_tool_lsp_diagnostics(args: dict, workspace: Path,
                                        workspace_lock) -> str:
     tool = "lsp_diagnostics"
@@ -501,6 +591,12 @@ async def _inline_tool_lsp_diagnostics(args: dict, workspace: Path,
         diags = await mgr.diagnostics(p, wait_s=wait_s)
     except _lsp.LspError as exc:
         return _err_failed(tool, exc)
+    if not diags and not mgr.has_diagnostics(p):
+        # Cold server: an empty list here means "no publication yet", not
+        # "the file is clean". Say so instead of a false negative.
+        return (f"(no diagnostics yet for {_rel(workspace, p)} - the "
+                f"language server is still analyzing; call lsp_diagnostics "
+                f"again in a moment)")
     out = _fmt_diagnostics(_rel(workspace, p), diags, cap)
     if len(diags) > cap:
         out += (f"\n(+{len(diags) - cap} more diagnostics - "

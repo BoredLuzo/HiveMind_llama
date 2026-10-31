@@ -5182,6 +5182,10 @@ async def run_code_duo(ctx):
                                 compression_mode=_comp_mode,
                                 cut_index=_comp_cut,
                                 local_only=_compress_local_only,
+                                # WHOLE-TAIL-DROP (2026-10-31): if summary +
+                                # kept raw tail still exceed the compression
+                                # threshold, drop the oldest whole tail turns.
+                                target_tokens=int(_compress_threshold),
                             )
                             _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(messages=_dtool_msgs, **_comp_kwargs)
                             # MINI-SHRINK-RETRY (2026-09-07): if the full compression

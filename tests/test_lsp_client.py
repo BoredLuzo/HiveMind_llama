@@ -79,7 +79,8 @@ check("1b unknown extension maps to None", LR.language_for_path("logo.png") is N
 
 _r = LR.resolve("python")
 check("1c resolve returns an existing binary or None",
-      _r is None or Path(_r[0]).exists(), f"({_r})")
+      _r is None or _r[0].lower() in ("cmd", "cmd.exe")
+      or Path(_r[0]).exists(), f"({_r})")
 
 _ov = {"python": [sys.executable, "--version"]}
 check("1d a found override replaces the defaults",
@@ -118,6 +119,16 @@ _loc = LC._decode_uris({"uri": _uri, "range": {"start": {"line": 1}}})
 check("2d result locations decode uri -> path",
       same_path(_loc.get("path", ""), _tricky.resolve())
       and "uri" not in _loc and _loc["range"]["start"]["line"] == 1)
+if os.name == "nt":
+    # Pyright publishes file:///c%3A/... while the client opens
+    # file:///C:/... - both must collapse onto one diagnostics key.
+    _parts = _tricky.resolve().as_posix()
+    _enc = "file:///" + _parts[0].lower() + "%3A" + _parts[2:]
+    check("2e encoded drive URIs canonicalize to the client URI",
+          LC.canonical_uri(_enc) == _uri, f"({LC.canonical_uri(_enc)} vs {_uri})")
+    check("2f encoded drive URIs decode to the same path",
+          same_path(LC.uri_to_path(_enc), _tricky.resolve()),
+          f"({LC.uri_to_path(_enc)})")
 
 
 # ── 3. Live flow: start, features, close --------------------------------

@@ -248,17 +248,126 @@ _RULE_NOTICE_MARKERS = (
     "[RUNTIME NOTICE]", "[CTX CRITICAL:", "[CTX: ~", "[CTX:",
     "[PLAN-PIN", "[SYSTEM]", "[READ LADDER]", "[LOOP DETECTED]",
     "[GRACE ROUND", "[TIMEOUT]", "[JSON parse error", "[CTX-HORIZON]",
+    "[CONTEXT DROPPED",
 )
 
 
+def _drop_whole_oldest(
+    messages: list,
+    target_tokens: int,
+    *,
+    protect_prefix: int = 0,
+    keep_recent: int = 0,
+    protected_ids: set | None = None,
+    protect_first_user: bool = True,
+) -> tuple[list, int, list[str]]:
+    """Drop the oldest whole messages/turns until the estimate fits.
+
+    Whole-message dropping is the last deterministic lever: masking tool
+    outputs (phase 1) and removing notices (phase 2) can leave many small
+    messages that still add up. This helper never splits an assistant
+    ``tool_calls`` message from its tool results and never touches the
+    protected prefix (system + summary), the recent tail, or the first user
+    task message.
+
+    Returns (messages, dropped_count, evicted_paths).
+    """
+    if not messages:
+        return [], 0, []
+    protected = set(protected_ids or ())
+    for _i, _m in enumerate(messages):
+        if _i < max(0, int(protect_prefix or 0)) or _m.get("role") == "system":
+            protected.add(id(_m))
+    if keep_recent and int(keep_recent) > 0:
+        for _m in messages[-int(keep_recent):]:
+            protected.add(id(_m))
+    if protect_first_user:
+        for _m in messages:
+            if _m.get("role") == "user":
+                protected.add(id(_m))
+                break
+
+    _est = _estimate_ctx_tokens(messages)
+    _target = max(0, int(target_tokens or 0))
+    out: list[dict] = []
+    dropped = 0
+    evicted: list[str] = []
+    _i = 0
+    while _i < len(messages):
+        _m = messages[_i]
+        if id(_m) in protected:
+            out.append(_m)
+            _i += 1
+            continue
+        if _est <= _target:
+            out.extend(messages[_i:])
+            break
+        # A write/edit/read call and its results are one turn. DROP-INTEGRITY
+        # (2026-10-31): deleting the assistant half alone leaves an orphaned
+        # role=tool message, which the server rejects.
+        _group = [_m]
+        _j = _i + 1
+        if _m.get("role") == "assistant" and _m.get("tool_calls"):
+            _ids = {
+                str((_tc or {}).get("id") or "")
+                for _tc in (_m.get("tool_calls") or [])
+                if isinstance(_tc, dict)
+            }
+            while _j < len(messages) and messages[_j].get("role") == "tool":
+                _t = messages[_j]
+                _tid = str(_t.get("tool_call_id") or "")
+                # Missing ids are tolerated (group by position); a concrete
+                # foreign id means this tool result belongs to another turn.
+                if _ids and _tid and _tid not in _ids:
+                    break
+                _group.append(_t)
+                _j += 1
+        if any(id(_x) in protected for _x in _group):
+            # The turn straddles the protected tail boundary; leave it intact.
+            out.extend(_group)
+            _i = _j
+            continue
+        for _x in _group:
+            if _x.get("role") == "tool":
+                evicted.extend(_RE_READ_PATH.findall(str(_x.get("content") or "")))
+        _est -= _estimate_ctx_tokens(_group)
+        dropped += len(_group)
+        _i = _j
+    return out, dropped, evicted
+
+
+def _merge_drop_marker(out: list, dropped: int) -> None:
+    """Tell the model that older turns were removed, without a second user
+    turn in a row: prepend to the first remaining user message."""
+    if dropped <= 0:
+        return
+    _msg = (
+        f"[CONTEXT DROPPED: {dropped} older message(s) removed to fit the "
+        f"context window. Re-read a file before editing if its content is "
+        f"missing.]"
+    )
+    _pos = 0
+    while _pos < len(out) and out[_pos].get("role") == "system":
+        _pos += 1
+    for _j in range(_pos, len(out)):
+        if out[_j].get("role") == "user":
+            out[_j] = {**out[_j],
+                       "content": _msg + "\n\n" + str(out[_j].get("content") or "")}
+            return
+    out.insert(_pos, {"role": "user", "content": _msg})
+
+
 def _compress_rule_based(messages: list, target_tokens: int = 0,
-                         keep_recent_msgs: int = 12) -> tuple:
+                         keep_recent_msgs: int = 12,
+                         tail_tool_max_chars: int = 0) -> tuple:
     """Deterministische, regelbasierte Kompression.
 
     Fallback wenn die LLM-Zusammenfassung wiederholt fehlschlaegt oder zu
     teuer ist: ersetzt aeltere grosse Tool-Outputs (ausserhalb der letzten
-    keep_recent_msgs) durch Recall-Marker und entfernt ueberfluessige
-    Notice-/System-Meldungen, bis target_tokens unterschritten sind.
+    keep_recent_msgs) durch Recall-Marker, entfernt ueberfluessige
+    Notice-Meldungen und droppt zuletzt ganze alte Nachrichten/Turns, bis
+    target_tokens unterschritten sind. System, erste User-Aufgabe und der
+    Recent-Tail bleiben erhalten.
 
     Bewusster Cache-Bust (wie jede Kompression); der Aufrufer setzt danach
     LRU/Horizon neu. Rein deterministisch und ohne weitere Inferenz.
@@ -269,39 +378,79 @@ def _compress_rule_based(messages: list, target_tokens: int = 0,
         return list(messages), []
     out = [dict(m) for m in messages]  # flache Kopien, Indizes bleiben stabil
     target_tokens = max(0, int(target_tokens or 0))
-    _safe_end = len(out) - max(0, int(keep_recent_msgs or 0))
+    _keep = max(0, int(keep_recent_msgs or 0))
     _est = _estimate_ctx_tokens(out)
     _evicted_paths: list[str] = []
 
-    # 1) Aelteste grosse Tool-Outputs -> Recall-Marker
-    _idx = 0
-    while _est > target_tokens and _idx < _safe_end:
-        _m = out[_idx]
-        if _m.get("role") == "tool" and isinstance(_m.get("content"), str):
-            _old = _m["content"]
-            if _old and not _old.startswith("[System: Content of"):
-                _paths_in = _RE_READ_PATH.findall(_old)
-                _p0 = (_paths_in[0] if _paths_in else (_m.get("name") or "tool output"))
-                _marker = _recall_marker(str(_p0))
-                _est -= (len(_old) // 3) - (len(_marker) // 3)
-                _m["content"] = _marker
-                if _paths_in:
-                    _evicted_paths.extend(_paths_in)
-        _idx += 1
-
-    # 2) Ueberfluessige Notice-/System-User-Messages vorne entfernen
-    _idx2 = 0
-    while _est > target_tokens and _idx2 < len(out):
-        _m = out[_idx2]
+    # Protected: system, first user task, recent tail. Identity-based so
+    # deleting earlier messages cannot accidentally shift the tail.
+    _protected: set = {id(m) for m in out if m.get("role") == "system"}
+    if _keep:
+        for _m in out[-_keep:]:
+            _protected.add(id(_m))
+    for _m in out:
         if _m.get("role") == "user":
-            _c = str(_m.get("content") or "")
-            if _c.startswith(_RULE_NOTICE_MARKERS):
-                _est -= len(_c) // 3
-                del out[_idx2]
-                continue
-        _idx2 += 1
+            _protected.add(id(_m))
+            break
 
-    return out, _evicted_paths
+    # 1) Aelteste grosse Tool-Outputs -> Recall-Marker
+    for _m in out:
+        if _est <= target_tokens:
+            break
+        if id(_m) in _protected or _m.get("role") != "tool":
+            continue
+        if not isinstance(_m.get("content"), str):
+            continue
+        _old = _m["content"]
+        if not _old or _old.startswith("[System: Content of"):
+            continue
+        _paths_in = _RE_READ_PATH.findall(_old)
+        _p0 = (_paths_in[0] if _paths_in else (_m.get("name") or "tool output"))
+        _marker = _recall_marker(str(_p0))
+        _est -= (len(_old) // 3) - (len(_marker) // 3)
+        _m["content"] = _marker
+        if _paths_in:
+            _evicted_paths.extend(_paths_in)
+
+    # 2) Ueberfluessige Notice-User-Messages entfernen
+    if _est > target_tokens:
+        _kept: list = []
+        for _m in out:
+            if (id(_m) not in _protected and _m.get("role") == "user"
+                    and str(_m.get("content") or "").startswith(_RULE_NOTICE_MARKERS)):
+                _est -= len(str(_m.get("content") or "")) // 3
+                continue
+            _kept.append(_m)
+        out = _kept
+
+    # 3) Ganze alte Nachrichten/Turns droppen (nicht nur Payloads)
+    if _est > target_tokens and target_tokens > 0:
+        out, _dropped, _drop_paths = _drop_whole_oldest(
+            out, target_tokens, keep_recent=_keep, protect_first_user=True)
+        if _dropped:
+            _merge_drop_marker(out, _dropped)
+            _evicted_paths.extend(_drop_paths)
+
+    # 4) Tail-Tool-Cap: kept tool outputs are the after-size driver
+    _cap = max(0, int(tail_tool_max_chars or 0))
+    if _cap and _keep:
+        for _i in range(max(0, len(out) - _keep), len(out)):
+            _m = out[_i]
+            if _m.get("role") != "tool":
+                continue
+            _c = str(_m.get("content") or "")
+            if len(_c) > _cap:
+                _dropped_chars = len(_c) - _cap
+                out[_i] = {
+                    **_m,
+                    "content": (
+                        f"[... first {_dropped_chars} of {len(_c)} chars dropped "
+                        f"(duo_compress_tail_tool_max_chars={_cap})]\n" + _c[-_cap:]
+                    ),
+                }
+
+    # Deduplicate path strings; the read guard handles both path forms.
+    return out, list(dict.fromkeys(_evicted_paths))
 
 
 def _validate_compression_summary(summary: str,
@@ -401,6 +550,7 @@ async def _compress_tool_context(
     local_only: bool = False,
     aggressive_retry: bool = False,
     tail_tool_max_chars: int = 0,
+    target_tokens: int = 0,
 ) -> list:
 
 
@@ -669,6 +819,28 @@ async def _compress_tool_context(
                 _capped, _cap,
             )
     _compressed.extend(_recent_tail_msgs)
+    # WHOLE-TAIL-DROP (2026-10-31): the summary can be small while the kept
+    # raw tail alone still exceeds the threshold (12-18 messages with several
+    # read_file dumps). Cap only trims single tool payloads; this drops the
+    # oldest whole tail turns until the target is met, keeping the newest
+    # four messages (two turns) so the coder still sees its last action.
+    if target_tokens and int(target_tokens) > 0:
+        _compressed, _dropped_tail, _drop_paths = _drop_whole_oldest(
+            _compressed, int(target_tokens), protect_prefix=2, keep_recent=4)
+        if _dropped_tail:
+            _compressed[1] = {
+                **_compressed[1],
+                "content": str(_compressed[1].get("content") or "")
+                + f"\n\n[CONTEXT DROPPED: {_dropped_tail} older tail message(s) "
+                  f"removed to fit the context window. Re-read a file before "
+                  f"editing if its content is missing.]",
+            }
+            if _drop_paths:
+                _condensed_files.update(str(_p) for _p in _drop_paths)
+            logger.warning(
+                "[CTX-COMPRESS] whole-tail-drop: removed %d message(s) to reach %d tokens",
+                _dropped_tail, int(target_tokens),
+            )
     return _compressed, _condensed_files, _compress_usage
 
 

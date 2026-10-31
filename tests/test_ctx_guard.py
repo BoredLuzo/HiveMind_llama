@@ -118,7 +118,7 @@ _rule_msgs = [
     _tool_msg(1, "[C:\\src\\b.py total lines: 5]\n" + "z" * 4000),
 ]
 _before = sum(len(str(m.get("content") or "")) for m in _rule_msgs) // 3
-_rule_out, _evicted_paths = _compress_rule_based(_rule_msgs, target_tokens=5,
+_rule_out, _evicted_paths = _compress_rule_based(_rule_msgs, target_tokens=2000,
                                                  keep_recent_msgs=2)
 _after = sum(len(str(m.get("content") or "")) for m in _rule_out) // 3
 check("R1: rule-based returns (list, paths) tuple", isinstance(_rule_out, list) and isinstance(_evicted_paths, list))
@@ -133,6 +133,25 @@ check("R4: evicted paths collected (read-guard)",
 check("R5: context shrunk", _after < _before, f" {_before} -> {_after}")
 _rule_out2, _ = _compress_rule_based([], target_tokens=5)
 check("R6: empty input -> empty", _rule_out2 == [])
+
+# WHOLE-MESSAGE-DROP (2026-10-31): when masking still leaves the context over
+# target, drop the oldest whole turn, keep the newest one and announce it.
+_rule_drop, _rule_drop_paths = _compress_rule_based(
+    _rule_msgs, target_tokens=5, keep_recent_msgs=2)
+_drop_text = "\n".join(str(m.get("content") or "") for m in _rule_drop)
+check("R7: whole old turn dropped (assistant call 0 gone)",
+      not any(m.get("role") == "assistant" and m.get("content") == "call 0"
+              for m in _rule_drop), f" got={str(_rule_drop)[:160]}")
+check("R8: dropped old read path released",
+      any("a.py" in p for p in _rule_drop_paths), f" got={_rule_drop_paths}")
+check("R9: newest tail tool output survives whole-drop",
+      any(str(m.get("content") or "").startswith(r"[C:\src\b.py")
+          for m in _rule_drop))
+check("R10: drop marker tells the model", "[CONTEXT DROPPED" in _drop_text,
+      f" got={_drop_text[:80]!r}")
+check("R11: system message survives whole-drop",
+      any(m.get("role") == "system" and m.get("content") == "SYS"
+          for m in _rule_drop))
 
 # ── partial-Modus in _compress_tool_context (Tail bleibt byte-identisch) ───
 import asyncio  # noqa: E402

@@ -20,6 +20,7 @@ Every flow runs in its own asyncio.run(); the handler keeps one manager per
 (workspace, event loop), so each flow gets a fresh configured FakeManager.
 """
 import asyncio
+import os
 import sys
 import tempfile
 import unittest.mock
@@ -77,6 +78,14 @@ class FakeManager:
     def available(self):
         self.calls.append(("available",))
         return list(self.rows)
+
+    def is_started(self, language_id):
+        self.calls.append(("is_started", language_id))
+        return bool(getattr(self, "started", True))
+
+    def has_diagnostics(self, path):
+        self.calls.append(("has_diagnostics", str(path)))
+        return bool(getattr(self, "published", True))
 
     async def start_language(self, language_id):
         self.calls.append(("start_language", language_id))
@@ -504,6 +513,80 @@ with unittest.mock.patch.object(LC, "LspManager", FakeManager):
     out = asyncio.run(_funnel_denied())
 check("11j the dispatcher rejects lsp_rename in duo_readonly mode",
       out.startswith("[TOOL_ERROR:TOOL_NOT_ALLOWED]"), f"({out[:80]})")
+
+# ── 12. automatic post-write diagnostics (2026-10-31) ────────────────────
+def _auto_key(ws):
+    loop = asyncio.get_running_loop()
+    key = str(Path(ws).resolve())
+    return (key.lower() if os.name == "nt" else key, id(loop))
+
+
+def _auto_flow(ws, path, *, enabled=True, started=True, published=True,
+               diag=None):
+    async def _go():
+        set_settings(lsp_enabled=enabled, lsp_auto_diagnostics=True)
+        LH._AUTO_DIAG_CACHE.clear()
+        fake = FakeManager(ws)
+        fake.started = started
+        fake.published = published
+        fake.diag_result = list(diag or [])
+        LH._MANAGERS[_auto_key(ws)] = fake
+        try:
+            return await LH.auto_diagnostics_block(ws, path)
+        finally:
+            LH._MANAGERS.clear()
+    return asyncio.run(_go())
+
+
+_auto_ws, _auto_sample, _auto_other = new_ws()
+_out = _auto_flow(_auto_ws, "sample.py", diag=DIAGS)
+check("12a auto diagnostics attach a compact block",
+      _out.startswith("[LSP auto-diagnostics") and "[ERROR]" in _out,
+      f"({_out[:100]})")
+_out = _auto_flow(_auto_ws, "sample.py", enabled=False, diag=DIAGS)
+check("12b lsp_enabled=false disables automatic diagnostics", _out == "")
+_out = _auto_flow(_auto_ws, "sample.py", started=False, diag=DIAGS)
+check("12c a cold server is not started on the write path",
+      _out == "")
+_out = _auto_flow(_auto_ws, "sample.py", published=False, diag=DIAGS)
+check("12d no publication yet -> no misleading auto block", _out == "")
+_out = _auto_flow(_auto_ws, "sample.py", diag=[DIAGS[0]])
+check("12e a warm server with a clean file -> no block",
+      _auto_flow(_auto_ws, "sample.py", diag=[]) == "")
+
+# explicit lsp_diagnostics must not report "clean" before the first publish
+def _pending_setup(mgr):
+    mgr.published = False
+    mgr.diag_result = []
+
+_out, _mgr = run("lsp_diagnostics", {"path": "sample.py"}, _auto_ws,
+                 setup=_pending_setup)
+check("12f cold diagnostics says 'still analyzing', not 'no diagnostics'",
+      "still analyzing" in _out, f"({_out[:100]})")
+
+# ── 13. manager cap closes evicted servers (audit P1-2) ──────────────────
+async def _evict_flow():
+    LH._MANAGERS.clear()
+    closed = []
+
+    class ClosingFake(FakeManager):
+        async def close_all(self):
+            closed.append(self)
+
+    with unittest.mock.patch.object(LC, "LspManager", ClosingFake):
+        for _i in range(LH._MANAGERS_CAP + 1):
+            _w = Path(tempfile.mkdtemp(prefix=f"hm_lsp_evict_{_i}_"))
+            LH._get_manager(_w)
+        await asyncio.sleep(0)
+    return len(closed), len(LH._MANAGERS)
+
+
+_evicted_n, _remaining_n = asyncio.run(_evict_flow())
+check("13a cap eviction closes the evicted managers",
+      _evicted_n == LH._MANAGERS_CAP, f"({_evicted_n})")
+check("13b the fresh manager stays cached", _remaining_n == 1,
+      f"({_remaining_n})")
+LH._MANAGERS.clear()
 
 restore_settings()
 print()

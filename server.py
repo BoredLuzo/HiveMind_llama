@@ -656,6 +656,26 @@ async def _shutdown():
     except (ImportError, OSError, ValueError, RuntimeError,
             AttributeError) as _mce:
         _logger.debug("[Hivemind] MCP shutdown error: %s", _mce)
+    try:
+        # LSP children (pyright/gopls/rust-analyzer) are separate processes
+        # too; close_all() was only called from tests before 2026-10-31.
+        from tools.handlers.lsp import _MANAGERS as _lsp_managers
+        _lsp_loop_id = id(asyncio.get_running_loop())
+        _lsp_keys = [k for k in list(_lsp_managers)
+                     if isinstance(k, tuple) and len(k) == 2
+                     and k[1] == _lsp_loop_id]
+        _lsp_live = [_lsp_managers.pop(k) for k in _lsp_keys]
+        for _lm in _lsp_live:
+            try:
+                await asyncio.wait_for(_lm.close_all(), timeout=10.0)
+            except (OSError, RuntimeError, ValueError, AttributeError,
+                    asyncio.TimeoutError) as _lme:
+                _logger.debug("[Hivemind] LSP manager close error: %s", _lme)
+        if _lsp_live:
+            _logger.info("[Hivemind] LSP: %d language-server manager(s) closed",
+                         len(_lsp_live))
+    except (ImportError, AttributeError) as _lspe:
+        _logger.debug("[Hivemind] LSP shutdown error: %s", _lspe)
     if _force_kill_all:
         try:
             _fk = _force_kill_all()

@@ -639,6 +639,10 @@ DEFAULT_SETTINGS = {
     # How long lsp_diagnostics waits for the server's diagnostics
     # publication after open/change before returning what it has.
     "lsp_diagnostics_wait_s":  2.0,
+    # Attach a compact diagnostics block to a successful write/edit when a
+    # server for that language is already running. A cold server is warmed
+    # in the background instead of stalling the write; failures are silent.
+    "lsp_auto_diagnostics":    True,
     # Output caps for the lsp_* tools (results per call).
     "lsp_max_diagnostics":     50,
     "lsp_max_results":         50,   # cap for locations/symbols/actions lists
