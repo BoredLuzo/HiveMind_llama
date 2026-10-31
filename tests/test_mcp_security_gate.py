@@ -7,10 +7,8 @@ P2 S5 (SSE response for another id was returned as the answer) and P2 C3
 (no DELETE on close).
 """
 import asyncio
-import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
