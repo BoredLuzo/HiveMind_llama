@@ -83,6 +83,10 @@ were already mutated.
   direct/judge roles, fallback ladders, `safe_profile_matrix`, README.
   `BINARY_MIN_BUILD` gates `lfm3` and `lfm3-omni` at b12001 (b11889 dies with
   `unknown model architecture: 'lfm3'`).
+- Groot uses its **native GGUF chat template**; the Sharp v22.5 override was
+  unnecessary. A probe with b12001 parsed the model's XML tool calls in both
+  thinking-off and thinking-on mode (`finish=tool_calls`, JSON arguments,
+  `reasoning_content` filled when thinking is on).
 - Downloader: HTTP 416 with fewer bytes on disk than expected is no longer
   "Already complete"; the partial file is removed and fetched again.
 

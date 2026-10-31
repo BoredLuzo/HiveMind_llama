@@ -45,6 +45,9 @@
 - LFM3 1.7B QAD replaces the retired LFM2.5-2.6B line (installer judge step,
   direct/judge roles, fallback ladders, `safe_profile_matrix`, docs).
   `BINARY_MIN_BUILD` gates `lfm3`/`lfm3-omni` at b12001.
+- Groot uses its native GGUF chat template; the Sharp v22.5 override was
+  unnecessary (b12001 parses the native XML tool calls with thinking off
+  and on).
 - Downloader: HTTP 416 with fewer bytes on disk than expected is no longer
   "Already complete" - the partial file is removed and the download retried.
 

@@ -77,6 +77,11 @@ else:
     # enabled 2026-10-30 by user decision: tools +60.7 %, prose -4.9 %
     check("MTP enabled (tools +60.7 %, prose -4.9 %)", p.get("mtp") is True)
     check("jinja on", p.get("jinja") is True)
+    # NATIVE-TEMPLATE (2026-10-31): the GGUF carries its own qwen-style
+    # template; the Sharp override was unnecessary (b12001 parses the
+    # native XML tool calls in thinking-off and thinking-on mode).
+    check("native GGUF template (no registry override)",
+          not p.get("chat_template"), p.get("chat_template"))
     check("ncmoe 32 (real server: fastest + smallest shared delta vs baseline)",
           int(p.get("moe_cpu_experts") or 0) == 32,
           f"({p.get('moe_cpu_experts')})")
