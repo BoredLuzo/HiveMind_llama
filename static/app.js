@@ -13820,7 +13820,9 @@ function _updateDuoRoleStatus(elId, label, model) {
     _push('agents', 'Llama cache / checkpoints', null, 'Llama backend', null,
       'cache reuse ram mib ctx checkpoints llama_cache_reuse llama_cache_ram_mib llama_ctx_checkpoints');
     _push('agents', 'Run timeout (duo)', null, 'Duo timeout', null,
-      'duo_run_timeout_seconds critical timeout wall budget 420 900');
+      'duo_run_timeout_seconds duo_run_timeout_critical_seconds critical timeout wall budget 420 900');
+    _push('agents', 'Compression tail cap', null, 'Compression', null,
+      'duo_compress_tail_tool_max_chars tail tool output 8000 compression');
     _push('configs', 'MCP client timeout', null, 'MCP', null,
       'mcp_client_timeout_s timeout seconds server call');
     _push('configs', 'Git default branch', null, 'Git', null,

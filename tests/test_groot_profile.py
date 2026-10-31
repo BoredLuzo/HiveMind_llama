@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""GROOT profile + side-call sampler (2026-10-30).
+"""GROOT profile + sizing pins (2026-10-30, native template 2026-10-31).
 
 GROOT (Groot 19B-A3B-261023, Q4_K_M) is registered through the normal
 mechanism: a model_configs profile plus a models.json alias. This test pins
@@ -11,8 +11,7 @@ later edit cannot silently drift them:
   profile        : ctx 131072, ncmoe 32, KV q4_0, mmap+mlock,
                    MTP on, jinja on, native GGUF template (no override)
   sampler        : thinking temp 1.0 / presence 1.5; code temp 0.6 /
-                   presence 0.0; side calls temp 0.7 / top_p 0.8 / top_k 20 /
-                   min_p 0 / presence 1.5 with enable_thinking=false
+                   presence 0.0
 
 Offline only - no model load, no generation.
 """

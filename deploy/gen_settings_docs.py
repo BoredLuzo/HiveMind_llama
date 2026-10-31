@@ -56,13 +56,17 @@ def _comments() -> dict[str, str]:
             j = i - 1
             while j >= 0 and lines[j].strip().startswith("#"):
                 text = lines[j].strip().lstrip("#").strip()
-                if text and set(text) - {"\u2550", " "}:
+                if (text and set(text) - {"\u2550", " "}
+                        and not re.match(r"^[A-Z][0-9]?\)", text)
+                        and not re.match(r"^-{3,}", text)):
                     block.append(text)
                 j -= 1
             if block:
                 note = " ".join(reversed(block)).strip()
         if note:
-            out[m.group(1)] = note[:280]
+            if len(note) > 280:
+                note = note[:280].rsplit(" ", 1)[0] + "\u2026"
+            out[m.group(1)] = note
     return out
 
 

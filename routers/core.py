@@ -269,7 +269,10 @@ _INTERNAL_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 # They were missing here, so /internal/tool/exec let both through without
 # HIVEMIND_INTERNAL_TOKEN ("read/write tools stay available").
 _INTERNAL_EXEC_TOOLS = {"run_bash", "shell", "run_python",
-                        "start_background", "install_package"}
+                        "start_background", "install_package",
+                        # run_tests executes project test scripts (pytest/npm),
+                        # browser evaluate runs arbitrary JS in the page.
+                        "run_tests", "browser"}
 
 
 def _internal_host_allowed(host_header: str) -> bool:

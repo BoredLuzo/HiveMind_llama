@@ -334,7 +334,8 @@ DEFAULT_SETTINGS = {
     # OFF (2026-10-18): a checkpoint is a real git commit in the user's repo.
     # Opt-in; a bad write is still covered by undo_last + the write transaction.
     "duo_git_checkpoints":     False,
-    # run_python/background) via Windows Job Objects (KILL_ON_JOB_CLOSE) —
+    # Sandbox subprocesses (run_bash/run_python/background) via Windows Job
+    # Objects (KILL_ON_JOB_CLOSE).
     "duo_tool_sandbox":        True,
     # Job resource limits (0 = unlimited) for run_bash/run_python/background.
     "duo_tool_sandbox_max_mem_mb": 4096,
@@ -375,7 +376,7 @@ DEFAULT_SETTINGS = {
     "duo_wedge_handoff_max_tokens":      1200,
     "duo_wedge_handoff_model":           "",   # empty = coder model (fresh context, same weights)
     "keep_awake_during_run":   True,
-    # DESKTOP-NOTIFICATIONS (2026-08-27, User-Wunsch): Windows-Toasts via
+    # Windows toasts for run start/end and approval cards.
     "desktop_notifications":   True,
     "constraint_mode":         True,
     "git_repo_url":            "",
@@ -415,9 +416,6 @@ DEFAULT_SETTINGS = {
     "tts_speed":                 1.08,
     "tts_timeout_s":             120,
     "tts_idle_stop_s":           900,
-    # Telegram gateway voice (per bot, opt-in). The gateway reads these from the
-    # engine, so the UI switches actually drive it; the greying in the UI follows
-    # stt_enabled / tts_enabled (a voice note needs STT, a voice answer needs TTS).
     # Read-aloud (frontend): what the UI speaks on its own when TTS is on.
     # Direct = the whole answer; agentic = the plan first, then the coder's
     # answer; ask/gate read the interactive cards. All default off.
@@ -480,14 +478,11 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     "vision_agent_enabled":    False,
     "vision_agent_model":      "",
-    # vision_agent_mode removed (2026-10-03): no backend reader, the runner
-    # is sequential-only. It is also in _PRESET_NEVER_KEYS so stale values
-    # in old settings.json/presets can never load back.
     "vision_preprocess_timeout_seconds": 30,
     "vision_preprocess_load_timeout_seconds": 120,
     # PIPELINE-VISION (2026-08-19): feed images directly to multimodal pipeline agents?
     "pipeline_vision_direct":  False,
-    # on pipeline_vision_direct (→ {"analyst": True}).
+    # Per-role direct-image flags, e.g. {"analyst": true}.
     "pipeline_vision_roles":   {},
     "image_desc_full_pipeline": False,
 
@@ -594,9 +589,11 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # P) TELEGRAM GATEWAY
     # ════════════════════════════════════════════════════════════════════════
-    # Gateway-owned keys (phone UI and /gate write them). Defaults match the
-    # gateway fallbacks: off, no mirror, approvals "deny", restricted.
-    "telegram_gateway_enabled":   False,
+    # Gateway-owned keys (phone UI and /gate write them).
+    # telegram_gateway_enabled is deliberately NOT defaulted: the gateway
+    # treats "key absent" as "not configured, the toml master switch decides"
+    # and "key present and false" as a veto. A shipped False would shut down
+    # every toml-only gateway on the next start.
     "telegram_mirror_enabled":    False,
     "telegram_approval_mode":     "deny",
     "telegram_phone_restricted":  True,
@@ -816,7 +813,11 @@ def _write_settings_unlocked(settings: dict, *, saved_at: str | None = None) -> 
             with open(_tmp, "w", encoding="utf-8") as _fh:
                 _fh.write(_data)
                 _fh.flush()
-                os.fsync(_fh.fileno())       # data before the atomic replace
+                try:
+                    os.fsync(_fh.fileno())   # data before the atomic replace
+                except OSError as _fs_err:
+                    _logger.warning("[settings] fsync failed (%s) - continuing",
+                                    _fs_err)
             _tmp.replace(SETTINGS_FILE)      # atomar, OS-Garantie
             break
         except PermissionError:

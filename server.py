@@ -1822,6 +1822,12 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
                     tool="hivemind_pipeline", mode="openai_agent", retryable=False)
         _tool_args = dict(args or {})
         _tool_args["__model__"] = model_for_limits
+        # OPENAI-BRIDGE (2026-10-31, audit): this path has no run id, so the
+        # approval gate used to fall through to allow. Mark it external like
+        # /internal/tool/exec; with duo_action_approval_enabled=true the gate
+        # now fails closed with APPROVAL_UNAVAILABLE.
+        from tools.runner import _external_dispatch as _ext_cv
+        _ext_token = _ext_cv.set(True)
         try:
             return await _run_inline_tool(name, _tool_args,
                 workspace_lock=_OPENAI_WORKSPACE_LOCK,
@@ -1830,6 +1836,8 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
             return _tool_error_response("TOOL_EXEC_EXCEPTION",
                 f"{type(e).__name__}: {str(e)[:220]}",
                 tool=name, mode="openai_agent", retryable=False)
+        finally:
+            _ext_cv.reset(_ext_token)
 
     _agent_state = {
         "stop_reason": "completed", "tool_calls": 0, "tool_errors": 0,

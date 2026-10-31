@@ -214,6 +214,10 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
             continue
         if key in _PRESET_NEVER_KEYS:
             continue
+        if key not in DEFAULT_SETTINGS:
+            # STALE-KEY (2026-10-31): old presets carry keys with no reader;
+            # applying them put them back into settings.json on every load.
+            continue
         if key == "workspace" and isinstance(value, str) and value.strip():
             if not Path(value.strip()).exists():
                 _warn = (f"workspace '{value.strip()}' from preset '{name}' does not "

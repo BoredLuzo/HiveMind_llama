@@ -204,6 +204,10 @@ def _profile_moe_cfg(model_name: str) -> dict | None:
 MOE_DEFAULT_BYTES_PER_TOKEN = 12288
 
 
+# Rows whose name carries no MoE marker but that must keep prefix matching
+# for quant/finetune suffixes (ling: hybrid KDA/MLA row).
+_MOE_PREFIX_EXTRA = {"ling-3.0-tiny"}
+
 _PROFILE_MOE_LOGGED: set[str] = set()
 
 
@@ -221,7 +225,8 @@ def moe_cfg_for(model_name: str) -> dict | None:
         for table_key in _MOE_TABLE:
             if table_key == key:
                 continue
-            if not any(m in table_key for m in ("a3b", "a2b", "a2.5b", "35b")):
+            if not (any(m in table_key for m in ("a3b", "a2b", "a2.5b", "35b"))
+                    or table_key in _MOE_PREFIX_EXTRA):
                 continue
             if key.startswith(table_key):
                 return _MOE_TABLE[table_key]

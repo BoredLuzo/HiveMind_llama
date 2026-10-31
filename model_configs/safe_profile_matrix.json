@@ -4,8 +4,6 @@
     "vram_budget_gb": 7.5,
     "max_concurrent_models": 2,
     "duo_runtime_profile": "balanced",
-    "duo_coder_ctx_agentic": 16384,
-    "duo_coder_ctx_normal": 8192,
     "default_keep_alive": "10m",
     "smart_preload_keep_alive": "10m",
     "model_overrides": {

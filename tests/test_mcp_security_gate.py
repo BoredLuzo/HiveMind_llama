@@ -36,7 +36,8 @@ from routers.core import _internal_exec_allowed  # noqa: E402
 
 _old_tok = os.environ.pop("HIVEMIND_INTERNAL_TOKEN", None)
 try:
-    for _tool in ("run_bash", "run_python", "start_background", "install_package"):
+    for _tool in ("run_bash", "run_python", "start_background", "install_package",
+                  "run_tests", "browser"):
         _ok, _why = _internal_exec_allowed(_tool)
         check(f"S2 {_tool} is token-gated", not _ok, _why[:60])
     _ok, _ = _internal_exec_allowed("read_file")
