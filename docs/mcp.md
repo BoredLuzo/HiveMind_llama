@@ -107,6 +107,56 @@ gates above are unchanged, so existing clients keep working.
 (300 chars) plain-text substitutions — a prompt never executes anything by
 itself. Unknown prompts and missing required arguments answer `-32602`.
 
+### Protocol 2025-06-18: negotiation, sessions, GET-SSE stream (2026-10-31)
+
+`initialize` negotiates per request: the server echoes the offered version
+when it implements it and answers with the `2024-11-05` baseline otherwise.
+It never advertises a version newer than `2025-06-18`.
+
+| Client offers | Server answers | HTTP session | GET-SSE stream |
+|---|---|---|---|
+| `2025-06-18` | `2025-06-18` | yes | yes |
+| `2025-03-26` | `2025-03-26` | yes | yes |
+| `2024-11-05` | `2024-11-05` | no (legacy) | no |
+| anything else / missing | `2024-11-05` | no (legacy) | no |
+
+**Sessions (HTTP only).** A 2025+ `initialize` over HTTP answers with a
+`Mcp-Session-Id` response header — a `secrets.token_urlsafe(32)` token. Every
+subsequent POST to `/mcp` of that protocol generation must return the id in
+the `Mcp-Session-Id` request header: missing or unknown → `404` with a
+JSON-RPC `-32001` error body. A POST is treated as 2025-generation when it
+carries `Mcp-Session-Id` or a 2025 `MCP-Protocol-Version` header; a POST
+without either is a legacy `2024-11-05` request and is byte-identical to the
+old behaviour — that is exactly what keeps old clients working. Sessions
+expire after `MCP_SESSION_TTL_S` (default 3600 s) idle; the table is swept
+lazily on every session-table access (per-request sweep). At most
+`MCP_SESSION_MAX` (default 64) sessions live at once; the oldest is evicted
+and gets a clean 404 afterwards. `DELETE /mcp` with the session header ends
+the session — idempotent, always `204`, also for unknown or already-ended
+ids. An open GET stream counts as activity and is closed when its session
+ends (delete, expiry, eviction).
+
+**GET /mcp SSE stream.** `GET /mcp` with a valid session id opens the
+server→client stream (`Content-Type: text/event-stream`, one per session).
+It carries every notification the server emits for that session — JSON-RPC
+frames as `id: <n>` / `event: message` / `data: {...}` (today: the `query`
+progress notifier) — plus `: keep-alive` comments every `MCP_SSE_KEEPALIVE_S`
+(default 15 s) as the heartbeat. POSTs are answered on their own connections
+exactly as before and only fan their notifications out to the stream, so an
+open stream never blocks a POST. Reconnects replay missed events via the
+`Last-Event-ID` header: each session keeps the last 500 events under
+monotonically increasing ids ("1", "2", …), and a GET with `Last-Event-ID: n`
+first receives every buffered event newer than `n` before going live.
+
+**Still unsupported (as before).** `sampling/createMessage`,
+`elicitation/create` and `completion/complete` answer `-32601`; the
+`initialize` capabilities stay `tools` + `resources` + `prompts`.
+
+**2024-11-05 clients are unaffected.** No session header is issued or
+required for them, stdio never needs a session (it is inherently one
+session; a `Mcp-Session-Id` header would be accepted and ignored there), and
+every legacy request/response byte-flow is identical.
+
 ### Env reference
 
 | Variable | Default | Purpose |
@@ -136,6 +186,9 @@ itself. Unknown prompts and missing required arguments answer `-32602`.
 | `MCP_RESOURCE_MAX_ENTRIES` | `200` | max entries per `resources/list` |
 | `MCP_RESOURCE_MAX_DEPTH` | `8` | max directory depth for the listing walk |
 | `MCP_TEST_OUTPUT_MAX_CHARS` | `8000` | `run_tests` output cap (tail kept) |
+| `MCP_SESSION_TTL_S` | `3600` | 2025+ session idle expiry (swept on access) |
+| `MCP_SESSION_MAX` | `64` | concurrent 2025+ sessions, oldest evicted beyond |
+| `MCP_SSE_KEEPALIVE_S` | `15` | GET-SSE keep-alive comment interval (heartbeat) |
 
 ## 2. IDE → HiveMind (editor context, port 8001)
 

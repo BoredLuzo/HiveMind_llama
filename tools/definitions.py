@@ -477,6 +477,20 @@ _INLINE_CODING_TOOLS = [
             "new_name":  {"type": "string", "description": "New symbol name"}
         }, "required": ["path", "line", "character", "new_name"]}
     }},
+    {"type": "function", "function": {
+        # MUTATING (approval-gated in runner._APPROVAL_TOOLS): the handler
+        # applies the server's TextEdits and REWRITES the file.
+        "name": "lsp_format",
+        "description": (
+            "Format one file with its language server (textDocument/"
+            "formatting) and write the result back atomically. Use after "
+            "edits so the file matches the project style; then re-run "
+            "lsp_diagnostics. Approval-gated."
+        ),
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "File path (source file)"}
+        }, "required": ["path"]}
+    }},
 ]
 
 

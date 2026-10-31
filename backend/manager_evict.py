@@ -31,9 +31,15 @@ class LlamaEvictMixin:
             slot = await self._find_loaded(model)
             if slot:
                 logger.info(f"Evicting {model} from slot {slot.slot_id}")
+                _mem_label = f"evict:{model}"
                 self._metric_inc("evictions_total")
                 self._metric_inc("evictions_manual")
                 await _kill_slot_async(slot)
+                try:
+                    from utils.mem_watch import log_snapshot as _mem_snap
+                    _mem_snap(_mem_label)
+                except Exception:
+                    pass
             else:
                 _loaded_names = [s.model for s in self._slots if s.model]
                 logger.warning(f"Evict: model '{model}' not found. Loaded slots: {_loaded_names}")

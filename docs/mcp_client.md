@@ -97,6 +97,7 @@ Either use the **MCP client** card in the config page (toggle, server list as JS
 | `mcp_servers[].headers` | HTTP only: extra headers sent with every request (auth, API version pins) |
 | `mcp_servers[].token_env` | HTTP only: name of an environment variable; set and non-empty → `Authorization: Bearer <value>`, missing/empty → the server fails to start |
 | `mcp_servers[].enabled` | set `false` to keep an entry but skip it; the string `"false"` counts as off |
+| `mcp_server_budgets` | optional object `{server name: max tool calls}`; a missing key, `0` or a negative number means unlimited (default) |
 
 After editing, `POST /mcp/reload` (or restart the engine). `GET /mcp/servers`
 shows what is configured, what is running and which tools came back.
@@ -106,9 +107,58 @@ shows what is configured, what is running and which tools came back.
 Every tool is named `mcp_<server>_<tool>`, sanitized to `[a-z0-9_]` and capped
 at 64 characters, for example `mcp_files_read_file`. The description is
 prefixed with `[mcp:files]` and the server's `inputSchema` is passed through, so
-the model sees the real parameters. Two caps keep a broken server from blowing
+the model sees the real parameters. If the server sends an `annotations`
+object for a tool (`readOnlyHint`, `destructiveHint`, `title`, ...), it is
+passed through verbatim next to the parameters; a tool without annotations
+gets no `annotations` key at all. Two caps keep a broken server from blowing
 up a request: a name longer than 64 characters is truncated, and a schema over
 8 kB is replaced by an empty one with a note.
+
+## Per-server call budgets
+
+A single server can eat an unbounded number of tool calls per run (a model
+loop, a misbehaving IDE client). The optional settings key
+`mcp_server_budgets` caps this per server:
+
+```json
+{"mcp_server_budgets": {"files": 100, "github": 20}}
+```
+
+- The limit counts **tool calls per rolling 1-hour window**, per server name
+  (all tools of that server share the budget). The window rolls: a call
+  counts until one hour has passed since it was made, then its slot frees up
+  again.
+- Absent key, `0`, a negative number or a non-integer value means
+  **unlimited** - the default behaviour. A non-object value is logged as
+  config decay.
+- When the budget is exhausted, the call fails with
+  `[TOOL_ERROR: MCP_BUDGET_EXCEEDED]` and a message naming the server, the
+  limit and when the window resets. No request is sent to the server.
+- Exhaustion is **not** a broken server: the connection stays alive, the
+  status endpoint keeps reporting `ok`, and the next call inside the next
+  window works again. A reload does not reset the counter either (editing
+  the config must not be a budget loophole).
+- The counter lives in memory only: an engine restart clears it. Limits are
+  read on reload, like the server list itself.
+
+## Connect an IDE to HiveMind itself
+
+To use HiveMind's **own** MCP server from an IDE (Claude Desktop, Cline,
+Zed, VS Code), `tools/mcp_config_gen.py` generates the ready-to-paste stdio
+client config - the venv python and `infra/mcp_server.py` resolved to
+absolute paths of the checkout the tool lives in, like `start_mcp.bat`
+would start it:
+
+```bat
+python tools\mcp_config_gen.py --format vscode --out .vscode\mcp.json
+python tools\mcp_config_gen.py                    :: summary + all four formats
+python tools\mcp_config_gen.py --check            :: validate the JSON output
+```
+
+The generated `env` block carries `HIVEMIND_INTERNAL_TOKEN` as a
+`<HIVEMIND_INTERNAL_TOKEN>` placeholder to fill in; `--include-secret`
+embeds the value from the environment instead. No secret from
+`settings.json` ever reaches the output.
 
 ## What the server process sees
 
@@ -219,6 +269,7 @@ Keep in mind:
 | `MCP_SERVER_DOWN` | the process exited or timed out; check `GET /mcp/servers` |
 | `MCP_DISABLED` | `mcp_client_enabled` is false |
 | `MCP_AUTH_FAILED` | the server rejected the token (HTTP 401/403): missing, wrong or expired; check `token_env` / `headers` |
+| `MCP_BUDGET_EXCEEDED` | the server hit its `mcp_server_budgets` limit for the rolling 1-hour window; the message says when it resets - wait, or raise the limit |
 | `token_env '...' is set but the environment variable is empty or missing` | set the variable before starting the engine, or remove `token_env` from the entry |
 | `command not found` | the executable is not on `PATH`; use an absolute path |
 | `is busy with another call` | a second call arrived while the first is still running; the server is fine |

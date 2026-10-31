@@ -218,6 +218,7 @@ and `lsp_servers` overrides a command.
 | `lsp_workspace_symbols` | Project-wide symbol search by name/prefix. |
 | `lsp_code_actions` | Quickfix/refactor titles for a 1-based range; nothing is applied. |
 | `lsp_rename` | Project-wide rename plan with per-file edit lines; writes nothing, apply with `edit_file`; approval-gated. |
+| `lsp_format` | Formats a file through its language server and rewrites it atomically; approval-gated. |
 
 Read-only modes get the eight read tools plus `lsp_code_actions`;
 `lsp_rename` is full-mode only. A missing server answers `LSP_UNAVAILABLE`

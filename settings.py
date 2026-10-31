@@ -646,6 +646,15 @@ DEFAULT_SETTINGS = {
     # Output caps for the lsp_* tools (results per call).
     "lsp_max_diagnostics":     50,
     "lsp_max_results":         50,   # cap for locations/symbols/actions lists
+    # Close a language server after this many idle seconds (0 = off). The
+    # next lsp_* call restarts it lazily; keeps commit/RAM down in long
+    # sessions where a server is used once and never again.
+    "lsp_idle_timeout_s":      600,
+    # Per-server MCP client call budgets: {"server-name": max calls per
+    # rolling hour}. Absent/0 = unlimited (previous behavior).
+    "mcp_server_budgets":      {},
+    # [MEM] commit-charge snapshots at startup/load/evict/run-end.
+    "mem_watch_enabled":       True,
 
     "soul_evolve_agent": {
         "enabled":     False,

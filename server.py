@@ -722,6 +722,14 @@ async def _startup():
         _browser_timer.daemon = True   # never block interpreter exit
         _browser_timer.start()
 
+    # [MEM] baseline right after boot (2026-10-31): the commit-charge line
+    # every load/evict/run-end snapshot is compared against.
+    try:
+        from utils.mem_watch import log_snapshot as _mem_snap
+        _mem_snap("startup")
+    except Exception:
+        pass
+
     # MCP client: start the configured servers in the background (best
     # effort, a slow server must not delay boot).
     try:
@@ -1729,6 +1737,11 @@ async def stream(req: Request):
                     "[RUN-TRACE] /stream generator NORMAL end — %d events, done sent",
                     _state["events"],
                 )
+                try:
+                    from utils.mem_watch import log_snapshot as _mem_snap
+                    _mem_snap("run_end")
+                except Exception:
+                    pass
             else:
                 logger.warning(
                     "[RUN-TRACE] /stream generator ended without done — %d events (runner early exit or detached)",

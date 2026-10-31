@@ -37,6 +37,8 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
+from collections import deque
 from pathlib import Path
 
 logger = logging.getLogger("hivemind.mcp_client")
@@ -67,6 +69,9 @@ MAX_HTTP_BODY_BYTES = 8 * 1024 * 1024
 MAX_TOOL_NAME = 64
 MAX_SCHEMA_CHARS = 8000
 _NAME_OK = "abcdefghijklmnopqrstuvwxyz0123456789_"
+# Per-server call budget (mcp_server_budgets): the rolling window over which
+# a server's tool calls are counted. Absent/0/negative limit = unlimited.
+MCP_BUDGET_WINDOW_S = 3600.0
 
 # HTTP retry policy (Streamable HTTP only): up to MAX_HTTP_RETRIES retries
 # after the first attempt, with these pauses before each retry. tools/call is
@@ -1205,6 +1210,90 @@ def _render_result(result: dict) -> str:
     return text
 
 
+class _ServerCallBudget:
+    """Rolling-window call budget for ONE server (deque of call timestamps).
+
+    `mcp_server_budgets` caps how many tool calls a single server may take
+    per rolling window (default 1 h). The counter is in-memory only - a
+    restart clears it - and exhaustion is a temporary state: the connection
+    is NOT marked dead (M2 spirit), the next window simply works again.
+    Used from one event loop; the asyncio.Lock keeps concurrent take()s
+    from over-admitting.
+    """
+
+    def __init__(self, window_s: float = MCP_BUDGET_WINDOW_S) -> None:
+        self.window_s = float(window_s)
+        self._stamps: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    def _prune(self, now: float) -> None:
+        """Drop stamps that slid out of the window (oldest first)."""
+        cut = now - self.window_s
+        while self._stamps and self._stamps[0] <= cut:
+            self._stamps.popleft()
+
+    async def take(self, limit: int, *,
+                   now: float | None = None) -> tuple[bool, float]:
+        """Try to consume one call slot.
+
+        Returns (True, 0.0) when allowed (and records the call), else
+        (False, seconds_until_oldest_stamp_leaves_window). A refused call is
+        NOT recorded, so the window resets at the oldest RECORDED call.
+        `now` is injectable for tests; default is the monotonic clock.
+        """
+        async with self._lock:
+            moment = time.monotonic() if now is None else float(now)
+            self._prune(moment)
+            if len(self._stamps) >= limit:
+                reset_in = max(0.0, self._stamps[0] + self.window_s - moment)
+                return False, reset_in
+            self._stamps.append(moment)
+            return True, 0.0
+
+
+def _parse_budgets(settings: dict | None) -> dict[str, int]:
+    """`mcp_server_budgets` -> {server_name: limit}, decay-tolerant.
+
+    The key may be missing entirely (the default settings do not carry it
+    yet) - that means unlimited. 0, negative and garbage values also mean
+    unlimited; only positive integers become a budget. A non-dict value is
+    config decay and is logged like the other decay paths (C8 style).
+    """
+    raw = _setting(settings, "mcp_server_budgets", {})
+    if not isinstance(raw, dict):
+        if raw is not None:
+            logger.warning("[MCP] mcp_server_budgets is %s, expected an "
+                           "object of {\"server\": limit} - no per-server "
+                           "budgets applied", type(raw).__name__)
+        return {}
+    out: dict[str, int] = {}
+    for name, val in raw.items():
+        if isinstance(val, bool):
+            logger.warning("[MCP] mcp_server_budgets[%r] is a bool, expected "
+                           "an integer - ignored", name)
+            continue
+        try:
+            limit = int(val)
+        except (TypeError, ValueError):
+            logger.warning("[MCP] mcp_server_budgets[%r] = %r is not an "
+                           "integer - ignored", name, val)
+            continue
+        if limit > 0:
+            out[str(name)] = limit
+    return out
+
+
+def _fmt_reset_in(seconds: float) -> str:
+    """Human form for 'the window resets in ...'."""
+    s = max(0, int(seconds + 0.5))
+    if s >= 3600:
+        h, m = divmod(s, 3600)
+        return f"~{h}h {m // 60:02d}min"
+    if s >= 60:
+        return f"~{s // 60}min"
+    return f"~{s}s"
+
+
 class McpClient:
     """The configured servers, started on demand and cached."""
 
@@ -1220,6 +1309,12 @@ class McpClient:
         self._negotiated: dict[str, str] = {}
         self._defs: list[dict] | None = None
         self._names: dict[str, tuple[str, str]] = {}  # tool name -> (server, tool)
+        # per-server call budgets (mcp_server_budgets): the parsed limits of
+        # the last refresh + one rolling-window counter per server name. The
+        # counters survive refreshes on purpose - a reload must not reset a
+        # budget (editing the config would become the loophole).
+        self._budget_limits: dict[str, int] = {}
+        self._budgets: dict[str, _ServerCallBudget] = {}
 
     # -- configuration ------------------------------------------------
     @staticmethod
@@ -1319,6 +1414,9 @@ class McpClient:
     async def _refresh_locked(self, settings: dict | None = None) -> dict:
         settings = _settings(settings)
         self._last_settings = settings
+        # budgets follow the same settings snapshot the servers come from, so
+        # an edit takes effect on the next reload (like mcp_servers itself)
+        self._budget_limits = _parse_budgets(settings)
         if not self.enabled(settings):
             # already holding _lifecycle (refresh): call the unlocked body
             await self._close_all_unlocked()
@@ -1414,6 +1512,31 @@ class McpClient:
             key=lambda entry: entry["name"])
 
     # -- tool layer ----------------------------------------------------
+    async def _budget_gate(self, server: str) -> str | None:
+        """Per-server rolling-window call budget (mcp_server_budgets).
+
+        Returns the standard tool-error string when the server's budget is
+        exhausted for the window, else None (the call is recorded). A server
+        without a positive limit is unlimited. Exhaustion is deliberately
+        NOT a dead connection: it lasts until the window resets, so the next
+        window works again - conn.dead is never touched here.
+        """
+        limit = self._budget_limits.get(server, 0)
+        if limit <= 0:
+            return None
+        budget = self._budgets.get(server)
+        if budget is None:
+            budget = _ServerCallBudget()
+            self._budgets[server] = budget
+        allowed, reset_in = await budget.take(limit)
+        if allowed:
+            return None
+        return (f"[TOOL_ERROR: MCP_BUDGET_EXCEEDED]\n{server} hit its "
+                f"per-server call budget: {limit} tool call(s) per rolling "
+                f"{MCP_BUDGET_WINDOW_S / 3600:.0f}-hour window. The window "
+                f"resets in {_fmt_reset_in(reset_in)}. Wait for the reset or "
+                f'ask the user to raise mcp_server_budgets["{server}"].')
+
     def tool_defs(self) -> list[dict]:
         """OpenAI-style specs. Never starts a process: the caller refreshes."""
         if self._defs is None:
@@ -1450,6 +1573,11 @@ class McpClient:
             return (f"[TOOL_ERROR: MCP_SERVER_DOWN]\n{server} is not running"
                     f"{': ' + conn.last_error if conn and conn.last_error else ''}. "
                     f"Fix the server config or disable it.")
+        # per-server call budget: checked before the call is sent anywhere,
+        # so an exhausted server sees no traffic until the window resets
+        budget_err = await self._budget_gate(server)
+        if budget_err is not None:
+            return budget_err
         # C11 (2026-10-31): the lookup above is synchronous, so a concurrent
         # refresh cannot tear it apart mid-lookup. The guard keeps the call
         # itself alive: refresh()/close_all() may pop and close this conn,
@@ -1501,7 +1629,7 @@ def _tool_def(name: str, server: str, tool: dict) -> dict:
     desc = str(tool.get("description") or "").strip()
     if len(desc) > 400:
         desc = desc[:400].rstrip() + "..."
-    return {
+    spec = {
         "type": "function",
         "function": {
             "name": name,
@@ -1509,6 +1637,13 @@ def _tool_def(name: str, server: str, tool: dict) -> dict:
             "parameters": schema,
         },
     }
+    # Surface the remote tool's annotations (readOnlyHint, destructiveHint,
+    # title, ...) verbatim, so the host schema fitter and the model can see
+    # them. Missing or empty -> the key is omitted entirely (no empty dict).
+    annotations = tool.get("annotations")
+    if isinstance(annotations, dict) and annotations:
+        spec["function"]["annotations"] = annotations
+    return spec
 
 
 _client: McpClient | None = None

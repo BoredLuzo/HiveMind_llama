@@ -33,6 +33,23 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   log-name sanitizer, 2 MB stdio cap, body-read timeout + connection cap,
   version negotiation. Integration: `mcp_*` call budget, documented mode-less
   exception, destructive gate scans MCP args.
+- **Protocol 2025-06-18 (2026-11-01)**: `initialize` negotiates
+  2024-11-05 / 2025-03-26 / 2025-06-18 (anything else falls back to the
+  2024 baseline). 2025 HTTP sessions get a `Mcp-Session-Id`
+  (`secrets.token_urlsafe(32)`), required on later POSTs (unknown/missing →
+  404 with a JSON-RPC error body), 1h idle TTL (`MCP_SESSION_TTL_S`),
+  64-session cap (`MCP_SESSION_MAX`), idempotent `DELETE /mcp`. `GET /mcp`
+  opens the per-session SSE stream with a keep-alive heartbeat
+  (`MCP_SSE_KEEPALIVE_S`), `Last-Event-ID` resumability over a 500-event
+  ring and live fan-out of progress notifications. stdio needs no session.
+  Sampling/elicitation/completions stay deliberately unsupported (-32601).
+- **Per-server client budgets + IDE configs (2026-11-01)**:
+  `mcp_server_budgets` {server: calls per rolling hour} is enforced in the
+  client's call path (`MCP_BUDGET_EXCEEDED` names server, limit and reset;
+  reloads keep counters); remote tool `annotations` pass through into the
+  host schema. `python tools/mcp_config_gen.py` generates ready-to-paste
+  stdio configs for Claude Desktop / Cline / Zed / VS Code with a
+  `<HIVEMIND_INTERNAL_TOKEN>` placeholder unless `--include-secret`.
 - **Phase 2 (2026-10-31)**: all 23 tools carry MCP annotations
   (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`).
   New tools: `git_diff` (read, bounded), `git_commit` (write tier, explicit
@@ -82,6 +99,20 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   A real-rust smoke suite covers it (skips without rust-analyzer).
 - `docs/lsp.md` documents all ten tools, arguments, tiers, errors, the server
   registry and the known limits; the README now carries the tool table.
+- **Idle reaper + workspace settings + lsp_format (P1/P2 closure)**: a
+  language server is closed after 600s idle (`lsp_idle_timeout_s`, 0 = off)
+  and restarted lazily. `.vscode/settings.json` is answered to
+  `workspace/configuration` (per section) and pushed once via
+  `workspace/didChangeConfiguration` — a workspace can finally configure
+  rust-analyzer/pyright. The new approval-gated `lsp_format` applies the
+  server's `textDocument/formatting` edits atomically, and every write fires
+  a `didChangeWatchedFiles` hint for workspace indexes.
+- **[MEM] commit-charge snapshots**: one line per startup, model load,
+  eviction and run end — `commit=x/yGB engine=…MB llama[…]=…MB tts=…MB
+  lsp[…]=…MB` (PrivateUsage via GetProcessMemoryInfo, PIDs from HiveMind's
+  own managers; `mem_watch_enabled` switches it off). This makes the
+  "commit grows across loads and stays until restart" observation measurable
+  per process.
 
 ### Code panel, startup update check, compression
 - **Code panel performance**: streamed plain text now appends to one text node

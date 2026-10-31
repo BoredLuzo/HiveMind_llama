@@ -780,3 +780,100 @@ async def _inline_tool_lsp_rename(args: dict, workspace: Path,
                 f"{line}:{char} - the server refused the rename; "
                 f"nothing was changed)")
     return _summarize_rename(workspace, edit, new_name)
+
+
+# ── lsp_format (2026-10-31, P2): server-driven formatting ────────────────────
+def _apply_text_edits(text: str, edits: list[dict]) -> str:
+    """Apply LSP TextEdit[] (0-based, UTF-16 columns) to text.
+
+    LSP applies edits bottom-up; sorting by start position descending makes
+    the offsets stable. Line/character -> offset via the split-lines map.
+    """
+    line_starts = [0]
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            line_starts.append(i + 1)
+    lines = text.split("\n")
+
+    def _offset(line: int, character: int) -> int:
+        line = max(0, min(int(line), len(line_starts) - 1))
+        base = line_starts[line]
+        line_text = lines[line] if line < len(lines) else ""
+        # LSP columns are UTF-16 code units; python str indices are code
+        # points. They only differ for astral characters — clamp instead of
+        # failing, a formatting edit never targets emoji columns precisely.
+        return base + max(0, min(int(character), len(line_text)))
+
+    out = text
+    for edit in sorted(edits, key=lambda e: (
+            (e.get("range", {}).get("start") or {}).get("line", 0),
+            (e.get("range", {}).get("start") or {}).get("character", 0)),
+            reverse=True):
+        rng = edit.get("range") or {}
+        start = rng.get("start") or {}
+        end = rng.get("end") or {}
+        s_off = _offset(start.get("line", 0), start.get("character", 0))
+        e_off = _offset(end.get("line", 0), end.get("character", 0))
+        if e_off < s_off:
+            s_off, e_off = e_off, s_off
+        out = out[:s_off] + str(edit.get("newText") or "") + out[e_off:]
+    return out
+
+
+async def _inline_tool_lsp_format(args: dict, workspace: Path,
+                                  workspace_lock) -> str:
+    """Mutating tool (approval-gated in runner._APPROVAL_TOOLS): format the
+    file with its language server and WRITE the result."""
+    tool = "lsp_format"
+    mgr, p, language, early = await _prepare(tool, args, workspace,
+                                             workspace_lock)
+    if early is not None:
+        return early
+    edits = await mgr.format(p)
+    if edits is None:
+        return (f"(the {language} server does not offer formatting for "
+                f"{_rel(workspace, p)} - nothing was changed)")
+    if not edits:
+        return (f"Formatted {_rel(workspace, p)}: the server returned no "
+                f"edits - the file already matches the server's format.")
+    try:
+        original = p.read_text(encoding="utf-8", errors="replace")
+        formatted = _apply_text_edits(original, edits)
+        if formatted == original:
+            return (f"Formatted {_rel(workspace, p)}: {len(edits)} edit(s) "
+                    f"changed nothing - already formatted.")
+        from tools.handlers.file_ops import _checked_atomic_write as _caw
+        _werr = await _caw(p, formatted, workspace_lock, tool)
+        if _werr:
+            return _werr
+        return (f"Formatted {_rel(workspace, p)}: {len(edits)} edit(s) "
+                f"applied, file rewritten "
+                f"({len(original)} -> {len(formatted)} chars). "
+                f"Re-run lsp_diagnostics to confirm it is still clean.")
+    except OSError as exc:
+        return _tool_error_response(
+            "LSP_FAILED", f"{tool}: formatting result could not be written: "
+            f"{exc}", tool=tool)
+
+
+def notify_watched_change(workspace: Path, paths) -> int:
+    """Fire workspace/didChangeWatchedFiles for files HiveMind wrote.
+
+    Fire-and-forget from the write path: no manager / no live server / any
+    error -> 0 notifications and no exception (the next lsp_* call still
+    full-text-syncs from disk, so this is an index-freshness hint only).
+    """
+    try:
+        import asyncio as _asyncio
+        loop = _asyncio.get_running_loop()
+        try:
+            ws_key = str(Path(workspace).resolve())
+        except OSError:
+            ws_key = str(workspace)
+        mgr = _MANAGERS.get((ws_key.lower() if os.name == "nt" else ws_key,
+                             id(loop)))
+        if mgr is None:
+            return 0
+        return mgr.broadcast_watched_change(list(paths or []))
+    except Exception:
+        return 0

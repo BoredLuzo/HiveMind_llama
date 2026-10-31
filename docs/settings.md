@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**261 settings keys.**
+**264 settings keys.**
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -178,6 +178,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `lsp_client_timeout_s` | int | `30` | Per-request timeout in seconds for one LSP request; also caps the initialize handshake. A hung server is killed and lazily restarted on the next call. |
 | `lsp_diagnostics_wait_s` | float | `5.0` | How long lsp_diagnostics waits for the server's diagnostics publication after open/change before returning what it has. |
 | `lsp_enabled` | bool | `True` | lsp_enabled is the ONLY switch - there are deliberately no per-language on/off flags. True = the lsp_* tools exist; a language server process still starts LAZILY on the first tool call, never at boot. A language without a found server command answers LSP_UNAVAILABLE (with an… |
+| `lsp_idle_timeout_s` | int | `600` | Close a language server after this many idle seconds (0 = off). The next lsp_* call restarts it lazily; keeps commit/RAM down in long sessions where a server is used once and never again. |
 | `lsp_max_diagnostics` | int | `50` | Output caps for the lsp_* tools (results per call). |
 | `lsp_max_results` | int | `50` | cap for locations/symbols/actions lists |
 | `lsp_servers` | object | `{}` | Optional command override per language id, read by the LSP client: {"python": "pyright-langserver --stdio", "rust": ["rust-analyzer"]} A configured command REPLACES the default candidates for that language and must resolve (otherwise the language reports as missing - no silent… |
@@ -186,7 +187,9 @@ its comment) in `settings.py`, then re-run the generator.
 | `max_model_size_gb` | null | `None` |  |
 | `mcp_client_enabled` | bool | `False` | MCP client (beta): use external MCP servers over stdio. Off by default; phone runs stay blocked by the phone restriction gate. |
 | `mcp_client_timeout_s` | int | `30` |  |
+| `mcp_server_budgets` | object | `{}` | Per-server MCP client call budgets: {"server-name": max calls per rolling hour}. Absent/0 = unlimited (previous behavior). |
 | `mcp_servers` | list | `[]` | {"name": "...", "command": "npx", "args": ["-y", "@playwright/mcp@latest"]}   (stdio) {"name": "...", "url": "http://localhost:9000/mcp"}                            (streamable HTTP) as additional tools. External MCP servers (client direction): every entry is a stdio or… |
+| `mem_watch_enabled` | bool | `True` | [MEM] commit-charge snapshots at startup/load/evict/run-end. |
 | `mode` | str | `simple` |  |
 | `model_capability_overrides` | object | `{}` |  |
 | `models_dir` | str | `` |  |

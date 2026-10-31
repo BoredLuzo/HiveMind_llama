@@ -2302,6 +2302,11 @@ class LlamaLoadMixin:
 
             slot._ready_event.set()
             logger.info(f"Slot {slot.slot_id}: {model} ready on port {slot.port}")
+            try:
+                from utils.mem_watch import log_snapshot as _mem_snap
+                _mem_snap(f"load:{model}")
+            except Exception:
+                pass
             # VRAM-HEADROOM (2026-10-27, live): a load that only just fits is
             # the slow case - the driver pages VRAM once the KV cache grows, and
             # decode drops by an order of magnitude an hour into the run. The

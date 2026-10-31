@@ -40,6 +40,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import url2pathname
@@ -47,6 +48,47 @@ from urllib.request import url2pathname
 from infra import lsp_registry as registry
 
 logger = logging.getLogger("hivemind.lsp_client")
+
+# ── workspace settings (.vscode/settings.json) ────────────────────────────
+# Servers ask for their configuration via workspace/configuration; a
+# rust-analyzer (for example) only enables check-on-save diagnostics when it
+# sees its section. Read the workspace's .vscode/settings.json once per
+# mtime and answer both the pull request and a didChangeConfiguration push
+# with it. Tolerant: missing/broken file -> {}.
+_WS_SETTINGS_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def read_workspace_settings(workspace: Path) -> dict:
+    try:
+        path = Path(workspace) / ".vscode" / "settings.json"
+        if not path.is_file():
+            return {}
+        mtime = path.stat().st_mtime
+        cached = _WS_SETTINGS_CACHE.get(str(path))
+        if cached and cached[0] == mtime:
+            return cached[1]
+        import json
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data = data if isinstance(data, dict) else {}
+        _WS_SETTINGS_CACHE[str(path)] = (mtime, data)
+        return data
+    except (OSError, ValueError):
+        return {}
+
+
+def _lookup_section(settings: dict, section) -> object:
+    """Resolve a dotted workspace/configuration section ("a.b" -> a.b)."""
+    if not isinstance(settings, dict):
+        return None
+    if not section:
+        return settings
+    node: object = settings
+    for part in str(section).split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return None
+    return node
 
 INIT_TIMEOUT_S = 20.0        # initialize handshake cap (a hung server must not hold a run)
 DEFAULT_TIMEOUT_S = 30.0     # per-request cap unless settings say otherwise
@@ -57,6 +99,8 @@ MAX_MESSAGE_BYTES = 16 * 1024 * 1024   # one frame; a source file result is far 
 STDERR_KEEP = 4000           # stderr tail kept for error messages (see mcp_client)
 MAX_DOC_CHARS = 4_000_000    # full-text sync cap: refuse absurd files instead of ballooning RAM
 DIAG_POLL_S = 0.05           # diagnostics wait poll interval
+DEFAULT_IDLE_TIMEOUT_S = 600  # close a language server after this idle time (0 = off)
+REAPER_SWEEP_S = 60          # reaper check interval
 
 # Declared client capabilities (2026-10-31): exactly what this client
 # actually implements - full-sync text sync, the feature requests below,
@@ -258,6 +302,8 @@ class _LspConnection:
         self._doc_text: dict[str, str] = {}
         self.init_params: dict = {}
         self.server_capabilities: dict = {}
+        # .vscode/settings.json content, set by the manager before start()
+        self.config_settings: dict = {}
         self.dead = False
         self.last_error = ""
 
@@ -310,6 +356,12 @@ class _LspConnection:
         caps = result.get("capabilities") if isinstance(result, dict) else None
         self.server_capabilities = caps if isinstance(caps, dict) else {}
         await self.notify("initialized")
+        if self.config_settings:
+            # Push the workspace settings so servers that do not use the
+            # configuration pull (rust-analyzer) still see their section
+            # (its keys live at the top level of .vscode/settings.json).
+            await self.notify("workspace/didChangeConfiguration",
+                              {"settings": dict(self.config_settings)})
 
     async def _drain_stderr(self) -> None:
         """Keep stderr flowing (a full pipe stalls some servers) and log it
@@ -514,7 +566,13 @@ class _LspConnection:
         params = params if isinstance(params, dict) else {}
         if method == "workspace/configuration":
             items = params.get("items")
-            result = [None] * len(items) if isinstance(items, list) else None
+            if isinstance(items, list):
+                result = [_lookup_section(self.config_settings,
+                                          (it or {}).get("section")
+                                          if isinstance(it, dict) else None)
+                          for it in items]
+            else:
+                result = None
         elif method in ("client/registerCapability",
                         "window/workDoneProgress/create"):
             result = None
@@ -819,6 +877,18 @@ class LspManager:
             self._timeout_s = DEFAULT_TIMEOUT_S
         self._lifecycle = asyncio.Lock()
         self._conns: dict[str, _LspConnection] = {}
+        # IDLE REAPER (2026-10-31): language servers used to run until engine
+        # shutdown, holding commit/RAM for hours after their last call. A
+        # connection idle for lsp_idle_timeout_s is closed; the next call
+        # restarts it lazily (same path as a dead connection). 0 disables.
+        try:
+            self._idle_timeout_s = max(0.0, float(
+                settings.get("lsp_idle_timeout_s", DEFAULT_IDLE_TIMEOUT_S)))
+        except (TypeError, ValueError):
+            self._idle_timeout_s = DEFAULT_IDLE_TIMEOUT_S
+        self._now = time.monotonic          # injectable clock for tests
+        self._last_used: dict[str, float] = {}
+        self._reaper_task: asyncio.Task | None = None
 
     # -- connections ---------------------------------------------------
     async def _conn(self, language_id: str) -> _LspConnection:
@@ -826,10 +896,13 @@ class LspManager:
         connection is reaped and restarted here (lazy self-healing)."""
         async with self._lifecycle:
             conn = self._conns.get(language_id)
+            self.reap_idle()
+            self._last_used[language_id] = self._now()
             if conn is not None:
                 if not conn.dead:
                     return conn
                 self._conns.pop(language_id, None)
+                self._last_used.pop(language_id, None)
                 await conn.close()
             argv = registry.resolve(language_id, self._override)
             if argv is None:
@@ -839,15 +912,65 @@ class LspManager:
                                f"'{language_id}' (tried: {names})")
             conn = _LspConnection(language_id, argv, self.workspace,
                                   self._timeout_s)
+            conn.config_settings = read_workspace_settings(self.workspace)
             try:
                 await conn.start()
             except LspError as exc:
                 logger.info("[LSP] starting %s failed: %s", language_id, exc)
                 raise
             self._conns[language_id] = conn
+            self._last_used[language_id] = self._now()
+            self._ensure_reaper()
             logger.info("[LSP] started %s: %s", language_id,
                         " ".join(argv))
             return conn
+
+    def _ensure_reaper(self) -> None:
+        if self._reaper_task is not None and not self._reaper_task.done():
+            return
+        if self._idle_timeout_s <= 0:
+            return
+        self._reaper_task = asyncio.create_task(self._reaper_loop())
+
+    async def _reaper_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(min(REAPER_SWEEP_S,
+                                        max(5.0, self._idle_timeout_s / 4)
+                                        if self._idle_timeout_s > 0
+                                        else REAPER_SWEEP_S))
+                self.reap_idle()
+        except asyncio.CancelledError:
+            return
+
+    def reap_idle(self, now: float | None = None) -> list[str]:
+        """Close every connection idle beyond the timeout; returns languages.
+
+        Synchronous and exception-free by design: called from _conn (the
+        tool path) and from the reaper loop. Uses the injected clock so
+        tests can advance time without sleeping."""
+        if self._idle_timeout_s <= 0:
+            return []
+        now = self._now() if now is None else now
+        closed: list[str] = []
+        for lang, conn in list(self._conns.items()):
+            last = self._last_used.get(lang, now)
+            if conn.dead or (now - last) >= self._idle_timeout_s:
+                self._conns.pop(lang, None)
+                self._last_used.pop(lang, None)
+                closed.append(lang)
+                if not conn.dead:
+                    logger.info("[LSP] idle reaper: closed %s (idle %.0fs)",
+                                lang, now - last)
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(conn.close())
+                    except RuntimeError:
+                        pass
+        if not self._conns and self._reaper_task is not None:
+            self._reaper_task.cancel()
+            self._reaper_task = None
+        return closed
 
     async def start_language(self, language_id: str) -> bool:
         """Start (or reuse) the server for a language. False - never an
@@ -870,6 +993,54 @@ class LspManager:
         """True when a live server for this language is already running."""
         conn = self._conns.get(str(language_id).strip().lower())
         return conn is not None and not conn.dead
+
+    def broadcast_watched_change(self, paths) -> int:
+        """workspace/didChangeWatchedFiles for files HiveMind itself wrote.
+
+        Keeps workspace-wide indexes (gopls, rust-analyzer) current without a
+        real file watcher; external edits are still picked up lazily on the
+        next tool call (full-text sync). Returns conns notified."""
+        changes = []
+        for raw in (paths or []):
+            try:
+                p = self._resolve_path(raw)
+                changes.append({"uri": canonical_uri(path_to_uri(p)),
+                                "type": 2})   # Changed
+            except (OSError, ValueError):
+                continue
+        if not changes:
+            return 0
+        sent = 0
+        for conn in list(self._conns.values()):
+            if conn.dead:
+                continue
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(conn.notify(
+                    "workspace/didChangeWatchedFiles", {"changes": changes}))
+                sent += 1
+            except (LspError, OSError, RuntimeError):
+                continue
+        return sent
+
+    async def format(self, path, tab_size: int = 4,
+                     insert_spaces: bool = True) -> list[dict] | None:
+        """textDocument/formatting -> TextEdit[] (None = not offered)."""
+        conn, uri = await self._open_for(path)
+        if conn is None or uri is None:
+            return []
+        caps = conn.server_capabilities or {}
+        if not (caps.get("documentFormattingProvider")
+                or isinstance(caps.get("documentOnTypeFormattingProvider"), dict)
+                or caps.get("documentRangeFormattingProvider")):
+            return None
+        result = await conn.request("textDocument/formatting", {
+            "textDocument": {"uri": uri},
+            "options": {"tabSize": max(1, int(tab_size)),
+                        "insertSpaces": bool(insert_spaces)}})
+        if not isinstance(result, list):
+            return None
+        return [e for e in result if isinstance(e, dict)]
 
     def has_diagnostics(self, path) -> bool:
         """True when the server has published at least one diagnostics set
@@ -1029,6 +1200,9 @@ class LspManager:
     # -- shutdown ------------------------------------------------------
     async def close_all(self) -> None:
         """Shut every running language server down (engine exit, tests)."""
+        if self._reaper_task is not None:
+            self._reaper_task.cancel()
+            self._reaper_task = None
         async with self._lifecycle:
             conns = list(self._conns.values())
             self._conns = {}

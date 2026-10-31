@@ -11,10 +11,12 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import sys
 import threading
 import tempfile
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -441,14 +443,125 @@ def _pop_cancelled(req_id: Any) -> bool:
     return True
 
 
-# ── S14 (2026-10-31 audit): initialize now NEGOTIATES the protocol version
-# instead of hardcoding "2024-11-05". TODO(compat): only advertise the 2025
-# revisions once the GET stream / Mcp-Session-Id headers they expect exist -
-# answering them today would promise features the transport does not have.
-# A client that requires 2025-only disconnects cleanly on the baseline
-# answer, per spec.
-_SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05",)
+# ── S14 (2026-10-31 audit) + 2025-06-18 (2026-10-31): initialize NEGOTIATES
+# the protocol version instead of hardcoding "2024-11-05". The 2025 revisions
+# get HTTP sessions and the GET-SSE stream (section below); the 2024-11-05
+# baseline stays byte-identical for legacy clients. A revision newer than
+# 2025-06-18 is never advertised - unknown offers fall back to the baseline.
+_PROTOCOL_VERSION_BASELINE = "2024-11-05"
+_PROTOCOL_VERSION_LATEST = "2025-06-18"
+# Revisions that get sessions + the GET stream; both are echoed verbatim.
+_PROTOCOL_VERSIONS_2025 = ("2025-03-26", "2025-06-18")
+_SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05",) + _PROTOCOL_VERSIONS_2025
 _PROTOCOL_VERSION_DEFAULT = "2024-11-05"
+
+
+# ── Protocol 2025-06-18: HTTP sessions + the GET-SSE stream ───────────────────
+# A 2025+ initialize over HTTP creates a session (secrets.token_urlsafe(32)),
+# returns it as the Mcp-Session-Id response header and requires it back on
+# every subsequent POST of that generation (missing/unknown -> 404). Sessions
+# expire after MCP_SESSION_TTL_S idle (lazy sweep on every session-table
+# access), are capped at MCP_SESSION_MAX with oldest-first eviction, and end
+# via DELETE /mcp (idempotent). Each session owns a bounded event ring (the
+# last MCP_SESSION_EVENT_HISTORY server->client notifications under
+# monotonically increasing ids) that the GET /mcp SSE stream replays after
+# Last-Event-ID and then follows live. stdio is inherently one session: no id
+# is required there.
+
+MCP_SESSION_TTL_S = max(1.0, float(os.environ.get("MCP_SESSION_TTL_S", "3600") or 3600))
+MCP_SESSION_MAX = max(1, int(os.environ.get("MCP_SESSION_MAX", "64")))
+MCP_SSE_KEEPALIVE_S = max(0.05, float(os.environ.get("MCP_SSE_KEEPALIVE_S", "15") or 15))
+MCP_SESSION_EVENT_HISTORY = 500
+
+
+def _session_clock() -> float:
+    """Monotonic session clock (injectable for TTL tests)."""
+    return time.monotonic()
+
+
+class _Session:
+    """One 2025+ HTTP session: identity, idle clock, SSE event ring."""
+
+    __slots__ = ("id", "protocol_version", "created", "last_seen",
+                 "events", "next_event_id", "event_available", "ended")
+
+    def __init__(self, sid: str, protocol_version: str) -> None:
+        self.id = sid
+        self.protocol_version = protocol_version
+        self.created = _session_clock()
+        self.last_seen = self.created
+        self.events: deque = deque(maxlen=MCP_SESSION_EVENT_HISTORY)  # (seq, sse frame)
+        self.next_event_id = 1
+        self.event_available = asyncio.Event()
+        self.ended = False
+
+
+_SESSIONS: dict[str, _Session] = {}
+
+
+def _session_end(sid: str) -> bool:
+    """End the session (DELETE /mcp, eviction, sweep). Idempotent: an unknown
+    id is a no-op. Wakes the SSE loop so an open stream closes cleanly."""
+    s = _SESSIONS.pop(str(sid or ""), None)
+    if s is None:
+        return False
+    s.ended = True
+    s.event_available.set()
+    return True
+
+
+def _sessions_sweep() -> int:
+    """Drop sessions idle for more than MCP_SESSION_TTL_S. Called lazily on
+    every session-table access (per-request sweep)."""
+    now = _session_clock()
+    dead = [sid for sid, s in _SESSIONS.items() if now - s.last_seen > MCP_SESSION_TTL_S]
+    for sid in dead:
+        _session_end(sid)
+    return len(dead)
+
+
+def _session_create(protocol_version: str) -> _Session:
+    """New session for a 2025+ initialize; enforces the cap by evicting the
+    oldest session (insertion order) first."""
+    _sessions_sweep()
+    while len(_SESSIONS) >= MCP_SESSION_MAX:
+        _session_end(next(iter(_SESSIONS)))      # dict order = oldest first
+    s = _Session(secrets.token_urlsafe(32), protocol_version)
+    _SESSIONS[s.id] = s
+    return s
+
+
+def _session_get_alive(sid: str) -> _Session | None:
+    """The session for `sid`, if it exists and has not ended."""
+    s = _SESSIONS.get(str(sid or "")) if sid else None
+    if s is None or s.ended:
+        return None
+    return s
+
+
+def _session_append_event(session: _Session, method: str, params: dict) -> int:
+    """Fan a server->client notification into the session's SSE ring.
+    Returns the monotonic id used as the SSE `id:` field."""
+    payload = json.dumps({"jsonrpc": "2.0", "method": method, "params": params},
+                         ensure_ascii=False)
+    seq = session.next_event_id
+    session.next_event_id += 1
+    session.events.append((seq, f"event: message\ndata: {payload}\n\n"))
+    session.event_available.set()
+    return seq
+
+
+def _make_session_notifier(session: _Session):
+    """Progress notifier for 2025+ HTTP sessions: notifications fan out to
+    the session's GET-SSE stream (the POST response itself is unchanged)."""
+
+    def _notify(params: dict):
+        try:
+            _session_append_event(session, "notifications/progress",
+                                  dict(params or {}))
+        except (TypeError, ValueError) as exc:
+            print(f"[MCP-session] notify failed: {exc}", file=sys.stderr)
+    return _notify
 
 
 async def _try_shared_tool_exec(tool_name: str, args: dict) -> tuple[bool, str]:
@@ -2024,7 +2137,10 @@ async def route(user_input: str, explicit_tool: str | None = None) -> tuple[str,
 
 # ── MCP Protocol Handler ───────────────────────────────────────────────────────
 
-async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
+async def handle_request(req: dict, transport: str = "stdio",
+                         session: "_Session | None" = None) -> dict | None:
+    """One JSON-RPC message. `session` is the 2025+ HTTP session (if any) -
+    only used to fan progress notifications out to its GET-SSE stream."""
     if not isinstance(req, dict):
         # S9 (2026-10-31 audit): a non-dict (e.g. a scalar batch item that
         # slipped through) used to raise AttributeError and the connection
@@ -2071,7 +2187,11 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
 
     if method == "initialize":
         # S14: echo the requested protocol version when we actually
-        # implement it; answer with the baseline otherwise.
+        # implement it; answer with the baseline otherwise. The 2025
+        # revisions (sessions + GET stream) are implemented over HTTP now -
+        # a 2025-03-26/2025-06-18 offer is echoed verbatim, and the HTTP
+        # layer attaches the Mcp-Session-Id header (see _http_handle_...
+        # below). Never advertise anything newer than 2025-06-18.
         _init_params = req.get("params")
         _req_ver = ""
         if isinstance(_init_params, dict):
@@ -2116,8 +2236,13 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
         is_error = False
         err_meta = None
         _notify = None
-        if tool_name == "query" and transport == "stdio":
-            _notify = _make_stdio_notifier()
+        if tool_name == "query":
+            if transport == "stdio":
+                _notify = _make_stdio_notifier()
+            elif session is not None:
+                # 2025-06-18: progress notifications fan out to the
+                # session's GET-SSE stream; the POST response is unchanged.
+                _notify = _make_session_notifier(session)
         try:
             if tool_name == "query":
                 result = await tool_query(
@@ -2327,7 +2452,7 @@ async def _stdio_loop():
 
 # ── HTTP Transport ─────────────────────────────────────────────────────────────
 
-async def _handle_rpc_item(item: Any) -> dict | None:
+async def _handle_rpc_item(item: Any, session: "_Session | None" = None) -> dict | None:
     """One JSON-RPC message of an HTTP request (single or batch item).
 
     S9 (2026-10-31 audit): a non-dict item ([1, 2] in a batch) used to raise
@@ -2337,11 +2462,14 @@ async def _handle_rpc_item(item: Any) -> dict | None:
     if not isinstance(item, dict):
         return {"jsonrpc": "2.0", "id": None,
                 "error": {"code": -32600, "message": "request must be an object"}}
+    # `session` is only forwarded when set, so a monkeypatched 2-arg
+    # handle_request (tests) keeps working on the legacy path.
+    _kwargs = {"session": session} if session is not None else {}
     try:
         if MCP_REQUEST_TIMEOUT_S > 0:
-            return await asyncio.wait_for(handle_request(item, "http"),
+            return await asyncio.wait_for(handle_request(item, "http", **_kwargs),
                                           timeout=MCP_REQUEST_TIMEOUT_S)
-        return await handle_request(item, "http")
+        return await handle_request(item, "http", **_kwargs)
     except asyncio.TimeoutError:
         rid = item.get("id")
         # S7 (2026-10-31 audit): the in-request [MCP-CALL] line never fires
@@ -2375,6 +2503,71 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         await _http_handle_connection(reader, writer)
     finally:
         _CONN_SEM.release()
+
+
+async def _handle_sse_stream(session: "_Session", writer: asyncio.StreamWriter,
+                             cors: str, last_event_id: str = "") -> None:
+    """GET /mcp for a 2025+ session: the SSE stream with server->client
+    messages. Replays ring events newer than Last-Event-ID, then follows the
+    ring live and sends `: keep-alive` comments (the heartbeat) whenever
+    nothing arrived for MCP_SSE_KEEPALIVE_S. Ends when the client disconnects
+    or the session is deleted/expired/evicted. POSTs are answered on their own
+    connections - they only fan their notifications out to the stream."""
+    try:
+        writer.write(
+            f"HTTP/1.1 200 OK\r\n{cors}"
+            f"Content-Type: text/event-stream\r\n"
+            f"Cache-Control: no-cache\r\n\r\n".encode()
+        )
+        await writer.drain()
+    except (ConnectionError, OSError):
+        writer.close()
+        return
+
+    since = -1
+    _raw = str(last_event_id or "").strip()
+    if _raw.isdigit():
+        since = int(_raw)
+    if since >= session.next_event_id:
+        # An id this session never emitted (stale from another session) -
+        # ignore it and stream live from now.
+        since = -1
+    cursor = since if since >= 0 else 0
+    session.event_available.clear()
+    for seq, frame in list(session.events):
+        if seq <= cursor:
+            continue
+        try:
+            writer.write(f"id: {seq}\n{frame}".encode("utf-8", "replace"))
+            await writer.drain()
+        except (ConnectionError, OSError):
+            writer.close()
+            return
+        cursor = seq
+
+    while not session.ended:
+        try:
+            await asyncio.wait_for(session.event_available.wait(),
+                                   timeout=MCP_SSE_KEEPALIVE_S)
+        except TimeoutError:
+            pass                      # idle tick -> keep-alive comment below
+        session.event_available.clear()
+        if session.ended:
+            break
+        try:
+            wrote = False
+            for seq, frame in list(session.events):
+                if seq > cursor:
+                    writer.write(f"id: {seq}\n{frame}".encode("utf-8", "replace"))
+                    cursor = seq
+                    wrote = True
+            if not wrote:
+                writer.write(b": keep-alive\n\n")
+            await writer.drain()
+            session.last_seen = _session_clock()
+        except (ConnectionError, OSError):
+            break
+    writer.close()
 
 
 async def _http_handle_connection(reader: asyncio.StreamReader,
@@ -2445,6 +2638,25 @@ async def _http_handle_connection(reader: asyncio.StreamReader,
             )
             await writer.drain(); writer.close(); return
 
+        if method == "GET" and path == "/mcp":
+            # 2025-06-18: the per-session SSE stream (server->client). No or
+            # unknown session -> the generic 404 below (legacy shape).
+            _sessions_sweep()
+            _gsess = _session_get_alive(headers.get("mcp-session-id", ""))
+            if _gsess is not None:
+                _gsess.last_seen = _session_clock()
+                await _handle_sse_stream(_gsess, writer, cors,
+                                         headers.get("last-event-id", ""))
+                return
+
+        if method == "DELETE" and path == "/mcp":
+            # 2025-06-18: end the session. Idempotent - always 204, also for
+            # unknown or already-ended ids.
+            _sessions_sweep()
+            _session_end(headers.get("mcp-session-id", ""))
+            writer.write(f"HTTP/1.1 204 No Content\r\n{cors}Content-Length: 0\r\n\r\n".encode())
+            await writer.drain(); writer.close(); return
+
         if method == "POST" and path == "/mcp":
             try:
                 content_length = int(headers.get("content-length", len(body_part)) or 0)
@@ -2498,6 +2710,43 @@ async def _http_handle_connection(reader: asyncio.StreamReader,
                 )
                 await writer.drain(); writer.close(); return
 
+            # ── Protocol 2025-06-18: session handling ──────────────────────
+            # A 2025+ initialize creates a session (id returned as the
+            # Mcp-Session-Id header). Every other request of that generation
+            # (any Mcp-Session-Id header, or a 2025 MCP-Protocol-Version
+            # header) REQUIRES a valid session id - missing/unknown -> 404
+            # with a JSON-RPC error body. A headerless POST without a 2025
+            # protocol header is a legacy 2024-11-05 request and stays
+            # byte-identical.
+            _mcp_sid = headers.get("mcp-session-id", "")
+            _mcp_proto = headers.get("mcp-protocol-version", "")
+            http_session = None
+            new_session_id = ""
+            if isinstance(req, dict) and req.get("method") == "initialize":
+                _init_params = req.get("params")
+                _req_ver = (str(_init_params.get("protocolVersion", "") or "")
+                            if isinstance(_init_params, dict) else "")
+                if _req_ver in _PROTOCOL_VERSIONS_2025:
+                    http_session = _session_create(_req_ver)
+                    new_session_id = http_session.id
+            elif _mcp_sid or _mcp_proto in _PROTOCOL_VERSIONS_2025:
+                _sessions_sweep()
+                http_session = _session_get_alive(_mcp_sid)
+                if http_session is None:
+                    _err_id = req.get("id") if isinstance(req, dict) else None
+                    resp_body = json.dumps({
+                        "jsonrpc": "2.0", "id": _err_id,
+                        "error": {"code": -32001,
+                                  "message": "session not found or expired "
+                                             "(re-initialize for a new Mcp-Session-Id)"},
+                    }).encode()
+                    writer.write(
+                        f"HTTP/1.1 404 Not Found\r\n{cors}Content-Type: application/json\r\n"
+                        f"Content-Length: {len(resp_body)}\r\n\r\n".encode() + resp_body
+                    )
+                    await writer.drain(); writer.close(); return
+                http_session.last_seen = _session_clock()
+
             if isinstance(req, list):
                 if len(req) > MCP_MAX_BATCH:
                     resp_body = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
@@ -2506,18 +2755,20 @@ async def _http_handle_connection(reader: asyncio.StreamReader,
                     }}).encode()
                 else:
                     async with _HTTP_SEM:
-                        resps = [r for r in [await _handle_rpc_item(x) for x in req] if r is not None]
+                        resps = [r for r in [await _handle_rpc_item(x, session=http_session)
+                                             for x in req] if r is not None]
                     resp_body = json.dumps(resps, ensure_ascii=False).encode()
             else:
                 async with _HTTP_SEM:
-                    resp = await _handle_rpc_item(req)
+                    resp = await _handle_rpc_item(req, session=http_session)
                 if resp is None:
                     writer.write(f"HTTP/1.1 202 Accepted\r\n{cors}Content-Length: 0\r\n\r\n".encode())
                     await writer.drain(); writer.close(); return
                 resp_body = json.dumps(resp, ensure_ascii=False).encode()
 
+            _sess_hdr = f"Mcp-Session-Id: {new_session_id}\r\n" if new_session_id else ""
             writer.write(
-                f"HTTP/1.1 200 OK\r\n{cors}Content-Type: application/json\r\n"
+                f"HTTP/1.1 200 OK\r\n{cors}{_sess_hdr}Content-Type: application/json\r\n"
                 f"Content-Length: {len(resp_body)}\r\n\r\n".encode() + resp_body
             )
             await writer.drain(); writer.close(); return

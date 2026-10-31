@@ -48,7 +48,8 @@ from tools.handlers import (
     _inline_tool_lsp_symbols,
     _inline_tool_lsp_workspace_symbols,
     _inline_tool_lsp_code_actions,
-    _inline_tool_lsp_rename)
+    _inline_tool_lsp_rename,
+    _inline_tool_lsp_format)
 
 from tools.browser import browser_tool as _browser_tool
 
@@ -407,6 +408,9 @@ _APPROVAL_TOOLS = frozenset({
     # and the agent applies it via edit_file (each of THOSE writes is gated
     # again, so nothing bypasses the gate).
     "lsp_rename",
+    # LSP-FORMAT (2026-10-31): applies the server's TextEdits and REWRITES
+    # the file - a real write, so it shows the approval card.
+    "lsp_format",
 })
 
 # Pending approvals keyed by run_id (2026-09-18): the approval_request SSE
@@ -1085,6 +1089,7 @@ _INLINE_TOOL_HANDLER_MAP = {
     "lsp_workspace_symbols": _inline_tool_lsp_workspace_symbols,
     "lsp_code_actions": _inline_tool_lsp_code_actions,
     "lsp_rename": _inline_tool_lsp_rename,
+    "lsp_format": _inline_tool_lsp_format,
 }
 
 
@@ -1755,6 +1760,8 @@ async def _run_inline_tool(
                     _lsp_note = await _lsp_auto(workspace, args["path"])
                     if _lsp_note:
                         _result += "\n\n" + _lsp_note
+                    from tools.handlers.lsp import notify_watched_change as _lsp_watch
+                    _lsp_watch(workspace, [args["path"]])
                 except (ImportError, OSError, RuntimeError, ValueError,
                         AttributeError, TypeError):
                     pass

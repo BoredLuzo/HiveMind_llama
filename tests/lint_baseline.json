@@ -23,6 +23,10 @@
   "broad_except": 9,
   "except_pass": 5
  },
+ "backend/llama_preflight.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "backend/llama_server_manager.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -36,8 +40,8 @@
   "except_pass": 4
  },
  "backend/manager_evict.py": {
-  "broad_except": 1,
-  "except_pass": 0
+  "broad_except": 2,
+  "except_pass": 1
  },
  "backend/manager_health.py": {
   "broad_except": 9,
@@ -54,6 +58,10 @@
  "backend/manager_process.py": {
   "broad_except": 2,
   "except_pass": 1
+ },
+ "backend/runtime_flags.py": {
+  "broad_except": 0,
+  "except_pass": 0
  },
  "context/__init__.py": {
   "broad_except": 0,
@@ -96,8 +104,8 @@
   "except_pass": 0
  },
  "core/agentic_tool_loop.py": {
-  "broad_except": 14,
-  "except_pass": 8
+  "broad_except": 12,
+  "except_pass": 6
  },
  "core/budgets.py": {
   "broad_except": 3,
@@ -312,7 +320,7 @@
   "except_pass": 1
  },
  "hive_functions/num_ctx_config.py": {
-  "broad_except": 3,
+  "broad_except": 2,
   "except_pass": 1
  },
  "hive_functions/pipeline.py": {
@@ -471,6 +479,18 @@
   "broad_except": 1,
   "except_pass": 0
  },
+ "infra/lsp_client.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/lsp_registry.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "infra/mcp_client.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "infra/mcp_server.py": {
   "broad_except": 30,
   "except_pass": 3
@@ -559,6 +579,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "routers/mcp.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "routers/models.py": {
   "broad_except": 4,
   "except_pass": 1
@@ -620,8 +644,8 @@
   "except_pass": 0
  },
  "server.py": {
-  "broad_except": 36,
-  "except_pass": 17
+  "broad_except": 38,
+  "except_pass": 19
  },
  "settings.py": {
   "broad_except": 3,
@@ -640,6 +664,10 @@
   "except_pass": 0
  },
  "tests/direct_vision_check.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/lsp_fake_server.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -691,6 +719,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_branch_model.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_browser_blocked_dedup.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -700,6 +732,10 @@
   "except_pass": 0
  },
  "tests/test_budgets.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_cache_budget.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -735,6 +771,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_cmd_flags.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_coder_after_run.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -751,12 +791,20 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_compression_empty_summary.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_compression_plan_anchor.py": {
   "broad_except": 0,
   "except_pass": 0
  },
  "tests/test_compression_plan_survival.py": {
   "broad_except": 1,
+  "except_pass": 0
+ },
+ "tests/test_compression_whole_drop.py": {
+  "broad_except": 0,
   "except_pass": 0
  },
  "tests/test_content_budget_tokens.py": {
@@ -783,11 +831,19 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_ctx_full_storm.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_ctx_guard.py": {
   "broad_except": 0,
   "except_pass": 0
  },
  "tests/test_ctx_lru_invalidation.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_deadline_and_416.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -828,6 +884,14 @@
   "except_pass": 0
  },
  "tests/test_duo_split.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_split_integrity.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_duo_ubatch.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -971,6 +1035,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_groot_profile.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_harness_stats.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1003,6 +1071,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_langrun_guard_failclosed.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_lint.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1012,6 +1084,18 @@
   "except_pass": 0
  },
  "tests/test_live_findings.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_load_mode_ram_guard.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_load_preflight.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_log_archive.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1027,11 +1111,55 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_lsp_client.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_lsp_real_pyright.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_lsp_real_rust.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_lsp_tools.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_manager_lock.py": {
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_mcp_2025.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mcp_audit_fixes.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mcp_client.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mcp_client_budgets.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_mcp_hardening.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mcp_phase2.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mcp_security_gate.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_mem_watch.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1056,6 +1184,10 @@
   "except_pass": 0
  },
  "tests/test_model_catalog.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_model_filter.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1087,6 +1219,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_perf_logging.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_phone_restriction.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1104,6 +1240,10 @@
   "except_pass": 0
  },
  "tests/test_planner_reuse_ctx.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_planner_scaffold_guard.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1131,6 +1271,14 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_preflight_failclosed.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_preflight_matrix.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_preset_agent_merge.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1143,11 +1291,19 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_preset_prompts_refix.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_preset_snapshot_complete.py": {
   "broad_except": 0,
   "except_pass": 0
  },
  "tests/test_presets_bom.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_profile_launch_flags.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1215,6 +1371,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_runtime_flags.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_safe_profile_choice.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1231,6 +1391,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_settings_atomic.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_settings_foreign_write_warning.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1240,6 +1404,10 @@
   "except_pass": 0
  },
  "tests/test_shell_env.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_side_fallback.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1283,6 +1451,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_tail_cap.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_takeover_polish.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1311,6 +1483,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_tool_call_miss_log.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_tool_descriptions.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1324,6 +1500,10 @@
   "except_pass": 0
  },
  "tests/test_tool_registry_consistency.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_tool_round_default.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1371,6 +1551,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_update_check.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_update_prune.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1415,6 +1599,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_vram_profile_sizing.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_wait_ready.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1452,6 +1640,10 @@
   "except_pass": 0
  },
  "tests/test_workspace_provenance.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_write_folder_hint.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1519,6 +1711,10 @@
   "broad_except": 7,
   "except_pass": 1
  },
+ "tools/handlers/lsp.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
  "tools/handlers/misc.py": {
   "broad_except": 3,
   "except_pass": 1
@@ -1528,6 +1724,10 @@
   "except_pass": 0
  },
  "tools/limits.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tools/mcp_config_gen.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1551,6 +1751,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tools/update_check.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tools/websearch.py": {
   "broad_except": 12,
   "except_pass": 5
@@ -1560,6 +1764,10 @@
   "except_pass": 1
  },
  "utils/__init__.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "utils/bg_tasks.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1575,11 +1783,19 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "utils/mem_watch.py": {
+  "broad_except": 6,
+  "except_pass": 4
+ },
  "utils/messages.py": {
   "broad_except": 0,
   "except_pass": 0
  },
  "utils/patterns.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "utils/perf_log.py": {
   "broad_except": 0,
   "except_pass": 0
  },

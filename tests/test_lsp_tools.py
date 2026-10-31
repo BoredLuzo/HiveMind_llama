@@ -87,6 +87,16 @@ class FakeManager:
         self.calls.append(("has_diagnostics", str(path)))
         return bool(getattr(self, "published", True))
 
+    async def format(self, path, tab_size=4, insert_spaces=True):
+        self.calls.append(("format", str(path), tab_size, insert_spaces))
+        if getattr(self, "format_unsupported", False):
+            return None
+        return list(getattr(self, "format_edits", []))
+
+    def broadcast_watched_change(self, paths):
+        self.calls.append(("watched", list(paths)))
+        return len(list(paths))
+
     async def start_language(self, language_id):
         self.calls.append(("start_language", language_id))
         return self.start_ok
@@ -430,6 +440,8 @@ check("8h the other lsp tools are deliberately NOT approval-gated",
            "lsp_references", "lsp_hover", "lsp_symbols",
            "lsp_workspace_symbols", "lsp_code_actions"}
       & R._APPROVAL_TOOLS)
+check("8h2 only the two mutating lsp tools are gated",
+      {"lsp_rename", "lsp_format"} <= R._APPROVAL_TOOLS)
 
 # ── 9. code actions: listed only, nothing applied ───────────────────────────
 ACTIONS = [{"title": "Add 'import os'", "kind": "quickfix",
@@ -483,8 +495,8 @@ READ = D._LSP_READ_TOOLS | D._LSP_CODE_ACTIONS
 check("11a the read tiers offer the LSP read tools + code actions",
       all(READ <= names(m) for m in
           ("duo_readonly", "pre_explore", "critic_verify", "direct_python")))
-FULL = READ | {"lsp_rename"}
-check("11b the full tiers offer everything incl. lsp_rename",
+FULL = READ | {"lsp_rename", "lsp_format"}
+check("11b the full tiers offer everything incl. lsp_rename/lsp_format",
       all(FULL <= names(m) for m in
           ("duo_full", "tool_agent", "mcp_agent", "openai_agent",
            "direct_full")))
@@ -576,6 +588,51 @@ _out, _mgr = run("lsp_diagnostics", {"path": "sample.py"}, _auto_ws,
                  setup=_pending_setup)
 check("12f cold diagnostics says 'still analyzing', not 'no diagnostics'",
       "still analyzing" in _out, f"({_out[:100]})")
+
+# ── 15. watched-change notify from the write path ────────────────────────
+_ws_ws, _ws_sample, _ws_other = new_ws()
+def _watch_flow(path):
+    async def _go():
+        set_settings(lsp_enabled=True)
+        LH._MANAGERS.clear()
+        fake = FakeManager(_ws_ws)
+        LH._MANAGERS[_auto_key(_ws_ws)] = fake
+        try:
+            return fake, LH.notify_watched_change(_ws_ws, path)
+        finally:
+            LH._MANAGERS.clear()
+    return asyncio.run(_go())
+
+_fake, _sent = _watch_flow(["sample.py"])
+check("15a a write notifies didChangeWatchedChanges through the manager",
+      _sent == 1 and ("watched", ["sample.py"]) in _fake.calls,
+      f"({_sent})")
+_fake2, _sent2 = _watch_flow([])
+check("15b an empty path list sends nothing", _sent2 == 0)
+async def _no_mgr():
+    LH._MANAGERS.clear()
+    return LH.notify_watched_change(_ws_ws, ["sample.py"])
+check("15c no manager -> silent 0", asyncio.run(_no_mgr()) == 0)
+
+# ── 16. workspace/configuration answers from .vscode/settings.json ───────
+from infra import lsp_client as LC2
+_cfg_ws = Path(tempfile.mkdtemp(prefix="hm_lsp_cfg_"))
+(_cfg_ws / ".vscode").mkdir()
+(_cfg_ws / ".vscode" / "settings.json").write_text(
+    '{"rust-analyzer": {"checkOnSave": {"enable": true}}, "python": {"analysis": {"typeCheckingMode": "basic"}}}',
+    encoding="utf-8")
+_ws_data = LC2.read_workspace_settings(_cfg_ws)
+check("16a the reader loads .vscode/settings.json",
+      _ws_data.get("rust-analyzer", {}).get("checkOnSave", {}).get("enable") is True)
+(_cfg_ws / ".vscode" / "settings.json").write_text("{broken", encoding="utf-8")
+check("16b a broken file answers {}", LC2.read_workspace_settings(_cfg_ws) == {})
+check("16c a missing file answers {}",
+      LC2.read_workspace_settings(Path(tempfile.mkdtemp(prefix="hm_lsp_nocfg_"))) == {})
+_r = LC2._lookup_section({"a": {"b": 7}}, "a.b")
+check("16d dotted sections resolve", _r == 7)
+check("16e missing sections answer None",
+      LC2._lookup_section({"a": 1}, "x.y") is None
+      and LC2._lookup_section({}, None) == {})
 
 # ── 13. manager cap closes evicted servers (audit P1-2) ──────────────────
 async def _evict_flow():

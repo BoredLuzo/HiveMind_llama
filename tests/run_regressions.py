@@ -207,6 +207,7 @@ SUITES = [
     ("preset_prompts_refix",    "tests/test_preset_prompts_refix.py",          30),
     ("mcp_audit_fixes",         "tests/test_mcp_audit_fixes.py",               60),
     ("mcp_client",              "tests/test_mcp_client.py",                    90),
+    ("mcp_client_budgets",      "tests/test_mcp_client_budgets.py",             60),
     ("write_folder_hint",      "tests/test_write_folder_hint.py",         20),
     ("settings_atomic",       "tests/test_settings_atomic.py",            40),
     ("branch_model",           "tests/test_branch_model.py",              20),
@@ -254,12 +255,14 @@ SUITES = [
     ("deadline_and_416",        "tests/test_deadline_and_416.py",           30),
     ("mcp_security_gate",       "tests/test_mcp_security_gate.py",          60),
     ("mcp_phase2",              "tests/test_mcp_phase2.py",                  90),
+    ("mcp_2025",                "tests/test_mcp_2025.py",                    120),
     ("lsp_client",              "tests/test_lsp_client.py",                  90),
     ("lsp_tools",               "tests/test_lsp_tools.py",                   60),
     ("lsp_real_pyright",        "tests/test_lsp_real_pyright.py",            120),
     ("lsp_real_rust",           "tests/test_lsp_real_rust.py",               180),
     ("update_check",            "tests/test_update_check.py",                30),
     ("compression_whole_drop",  "tests/test_compression_whole_drop.py",      30),
+    ("mem_watch",               "tests/test_mem_watch.py",                   30),
 
 ]
 

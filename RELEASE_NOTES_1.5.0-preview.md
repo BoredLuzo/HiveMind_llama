@@ -47,6 +47,23 @@ are text-only, cap at 256 KB and hide secrets such as `settings.json`,
 `gateway.toml`, `.env*` and private keys. The advertised protocol remains
 2024-11-05; 2025 sessions/GET-SSE stay deliberately unadvertised.
 
+## MCP: 2025 protocol, budgets, one-command IDE configs
+
+The server now negotiates MCP 2025-06-18 (besides 2024-11-05, which is
+unchanged byte-for-byte). A 2025 HTTP session gets a `Mcp-Session-Id` that
+later POSTs must carry, expires after an hour idle (max 64 sessions), and
+`DELETE /mcp` ends it. `GET /mcp` is the per-session SSE stream: keep-alive
+heartbeat, `Last-Event-ID` replay over a 500-event ring, live progress
+fan-out. stdio needs no session. Sampling/elicitation/completions stay
+deliberately unsupported.
+
+The MCP client learned per-server call budgets
+(`mcp_server_budgets`: calls per rolling hour, `MCP_BUDGET_EXCEEDED` names
+the server, limit and reset time) and passes remote tool annotations
+through. `python tools/mcp_config_gen.py` prints ready-to-paste configs for
+Claude Desktop, Cline, Zed and VS Code - no real token lands in the output
+unless `--include-secret` is passed.
+
 ## Settings and presets
 
 The code read several settings that were never shipped as defaults
@@ -104,6 +121,17 @@ never starts a cold server; diagnostics attach once one is warm. A cold
 of claiming the file is clean. Pyright's `file:///c%3A/...` URIs are canonicalized, so its real
 diagnostics are actually visible.
 
+P1/P2 closure: a language server is closed after 600s idle
+(`lsp_idle_timeout_s`) and restarted lazily — no more pyright/rust-analyzer
+processes lingering for the engine's whole lifetime after one call.
+`.vscode/settings.json` is now honored (configuration pulls answered per
+section plus one didChangeConfiguration push). `lsp_format` (approval-gated)
+formats a file through its language server and rewrites it atomically, and
+writes fire `didChangeWatchedFiles` hints. `[MEM]` lines at
+startup/load/evict/run-end make the commit-charge growth observable per
+process: `commit=18.3/50.9GB engine=… llama[8101]=… tts=… lsp[python]=…`
+(`mem_watch_enabled=false` silences them).
+
 The second LSP pass closes the remaining audit P2s: diagnostics now carry the
 document version, so a delayed publication for the old text cannot satisfy a
 freshness wait; `.tsx`/`.jsx` open as `typescriptreact`/`javascriptreact`
@@ -150,12 +178,13 @@ manifest and prunes files that left the repository.
 
 ## Tests
 
-240/240 suites, ruff clean. New coverage: MCP phase 2 (137 checks:
+243/243 suites, ruff clean. New coverage: MCP phase 2 (137 checks:
 annotations, the four new tools, resources containment/secret denylist,
 prompts, backward compatibility), LSP client/tools (55 + 76 checks), the
 startup update checker (36 checks), whole-turn compression (15 checks) and
 the real-pyright/rust LSP smoke suites (5 + 4 checks; skipped when the
-server is absent).
+server is absent), the [MEM] suite (16 checks), MCP 2025 (47 checks) and
+the MCP client budgets/config-gen suite (41 checks).
 The existing MCP suites still pass (28 + 175 + 73 + 23).
 
 ## Known limits

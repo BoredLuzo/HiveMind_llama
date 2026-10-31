@@ -319,6 +319,55 @@ check("4g a server with diagnosticProvider answers via pull",
       f"({_pull['diag'][0]['message'] if _pull['diag'] else '[]'})")
 
 
+# ── 4h. idle reaper closes unused servers ──────────────────────────────
+async def _idle_flow():
+    ws, sample = new_ws()
+    mgr = LC.LspManager(ws, settings=make_settings("normal",
+                                                   timeout_s=10))
+    out = {}
+    out["start"] = await mgr.start_language("python")
+    conn1 = mgr._conns.get("python")
+    out["pid1"] = conn1._proc.pid if conn1 else None
+    out["reap_at_default"] = mgr.reap_idle(now=mgr._now() + 1)   # far below timeout
+    # advance the injected clock beyond the 600 s default and reap
+    out["reaped"] = mgr.reap_idle(now=mgr._now() + 10_000)
+    out["conns_after"] = dict(mgr._conns)
+    # next use restarts lazily
+    diags = await mgr.diagnostics(sample, wait_s=1.0)
+    conn2 = mgr._conns.get("python")
+    out["pid2"] = conn2._proc.pid if conn2 else None
+    out["diag_after_restart"] = len(diags)
+    await mgr.close_all()
+    return out
+
+
+_idle = asyncio.run(_idle_flow())
+check("4h1 nothing reaped below the idle timeout",
+      _idle["reap_at_default"] == [] and _idle["start"] is True)
+check("4h2 the reaper closes the idle server",
+      _idle["reaped"] == ["python"] and _idle["conns_after"] == {})
+check("4h3 the next call restarts the server lazily",
+      _idle["pid2"] not in (None, _idle["pid1"])
+      and _idle["diag_after_restart"] == 1,
+      f"(pid {_idle['pid1']} -> {_idle['pid2']})")
+
+
+async def _idle_off_flow():
+    ws, sample = new_ws()
+    mgr = LC.LspManager(ws, settings={**make_settings("normal"),
+                                      "lsp_idle_timeout_s": 0})
+    out = {"start": await mgr.start_language("python")}
+    out["reaped"] = mgr.reap_idle(now=mgr._now() + 10_000)
+    out["alive"] = "python" in mgr._conns
+    await mgr.close_all()
+    return out
+
+
+_off = asyncio.run(_idle_off_flow())
+check("4h4 lsp_idle_timeout_s=0 disables the reaper",
+      _off["reaped"] == [] and _off["alive"])
+
+
 # ── 5. Server->client requests are answered -----------------------------
 async def _cfgprobe_flow():
     ws, sample = new_ws()
