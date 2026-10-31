@@ -12,7 +12,7 @@ Recommended set (as of release, = default-settings alignment 2026-08-26):
   lfm3-omni:2b            Q4_0          — Subagent/Vision-Worker (+mmproj)
   lfm3:1.7b-qad           QAD Q4_0      — text-only subagent
   lfm2.5:24b-a2b          Q4_K_M        — Coder/Writer (MoE, + DSpark drafter)
-  spark-x2.6:4b           Q4_K_M        — Judge/direct helper (dense 4B)
+  spark-x2.6:4b           Q4_K_M        — fast direct helper (dense 4B)
   qwen3.5:0.8b-ud         UD-Q4_K_XL    — Subagent ladder (smallest tier)
   qwen3.5:2b              Q4_K_M        — Refiner
   qwen3.5:4b-mtp          Q4_K_M        — Analyst/Critic/Synthesizer/Speed/Fallback
@@ -71,8 +71,8 @@ def _persist_models_dir(mdir: Path) -> None:
 # ESSENTIAL-SET (2026-10-26, ThinkPad feedback): `--essential` downloads the
 # direct/coder core and skips helper models a small machine may not want.
 # lfm3-omni is the optional vision worker. LFM3 1.7B stays in the essential
-# set because it also serves direct/subagent; the judge step in install.bat
-# is separately optional, and keyword routing works without any judge.
+# set because it also serves direct/subagent. The judge role is deliberately
+# not tied to a downloaded model: any installed LLM can be assigned to it.
 ESSENTIAL_SKIP_KEYS = {"lfm3-omni:2b"}
 # DRAFTER-SKIP (2026-10-27, corrected): speculative decoding is ON again for
 # the profiles that ship an MTP head, so a drafter sidecar is NOT dead weight.
@@ -183,7 +183,7 @@ SPECS: list[dict] = [
     {
         "key": "spark-x2.6:4b",
         "tag": "spark-x2.6:4b",
-        "desc": "Spark-X2.6 4B Q4_K_M (dense, fast judge/direct helper, ~3GB)",
+        "desc": "Spark-X2.6 4B Q4_K_M (dense, fast direct helper, ~3GB)",
         "repo": "XHToken/Spark-X2.6-4B-GGUF",
         "file_regex": [
             r"(?i)^spark-x2\.6-4b-q4_k_m\.gguf$",
@@ -669,7 +669,7 @@ def main() -> int:
                     help="skip the drafter sidecars (costs ~50%% decode for the "
                          "models that need one)")
     ap.add_argument("--essential", action="store_true",
-                    help="skip helper models (judge/decider) - core only")
+                    help="skip the optional omni vision worker - core models only")
     ap.add_argument("--list-only", action="store_true")
     ap.add_argument("--scan-only", action="store_true",
                     help="Only scan local GGUFs + write models.json, NO download, NO network")

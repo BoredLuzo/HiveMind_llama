@@ -119,7 +119,7 @@ the Coder context.
 | Mode | When | What happens |
 |------|------|--------------|
 | Simple / Direct | trivial tasks (default) | single model, direct answer, optional web-search tool calls |
-| Auto | judge-routed | judge model classifies complexity, routes to Direct / Pipeline / Duo |
+| Auto | judge-routed | the model assigned to the Judge role (any installed LLM) classifies complexity, routes to Direct / Pipeline / Duo |
 | Pipeline | analysis, complex docs | Analyst -> Refiner -> Critic -> Synthesizer, optional constraint loop |
 | Map (AutoMap) | mixed tasks | heuristic scorer picks the best model per agent role |
 | Code Duo | coding | Coder + Critic loop, sub-modes Critic-Duo and Agentic |
@@ -463,7 +463,7 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `lfm3-omni:2b` | LiquidAI/LFM3-Omni-2B-GGUF | subagent / vision worker (needs b12001+) | 1.0 GB + 0.3 GB mmproj |
 | `lfm3:1.7b-qad` | LiquidAI/LFM3-1.7B-GGUF | text-only subagent (lowest latency tier) | 1.0 GB |
 | `lfm2.5:24b-a2b` | LiquidAI/LFM2.5-24B-A2B-GGUF | coder / writer (MoE 24B/2B active, + DSpark drafter) | 13.5 GB + 0.6 GB drafter |
-| `spark-x2.6:4b` | XHToken/Spark-X2.6-4B-GGUF | fast judge / direct helper (dense 4B) | 3.0 GB |
+| `spark-x2.6:4b` | XHToken/Spark-X2.6-4B-GGUF | fast direct helper (dense 4B) | 3.0 GB |
 | `minicpm5:2b-sharp` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | light all-rounder, recommended tier (Q6_K_XL) | 2.2 GB |
 | `minicpm5:2b-sharp-q4` | peculiar-ragdoll/Sharp-MiniCPM5-2B-GGUF | same model, smaller/weaker tier (Q4_K_XL) | 1.6 GB |
 
@@ -633,10 +633,11 @@ token - whisper and parakeet are public repos.
 `install.bat` asks before every download step: Python 3.14 (only if missing),
 uv, venv in `.venv\`, dependencies, GPU backend choice, llama.cpp nightly into
 `llama\`, then it opens `setup_models.bat` for the models. Inside the models
-step, two optional extras ask before installing anything: the judge model and
-the routing decider (a small CPU classifier that routes direct answer vs. code
-run, see `routing_decider` in `docs/settings.md`) - both off by default, both
-saying how to add them later. Afterwards SearXNG is installed when Docker is
+step, one optional extra asks before installing anything: the routing decider
+(a small CPU classifier that routes direct answer vs. code run, see
+`routing_decider` in `docs/settings.md`) - off by default, and it says how to
+add it later. The judge role is not a separate download: assign any installed
+model to Judge in the UI. Afterwards SearXNG is installed when Docker is
 present, and the Telegram gateway can be set up (`docs/gateway_setup.md`).
 Then run `start_hivemind.bat` and open http://localhost:8001.
 

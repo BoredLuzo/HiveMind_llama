@@ -75,6 +75,10 @@ panel, and the branch fields write the key the backend reads.
   template; ub comes from `duo_ubatch` (shipped 256).
 - LFM3 1.7B QAD replaced the retired LFM2.5-2.6B line in 1.4.14; the installer
   prose no longer mentions the 2.6B drafter.
+- There is no judge-specific model download anymore: the Judge role can use
+  any installed LLM. The optional routing decider (CPU classifier) remains the
+  only routing extra in the installer; the essential set skips only the
+  optional omni vision worker.
 
 ## Language servers (LSP)
 

@@ -175,9 +175,13 @@ Tests: 233/233 suites, ruff clean.
   `duo_ubatch` survives a preset load and garbage ints cannot 500 the apply.
 
 ### Models and installer
-- LFM3 1.7B QAD replaces the retired LFM2.5-2.6B line (installer judge step,
-  direct/judge roles, fallback ladders, `safe_profile_matrix`, docs).
+- LFM3 1.7B QAD replaces the retired LFM2.5-2.6B line (direct/subagent roles,
+  fallback ladders, `safe_profile_matrix`, docs).
   `BINARY_MIN_BUILD` gates `lfm3`/`lfm3-omni` at b12001.
+- The installer no longer offers a dedicated judge-model download. The Judge
+  role accepts any installed LLM; the optional CPU decider stays as the only
+  routing extra. `setup_models.bat`/`fetch_models.py` now describe the
+  essential set as core models plus the optional omni vision worker.
 - Groot uses its native GGUF chat template; the Sharp v22.5 override was
   unnecessary (b12001 parses the native XML tool calls with thinking off
   and on).

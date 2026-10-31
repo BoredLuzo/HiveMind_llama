@@ -15,8 +15,8 @@ echo    [3/9] llama.cpp backend - downloaded for the chosen backend
 echo    [4/9] Windows tools     - optional POSIX tools (grep/sed/find)
 echo    [5/9] Desktop shortcut  - optional, with the HiveMind icon
 echo    [6/9] Models            - downloaded into your chosen folder
-echo          (judge + decider are optional extras inside this step,
-echo           both off by default)
+echo          (the routing decider is an optional extra inside this step,
+echo           off by default; the judge role can use any installed model)
 echo    [7/9] SearXNG           - optional web search (requires Docker)
 echo    [8/9] Voice             - optional speech to text / text to speech
 echo    [9/9] Telegram gateway  - optional: message HiveMind from
@@ -473,7 +473,7 @@ choice /c YN /n /d N /m "Pre-install the decider environment + model? [y/N] "
 if errorlevel 2 (
     echo   Skipped (default). Enable later: Settings -^> Routing -^> Decider.
     echo   The engine downloads the encoder on first use if it is missing.
-    goto judge_step
+    goto searxng_step
 )
 REM DECIDER-ENV (2026-10-21, audit): the model weights alone are useless
 REM without the gliner2 package and CPU torch - the first version of this
@@ -490,35 +490,7 @@ if not errorlevel 1 (
     echo   [NOTE] Pre-download failed (offline or wheel missing).
     echo          Keyword rules decide until it is installed.
 )
-goto judge_step
-
-:judge_step
-REM ======================================================
-REM [6c] Judge model (OPTIONAL, opt-in)
-REM ======================================================
-REM JUDGE-OPTIONAL (2026-10-26): the judge is the small LLM that labels a
-REM request direct vs agentic (the CPU decider above can take that over
-REM later). Without either, keyword rules route. Small machines and the
-REM essential set skip it; Enter = skip, never fatal.
-echo  ==========================================================
-echo   [judge] Judge/Decider model ^(optional, ~1GB^)
-echo   Routes direct vs agentic requests. Without it, keyword
-echo   rules decide. Skip on small machines.
-echo  ==========================================================
-choice /c YN /n /d N /m "Install the judge model now? [y/N] "
-if errorlevel 2 (
-    echo   Skipped - add later: setup_models.bat ^> S ^> lfm3:1.7b-qad
-    goto judge_done
-)
-"%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-keys lfm3:1.7b-qad
-if errorlevel 1 (
-    echo   [WARN] judge model download failed - continue without it;
-    echo   setup_models.bat installs it later. Keyword routing works.
-) else (
-    echo   OK.
-)
-:judge_done
-echo.
+goto searxng_step
 
 :searxng_step
 REM [7/9] SearXNG (optional)

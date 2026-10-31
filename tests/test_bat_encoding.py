@@ -65,36 +65,38 @@ def main():
     else:
         ok("no control characters in bat files")
 
-    # The judge step must call the real script.
+    # The judge is not a dedicated model download (2026-10-31): any
+    # installed LLM can be assigned to the Judge role. The installer must not
+    # offer lfm3 as a judge-specific install step.
     _inst = (ROOT / "install.bat").read_text(encoding="ascii", errors="replace")
-    if "deploy\\fetch_models.py --models-dir" in _inst and "--only-keys lfm3:1.7b-qad" in _inst:
-        ok("install.bat calls deploy\\fetch_models.py for the judge")
+    if (":judge_step" not in _inst
+            and "--only-keys lfm3:1.7b-qad" not in _inst
+            and "judge model" not in _inst.lower()):
+        ok("no dedicated judge-model install step")
     else:
-        fail("install.bat calls deploy\\fetch_models.py for the judge",
-             "path or model key missing")
+        fail("no dedicated judge-model install step",
+             "judge_step / lfm3-only download still present")
 
-    # DECIDER + JUDGE FLOW (2026-10-28, audit): the decider step used to end in
-    # both branches with "goto searxng_step" and thereby jumped OVER the judge
-    # block - the judge question was dead code, and a second decider step added
-    # later sat in the same dead region. Pins: both steps exist, both are
-    # opt-in (choice /d N), the decider hands over to the judge, and the judge
-    # falls through to SearXNG.
+    # DECIDER FLOW (2026-10-31): the optional CPU decider stays; both
+    # branches must fall through to SearXNG, with no judge block in between.
     _dec_i = _inst.find(":decider_model_step")
-    _jud_i = _inst.find(":judge_step")
-    if _dec_i >= 0 and _jud_i > _dec_i and "goto judge_step" in _inst:
-        ok("install.bat asks for the decider, then the judge")
+    _sx_i = _inst.find(":searxng_step")
+    _dec_block = _inst[_dec_i:_sx_i] if _dec_i >= 0 and _sx_i > _dec_i else ""
+    if _dec_i >= 0 and _sx_i > _dec_i:
+        ok("install.bat asks for the decider, then SearXNG")
     else:
-        fail("install.bat asks for the decider, then the judge",
-             "label order or the handover goto is missing")
-    if _inst.count("choice /c YN /n /d N") >= 2:
-        ok("decider and judge are opt-in (Enter = skip)")
+        fail("install.bat asks for the decider, then SearXNG",
+             "label order is wrong")
+    if _dec_block.count("goto searxng_step") >= 2:
+        ok("both decider branches reach SearXNG")
     else:
-        fail("decider and judge are opt-in (Enter = skip)",
-             "a choice without /d N means the user cannot accept the default")
-    if ":searxng_step" in _inst and _inst.find(":searxng_step") > _jud_i:
-        ok("the judge falls through to SearXNG")
+        fail("both decider branches reach SearXNG",
+             "a branch still jumps to the removed judge block")
+    if _inst.count("choice /c YN /n /d N") >= 1:
+        ok("the decider is opt-in (Enter = skip)")
     else:
-        fail("the judge falls through to SearXNG", "label above the judge block")
+        fail("the decider is opt-in (Enter = skip)",
+             "choice without /d N means the user cannot accept the default")
     if ":decider_done" not in _inst:
         ok("no duplicate decider block")
     else:

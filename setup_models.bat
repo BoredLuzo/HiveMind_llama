@@ -58,8 +58,8 @@ echo.
 echo    LFM2.5 24B-A2B also downloads its DSpark spec-dec drafter.
 echo    Gemma-4 E4B/E2B QAT also download their MTP drafter.
 echo.
-echo  D = download all missing, E = essential set (skips the judge/
-echo      decider helper model - for small machines),
+echo  D = download all missing, E = essential set (core models; skips
+echo      the optional omni vision worker - for small machines),
 echo  S = select single models,
 echo  C = add own model with config, R = register folder only (no download),
 echo  A = abort.
@@ -77,7 +77,7 @@ goto done
 
 :essential_set
 echo.
-echo  Essential set: direct/coder core, judge/decider helper skipped.
+echo  Essential set: direct/coder core, optional omni vision worker skipped.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-missing --essential
 goto done
 
