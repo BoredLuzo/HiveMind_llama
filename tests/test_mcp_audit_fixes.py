@@ -248,6 +248,135 @@ check("5a2 the http entry reports has_auth (flag, not value)",
       _http_entry.get("has_auth") is True and "SOME_TOKEN_VAR" not in blob,
       f"(http entry: {json.dumps(_http_entry)[:80]})")
 
+# ── 6. Integration round 2 (2026-10-31): budgets on the IDE path, mode ──
+#    decision, destructive gate for MCP args, direct_full comment
+from tools import runner as TR               # noqa: E402
+from tools.definitions import mcp_allowed_in_mode   # noqa: E402
+
+# 6a S3: the contextless /internal/tool/exec path seeds SHARED budget
+# windows instead of getting a fresh (unlimited) counter per call.
+async def _seed_shape():
+    TR._external_budget_windows.clear()
+    TR._seed_external_budgets()
+    ws = TR._web_search_count.get()
+    fetch = TR._web_fetch_count.get()
+    inst = TR._install_count.get()
+    mcp = TR._mcp_call_count.get()
+    shared = dict(TR._external_budget_windows)
+    TR._seed_external_budgets()   # second seed inside the window: same lists
+    return (ws, fetch, inst, mcp, shared,
+            TR._web_search_count.get(), TR._web_fetch_count.get(),
+            TR._install_count.get(), TR._mcp_call_count.get())
+
+
+_w1, _f1, _i1, _m1, _shared, _w2, _f2, _i2, _m2 = asyncio.run(_seed_shape())
+check("6a all four budgets are wired to the shared windows",
+      _w1 is _shared.get("web_search") and _f1 is _shared.get("web_fetch")
+      and _i1 is _shared.get("install") and _m1 is _shared.get("mcp"),
+      f"({sorted(_shared)})")
+check("6a2 re-seeding within the window keeps the same counters",
+      _w2 is _w1 and _f2 is _f1 and _i2 is _i1 and _m2 is _m1)
+
+# 6b S3: an expired window resets the shared counters.
+async def _window_reset():
+    TR._external_budget_windows.clear()
+    TR._seed_external_budgets()
+    old = TR._external_budget_windows["web_search"]
+    old[0] = 7
+    old[1] -= TR._EXTERNAL_BUDGET_WINDOW_S + 1.0
+    TR._seed_external_budgets()
+    return old, TR._external_budget_windows["web_search"]
+
+
+_old, _new = asyncio.run(_window_reset())
+check("6b an expired window starts a fresh counter",
+      _new is not _old and _new[0] == 0, f"({ _old} -> {_new})")
+TR._external_budget_windows.clear()
+
+# 6c S3/NO-CONTEXT: without external dispatch the governors keep the
+# deliberate fresh-per-call behaviour - they never touch the shared windows.
+async def _no_context_consume():
+    TR._external_budget_windows.clear()
+    before = dict(TR._external_budget_windows)
+    TR._consume_web_search_budget()
+    TR._consume_install_budget()
+    TR._consume_mcp_call_budget()
+    return before, dict(TR._external_budget_windows)
+
+
+_before, _after = asyncio.run(_no_context_consume())
+check("6c contextless direct calls do not touch the shared windows",
+      _before == {} and _after == {}, f"({_after})")
+TR._external_budget_windows.clear()
+
+# 6d S3: the real external call seeds the windows (mcp client is disabled in
+# this environment, so the call ends in MCP_DISABLED - after seeding).
+async def _external_call_seeds():
+    tok = TR._external_dispatch.set(True)
+    try:
+        TR._external_budget_windows.clear()
+        out = await TR._run_inline_tool("mcp_auditfix_probe", {})
+        return out, dict(TR._external_budget_windows)
+    finally:
+        TR._external_dispatch.reset(tok)
+        TR._external_budget_windows.clear()
+
+
+_out, _win = asyncio.run(_external_call_seeds())
+check("6d an /internal/tool/exec-style call seeds the budget windows",
+      "MCP_DISABLED" in _out and {"web_search", "web_fetch", "install", "mcp"} <= set(_win),
+      f"({sorted(_win)}, out={_out[:40]!r})")
+
+# 6e I3: the mcp_* budget trips like the other governors (fallback limit 40,
+# no settings key yet).
+async def _mcp_budget_trip():
+    TR._external_budget_windows.clear()
+    results = []
+    for _ in range(64):
+        results.append(TR._consume_mcp_call_budget())
+        if results[-1]:
+            break
+    return results
+
+
+_res = asyncio.run(_mcp_budget_trip())
+check("6e the mcp call budget trips (first True at limit+1)",
+      _res[-1] is True and all(r is False for r in _res[:-1])
+      and len(_res) == TR._MCP_CALL_BUDGET_DEFAULT + 1,
+      f"(first True after {len(_res)} calls)")
+TR._external_budget_windows.clear()
+
+# 6f I5: the destructive gate also inspects MCP tool args now.
+check("6f precheck: the probe pattern is destructive",
+      TR._is_destructive_bash("format C:") is not None)
+_gate_block = asyncio.run(TR._destructive_gate("mcp_probe_tool", {"cmd": "format C:"}))
+check("6f2 destructive MCP args hit the gate (no run_id -> denied)",
+      _gate_block is not None and "DESTRUCTIVE GATE" in _gate_block,
+      f"({_gate_block[:60]!r})")
+_gate_clean = asyncio.run(TR._destructive_gate("mcp_probe_tool", {"path": "notes.txt"}))
+check("6f3 benign MCP args pass the gate", _gate_clean is None)
+
+# 6g I4: the mode-less decision is explicit - documented in the code and
+# never used by the HTTP surface.
+check("6g mode-less calls are a documented MCP allowance",
+      mcp_allowed_in_mode(None) is True)
+check("6g2 the endpoint default mode keeps MCP access",
+      mcp_allowed_in_mode("mcp_agent") is True)
+check("6g3 read-only modes stay excluded",
+      mcp_allowed_in_mode("duo_readonly") is False)
+_src_core6 = (ROOT / "routers" / "core.py").read_text(encoding="utf-8", errors="replace")
+_src_defs = (ROOT / "tools" / "definitions.py").read_text(encoding="utf-8", errors="replace")
+check("6g4 the HTTP surface defaults to mcp_agent (never mode-less)",
+      '"tool_mode", "mcp_agent"' in _src_core6)
+check("6g5 the None-escape is documented in mcp_allowed_in_mode",
+      "documented decision" in _src_defs)
+
+# 6h I15: the MCP_TOOL_MODES comment no longer claims direct_full is
+# excluded.
+_block = _src_defs.split("MCP_TOOL_MODES = frozenset")[0][-700:]
+check("6h the comment states direct_full stays included",
+      'direct_full' in _block and '(mode "direct")' in _block, f"({_block[-120:]!r})")
+
 print()
 print(f"SUMMARY mcp_audit_fixes: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

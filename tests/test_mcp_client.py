@@ -56,6 +56,14 @@ for line in sys.stdin:
         continue
     method = msg.get("method")
     rid = msg.get("id")
+    if MODE == "strid" and rid is not None:
+        rid = str(rid)          # audit C9: the client must match "1" to 1
+    if MODE == "wrongid" and msg.get("id") is not None:
+        # audit C9: 60 answers for a foreign id - the client must cap its
+        # skip loop instead of spinning until the call timeout
+        for _i in range(60):
+            send({"jsonrpc": "2.0", "id": msg["id"] + 1000, "result": {}})
+        continue
     if method == "initialize":
         if MODE == "die":
             sys.exit(0)
@@ -68,6 +76,11 @@ for line in sys.stdin:
     elif method == "notifications/initialized":
         continue
     elif method == "tools/list":
+        if MODE == "struct":
+            send({"jsonrpc": "2.0", "id": rid, "result": {"tools": [
+                {"name": "struct", "description": "structured only",
+                 "inputSchema": {"type": "object", "properties": {}}}]}})
+            continue
         if MODE == "paged":
             cursor = (msg.get("params") or {}).get("cursor")
             if cursor == "p2":
@@ -96,7 +109,11 @@ for line in sys.stdin:
         params = msg.get("params") or {}
         name = params.get("name")
         args = params.get("arguments") or {}
-        if name == "echo":
+        if name == "struct":
+            # audit C12: a result that only carries structuredContent
+            send({"jsonrpc": "2.0", "id": rid, "result": {
+                "structuredContent": {"answer": 42, "note": "structured only"}}})
+        elif name == "echo":
             send({"jsonrpc": "2.0", "id": rid, "result": {"content": [
                 {"type": "text", "text": "echo: " + MARKER + "|" + str(args.get("text", ""))}]}})
         elif name == "boom":
@@ -549,7 +566,8 @@ import threading as _threading  # noqa: E402
 
 
 def _make_http_server(mode: str):
-    state = {"requests": [], "initialize": 0, "tools_list": 0, "tools_call": 0}
+    state = {"requests": [], "initialize": 0, "tools_list": 0, "tools_call": 0,
+             "session_n": 0}
 
     class Handler(_http_server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -565,6 +583,7 @@ def _make_http_server(mode: str):
                 msg = {}
             rid = msg.get("id")
             method = msg.get("method")
+            _reply_session = ""   # expire404: initialize hands out a session
             state["requests"].append({
                 "method": method,
                 "authorization": self.headers.get("Authorization"),
@@ -575,6 +594,10 @@ def _make_http_server(mode: str):
             if method == "initialize":
                 state["initialize"] += 1
                 offered = (msg.get("params") or {}).get("protocolVersion")
+                if mode == "expire404":
+                    # audit C4: every fresh initialize gets the next session
+                    state["session_n"] += 1
+                    _reply_session = f"sess-{state['session_n']}"
                 if mode == "verreject" and offered == "2024-11-05":
                     body = {"jsonrpc": "2.0", "id": rid,
                             "error": {"code": -32602,
@@ -601,6 +624,13 @@ def _make_http_server(mode: str):
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
+                if mode == "plain404":
+                    # audit C4: without a sent session there is nothing to
+                    # recover - this must fail the start
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 body = {"jsonrpc": "2.0", "id": rid, "result": {"tools": [
                     {"name": "echo", "description": "echo",
                      "inputSchema": {"type": "object",
@@ -615,6 +645,83 @@ def _make_http_server(mode: str):
                 if mode == "slowcall":
                     time.sleep(3)          # longer than every test timeout
                 args = (msg.get("params") or {}).get("arguments") or {}
+                if mode == "expire404":
+                    # audit C4: sess-1 is expired, 404 until the client
+                    # re-initializes and comes back with sess-2
+                    sid = self.headers.get("Mcp-Session-Id") or ""
+                    if sid == "sess-1":
+                        self.send_response(404)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    raw = json.dumps({"jsonrpc": "2.0", "id": rid,
+                                      "result": {"content": [
+                                          {"type": "text",
+                                           "text": "http: " + str(args.get("text", ""))}]}}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+                if mode == "sseopen":
+                    # audit C2: the answer event goes out, then the chunked
+                    # stream is HELD OPEN (no terminal chunk) - the old
+                    # whole-body buffer timed out here
+                    raw = json.dumps({"jsonrpc": "2.0", "id": rid,
+                                      "result": {"content": [
+                                          {"type": "text",
+                                           "text": "http: " + str(args.get("text", ""))}]}}).encode("utf-8")
+                    event = b"event: message\ndata: " + raw + b"\n\n"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    self.wfile.write(f"{len(event):x}\r\n".encode("ascii")
+                                     + event + b"\r\n")
+                    self.wfile.flush()
+                    time.sleep(3)
+                    return
+                if mode == "ssewrong":
+                    # audit C1: a valid JSON-RPC message for ANOTHER id
+                    raw = json.dumps({"jsonrpc": "2.0", "id": (rid or 0) + 5,
+                                      "result": {"content": [
+                                          {"type": "text",
+                                           "text": "FOREIGN-PAYLOAD"}]}}).encode("utf-8")
+                    event = b"event: message\ndata: " + raw + b"\n\n"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", str(len(event)))
+                    self.end_headers()
+                    self.wfile.write(event)
+                    return
+                if mode == "ssemulti":
+                    # audit C10: the answer split over two data: lines
+                    raw = json.dumps({"jsonrpc": "2.0", "id": rid,
+                                      "result": {"content": [
+                                          {"type": "text",
+                                           "text": "http: " + str(args.get("text", ""))}]}}).encode("utf-8")
+                    cut = raw.index(b'"result"')
+                    event = (b"event: message\ndata: " + raw[:cut]
+                             + b'"result"\ndata: ' + raw[cut + 8:] + b"\n\n")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", str(len(event)))
+                    self.end_headers()
+                    self.wfile.write(event)
+                    return
+                if mode == "jsonwrongid":
+                    # audit C5: a plain-JSON answer for ANOTHER id
+                    raw = json.dumps({"jsonrpc": "2.0", "id": (rid or 0) + 7,
+                                      "result": {"content": [
+                                          {"type": "text",
+                                           "text": "FOREIGN-JSON-PAYLOAD"}]}}).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
                 body = {"jsonrpc": "2.0", "id": rid, "result": {"content": [
                     {"type": "text", "text": "http: " + str(args.get("text", ""))}]}}
             else:
@@ -634,6 +741,8 @@ def _make_http_server(mode: str):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(raw)))
+                    if _reply_session:
+                        self.send_header("Mcp-Session-Id", _reply_session)
                     self.end_headers()
                     self.wfile.write(raw)
             except (BrokenPipeError, ConnectionResetError):
@@ -1014,6 +1123,265 @@ check("25i2 docs describe the retry policy truthfully",
 check("25i3 docs name the auth flag and the version fallback",
       "has_auth" in _DOC3 and "2025-03-26" in _DOC3,
       "(auth + version section)")
+
+
+# ── 26. HTTP streaming and id discipline (2026-10-31, C1/C2/C4/C5/C10) ─
+# New fake-server modes: sseopen (answers as SSE, then holds the chunked
+# stream open), ssewrong (SSE answer for a foreign id), ssemulti (answer
+# split over two data: lines), jsonwrongid (plain JSON for a foreign id),
+# expire404 (404 for the expired session, fresh session after re-init),
+# plain404 (404 with no session at all).
+async def _http_call_flow(mode: str, call_timeout: float = 4.0):
+    srv, url = _make_http_server(mode)
+    try:
+        client = MC.McpClient()
+        st = await client.refresh(settings_with({"name": "httpfake", "url": url},
+                                                timeout_s=5.0))
+        t0 = time.time()
+        out = await client.call("mcp_httpfake_echo", {"text": "hi"},
+                                timeout=call_timeout)
+        dt = time.time() - t0
+        conn = client._conns.get("httpfake")
+        snap = {"dead": conn.dead if conn else None,
+                "session": conn._session_id if conn else None,
+                "inits": srv.state["initialize"]}
+        await client.close_all()
+        return st, out, dt, snap
+    finally:
+        srv.shutdown()
+
+
+_st_26a, _out_26a, _dt_26a, _snap_26a = asyncio.run(
+    _http_call_flow("sseopen", call_timeout=8.0))
+check("26a the SSE answer arrives while the stream is still open",
+      _out_26a == "http: hi" and _dt_26a < 2.0,
+      f"(out={_out_26a[:40]!r}, dt={_dt_26a:.2f}s)")
+
+_st_26b, _out_26b, _dt_26b, _snap_26b = asyncio.run(_http_call_flow("ssewrong"))
+check("26b a wrong-id SSE message is not handed to the model",
+      _out_26b.startswith("[TOOL_ERROR: MCP_CALL_FAILED]")
+      and "FOREIGN-PAYLOAD" not in _out_26b and "mismatch" in _out_26b,
+      f"({_out_26b[:80]!r})")
+
+_st_26c, _names_26c, _out_26c = asyncio.run(_http_flow("ssemulti"))
+check("26c multi-line data: fields are joined into one event",
+      _out_26c == "http: hi", f"({_out_26c[:60]!r})")
+
+_st_26d, _out_26d, _dt_26d, _snap_26d = asyncio.run(
+    _http_call_flow("jsonwrongid"))
+check("26d the plain-JSON path checks the response id too",
+      _out_26d.startswith("[TOOL_ERROR: MCP_CALL_FAILED]")
+      and "FOREIGN-JSON-PAYLOAD" not in _out_26d and "mismatch" in _out_26d,
+      f"({_out_26d[:80]!r})")
+
+_st_26e, _out_26e, _dt_26e, _snap_26e = asyncio.run(
+    _http_call_flow("expire404", call_timeout=8.0))
+check("26e an expired session (HTTP 404) re-initializes once and retries",
+      _out_26e == "http: hi" and _snap_26e["inits"] == 2,
+      f"(out={_out_26e[:50]!r}, inits={_snap_26e['inits']})")
+check("26e2 the recovered connection is alive and carries the new session",
+      _snap_26e["dead"] is False and _snap_26e["session"] == "sess-2",
+      f"({_snap_26e})")
+
+_srv_26f, _url_26f = _make_http_server("plain404")
+try:
+    _client_26f = MC.McpClient()
+    _st_26f = asyncio.run(_client_26f.refresh(
+        settings_with({"name": "httpfake", "url": _url_26f}, timeout_s=5.0)))
+finally:
+    _srv_26f.shutdown()
+check("26f a 404 without a session still fails the start loudly",
+      _st_26f["servers"][0]["ok"] is False
+      and "404" in _st_26f["servers"][0]["error"]
+      and _srv_26f.state["tools_list"] == 1,
+      f"({_st_26f['servers'][0]['error'][:60]!r})")
+
+
+# ── 27. stdio id discipline (2026-10-31, audit C9) ────────────────────
+async def _strid_flow():
+    client = MC.McpClient()
+    st = await client.refresh(settings_with(spec("strid", "strid")))
+    out = await client.call("mcp_strid_echo", {"text": "hi"})
+    await client.close_all()
+    return st, out
+
+
+_st_27, _out_27 = asyncio.run(_strid_flow())
+check("27a a server echoing string ids matches (\"1\" == 1)",
+      _st_27["servers"][0]["ok"] is True and _out_27 == "echo: none|hi",
+      f"(err={_st_27['servers'][0]['error'][:50]!r}, out={_out_27[:40]!r})")
+
+
+async def _wrongid_flow():
+    client = MC.McpClient()
+    t0 = time.time()
+    st = await client.refresh(settings_with(spec("wrong", "wrongid")))
+    dt = time.time() - t0
+    await client.close_all()
+    return st, dt
+
+
+_st_27b, _dt_27b = asyncio.run(_wrongid_flow())
+check("27b a server answering only for other ids is capped, not spun on",
+      _st_27b["servers"][0]["ok"] is False
+      and "no answer for id" in _st_27b["servers"][0]["error"]
+      and _dt_27b < 4.0,
+      f"(err={_st_27b['servers'][0]['error'][:60]!r}, dt={_dt_27b:.2f}s)")
+
+
+# ── 28. call vs refresh (2026-10-31, audit C11) ───────────────────────
+# The per-conn guard: a refresh that rebuilds a conn must wait for the
+# in-flight call instead of killing it mid-flight.
+async def _guard_flow():
+    d = Path(tempfile.mkdtemp(prefix="hm_mcp_guard_"))
+    script = d / "slow.py"
+    script.write_text(SLOW, encoding="utf-8")
+    client = MC.McpClient()
+    base = {"name": "gslow", "command": sys.executable,
+            "args": [str(script)], "enabled": True}
+    await client.refresh(settings_with(base, timeout_s=8.0))
+    inflight = asyncio.create_task(client.call("mcp_gslow_wait", {}))
+    await asyncio.sleep(0.3)
+    # signature change (extra env) -> the refresh pops and closes the conn
+    # the call is running on; without the guard the call dies with
+    # "closed stdout"
+    changed = dict(base, env={"HIVEMIND_TEST_GUARD": "1"})
+    st2 = await client.refresh(settings_with(changed, timeout_s=8.0))
+    done = await inflight
+    second = await client.call("mcp_gslow_wait", {})
+    await client.close_all()
+    return done, st2, second
+
+
+_done_28, _st_28, _second_28 = asyncio.run(_guard_flow())
+check("28a an in-flight call survives a concurrent rebuild",
+      _done_28 == "done", f"({_done_28[:70]!r})")
+check("28b the rebuilt connection serves the next call",
+      _st_28["servers"][0]["ok"] is True and _second_28 == "done",
+      f"(err={_st_28['servers'][0]['error'][:50]!r})")
+check("28c close waits on the per-conn guard",
+      "async with self._guard" in SRC_CLIENT, "(infra/mcp_client.py)")
+
+
+# ── 29. result rendering (2026-10-31, audit C12) ──────────────────────
+async def _render_flow():
+    client = MC.McpClient()
+    await client.refresh(settings_with(spec("struct", "struct"),
+                                       spec("big", "normal")))
+    struct = await client.call("mcp_struct_struct", {})
+    big = await client.call("mcp_big_big", {})
+    await client.close_all()
+    return struct, big
+
+
+_struct_29, _big_29 = asyncio.run(_render_flow())
+check("29a a structuredContent-only result is rendered, not '(no output)'",
+      '"answer": 42' in _struct_29 and "(no output)" not in _struct_29,
+      f"({_struct_29[:60]!r})")
+check("29b a cut at MAX_OUTPUT_CHARS carries the [truncated] marker",
+      _big_29.endswith("[truncated]")
+      and len(_big_29) <= MC.MAX_OUTPUT_CHARS + len("\n[truncated]"),
+      f"(len={len(_big_29)})")
+
+
+# ── 30. process kill off the loop + cmd quoting (2026-10-31, C6/C13) ──
+import inspect as _inspect                                               # noqa: E402
+check("30a the tree kill no longer blocks the event loop",
+      _inspect.iscoroutinefunction(MC._kill_tree)
+      and "asyncio.to_thread" in SRC_CLIENT, "(C6)")
+
+
+async def _kill_tree_flow():
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", "import time; time.sleep(60)",
+        start_new_session=(sys.platform != "win32"))
+    t0 = time.time()
+    await MC._kill_tree(proc)
+    return time.time() - t0
+
+
+_dt_30b = asyncio.run(_kill_tree_flow())
+check("30b the tree kill runs detached and fast",
+      _dt_30b < 10.0, f"(dt={_dt_30b:.2f}s)")
+
+_sp_30 = MC.ServerSpec({"name": "cmdq", "command": "C:/tools/s.cmd",
+                        "args": ['say "hi" & echo %PWNED%']}, 0)
+if sys.platform == "win32":
+    _argv_30 = _sp_30.argv()
+    check("30c cmd-style quoting doubles the quote sign",
+          _argv_30[:4] == ["cmd", "/d", "/c", "C:/tools/s.cmd"]
+          and _argv_30[4] == '"say ""hi"" & echo %PWNED%"',
+          f"({_argv_30})")
+else:
+    check("30c cmd-style quoting doubles the quote sign", True, "(posix run)")
+
+
+# ── 31. redaction in describe() (2026-10-31, audit C7) ────────────────
+_sp_31 = MC.ServerSpec({"name": "sec", "command": "python",
+                        "args": ["-m", "server", "--api-key", "sk-live-123",
+                                 "--token=abc123", "--verbose",
+                                 "--db", "C:/x.db"]}, 0)
+_d_31 = _sp_31.describe()
+_masked_31 = sum(1 for a in _d_31["args"]
+                 if a == "***" or a.endswith("=***"))
+check("31a secret arg values are masked, options stay readable",
+      "sk-live-123" not in json.dumps(_d_31)
+      and "abc123" not in json.dumps(_d_31)
+      and _masked_31 == 2
+      and "--api-key" in _d_31["args"] and "--token=***" in _d_31["args"]
+      and "C:/x.db" in _d_31["args"],
+      f"({_d_31['args']})")
+check("31b the signature stays raw so a reload still rebuilds correctly",
+      "sk-live-123" in str(_sp_31.signature()), "(C7)")
+_d_31u = MC.ServerSpec({"name": "secu",
+                        "url": "http://user:pass@h:8931/mcp"}, 0).describe()
+check("31c url userinfo is masked",
+      _d_31u["url"] == "http://user:***@h:8931/mcp"
+      and "pass" not in _d_31u["url"], f"({_d_31u['url']})")
+_d_31u2 = MC.ServerSpec({"name": "secu2",
+                         "url": "https://token123@h/mcp"}, 0).describe()
+check("31d a bare userinfo (token-in-username style) is masked completely",
+      _d_31u2["url"] == "https://***@h/mcp", f"({_d_31u2['url']})")
+check("31e a url without userinfo is untouched",
+      MC._redact_url("http://127.0.0.1:8931/mcp") == "http://127.0.0.1:8931/mcp")
+check("31f non-secret args pass through",
+      MC._redact_args(["-m", "server", "--verbose"]) == ["-m", "server", "--verbose"])
+
+
+# ── 32. config decay is logged (2026-10-31, audit C8) ─────────────────
+_grab_32 = _LogGrab()
+_lg_32 = _logging.getLogger("hivemind.mcp_client")
+_lg_32.addHandler(_grab_32)
+try:
+    check("32a a non-list mcp_servers is decayed loudly",
+          MC.McpClient._specs({"mcp_servers": "oops"}) == []
+          and any("mcp_servers" in m and "list" in m
+                  for m in _grab_32.messages),
+          f"({_grab_32.messages[-1:]})")
+    _grab_32.messages.clear()
+
+    import settings as _S_32                                             # noqa: E402
+    _orig_load_32 = _S_32.load_settings
+
+    def _broken_load():
+        raise ValueError("broken settings file")
+
+    _S_32.load_settings = _broken_load
+    MC._SETTINGS_LOAD_WARNED = False
+    _loaded_32 = MC._settings(None)
+    _S_32.load_settings = _orig_load_32
+    check("32b a broken settings load decays to {} loudly",
+          _loaded_32 == {}
+          and any("settings" in m.lower() for m in _grab_32.messages),
+          f"({_grab_32.messages[-1:]})")
+    _grab_32.messages.clear()
+
+    MC.ServerSpec({"name": "both", "url": "http://x/mcp", "command": "py"}, 0)
+    check("32c url + command together is decayed loudly",
+          any("'url' and 'command'" in m for m in _grab_32.messages),
+          f"({_grab_32.messages[-1:]})")
+finally:
+    _lg_32.removeHandler(_grab_32)
 
 
 print()

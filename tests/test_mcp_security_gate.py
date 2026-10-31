@@ -64,17 +64,25 @@ finally:
         os.environ["HIVEMIND_INTERNAL_TOKEN"] = _old_tok
 
 # ── S5: an SSE answer for another id is an error, not the answer ────────────
-from infra.mcp_client import McpError, _sse_response  # noqa: E402
+# 2026-10-31 (audit C2/C10): _sse_response is now the per-event matcher of
+# the streaming reader; it returns None for a foreign id and records it, and
+# the raise lives in HttpConn._read_sse (pinned end-to-end in
+# tests/test_mcp_client.py block 26b).
+from infra.mcp_client import _SSEAssembler, _sse_response  # noqa: E402
 
-_body = 'data: {"jsonrpc":"2.0","id":2,"result":{"value":"other"}}\n\n'
-try:
-    _sse_response(_body, 1)
-    check("S5 id mismatch raises", False, "returned a message")
-except McpError as _exc:
-    check("S5 id mismatch raises", "id mismatch" in str(_exc), str(_exc)[:70])
+_asm_5 = _SSEAssembler()
+_foreign_5: list = []
+_events_5 = _asm_5.feed(
+    'data: {"jsonrpc":"2.0","id":2,"result":{"value":"other"}}\n\n')
+check("S5 the assembler completes one event", len(_events_5) == 1)
+check("S5 id mismatch is not returned as the answer",
+      _sse_response(_events_5[0], 1, _foreign_5) is None and _foreign_5 == [2],
+      f"(foreign={_foreign_5})")
 
-_ok_body = 'data: {"jsonrpc":"2.0","id":7,"result":{"value":"mine"}}\n\n'
-check("S5 matching id still works", _sse_response(_ok_body, 7)["result"]["value"] == "mine")
+_ok_events = _SSEAssembler().feed(
+    'data: {"jsonrpc":"2.0","id":7,"result":{"value":"mine"}}\n\n')
+check("S5 matching id still works",
+      _sse_response(_ok_events[0], 7, [])["result"]["value"] == "mine")
 
 # ── C3: close DELETEs the HTTP session ──────────────────────────────────────
 from infra.mcp_client import HttpConn  # noqa: E402
@@ -97,6 +105,9 @@ _conn._session_id = "sess-1"
 _conn._bearer = ""
 _conn._client = _FakeClient()
 _conn.spec = SimpleNamespace(url="http://127.0.0.1:9/mcp", headers={})
+# C11 (2026-10-31): close() now waits on the per-conn guard; the fake conn
+# bypasses __init__, so it carries its own (free) lock.
+_conn._guard = asyncio.Lock()
 _fake = _conn._client
 asyncio.run(_conn.close())
 check("C3 close sends DELETE with the session id",

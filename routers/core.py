@@ -313,6 +313,14 @@ def _internal_exec_allowed(tool_name: str) -> tuple[bool, str]:
                    "HIVEMIND_INTERNAL_TOKEN (read-only tools stay available)")
 
 
+def _log_safe_name(name: str) -> str:
+    """S11 (2026-10-31 audit): the raw tool name reaches the [INTERNAL-EXEC]
+    log lines unfiltered - a newline inside it forges extra log entries
+    (log injection). Only flattened single-line names are logged; the
+    dispatch itself keeps using the raw name."""
+    return " ".join(str(name or "").split())[:80]
+
+
 @router.post("/internal/tool/exec")
 async def internal_tool_exec(req: Request):
     try:
@@ -331,11 +339,12 @@ async def internal_tool_exec(req: Request):
     _t_start = _time.time()
     if not _internal_host_allowed(req.headers.get("host", "")):
         logger.warning("[INTERNAL-EXEC] rejected: non-loopback Host %r (tool=%s)",
-                        req.headers.get("host", ""), name)
+                        req.headers.get("host", ""), _log_safe_name(name))
         return JSONResponse({"ok": False, "error": "Host not allowed"}, status_code=403)
     _exec_ok, _exec_reason = _internal_exec_allowed(name)
     if not _exec_ok:
-        logger.warning("[INTERNAL-EXEC] rejected: tool=%s reason=%s", name, _exec_reason)
+        logger.warning("[INTERNAL-EXEC] rejected: tool=%s reason=%s",
+                       _log_safe_name(name), _exec_reason)
         return JSONResponse({"ok": False, "error": _exec_reason}, status_code=403)
 
     tool_mode = str(body.get("tool_mode", "mcp_agent") or "mcp_agent")
@@ -378,7 +387,7 @@ async def internal_tool_exec(req: Request):
             _ext_cv.reset(_ext_token)
         terr = _parse_tool_error(result)
         logger.info("[INTERNAL-EXEC] tool=%s ok=%s elapsed=%.2fs bytes=%d",
-                     name, terr is None, _time.time() - _t_start,
+                     _log_safe_name(name), terr is None, _time.time() - _t_start,
                      len(str(result).encode("utf-8", "replace")))
         return {"ok": terr is None, "result": result, "tool_error": terr}
     except Exception as e:

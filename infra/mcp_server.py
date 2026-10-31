@@ -67,7 +67,15 @@ MCP_MAX_HEADER_BYTES = max(4096, int(os.environ.get("MCP_MAX_HEADER_BYTES", str(
 MCP_MAX_CONCURRENCY = max(1, int(os.environ.get("MCP_MAX_CONCURRENCY", "8")))
 MCP_MAX_BATCH = max(1, int(os.environ.get("MCP_MAX_BATCH", "16")))
 # Zeitlimit fuer einen einzelnen Request (Tool-Laufzeit). 0 = aus.
+# S8 (2026-10-31 audit): applies to BOTH transports now - stdio had no
+# request limit at all, so a hung call blocked the loop unabortably.
 MCP_REQUEST_TIMEOUT_S = float(os.environ.get("MCP_REQUEST_TIMEOUT_S", "300") or 300)
+# S13 (2026-10-31 audit): the body read had no timeout (slowloris) and the
+# number of concurrent connections was unbounded - only in-flight requests
+# were capped by _HTTP_SEM.
+MCP_BODY_TIMEOUT_S = max(1.0, float(os.environ.get("MCP_BODY_TIMEOUT_S", "30") or 30))
+MCP_MAX_CONNECTIONS = max(1, int(os.environ.get("MCP_MAX_CONNECTIONS", "32")))
+_CONN_SEM = asyncio.Semaphore(MCP_MAX_CONNECTIONS)
 _HTTP_SEM = asyncio.Semaphore(MCP_MAX_CONCURRENCY)
 MCP_HTTP_TOKEN = os.environ.get("MCP_HTTP_TOKEN", "").strip()
 
@@ -371,6 +379,58 @@ _MCP_SHARED_TOOL_NAMES = {
     "git_status",
     "run_python",
 }
+
+
+def _looks_like_error_text(text: str) -> bool:
+    """S10 (2026-10-31 audit): the old heuristic flagged ANY text starting
+    with "[" that contained "error"/"timeout"/"not found" somewhere - a
+    legitimate file whose content begins with "[" (a markdown link, a log
+    line) was reported as isError. Only our own error envelope counts now;
+    the JSON variant is handled by the structured parser in handle_request,
+    this catches the inline Format B ([TOOL_ERROR:CODE] ...)."""
+    t = str(text or "").strip().lower()
+    return t.startswith("[tool_error")
+
+
+# ── S8 (2026-10-31 audit): notifications/cancelled ────────────────────────────
+# The notification used to be swallowed with all the others. The requestId is
+# registered so a request that has not started yet (pipelined on stdio, a
+# later batch item) is skipped instead of executing work the client no longer
+# wants. An in-flight call cannot be interrupted from here (the stdio loop is
+# sequential) - the request timeout is the abort path for those.
+_CANCELLED_REQUESTS: list = []
+_CANCELLED_REQUESTS_CAP = 256
+
+
+def _remember_cancelled(params: Any) -> None:
+    rid = params.get("requestId") if isinstance(params, dict) else None
+    if rid is None:
+        return
+    if rid in _CANCELLED_REQUESTS:
+        return
+    _CANCELLED_REQUESTS.append(rid)
+    if len(_CANCELLED_REQUESTS) > _CANCELLED_REQUESTS_CAP:
+        del _CANCELLED_REQUESTS[: len(_CANCELLED_REQUESTS) - _CANCELLED_REQUESTS_CAP]
+
+
+def _pop_cancelled(req_id: Any) -> bool:
+    if req_id not in _CANCELLED_REQUESTS:
+        return False
+    try:
+        _CANCELLED_REQUESTS.remove(req_id)
+    except ValueError:
+        pass
+    return True
+
+
+# ── S14 (2026-10-31 audit): initialize now NEGOTIATES the protocol version
+# instead of hardcoding "2024-11-05". TODO(compat): only advertise the 2025
+# revisions once the GET stream / Mcp-Session-Id headers they expect exist -
+# answering them today would promise features the transport does not have.
+# A client that requires 2025-only disconnects cleanly on the baseline
+# answer, per spec.
+_SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05",)
+_PROTOCOL_VERSION_DEFAULT = "2024-11-05"
 
 
 async def _try_shared_tool_exec(tool_name: str, args: dict) -> tuple[bool, str]:
@@ -1243,8 +1303,26 @@ async def route(user_input: str, explicit_tool: str | None = None) -> tuple[str,
 # ── MCP Protocol Handler ───────────────────────────────────────────────────────
 
 async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
+    if not isinstance(req, dict):
+        # S9 (2026-10-31 audit): a non-dict (e.g. a scalar batch item that
+        # slipped through) used to raise AttributeError and the connection
+        # closed without any answer.
+        return {"jsonrpc": "2.0", "id": None,
+                "error": {"code": -32600, "message": "request must be an object"}}
     method = req.get("method", "")
     req_id = req.get("id")
+    if "id" not in req:
+        # S9: a message without "id" is a notification - it must not be
+        # answered (the server used to reply with id:null, which breaks
+        # spec-strict clients). notifications/cancelled is registered on
+        # the way (S8).
+        if method == "notifications/cancelled":
+            _remember_cancelled(req.get("params"))
+        return None
+    if req_id is not None and _pop_cancelled(req_id):
+        # S8: the client cancelled this request before the server got to
+        # it - do not execute, do not answer.
+        return None
 
     def _parse_structured_tool_error(text: str) -> dict | None:
         if not isinstance(text, str):
@@ -1263,21 +1341,6 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
             return err
         return d
 
-    def _looks_like_error_text(text: str) -> bool:
-        if not isinstance(text, str):
-            return False
-        t = text.strip().lower()
-        if not t.startswith("["):
-            return False
-        markers = (
-            "error",
-            "fehler",
-            "timeout",
-            "not found",
-            "nicht gefunden",
-        )
-        return any(mk in t for mk in markers)
-
     def ok(result):
         return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
@@ -1285,8 +1348,15 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
         return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": msg}}
 
     if method == "initialize":
+        # S14: echo the requested protocol version when we actually
+        # implement it; answer with the baseline otherwise.
+        _init_params = req.get("params")
+        _req_ver = ""
+        if isinstance(_init_params, dict):
+            _req_ver = str(_init_params.get("protocolVersion", "") or "")
         return ok({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": (_req_ver if _req_ver in _SUPPORTED_PROTOCOL_VERSIONS
+                                else _PROTOCOL_VERSION_DEFAULT),
             "serverInfo": {"name": "hivemind-mcp", "version": "2.0.0"},
             "capabilities": {"tools": {}},
         })
@@ -1309,7 +1379,10 @@ async def handle_request(req: dict, transport: str = "stdio") -> dict | None:
         if not isinstance(tool_name, str) or not tool_name:
             return err(-32602, "tool name missing")
         if tool_name not in TOOL_FNS:
-            return err(-32601, f"Unknown tool: {tool_name}")
+            # S9 (2026-10-31 audit): an unknown tool is Invalid Params
+            # (-32602), not "Method not found" (-32601) - the tools/call
+            # method itself exists.
+            return err(-32602, f"Unknown tool: {tool_name}")
         allowed, reason = _tool_allowed(tool_name, transport)
         if not allowed:
             _audit_tool_call(tool_name, transport, ok=False, reason=reason)
@@ -1431,7 +1504,11 @@ async def _stdio_loop():
         sys.stdout.buffer.flush()
 
     buf = ""
-    _buf_max = 1024 * 512
+    # S12 (2026-10-31 audit): the 512 KB line cap rejected big write_file
+    # payloads that the HTTP transport (MCP_MAX_BODY_BYTES, 2 MB) accepts -
+    # the same IDE call failed cryptically over stdio and went through over
+    # HTTP. Both transports now share the same limit.
+    _buf_max = MCP_MAX_BODY_BYTES
     while True:
         try:
             line = await loop.run_in_executor(None, _readline)
@@ -1455,7 +1532,28 @@ async def _stdio_loop():
                 buf = ""
             except json.JSONDecodeError:
                 continue
-            response = await handle_request(req)
+            try:
+                if MCP_REQUEST_TIMEOUT_S > 0:
+                    # S8: stdio had no request timeout - a hung call blocked
+                    # the sequential loop forever. The client can also
+                    # cancel via notifications/cancelled (registry above).
+                    response = await asyncio.wait_for(handle_request(req),
+                                                      timeout=MCP_REQUEST_TIMEOUT_S)
+                else:
+                    response = await handle_request(req)
+            except asyncio.TimeoutError:
+                _t_rid = req.get("id") if isinstance(req, dict) else None
+                _t_name = ""
+                if (isinstance(req, dict) and req.get("method") == "tools/call"
+                        and isinstance(req.get("params"), dict)):
+                    _t_name = str(req["params"].get("name", "") or "")
+                _audit_tool_call(_t_name, "stdio", ok=False,
+                                 reason="request_timeout",
+                                 elapsed_s=MCP_REQUEST_TIMEOUT_S)
+                response = {"jsonrpc": "2.0", "id": _t_rid,
+                            "error": {"code": -32000,
+                                      "message": f"request timed out after "
+                                                 f"{MCP_REQUEST_TIMEOUT_S:.0f}s"}}
             if response is not None:
                 out = (json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8")
                 await loop.run_in_executor(None, _writeline, out)
@@ -1466,7 +1564,58 @@ async def _stdio_loop():
 
 # ── HTTP Transport ─────────────────────────────────────────────────────────────
 
+async def _handle_rpc_item(item: Any) -> dict | None:
+    """One JSON-RPC message of an HTTP request (single or batch item).
+
+    S9 (2026-10-31 audit): a non-dict item ([1, 2] in a batch) used to raise
+    AttributeError inside the timeout handler and the connection closed
+    without any answer. It now gets a clean -32600 response.
+    """
+    if not isinstance(item, dict):
+        return {"jsonrpc": "2.0", "id": None,
+                "error": {"code": -32600, "message": "request must be an object"}}
+    try:
+        if MCP_REQUEST_TIMEOUT_S > 0:
+            return await asyncio.wait_for(handle_request(item, "http"),
+                                          timeout=MCP_REQUEST_TIMEOUT_S)
+        return await handle_request(item, "http")
+    except asyncio.TimeoutError:
+        rid = item.get("id")
+        # S7 (2026-10-31 audit): the in-request [MCP-CALL] line never fires
+        # because handle_request is cancelled before it writes its own audit
+        # entry - the long calls, exactly the ones worth a record, went
+        # unlogged.
+        if item.get("method") == "tools/call":
+            _p = item.get("params")
+            _t_name = str(_p.get("name", "") or "") if isinstance(_p, dict) else ""
+            _audit_tool_call(_t_name, "http", ok=False, reason="request_timeout",
+                             elapsed_s=MCP_REQUEST_TIMEOUT_S)
+        return {"jsonrpc": "2.0", "id": rid,
+                "error": {"code": -32000,
+                          "message": f"request timed out after {MCP_REQUEST_TIMEOUT_S:.0f}s"}}
+
+
 async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """S13 (2026-10-31 audit): caps the number of open connections before any
+    byte is read. _HTTP_SEM only bounds in-flight requests - unboundedly many
+    (half-)open sockets used to be possible."""
+    if _CONN_SEM.locked():
+        try:
+            writer.write(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+        except (ConnectionError, OSError):
+            pass
+        writer.close()
+        return
+    await _CONN_SEM.acquire()
+    try:
+        await _http_handle_connection(reader, writer)
+    finally:
+        _CONN_SEM.release()
+
+
+async def _http_handle_connection(reader: asyncio.StreamReader,
+                                  writer: asyncio.StreamWriter):
     try:
         raw = b""
         try:
@@ -1558,7 +1707,16 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 writer.write(f"HTTP/1.1 413 Payload Too Large\r\n{cors}Content-Length: 0\r\n\r\n".encode())
                 await writer.drain(); writer.close(); return
             while len(body_bytes) < content_length:
-                more = await reader.read(content_length - len(body_bytes))
+                # S13: every body read has a timeout - a client that opens
+                # the connection but never finishes the body used to hold
+                # the slot forever.
+                try:
+                    more = await asyncio.wait_for(
+                        reader.read(content_length - len(body_bytes)),
+                        timeout=MCP_BODY_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    writer.write(b"HTTP/1.1 408 Request Timeout\r\nContent-Length: 0\r\n\r\n")
+                    await writer.drain(); writer.close(); return
                 if not more:
                     break
                 body_bytes += more
@@ -1577,18 +1735,6 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 )
                 await writer.drain(); writer.close(); return
 
-            async def _run_one(item):
-                try:
-                    if MCP_REQUEST_TIMEOUT_S > 0:
-                        return await asyncio.wait_for(handle_request(item, "http"),
-                                                      timeout=MCP_REQUEST_TIMEOUT_S)
-                    return await handle_request(item, "http")
-                except asyncio.TimeoutError:
-                    rid = item.get("id") if isinstance(item, dict) else None
-                    return {"jsonrpc": "2.0", "id": rid,
-                            "error": {"code": -32000,
-                                      "message": f"request timed out after {MCP_REQUEST_TIMEOUT_S:.0f}s"}}
-
             if isinstance(req, list):
                 if len(req) > MCP_MAX_BATCH:
                     resp_body = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
@@ -1597,11 +1743,11 @@ async def _http_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                     }}).encode()
                 else:
                     async with _HTTP_SEM:
-                        resps = [r for r in [await _run_one(x) for x in req] if r is not None]
+                        resps = [r for r in [await _handle_rpc_item(x) for x in req] if r is not None]
                     resp_body = json.dumps(resps, ensure_ascii=False).encode()
             else:
                 async with _HTTP_SEM:
-                    resp = await _run_one(req)
+                    resp = await _handle_rpc_item(req)
                 if resp is None:
                     writer.write(f"HTTP/1.1 202 Accepted\r\n{cors}Content-Length: 0\r\n\r\n".encode())
                     await writer.drain(); writer.close(); return

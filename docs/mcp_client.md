@@ -12,8 +12,11 @@ Status: beta. Off by default. Two transports: stdio and HTTP.
   server, killed with its whole tree on timeout or shutdown.
 - **HTTP** (Streamable HTTP): an entry with `url` instead of `command` is called
   over POST JSON-RPC; answers may come back as JSON or as an SSE stream, and a
-  `Mcp-Session-Id` the server sets is reused. Nothing is started, so there is no
-  process to kill.
+  `Mcp-Session-Id` the server sets is reused. The SSE answer is read as it
+  streams: the call returns as soon as the answer event arrives and the stream
+  is closed then - a server that keeps the event stream open afterwards does
+  not cause a timeout, and a response body is capped at 8 MB in total. Nothing
+  is started, so there is no process to kill.
 
 ```json
 {"name": "remote", "url": "http://127.0.0.1:8931/mcp"}
@@ -33,9 +36,10 @@ An explicit `Authorization` inside `headers` wins over `token_env`. A
 configured `token_env` whose variable is missing or empty **fails the start**
 with the variable name in the message - the server never starts
 unauthenticated by accident. Tokens are never logged. `GET /mcp/servers`
-reports the server list redacted (no env values, no header values); the
-`GET /mcp/servers` and the reload response both report `has_auth: true` per
-HTTP server, never the value.
+reports the server list redacted (no env values, no header values,
+secret-carrying `args` values such as `--api-key ...`, and `url` userinfo);
+the `GET /mcp/servers` and the reload response both report `has_auth: true`
+per HTTP server, never the value.
 If the server answers 401 or 403, the tool call returns
 `[TOOL_ERROR: MCP_AUTH_FAILED]` (token missing, wrong or expired) and the
 connection stays alive - a wrong token is a configuration mistake, not a
@@ -146,7 +150,8 @@ so a dead server does not end the run.
 - A server that hangs, crashes or prints garbage never breaks a run: the call
   returns `[TOOL_ERROR: MCP_*]` and the connection is marked dead until the
   next reload. The exception is HTTP 401/403: the connection stays alive (see
-  "HTTP auth" above).
+  "HTTP auth" above). An HTTP 404 on an expired session is recovered instead
+  of killing the connection (see below).
 - HTTP requests are retried: up to 3 retries after the first attempt on
   connect errors (`ConnectError`), read timeouts (`ReadTimeout`), broken
   responses (`RemoteProtocolError`) and HTTP 502/503/504. Pauses
@@ -155,8 +160,18 @@ so a dead server does not end the run.
   the last error wins and names the attempt count. **`tools/call` is the
   exception**: only connect errors are retried there, because a read timeout
   means the request was delivered and the server may already have executed
-  the tool. A tool call that runs into its timeout sends
+  the tool. The retry ladder covers the connect and header phase; once an
+  answer streams in, a mid-stream failure is reported as a tool error instead
+  of being replayed. A tool call that runs into its timeout sends
   `notifications/cancelled` (HTTP only) so the server can stop the work.
+- If a server has forgotten the session (HTTP 404 while an
+  `Mcp-Session-Id` was sent), the client drops the session, re-initializes
+  once and retries the call. A 404 without a session still marks the
+  connection dead.
+- Config decay is logged, not silent: a non-list `mcp_servers`, a settings
+  file that fails to load (the client then looks disabled) and an entry with
+  both `url` and `command` (HTTP wins, `command`/`args` are ignored) each
+  produce a warning in the log.
 - Status codes are honored on the handshake confirmation too: only
   502/503/504 are retried with the same ladder; a 401/403 fails the start
   immediately with the server's auth-rejection text (the `MCP_AUTH_FAILED`
@@ -168,11 +183,16 @@ so a dead server does not end the run.
   with is accepted, including newer ones. A server that rejects the offer
   gets exactly one retry with the version its error advertised (else
   `2025-03-26`); a failed negotiation closes the connection.
-- Output is capped at 200k characters per call; image blocks are reported as
-  `[image content omitted]`.
+- Output is capped at 200k characters per call; a cut is marked with
+  `[truncated]`, and a result that carries only `structuredContent` is
+  rendered as JSON. Image blocks are reported as `[image content omitted]`.
 - At most 8 servers and 64 tools per server.
+- While waiting for a stdio answer, notifications are skipped and answers for
+  other request ids are capped (50); ids echoed as numeric strings (`"1"` vs
+  `1`) still match.
 - `command` and `args` are executed **without a shell**. Only `.cmd` and `.bat`
-  are wrapped in `cmd /d /c` because Windows cannot exec them directly.
+  are wrapped in `cmd /d /c` because Windows cannot exec them directly; quotes
+  inside an argument are doubled (`""`), the way `cmd.exe` expects.
 - Phone runs cannot use MCP tools: the phone restriction gate rejects anything
   outside its safe set, and MCP tools are not in it.
 - Nothing starts while the client is disabled. A stored `mcp_servers` list

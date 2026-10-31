@@ -605,13 +605,23 @@ def _apply_budget_texts(tools: list, budgets) -> list:
 # allowlist can never contain them. These modes are allowed to use them: they
 # already hold write and exec rights, so an MCP tool adds no new capability
 # class. Read-only modes (duo_readonly, pre_explore, critic_verify) and the
-# direct chat are deliberately excluded.
+# plain direct chat (mode "direct") are deliberately excluded - direct_full
+# is the full-access direct tier and stays included. (I15, 2026-10-31: the
+# old comment said "the direct chat is excluded", which read as if
+# direct_full were excluded too - it is not.)
 MCP_TOOL_MODES = frozenset({"duo_full", "tool_agent", "mcp_agent",
                             "openai_agent", "direct_full"})
 
 
 def mcp_allowed_in_mode(mode: str | None) -> bool:
-    """True if this mode may see and call MCP tools."""
+    """True if this mode may see and call MCP tools.
+
+    I4 (2026-10-31 audit, documented decision): mode=None deliberately
+    allows MCP tools - there is no mode filter to violate. That is the
+    escape hatch for unit tests and direct API calls; the HTTP surface
+    (/internal/tool/exec) always sends a real mode and defaults to
+    "mcp_agent", so the IDE path never runs mode-less.
+    """
     if not mode:
         return True          # no mode filter at all (tests, ad-hoc calls)
     return mode in MCP_TOOL_MODES

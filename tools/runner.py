@@ -197,6 +197,58 @@ def _consume_install_budget() -> bool:
     _c[0] += 1
     return _c[0] > _limit
 
+
+# I3 (2026-10-31 audit): mcp_* calls had no budget at all - websearch/fetch/
+# install are governed, but a loop against an external MCP server (model
+# hallucination or an IDE client) ran unbounded. Same governor pattern; the
+# fallback limit lives here because there is no settings key yet and this
+# pass must not change settings.py.
+_mcp_call_count: _contextvars.ContextVar[list] = _contextvars.ContextVar(
+    "mcp_call_count", default=None
+)
+_MCP_CALL_BUDGET_DEFAULT = 40
+
+
+def _consume_mcp_call_budget() -> bool:
+
+    try:
+        from core.state import settings as _mc_settings
+        _limit = int(_mc_settings.get("mcp_client_max_calls_per_run",
+                                      _MCP_CALL_BUDGET_DEFAULT))
+    except (ImportError, AttributeError, TypeError, ValueError):
+        _limit = _MCP_CALL_BUDGET_DEFAULT
+    _c = _mcp_call_count.get(None)
+    if _c is None:
+        _c = [0]
+        _mcp_call_count.set(_c)
+    _c[0] += 1
+    return _c[0] > _limit
+
+
+# S3 (2026-10-31 audit): the four governors above live in ContextVars that
+# only a real run sets up (core/duo_runner). The contextless
+# /internal/tool/exec path (IDE direction) never does, so every call got a
+# fresh counter = the limits never applied there. The external path seeds
+# SHARED, windowed counters instead: one window per engine process, reset
+# after _EXTERNAL_BUDGET_WINDOW_S of no use. Scoped to _external_dispatch,
+# so direct/unit-test calls keep the deliberate fresh-per-call behaviour
+# the NO-CONTEXT comments above promise.
+_EXTERNAL_BUDGET_WINDOW_S = 3600.0
+_EXTERNAL_BUDGET_KEYS = ("web_search", "web_fetch", "install", "mcp")
+_external_budget_windows: dict = {}
+
+
+def _seed_external_budgets() -> None:
+    _now = time.monotonic()
+    for _key in _EXTERNAL_BUDGET_KEYS:
+        _st = _external_budget_windows.get(_key)
+        if _st is None or (_now - _st[1]) > _EXTERNAL_BUDGET_WINDOW_S:
+            _external_budget_windows[_key] = [0, _now]
+    _web_search_count.set(_external_budget_windows["web_search"])
+    _web_fetch_count.set(_external_budget_windows["web_fetch"])
+    _install_count.set(_external_budget_windows["install"])
+    _mcp_call_count.set(_external_budget_windows["mcp"])
+
 # Phase-1 instrumentation: per-run counters + structured logs
 # for ask_user / destructive_gate (logging only, no behavior impact).
 _TOOL_USE_COUNTS: dict = {}
@@ -1182,6 +1234,21 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
             _destructive = True
             _reason = f"{name} command matches a destructive pattern: '{_matched}'"
             _details = _cmd[:200]
+    elif bool(name) and name.startswith("mcp_"):
+        # I5 (2026-10-31 audit): MCP tool args reached the external server
+        # unfiltered. Many MCP tools wrap a shell or a file API, so a string
+        # arg can carry the same destructive payload run_bash would be gated
+        # on. Scan the string values with the bash patterns (bounded blob,
+        # keys excluded) so such a call needs the same confirmation — and on
+        # the contextless /internal/tool/exec path (no run_id) it is denied
+        # outright, exactly like run_bash on that path.
+        _blob = " | ".join(str(v) for v in (args or {}).values()
+                           if isinstance(v, str))[:2000]
+        _matched = _is_destructive_bash(_blob)
+        if _matched:
+            _destructive = True
+            _reason = f"mcp tool arguments match a destructive pattern: '{_matched}'"
+            _details = _blob[:200]
 
     if not _destructive:
         return None
@@ -1296,6 +1363,13 @@ async def _run_inline_tool(
     include_websearch: bool = False) -> str:
     """Primary inline-tool dispatch using the unified handler map."""
     workspace = Path(workspace_lock) if workspace_lock else Path(os.environ.get("HIVEMIND_WORKSPACE", "."))
+
+    # S3 (2026-10-31 audit): the endpoint never sets up a run context, so the
+    # budget ContextVars below would be fresh per call = unlimited. Seed the
+    # shared windowed counters so the settings limits also apply on the
+    # contextless /internal/tool/exec path (and I3's mcp budget with them).
+    if _is_external_dispatch():
+        _seed_external_budgets()
 
     _read_set = _files_read_in_run.get(None)
     if _read_set is None:
@@ -1490,6 +1564,16 @@ async def _run_inline_tool(
         # dynamic and must not disturb the static handler map or its pins.
         # H7: an MCP tool can write or exec, so it goes through the same
         # approval gate as the built-in mutating tools.
+        # I3 (2026-10-31 audit): per-run call budget, mirroring the
+        # websearch/fetch/install governors. Runs before the approval gate so
+        # an over-budget call never burns a user pause.
+        if _consume_mcp_call_budget():
+            return _tool_error_response(
+                "MCP_BUDGET_EXHAUSTED",
+                "MCP tool call budget exhausted (mcp_client_max_calls_per_run "
+                "calls per run). Work with the results you already have.",
+                tool=name,
+                mode=str(tool_mode or "") )
         _mcp_note = ""
         if _approval_gate_on():
             _mcp_appr = await _check_action_approval(name, args or {}, workspace,
@@ -1503,6 +1587,12 @@ async def _run_inline_tool(
                             "React to this message: adjust the approach and call "
                             "again if needed.")
                 _mcp_note = _payload
+        # I5 (2026-10-31 audit): the destructive gate now also inspects MCP
+        # tool args (string values), so a shell-wrapping external tool needs
+        # the same confirmation as run_bash.
+        _mcp_gate_block = await _destructive_gate(name, args)
+        if _mcp_gate_block is not None:
+            return _mcp_gate_block
         try:
             from infra import mcp_client as _mcp_call
             _mcp_result = await _mcp_call.call(name, args or {})

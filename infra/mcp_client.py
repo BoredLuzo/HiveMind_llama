@@ -7,8 +7,8 @@ them over HTTP (`url` entries) and offers their tools to the model.
 Design rules (beta, deliberately small):
   - two transports: stdio (one process per configured server, started on
     first use, killed on shutdown or after a timeout) and Streamable HTTP
-    (`url` entries; answers as JSON or SSE, no process, optional auth via
-    `headers`/`token_env`).
+    (`url` entries; answers as JSON or an SSE stream that is read
+    incrementally, no process, optional auth via `headers`/`token_env`).
   - `command` + `args` are executed WITHOUT a shell. Only `.cmd`/`.bat` are
     wrapped in `cmd /c` because Windows cannot exec them directly.
   - off by default (`mcp_client_enabled=false`) and closed to phone runs: the
@@ -20,7 +20,8 @@ Design rules (beta, deliberately small):
   - tool names are `mcp_<server>_<tool>`, sanitized to [a-z0-9_], stable.
 
 Protocol: JSON-RPC 2.0. stdio frames one JSON object per line; the HTTP
-transport POSTs one request and reads the answer as JSON or an SSE stream.
+transport POSTs one request and reads the answer incrementally as JSON or
+an SSE stream.
 """
 from __future__ import annotations
 
@@ -60,6 +61,9 @@ MAX_TOOL_PAGES = 10
 MAX_OUTPUT_CHARS = 200_000
 STDERR_KEEP = 4000
 MAX_LINE_BYTES = 8 * 1024 * 1024
+# C2 (2026-10-31): an HTTP body (JSON or the SSE total) is bounded like a
+# stdio line - an endless body must not become an unbounded buffer.
+MAX_HTTP_BODY_BYTES = 8 * 1024 * 1024
 MAX_TOOL_NAME = 64
 MAX_SCHEMA_CHARS = 8000
 _NAME_OK = "abcdefghijklmnopqrstuvwxyz0123456789_"
@@ -100,20 +104,41 @@ class McpServerError(McpError):
         self.code = err.get("code") if isinstance(err, dict) else None
 
 
+_SETTINGS_LOAD_WARNED = False
+
+
+def _warn_settings_decay(reason: object) -> None:
+    """One warning for the settings-decay paths (audit C8): a broken
+    settings file used to leave the MCP client silently looking disabled.
+    Warned once - _settings() runs on every model request via tool_defs()."""
+    global _SETTINGS_LOAD_WARNED
+    if _SETTINGS_LOAD_WARNED:
+        return
+    _SETTINGS_LOAD_WARNED = True
+    logger.warning("[MCP] settings are not usable (%s) - the MCP client "
+                   "stays disabled until settings load again", reason)
+
+
 def _settings(settings: dict | None = None) -> dict:
     """The one place that knows where settings come from.
 
     Callers may pass a dict (tests, the router) or nothing (tool layer), in
     which case the engine's settings are loaded. A failed import is not an
-    error - the client simply stays disabled.
+    error - the client simply stays disabled (and says so once, audit C8).
     """
     if isinstance(settings, dict):
         return settings
     try:
         from settings import load_settings
-        return load_settings() or {}
-    except (ImportError, OSError, ValueError):
+        loaded = load_settings()
+    except (ImportError, OSError, ValueError) as exc:
+        _warn_settings_decay(exc)
         return {}
+    if not isinstance(loaded, dict):
+        _warn_settings_decay(f"load_settings() returned "
+                             f"{type(loaded).__name__}, expected a dict")
+        return {}
+    return loaded
 
 
 def _setting(settings: dict | None, key: str, default):
@@ -165,6 +190,13 @@ class ServerSpec:
         # HTTP transport: a `url` entry speaks Streamable HTTP instead of
         # starting a process. Both shapes share the rest of the client.
         self.url = str(raw.get("url") or "").strip()
+        # C8 (2026-10-31): url + command together used to silently mean
+        # "HTTP wins" - say so, or the command never runs and nobody knows
+        # why.
+        if self.url and self.command:
+            logger.warning("[MCP] server %s sets both 'url' and 'command' - "
+                           "the HTTP transport wins, 'command'/'args' are "
+                           "ignored", self.name)
         # HTTP auth, ignored by stdio servers: `headers` go out verbatim,
         # `token_env` names an environment variable whose value becomes
         # `Authorization: Bearer <value>` (an explicit Authorization header
@@ -206,7 +238,11 @@ class ServerSpec:
             args = []
             for a in self.args:
                 if any(c in _META or c.isspace() for c in a):
-                    a = '"' + a.replace('"', '\\"') + '"'
+                    # C13 (2026-10-31): cmd.exe strips quote pairs, it does
+                    # not know the backslash escape - a quote inside the
+                    # argument must be doubled ("") or it ends the quoted
+                    # section early and the rest leaks to cmd as syntax.
+                    a = '"' + a.replace('"', '""') + '"'
                 args.append(a)
             argv = ["cmd", "/d", "/c", exe, *args]
         return argv
@@ -220,15 +256,17 @@ class ServerSpec:
                 tuple(sorted(self.headers.items())), self.token_env)
 
     def describe(self) -> dict:
+        """The browser-readable view (GET /mcp/servers, reload response):
+        fields that can carry secrets are redacted, the fact of auth is not."""
         out = {"name": self.name, "enabled": self.enabled, "kind": self.kind}
         if self.kind == "http":
-            out["url"] = self.url
+            out["url"] = _redact_url(self.url)
             # the fact of auth, never the value: this dict lands in
             # GET /mcp/servers and is readable in the browser
             out["has_auth"] = self.has_auth
         else:
             out["command"] = self.command
-            out["args"] = list(self.args)
+            out["args"] = _redact_args(self.args)
         return out
 
 
@@ -236,6 +274,59 @@ def _has_auth_header(headers: dict) -> bool:
     """An explicit Authorization header (any casing). It wins over token_env,
     so a configured header must never be overwritten by a bearer token."""
     return any(str(k).lower() == "authorization" for k in headers)
+
+
+# An option name that plausibly carries a secret value (C7): --api-key,
+# -token, --auth-file, --bearer-token=... A leading dash is required so a
+# plain word in the args never trips the heuristic.
+_SECRET_ARG_NAME = re.compile(
+    r"(?i)^-{1,2}[a-z0-9_.-]*"
+    r"(?:api[-_]?key|apikey|token|secret|password|passwd|pwd|credential|auth)"
+    r"[a-z0-9_.-]*$")
+
+
+def _redact_args(args: list[str]) -> list[str]:
+    """Values of secret-carrying options never reach GET /mcp/servers.
+
+    Audit C7 (2026-10-31): describe() echoed the args verbatim, so
+    `--api-key sk-...` was browser-readable. Options whose NAME looks like
+    a secret mask their value; `--opt=value` masks only the value part.
+    """
+    out: list[str] = []
+    hide_next = False
+    for arg in args:
+        text = str(arg)
+        if hide_next:
+            out.append("***")
+            hide_next = False
+            continue
+        name, eq, _value = text.partition("=")
+        if eq and _SECRET_ARG_NAME.match(name):
+            out.append(f"{name}=***")
+            continue
+        if _SECRET_ARG_NAME.match(text):
+            out.append(text)
+            hide_next = True
+            continue
+        out.append(text)
+    return out
+
+
+def _redact_url(url: str) -> str:
+    """Mask userinfo in a url (https://user:token@host) before it lands in
+    the browser-readable server list (audit C7): with a password only the
+    username stays, a bare userinfo (token-in-username style) is masked
+    completely."""
+    scheme = url.find("://")
+    at = url.rfind("@")
+    if scheme == -1 or at == -1 or at < scheme:
+        return url
+    userinfo = url[scheme + 3:at]
+    if not userinfo or "/" in userinfo:
+        return url  # the "@" belongs to the path or query, not to userinfo
+    masked = (f"{userinfo.split(':', 1)[0]}:***"
+              if ":" in userinfo else "***")
+    return f"{url[:scheme + 3]}{masked}{url[at:]}"
 
 
 def _resolve_bearer(spec: ServerSpec) -> str:
@@ -274,6 +365,10 @@ class ServerConn:
         self._proc: asyncio.subprocess.Process | None = None
         self.loop = asyncio.get_running_loop()
         self._lock = asyncio.Lock()
+        # C11 (2026-10-31): call-vs-close. Held by McpClient.call for the
+        # duration of a tool call; close() waits on it, so a refresh or a
+        # shutdown cannot kill in-flight work.
+        self._guard = asyncio.Lock()
         self._next_id = 0
         self._stderr = ""
         self._buf = b""
@@ -449,8 +544,22 @@ class ServerConn:
                 continue
             if not isinstance(msg, dict):
                 continue
-            if msg.get("id") != rid:
-                continue  # notification or a stale answer: ignore it
+            if "id" not in msg:
+                # a notification (progress etc.): normal traffic while we
+                # wait; the call timeout bounds how long we wait at all
+                continue
+            if not _id_matches(msg.get("id"), rid):
+                # C9 (2026-10-31): the match accepts numeric strings ("1"
+                # vs 1 - a server echoing string ids used to spin here
+                # until the timeout and get killed), and this skip loop is
+                # capped like the garbage cap: a server answering only for
+                # other ids must not spin either.
+                skipped += 1
+                if skipped > 50:
+                    self._die(f"{self.spec.name} sent no answer for id {rid}")
+                    raise McpError(f"{self.spec.name} sent no answer for id "
+                                   f"{rid} (50+ answers for other ids)")
+                continue
             if "error" in msg:
                 raise McpServerError(self.spec.name, msg.get("error"))
             result = msg.get("result")
@@ -465,10 +574,16 @@ class ServerConn:
         return _render_result(result)
 
     async def close(self) -> None:
-        if self._drainer is not None:
-            self._drainer.cancel()
-            self._drainer = None
-        await self._kill()
+        # C11 (2026-10-31): wait for an in-flight call instead of killing it.
+        # A refresh that rebuilds this conn (signature change) used to close
+        # it under a running tool call - the call died with "closed stdout".
+        # close_all (shutdown) therefore waits for in-flight calls too,
+        # each bounded by its own timeout.
+        async with self._guard:
+            if self._drainer is not None:
+                self._drainer.cancel()
+                self._drainer = None
+            await self._kill()
 
     async def _kill(self) -> None:
         proc, self._proc = self._proc, None
@@ -486,7 +601,7 @@ class ServerConn:
             # TREE-KILL (2026-10-26): npx, uvx and cmd /c start a grandchild.
             # Terminating only the direct child left node/python running and
             # holding the pipes, so a timeout leaked a process per call.
-            _kill_tree(proc)
+            await _kill_tree(proc)
             try:
                 proc.terminate()
             except (ProcessLookupError, OSError):
@@ -506,16 +621,23 @@ class ServerConn:
             pass
 
 
-def _kill_tree(proc) -> None:
-    """Best effort: kill the whole process tree of the child."""
+async def _kill_tree(proc) -> None:
+    """Best effort: kill the whole process tree of the child.
+
+    C6 (2026-10-31): taskkill ran as a blocking subprocess.run inside the
+    event loop - up to 10 s of frozen loop per killed server. to_thread
+    keeps the loop serving while the kill runs.
+    """
     pid = getattr(proc, "pid", None)
     if not pid:
         return
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                           capture_output=True, timeout=10,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            await asyncio.to_thread(
+                subprocess.run,
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True, timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         else:
             os.killpg(os.getpgid(pid), signal.SIGTERM)
     except (OSError, subprocess.SubprocessError, ProcessLookupError):
@@ -574,6 +696,16 @@ async def _handshake_initialize(conn: ServerConn | HttpConn, limit: float) -> No
         conn.protocol_version = version.strip()
 
 
+async def _drop(resp: httpx.Response) -> None:
+    """Best-effort close of a streaming response (audit C2): with the body
+    read incrementally, an abandoned response would pin the connection; the
+    close itself must never mask the real error."""
+    try:
+        await resp.aclose()
+    except (httpx.HTTPError, OSError):
+        pass
+
+
 class HttpConn:
     """One MCP server over Streamable HTTP (POST JSON-RPC, JSON or SSE back).
 
@@ -592,6 +724,8 @@ class HttpConn:
         self._session_id = ""
         self._next_id = 0
         self._client: httpx.AsyncClient | None = None
+        # C11 (2026-10-31): call-vs-close guard, see ServerConn
+        self._guard = asyncio.Lock()
         # the protocol version the server accepted ("" until the handshake)
         self.protocol_version = ""
         # resolved from token_env at start(); never logged, never exposed
@@ -627,18 +761,22 @@ class HttpConn:
     async def close(self) -> None:
         # SESSION-CLOSE (2026-10-31, audit C3): the server kept the session
         # (and its resources) alive after the client was gone.
-        if self._session_id and self._client is not None:
-            try:
-                await self._client.delete(self.spec.url, headers=self._headers())
-            except (OSError, RuntimeError, httpx.HTTPError):
-                pass
-        self._session_id = ""
-        if self._client is not None:
-            try:
-                await self._client.aclose()
-            except (OSError, RuntimeError):
-                pass
-            self._client = None
+        # C11: the guard waits for an in-flight call before session and
+        # client are torn down under it.
+        async with self._guard:
+            if self._session_id and self._client is not None:
+                try:
+                    await self._client.delete(self.spec.url,
+                                              headers=self._headers())
+                except (OSError, RuntimeError, httpx.HTTPError):
+                    pass
+            self._session_id = ""
+            if self._client is not None:
+                try:
+                    await self._client.aclose()
+                except (OSError, RuntimeError):
+                    pass
+                self._client = None
 
     # -- json-rpc ------------------------------------------------------
     def _die(self, reason: str) -> None:
@@ -659,10 +797,17 @@ class HttpConn:
         return h
 
     async def _post(self, payload: dict, timeout: float) -> httpx.Response:
+        """POST, STREAMING (audit C2): returns as soon as the headers are
+        in, with the body still unread. The caller drains the stream (SSE
+        answer) or reads it (JSON) and must close it - an abandoned stream
+        leaks the connection; _drop() is the best-effort closer."""
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=timeout, follow_redirects=True)
-        return await self._client.post(self.spec.url, json=payload,
-                                       headers=self._headers(), timeout=timeout)
+            self._client = httpx.AsyncClient(timeout=timeout,
+                                             follow_redirects=True)
+        req = self._client.build_request("POST", self.spec.url, json=payload,
+                                         headers=self._headers(),
+                                         timeout=timeout)
+        return await self._client.send(req, stream=True)
 
     async def _post_retry(self, payload: dict, method: str,
                           timeout: float) -> httpx.Response:
@@ -676,6 +821,12 @@ class HttpConn:
         +-20 % jitter, capped by the call timeout: when the remaining budget
         cannot afford the next pause, the last error wins. Every exhaustion
         marks the connection dead and names the attempt count.
+
+        STREAMING (2026-10-31, audit C2): the response returns with the
+        headers and an UNREAD body - the caller drains it (SSE) or reads it
+        (JSON) and closes it. The ladder therefore only sees failures of the
+        connect/header phase; once the body streams, a failure is terminal
+        (the request was delivered, replaying could double it).
         """
         deadline = self.loop.time() + float(timeout)
 
@@ -722,6 +873,9 @@ class HttpConn:
                 raise McpError(f"{self.spec.name} unreachable: {exc}") from exc
 
             if resp.status_code in HTTP_RETRY_STATUSES and method != "tools/call":
+                # the unread body of the rejected attempt must not pin the
+                # connection while we sleep
+                await _drop(resp)
                 pause = _pause_for(attempts)
                 if attempts > MAX_HTTP_RETRIES or \
                         deadline - self.loop.time() < pause:
@@ -745,11 +899,12 @@ class HttpConn:
         if rid is None:
             return
         try:
-            await self._post({"jsonrpc": "2.0",
-                              "method": "notifications/cancelled",
-                              "params": {"requestId": rid,
-                                         "reason": "client timeout"}},
-                             min(CANCEL_TIMEOUT_S, self.timeout_s))
+            resp = await self._post({"jsonrpc": "2.0",
+                                     "method": "notifications/cancelled",
+                                     "params": {"requestId": rid,
+                                                "reason": "client timeout"}},
+                                    min(CANCEL_TIMEOUT_S, self.timeout_s))
+            await _drop(resp)
         except (httpx.HTTPError, OSError) as exc:
             logger.info("[MCP] cancellation for %s failed: %s",
                         self.spec.name, exc)
@@ -760,22 +915,26 @@ class HttpConn:
             body["params"] = params
         resp = await self._post_retry(body, method,
                                       min(INIT_TIMEOUT_S, self.timeout_s))
-        if resp.status_code in (401, 403):
-            # an unauthorized notification must not pass silently: the whole
-            # session would run on a rejected token
-            raise _auth_error(self.spec.name, resp.status_code)
-        if resp.status_code >= 400:
-            # NOTIFY-STATUS (2026-10-28, mcp audit): 500/404 on the
-            # initialized notification used to be waved through and the
-            # session started anyway. A server that rejects the handshake
-            # confirmation is broken - fail the start loudly.
-            self._die(f"{self.spec.name} answered HTTP {resp.status_code} "
-                      f"on {method}")
-            raise McpError(f"{self.spec.name}: HTTP {resp.status_code} "
-                           f"on {method}")
+        try:
+            if resp.status_code in (401, 403):
+                # an unauthorized notification must not pass silently: the
+                # whole session would run on a rejected token
+                raise _auth_error(self.spec.name, resp.status_code)
+            if resp.status_code >= 400:
+                # NOTIFY-STATUS (2026-10-28, mcp audit): 500/404 on the
+                # initialized notification used to be waved through and the
+                # session started anyway. A server that rejects the handshake
+                # confirmation is broken - fail the start loudly.
+                self._die(f"{self.spec.name} answered HTTP {resp.status_code} "
+                          f"on {method}")
+                raise McpError(f"{self.spec.name}: HTTP {resp.status_code} "
+                               f"on {method}")
+        finally:
+            await _drop(resp)
 
     async def request(self, method: str, params: dict, *,
-                      timeout: float | None = None) -> dict:
+                      timeout: float | None = None,
+                      _recovered: bool = False) -> dict:
         if self.dead:
             raise McpError(self.last_error or f"{self.spec.name} is marked dead")
         limit = float(timeout or self.timeout_s)
@@ -784,33 +943,121 @@ class HttpConn:
         payload = {"jsonrpc": "2.0", "id": rid, "method": method,
                    "params": params or {}}
         resp = await self._post_retry(payload, method, limit)
-
-        sid = resp.headers.get("mcp-session-id")
-        if sid:
-            self._session_id = sid
-        if resp.status_code in (401, 403):
-            # AUTH, not transport: a wrong or missing token is a config
-            # mistake. Marking the connection dead would keep it broken even
-            # after the token is fixed, until the next reload.
-            raise _auth_error(self.spec.name, resp.status_code)
-        if resp.status_code >= 400:
-            self._die(f"{self.spec.name} answered HTTP {resp.status_code}")
-            raise McpError(f"{self.spec.name}: HTTP {resp.status_code}")
-        ctype = resp.headers.get("content-type", "")
-        if "text/event-stream" in ctype:
-            msg = _sse_response(resp.text, rid)
-        else:
+        try:
+            sid = resp.headers.get("mcp-session-id")
+            if sid:
+                self._session_id = sid
+            if resp.status_code in (401, 403):
+                # AUTH, not transport: a wrong or missing token is a config
+                # mistake. Marking the connection dead would keep it broken
+                # even after the token is fixed, until the next reload.
+                raise _auth_error(self.spec.name, resp.status_code)
+            if (resp.status_code == 404 and self._session_id
+                    and method != "initialize" and not _recovered):
+                # SESSION-EXPIRY (2026-10-31, audit C4): a server that
+                # restarted or expired the session answers 404 while we
+                # still send the old Mcp-Session-Id. That is recoverable -
+                # drop the session, re-initialize once, replay the call -
+                # and must not mark the connection dead like a real
+                # transport failure would.
+                self._session_id = ""
+                await self._handshake()
+                return await self.request(method, params, timeout=timeout,
+                                          _recovered=True)
+            if resp.status_code >= 400:
+                self._die(f"{self.spec.name} answered HTTP {resp.status_code}")
+                raise McpError(f"{self.spec.name}: HTTP {resp.status_code}")
+            ctype = resp.headers.get("content-type", "")
+            if "text/event-stream" in ctype:
+                return await self._read_sse(resp, rid, limit)
+            body = await self._read_body_bounded(resp, MAX_HTTP_BODY_BYTES)
             try:
-                msg = resp.json()
+                msg = json.loads(body)
             except ValueError:
                 self._die(f"{self.spec.name} sent no JSON")
                 raise McpError(f"{self.spec.name} sent no JSON") from None
-        if not isinstance(msg, dict):
-            raise McpError(f"{self.spec.name} sent an unexpected payload")
+            if not isinstance(msg, dict):
+                raise McpError(f"{self.spec.name} sent an unexpected payload")
+            return self._unwrap(msg, rid)
+        finally:
+            await _drop(resp)
+
+    def _unwrap(self, msg: dict, rid: int) -> dict:
+        """The answer for `rid`: id discipline first, then error/result.
+
+        The plain-JSON path used to skip the id check entirely (audit C5) -
+        a response belonging to another request could reach this caller.
+        """
+        if not _id_matches(msg.get("id"), rid):
+            raise McpError(f"{self.spec.name}: response id mismatch: "
+                           f"want {rid}, got {msg.get('id')!r}")
         if "error" in msg:
             raise McpServerError(self.spec.name, msg.get("error"))
         result = msg.get("result")
         return result if isinstance(result, dict) else {"value": result}
+
+    async def _read_body_bounded(self, resp: httpx.Response, cap: int) -> bytes:
+        """The whole JSON body, read with a cap: an endless body must not
+        become an unbounded buffer (audit C2, same cap class as the stdio
+        MAX_LINE_BYTES)."""
+        buf = bytearray()
+        try:
+            async for chunk in resp.aiter_bytes():
+                buf += chunk
+                if len(buf) > cap:
+                    self._die(f"{self.spec.name} sent a body over "
+                              f"{cap // (1024 * 1024)} MiB")
+                    raise McpError(f"{self.spec.name} sent a body that is "
+                                   f"too large")
+        except (httpx.HTTPError, OSError) as exc:
+            self._die(f"{self.spec.name} unreachable: {exc}")
+            raise McpError(f"{self.spec.name} unreachable: {exc}") from exc
+        return bytes(buf)
+
+    async def _read_sse(self, resp: httpx.Response, rid: int,
+                        limit: float) -> dict:
+        """Read the answer for `rid` out of an SSE stream, INCREMENTALLY.
+
+        Audit C2 (2026-10-31): the transport buffered the whole body before
+        parsing, so a spec-legal server that keeps the event stream open
+        after the answer turned every call into a false timeout, and an
+        endless stream was an unbounded buffer. Bounded here by the call
+        deadline and MAX_HTTP_BODY_BYTES in total; the stream is closed as
+        soon as the answer arrives (request()'s finally). Multi-line
+        data: fields are one event (_SSEAssembler, audit C10).
+        """
+        deadline = self.loop.time() + limit
+        asm = _SSEAssembler()
+        foreign: list = []
+        total = 0
+        try:
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > MAX_HTTP_BODY_BYTES:
+                    self._die(f"{self.spec.name} sent an SSE body over "
+                              f"{MAX_HTTP_BODY_BYTES // (1024 * 1024)} MiB")
+                    raise McpError(f"{self.spec.name} sent an SSE body that "
+                                   f"is too large")
+                if self.loop.time() > deadline:
+                    self._die(f"{self.spec.name} timed out after {limit:.1f}s")
+                    raise McpError(f"{self.spec.name} timed out after "
+                                   f"{limit:.1f}s (SSE)")
+                for data in asm.feed(chunk.decode("utf-8", "replace")):
+                    msg = _sse_response(data, rid, foreign)
+                    if msg is not None:
+                        return self._unwrap(msg, rid)
+        except (httpx.HTTPError, OSError) as exc:
+            self._die(f"{self.spec.name} unreachable: {exc}")
+            raise McpError(f"{self.spec.name} unreachable: {exc}") from exc
+        for data in asm.finish():
+            msg = _sse_response(data, rid, foreign)
+            if msg is not None:
+                return self._unwrap(msg, rid)
+        if foreign:
+            raise McpError(f"{self.spec.name}: SSE response id mismatch: "
+                           f"want {rid}, got {foreign[-3:]}")
+        raise McpError(f"{self.spec.name}: SSE stream ended without a "
+                       f"response with id {rid}")
 
     async def call_tool(self, tool: str, arguments: dict,
                         timeout: float | None = None) -> str:
@@ -820,32 +1067,88 @@ class HttpConn:
         return _render_result(result)
 
 
-def _sse_response(body: str, rid: int) -> dict:
-    """Pick the JSON-RPC answer for `rid` out of an SSE body."""
-    candidates: list[dict] = []
-    for line in str(body or "").splitlines():
-        if not line.startswith("data:"):
-            continue
-        chunk = line[5:].strip()
-        if not chunk:
-            continue
-        try:
-            msg = json.loads(chunk)
-        except ValueError:
-            continue
-        if isinstance(msg, dict):
-            candidates.append(msg)
-    for msg in candidates:
-        if msg.get("id") == rid:
-            return msg
-    if candidates:
-        # ID-MISMATCH (2026-10-31, audit S5): returning candidates[-1] handed
-        # a notification or another request's answer to the caller, which
-        # surfaced as {"value": None} instead of an error.
-        raise McpError(
-            f"SSE response id mismatch: want {rid}, "
-            f"got {[c.get('id') for c in candidates[-3:]]}")
-    raise McpError("SSE response carried no JSON-RPC message")
+def _id_matches(msg_id: object, rid: int) -> bool:
+    """Whether a JSON-RPC answer belongs to our request `rid`.
+
+    Ours are ints, but a server may echo them as numeric strings ("1" vs 1,
+    audit C9) - both match. Anything else is a foreign message and must
+    never be treated as the answer (audits C1/C5).
+    """
+    if msg_id == rid:
+        return True
+    if isinstance(msg_id, str):
+        txt = msg_id.strip()
+        if txt.isdigit():
+            return int(txt) == rid
+    return False
+
+
+class _SSEAssembler:
+    """Reassembles SSE events from stream chunks.
+
+    Audit C10 (2026-10-31): the old parser treated every `data:` line as
+    its own JSON object, so a spec-legal multi-line `data:` field was
+    dropped. Per the SSE spec an event ends at a blank line and its data is
+    all its `data:` fields joined with newline.
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._data: list[str] = []
+
+    def feed(self, text: str) -> list[str]:
+        """Feed one decoded chunk; return the data payloads of the events
+        it completed, in order."""
+        self._buf += text
+        out: list[str] = []
+        while "\n" in self._buf:
+            line, _, self._buf = self._buf.partition("\n")
+            if line.endswith("\r"):
+                line = line[:-1]
+            if not line:
+                # blank line = end of event; comment/heartbeat lines in
+                # between carry no data and are ignored
+                if self._data:
+                    out.append("\n".join(self._data))
+                    self._data = []
+                continue
+            if line.startswith("data:"):
+                value = line[5:]
+                if value.startswith(" "):
+                    value = value[1:]
+                self._data.append(value)
+            # event:/id:/retry: lines carry no JSON-RPC message here; the
+            # id discipline comes from the payload itself
+        return out
+
+    def finish(self) -> list[str]:
+        """The event still open at end-of-stream: a body without the final
+        blank line must not lose its last event."""
+        if not self._data:
+            return []
+        out = ["\n".join(self._data)]
+        self._data = []
+        return out
+
+
+def _sse_response(data: str, rid: int, foreign: list) -> dict | None:
+    """One SSE event's data payload, if it is the JSON-RPC answer for `rid`.
+
+    Everything else - malformed JSON, notifications, answers for other
+    requests - returns None, and the id is recorded in `foreign` so the
+    caller can say what it saw instead of handing a foreign message to the
+    model (audit C1: the old candidates[-1] fallback did exactly that).
+    """
+    try:
+        msg = json.loads(data)
+    except ValueError:
+        return None
+    if not isinstance(msg, dict):
+        return None
+    if _id_matches(msg.get("id"), rid):
+        return msg
+    foreign.append(msg.get("id"))
+    return None
 
 
 async def _collect_tools(request_fn, limit: float) -> list[dict]:
@@ -868,7 +1171,13 @@ async def _collect_tools(request_fn, limit: float) -> list[dict]:
     return out[:MAX_TOOLS_PER_SERVER]
 
 def _render_result(result: dict) -> str:
-    """MCP content blocks -> plain text for the tool result."""
+    """MCP content blocks -> plain text for the tool result.
+
+    A result that only carries structuredContent (no text blocks) used to
+    render "(no output)" - the JSON IS the payload, render it (audit C12).
+    A cut at MAX_OUTPUT_CHARS is marked, so a truncated answer cannot pass
+    for a complete one.
+    """
     blocks = result.get("content") if isinstance(result, dict) else None
     parts: list[str] = []
     if isinstance(blocks, list):
@@ -881,14 +1190,19 @@ def _render_result(result: dict) -> str:
                 parts.append("[image content omitted]")
             else:
                 parts.append(f"[{block.get('type') or 'unknown'} content omitted]")
-    elif isinstance(result, dict) and isinstance(result.get("value"), str):
-        parts.append(result["value"])
     text = "\n".join(p for p in parts if p).strip()
+    if not text and isinstance(result.get("structuredContent"), dict):
+        # the value came from json.loads, so dumps cannot fail
+        text = json.dumps(result["structuredContent"], ensure_ascii=False)
+    if not text and isinstance(result.get("value"), str):
+        text = result["value"]
     if not text:
         text = "(no output)"
+    if len(text) > MAX_OUTPUT_CHARS:
+        text = text[:MAX_OUTPUT_CHARS] + "\n[truncated]"
     if result.get("isError"):
-        return f"[TOOL_ERROR: MCP_TOOL_ERROR]\n{text[:MAX_OUTPUT_CHARS]}"
-    return text[:MAX_OUTPUT_CHARS]
+        return f"[TOOL_ERROR: MCP_TOOL_ERROR]\n{text}"
+    return text
 
 
 class McpClient:
@@ -912,6 +1226,10 @@ class McpClient:
     def _specs(settings: dict | None) -> list[ServerSpec]:
         raw = _setting(settings, "mcp_servers", [])
         if not isinstance(raw, list):
+            # C8 (2026-10-31): a non-list mcp_servers (a JSON object, a
+            # string from a broken edit) silently emptied the client.
+            logger.warning("[MCP] mcp_servers is %s, expected a list - "
+                           "no servers configured", type(raw).__name__)
             return []
         out: list[ServerSpec] = []
         seen: set[str] = set()
@@ -1063,6 +1381,8 @@ class McpClient:
         # into the dict this method just emptied. Wait for it instead
         # (bounded by the per-server INIT_TIMEOUT_S); per-conn close does not
         # take the lock again.
+        # C11: with the per-conn guard, shutdown also waits for in-flight
+        # tool calls (each bounded by its timeout) instead of killing them.
         async with self._lifecycle:
             await self._close_all_unlocked()
 
@@ -1130,6 +1450,18 @@ class McpClient:
             return (f"[TOOL_ERROR: MCP_SERVER_DOWN]\n{server} is not running"
                     f"{': ' + conn.last_error if conn and conn.last_error else ''}. "
                     f"Fix the server config or disable it.")
+        # C11 (2026-10-31): the lookup above is synchronous, so a concurrent
+        # refresh cannot tear it apart mid-lookup. The guard keeps the call
+        # itself alive: refresh()/close_all() may pop and close this conn,
+        # but close() waits on the guard until the call has finished instead
+        # of killing in-flight work. A conn stuck in close/kill fails the
+        # call fast with the M2-style busy error.
+        limit = float(timeout or conn.timeout_s)
+        try:
+            await asyncio.wait_for(conn._guard.acquire(), timeout=limit)
+        except asyncio.TimeoutError:
+            return (f"[TOOL_ERROR: MCP_CALL_FAILED]\n{server} is busy with "
+                    f"another call (waited {limit:.1f}s)")
         try:
             return await conn.call_tool(tool, arguments, timeout=timeout)
         except McpAuthError as exc:
@@ -1138,6 +1470,8 @@ class McpClient:
         except McpError as exc:
             logger.info("[MCP] %s.%s failed: %s", server, tool, exc)
             return f"[TOOL_ERROR: MCP_CALL_FAILED]\n{exc}"
+        finally:
+            conn._guard.release()
 
 
 RELOAD_TOOL_NAME = "mcp_reload"
