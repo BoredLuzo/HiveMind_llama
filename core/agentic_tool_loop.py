@@ -660,7 +660,10 @@ class AgenticToolLoop(ToolLoop):
                                 + len(str(_m.get("tool_calls", "") or ""))
                                 for _m in _tel_msgs
                             )
-                            _tel.update_cpt_ema(
+                            # CPT-EMA lives in core.budgets, not telemetry
+                            # (live 2026-10-31: AttributeError every round).
+                            from core.budgets import update_cpt_ema as _update_cpt_ema
+                            _update_cpt_ema(
                                 getattr(self.round_state, "exec_model", None),
                                 _tel_chars,
                                 int((_dr_usage_final or {}).get("prompt_tokens") or 0),
