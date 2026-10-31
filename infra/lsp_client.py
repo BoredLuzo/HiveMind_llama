@@ -599,12 +599,15 @@ class _LspConnection:
 
     async def collect_diagnostics(self, path: Path, wait_s: float,
                                   language_id: str | None = None) -> list[dict]:
-        """Open/refresh the document, then - only when a sync was actually
-        sent - wait up to wait_s for a diagnostics publication NEWER than
-        this call (per-URI generation counter: the publication may arrive
-        between didOpen and the wait, it still counts as fresh). For an
-        unchanged already-open document the stored diagnostics are current,
-        so they return without waiting.
+        """Open/refresh the document, then wait up to wait_s for a suitable
+        diagnostics publication (per-URI generation counter: the publication
+        may arrive between didOpen and the wait, it still counts as fresh).
+
+        - changed document: wait for a publication NEWER than this call;
+        - already open + already published: return immediately;
+        - already open but NEVER published (cold server): wait too, instead
+          of answering "(no diagnostics)" before analysis started. This is
+          the cold-pyright case small models hit on the first tool call.
 
         Version-aware servers: a publication for an older document version
         is discarded in _dispatch; the wait additionally requires the
@@ -613,7 +616,8 @@ class _LspConnection:
         uri = canonical_uri(path_to_uri(path))
         gen0 = self._diag_gen.get(uri, 0)
         _uri, changed = await self.ensure_open(path, uri, language_id)
-        if changed:
+        _cold = gen0 == 0
+        if changed or (_cold and wait_s > 0):
             expected = self.open_docs.get(uri)
             deadline = self.loop.time() + wait_s
             while self.loop.time() < deadline:

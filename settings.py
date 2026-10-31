@@ -638,7 +638,7 @@ DEFAULT_SETTINGS = {
     "lsp_client_timeout_s":    30,
     # How long lsp_diagnostics waits for the server's diagnostics
     # publication after open/change before returning what it has.
-    "lsp_diagnostics_wait_s":  2.0,
+    "lsp_diagnostics_wait_s":  5.0,
     # Attach a compact diagnostics block to a successful write/edit when a
     # server for that language is already running. A cold server is warmed
     # in the background instead of stalling the write; failures are silent.

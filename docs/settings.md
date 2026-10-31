@@ -176,7 +176,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `llama_ubatch_size` | int | `256` |  |
 | `lsp_auto_diagnostics` | bool | `True` | Attach a compact diagnostics block to a successful write/edit when a server for that language is already running. A cold server is warmed in the background instead of stalling the write; failures are silent. |
 | `lsp_client_timeout_s` | int | `30` | Per-request timeout in seconds for one LSP request; also caps the initialize handshake. A hung server is killed and lazily restarted on the next call. |
-| `lsp_diagnostics_wait_s` | float | `2.0` | How long lsp_diagnostics waits for the server's diagnostics publication after open/change before returning what it has. |
+| `lsp_diagnostics_wait_s` | float | `5.0` | How long lsp_diagnostics waits for the server's diagnostics publication after open/change before returning what it has. |
 | `lsp_enabled` | bool | `True` | lsp_enabled is the ONLY switch - there are deliberately no per-language on/off flags. True = the lsp_* tools exist; a language server process still starts LAZILY on the first tool call, never at boot. A language without a found server command answers LSP_UNAVAILABLE (with an… |
 | `lsp_max_diagnostics` | int | `50` | Output caps for the lsp_* tools (results per call). |
 | `lsp_max_results` | int | `50` | cap for locations/symbols/actions lists |

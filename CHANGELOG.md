@@ -60,8 +60,9 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   already warm, a successful write/edit appends a compact
   `[LSP auto-diagnostics …]` block (8-line cap); a cold server is never started
   by a write (only an explicit LSP call starts one). `lsp_auto_diagnostics` turns
-  it off. A cold explicit `lsp_diagnostics` now says "still analyzing" instead
-  of falsely reporting a clean file.
+  it off. A cold explicit `lsp_diagnostics` now waits up to 5s for the first
+  publication (`lsp_diagnostics_wait_s=5`) and only then says "still
+  analyzing" instead of falsely reporting a clean file.
 - **Lifecycle fixes from the agentic audit**: engine shutdown closes every
   cached LSP manager (previously pyright/gopls/rust-analyzer survived the
   engine), and manager-cache eviction closes the evicted servers instead of

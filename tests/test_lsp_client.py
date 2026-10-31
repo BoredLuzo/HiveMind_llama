@@ -325,6 +325,7 @@ async def _slowdiag_flow():
     other = ws / "other.py"
     other.write_text("x = 1\ny = 2\n", encoding="utf-8")
     mgr = LC.LspManager(ws, settings=make_settings("slowdiag"))
+    await mgr.start_language("python")   # exclude process startup from dt
     t0 = time.time()
     empty = await mgr.diagnostics(sample, wait_s=0.1)
     dt_empty = time.time() - t0

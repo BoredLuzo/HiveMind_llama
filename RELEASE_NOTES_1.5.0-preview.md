@@ -95,8 +95,9 @@ evicted managers instead of orphaning their processes. A successful write or
 edit also attaches a compact `[LSP auto-diagnostics …]` block when a server is
 already warm (8-line cap; `lsp_auto_diagnostics=false` disables it); a write
 never starts a cold server; diagnostics attach once one is warm. A cold
-`lsp_diagnostics` answers "still analyzing" instead of claiming the file is
-clean. Pyright's `file:///c%3A/...` URIs are canonicalized, so its real
+`lsp_diagnostics` waits up to 5s for the first publication
+(`lsp_diagnostics_wait_s=5`) and only then answers "still analyzing" instead
+of claiming the file is clean. Pyright's `file:///c%3A/...` URIs are canonicalized, so its real
 diagnostics are actually visible.
 
 The second LSP pass closes the remaining audit P2s: diagnostics now carry the

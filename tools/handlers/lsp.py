@@ -40,7 +40,7 @@ _LSP_FALLBACKS: dict = {
     "lsp_enabled": True,
     "lsp_servers": {},
     "lsp_client_timeout_s": 30,
-    "lsp_diagnostics_wait_s": 2.0,
+    "lsp_diagnostics_wait_s": 5.0,
     "lsp_auto_diagnostics": True,
     "lsp_max_diagnostics": 50,
     "lsp_max_results": 50,
@@ -575,7 +575,7 @@ async def auto_diagnostics_block(workspace: Path, path: str,
                          id(loop)))
     if mgr is None or not mgr.is_started(language):
         return ""
-    wait_s = min(_coerce_float(settings.get("lsp_diagnostics_wait_s"), 2.0),
+    wait_s = min(_coerce_float(settings.get("lsp_diagnostics_wait_s"), 5.0),
                  1.5)
     try:
         diags = await mgr.diagnostics(p, wait_s=wait_s)
@@ -607,7 +607,7 @@ async def _inline_tool_lsp_diagnostics(args: dict, workspace: Path,
     if early is not None:
         return early
     settings = _lsp_settings()
-    wait_s = _coerce_float(settings.get("lsp_diagnostics_wait_s"), 2.0)
+    wait_s = _coerce_float(settings.get("lsp_diagnostics_wait_s"), 5.0)
     cap = _coerce_int(settings.get("lsp_max_diagnostics"), 50, 1, 500)
     try:
         diags = await mgr.diagnostics(p, wait_s=wait_s)
