@@ -314,6 +314,56 @@ the tag. Vision models additionally need their `mmproj_filename`; models with
 an MTP head need `mtp: true` (the flags are only passed when the binary
 supports them). Everything else has a sane default.
 
+### Context compression: what it costs and which toggles help
+
+Compression itself is cheap: the local compressor truncates tool output and
+drops old turns in milliseconds. The expensive part is the **re-prefill**.
+llama.cpp caches an exact token prefix; when compression replaces early
+messages with a summary, the new prompt diverges near the start and the whole
+prompt is recomputed. Measured on the Groot 19B run: 20,978 -> 13,571 tokens
+compressed in 9 ms, then the next round had 15,000 prompt tokens, `cached=0`,
+and paid ~117 s at ~128 t/s. Before compression the same slot reused 98-100 %.
+
+Groot and qwen3.6 are hybrid models (`full_attention_interval=4`): only every
+fourth layer carries a growing KV cache, and a recurrent state cannot be
+shifted or partially rewound. `--cache-reuse`/KV-shift therefore does not help
+there; `--ctx-checkpoints` is the only restore path. Keep retained messages
+byte-identical (do not truncate them in place); prefer dropping whole old
+messages.
+
+| Setting | Default | Effect |
+|---|---|---|
+| `duo_coder_ctx_agentic` | model/profile | Coder context ceiling. A larger ctx does **not** make prefill faster per token; it makes full re-prefills rarer and slower at depth. On 8 GB, 65k-100k is the practical range; 150k risks shared-memory spill. |
+| `duo_compress_auto_floor` | `0.70` | Auto trigger as a fraction of ctx when `duo_compress_threshold` is 0. `0.85-0.9` gives hysteresis: compress late, keep a long runway. |
+| `duo_compress_threshold` | `0` | Absolute token threshold; overrides the floor. |
+| `duo_compress_overflow_reserve` | `1024` | Tokens kept free for output; larger = earlier compression. |
+| `duo_compress_local_only` | `false` | Skip the LLM summary and use the local rule/tail compressor: fast and deterministic. Enabling it removes the summary-model call from the critical path. |
+| `duo_compress_model` | `auto` | Summary model when local-only is off. |
+| `duo_compress_llm_timeout_s` | `180` | Summary timeout. |
+| `duo_compress_tail_tool_max_chars` | `8000` | Keep only the last N chars of a tool output. 3000-4000 for tool-heavy runs; `0` disables. Truncating a retained message changes the prefix, so prefer limiting output at the source. |
+| `duo_partial_compression` | `false` | Compress only part of the history, keeping the tail stable. On hybrid models there is no KV shift, so the gain is limited. |
+| `duo_max_compressions` | `40` | Hard cap per run. |
+| `duo_tool_output_ttl` | `3` | How many rounds a tool output stays in context. Evicting earlier mutates history; do it at compression time, not between rounds. |
+| `llama_cache_ram_mib` | `1024` | Host-side prompt cache. Roughly 18 KiB/token: 32k ~0.6 GB, 100k ~1.8 GB. It only helps when the prefix matches. |
+| `llama_ctx_checkpoints` | `4` | Restore points per slot. More can provide a reuse point before the summary, at host-RAM cost. |
+| `llama_cache_reuse` | `256` | Chunk reuse for non-hybrid models. Hybrid/recurrent models cannot shift, so it does not help Groot/qwen3.6. |
+
+Rules of thumb:
+
+- **Hysteresis**: trigger at 85-90 % of ctx, compress to an absolute target of
+  8-12k. The cost per compression is the target prefill; the trigger only
+  decides how often you pay it. Overhead per 1k new context is
+  `(target / prefill_rate) / (trigger - target)`. Today the target comes from
+  `keep_recent_msgs` + summary, not from a dedicated absolute setting.
+- **No-op guard**: a compression that saves only a few percent is pure loss;
+  skip it and trim tool output instead. This is not automatic yet.
+- **8 GB starting point**: ctx 65536-100000, `duo_compress_auto_floor=0.85`,
+  `duo_compress_local_only=true`, tail cap 4000 (or 0 plus source limits),
+  `llama_cache_ram_mib=2048` for 100k, `-ub 1024`.
+- **Diagnosis**: check `[CACHE] reuse`, `pages_in_s` and the shared-memory peak
+  before assuming the model is slow. A cold re-prefill is deterministic; a
+  paging model is not.
+
 
 A config named after the base only (example name: `gemma-4.json`) applies to
 all tags of that base; the exact-tag form (example: `gemma-4_e4b-it.json`)
