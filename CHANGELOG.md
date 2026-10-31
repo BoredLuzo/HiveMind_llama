@@ -1,3 +1,47 @@
+## [1.5.0-preview] - 2026-10-31
+
+Preview scope: the MCP hardening and settings/preset work on top of 1.4.14.
+Groot stays **experimental**; the live validation on the ThinkPad is the next
+step. A GitHub pre-release is not offered by `/releases/latest`, so other
+installs update only through `update.bat --zip`.
+
+### MCP (both directions)
+- **Exec and mutating tools over HTTP need the shared secret.**
+  `run_bash`, `shell`, `run_python`, `start_background`, `install_package`,
+  `run_tests`, `browser` and the mutating class (`write_file`, `edit_file`,
+  `write_file_append`, `edit_ast`, `replace_lines`, `patch_file`,
+  `git_commit`, all `mcp_*` names) are refused by `/internal/tool/exec`
+  without `HIVEMIND_INTERNAL_TOKEN`; read-only tools stay available. The
+  mutating set is imported from the runner's approval set, not copied.
+- The SSE client raises on an id mismatch instead of returning a foreign
+  message; `close_all()` takes the lifecycle lock (the refresh error path
+  calls the unlocked body); HTTP close sends `DELETE` with `Mcp-Session-Id`.
+- The local `search_code` fallback is argv-only (a quote in the pattern could
+  inject commands); the advertised `shell` forwards as `run_bash` in the
+  shared path only, after the tier check.
+- `docs/mcp.md` / `docs/mcp_client.md` state the token-gated set, the real
+  retry statuses (502/503/504) and that `has_auth` appears on both endpoints.
+
+### Settings, presets, UI, docs
+- Missing defaults are persisted: `duo_compress_tail_tool_max_chars`,
+  `duo_planner_enabled`, `duo_coder_always_vision`, the telegram mirror/
+  approval/phone keys. `telegram_gateway_enabled` is deliberately not
+  defaulted (absent = the gateway.toml switch decides; present and false is a
+  veto).
+- Save path: fsync (tolerated failure), temp cleanup, deepcopy at the async
+  call sites, POST /settings applies the llama startup flags through the same
+  helper as a preset load, presets migrate `llama_ubatch_size` to
+  `duo_ubatch` and skip keys that no longer exist, and the bookkeeping keys
+  are stripped on load.
+- UI: the tool-round select can show the shipped 50; `.opt-name` rows and
+  key-name entries are searchable; the VRAM gate jumps to the agents panel;
+  the branch fields write `git_default_branch`.
+- `docs/settings.md` regenerated (254 keys); the generator lifts block
+  comments and skips banners. Groot's profile loses the dead `ubatch` and
+  `side_call_sampling` keys and uses its native GGUF template.
+
+Tests: 233/233 suites, ruff clean.
+
 ## [1.4.14] - 2026-10-31
 
 ### Tool loop

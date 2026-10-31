@@ -23,7 +23,7 @@ def _as_int(settings: dict, key: str, default) -> int:
         return int(default)
 
 
-def apply_runtime_flags(settings: dict) -> dict:
+def apply_runtime_flags(settings: dict) -> None:
     """Apply cache/checkpoint/mlock/ubatch to all three flag holders."""
     from backend import llama_config as lc
     from backend import llama_server_manager as lsm
@@ -36,14 +36,6 @@ def apply_runtime_flags(settings: dict) -> dict:
     mlock = bool(settings.get("llama_mlock", True))
     ubatch, batch = lc.resolve_ubatch_sizes(settings)
 
-    applied = {
-        "llama_cache_reuse": cache_reuse,
-        "llama_cache_ram_mib": cache_ram,
-        "llama_ctx_checkpoints": checkpoints,
-        "llama_mlock": mlock,
-        "ubatch": ubatch,
-        "batch": batch,
-    }
     # Set the five startup flags on all three holders unconditionally: the
     # old preset block created the attributes on llama_server_manager even
     # where its import list did not carry them (tests pin that contract).
@@ -56,7 +48,5 @@ def apply_runtime_flags(settings: dict) -> dict:
         # LLAMA_BATCH is not a module global; --batch-size is derived from
         # LLAMA_UBATCH in the loader. `batch` stays in the return value.
     logger.info(
-        "[FLAGS] cache_reuse=%d cache_ram=%d checkpoints=%d mlock=%s "
-        "ubatch=%d (batch %d)", cache_reuse, cache_ram, checkpoints, mlock,
-        ubatch, batch)
-    return applied
+        "[FLAGS] cache_reuse=%d cache_ram=%d checkpoints=%d mlock=%s ubatch=%d",
+        cache_reuse, cache_ram, checkpoints, mlock, ubatch)

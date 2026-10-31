@@ -297,7 +297,8 @@ SPECS: list[dict] = [
         # GROOT 19B-A3B (2026-10-30, user request): qwen35moe like Hermes,
         # 128 experts (8 used), ctx 262144, nextn head present. Profile:
         # model_configs/models/groot_19b-a3b-261023.json (ctx 131072,
-        # ncmoe 28, KV q4_0, ub 512, mmap+mlock, MTP off).
+        # ncmoe 32, KV q4_0, mmap+mlock, MTP on, native GGUF template).
+        # ub is not a profile key: duo_ubatch/llama_ubatch_size (shipped 256).
         "key": "groot:19b-a3b-261023",
         "tag": "groot:19b-a3b-261023",
         "desc": "Groot 19B-A3B-261023 Q4_K_M (Agent-Coder, 128 Experten, ~11.7GB)",

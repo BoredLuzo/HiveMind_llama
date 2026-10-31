@@ -378,8 +378,8 @@ projector/drafter. A repo can rename or re-quantise a file, so
 
 Text-only models (`minicpm5`, `lfm2.5`, `spark-x2.6`) download a single GGUF; the
 vision models pull their projector automatically, and `gemma-4` additionally gets a
-~60 MB MTP drafter from the same repo. `lfm2.5` (2.6B and 24B-A2B) ships a DSpark
-spec-dec drafter as a sidecar - it is never registered as a model.
+~60 MB MTP drafter from the same repo. `lfm2.5` 24B-A2B ships a DSpark spec-dec
+drafter as a sidecar - it is never registered as a model.
 
 GGUFs already on disk can be registered without downloading anything
 (`setup_models.bat` -> `[R]`) or given a full config via `[C]`.

@@ -55,7 +55,7 @@ echo  Download catalog (existing models stay untouched and get registered):
 echo.
 "%PY%" deploy\fetch_models.py --print-catalog
 echo.
-echo    LFM2.5 2.6B / 24B-A2B also download their DSpark spec-dec drafter.
+echo    LFM2.5 24B-A2B also downloads its DSpark spec-dec drafter.
 echo    Gemma-4 E4B/E2B QAT also download their MTP drafter.
 echo.
 echo  D = download all missing, E = essential set (skips the judge/

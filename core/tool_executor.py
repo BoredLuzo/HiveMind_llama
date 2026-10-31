@@ -943,9 +943,8 @@ async def execute_tool_round(
             # before its legitimate recovery read_file after 5 big write
             # rounds). Push the deadline forward instead of aborting
             # productive work; the hard tool-round cap still bounds runaways.
-            _gref = getattr(trs, "grace_extensions_ref", None)
-            _gcount = (int(_gref[0]) if isinstance(_gref, list) and _gref
-                       else int(getattr(trs, "grace_extensions", 0)))
+            _gref = trs.grace_extensions_ref
+            _gcount = int(_gref[0])
             _grace_at = time.monotonic() + 300.0
             if _grace_at > trs.duo_deadline_at:
                 if _gcount >= 1:
@@ -953,10 +952,7 @@ async def execute_tool_round(
                         "[DEADLINE-GRACE] %s succeeded, but the one allowed "
                         "extension is spent - deadline stays", _dname)
                 else:
-                    if isinstance(_gref, list):
-                        _gref[0] = _gcount + 1
-                    else:
-                        trs.grace_extensions = _gcount + 1
+                    _gref[0] = _gcount + 1
                     trs.duo_deadline_at = _grace_at
                     result.deadline_extended_to = _grace_at
                     _logger.info(

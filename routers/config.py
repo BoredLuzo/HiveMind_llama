@@ -72,6 +72,12 @@ _UI_REV_PROTECTED_KEYS = {
 # `_registry` is internal bookkeeping, and image_processing_mode /
 # vision_agent_mode have no backend reader (the truth lives in
 # vision_model.json via /vision/config).
+# llama-server startup flags that POST /settings and a preset load must push
+# into the module globals (runtime_flags.apply_runtime_flags).
+_RUNTIME_FLAG_KEYS = {"llama_cache_reuse", "llama_cache_ram_mib",
+                      "llama_ctx_checkpoints", "llama_ubatch_size",
+                      "duo_ubatch", "llama_mlock"}
+
 _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
                       "image_processing_mode", "vision_agent_mode",
                       # BOOKKEEPING (2026-10-28, preset audit): these three are
@@ -235,10 +241,7 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
     # effect after an engine restart. Sync them the way the startup path
     # does; imports isolated so a missing module logs instead of failing
     # the apply (no-new-silent-excepts guard).
-    _flag_keys = {"llama_cache_reuse", "llama_cache_ram_mib",
-                  "llama_ctx_checkpoints", "llama_ubatch_size", "duo_ubatch",
-                  "llama_mlock"}
-    if _applied_keys & _flag_keys:
+    if _applied_keys & _RUNTIME_FLAG_KEYS:
         try:
             from backend.runtime_flags import apply_runtime_flags as _apply_flags
             _apply_flags(settings)
@@ -612,10 +615,7 @@ async def post_settings(req: Request):
     # UI-SAVE-FLAG-SYNC (2026-10-31, audit F6): a ubatch/cache/checkpoint
     # change through POST /settings used to wait for a restart while the same
     # change via a preset applied immediately.
-    _flag_keys = {"llama_cache_reuse", "llama_cache_ram_mib",
-                  "llama_ctx_checkpoints", "llama_ubatch_size", "duo_ubatch",
-                  "llama_mlock"}
-    if _flag_keys & set(data):
+    if _RUNTIME_FLAG_KEYS & set(data):
         try:
             from backend.runtime_flags import apply_runtime_flags as _apply_flags
             _apply_flags(settings)

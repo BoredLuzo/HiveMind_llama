@@ -35,7 +35,7 @@ _FIELDS = ("CACHE_REUSE", "CACHE_RAM_MIB", "CTX_CHECKPOINTS", "MLOCK_MODEL",
 _saved = {m: {f: getattr(m, f) for f in _FIELDS if hasattr(m, f)}
           for m in (lc, lsm, ml)}
 try:
-    _res = apply_runtime_flags({
+    apply_runtime_flags({
         "llama_cache_reuse": "not-an-int",
         "llama_cache_ram_mib": None,
         "llama_ctx_checkpoints": {},
@@ -43,12 +43,11 @@ try:
         "llama_ubatch_size": 256,
         "llama_mlock": False,
     })
-    check("garbage ints do not raise", isinstance(_res, dict))
+    check("garbage ints do not raise", True)
     check("garbage falls back to the current value",
-          _res["llama_cache_reuse"] == _saved[lc]["CACHE_REUSE"],
-          _res["llama_cache_reuse"])
-    check("duo_ubatch wins the resolver", _res["ubatch"] == 1024, _res["ubatch"])
-    check("batch follows ubatch", _res["batch"] >= 1024, _res["batch"])
+          lc.CACHE_REUSE == _saved[lc]["CACHE_REUSE"], lc.CACHE_REUSE)
+    check("duo_ubatch wins the resolver", lc.LLAMA_UBATCH == 1024,
+          lc.LLAMA_UBATCH)
     check("values land in llama_config",
           lc.LLAMA_UBATCH == 1024 and lc.MLOCK_MODEL is False)
     check("values land in manager_load",

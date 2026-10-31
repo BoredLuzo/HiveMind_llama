@@ -26,6 +26,7 @@ from context.pause_state import load_pause_state
 from utils.tool import parse_tool_args as _parse_tool_args
 from tools.errors import tool_error_response as _tool_error_response, parse_tool_error as _parse_tool_error
 from tools.runner import _run_inline_tool
+from tools.runner import _APPROVAL_TOOLS as _INTERNAL_MUTATING_TOOLS
 
 logger = logging.getLogger("hivemind.server")
 
@@ -275,14 +276,8 @@ _INTERNAL_EXEC_TOOLS = {"run_bash", "shell", "run_python",
                         "run_tests", "browser"}
 
 # S1 (2026-10-31 handoff): the mutating class needs the same shared secret
-# over HTTP, not just the exec class. Mirrors tools.runner._APPROVAL_TOOLS;
-# test_mcp_security_gate pins that the two sets stay equal. mcp_* names are
-# dynamic and mutating by rule (H7), handled by prefix.
-_INTERNAL_MUTATING_TOOLS = frozenset({
-    "run_bash", "run_python", "install_package", "start_background",
-    "write_file", "edit_file", "write_file_append",
-    "edit_ast", "replace_lines", "patch_file", "git_commit",
-})
+# over HTTP, not just the exec class. Imported from the runner so the two
+# cannot drift; mcp_* names are dynamic and mutating by rule (H7).
 
 
 def _internal_host_allowed(host_header: str) -> bool:

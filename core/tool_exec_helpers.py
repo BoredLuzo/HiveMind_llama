@@ -1158,10 +1158,9 @@ class ToolRoundState:
     # +300 s grace per successful write is legitimate progress, but unbounded
     # extensions let a run outlive its configured timeout indefinitely. One
     # extension max (live 2026-10-31: 900 s configured, 1064 s coder phase).
-    # The counter lives in a shared list because this dataclass is rebuilt
-    # every round; a per-round counter granted the extension again each time.
-    grace_extensions_ref: list | None = None
-    grace_extensions: int = 0
+    # Shared list because this dataclass is rebuilt every round; a per-round
+    # counter granted the extension again each time.
+    grace_extensions_ref: list = field(default_factory=lambda: [0])
     verify_mutation_serial: int = 0
     verify_last_ok_serial: int = 0
     last_run_bash_failure: dict | None = None
