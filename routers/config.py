@@ -229,34 +229,10 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
                   "llama_mlock"}
     if _applied_keys & _flag_keys:
         try:
-            import backend.llama_config as _lc_flags
-            import backend.llama_server_manager as _lsm_flags
-            import backend.manager_load as _ml_flags
+            from backend.runtime_flags import apply_runtime_flags as _apply_flags
+            _apply_flags(settings)
         except ImportError as exc:
             logger.warning("[PRESET] llama flag sync skipped: %s", exc)
-        else:
-            _lc_flags.CACHE_REUSE = int(settings.get("llama_cache_reuse", 256) or 0)
-            _lsm_flags.CACHE_REUSE = _lc_flags.CACHE_REUSE
-            _lc_flags.CACHE_RAM_MIB = int(settings.get(
-                "llama_cache_ram_mib", _lc_flags.CACHE_RAM_MIB))
-            _lsm_flags.CACHE_RAM_MIB = _lc_flags.CACHE_RAM_MIB
-            _lc_flags.CTX_CHECKPOINTS = int(settings.get(
-                "llama_ctx_checkpoints", _lc_flags.CTX_CHECKPOINTS))
-            _lsm_flags.CTX_CHECKPOINTS = _lc_flags.CTX_CHECKPOINTS
-            _lc_flags.MLOCK_MODEL = bool(settings.get("llama_mlock", True))
-            _lsm_flags.MLOCK_MODEL = _lc_flags.MLOCK_MODEL
-            try:
-                # RESOLVER-PARITY (2026-10-31): boot uses resolve_ubatch_sizes
-                # (duo_ubatch wins, clamp [64,4096], 32-alignment). Reading
-                # only llama_ubatch_size here silently dropped an explicit
-                # duo_ubatch on every preset load.
-                _ub_val, _ = _lc_flags.resolve_ubatch_sizes(settings)
-                _lc_flags.LLAMA_UBATCH = _ub_val
-                # manager_load holds a by-value import from boot - sync it
-                # too (same trap as the CACHE_REUSE fix, server.py:398)
-                _ml_flags.LLAMA_UBATCH = _ub_val
-            except (TypeError, ValueError):
-                pass
         # PRESET-MODEL-CHECK (2026-10-28, preset audit): missing models used
     # to fail silently at the first run, and registry_sync wrote them
     # into the target's registry.json without a word. Check every model
@@ -807,7 +783,7 @@ async def save_preset_ep(name: str, req: Request):
         # custom prompts with the built-in base prompts. Re-saving a preset
         # must copy FROM itself; only a NEW preset starts from the base.
         copy_prompts_to_preset(
-            src_preset=(name if name in presets else None), dst_preset=name,
+            src_preset=name, dst_preset=name,
             agent_keys=list(_state.pipeline.agents.keys()), base_prompts=PROMPTS
         )
     save_presets(presets)

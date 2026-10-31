@@ -532,6 +532,7 @@ BINARY_MIN_BUILD: dict[str, int] = {
     "qwen3":     8260,
     "lfm2.5":    9518,
     "lfm3":      12001,  # arch "lfm3" needs PR #31252 (b11889: unknown model architecture)
+    "lfm3-omni": 12001,  # same arch, different tag
     "ling-3.0-tiny": 10488,
     # minicpmv4_7 VISION projector needs b11574+ (b11456 failed the mmproj
     # load with "unknown projector type" and ran TEXT fine — verified

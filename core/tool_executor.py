@@ -945,11 +945,19 @@ async def execute_tool_round(
             # productive work; the hard tool-round cap still bounds runaways.
             _grace_at = time.monotonic() + 300.0
             if _grace_at > trs.duo_deadline_at:
-                trs.duo_deadline_at = _grace_at
-                result.deadline_extended_to = _grace_at
-                _logger.info(
-                    "[DEADLINE-GRACE] %s succeeded - run deadline extended by +300s",
-                    _dname)
+                if int(getattr(trs, "grace_extensions", 0)) >= 1:
+                    _logger.warning(
+                        "[DEADLINE-GRACE] %s succeeded, but the one allowed "
+                        "extension is spent - deadline stays", _dname)
+                else:
+                    trs.grace_extensions = int(
+                        getattr(trs, "grace_extensions", 0)) + 1
+                    trs.duo_deadline_at = _grace_at
+                    result.deadline_extended_to = _grace_at
+                    _logger.info(
+                        "[DEADLINE-GRACE] %s succeeded - run deadline extended by "
+                        "+300s (extension %d/1)",
+                        _dname, trs.grace_extensions)
             # CONTEXT-COMPACTION: compact this round's huge args after success
             # (never sent as a prompt -> cache-friendly, saves context).
             _saved_chars = len(_raw_s)

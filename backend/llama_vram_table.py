@@ -199,6 +199,9 @@ def _profile_moe_cfg(model_name: str) -> dict | None:
 MOE_DEFAULT_BYTES_PER_TOKEN = 12288
 
 
+_PROFILE_MOE_LOGGED: set[str] = set()
+
+
 def moe_cfg_for(model_name: str) -> dict | None:
     """_MOE_TABLE resolution shared by vram_of_moe and the /vram/estimate route:
     exact, -ud-stripped, then prefix (GGUF auto-discovery appends quant/finetune
@@ -215,9 +218,16 @@ def moe_cfg_for(model_name: str) -> dict | None:
         # MoE model (and the pre-flight then blocked the load).
         cfg = _profile_moe_cfg(key)
         if cfg:
-            _logger.info("moe_cfg_for(%s): no table entry, using the profile "
-                         "(active_gpu_gb=%s, n_cpu_moe=%s)",
-                         key, cfg["active_gpu_gb"], cfg.get("n_cpu_moe"))
+            # LOG-ONCE (2026-10-31, audit): this runs from can_fit, both
+            # budget sums, vram_of and the ctx ladder - 10-25 INFO lines per
+            # load. One line per model, DEBUG after.
+            if key not in _PROFILE_MOE_LOGGED:
+                _PROFILE_MOE_LOGGED.add(key)
+                _logger.info("moe_cfg_for(%s): no table entry, using the profile "
+                             "(active_gpu_gb=%s, n_cpu_moe=%s)",
+                             key, cfg["active_gpu_gb"], cfg.get("n_cpu_moe"))
+            else:
+                _logger.debug("moe_cfg_for(%s): profile repeat", key)
     return cfg
 
 
@@ -296,8 +306,11 @@ def vram_of(model_name: str) -> float:
     #    (active_gpu_gb = the measured non-KV resident part). Without this,
     #    profile-sized MoEs fell through to the dense heuristic (~0.6 GB/B),
     #    which overstates a 35B-A3B by gigabytes and blocked loads that fit.
+    # Any MoE sizing (static table row OR local profile) is authoritative.
+    # "gut gesplittet gespeichert": n_cpu_moe + active_gpu_gb live in the
+    # profile/table; the dense heuristic must never override that split.
     _cfg = moe_cfg_for(model_name)
-    if _cfg and _cfg.get("source") == "profile" and _cfg.get("active_gpu_gb"):
+    if _cfg and _cfg.get("active_gpu_gb"):
         return round(float(_cfg["active_gpu_gb"]), 2)
 
     # 1. Exakter Match
@@ -342,9 +355,6 @@ _CTX_KV_KB_PER_TOKEN: dict[str, float] = {
     "qwen3.5":             9.2,   # hybrid: 8/33 layers carry KV (measured 990 MiB @112640)
     "k2-horizon:7b":       41.5,  # dense: all 36 layers, 8 kv-heads x 128 (gguf metadata)
     "k2-horizon:3.7b":     78.0,  # same geometry, q8_0 override
-    "mellum2.1:12b-a2.5b-thinking": 4.1,  # swa-moe: 7/28 full-attention layers
-    "minicpm-v-4.7:35b":   20.5,  # qwen35moe hybrid: 10/40 layers, 2 kv-heads x 256 (gguf tensors)
-    "lfm2.5:24b":          20.5,  # lfm2moe hybrid: 10/40 layers, 8 kv-heads x 64 (gguf tensors)
 }
 
 

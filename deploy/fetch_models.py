@@ -476,6 +476,18 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool) -> bool:
         resp = urllib.request.urlopen(req, timeout=120)
     except urllib.error.HTTPError as he:
         if he.code == 416 and _have:
+            # 416 means the server has no bytes past _have. The pre-check
+            # above already returned when _have >= _expected, so a 416 here
+            # means the upstream file shrank or changed: the partial file is
+            # NOT complete (audit 2026-10-30).
+            if _expected and _have < _expected:
+                print(f"    [WARNING] 416 with {_have} of {_expected} bytes on "
+                      f"disk - upstream file changed; deleting partial file")
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+                return False
             print(f"    Already complete: {dest.name}")
             return True
         raise

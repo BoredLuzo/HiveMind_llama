@@ -208,14 +208,8 @@ _DUO_HEARTBEAT_DEFAULT = 10
 
 
 
-_FALLBACK_MODEL_PREFERENCE = (
-    # MTP variants first (2026-09-15): the plain tags resolve to the same
-    # GGUFs nowadays but WITHOUT the mtp/reasoning launch flags — a fallback
-    # to "qwen3.5:4b" ran the coder without spec-decode and reasoning off.
-    "qwen3.5:4b-mtp", "qwen3.5:2b-mtp", "qwen3.5:4b", "qwen3.5:2b-ud",
-    "qwen3.5:2b", "lfm3:1.7b-qad", "lfm2.5:2.6b",
-    "ministral:3b-instruct-2410", "gemma-4:e4b-it-obliterated", "qwen3.5:0.8b-ud",
-)
+# (The fallback ladder lives in core/duo/preflight.py; a second copy here
+# was dead since the split - 2026-10-31 audit.)
 
 
 
@@ -1404,6 +1398,7 @@ class _DuoExecRoundState:
     """
     duo_deadline_at: float = 0.0
     exec_result: object = None
+    timed_out: bool = False
     snap_before: object = None
     last_too_large_ref: list | None = None
     cached_port_ref: list | None = None
@@ -1436,6 +1431,7 @@ async def _duo_exec_round_task(
     _snap_before = ps.snap_before
     _last_too_large_ref = ps.last_too_large_ref
     _cached_port_ref = ps.cached_port_ref
+    _timed_out = ps.timed_out
     try:
         # ── RUN-BASH-CHANGE-DETECTION (Problem 2) ─────────────
         # _contracts_raw exports, normalized against _ws_str.
@@ -1513,6 +1509,23 @@ async def _duo_exec_round_task(
                 _hb_last = time.monotonic()
             if _exec_task.done():
                 break
+            # RUN-DEADLINE-IN-ROUND (2026-10-31, live): the round heads catch
+            # the deadline, but one long generation plus a compression could
+            # run minutes past it (900 s configured, 1056 s alive). Cancel the
+            # executor at the deadline; cancelling the HTTP request also drops
+            # the server-side generation.
+            if _duo_deadline_at and time.monotonic() >= _duo_deadline_at:
+                logger.warning(
+                    "[RUN-DEADLINE] deadline reached inside a tool round - cancelling")
+                _exec_task.cancel()
+                _timed_out = True
+                try:
+                    await _exec_task
+                except (asyncio.CancelledError, RuntimeError):
+                    pass
+                yield await ctx.emit({"type": "status",
+                    "content": "⏱ Run deadline reached — tool round cancelled."})
+                break
             # HEARTBEAT (2026-08-21): keepalive during long tool rounds.
             # elapsed = total time since loop start.
             if time.monotonic() - _hb_last >= _hb_interval:
@@ -1520,17 +1533,18 @@ async def _duo_exec_round_task(
                 _hb_last = time.monotonic()
                 yield await ctx.emit({"type": "heartbeat", "elapsed": _hb_total})
             await asyncio.sleep(0.02)
-        _exec_result = _exec_task.result()
+        _exec_result = None if _timed_out else _exec_task.result()
         # DEADLINE-GRACE (2026-09-09): pull the extended
         # deadline back into the runner + state so the outer
         # checks and later phases see it too.
-        if _exec_result.deadline_extended_to:
+        if _exec_result is not None and _exec_result.deadline_extended_to:
             if _exec_result.deadline_extended_to > _duo_deadline_at:
                 _duo_deadline_at = _exec_result.deadline_extended_to
                 state["_duo_deadline_at"] = _duo_deadline_at
     finally:
         ps.duo_deadline_at = _duo_deadline_at
         ps.exec_result = _exec_result
+        ps.timed_out = _timed_out
         ps.snap_before = _snap_before
         ps.last_too_large_ref = _last_too_large_ref
         ps.cached_port_ref = _cached_port_ref
@@ -5610,11 +5624,11 @@ async def run_code_duo(ctx):
                                 # degrades to the tiny-budget fallback instead
                                 # of looping.
                                 from context.ctx_guard import allow_force_compress as _afc
-                                # NOTFALL (Audit 30.10): >90 % ctx oder >=2
-                                # Runden ohne lebensfaehiges Budget -> die
-                                # Bremse darf nicht blocken (head <= 0 wuerde
-                                # einen 512-Token-Request gegen die Wand
-                                # schicken und die History vergiften).
+                                # EMERGENCY (audit 30.10): at >90% ctx or
+                                # >=2 rounds without a viable budget the brake
+                                # must not block (head <= 0 would fire a
+                                # 512-token request against the wall and
+                                # poison the tool-call history).
                                 _ctx_emergency = (
                                     _guard_tokens > int(_dtool_ctx * 0.90)
                                     or _ctx_full_skips >= 2
@@ -5940,6 +5954,12 @@ async def run_code_duo(ctx):
                                     _miss_content = str(_dr_msg.get("content") or "")
                                     _miss_reason = "".join(
                                         _result.get("dr_thinking_parts") or [])
+                                    # RAW (2026-10-31, audit): _dr_msg has
+                                    # already been through <think> preprocessing
+                                    # and fence stripping; the incident needs the
+                                    # untouched SSE accumulation too.
+                                    _miss_raw = "".join(
+                                        _result.get("dr_content_parts") or [])
                                     logger.warning(
                                         "[TOOL-CALL-MISS] round=%s model=%s "
                                         "thinking=%s ctk=%s tools=%d schema_chars=%d "
@@ -5947,7 +5967,8 @@ async def run_code_duo(ctx):
                                         "prompt_tokens=%s cached=%s finish=%s "
                                         "completion=%s max_tokens=%s "
                                         "temp=%s presence=%s top_p=%s top_k=%s min_p=%s seed=%s "
-                                        "content[0:500]=%r reasoning[0:500]=%r",
+                                        "content[0:500]=%r reasoning[0:500]=%r "
+                                        "raw[0:500]=%r",
                                         _dr, coder_mdl, _thinking,
                                         _tool_payload.get("chat_template_kwargs"),
                                         len(_miss_tools), len(_miss_tools_json),
@@ -5969,6 +5990,7 @@ async def run_code_duo(ctx):
                                         _tool_payload.get("seed"),
                                         _miss_content[:500],
                                         _miss_reason[:500],
+                                        _miss_raw[:500],
                                     )
                                 except (TypeError, ValueError,
                                         AttributeError, KeyError) as _miss_err:
@@ -6196,6 +6218,7 @@ async def run_code_duo(ctx):
                         finally:
                             _duo_deadline_at = _exec_ps.duo_deadline_at
                             _exec_result = _exec_ps.exec_result
+                            _duo_timed_out = _exec_ps.timed_out
                             _snap_before = _exec_ps.snap_before
                             _last_too_large_ref = _exec_ps.last_too_large_ref
                             _cached_port_ref = _exec_ps.cached_port_ref

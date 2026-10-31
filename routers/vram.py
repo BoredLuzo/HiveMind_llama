@@ -209,8 +209,19 @@ async def vram_status(req: Request):
 @router.get("/table")
 async def vram_table():
     try:
-        from backend.llama_vram_table import VRAM_GB
-        return JSONResponse(content={"vram_gb": VRAM_GB})
+        from backend.llama_vram_table import VRAM_GB, moe_cfg_for
+        # PROFILE-MERGE (2026-10-31, audit): the static dict has no profile
+        # models; the panel showed e.g. Groot at the 4.0 fallback.
+        _out = dict(VRAM_GB)
+        try:
+            from model_configs import models_registry as _reg
+            for _name in list(_reg._ensure_cache()):
+                _cfg = moe_cfg_for(_name)
+                if _cfg and _cfg.get("source") == "profile":
+                    _out.setdefault(_name, round(float(_cfg["active_gpu_gb"]), 2))
+        except (ImportError, AttributeError, KeyError):
+            pass
+        return JSONResponse(content={"vram_gb": _out})
     except ImportError:
         return JSONResponse(content={"vram_gb": _VRAM_LOOKUP_GB})
 

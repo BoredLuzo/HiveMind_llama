@@ -245,7 +245,7 @@ if _ft is not None:
 # ── block 4: tool-round exec + wedge handoff + ctx pressure ────────────────
 EXEC_FIELDS = [
     "duo_deadline_at", "exec_result", "snap_before",
-    "last_too_large_ref", "cached_port_ref",
+    "last_too_large_ref", "cached_port_ref", "timed_out",
 ]
 check_seam("_duo_exec_round_task", "_DuoExecRoundState", EXEC_FIELDS, "b4")
 

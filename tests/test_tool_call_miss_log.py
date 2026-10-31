@@ -25,7 +25,7 @@ _REQUIRED = (
     "tool_choice=", "slot_ctx=", "req_ctx=", "prompt_tokens=", "cached=",
     "finish=", "completion=", "max_tokens=",
     "temp=", "presence=", "top_p=", "top_k=", "min_p=", "seed=",
-    "content[0:500]=", "reasoning[0:500]=",
+    "content[0:500]=", "reasoning[0:500]=", "raw[0:500]=",
 )
 
 passed = failed = 0
@@ -69,7 +69,7 @@ def test_tool_call_miss_log():
     check("8 formatting failure cannot break the round",
           "except (TypeError, ValueError," in seg
           and "AttributeError, KeyError) as _miss_err" in seg
-          and 'logger.debug(\n                                        "[TOOL-CALL-MISS] log failed' in seg)
+          and "[TOOL-CALL-MISS] log failed" in seg)
 
 
 if __name__ == "__main__":

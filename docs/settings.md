@@ -122,7 +122,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_thinking_per_chunk` | bool | `False` |  |
 | `duo_tool_autopromote_max_rounds` | int | `4` |  |
 | `duo_tool_output_ttl` | int | `3` |  |
-| `duo_tool_rounds` | int | `0` |  |
+| `duo_tool_rounds` | int | `50` |  |
 | `duo_tool_sandbox` | bool | `True` |  |
 | `duo_tool_sandbox_max_cpu_s` | int | `0` |  |
 | `duo_tool_sandbox_max_mem_mb` | int | `4096` |  |

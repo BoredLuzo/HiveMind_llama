@@ -629,7 +629,9 @@ def _bucket_stop_reason(stop_reason: str) -> str:
         return "none"
     if sr in {"request_timeout", "request_error", "stream_incomplete", "server_error_event"}:
         return "transport_error"
-    if sr in {"hard_stop", "timeout", "error"}:
+    if sr == "timeout":
+        return "timeout"
+    if sr in {"hard_stop", "error"}:
         return "runtime_load_error"
     if sr in ("max_tool_rounds", "verification_required_after_write"):
         return "tool_error"

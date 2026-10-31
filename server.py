@@ -1464,7 +1464,7 @@ async def stream(req: Request):
 
     _duo_tool_rounds_raw = body.get("duo_tool_rounds", None)
     if _duo_tool_rounds_raw is None:
-        _duo_tool_rounds_raw = settings.get("duo_tool_rounds", 0)
+        _duo_tool_rounds_raw = settings.get("duo_tool_rounds", 50)
     duo_tool_rounds = int(_duo_tool_rounds_raw)
     duo_coding_mode = _as_bool(_body_or_settings("duo_coding_mode", default=True), default=True)
     duo_chunking    = _as_bool(_body_or_settings("duo_chunking",   default=False))

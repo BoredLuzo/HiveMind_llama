@@ -79,7 +79,12 @@ check("-b follows the ubatch in the loader CMD",
 check("-ubatch-size uses the same value", "str(int(LLAMA_UBATCH))" in mgr)
 # PRESET-SYNC (2026-10-31): a preset load must not drop an explicit duo_ubatch.
 cfg = (root / "routers" / "config.py").read_text(encoding="utf-8")
-check("preset sync uses the resolver", "resolve_ubatch_sizes(settings)" in cfg)
+check("preset sync uses the runtime-flag helper",
+      "from backend.runtime_flags import apply_runtime_flags" in cfg
+      and "_apply_flags(settings)" in cfg)
+_rf = (root / "backend" / "runtime_flags.py").read_text(encoding="utf-8")
+check("helper resolves ubatch via the resolver",
+      "resolve_ubatch_sizes(settings)" in _rf)
 check("duo_ubatch triggers the preset flag sync", '"duo_ubatch"' in cfg)
 
 print(f"\nduo_ubatch: {passed} passed, {failed} failed")

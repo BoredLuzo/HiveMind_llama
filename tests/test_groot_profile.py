@@ -76,6 +76,11 @@ else:
           int(p.get("moe_cpu_experts") or 0) == 32,
           f"({p.get('moe_cpu_experts')})")
     check("thinking capable", (p.get("capabilities") or {}).get("thinking") is True)
+    # the two fields the MoE sizing reads (llama_vram_table profile path)
+    check("vram override 4.6 (measured non-KV resident)", p.get("vram_gb_override") == 4.6,
+          p.get("vram_gb_override"))
+    check("kv bytes/token 6336 (11 layers x 576 B)", p.get("kv_bytes_per_token") == 6336,
+          p.get("kv_bytes_per_token"))
 
     s = p.get("sampling") or {}
     th = s.get("thinking") or {}

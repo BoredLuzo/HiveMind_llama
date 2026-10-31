@@ -15,7 +15,10 @@ from context.ctx_guard import (
     min_viable_tool_budget as _mvb,
     resolve_compress_threshold as _thr,
 )
-from core.duo_helpers import should_compress_after_truncated_drop as _scd
+from core.duo_helpers import (
+    should_compress_after_truncated_drop as _scd,
+    _bucket_stop_reason as _bucket,
+)
 
 passed = 0
 failed = 0
@@ -80,6 +83,8 @@ check("D2: stop + edit_file -> no force", not _scd("stop", ["edit_file"]))
 check("D3: length + write_file -> no force", not _scd("length", ["write_file"]))
 check("D4: length + mixed -> compress", _scd("length", ["write_file", "edit_file"]))
 check("D5: no reason -> no force", not _scd(None, None))
+check("B1: timeout bucket is 'timeout'", _bucket("timeout") == "timeout", _bucket("timeout"))
+check("B2: hard_stop stays a load error", _bucket("hard_stop") == "runtime_load_error")
 
 print()
 print(f"{'='*50}")

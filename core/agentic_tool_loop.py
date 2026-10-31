@@ -708,12 +708,20 @@ class AgenticToolLoop(ToolLoop):
                                 pass
                         try:
                             from pathlib import Path as _P
+                            # TAIL-READ (2026-10-31, audit): read_text() pulled
+                            # the WHOLE slot log (hundreds of MB after a long
+                            # run) to keep 40 KB, every coder round. Anchor the
+                            # path at the repo root instead of the CWD.
+                            _logs = _P(__file__).resolve().parent.parent / "logs"
                             _slots = sorted(
-                                _P("logs").glob("llama_server_*.log"),
+                                _logs.glob("llama_server_*.log"),
                                 key=lambda f: f.stat().st_mtime, reverse=True)
                             if _slots:
-                                _txt = _slots[0].read_text(
-                                    encoding="utf-8", errors="replace")[-40000:]
+                                with _slots[0].open("rb") as _fh:
+                                    _fh.seek(0, 2)
+                                    _fh.seek(max(0, _fh.tell() - 40000))
+                                    _txt = _fh.read(40000).decode(
+                                        "utf-8", errors="replace")
                                 _am = re.findall(
                                     r"draft acceptance = ([\d.]+)", _txt)
                                 if _am:

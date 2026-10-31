@@ -249,6 +249,9 @@ SUITES = [
     ("compression_empty_summary", "tests/test_compression_empty_summary.py", 30),
     ("vram_profile_sizing",     "tests/test_vram_profile_sizing.py",       30),
     ("tool_call_miss_log",      "tests/test_tool_call_miss_log.py",         30),
+    ("tool_round_default",      "tests/test_tool_round_default.py",         30),
+    ("runtime_flags",           "tests/test_runtime_flags.py",              60),
+    ("deadline_and_416",        "tests/test_deadline_and_416.py",           30),
 
 ]
 
@@ -271,6 +274,10 @@ def main() -> int:
     print("REGRESSION RUN - HiveMind Feature-Checks")
     print("=" * 64)
     for name, rel, timeout in SUITES:
+        # --only must be applied BEFORE the missing-file check; on a partial
+        # checkout it otherwise failed every registered-but-absent suite.
+        if only and only not in name.lower():
+            continue
         if not (ROOT / rel).exists():
             # SKIP-ONLY-BY-FLAG (2026-10-27, audit): this branch swallowed a
             # DELETED or renamed suite - coverage shrank, the run stayed green.
@@ -283,26 +290,26 @@ def main() -> int:
             print(f"[FAIL] {name:<20} ({rel} missing - registered but not on disk;"
                   f" --allow-missing to skip on partial checkouts)")
             continue
-        if only and only not in name.lower():
-            continue
         target = ROOT / rel
-        if not target.exists():
-            results.append((name, False, 0.0))
-            failed_total += 1
-            print(f"[FAIL] {name:<20} ({rel} missing)")
-            continue
         t0 = time.time()
         # ENC-FIX (2026-10-15): suites print non-ASCII (❌/✅, umlauts) — a
         # cp1252 console (PowerShell without PYTHONUTF8) killed them with
         # UnicodeEncodeError. Force UTF-8 for every child, independent of
         # the invoking console's locale.
         _suite_env = {**os.environ, "PYTHONIOENCODING": "utf-8:replace"}
-        r = subprocess.run(
-            [sys.executable, str(target)],
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            env=_suite_env,
-            cwd=str(ROOT), timeout=timeout)
+        try:
+            r = subprocess.run(
+                [sys.executable, str(target)],
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                env=_suite_env,
+                cwd=str(ROOT), timeout=timeout)
+        except subprocess.TimeoutExpired:
+            dur = time.time() - t0
+            failed_total += 1
+            results.append((name, False, dur))
+            print(f"[FAIL] {name:<20} (timeout after {timeout}s)")
+            continue
         dur = time.time() - t0
         ok = r.returncode == 0
         failed_total += 0 if ok else 1

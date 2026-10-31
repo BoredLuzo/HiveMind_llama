@@ -528,8 +528,6 @@ class RunBridge:
         # from the live phone mode.
         _conf = self._chat_runconf(chat_id, _s)
         sel_mode = _conf.get("mode", "")
-        if _conf.get("mode"):
-            _eff_label = f"{_conf['mode']} (chat)"
         _agents = (_s.get("agents") or {}) if isinstance(_s, dict) else {}
         _coder_mdl = (_agents.get("duo_coder") or {}).get("model") or ""
         _planner_mdl = _s.get("duo_planner_model") or _coder_mdl
@@ -539,7 +537,12 @@ class RunBridge:
         if from_voice and not _sel:
             # the engine decides the route for a spoken note
             _eff = "auto"
-        _eff_label = f"{_eff} (phone override)" if _mode_src == "phone" else _eff
+        # PIN-WINS (2026-10-31, audit): the note used to show the live phone
+        # mode even when this chat was pinned to another one.
+        _eff_label = (
+            f"{_conf['mode']} (chat)" if _conf.get("mode")
+            else f"{_eff} (phone override)" if _mode_src == "phone"
+            else _eff)
         if from_voice and not _sel:
             _eff_label = "auto (HiveMind decides)"
         if from_voice and not _sel and not _ov_model:

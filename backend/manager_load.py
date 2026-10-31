@@ -39,7 +39,7 @@ from .llama_manager_utils import (
 from .llama_slots import ModelSlot
 from typing import Optional
 from pathlib import Path
-from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
+from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, moe_cfg_for, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
 from .llama_models import resolve_model_path, list_available_models, resolve_mmproj_path, _strip_alias
 import asyncio
 import httpx
@@ -182,7 +182,6 @@ def _probe_all(llama_bin: str) -> tuple[int, bool, bool, bool, bool, bool]:
 # reaches backend.llama_models, which reaches this module).
 
 _LOAD_MODES = ("none", "mmap", "mlock", "mmap+mlock", "dio")
-_RAM_HEADROOM_GB = 8.0
 
 
 def _free_ram_gb() -> float:
@@ -208,27 +207,35 @@ def _ram_guard_blocks(model: str, free_ram_gb: float) -> bool:
 _BIN_HELP_CACHE: dict[str, str] = {}
 
 
-def _binary_help(bin_path=None) -> str:
+async def _binary_help(bin_path=None) -> str:
     """Cached `llama-server --help` text (one subprocess per binary path).
 
     FLAG-PROBING (2026-10-30): a flag the binary does not know aborts the
     load. `--spec-draft-p-min` exists from b12001 on, b11889 would refuse it,
     so capability is read from the help text instead of assumed.
+    ASYNC (2026-10-31, audit): the probe used to block the event loop up to
+    30 s on the first MTP load, and a failed probe was cached forever (the
+    flag then stayed omitted for the process lifetime). Runs in a thread;
+    empty results are not cached.
     """
     key = str(bin_path or LLAMA_BIN)
-    if key not in _BIN_HELP_CACHE:
-        try:
-            _BIN_HELP_CACHE[key] = subprocess.run(
-                [key, "--help"], capture_output=True, text=True, timeout=30,
-                encoding="utf-8", errors="replace").stdout or ""
-        except (OSError, subprocess.SubprocessError):
-            _BIN_HELP_CACHE[key] = ""
-    return _BIN_HELP_CACHE[key]
+    if key in _BIN_HELP_CACHE:
+        return _BIN_HELP_CACHE[key]
+    try:
+        _proc = await asyncio.to_thread(
+            subprocess.run, [key, "--help"], capture_output=True, text=True,
+            timeout=30, encoding="utf-8", errors="replace")
+        _txt = _proc.stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        _txt = ""
+    if _txt:
+        _BIN_HELP_CACHE[key] = _txt
+    return _txt
 
 
-def _help_supports(flag: str) -> bool:
+async def _help_supports(flag: str) -> bool:
     """True when the loaded binary lists `flag` in its help."""
-    return bool(flag) and flag in _binary_help()
+    return bool(flag) and flag in await _binary_help()
 
 
 def _archive_old_slot_logs(log_dir, port: int, keep: int = 10) -> None:
@@ -299,7 +306,7 @@ def _append_chat_template(cmd: list, model_base: str, reg_template: str) -> None
     sharp_v22.5.0 -> chat_template22.5 -> qwen3.6 template fire.
     """
     _templates_dir = Path(__file__).resolve().parent.parent / "model_configs"
-    # Registry-Template (expliziter Pfad oder Basisname) hat Vorrang.
+    # Registry template (explicit path or base name) wins.
     if reg_template:
         _reg_template_path = Path(reg_template)
         if not _reg_template_path.is_absolute():
@@ -568,7 +575,7 @@ class LlamaLoadMixin:
         async with self._lock:
             _committed = sum(
                 vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
-                if any(x in (s.model or "") for x in ("35b-a3b", "a3b-ud", "a3b-mtp"))
+                if moe_cfg_for(_strip_alias(s.model))
                 else _vram_of(s.model)
                 for s in self._slots if s.model
             )
@@ -589,7 +596,7 @@ class LlamaLoadMixin:
                 # Recalculate after eviction (stale _committed used to log wrong value)
                 _committed_after = sum(
                     vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
-                    if any(x in (s.model or "") for x in ("35b-a3b", "a3b-ud", "a3b-mtp"))
+                    if moe_cfg_for(_strip_alias(s.model))
                     else _vram_of(s.model)
                     for s in self._slots if s.model
                 )
@@ -1594,12 +1601,12 @@ class LlamaLoadMixin:
             ]
             # --spec-draft-p-min exists from b12001 on; on older binaries the
             # flag would abort the load, so gate it on the help text we read.
-            if _help_supports("--spec-draft-p-min"):
+            if await _help_supports("--spec-draft-p-min"):
                 cmd += ["--spec-draft-p-min", f"{_draft_pmin:g}"]
             logger.info(
                 "MTP active: %s (draft-max=%d, draft-min=%d, draft-p-min=%s%s)",
                 MTP_SPEC_TYPE, _draft_nmax, MTP_DRAFT_N_MIN, f"{_draft_pmin:g}",
-                "" if _help_supports("--spec-draft-p-min") else " [flag unsupported - omitted]",
+                "" if await _help_supports("--spec-draft-p-min") else " [flag unsupported - omitted]",
             )
 
         # ── DSpark external drafter (Speculative-Decoding Sidecar) ──────────

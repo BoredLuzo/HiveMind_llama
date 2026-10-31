@@ -7,6 +7,7 @@ import json
 import os
 import logging
 import threading
+import time
 from datetime import datetime as _dt
 from pathlib import Path
 
@@ -105,7 +106,10 @@ DEFAULT_SETTINGS = {
 
     # ════════════════════════════════════════════════════════════════════════
     # ════════════════════════════════════════════════════════════════════════
-    "duo_tool_rounds":         0,
+    # Agentic tool rounds per chunk. 50 (2026-10-31): a fresh install must
+    # be able to write files; 0 silently disabled the whole tool loop and
+    # chunking then produced text-only "implementations".
+    "duo_tool_rounds":         50,
     "duo_use_pipeline":        False,
     "duo_critic_tools":        False,
     # CHUNKING DEFAULT OFF (2026-10-27, owner): stays a working opt-in, but a
@@ -739,7 +743,7 @@ def _load_settings_from_disk() -> dict:
             pass
     return dict(DEFAULT_SETTINGS)
 
-_settings_write_lock = threading.Lock()
+_settings_write_lock = threading.RLock()
 
 
 def _now_iso() -> str:
@@ -842,11 +846,19 @@ _presets_write_lock = threading.Lock()
 
 
 def save_presets(presets: dict):
+    # ATOMIC-WRITE (2026-10-31, audit): the hardened settings path carries a
+    # PID in the temp name and retries once on Windows PermissionError; the
+    # preset path had neither, so two processes could interleave.
     _data = json.dumps(presets, ensure_ascii=False, indent=2)
-    _tmp = PRESETS_FILE.with_name(f".presets_{threading.get_ident()}.tmp")
-    _tmp.write_text(_data, encoding="utf-8")
     with _presets_write_lock:
-        _tmp.replace(PRESETS_FILE)
+        _tmp = PRESETS_FILE.with_name(
+            f".presets_{os.getpid()}_{threading.get_ident()}.tmp")
+        _tmp.write_text(_data, encoding="utf-8")
+        try:
+            _tmp.replace(PRESETS_FILE)
+        except PermissionError:
+            time.sleep(0.1)
+            _tmp.replace(PRESETS_FILE)
 
 
 def get_custom_prompt(preset_name: str, agent_key: str) -> str | None:

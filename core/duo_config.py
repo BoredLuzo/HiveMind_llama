@@ -9,7 +9,7 @@ class DuoConfig:
 
     Replaces 20 separate keyword arguments in run_stream().
     """
-    tool_rounds: int = 0
+    tool_rounds: int = 50
     use_pipeline: bool = False
     coding_mode: bool = True
     chunking: bool = False
@@ -36,7 +36,7 @@ class DuoConfig:
 
     @classmethod
     def from_legacy_params(cls, *,
-                           duo_tool_rounds=0,
+                           duo_tool_rounds=50,
                            duo_use_pipeline=False,
                            duo_coding_mode=True,
                            duo_chunking=False,

@@ -1155,6 +1155,10 @@ class ToolRoundState:
     instead of 17 individual parameters."""
     tool_ctx_lru: object = None
     duo_deadline_at: float = 0.0
+    # +300 s grace per successful write is legitimate progress, but unbounded
+    # extensions let a run outlive its configured timeout indefinitely. One
+    # extension max (live 2026-10-31: 900 s configured, 1056 s alive).
+    grace_extensions: int = 0
     verify_mutation_serial: int = 0
     verify_last_ok_serial: int = 0
     last_run_bash_failure: dict | None = None

@@ -955,7 +955,7 @@ async function loadSettings() {
     }
     var dtrSel = document.getElementById('duo-tool-rounds-sel');
     if (dtrSel) {
-      S.duoToolRounds = parseInt(s.duo_tool_rounds || 0);
+      S.duoToolRounds = parseInt(s.duo_tool_rounds ?? 50);
       dtrSel.value = String(S.duoToolRounds);
     }
     var dpipeEl = document.getElementById('duo-pipeline-toggle');

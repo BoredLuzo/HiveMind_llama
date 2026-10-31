@@ -27,7 +27,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import model_configs.models_registry as _registry
 from backend.llama_vram_table import (  # noqa: E402
-    moe_cfg_for, _profile_moe_cfg, vram_of_moe, vram_of_with_ctx,
+    moe_cfg_for, _profile_moe_cfg, vram_of, vram_of_moe, vram_of_with_ctx,
     _MOE_TABLE,
 )
 
@@ -143,6 +143,15 @@ try:
         check("5b profile MoE: ctx estimate uses the profile, not the dense formula",
               vram_of_with_ctx(TEST_MOE, 65536) == _exp5,
               f" ({vram_of_with_ctx(TEST_MOE, 65536)} == {_exp5})")
+        # 5c/5d: the stored MoE split (table row) is authoritative in vram_of
+        # too - the dense 0.6 GB/B heuristic used to answer 21.0 for a 35B-A3B.
+        check("5c table MoE: vram_of is the stored active_gpu_gb",
+              vram_of("qwen3.6:35b-a3b") == 4.66
+              and vram_of("hermes3.6:35b-a3b") == 4.66,
+              f" ({vram_of('qwen3.6:35b-a3b')})")
+        check("5d prefix MoE: lfm2.5:24b-a2b uses its table row",
+              vram_of("lfm2.5:24b-a2b") == 5.91,
+              f" ({vram_of('lfm2.5:24b-a2b')})")
 finally:
     _restore()
 

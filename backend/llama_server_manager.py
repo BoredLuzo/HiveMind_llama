@@ -33,7 +33,7 @@ from .llama_config import (
     _GPU_LAYERS_TABLE,
 )
 from .llama_models import resolve_model_path, list_available_models, resolve_mmproj_path, _strip_alias
-from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
+from .llama_vram_table import vram_of_moe, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
 
 logger = logging.getLogger("llama_manager")
 from .llama_manager_utils import (
