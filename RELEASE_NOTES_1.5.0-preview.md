@@ -55,6 +55,15 @@ panel, and the branch fields write the key the backend reads.
 - LFM3 1.7B QAD replaced the retired LFM2.5-2.6B line in 1.4.14; the installer
   prose no longer mentions the 2.6B drafter.
 
+## Maintainability
+
+The final pass removed the dead settings keys that old exports kept
+round-tripping, single-sourced the runtime-flag key list (POST /settings
+imports it from the helper), removed three silent swallows, renamed the token
+gate to what it actually covers, and restored the comment blocks the docs
+generator had attached to the wrong keys. The dev-only sync tool now keeps a
+manifest and prunes files that left the repository.
+
 ## Tests
 
 233/233 suites, ruff clean. The new MCP suite covers the token gates, the

@@ -40,6 +40,21 @@ installs update only through `update.bat --zip`.
   comments and skips banners. Groot's profile loses the dead `ubatch` and
   `side_call_sampling` keys and uses its native GGUF template.
 
+### Maintainability (2026-10-31, final pass)
+- 17 settings keys with no production reader are dropped on load (old UI and
+  preset exports no longer round-trip them); preset apply skips unknown keys.
+- `RUNTIME_FLAG_KEYS` is exported by `backend/runtime_flags` and imported by
+  POST /settings, so the key list cannot drift from the helper.
+- The three silent swallows are gone: POST /settings logs an ImportError, the
+  VRAM profile merge logs, and the deadline cancel abandons the tool task
+  without awaiting it (an outer cancellation is no longer swallowed).
+- `_INTERNAL_TOKEN_GATED_TOOLS` names what it gates (exec + mutating); the dead
+  `shell` clause in the shared dispatch and the stale `batch` note are gone.
+- `docs/architecture.md` lists the new log markers; the settings generator's
+  notes for the voice/telegram keys are restored.
+- `tools/sync_to_installs.py` (dev-only, gitignored) keeps a manifest and
+  prunes files it synced before that are no longer tracked.
+
 Tests: 233/233 suites, ruff clean.
 
 ## [1.4.14] - 2026-10-31
