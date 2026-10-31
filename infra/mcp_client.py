@@ -1002,7 +1002,8 @@ class McpClient:
         settings = _settings(settings)
         self._last_settings = settings
         if not self.enabled(settings):
-            await self.close_all()
+            # already holding _lifecycle (refresh): call the unlocked body
+            await self._close_all_unlocked()
             self._defs = []
             self._names = {}
             return {"enabled": False, "servers": []}
@@ -1057,13 +1058,23 @@ class McpClient:
         return {"enabled": True, "servers": status}
 
     async def close_all(self) -> None:
+        # C3 (2026-10-31 handoff): shutdown used to race the boot refresh.
+        # The refresh holds the lifecycle lock and would spawn fresh conns
+        # into the dict this method just emptied. Wait for it instead
+        # (bounded by the per-server INIT_TIMEOUT_S); per-conn close does not
+        # take the lock again.
+        async with self._lifecycle:
+            await self._close_all_unlocked()
+
+    async def _close_all_unlocked(self) -> None:
+        """The body of close_all; callers hold _lifecycle."""
         # L6: the caches described tools that no longer exist after a close.
         self._defs = []
         self._names = {}
         self._negotiated.clear()
-        # SERVER-ERRORS-CLEAR (2026-10-28, mcp audit): _server_errors fed the
-        # MCP_UNKNOWN_TOOL hint - after close_all it kept naming servers that
-        # are gone.
+        # SERVER-ERRORS-CLEAR (2026-10-28, mcp audit): _server_errors fed
+        # the MCP_UNKNOWN_TOOL hint - after close_all it kept naming
+        # servers that are gone.
         self._server_errors.clear()
         conns = list(self._conns.values())
         self._conns = {}

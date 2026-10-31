@@ -34,7 +34,8 @@ configured `token_env` whose variable is missing or empty **fails the start**
 with the variable name in the message - the server never starts
 unauthenticated by accident. Tokens are never logged. `GET /mcp/servers`
 reports the server list redacted (no env values, no header values); the
-reload response reports `has_auth: true` per HTTP server, never the value.
+`GET /mcp/servers` and the reload response both report `has_auth: true` per
+HTTP server, never the value.
 If the server answers 401 or 403, the tool call returns
 `[TOOL_ERROR: MCP_AUTH_FAILED]` (token missing, wrong or expired) and the
 connection stays alive - a wrong token is a configuration mistake, not a
@@ -156,10 +157,11 @@ so a dead server does not end the run.
   means the request was delivered and the server may already have executed
   the tool. A tool call that runs into its timeout sends
   `notifications/cancelled` (HTTP only) so the server can stop the work.
-- Status codes are honored on the handshake confirmation too: a 401/403 on
-  `notifications/initialized` fails the start as `MCP_AUTH_FAILED`, 5xx is
-  retried with the same ladder, and any other 4xx fails the start instead
-  of being waved through.
+- Status codes are honored on the handshake confirmation too: only
+  502/503/504 are retried with the same ladder; a 401/403 fails the start
+  immediately with the server's auth-rejection text (the `MCP_AUTH_FAILED`
+  code appears in **tool results**, not in the start error), and any other
+  4xx/5xx fails the start instead of being waved through.
 - Protocol versions are negotiated: the first offer is `2024-11-05`, or the
   version the server accepted on a previous connect (a rebuilt connection
   offers the stored version). Whatever version string the server answers

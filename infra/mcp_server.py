@@ -426,7 +426,7 @@ async def _dispatch_tool(tool_name: str, args: dict, local_handler=None,
     if not allowed:
         _audit_tool_call(tool_name, transport, ok=False, reason=reason)
         return _tool_error_response("TOOL_NOT_ALLOWED", reason, tool=tool_name)
-    if tool_name in _MCP_SHARED_TOOL_NAMES:
+    if tool_name in _MCP_SHARED_TOOL_NAMES or tool_name == "shell":
         if not MCP_SHARED_TOOL_ENABLED:
             return _tool_error_response(
                 "MCP_SHARED_DISABLED",
@@ -434,7 +434,12 @@ async def _dispatch_tool(tool_name: str, args: dict, local_handler=None,
                 tool=tool_name,
                 retryable=False,
             )
-        ok, result = await _try_shared_tool_exec(tool_name, args)
+        # ADVERTISED ALIAS (2026-10-31 handoff S4): IDEs call the documented
+        # "shell"; the engine tool is run_bash. The tier check above already
+        # treated it as exec, so forwarding cannot lift it into a lower tier.
+        # Only the shared path aliases; the local handler keeps its name.
+        _forward = "run_bash" if tool_name == "shell" else tool_name
+        ok, result = await _try_shared_tool_exec(_forward, args)
         if ok:
             return result
         return _tool_error_response(
@@ -663,9 +668,10 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
     if IS_WINDOWS:
         try:
             glob_pat = file_glob if file_glob != "*" else "*.*"
+            # ARGV-ONLY (2026-10-31 handoff S5): a quote in the pattern
+            # escaped the shell quoting and injected commands.
             proc = await asyncio.create_subprocess_exec(
-                "cmd.exe", "/c",
-                f'findstr /s /n /i "{pattern}" "{p}\\{glob_pat}"',
+                "findstr", "/s", "/n", "/i", pattern, f"{p}\\{glob_pat}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(p),
@@ -677,8 +683,8 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
 
     # 3. Unix: grep
     try:
-        proc = await asyncio.create_subprocess_shell(
-            f'grep -rn "{pattern}" "{p}"',
+        proc = await asyncio.create_subprocess_exec(
+            "grep", "-rn", pattern, str(p),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

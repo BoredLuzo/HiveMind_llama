@@ -32,7 +32,8 @@ def check(name, cond, extra=""):
 
 
 # ── S2: exec-class tools require the internal token ─────────────────────────
-from routers.core import _internal_exec_allowed  # noqa: E402
+from routers.core import (_internal_exec_allowed,  # noqa: E402
+                          _INTERNAL_MUTATING_TOOLS)
 
 _old_tok = os.environ.pop("HIVEMIND_INTERNAL_TOKEN", None)
 try:
@@ -46,25 +47,23 @@ finally:
     if _old_tok is not None:
         os.environ["HIVEMIND_INTERNAL_TOKEN"] = _old_tok
 
-# ── S1: external dispatch + gate on -> DENY, not allow ──────────────────────
-import core.state as _state  # noqa: E402
-import tools.runner as _runner  # noqa: E402
+# ── S1: the mutating class needs the same token over /internal/tool/exec ────
+from tools.runner import _APPROVAL_TOOLS  # noqa: E402
 
-_prev_settings = _state.settings
-_state.settings = dict(_prev_settings or {})
-_state.settings["duo_action_approval_enabled"] = True
-_tok = _runner._external_dispatch.set(True)
+check("S1 mutating mirror equals the runner's gated set",
+      _INTERNAL_MUTATING_TOOLS == _APPROVAL_TOOLS,
+      f"(missing={sorted(_APPROVAL_TOOLS - _INTERNAL_MUTATING_TOOLS)})")
+_old_tok = os.environ.pop("HIVEMIND_INTERNAL_TOKEN", None)
 try:
-    with tempfile.TemporaryDirectory(prefix="hvm_mcp_gate_") as _ws:
-        _res = asyncio.run(_runner._check_action_approval(
-            "run_bash", {"cmd": "echo x"}, _ws))
-    check("S1 external dispatch fails closed",
-          _res is not None and _res[0] == "DENY"
-          and "APPROVAL_UNAVAILABLE" in str(_res[1]),
-          str(_res)[:80])
+    for _tool in ("write_file", "edit_file", "write_file_append", "edit_ast",
+                  "replace_lines", "patch_file", "git_commit", "mcp_foo_bar"):
+        _ok, _why = _internal_exec_allowed(_tool)
+        check(f"S1 {_tool} is token-gated", not _ok, _why[:60])
+    _ok, _ = _internal_exec_allowed("read_file")
+    check("S1 read-only tools stay available", _ok)
 finally:
-    _runner._external_dispatch.reset(_tok)
-    _state.settings = _prev_settings
+    if _old_tok is not None:
+        os.environ["HIVEMIND_INTERNAL_TOKEN"] = _old_tok
 
 # ── S5: an SSE answer for another id is an error, not the answer ────────────
 from infra.mcp_client import McpError, _sse_response  # noqa: E402

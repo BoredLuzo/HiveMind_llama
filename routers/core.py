@@ -274,6 +274,16 @@ _INTERNAL_EXEC_TOOLS = {"run_bash", "shell", "run_python",
                         # browser evaluate runs arbitrary JS in the page.
                         "run_tests", "browser"}
 
+# S1 (2026-10-31 handoff): the mutating class needs the same shared secret
+# over HTTP, not just the exec class. Mirrors tools.runner._APPROVAL_TOOLS;
+# test_mcp_security_gate pins that the two sets stay equal. mcp_* names are
+# dynamic and mutating by rule (H7), handled by prefix.
+_INTERNAL_MUTATING_TOOLS = frozenset({
+    "run_bash", "run_python", "install_package", "start_background",
+    "write_file", "edit_file", "write_file_append",
+    "edit_ast", "replace_lines", "patch_file", "git_commit",
+})
+
 
 def _internal_host_allowed(host_header: str) -> bool:
     """Loopback-only (wie der MCP-HTTP-Guard), um DNS-Rebinding zu blocken."""
@@ -295,13 +305,16 @@ def _internal_host_allowed(host_header: str) -> bool:
 
 
 def _internal_exec_allowed(tool_name: str) -> tuple[bool, str]:
-    """Exec-Tools nur mit konfiguriertem Shared-Secret."""
-    if str(tool_name or "") not in _INTERNAL_EXEC_TOOLS:
+    """Exec and mutating tools over HTTP need the configured shared secret."""
+    _name = str(tool_name or "")
+    if (_name not in _INTERNAL_EXEC_TOOLS
+            and _name not in _INTERNAL_MUTATING_TOOLS
+            and not _name.startswith("mcp_")):
         return True, ""
     if os.environ.get("HIVEMIND_INTERNAL_TOKEN", "").strip():
         return True, ""      # Token wurde im Handler bereits geprueft
-    return False, ("exec tools are disabled over HTTP without HIVEMIND_INTERNAL_TOKEN "
-                   "(read/write tools stay available)")
+    return False, ("exec/mutating tools are disabled over HTTP without "
+                   "HIVEMIND_INTERNAL_TOKEN (read-only tools stay available)")
 
 
 @router.post("/internal/tool/exec")

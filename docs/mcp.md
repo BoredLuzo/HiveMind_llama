@@ -98,12 +98,15 @@ call. That endpoint is hardened as well (2026-10-21):
 
 - **Host guard**: only loopback `Host` headers (plus `MCP_HTTP_EXTRA_HOSTS`) are
   accepted, which blocks DNS rebinding.
-- **Exec needs a shared secret.** `run_bash`, `shell` and `run_python` are
-  refused over HTTP unless `HIVEMIND_INTERNAL_TOKEN` is set and sent as
+- **Exec and mutating tools need a shared secret.** `run_bash`, `shell`,
+  `run_python`, `start_background`, `install_package`, `run_tests`, `browser`
+  and the mutating class (`write_file`, `edit_file`, `write_file_append`,
+  `edit_ast`, `replace_lines`, `patch_file`, `git_commit`, all `mcp_*` names)
+  are refused over HTTP unless `HIVEMIND_INTERNAL_TOKEN` is set and sent as
   `X-Hivemind-Internal-Token`. Without the variable the answer is
-  `403 exec tools are disabled over HTTP without HIVEMIND_INTERNAL_TOKEN`.
-  Read and write tools stay available; their workspace lock is derived
-  server-side and cannot be weakened by the request body.
+  `403 exec/mutating tools are disabled over HTTP without HIVEMIND_INTERNAL_TOKEN`.
+  Read-only tools stay available; their workspace lock is derived server-side
+  and cannot be weakened by the request body.
 - **Audit**: every call logs one line,
   `[INTERNAL-EXEC] tool=read_file ok=True elapsed=0.02s bytes=123`.
 
