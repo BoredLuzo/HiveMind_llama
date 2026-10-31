@@ -26,6 +26,17 @@ argv-only (no shell quoting); the advertised `shell` forwards as `run_bash`
 after the tier check; both MCP docs state the retry statuses and the auth flag
 truthfully.
 
+The remaining 34 findings are closed in the same release: the client streams
+SSE with a body cap, recovers a 404 session once, checks ids on the JSON path,
+redacts stdio args/URL userinfo, warns on config decays, joins multi-line SSE,
+serializes call vs close/refresh, renders `structuredContent` and marks
+truncation; the server seeds budgets on the contextless IDE path, writes the
+audit line on timeouts, handles `notifications/cancelled` and stdio timeouts,
+returns spec-correct error codes, narrows `isError`, sanitizes log names,
+aligns the stdio/HTTP caps, bounds body reads and connections, and negotiates
+the protocol version. Integration adds an `mcp_*` call budget and scans MCP
+arguments in the destructive gate.
+
 ## Settings and presets
 
 The code read several settings that were never shipped as defaults

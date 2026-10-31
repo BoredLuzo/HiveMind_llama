@@ -21,6 +21,16 @@ installs update only through `update.bat --zip`.
   shared path only, after the tier check.
 - `docs/mcp.md` / `docs/mcp_client.md` state the token-gated set, the real
   retry statuses (502/503/504) and that `has_auth` appears on both endpoints.
+- **The remaining 34 audit findings are closed.** Client: streaming SSE with a
+  body cap, 404 session recovery, JSON-id check, off-loop taskkill, stdio/URL
+  redaction, config-decay warnings, string-id match, multi-line SSE,
+  call/refresh guard, structuredContent + truncation marker, cmd quoting.
+  Server: budget seeding for the IDE path, timeout audit line,
+  `notifications/cancelled` + stdio timeout, correct error codes, id-less
+  notifications without a response, non-dict batches, narrow `isError`,
+  log-name sanitizer, 2 MB stdio cap, body-read timeout + connection cap,
+  version negotiation. Integration: `mcp_*` call budget, documented mode-less
+  exception, destructive gate scans MCP args.
 
 ### Settings, presets, UI, docs
 - Missing defaults are persisted: `duo_compress_tail_tool_max_chars`,
