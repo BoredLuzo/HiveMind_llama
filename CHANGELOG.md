@@ -1,4 +1,63 @@
-## [1.4.13] - unreleased
+## [1.4.14] - 2026-10-31
+
+### Tool loop
+- `duo_tool_rounds` ships **50** (was 0). A fresh install could not write a
+  file: `_tool_round_base` requires `> 0`, so agentic chunk runs attached no
+  tools and produced text-only "implementations" (live: 7/7 rounds, empty
+  workspace). An explicit 0 still disables the loop.
+- **Truncated `edit_file` no longer retries itself.** `write_file` already
+  salvaged partial content with a marker; an `edit_file` cut at the output
+  limit is dropped (a half edit would corrupt the file) and now forces a
+  compression instead of retrying with the same clamped budget (live: a
+  2404-token budget against an ~16k request, deterministic truncation).
+- `min_viable_tool_budget`: a tool round must keep `max(1024, min(4096,
+  request//2))` output tokens; the fixed 1024 floor let the 2404 budget ship.
+- `write_file`/`edit_file` shrink guards are proportional: >=30 content lines
+  and <=25 % now blocks without `confirm_shrink` (live: 11 616 -> 1 716 bytes,
+  ~40 -> 9 lines, passed the absolute arms).
+- `[TOOL-CALL-MISS]` WARNING per failed tool round: thinking flag +
+  chat_template_kwargs, tools count/schema/hash, tool_choice, slot/requested
+  ctx, prompt/cached tokens, finish_reason, completion/max_tokens, all sampler
+  values, and 500 chars of content, reasoning and raw SSE.
+
+### Deadline
+- The run deadline is enforced **inside** a tool round: the heartbeat cancels
+  the executor (and the server-side generation). A cancelled round reports
+  `timeout` in its own stop-reason bucket.
+- A successful write grants at most **one** +300 s grace extension; the
+  unbounded extension let a 900 s run stay alive past 1056 s.
+
+### MoE sizing
+- `vram_of()` uses the stored MoE split (`active_gpu_gb` + `n_cpu_moe`) for
+  every table row and profile: hermes/qwen3.6 21.0 -> 4.66 GiB, minicpm
+  21.0 -> 4.64, lfm2.5:24b 14.4 -> 5.91, mellum 7.2 -> 4.0.
+  `_enforce_vram_budget` classifies by `moe_cfg_for` instead of name
+  substrings.
+- `vram_of_with_ctx` delegates all MoE models to `vram_of_moe`; the Groot
+  profile carries `vram_gb_override 4.6` and `kv_bytes_per_token 6336`.
+- `duo_ubatch` ships 256 (measured opt-in 512/1024); preset loads use the same
+  resolver through one `apply_runtime_flags()` helper, so an explicit
+  `duo_ubatch` survives a preset load and garbage ints cannot 500 the apply.
+
+### Models and installer
+- LFM3 1.7B QAD replaces the retired LFM2.5-2.6B line (installer judge step,
+  direct/judge roles, fallback ladders, `safe_profile_matrix`, docs).
+  `BINARY_MIN_BUILD` gates `lfm3`/`lfm3-omni` at b12001.
+- Downloader: HTTP 416 with fewer bytes on disk than expected is no longer
+  "Already complete" - the partial file is removed and the download retried.
+
+### Hygiene
+- Log-once for profile MoE resolutions; `_binary_help` no longer blocks the
+  event loop (thread) and does not cache failures; slot-log telemetry reads a
+  40 KB tail from a `__file__`-anchored path; `save_presets` uses a PID temp
+  name + retry; the settings lock is an `RLock`; the Telegram start note shows
+  the pinned chat mode; `/vram/table` includes profile-sized MoEs.
+- Dead code removed (`_FALLBACK_MODEL_PREFERENCE` copy, `_RAM_HEADROOM_GB`,
+  unused flag imports, dead KV rows, `src_preset` ternary).
+
+Tests: 232/232 suites, ruff clean.
+
+## [1.4.13] - 2026-10-30
 
 ## Stability (2026-10-30)
 
