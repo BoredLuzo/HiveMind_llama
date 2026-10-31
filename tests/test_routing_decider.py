@@ -188,6 +188,34 @@ check("shadow: judge still decides (not the rules)",
       d.source == "judge" and seen_shadow["n"] == 1,
       f"({d.source}, judge calls {seen_shadow['n']})")
 
+# ── Forced complexity is a hard override: no encoder, no judge ─────────────
+import asyncio  # noqa: E402
+
+_forced_calls = {"n": 0}
+
+
+async def _forced_judge(_text):
+    _forced_calls["n"] += 1
+    return "complex", 0.9
+
+
+for _forced, _route in (("trivial", "direct"), ("simple", "direct"),
+                        ("complex", "agentic"), ("code_duo", "agentic")):
+    _d = asyncio.run(D.decide_async(
+        settings(routing_decider="on", routing_judge="on"), QUESTION,
+        forced_complexity=_forced, judge_call_async=_forced_judge))
+    check(f"forced {_forced} skips judge and encoder",
+          _d.source == "force" and _d.route == _route
+          and _forced_calls["n"] == 0,
+          f"({_d.route}/{_d.source}, judge={_forced_calls['n']})")
+
+for _forced, _route in (("trivial", "direct"), ("complex", "agentic")):
+    _enc = FakeEncoder("direct", 0.99)
+    _d = D.resolve(settings(routing_decider="on"), CODE,
+                   forced_complexity=_forced, encoder=_enc)
+    check(f"resolve forced {_forced} ignores the encoder",
+          _d.source == "force" and _d.route == _route and _enc.calls == 0)
+
 print()
 print(f"SUMMARY routing_decider: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

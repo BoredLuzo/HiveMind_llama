@@ -476,7 +476,14 @@ def decide_from_signals(settings: dict, text: str, *,
         planner_src = "heuristic"
 
     # 1. harte Overrides
-    if str(forced_complexity or "") == "simple":
+    _forced = str(forced_complexity or "")
+    if _forced == "trivial":
+        return Decision(route="direct", planner=False, source="force",
+                        reason="forced trivial")
+    if _forced == "complex":
+        return Decision(route="agentic", planner=(planner_src != "never"),
+                        source="force", reason="forced complex")
+    if _forced == "simple":
         return Decision(route="direct", planner=False, source="force", reason="forced simple")
     if str(forced_complexity or "") == "code_duo":
         return Decision(route="agentic", planner=(planner_src != "never"), source="force",
@@ -562,7 +569,8 @@ def resolve(settings: dict, text: str, *, forced_complexity: str | None = None,
             judge_call=None, cache: DecisionCache | None = None) -> Decision:
     """Sync-Variante (Tests, CLI, Skripte). Der Judge wird nur gefragt, wenn er
     gebraucht wird und `judge_call` gesetzt ist."""
-    if str(forced_complexity or "") in ("simple", "complex", "code_duo"):
+    if str(forced_complexity or "").strip():
+        # any forced value is a hard override: neither encoder nor judge
         return decide_from_signals(settings, text, forced_complexity=forced_complexity)
 
     decider_mode = _mode_from(settings, "routing_decider")
@@ -602,11 +610,17 @@ async def decide_async(settings: dict, text: str, *, forced_complexity: str | No
     """Runtime-Variante: Encoder im Worker-Thread, Judge im Event-Loop."""
     import asyncio
 
+    _forced = str(forced_complexity or "").strip()
+    if _forced:
+        # A forced complexity is a hard override: no encoder load, no judge
+        # (live 2026-10-31: forced "trivial" still loaded the judge model).
+        return decide_from_signals(settings, text, forced_complexity=_forced)
+
     decider_mode = _mode_from(settings, "routing_decider")
     planner_goal = _planner_from(settings) in ("decider", "auto")
     enc_dec: Decision | None = None
 
-    if decider_mode != "off" and str(forced_complexity or "") not in ("simple", "complex", "code_duo"):
+    if decider_mode != "off":
         enc = backend(_model_from(settings))
         key = DecisionCache.key(text, enc.model_name, settings)
         cached = cache().get(key)

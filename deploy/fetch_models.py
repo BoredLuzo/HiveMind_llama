@@ -70,7 +70,9 @@ def _persist_models_dir(mdir: Path) -> None:
 # "Qwen3.5-4B-Q4_K_M.gguf". Pinned specs never fall back to search.)
 # ESSENTIAL-SET (2026-10-26, ThinkPad feedback): `--essential` downloads the
 # direct/coder core and skips helper models a small machine may not want.
-# Tunable: spec KEYS to skip (the judge/decider today).
+# lfm3-omni is the optional vision worker. LFM3 1.7B stays in the essential
+# set because it also serves direct/subagent; the judge step in install.bat
+# is separately optional, and keyword routing works without any judge.
 ESSENTIAL_SKIP_KEYS = {"lfm3-omni:2b"}
 # DRAFTER-SKIP (2026-10-27, corrected): speculative decoding is ON again for
 # the profiles that ship an MTP head, so a drafter sidecar is NOT dead weight.

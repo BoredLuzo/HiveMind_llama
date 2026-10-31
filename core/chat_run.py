@@ -751,7 +751,7 @@ async def run_stream(
     _can_need_judge = (
         mode in ("auto", "automap")
         and not duo_config.agentic_mode
-        and force_complexity not in ("simple", "complex")
+        and not force_complexity
         and 10 < int(judge_bias) < 90
     )
     if _can_need_judge and bool(settings.get("judge_prefetch_before_complexity", False)):
