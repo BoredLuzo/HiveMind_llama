@@ -237,7 +237,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `telegram_phone_restricted` | bool | `True` |  |
 | `telegram_progress_msgs` | bool | `True` |  |
 | `telegram_result_mode` | str | `both` | What a phone run sends back (1.4.2). "both" = text + voice note, "text" = text only, "voice" = only the model-generated answer as a voice note (the progress lines stay text). telegram_progress_msgs turns the info lines off entirely for a pure "results only" channel. |
-| `telegram_voice_in` | bool | `False` |  |
+| `telegram_voice_in` | bool | `False` | Telegram gateway voice (per bot, opt-in). The gateway reads these from the engine, so the UI switches drive it; greying follows stt_enabled / tts_enabled (a voice note needs STT, a voice answer needs TTS). |
 | `telegram_voice_out` | bool | `False` |  |
 | `tts_enabled` | bool | `False` | Opt-in like STT: the sidecar (torch) only starts when tts_enabled is on. Cosette + 1.08x speed are the owner's picks (2026-10-17); Pocket TTS has no speed parameter, so the factor is applied by HiveMind (WSOLA). |
 | `tts_idle_stop_s` | int | `900` |  |

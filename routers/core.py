@@ -269,11 +269,12 @@ _INTERNAL_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 # arbitrary shell as run_bash and install_package runs a package manager.
 # They were missing here, so /internal/tool/exec let both through without
 # HIVEMIND_INTERNAL_TOKEN ("read/write tools stay available").
-_INTERNAL_EXEC_TOOLS = {"run_bash", "shell", "run_python",
-                        "start_background", "install_package",
-                        # run_tests executes project test scripts (pytest/npm),
-                        # browser evaluate runs arbitrary JS in the page.
-                        "run_tests", "browser"}
+_INTERNAL_TOKEN_GATED_TOOLS = {"run_bash", "shell", "run_python",
+                               "start_background", "install_package",
+                               # run_tests executes project test scripts
+                               # (pytest/npm), browser evaluate runs arbitrary
+                               # JS in the page.
+                               "run_tests", "browser"}
 
 # S1 (2026-10-31 handoff): the mutating class needs the same shared secret
 # over HTTP, not just the exec class. Imported from the runner so the two
@@ -302,7 +303,7 @@ def _internal_host_allowed(host_header: str) -> bool:
 def _internal_exec_allowed(tool_name: str) -> tuple[bool, str]:
     """Exec and mutating tools over HTTP need the configured shared secret."""
     _name = str(tool_name or "")
-    if (_name not in _INTERNAL_EXEC_TOOLS
+    if (_name not in _INTERNAL_TOKEN_GATED_TOOLS
             and _name not in _INTERNAL_MUTATING_TOOLS
             and not _name.startswith("mcp_")):
         return True, ""

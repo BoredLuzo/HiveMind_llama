@@ -12,6 +12,13 @@ import logging
 
 logger = logging.getLogger("llama_flags")
 
+# The keys apply_runtime_flags reads. Callers that decide whether to call it
+# (POST /settings, preset apply) import this instead of keeping a copy.
+RUNTIME_FLAG_KEYS = frozenset({
+    "llama_cache_reuse", "llama_cache_ram_mib", "llama_ctx_checkpoints",
+    "llama_ubatch_size", "duo_ubatch", "llama_mlock",
+})
+
 
 def _as_int(settings: dict, key: str, default) -> int:
     raw = settings.get(key, default)
@@ -34,7 +41,7 @@ def apply_runtime_flags(settings: dict) -> None:
     checkpoints = max(0, _as_int(settings, "llama_ctx_checkpoints",
                                  lc.CTX_CHECKPOINTS))
     mlock = bool(settings.get("llama_mlock", True))
-    ubatch, batch = lc.resolve_ubatch_sizes(settings)
+    ubatch, _ = lc.resolve_ubatch_sizes(settings)
 
     # Set the five startup flags on all three holders unconditionally: the
     # old preset block created the attributes on llama_server_manager even
@@ -46,7 +53,7 @@ def apply_runtime_flags(settings: dict) -> None:
         mod.MLOCK_MODEL = mlock
         mod.LLAMA_UBATCH = ubatch
         # LLAMA_BATCH is not a module global; --batch-size is derived from
-        # LLAMA_UBATCH in the loader. `batch` stays in the return value.
+        # LLAMA_UBATCH in the loader.
     logger.info(
         "[FLAGS] cache_reuse=%d cache_ram=%d checkpoints=%d mlock=%s ubatch=%d",
         cache_reuse, cache_ram, checkpoints, mlock, ubatch)

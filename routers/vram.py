@@ -219,8 +219,8 @@ async def vram_table():
                 _cfg = moe_cfg_for(_name)
                 if _cfg and _cfg.get("source") == "profile":
                     _out.setdefault(_name, round(float(_cfg["active_gpu_gb"]), 2))
-        except (ImportError, AttributeError, KeyError):
-            pass
+        except (ImportError, AttributeError) as exc:
+            logger.warning("[VRAM] profile merge skipped: %s", exc)
         return JSONResponse(content={"vram_gb": _out})
     except ImportError:
         return JSONResponse(content={"vram_gb": _VRAM_LOOKUP_GB})

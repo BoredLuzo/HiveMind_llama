@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from backend.runtime_flags import RUNTIME_FLAG_KEYS as _RUNTIME_FLAG_KEYS
 from settings import (
     load_settings, save_settings,
     load_presets, save_presets,
@@ -72,12 +73,6 @@ _UI_REV_PROTECTED_KEYS = {
 # `_registry` is internal bookkeeping, and image_processing_mode /
 # vision_agent_mode have no backend reader (the truth lives in
 # vision_model.json via /vision/config).
-# llama-server startup flags that POST /settings and a preset load must push
-# into the module globals (runtime_flags.apply_runtime_flags).
-_RUNTIME_FLAG_KEYS = {"llama_cache_reuse", "llama_cache_ram_mib",
-                      "llama_ctx_checkpoints", "llama_ubatch_size",
-                      "duo_ubatch", "llama_mlock"}
-
 _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
                       "image_processing_mode", "vision_agent_mode",
                       # BOOKKEEPING (2026-10-28, preset audit): these three are
@@ -619,8 +614,8 @@ async def post_settings(req: Request):
         try:
             from backend.runtime_flags import apply_runtime_flags as _apply_flags
             _apply_flags(settings)
-        except ImportError:
-            pass
+        except ImportError as exc:
+            logger.warning("[settings] llama flag sync skipped: %s", exc)
     # VRAM-PREFLIGHT-GATE (2026-10-11): live-sync the toggle into the
     # backend modules (same triple-sync as the startup path) so the
     # switch takes effect without a restart.

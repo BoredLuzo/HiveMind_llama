@@ -426,7 +426,7 @@ async def _dispatch_tool(tool_name: str, args: dict, local_handler=None,
     if not allowed:
         _audit_tool_call(tool_name, transport, ok=False, reason=reason)
         return _tool_error_response("TOOL_NOT_ALLOWED", reason, tool=tool_name)
-    if tool_name in _MCP_SHARED_TOOL_NAMES or tool_name == "shell":
+    if tool_name in _MCP_SHARED_TOOL_NAMES:
         if not MCP_SHARED_TOOL_ENABLED:
             return _tool_error_response(
                 "MCP_SHARED_DISABLED",

@@ -450,7 +450,12 @@ mathematically unreachable given the GPU load at the time.
 | `[MSGSIG-CHANGE]` | Early-prefix signature change, must never implicate system[0] |
 | `[CTX-EVICT-EMERGENCY]` | Last-resort eviction, compression cap exhausted and ctx over 90% |
 | `[GRACE ROUND EXPIRED]` | Grace round used up after budget exhaustion |
-| `[DEADLINE-GRACE]` | Run deadline extended after a successful write |
+| `[DEADLINE-GRACE]` | Run deadline extended after a successful write (at most one +300 s per run) |
+| `[RUN-DEADLINE]` | Deadline hit inside a tool round, executor cancelled |
+| `[CTX-DOWNSHIFT]` | Coder ctx pinned to the actual slot ctx after a downshift |
+| `[TOOL-CALL-MISS]` | Tool round ended without a parsed tool call (request state logged) |
+| `[TOOL-TRUNCATION]` | edit_file cut at the output limit, compression forced instead of a retry |
+| `[FLAGS]` | Runtime llama flags applied from settings |
 | `[STUB-ECHO]` | Model echoed stub text as tool output, replaced with an error |
 | `[READ-GUARD]` | Short-term read-hint cleanup after compression |
 | `[TOOL_ERROR: READ_REQUIRED]` | Write blocked on an unread existing file |

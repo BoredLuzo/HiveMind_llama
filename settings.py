@@ -423,6 +423,9 @@ DEFAULT_SETTINGS = {
     "tts_read_agentic":          False,
     "tts_read_ask":              False,
     "tts_read_gate":             False,
+    # Telegram gateway voice (per bot, opt-in). The gateway reads these from
+    # the engine, so the UI switches drive it; greying follows stt_enabled /
+    # tts_enabled (a voice note needs STT, a voice answer needs TTS).
     "telegram_voice_in":         False,
     "telegram_voice_out":        False,
     # What a phone run sends back (1.4.2). "both" = text + voice note, "text" =
@@ -724,6 +727,20 @@ def _load_settings_from_disk() -> dict:
                 if _ws_val is not None and not str(_ws_val).strip():
                     data[_ws_key] = None
             data.pop("pre_explore_parallel", None)
+            # STALE-KEYS (2026-10-31, audit): keys from older UI/preset
+            # exports with no production reader. OUT of DEFAULT_SETTINGS and
+            # dropped on load so they cannot round-trip forever.
+            for _stale_key in (
+                    "automap_code_duo_enabled", "automap_duo_pre_explore",
+                    "automap_duo_parallel_preexplore",
+                    "automap_pipeline_websearch_enabled",
+                    "duo_distilled_executor", "startup_preload_analyst",
+                    "startup_preload_coder", "startup_preload_judge_in_agentic",
+                    "searxng_enabled", "tool_profile", "budget_schema_budget",
+                    "budget_tool_result_cap", "judge_bias",
+                    "duo_candidate_models", "ask_user_auto_proceed",
+                    "git_branch", "vision_agent_mode"):
+                data.pop(_stale_key, None)
     # MIGRATION: duo_test_feedback → new split toggles (chunk/final)
             _legacy_tf = data.get("duo_test_feedback") if "duo_test_feedback" in data else None
             if "duo_test_feedback_chunk" not in data and _legacy_tf is not None:

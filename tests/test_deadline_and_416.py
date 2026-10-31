@@ -34,8 +34,10 @@ check("cancelled round is reported as timeout",
 check("cancel path never dereferences None",
       "if _exec_result is None:" in _duo
       and "_duo_timed_out = True" in _duo)
-check("cancel wait is bounded", "asyncio.wait_for(" in _duo
-      and "timeout=10.0" in _duo)
+check("cancel does not await the dead task",
+      "_exec_task.cancel()" in _duo
+      and "await asyncio.sleep(0)" in _duo
+      and "tool round did not stop within 10s" not in _duo)
 
 _trs = (ROOT / "core" / "tool_exec_helpers.py").read_text(encoding="utf-8")
 check("grace ledger is shared per run (not per round)",

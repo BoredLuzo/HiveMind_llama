@@ -1522,18 +1522,12 @@ async def _duo_exec_round_task(
                     "[RUN-DEADLINE] deadline reached inside a tool round - cancelling")
                 _exec_task.cancel()
                 _timed_out = True
-                try:
-                    # BOUNDED-WAIT (2026-10-31, audit): a handler blocked in
-                    # asyncio.to_thread delivers CancelledError only after the
-                    # thread returns; a bare await could freeze the run (and
-                    # the SSE stream) behind the deadline.
-                    await asyncio.wait_for(
-                        asyncio.shield(_exec_task), timeout=10.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError,
-                        RuntimeError):
-                    logger.warning(
-                        "[RUN-DEADLINE] tool round did not stop within 10s - "
-                        "abandoning it")
+                # ABANDON-WITHOUT-AWAIT (2026-10-31, audit): a handler blocked
+                # in asyncio.to_thread delivers CancelledError only after the
+                # thread returns. Awaiting it would either freeze the run or
+                # swallow an outer cancellation; one loop tick delivers the
+                # cancel, then the round is abandoned.
+                await asyncio.sleep(0)
                 yield await ctx.emit({"type": "status",
                     "content": "⏱ Run deadline reached — tool round cancelled."})
                 break

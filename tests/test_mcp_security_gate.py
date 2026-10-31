@@ -35,8 +35,8 @@ from routers.core import (_internal_exec_allowed,  # noqa: E402
 
 _old_tok = os.environ.pop("HIVEMIND_INTERNAL_TOKEN", None)
 try:
-    for _tool in ("run_bash", "run_python", "start_background", "install_package",
-                  "run_tests", "browser"):
+    for _tool in ("run_bash", "shell", "run_python", "start_background",
+                  "install_package", "run_tests", "browser"):
         _ok, _why = _internal_exec_allowed(_tool)
         check(f"S2 {_tool} is token-gated", not _ok, _why[:60])
     _ok, _ = _internal_exec_allowed("read_file")
@@ -48,7 +48,7 @@ finally:
 # ── S1: the mutating class needs the same token over /internal/tool/exec ────
 from tools.runner import _APPROVAL_TOOLS  # noqa: E402
 
-check("S1 mutating mirror equals the runner's gated set",
+check("S1 mutating set is the runner's gated set (import identity)",
       _INTERNAL_MUTATING_TOOLS == _APPROVAL_TOOLS,
       f"(missing={sorted(_APPROVAL_TOOLS - _INTERNAL_MUTATING_TOOLS)})")
 _old_tok = os.environ.pop("HIVEMIND_INTERNAL_TOKEN", None)

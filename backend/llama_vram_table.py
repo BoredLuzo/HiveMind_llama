@@ -324,9 +324,9 @@ def vram_of(model_name: str) -> float:
     #    (active_gpu_gb = the measured non-KV resident part). Without this,
     #    profile-sized MoEs fell through to the dense heuristic (~0.6 GB/B),
     #    which overstates a 35B-A3B by gigabytes and blocked loads that fit.
-    # Any MoE sizing (static table row OR local profile) is authoritative.
-    # "gut gesplittet gespeichert": n_cpu_moe + active_gpu_gb live in the
-    # profile/table; the dense heuristic must never override that split.
+    # Any MoE sizing (static table row OR local profile) is authoritative:
+    # n_cpu_moe + active_gpu_gb store the CPU/GPU split; the dense heuristic
+    # must never override it.
     _cfg = moe_cfg_for(model_name)
     if _cfg and _cfg.get("active_gpu_gb"):
         return round(float(_cfg["active_gpu_gb"]), 2)
@@ -387,7 +387,7 @@ def vram_of_with_ctx(model_name: str, num_ctx: int = 4096) -> float:
     # absurd estimates (Groot 19B: 29+ GiB @131k) that block loads that fit.
     # Sits ABOVE the ctx<=4096 early return so a table MoE answers its
     # active_gpu_gb at small ctx too (else 21.0@4096 vs 4.68@4097 — a
-# non-monotonic cliff manager_health sums into free_gb). The guard against
+    # non-monotonic cliff manager_health sums into free_gb). The guard against
     # the dense fallback inside vram_of_moe avoids recursion.
     if moe_cfg_for(model_name):
         return vram_of_moe(model_name, num_ctx)
