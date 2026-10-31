@@ -60,7 +60,7 @@ Check "a) git status clean" ([string]::IsNullOrWhiteSpace($dirty)) `
 # -- b) version consistent across server.py, pyproject, CHANGELOG -------------
 $srv = (Select-String -Path server.py -Pattern 'HIVEMIND_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
 $pyp = (Select-String -Path pyproject.toml -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
-$chal = (Select-String -Path CHANGELOG.md -Pattern '^## \[([0-9]+\.[0-9]+\.[0-9]+)\]' |
+$chal = (Select-String -Path CHANGELOG.md -Pattern '^## \[([0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?)\]' |
          Select-Object -First 1).Matches[0].Groups[1].Value
 Check "b) version server.py == pyproject == CHANGELOG" `
     ($srv -eq $pyp -and $srv -eq $chal) "server=$srv pyproject=$pyp changelog=$chal"
