@@ -257,6 +257,7 @@ SUITES = [
     ("lsp_client",              "tests/test_lsp_client.py",                  90),
     ("lsp_tools",               "tests/test_lsp_tools.py",                   60),
     ("lsp_real_pyright",        "tests/test_lsp_real_pyright.py",            120),
+    ("lsp_real_rust",           "tests/test_lsp_real_rust.py",               180),
     ("update_check",            "tests/test_update_check.py",                30),
     ("compression_whole_drop",  "tests/test_compression_whole_drop.py",      30),
 

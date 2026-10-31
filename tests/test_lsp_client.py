@@ -300,6 +300,25 @@ check("4f TSX diagnostics arrive and the server saw typescriptreact",
       f"({_tsx['diag'][0].get('data') if _tsx['diag'] else '[]'})")
 
 
+# ── 4g. LSP 3.17 pull diagnostics (rust-analyzer path) ─────────────────
+async def _pull_flow():
+    ws, sample = new_ws()
+    mgr = LC.LspManager(ws, settings=make_settings("pullonly"))
+    try:
+        out = {"start": await mgr.start_language("python")}
+        out["diag"] = await mgr.diagnostics("sample.py", wait_s=0.1)
+        return out
+    finally:
+        await mgr.close_all()
+
+
+_pull = asyncio.run(_pull_flow())
+check("4g a server with diagnosticProvider answers via pull",
+      _pull["start"] and _pull["diag"]
+      and _pull["diag"][0]["message"].endswith(f"|{len(SAMPLE_TEXT)}"),
+      f"({_pull['diag'][0]['message'] if _pull['diag'] else '[]'})")
+
+
 # ── 5. Server->client requests are answered -----------------------------
 async def _cfgprobe_flow():
     ws, sample = new_ws()

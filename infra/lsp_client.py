@@ -248,6 +248,12 @@ class _LspConnection:
         # server does not send one). Lets collect_diagnostics ignore a
         # delayed publication for the pre-didChange text.
         self._diag_version: dict[str, int | None] = {}
+        # Last non-empty publication + its generation. rust-analyzer sends
+        # the native result and then a version-less empty "clear" before the
+        # cargo-check result; keeping the fresh non-empty result prevents the
+        # clear from erasing the only actionable finding.
+        self._diag_last_nonempty: dict[str, list[dict]] = {}
+        self._diag_last_nonempty_gen: dict[str, int] = {}
         self.open_docs: dict[str, int] = {}   # uri -> sync version
         self._doc_text: dict[str, str] = {}
         self.init_params: dict = {}
@@ -468,6 +474,9 @@ class _LspConnection:
                 elif uri not in self._diag_version:
                     self._diag_version[uri] = None
                 self._diag_gen[uri] = self._diag_gen.get(uri, 0) + 1
+                if self.diagnostics[uri]:
+                    self._diag_last_nonempty[uri] = list(self.diagnostics[uri])
+                    self._diag_last_nonempty_gen[uri] = self._diag_gen[uri]
         # everything else ($/progress, window/logMessage, telemetry, ...)
         # is ignored by design
 
@@ -554,6 +563,32 @@ class _LspConnection:
         """True after the server published diagnostics for this URI once."""
         return self._diag_gen.get(canonical_uri(uri), 0) > 0
 
+    def supports_pull_diagnostics(self) -> bool:
+        """LSP 3.17 pull diagnostics (textDocument/diagnostic)."""
+        return isinstance(self.server_capabilities.get("diagnosticProvider"),
+                          dict)
+
+    async def pull_diagnostics(self, uri: str) -> list[dict] | None:
+        """Ask the server for a DocumentDiagnosticReport.
+
+        Servers like rust-analyzer run their real check (cargo check) on this
+        request, so type errors arrive even when the push channel only
+        contains syntax diagnostics. None = no usable report.
+        """
+        result = await self.request(
+            "textDocument/diagnostic",
+            {"textDocument": {"uri": canonical_uri(uri)}})
+        if isinstance(result, list):
+            return [d for d in result if isinstance(d, dict)]
+        if not isinstance(result, dict):
+            return None
+        if result.get("kind") == "unchanged":
+            return [dict(d) for d in self.diagnostics.get(uri, [])]
+        items = result.get("items")
+        if isinstance(items, list):
+            return [d for d in items if isinstance(d, dict)]
+        return None
+
     def _read_doc(self, path: Path) -> str:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
@@ -598,7 +633,8 @@ class _LspConnection:
         return uri, True
 
     async def collect_diagnostics(self, path: Path, wait_s: float,
-                                  language_id: str | None = None) -> list[dict]:
+                                  language_id: str | None = None,
+                                  allow_pull: bool = True) -> list[dict]:
         """Open/refresh the document, then wait up to wait_s for a suitable
         diagnostics publication (per-URI generation counter: the publication
         may arrive between didOpen and the wait, it still counts as fresh).
@@ -608,6 +644,11 @@ class _LspConnection:
         - already open but NEVER published (cold server): wait too, instead
           of answering "(no diagnostics)" before analysis started. This is
           the cold-pyright case small models hit on the first tool call.
+
+        Only a NON-EMPTY publication satisfies the wait: rust-analyzer first
+        publishes an empty "clear" and fills the real result in afterwards
+        (native, then cargo-check) - accepting the clear would answer
+        "(no diagnostics)" while the check is still running.
 
         Version-aware servers: a publication for an older document version
         is discarded in _dispatch; the wait additionally requires the
@@ -621,11 +662,33 @@ class _LspConnection:
             expected = self.open_docs.get(uri)
             deadline = self.loop.time() + wait_s
             while self.loop.time() < deadline:
-                if self._diag_gen.get(uri, 0) > gen0:
+                if (self._diag_gen.get(uri, 0) > gen0
+                        and self.diagnostics.get(uri)):
                     got = self._diag_version.get(uri)
                     if got is None or expected is None or got >= expected:
                         break
                 await asyncio.sleep(DIAG_POLL_S)
+        if allow_pull and self.supports_pull_diagnostics():
+            try:
+                pulled = await self.pull_diagnostics(uri)
+            except (LspError, OSError, asyncio.TimeoutError) as exc:
+                logger.debug("[LSP:%s] pull diagnostics failed: %s",
+                             self.language_id, exc)
+                pulled = None
+            if pulled:
+                # An empty pull report means "check still running" on
+                # rust-analyzer; only a non-empty report is an answer.
+                self.diagnostics[uri] = pulled
+                self._diag_gen[uri] = self._diag_gen.get(uri, 0) + 1
+                self._diag_last_nonempty[uri] = list(pulled)
+                self._diag_last_nonempty_gen[uri] = self._diag_gen[uri]
+                return [dict(d) for d in pulled]
+        if not self.diagnostics.get(uri):
+            # A later EMPTY publication (rust-analyzer's clear) must not
+            # erase the fresh non-empty result from the same check cycle.
+            if self._diag_last_nonempty_gen.get(uri, 0) > gen0:
+                return [dict(d)
+                         for d in self._diag_last_nonempty.get(uri, [])]
         return [dict(d) for d in self.diagnostics.get(uri, [])]
 
     # -- shutdown ------------------------------------------------------
@@ -846,7 +909,8 @@ class LspManager:
         return conn, uri
 
     # -- features ------------------------------------------------------
-    async def diagnostics(self, path, wait_s: float = 2.0) -> list[dict]:
+    async def diagnostics(self, path, wait_s: float = 2.0,
+                          allow_pull: bool = True) -> list[dict]:
         """The diagnostics for one document, waiting up to wait_s for the
         server's publication after open/change. Unknown extension -> []."""
         p = self._resolve_path(path)
@@ -856,7 +920,8 @@ class LspManager:
         conn = await self._conn(lang)
         return await conn.collect_diagnostics(
             p, max(0.0, float(wait_s)),
-            language_id=registry.document_language_for_path(p))
+            language_id=registry.document_language_for_path(p),
+            allow_pull=allow_pull)
 
     async def definition(self, path, line: int, character: int) -> list[dict]:
         conn, uri = await self._open_for(path)

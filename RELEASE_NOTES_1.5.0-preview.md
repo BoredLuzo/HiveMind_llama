@@ -110,8 +110,12 @@ freshness wait; `.tsx`/`.jsx` open as `typescriptreact`/`javascriptreact`
 while still using the TypeScript server; `lsp_status`/`lsp_diagnostics` are
 tier-1 in the schema fitter, and `lsp_enabled=false` removes the schemas
 instead of offering tools that only answer `LSP_DISABLED`. Rename plans now
-include the 1-based edit lines. A real-pyright smoke suite covers the whole
-client path and skips on machines without pyright.
+include the 1-based edit lines. LSP 3.17 pull diagnostics are used when a
+server advertises `diagnosticProvider`; rust-analyzer's native error is kept
+even when it immediately follows with an empty clear. Real-pyright and
+real-rust smoke suites cover both paths and skip when the server is absent.
+The README now carries a table of all ten LSP tools, with full arguments and
+the server registry in `docs/lsp.md`.
 
 ## Code panel, startup update check, compression
 
@@ -146,11 +150,12 @@ manifest and prunes files that left the repository.
 
 ## Tests
 
-239/239 suites, ruff clean. New coverage: MCP phase 2 (137 checks:
+240/240 suites, ruff clean. New coverage: MCP phase 2 (137 checks:
 annotations, the four new tools, resources containment/secret denylist,
-prompts, backward compatibility), LSP client/tools (54 + 76 checks), the
+prompts, backward compatibility), LSP client/tools (55 + 76 checks), the
 startup update checker (36 checks), whole-turn compression (15 checks) and
-the real-pyright LSP smoke suite (5 checks; skipped when pyright is absent).
+the real-pyright/rust LSP smoke suites (5 + 4 checks; skipped when the
+server is absent).
 The existing MCP suites still pass (28 + 175 + 73 + 23).
 
 ## Known limits

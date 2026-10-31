@@ -75,6 +75,13 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   while still using the TypeScript server. `lsp_rename` now includes the
   1-based edit lines in its plan. A real-pyright smoke suite checks the
   client end to end and skips cleanly when pyright is not installed.
+- **Pull diagnostics + rust-analyzer**: `textDocument/diagnostic` is used when
+  the server advertises `diagnosticProvider`. rust-analyzer sends the native
+  type diagnostic, a version-less empty clear, and later a cargo-check result;
+  the client keeps the fresh non-empty finding instead of returning the clear.
+  A real-rust smoke suite covers it (skips without rust-analyzer).
+- `docs/lsp.md` documents all ten tools, arguments, tiers, errors, the server
+  registry and the known limits; the README now carries the tool table.
 
 ### Code panel, startup update check, compression
 - **Code panel performance**: streamed plain text now appends to one text node

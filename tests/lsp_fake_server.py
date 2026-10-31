@@ -24,6 +24,8 @@ Modes (argv[1]):
              (request timeout test)
   staleversion - publishes a delayed OLD-version diagnostic after didChange
              before the fresh one (tests the client's version guard)
+  pullonly - advertises LSP 3.17 diagnosticProvider and only answers
+             textDocument/diagnostic; no push publications
 """
 import json
 import sys
@@ -80,20 +82,22 @@ def notify(method, params):
     send({"jsonrpc": "2.0", "method": method, "params": params})
 
 
-def publish(uri, version=None, text=None):
+def diagnostic_item(uri, text=None):
     if text is None:
         text = state["texts"].get(uri, "")
     name = str(uri).rsplit("/", 1)[-1]
-    params = {
-        "uri": uri,
-        "diagnostics": [{
-            "range": {"start": {"line": 0, "character": 0},
-                      "end": {"line": 0,
-                              "character": min(5, max(1, len(text)))}},
-            "severity": 1,
-            "source": "fake-lsp",
-            "data": {"language": state["languages"].get(uri, "")},
-            "message": f"fake diag {name}|{len(text)}"}]}
+    return {
+        "range": {"start": {"line": 0, "character": 0},
+                  "end": {"line": 0,
+                          "character": min(5, max(1, len(text)))}},
+        "severity": 1,
+        "source": "fake-lsp",
+        "data": {"language": state["languages"].get(uri, "")},
+        "message": f"fake diag {name}|{len(text)}"}
+
+
+def publish(uri, version=None, text=None):
+    params = {"uri": uri, "diagnostics": [diagnostic_item(uri, text)]}
     if version is not None:
         params["version"] = version
     notify("textDocument/publishDiagnostics", params)
@@ -102,6 +106,8 @@ def publish(uri, version=None, text=None):
 def publish_open(uri):
     """On didOpen: either probe the server->client request path first
     (cfgprobe) or publish after the mode's delay."""
+    if MODE == "pullonly":
+        return
     if MODE == "cfgprobe":
         for _method in ("workspace/configuration",
                         "client/registerCapability",
@@ -151,15 +157,19 @@ while True:
                 "code": -32602,
                 "message": "bad initialize params (rootUri/processId)"}})
             continue
-        reply(rid, {"capabilities": {"textDocumentSync": 1,
-                                     "definitionProvider": True,
+        _caps = {"textDocumentSync": 1,
+                 "definitionProvider": True,
                                      "referencesProvider": True,
                                      "hoverProvider": True,
                                      "documentSymbolProvider": True,
                                      "workspaceSymbolProvider": True,
-                                     "renameProvider": True,
-                                     "codeActionProvider": True},
-                     "serverInfo": {"name": "fake-lsp", "version": "0"}})
+                 "renameProvider": True,
+                 "codeActionProvider": True}
+        if MODE == "pullonly":
+            _caps["diagnosticProvider"] = {
+                "interFileDependencies": False, "workspaceDiagnostics": False}
+        reply(rid, {"capabilities": _caps,
+                    "serverInfo": {"name": "fake-lsp", "version": "0"}})
     elif method == "exit":
         sys.exit(0 if state["shutdown"] else 1)
     elif method == "shutdown":
@@ -184,6 +194,8 @@ while True:
         state["texts"][uri] = changes[0].get("text", "")
         state["versions"][uri] = int(doc.get("version")
                                      or _old_version + 1)
+        if MODE == "pullonly":
+            continue
         if MODE == "staleversion":
             # old-version result lands after the change; the client must
             # ignore it and keep waiting for the new version
@@ -195,6 +207,9 @@ while True:
         if DIAG_DELAY_S:
             time.sleep(DIAG_DELAY_S)
         publish(uri, version=state["versions"].get(uri))
+    elif method == "textDocument/diagnostic":
+        uri = (params.get("textDocument") or {}).get("uri")
+        reply(rid, {"kind": "full", "items": [diagnostic_item(uri)]})
     elif method == "textDocument/definition":
         pos = params.get("position") or {}
         line = pos.get("line") or 0

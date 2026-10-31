@@ -203,23 +203,34 @@ Tool scoping per phase: `duo_full`, `duo_readonly`, `pre_explore`,
 ### Language servers (LSP)
 
 Beyond the built-in analysis tools, the coding modes can use the language
-servers already installed on the machine. `lsp_status` reports what was
-found, `lsp_diagnostics` returns compiler/linter diagnostics for a file,
-`lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_symbols` and
-`lsp_workspace_symbols` answer navigation questions, `lsp_code_actions`
-lists the server's quickfixes for a range (titles only) and `lsp_rename`
-returns a summarized project-wide rename plan — nothing is written; apply
-the plan with `edit_file`. A server process starts lazily on the first tool
-call, never at boot, and `lsp_enabled` (default on) is the single switch:
-there are no per-language flags. A language whose server is missing answers
-`LSP_UNAVAILABLE` with an install hint; `lsp_servers` in settings.json can
-point each language at a custom command. With a server already running, a
-successful write/edit also gets a compact `[LSP auto-diagnostics …]` block
-(errors first, capped at 8 lines); a write never starts a cold server, so the
-block appears once a server is warm. `lsp_auto_diagnostics` (default true)
-turns that off. With `lsp_enabled=false` the `lsp_*` schemas are removed
-entirely; TSX/JSX are sent as `typescriptreact`/`javascriptreact`, and a
-rename plan lists the 1-based edit lines. Typical installs:
+servers already installed on the machine through one generic client. There
+are no per-language flags: `lsp_enabled` (default on) is the single switch,
+and `lsp_servers` overrides a command.
+
+| LSP tool | What it does |
+|---|---|
+| `lsp_status` | Lists the registry: language, resolved command, found/missing. Never starts a server. |
+| `lsp_diagnostics` | Compiler/linter diagnostics for one file (`[ERROR] path:line:col message`). Push + LSP 3.17 pull; waits 5s for a cold server. |
+| `lsp_definition` | Definition location(s) at a 1-based line/character position. |
+| `lsp_references` | Workspace-wide references at a 1-based position. |
+| `lsp_hover` | Type signature/docs at a 1-based position. |
+| `lsp_symbols` | Document outline: classes, functions, methods, variables with kinds and line ranges. |
+| `lsp_workspace_symbols` | Project-wide symbol search by name/prefix. |
+| `lsp_code_actions` | Quickfix/refactor titles for a 1-based range; nothing is applied. |
+| `lsp_rename` | Project-wide rename plan with per-file edit lines; writes nothing, apply with `edit_file`; approval-gated. |
+
+Read-only modes get the eight read tools plus `lsp_code_actions`;
+`lsp_rename` is full-mode only. A missing server answers `LSP_UNAVAILABLE`
+with an install hint. With a server already running, a successful write/edit
+gets a compact `[LSP auto-diagnostics …]` block (8-line cap); a write never
+starts a cold server, and `lsp_auto_diagnostics` (default true) turns the
+block off. With `lsp_enabled=false` the `lsp_*` schemas are removed entirely;
+TSX/JSX are sent as `typescriptreact`/`javascriptreact`.
+
+Full tool arguments, tiers, errors and the server registry:
+[docs/lsp.md](docs/lsp.md).
+
+Typical installs:
 
 ```text
 npm install -g pyright                                # Python (pyright-langserver)

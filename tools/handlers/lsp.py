@@ -578,7 +578,7 @@ async def auto_diagnostics_block(workspace: Path, path: str,
     wait_s = min(_coerce_float(settings.get("lsp_diagnostics_wait_s"), 5.0),
                  1.5)
     try:
-        diags = await mgr.diagnostics(p, wait_s=wait_s)
+        diags = await mgr.diagnostics(p, wait_s=wait_s, allow_pull=False)
     except (_lsp.LspError, OSError, asyncio.TimeoutError):
         return ""
     if not mgr.has_diagnostics(p):
