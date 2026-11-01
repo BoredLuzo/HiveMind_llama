@@ -245,6 +245,48 @@ rustup component add rust-analyzer                     # Rust
 apt install clangd      # or: winget install LLVM.LLVM  # C / C++ (clangd)
 ```
 
+### Model Context Protocol (MCP)
+
+HiveMind speaks MCP in **both directions**. Both are opt-in and loopback-only.
+
+**As a server — your IDE uses HiveMind's tools** (`start_mcp.bat`, HTTP 8090;
+`stdio` for editors that spawn a process):
+
+| | |
+|---|---|
+| Protocols | 2024-11-05, 2025-03-26 / 2025-06-18 (sessions, `GET /mcp` SSE with `Last-Event-ID` replay) and 2026-07-28 (`server/discover`, `_meta` version check, stateless) |
+| Tools | the 23 the agent uses — read/write/edit/run/test/git plus `model_status`; every tool carries annotations (`readOnlyHint`, `destructiveHint`, …) |
+| Resources | `resources/list`, `resources/read`, `resources/templates/list` — workspace-contained, text-only, 256 KB cap, secret denylist (`settings.json`, `gateway.toml`, `.env*`, keys) |
+| Prompts | `review_diff`, `explain_file`, `fix_tests` |
+| Tiers | read / write / exec; exec **and** every mutating tool require `HIVEMIND_INTERNAL_TOKEN`, read-only tools stay free |
+| Limits | 2 MB bodies, 64 sessions, 1 h idle TTL, per-session SSE ring of 500 events |
+
+**As a client — external MCP servers become tools** (`mcp_client_enabled`,
+off by default): stdio or HTTP, per-server call budgets
+(`mcp_server_budgets`, rolling hour → `MCP_BUDGET_EXCEEDED` names server,
+limit and reset time), remote annotations passed through, SSE streaming with
+a body cap and one 404-session recovery.
+
+**Tiers are opt-in by environment:** `MCP_ALLOW_WRITE=1` (write tools),
+`MCP_ALLOW_EXEC=1` (exec tools, **stdio only**) and `MCP_ALLOW_QUERY=1`
+(the chat tool). An editor that spawns the process uses
+
+```json
+{"mcpServers": {"hivemind": {
+  "command": "python",
+  "args": ["infra/mcp_server.py"],
+  "cwd": "C:/path/to/HiveMind",
+  "env": {"MCP_ALLOW_WRITE": "1"}
+}}}
+```
+
+`python tools/mcp_config_gen.py` prints ready-to-paste configs for Claude
+Desktop, Cline, Zed and VS Code — no real token in the output unless
+`--include-secret` is passed.
+
+Details: [docs/mcp.md](docs/mcp.md) (server),
+[docs/mcp_client.md](docs/mcp_client.md) (client).
+
 ## VRAM & models
 
 - llama.cpp backend: Vulkan (AMD/Intel), CUDA (NVIDIA), CPU. Multi-slot worker
@@ -591,6 +633,28 @@ Hugging Face gate: accept the terms on
 [docs/huggingface_token.md](docs/huggingface_token.md). Speech to text needs no
 token - whisper and parakeet are public repos.
 
+## Telegram (optional)
+
+Run HiveMind from your phone. The gateway is a separate process
+(`start_gateway.bat` / headless variant), talks to the engine over loopback and
+needs your own bot token from [@BotFather](https://t.me/BotFather) — setup:
+[docs/gateway_setup.md](docs/gateway_setup.md).
+
+| | |
+|---|---|
+| Pairing | `/start` with the one-time code from the engine; only the paired owner id is answered, everything else is ignored |
+| Mirroring | runs you start in the browser appear on the phone: progress, result, approval cards. Your phone texts go **into** the running run as steering (one mirrored run at a time) |
+| Phone runs | full runs with `/mode auto\|agentic\|chat\|pipeline\|automap\|off`, `/models`, `/setModel`, `/ctx`, `/planner`, `/preset`, `/workspace`, `/tools`, `/gate`, `/restrict`, `/status`, `/stop`, `/new`, `/follow`, `/cron`, `/purge`, `/shutdown` |
+| Voice in | a voice note is transcribed on the CPU and runs like typed text — **a spoken note keeps the selected conversational mode** (chat/simple/direct) instead of being rerouted |
+| Voice out | answers can come back as a voice note (`/tts` behaviour follows the Voice card: text, voice or both) |
+| **Images** | a photo (or an image sent as a file) becomes a run with the **caption as the prompt**; the engine loads the model's vision projector on demand. Largest Telegram size, JPEG/PNG/WebP, 10 MB cap |
+| **PDFs / text files** | a PDF, `.txt`, `.md`, `.log` or `.csv` is extracted on the engine (`/documents/extract`, pypdf) and run as text with the caption as the question. 40 pages / 120k characters per document (the answer says when it was cut), 25 MB upload; a scanned PDF without a text layer answers "send the pages as photos" |
+| Safety | owner-only, private-chat-only, rate-limited, `telegram_phone_restricted` limits phone runs to read tools; approvals can be answered on the phone |
+
+Switches live in the **Telegram** card (mirror, voice in/out, **images in**,
+result format, progress lines) and are read by the gateway per message — no
+restart needed.
+
 ## Learning and memory
 
 - Soul engine: peer-rating-based personality evolution, injects learned traits
@@ -617,13 +681,12 @@ token - whisper and parakeet are public repos.
 ## API
 
 - OpenAI-compatible `/v1/chat/completions` (agent tool-loop mode).
-- MCP client (beta): external MCP servers as tools over **stdio or HTTP**
-  (`settings: mcp_client_enabled`,
-  off by default) - see [docs/mcp_client.md](docs/mcp_client.md).
-- MCP server (Model Context Protocol, `infra/mcp_server.py`), stdio + HTTP on - see [docs/mcp.md](docs/mcp.md) for the tiers, limits and the editor-context endpoint.
-  port 8090 (`start_mcp.bat`), tiered read/write/exec permissions.
+- MCP in both directions — server on port 8090 (`start_mcp.bat`) for IDEs,
+  client for external servers: see [Model Context Protocol](#model-context-protocol-mcp).
 - `/automap/*` for routing profiles, `/model_configs/*` for base/learned/
   effective configs and learning logs.
+- `/stt`, `/tts`, `/documents/extract` — speech in/out and document text for
+  surfaces that have no local filesystem (the Telegram gateway uses them).
 
 ## Requirements
 

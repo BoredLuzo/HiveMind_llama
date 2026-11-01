@@ -1,15 +1,31 @@
 # Release 1.5.0
 
-1.5.0 builds on 1.4.14 with four workstreams: a hardened, protocol-current
+1.5.0 builds on 1.4.14 with five workstreams: a hardened, protocol-current
 MCP surface (server + client), a generic language-server client for the
-coding agent, compression and context-reliability work for long agentic
-runs, and a round of installer/updater/git audits whose findings are all
-fixed in this build. Hermes stays the default coder.
+coding agent, compression and context-reliability work for long agentic runs,
+a phone surface that now takes pictures and documents, and a round of
+installer/updater/git audits whose findings are all fixed in this build.
+Hermes stays the default coder, Groot stays experimental.
+
+Highlights, if you read nothing else:
+
+- **MCP both directions** — 2024/2025/2026 protocols, resources, prompts,
+  23 annotated tools, token-gated writes, per-server budgets, one-command
+  IDE configs.
+- **LSP for every installed language server** — ten `lsp_*` tools,
+  automatic diagnostics after edits, workspace `.vscode/settings.json`
+  honoured, on by default.
+- **Reprompting is reliable** — the post-run reload race that hard-stopped
+  follow-up prompts is gone; the coder-load ladder survives aborts.
+- **Telegram takes photos and PDFs** — caption becomes the prompt, the
+  projector loads on demand, scanned PDFs say so instead of pretending.
+- **Installer fixes** — release notes render, the decider prompt appears,
+  the essential set is the default route, declining a model skips it whole.
 
 Upgrade: run `update.bat` (or the new startup check offers the update
 directly), or extract the zip next to the old install. Settings, models,
 sessions and the venv survive; new settings keys pick up their defaults
-automatically.
+automatically. One new dependency: `pypdf` (pure Python, for document text).
 
 ## MCP: hardening, 2025 + 2026 protocols, budgets, IDE configs
 
@@ -48,7 +64,23 @@ automatically.
   configs for Claude Desktop, Cline, Zed and VS Code — no real token in
   the output unless `--include-secret`.
 
-## Language servers (LSP)
+Using it: `start_mcp.bat` serves `http://127.0.0.1:8090/mcp`; editors that
+spawn a process use
+
+```json
+{"mcpServers": {"hivemind": {
+  "command": "python",
+  "args": ["infra/mcp_server.py"],
+  "cwd": "C:/path/to/HiveMind",
+  "env": {"MCP_ALLOW_WRITE": "1"}
+}}}
+```
+
+`MCP_ALLOW_WRITE=1` enables the write tier, `MCP_ALLOW_EXEC=1` the exec tier
+(**stdio only**), `MCP_ALLOW_QUERY=1` the chat query tool. Details and the
+full tier table: [docs/mcp.md](docs/mcp.md).
+
+## LSP: any installed language server
 
 LSP is **on by default** — it activates through `lsp_enabled: true` in
 `settings.json`: once a language server for the file type is installed,
@@ -77,6 +109,15 @@ switch; `lsp_servers` overrides a command.
   publication instead of claiming a clean file. Servers close after 600 s
   idle (`lsp_idle_timeout_s`) and restart lazily. TSX/JSX open as
   `typescriptreact`/`javascriptreact`.
+- **UI**: a new *Language Servers & Auto-Lint* card in CONFIGS carries the
+  on/off switch, the auto-diagnostics toggle, the wait and idle timeouts and
+  the Python auto-lint engine (auto / pyright only / syntax only). The card
+  lists what to install for every supported language —
+  `npm i -g pyright` (Python), `typescript-language-server` (TS/JS),
+  `rustup component add rust-analyzer` (Rust),
+  `go install golang.org/x/tools/gopls@latest` (Go), clangd (C/C++),
+  `bash-language-server`, `lua-language-server` and
+  `vscode-langservers-extracted` (JSON/YAML/HTML/CSS).
 - **Lifecycle**: engine shutdown closes every cached server; cache
   eviction closes evicted managers; pyright's `file:///c%3A/…` URIs are
   canonicalized. Live-verified: pyright errors found → fixed → clean;
@@ -183,36 +224,41 @@ searchable as "keep alive"/"ttl"; and the alias table gained the German and
 acronym forms people actually type (kompression, zeit, speicher, lsp,
 pyright, keep alive, …).
 
-## Telegram: images
+## Telegram: voice, images, documents
 
-A photo (or an image sent as a file) to the bot now becomes a normal run with
-its **caption as the prompt** and the picture attached — "what is wrong in this
-screenshot?" works from the phone. The gateway used to answer "Text only in
-this build" while the engine's `/stream` already accepted `images`. The largest
-photo size is used, image documents are recognised by mime type, an empty
-caption falls back to "Describe this image.", downloads are capped at 10 MB and
-the engine still enforces its own 8-images / ~14 MB-per-url limits. Switch:
-**Images in** in the Telegram card (or `telegram_image_in`), on by default;
-`image_in` in `gateway.toml` is the fallback. A vision-capable model on the
-active route gets the picture directly, otherwise the vision agent preprocesses
-it into text.
+The phone surface ships voice, pictures and files — all local, all behind the
+owner/private/rate gates.
 
-**PDFs and text files** sent to the bot are extracted on the engine
-(`/documents/extract`, pypdf) and run as prompt text with the caption as the
-question — "summarize this" works. Caps: 40 pages / 120k characters (the
-answer says when it was cut), 25 MB upload, and a scanned PDF without a text
-layer answers "send the pages as photos" instead of pretending. Plain
-`.txt/.md/.log/.csv` documents work the same way. New dependency: `pypdf`
-(pure Python).
+**Voice.** A voice note is transcribed on the CPU (whisper.cpp/Parakeet) and
+runs exactly like typed text; answers can come back as a voice note. A spoken
+note now **keeps the selected conversational mode** (chat/simple/direct used to
+be rerouted to `auto`, so speaking took a different route than typing);
+`code_duo` and friends still hand the route to the engine, because forcing them
+on "what time is it" was the old bug.
 
-The vision projector now also attaches for **user-registered** models: the
-loader honours a `mmproj_filename` declared in the registry even when the
-model's base is not in the built-in vision list. An image request against a
-warm text-only slot triggers the existing vision reload, so the projector is
-loaded on demand — no manual preload.
+**Images.** A photo (or an image sent as a file) becomes a normal run with its
+**caption as the prompt** — "what is wrong in this screenshot?" works from the
+phone. The gateway used to answer "Text only in this build" while the engine's
+`/stream` already accepted `images`. The largest photo size is used, image
+documents are recognised by mime type, an empty caption falls back to
+"Describe this image.", downloads are capped at 10 MB and the engine still
+enforces its own 8-images / ~14 MB-per-url limits. Switch: **Images in** in the
+Telegram card (or `telegram_image_in`), on by default; `image_in` in
+`gateway.toml` is the fallback.
 
-Voice notes also keep the selected conversational mode now (chat/simple/direct
-used to be rerouted to `auto`, so speaking took a different route than typing).
+**The vision projector loads on demand.** A request with images asks for
+`vision=True`; a warm text-only slot is reloaded with the projector instead of
+answering "image input is not supported". New: the loader also honours a
+`mmproj_filename` declared in the registry, so **user-registered** vision
+models get their projector even when their base is not in the built-in list.
+
+**PDFs and text files.** A PDF, `.txt`, `.md`, `.log` or `.csv` is extracted on
+the engine (`POST /documents/extract`, pypdf in a worker thread) and run as
+prompt text with the caption as the question — "summarize this" works. Caps:
+40 pages / 120k characters (the answer says when it was cut), 25 MB upload. A
+scanned PDF without a text layer answers "send the pages as photos" instead of
+pretending, and a document larger than one phone run accepts is refused with a
+hint to ask about a part. New dependency: `pypdf` (pure Python).
 
 ## Code panel & UI
 
@@ -255,12 +301,18 @@ generated and gate-checked.
 
 ## Tests
 
-245/245 regression suites, ruff clean. New coverage: MCP phase 2 (137
-checks), MCP 2025 (47), MCP client budgets/config-gen (41), MCP 2026
-(15), LSP client/tools (55 + 76), the startup update checker (39),
-whole-turn compression (15), `[MEM]` (16), the worker-pin suite (6) and
-real-pyright/real-rust LSP smoke suites (5 + 4; skipped when the server
-is absent). The existing MCP suites still pass (28 + 175 + 73 + 23).
+249/249 regression suites, ruff clean, 13/13 pre-push checks. New coverage:
+MCP phase 2 (137 checks), MCP 2025 (47), MCP client budgets/config-gen (41),
+MCP 2026 (15), LSP client/tools (55 + 76), the startup update checker (39),
+whole-turn compression (15), `[MEM]` (16), the worker-pin suite (6),
+preset prompt roles (26: the editor only offers keys a runner reads),
+the installer download flow (25: declining a model skips the whole spec,
+the essential set is a 4-model whitelist), Telegram images (22: photo sizes,
+image documents, caption as prompt, caps), documents (23: PDF extraction,
+page/char caps, DOC_* errors) and the real-pyright/real-rust LSP smoke suites
+(5 + 4; skipped when the server is absent). The existing MCP suites still pass
+(28 + 175 + 73 + 23), and the gateway bridge suite grew to 213 checks
+(voice keeps the selected mode, images reach the engine).
 
 ## Known limits
 
@@ -276,6 +328,10 @@ is absent). The existing MCP suites still pass (28 + 175 + 73 + 23).
   clients.
 - `undo_last`'s safety snapshot does not cover untracked files
   (`git stash create` cannot include them).
+- PDF extraction needs a text layer: a scanned PDF is answered with "send
+  the pages as photos" instead of being rasterised (no PDF renderer is
+  bundled). Images through the phone need free VRAM for the projector —
+  the same pre-flight rule as any text run.
 - The plaintext GitHub token warning from the preview build still
   applies if your settings predate the fix: rotate the token and use
   the UI field.
