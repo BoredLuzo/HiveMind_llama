@@ -975,8 +975,6 @@ class LspManager:
                                         if self._idle_timeout_s > 0
                                         else REAPER_SWEEP_S))
                 self.reap_idle()
-                if not self._conns and self._reaper_task is not None                         and self._reaper_task.done():
-                    return
             except asyncio.CancelledError:
                 return
             except Exception as exc:
@@ -1055,12 +1053,12 @@ class LspManager:
             if conn.dead:
                 continue
             try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(conn.notify(
-                    "workspace/didChangeWatchedFiles", {"changes": changes}))
-                sent += 1
-            except (LspError, OSError, RuntimeError):
+                asyncio.get_running_loop()
+            except RuntimeError:
                 continue
+            self._spawn(conn.notify(
+                "workspace/didChangeWatchedFiles", {"changes": changes}))
+            sent += 1
         return sent
 
     async def format(self, path, tab_size: int = 4,
@@ -1078,6 +1076,11 @@ class LspManager:
             "textDocument": {"uri": uri},
             "options": {"tabSize": max(1, int(tab_size)),
                         "insertSpaces": bool(insert_spaces)}})
+        if result is None:
+            # JSON null = the server refused because there is nothing to do
+            # (rust-analyzer answers null on an already-formatted file —
+            # re-audit 2026-11-01). An empty edit list, not a capability gap.
+            return []
         if not isinstance(result, list):
             return None
         return [e for e in result if isinstance(e, dict)]

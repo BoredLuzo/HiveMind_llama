@@ -519,7 +519,8 @@ async def _auto_commit_chunk(user_input: str, subtask: str, workspace: str,
         _label = (subtask or user_input or "workspace")[:60]
         _message = f"{_prefix} {_label}"
 
-        _fold_out = await exec_git_squash_checkpoints(_message, workspace)
+        _fold_out = await exec_git_squash_checkpoints(_message, workspace,
+                                                      files=files or None)
         if _fold_out.startswith(("✅", "❌")):
             return "" if _fold_out.startswith("ℹ️") else _fold_out
 

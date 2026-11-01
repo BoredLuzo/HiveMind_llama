@@ -175,11 +175,12 @@ _INLINE_CODING_TOOLS = [
         }, "required": ["cmd"]}
     }},
     {"type": "function", "function": {
-        "name": "git_commit", "description": "Commit all staged and unstaged changes in the workspace to git. Use after completing a chunk or a significant implementation step. Message should be a concise one-line description of what was implemented.",
+        "name": "git_commit", "description": "Commit the files you wrote in this run to git (scoped add + scoped commit; the whole index is never swept). Use after completing a chunk or a significant implementation step. Message should be a concise one-line description of what was implemented.",
         "parameters": {"type": "object", "properties": {
             "message": {"type": "string", "description": "Commit message (one line, imperative mood, max 72 chars)"},
+            "paths": {"type": "array", "items": {"type": "string"}, "description": "Files to commit (workspace-relative, the files you changed in this run)"},
             "workspace": {"type": "string", "description": "Git repo root (omit: workspace)"}
-        }, "required": ["message"]}
+        }, "required": ["message", "paths"]}
     }},
     {"type": "function", "function": {
         "name": "write_file_append",

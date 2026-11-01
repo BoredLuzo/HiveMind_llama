@@ -256,6 +256,7 @@ SUITES = [
     ("mcp_security_gate",       "tests/test_mcp_security_gate.py",          60),
     ("mcp_phase2",              "tests/test_mcp_phase2.py",                  90),
     ("mcp_2025",                "tests/test_mcp_2025.py",                    120),
+    ("mcp_2026",                "tests/test_mcp_2026.py",                     30),
     ("lsp_client",              "tests/test_lsp_client.py",                  90),
     ("lsp_tools",               "tests/test_lsp_tools.py",                   60),
     ("lsp_real_pyright",        "tests/test_lsp_real_pyright.py",            120),

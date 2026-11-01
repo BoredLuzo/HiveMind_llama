@@ -195,6 +195,14 @@ async def exec_git_commit(message: str, workspace: str, files: list[str] | None 
         # WHOLE index — foreign already-staged work (the owner's, in the
         # gravSandbox incident: 1186 files / 819k lines) was swept into the
         # run's chunk commit.
+        # GIT-AUDIT P1-1 (2026-11-01): the scoped add must come BACK —
+        # `git commit -- paths` matches TRACKED paths only, so a run's
+        # brand-new files failed with "pathspec did not match" and nothing
+        # was committed. Scoping the add to exactly the run's files keeps
+        # the foreign-index protection AND commits new files.
+        add_result = await _git("git", "add", "--", *_existing)
+        if add_result.returncode != 0:
+            return f"❌ git add failed: {add_result.stderr.strip()}"
         commit_result = await _git(
             "git", "commit", "-m", message[:72], "--", *_existing)
         if commit_result.returncode != 0:
@@ -339,7 +347,8 @@ async def _find_fold_base(workspace: str) -> str | None:
 
 
 async def exec_git_squash_checkpoints(message: str, workspace: str,
-                                      consolidate_only: bool = False) -> str:
+                                      consolidate_only: bool = False,
+                                      files: list[str] | None = None) -> str:
 
 
     import asyncio as _asyncio
@@ -386,9 +395,17 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
     if reset.returncode != 0:
         return f"❌ squash: git reset failed: {reset.stderr.strip()}"
 
+    # GIT-AUDIT P1-2 (2026-11-01): the soft-reset folds every change since
+    # the base into the index — `git add -A` then swept FOREIGN uncommitted
+    # work into the folded commit (probed). Scope the add to the run's
+    # files when a list is provided; without a list keep the old behavior
+    # only for consolidate-only (which folds existing checkpoints, not a
+    # live run) and refuse otherwise.
+    _scope = [f for f in (files or []) if (Path(workspace) / f).exists()]
+
     if consolidate_only:
         msg = f"{_checkpoint_marker()} session consolidated ({cp_count} checkpoints)"
-        add = await _git("git", "add", "-A")
+        add = await _git("git", "add", "-A") if not files             else await _git("git", "add", "--", *_scope)
         staged = await _git("git", "diff", "--cached", "--name-only")
         cc = await _git("git", "commit", "-m", msg[:72],
                         *(["--allow-empty"] if not staged.stdout.strip() else []))
@@ -396,7 +413,9 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
             return f"❌ squash-consolidate failed: {cc.stderr.strip()}"
         return f"✅ {cp_count} Checkpoints konsolidiert"
 
-    add = await _git("git", "add", "-A")
+    if files and not _scope:
+        return "ℹ️ squash: none of the run files exist — nothing to fold."
+    add = await _git("git", "add", "-A") if not files         else await _git("git", "add", "--", *_scope)
     if add.returncode != 0:
         return f"❌ git add failed: {add.stderr.strip()}"
     staged = await _git("git", "diff", "--cached", "--name-only")
@@ -459,6 +478,13 @@ async def exec_git_undo_full(workspace: str) -> str:
     if not cp:
         return ""
     added = await _files_new_since_cp(workspace, cp)
+    # GIT-AUDIT P1-4 (2026-11-01): reset --hard destroyed ALL uncommitted
+    # work since the checkpoint, and undo_last is deliberately un-gated —
+    # a model could silently wipe the owner's uncommitted changes. Capture
+    # a stash snapshot first (dangling commit, working tree untouched);
+    # the result names it so the destruction is always recoverable.
+    _safety = await _git("git", "stash", "create", "undo_last safety snapshot")
+    _safety_sha = _safety.stdout.strip() if _safety.returncode == 0 else ""
     reset = await _git("git", "reset", "--hard", cp)
     if reset.returncode != 0:
         return f"❌ undo: reset failed: {reset.stderr.strip()}"
@@ -478,6 +504,9 @@ async def exec_git_undo_full(workspace: str) -> str:
     msg = f"restored to checkpoint [{h.stdout.strip()}]"
     if removed:
         msg += f"; removed new files: {', '.join(removed[:8])}"
+    if _safety_sha:
+        msg += (f"; safety snapshot {_safety_sha[:10]} "
+                f"(recover with: git stash apply {_safety_sha[:10]})")
     return msg
 
 

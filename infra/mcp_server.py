@@ -452,7 +452,18 @@ _PROTOCOL_VERSION_BASELINE = "2024-11-05"
 _PROTOCOL_VERSION_LATEST = "2025-06-18"
 # Revisions that get sessions + the GET stream; both are echoed verbatim.
 _PROTOCOL_VERSIONS_2025 = ("2025-03-26", "2025-06-18")
-_SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05",) + _PROTOCOL_VERSIONS_2025
+# MCP 2026-07-28 (minimal support, 2026-11-01): the revision removed
+# sessions and the initialize handshake — every request carries its version
+# in _meta and the server answers `server/discover`. Our baseline flow is
+# already stateless, so 2026 support is: accept the version, answer
+# server/discover, never create a session for it.
+_PROTOCOL_VERSION_2026 = "2026-07-28"
+_SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05",) + _PROTOCOL_VERSIONS_2025 \
+    + (_PROTOCOL_VERSION_2026,)
+_META_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
+# 2026-07-28 error-code allocation: -32020..-32099 reserved for the spec.
+_ERR_UNSUPPORTED_PROTOCOL_VERSION = -32022
+_META_CLIENT_CAPS_KEY = "io.modelcontextprotocol/clientCapabilities"
 # Audit F-1: an initialize inside a BATCH never creates a session (the
 # session block below only inspects a dict-shaped top-level request). A 2025
 # initialize smuggled through a batch must therefore be answered on the 2024
@@ -461,13 +472,21 @@ _BASELINE_VERSION = "2024-11-05"
 
 
 def _baseline_batch_item(item: Any) -> Any:
-    """Force a batched 2025+ initialize down to the 2024 baseline."""
+    """Force a batched 2025+/2026 initialize down to the 2024 baseline.
+
+    Audit F-1: a batched initialize never creates a session (the session
+    block only inspects a dict-shaped top-level request), so a batched
+    initialize must never echo a version that implies one. 2026-07-28 is
+    stateless, but a batched offer is still answered on the baseline for a
+    uniform table — a 2026 client does not need initialize at all (it uses
+    `server/discover` + per-request _meta)."""
     if not isinstance(item, dict) or item.get("method") != "initialize":
         return item
     params = item.get("params")
     if not isinstance(params, dict):
         return item
-    if str(params.get("protocolVersion", "") or "") in _PROTOCOL_VERSIONS_2025:
+    if str(params.get("protocolVersion", "") or "") in _SUPPORTED_PROTOCOL_VERSIONS \
+            and str(params.get("protocolVersion", "")) != _BASELINE_VERSION:
         item = {**item, "params": {**params,
                                    "protocolVersion": _BASELINE_VERSION}}
     return item
@@ -2215,13 +2234,36 @@ async def handle_request(req: dict, transport: str = "stdio",
     def err(code, msg):
         return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": msg}}
 
+    # MCP 2026-07-28 (minimal): a request may carry its protocol version in
+    # `_meta` instead of initializing. An unsupported version is rejected
+    # with the spec's UnsupportedProtocolVersionError; a supported one just
+    # proceeds stateless (the baseline flow has no per-request state).
+    _req_meta = (req.get("params") or {}).get("_meta") \
+        if isinstance(req.get("params"), dict) else None
+    if isinstance(_req_meta, dict):
+        _meta_ver = str(_req_meta.get(_META_VERSION_KEY, "") or "")
+        if _meta_ver and _meta_ver not in _SUPPORTED_PROTOCOL_VERSIONS:
+            return err(_ERR_UNSUPPORTED_PROTOCOL_VERSION,
+                       f"unsupported protocol version {_meta_ver!r} "
+                       f"(supported: {', '.join(_SUPPORTED_PROTOCOL_VERSIONS)})")
+
+    if method == "server/discover":
+        # 2026-07-28: servers MUST answer this RPC with identity, supported
+        # versions and capabilities. Clients may probe it instead of
+        # initializing (and MUST on stdio for version selection).
+        return ok({
+            "serverInfo": {"name": "hivemind-mcp", "version": "2.0.0"},
+            "protocolVersions": list(_SUPPORTED_PROTOCOL_VERSIONS),
+            "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
+        })
+
     if method == "initialize":
         # S14: echo the requested protocol version when we actually
-        # implement it; answer with the baseline otherwise. The 2025
-        # revisions (sessions + GET stream) are implemented over HTTP now -
-        # a 2025-03-26/2025-06-18 offer is echoed verbatim, and the HTTP
-        # layer attaches the Mcp-Session-Id header (see _http_handle_...
-        # below). Never advertise anything newer than 2025-06-18.
+        # implement it; answer with the baseline otherwise. 2025-03-26 /
+        # 2025-06-18 offers are echoed verbatim (the HTTP layer attaches
+        # the Mcp-Session-Id header, see _http_handle_... below). A
+        # 2026-07-28 offer is echoed too but stays stateless (no session —
+        # 2026 removed sessions; clients use server/discover + _meta).
         _init_params = req.get("params")
         _req_ver = ""
         if isinstance(_init_params, dict):

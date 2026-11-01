@@ -68,6 +68,26 @@ Phase 2 additions (2026-10-31):
   token is set. Binding to a non-loopback address without a token prints a
   warning at startup.
 
+### Protocol 2026-07-28 (minimal, 2026-11-01)
+
+The 2026-07-28 revision removed sessions and the initialize handshake —
+HiveMind's baseline flow was already stateless, so support is minimal:
+
+- `server/discover` answers `{serverInfo, protocolVersions, capabilities}`
+  on both transports; a 2026 client probes it instead of initializing.
+- Every request may carry `_meta["io.modelcontextprotocol/protocolVersion"]`.
+  An unsupported version answers `-32022` (the 2026 spec's
+  `UnsupportedProtocolVersionError`); `2026-07-28` itself proceeds on the
+  stateless path. No session is created for a 2026 initialize (echoed
+  verbatim, no `Mcp-Session-Id`).
+- A batched initialize is always answered on the 2024 baseline, whatever
+  version it offers (audit F-1).
+- Deliberately NOT implemented (deprecated or out of scope for now):
+  `resultType` on results, `Mcp-Method`/`Mcp-Name` header enforcement,
+  `ttlMs`/`cacheScope` cache hints, `subscriptions/listen`, MRTR
+  (input_required), OAuth changes, and the -32002→-32602 resource error
+  renumber.
+
 ### Annotations, resources, prompts (phase 2, 2026-10-31)
 
 **Tool annotations.** Every `tools/list` entry now carries `annotations`

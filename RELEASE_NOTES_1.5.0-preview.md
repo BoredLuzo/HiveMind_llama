@@ -64,6 +64,23 @@ through. `python tools/mcp_config_gen.py` prints ready-to-paste configs for
 Claude Desktop, Cline, Zed and VS Code - no real token lands in the output
 unless `--include-secret` is passed.
 
+Minimal MCP 2026-07-28 support: `server/discover` (identity, versions,
+capabilities), per-request `_meta` protocol-version validation
+(`-32022` for unsupported), and a stateless 2026 initialize (no session).
+Batched initializes of any version answer on the 2024 baseline. The 2026
+revision's bigger items (`resultType`, header enforcement, cache hints,
+`subscriptions/listen`, MRTR) stay deliberately unimplemented until clients
+actually appear.
+
+The git deep audit found no security hole (argv-list everywhere, masked
+token flows) but four correctness bugs, all fixed: auto-commit could not
+commit NEW files since the 2026-10-14 scoping (`git commit -- paths` matches
+tracked paths only — the scoped add is back), the checkpoint squash and the
+model-callable `git_commit` tool swept the whole index via `git add -A`
+(both scoped to the run's files now; the tool requires explicit `paths`),
+and the ungated `undo_last` hard reset now takes a recoverable
+`git stash create` safety snapshot first.
+
 ## Settings and presets
 
 The code read several settings that were never shipped as defaults

@@ -50,6 +50,14 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   host schema. `python tools/mcp_config_gen.py` generates ready-to-paste
   stdio configs for Claude Desktop / Cline / Zed / VS Code with a
   `<HIVEMIND_INTERNAL_TOKEN>` placeholder unless `--include-secret`.
+- **Protocol 2026-07-28 minimal (2026-11-01)**: `server/discover` answers
+  identity + versions + capabilities on both transports; per-request
+  `_meta` protocol version is validated (unsupported → `-32022`); a 2026
+  initialize echoes stateless with no session; batched initializes of any
+  version are answered on the 2024 baseline. The 2026 revision removed
+  sessions — our baseline was already stateless, so the support stays small
+  (`resultType`, header enforcement, `ttlMs`/`cacheScope`, MRTR are
+  deliberately not implemented yet).
 - **Phase 2 (2026-10-31)**: all 23 tools carry MCP annotations
   (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`).
   New tools: `git_diff` (read, bounded), `git_commit` (write tier, explicit
@@ -113,6 +121,26 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   own managers; `mem_watch_enabled` switches it off). This makes the
   "commit grows across loads and stays until restart" observation measurable
   per process.
+
+### Git (audit fixes, 2026-11-01)
+- **Auto-commit commits new files again** (P1-1): the 2026-10-14 scoped
+  commit (`git commit -- paths`) matches tracked paths only, so a run's
+  brand-new files failed with "pathspec did not match". The scoped
+  `git add -- <run files>` is back before the scoped commit — foreign
+  already-staged work is still never swept (probed).
+- **Checkpoint squash folds only run files** (P1-2): the soft reset folds
+  everything since the base into the index; the following `git add -A`
+  swept foreign uncommitted work into the folded commit. The squash takes
+  the run's file list now.
+- **`git_commit` tool requires explicit paths** (P1-3): the model-callable
+  tool did `git add -A` + a bare commit, sweeping the whole index (the
+  approval gate is off by default). `paths` is now required and the commit
+  is scoped to them.
+- **`undo_last` is recoverable** (P1-4): the ungated `git reset --hard`
+  destroyed all uncommitted work since the checkpoint. A `git stash create`
+  safety snapshot is taken first and its recover sha is in the result.
+- Security verdict unchanged: argv-list subprocesses, URL vetting, masked
+  token flows, no leak end to end (DOKU/audits/GIT_AUDIT_20261101.md).
 
 ### Code panel, startup update check, compression
 - **Code panel performance**: streamed plain text now appends to one text node

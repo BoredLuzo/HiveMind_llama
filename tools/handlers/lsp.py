@@ -90,7 +90,7 @@ def _coerce_int(value, default: int, lo: int, hi: int) -> int:
 # manager's asyncio.Lock objects loop-correct.
 _MANAGERS: dict = {}
 _MANAGERS_CAP = 8
-_bg_format_tasks: set = set()   # tracked eviction closes (audit R2)
+_bg_close_tasks: set = set()   # tracked eviction closes (audit R2)
 
 
 def _manager_key(workspace: Path, loop) -> tuple:
@@ -135,8 +135,8 @@ def _get_manager(workspace: Path):
             for _key, _old in _evicted:
                 try:
                     _t = asyncio.create_task(_old.close_all())
-                    _bg_format_tasks.add(_t)
-                    _t.add_done_callback(_bg_format_tasks.discard)
+                    _bg_close_tasks.add(_t)
+                    _t.add_done_callback(_bg_close_tasks.discard)
                 except RuntimeError:
                     pass
         _MANAGERS[key] = mgr
