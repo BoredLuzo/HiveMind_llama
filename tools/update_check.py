@@ -143,6 +143,7 @@ class CheckResult:
     prerelease: bool = False
     checked_at: float = 0.0
     message: str = ""
+    body: str = ""              # release body (first 4 kB) for the warnings digest
 
     def as_dict(self) -> dict:
         return {
@@ -156,6 +157,7 @@ class CheckResult:
             "prerelease": self.prerelease,
             "checked_at": self.checked_at,
             "message": self.message,
+            "body": self.body[:4096],
         }
 
     @classmethod
@@ -222,6 +224,7 @@ def select_release(releases: object, current: str,
         name=str(asset.get("name") or ""),
         prerelease=ver.is_prerelease,
         checked_at=time.time(),
+        body=str(rel.get("body") or "")[:4096],
     )
 
 
@@ -338,6 +341,35 @@ def _download_asset(result: CheckResult, root: Path,
     return dest
 
 
+_WARN_RE = None
+
+
+def warnings_digest(body: str, limit: int = 3) -> list[str]:
+    """Up to `limit` lines the release author flags as important.
+
+    Word-boundary regex (installer audit: the old substring match flagged
+    "Keine breaking changes" — a line saying there are NONE) and the same
+    no-breaking suppression as update.bat.
+    """
+    global _WARN_RE
+    if _WARN_RE is None:
+        import re
+        _WARN_RE = re.compile(
+            r"\b(warning|breaking|known issues?|migrat\w*|attention|caution|"
+            r"deprecat\w*)\b", re.IGNORECASE)
+        _NO_BREAK = re.compile(r"\bno\b[^.]*\bbreaking\b", re.IGNORECASE)
+    out: list[str] = []
+    for raw in str(body or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if _WARN_RE.search(line) and not _NO_BREAK.search(line):
+            out.append(line[:110])
+            if len(out) >= limit:
+                break
+    return out
+
+
 def _print_box(result: CheckResult) -> None:
     kind = "pre-release" if result.prerelease else "release"
     line1 = f"HiveMind update available: {result.current} -> {result.latest}"
@@ -348,6 +380,10 @@ def _print_box(result: CheckResult) -> None:
     print("  | " + line1.ljust(width - 1) + "|")
     print("  | " + line2.ljust(width - 1) + "|")
     print("  +" + "-" * width + "+")
+    # Installer-audit UX gap: the startup path showed no release info at
+    # all while update.bat shows the notes — print a small warnings digest.
+    for line in warnings_digest(result.body):
+        print(f"  ! {line}")
 
 
 def install_update(result: CheckResult, root: Path = ROOT) -> int:
@@ -368,6 +404,10 @@ def install_update(result: CheckResult, root: Path = ROOT) -> int:
     if rc != 0:
         print("  [update] update.bat failed - the running installation is unchanged.")
         return 0
+    try:
+        zip_path.unlink()   # audit: the verified zip is no longer needed
+    except OSError:
+        pass
     print("  [update] installed. Please start start_hivemind.bat again.")
     return 10
 

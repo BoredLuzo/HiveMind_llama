@@ -81,6 +81,14 @@ model-callable `git_commit` tool swept the whole index via `git add -A`
 and the ungated `undo_last` hard reset now takes a recoverable
 `git stash create` safety snapshot first.
 
+The installer/updater audit fixed the ugly release-notes display (five
+stacked defects: ANSI/OEM double mojibake, no wrapping, misaligned box,
+erased code fences, raw links — now one probe-verified PowerShell renderer
+with UTF-8 read and 61-col wrapping) and a fun one: the decider opt-in
+prompt could never appear, because `choice /d N` without `/t` errors out on
+every install. The startup update check now prints a small warnings digest
+and cleans up its downloaded zip.
+
 ## Settings and presets
 
 The code read several settings that were never shipped as defaults

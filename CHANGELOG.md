@@ -122,6 +122,23 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   "commit grows across loads and stays until restart" observation measurable
   per process.
 
+### Installer/Updater (audit fixes, 2026-11-01)
+- **Release notes render properly** (P1): the old inline render double-
+  mangled UTF-8 (ANSI read → OEM `type` — every umlaut became `├ñ`),
+  never wrapped 200-char lines (box 63 chars), misaligned the header box
+  for every tag and erased code fences. `deploy/render_release_notes.ps1`
+  now does UTF-8 read, markdown-light conversion, code-block markers,
+  61-col wrapping and prints the box with a computed width.
+- **Decider opt-in prompt worked never** (P1): `choice /d N` without `/t`
+  errored (errorlevel 255) on every install — the question never showed.
+  `/t 30 /d N` now, and the "ready" message gates on the torch/gliner2
+  import probe AND the model download instead of only the snapshot exit.
+- The startup update check prints a warnings digest (word-boundary regex,
+  "Keine breaking changes" no longer triggers the scary prompt) and deletes
+  the downloaded zip after a successful install.
+- Startup check itself verified working: cache live, prerelease policy,
+  sha256 gate, offline-silent (36/36 checks).
+
 ### Git (audit fixes, 2026-11-01)
 - **Auto-commit commits new files again** (P1-1): the 2026-10-14 scoped
   commit (`git commit -- paths`) matches tracked paths only, so a run's

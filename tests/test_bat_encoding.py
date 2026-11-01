@@ -92,11 +92,13 @@ def main():
     else:
         fail("both decider branches reach SearXNG",
              "a branch still jumps to the removed judge block")
-    if _inst.count("choice /c YN /n /d N") >= 1:
-        ok("the decider is opt-in (Enter = skip)")
+    # /d requires /t (INSTALLER-AUDIT P1): the old /d N without /t made
+    # choice error out (errorlevel 255) and the opt-in never displayed.
+    if "choice /c YN /n /t 30 /d N" in _inst:
+        ok("the decider is opt-in with a working /t 30 /d N default")
     else:
-        fail("the decider is opt-in (Enter = skip)",
-             "choice without /d N means the user cannot accept the default")
+        fail("the decider is opt-in with a working /t 30 /d N default",
+             "choice /d N without /t errors out (errorlevel 255)")
     if ":decider_done" not in _inst:
         ok("no duplicate decider block")
     else:

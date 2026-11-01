@@ -201,20 +201,19 @@ if "%VCMP%"=="older" (
 )
 
 REM -- 4a. Render the release notes (markdown-light -> plain console text) --
-powershell -NoProfile -Command "$r = Get-Content '%TMPDIR%\release.json' -Raw | ConvertFrom-Json; $o = foreach ($l in ($r.body -split ([char]10))) { $t = $l.TrimEnd() -replace '\*\*','' -replace '`','' -replace '^#{1,6}\s*','== '; $t }; $o | Set-Content '%TMPDIR%\notes.txt'"
-echo.
-echo  +-------------------------------------------------------------+
-echo  ^|  RELEASE NOTES - %TAG%                     ^|
-echo  +-------------------------------------------------------------+
-type "%TMPDIR%\notes.txt"
-echo  +-------------------------------------------------------------+
+REM INSTALLER-AUDIT (2026-11-01): the old inline render double-mangled
+REM UTF-8 (ANSI read -> OEM type), never wrapped 200-char lines, misaligned
+REM the header box for every tag and erased code fences. The renderer is a
+REM probe-verified PS script now (same extraction precedent as
+REM deploy\update_prune.ps1) and prints the whole box with a computed width.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\render_release_notes.ps1" -JsonPath "%TMPDIR%\release.json" -Width 61 | powershell -NoProfile -Command "$tag = '%TAG%'; $w = 61; $inner = ' RELEASE NOTES - ' + $tag + ' '; '+' + ('-' * $w) + '+'; $pad = [Math]::Max(0, $w - $inner.Length); '| ' + $inner + (' ' * $pad) + '|'; '+' + ('-' * $w) + '+'"
 echo.
 
 REM -- 4b. Warnings from the release notes -----------------------------------
 REM Anything the release author flags (warning / breaking / known issue /
 REM migration / attention / caution) is shown BEFORE anything is changed.
 del "%TMPDIR%\warnings.txt" 2>nul
-powershell -NoProfile -Command "$r = Get-Content '%TMPDIR%\release.json' -Raw | ConvertFrom-Json; $w = $r.body -split ([char]10) | Where-Object { $_ -match '(?i)warning|breaking|known issue|migrat|attention|caution' } | Select-Object -First 5; if ($w) { $w | Set-Content '%TMPDIR%\warnings.txt' }"
+powershell -NoProfile -Command "$r = Get-Content '%TMPDIR%\release.json' -Raw -Encoding UTF8 | ConvertFrom-Json; $w = $r.body -split ([char]10) | ForEach-Object { $_.TrimEnd() } | Where-Object { $_ -match '(?i)\b(warning|breaking|known issues?|migrat\w*|attention|caution|deprecat\w*)\b' -and $_ -notmatch '(?i)\bno\b[^.]*\bbreaking\b' } | Select-Object -First 5; if ($w) { $w | Set-Content '%TMPDIR%\warnings.txt' -Encoding UTF8 }"
 if exist "%TMPDIR%\warnings.txt" (
     echo.
     echo  +-------------------------------------------------------------+

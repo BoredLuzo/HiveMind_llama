@@ -469,7 +469,7 @@ echo   Routing decider (optional, off by default): a small CPU classifier
 echo   that picks direct answer vs. code run. It needs gliner2 + CPU torch
 echo   (~2.5 GB env) plus the model (~1-2 GB). Enable it later in
 echo   Settings -^> Routing. Without it, keyword rules decide.
-choice /c YN /n /d N /m "Pre-install the decider environment + model? [y/N] "
+choice /c YN /n /t 30 /d N /m "Pre-install the decider environment + model? [y/N] "
 if errorlevel 2 (
     echo   Skipped (default). Enable later: Settings -^> Routing -^> Decider.
     echo   The engine downloads the encoder on first use if it is missing.
@@ -484,11 +484,19 @@ uv pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu 
 if errorlevel 1 uv pip install --python "%PY%" torch --quiet
 uv pip install --python "%PY%" gliner2 transformers huggingface_hub --quiet
 "%PY%" -c "from huggingface_hub import snapshot_download; snapshot_download('fastino/GLiNER2.5-Decide')"
-if not errorlevel 1 (
-    echo   Decider environment + model ready - enabling it later is instant.
+set "DEC_SNAP=%errorlevel%"
+"%PY%" -c "import torch, gliner2" >nul 2>&1
+REM INSTALLER-AUDIT (2026-11-01): the "ready" message used to key only on
+REM the snapshot exit - huggingface_hub succeeds even when torch/gliner2
+REM failed, and offline it is the snapshot that fails. Gate on BOTH.
+if errorlevel 1 (
+    echo   [NOTE] Environment incomplete (torch/gliner2 import failed).
+    echo          Keyword rules decide; re-run this step to retry.
+) else if not "%DEC_SNAP%"=="0" (
+    echo   [NOTE] Model download failed (offline?) - environment is ready,
+    echo          the engine fetches the model on first use when online.
 ) else (
-    echo   [NOTE] Pre-download failed (offline or wheel missing).
-    echo          Keyword rules decide until it is installed.
+    echo   Decider environment + model ready - enabling it later is instant.
 )
 goto searxng_step
 
