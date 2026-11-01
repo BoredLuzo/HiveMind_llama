@@ -453,6 +453,24 @@ _PROTOCOL_VERSION_LATEST = "2025-06-18"
 # Revisions that get sessions + the GET stream; both are echoed verbatim.
 _PROTOCOL_VERSIONS_2025 = ("2025-03-26", "2025-06-18")
 _SUPPORTED_PROTOCOL_VERSIONS = ("2024-11-05",) + _PROTOCOL_VERSIONS_2025
+# Audit F-1: an initialize inside a BATCH never creates a session (the
+# session block below only inspects a dict-shaped top-level request). A 2025
+# initialize smuggled through a batch must therefore be answered on the 2024
+# baseline — never echo a 2025 version without a session behind it.
+_BASELINE_VERSION = "2024-11-05"
+
+
+def _baseline_batch_item(item: Any) -> Any:
+    """Force a batched 2025+ initialize down to the 2024 baseline."""
+    if not isinstance(item, dict) or item.get("method") != "initialize":
+        return item
+    params = item.get("params")
+    if not isinstance(params, dict):
+        return item
+    if str(params.get("protocolVersion", "") or "") in _PROTOCOL_VERSIONS_2025:
+        item = {**item, "params": {**params,
+                                   "protocolVersion": _BASELINE_VERSION}}
+    return item
 _PROTOCOL_VERSION_DEFAULT = "2024-11-05"
 
 
@@ -539,11 +557,23 @@ def _session_get_alive(sid: str) -> _Session | None:
     return s
 
 
+# Audit F-2: the replay ring bounds count AND size — a multi-MB progress
+# notification must not sit in the ring verbatim.
+_SSE_MAX_EVENT_BYTES = 64 * 1024
+
+
 def _session_append_event(session: _Session, method: str, params: dict) -> int:
     """Fan a server->client notification into the session's SSE ring.
     Returns the monotonic id used as the SSE `id:` field."""
     payload = json.dumps({"jsonrpc": "2.0", "method": method, "params": params},
                          ensure_ascii=False)
+    if len(payload) > _SSE_MAX_EVENT_BYTES:
+        # Oversized notification: keep the envelope (and the id sequence);
+        # replay clients get a marker instead of megabytes of retained data.
+        payload = json.dumps(
+            {"jsonrpc": "2.0", "method": method,
+             "params": {"_truncated": True, "_original_bytes": len(payload)}},
+            ensure_ascii=False)
     seq = session.next_event_id
     session.next_event_id += 1
     session.events.append((seq, f"event: message\ndata: {payload}\n\n"))
@@ -2755,8 +2785,10 @@ async def _http_handle_connection(reader: asyncio.StreamReader,
                     }}).encode()
                 else:
                     async with _HTTP_SEM:
-                        resps = [r for r in [await _handle_rpc_item(x, session=http_session)
-                                             for x in req] if r is not None]
+                        resps = [r for r in [await _handle_rpc_item(
+                                            _baseline_batch_item(x),
+                                            session=http_session)
+                                            for x in req] if r is not None]
                     resp_body = json.dumps(resps, ensure_ascii=False).encode()
             else:
                 async with _HTTP_SEM:

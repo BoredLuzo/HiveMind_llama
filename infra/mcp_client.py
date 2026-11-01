@@ -1268,6 +1268,14 @@ def _parse_budgets(settings: dict | None) -> dict[str, int]:
         return {}
     out: dict[str, int] = {}
     for name, val in raw.items():
+        if not isinstance(name, str) or not name.strip():
+            logger.warning("[MCP] mcp_server_budgets has a non-string/empty "
+                           "server name - ignored")
+            continue
+        name = name.strip().lower()   # audit: keys must match the spec name
+        if name in out:
+            logger.warning("[MCP] mcp_server_budgets has a duplicate entry "
+                           "for %r - the later value wins", name)
         if isinstance(val, bool):
             logger.warning("[MCP] mcp_server_budgets[%r] is a bool, expected "
                            "an integer - ignored", name)
@@ -1521,13 +1529,14 @@ class McpClient:
         NOT a dead connection: it lasts until the window resets, so the next
         window works again - conn.dead is never touched here.
         """
-        limit = self._budget_limits.get(server, 0)
+        limit = self._budget_limits.get(str(server).strip().lower(), 0)
         if limit <= 0:
             return None
-        budget = self._budgets.get(server)
+        _bkey = str(server).strip().lower()
+        budget = self._budgets.get(_bkey)
         if budget is None:
             budget = _ServerCallBudget()
-            self._budgets[server] = budget
+            self._budgets[_bkey] = budget
         allowed, reset_in = await budget.take(limit)
         if allowed:
             return None
@@ -1642,7 +1651,14 @@ def _tool_def(name: str, server: str, tool: dict) -> dict:
     # them. Missing or empty -> the key is omitted entirely (no empty dict).
     annotations = tool.get("annotations")
     if isinstance(annotations, dict) and annotations:
-        spec["function"]["annotations"] = annotations
+        # Audit F-3: remote annotations are metadata, not content — cap them
+        # like the schema path so a hostile server cannot bloat the host
+        # schema with megabytes of hints.
+        if len(json.dumps(annotations, ensure_ascii=False)) <= 2048:
+            spec["function"]["annotations"] = annotations
+        else:
+            logger.info("[MCP] %s: annotations over 2 kB dropped",
+                        tool.get("name") or "?")
     return spec
 
 

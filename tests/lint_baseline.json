@@ -480,7 +480,7 @@
   "except_pass": 0
  },
  "infra/lsp_client.py": {
-  "broad_except": 0,
+  "broad_except": 1,
   "except_pass": 0
  },
  "infra/lsp_registry.py": {

@@ -174,7 +174,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `llama_gpu_layers_auto` | bool | `False` | Auto-fit (audit B3): omit --n-gpu-layers so llama.cpp fits the layers to the free VRAM itself — it refuses while the flag pins 99. Default keeps the explicit full-offload behavior. |
 | `llama_mlock` | bool | `True` |  |
 | `llama_ubatch_size` | int | `256` |  |
-| `lsp_auto_diagnostics` | bool | `True` | Attach a compact diagnostics block to a successful write/edit when a server for that language is already running. A cold server is warmed in the background instead of stalling the write; failures are silent. |
+| `lsp_auto_diagnostics` | bool | `True` | Attach a compact diagnostics block to a successful write/edit when a server for that language is already running. A write never starts a cold server (an explicit lsp_* call does); failures are silent. |
 | `lsp_client_timeout_s` | int | `30` | Per-request timeout in seconds for one LSP request; also caps the initialize handshake. A hung server is killed and lazily restarted on the next call. |
 | `lsp_diagnostics_wait_s` | float | `5.0` | How long lsp_diagnostics waits for the server's diagnostics publication after open/change before returning what it has. |
 | `lsp_enabled` | bool | `True` | lsp_enabled is the ONLY switch - there are deliberately no per-language on/off flags. True = the lsp_* tools exist; a language server process still starts LAZILY on the first tool call, never at boot. A language without a found server command answers LSP_UNAVAILABLE (with an… |

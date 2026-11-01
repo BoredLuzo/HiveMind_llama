@@ -325,5 +325,31 @@ async def _http_suite():
 asyncio.run(_http_suite())
 
 print()
+# ── 9. audit fixes F-1/F-2 (2026-11-01) ───────────────────────────────────
+_n_before = len(mcp._SESSIONS)
+item = mcp._baseline_batch_item({"jsonrpc": "2.0", "id": 61, "method": "initialize",
+                                 "params": {"protocolVersion": "2025-06-18",
+                                            "capabilities": {},
+                                            "clientInfo": {"name": "audit"}}})
+_r = asyncio.run(mcp.handle_request(item, "http"))
+check("9 a batched 2025 initialize is answered on the 2024 baseline",
+      _r["result"]["protocolVersion"] == "2024-11-05"
+      and len(mcp._SESSIONS) == _n_before,
+      f"(echo={_r['result']['protocolVersion']})")
+_r = asyncio.run(mcp.handle_request({"jsonrpc": "2.0", "id": 62, "method": "initialize",
+                                     "params": {"protocolVersion": "2025-06-18",
+                                                "capabilities": {},
+                                                "clientInfo": {"name": "audit"}}}, "http"))
+check("9 a top-level 2025 initialize still negotiates 2025",
+      _r["result"]["protocolVersion"] == "2025-06-18")
+sess = mcp._session_create("2025-06-18")
+mcp._session_append_event(sess, "notifications/progress",
+                          {"progressToken": 1, "message": "y" * (mcp._SSE_MAX_EVENT_BYTES + 10)})
+frame = sess.events[-1][1]
+check("9 an oversized notification is truncated in the ring",
+      len(frame) < mcp._SSE_MAX_EVENT_BYTES + 200
+      and "_truncated" in frame)
+mcp._session_end(sess.id)
+
 print(f"SUMMARY mcp_2025: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

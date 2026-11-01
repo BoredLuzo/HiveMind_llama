@@ -35,7 +35,7 @@ MODE = sys.argv[1] if len(sys.argv) > 1 else "normal"
 DIAG_DELAY_S = {"normal": 0.15, "slowdiag": 0.6}.get(MODE, 0.0)
 
 state = {"shutdown": False, "texts": {}, "probe_id": 9000,
-         "versions": {}, "languages": {}}
+         "versions": {}, "languages": {}, "config_push": None}
 cfg_pending = set()
 cfg_answered = 0
 
@@ -175,6 +175,14 @@ while True:
     elif method == "shutdown":
         state["shutdown"] = True
         reply(rid, None)
+    elif method == "workspace/didChangeConfiguration":
+        # recorded so tests can assert the client's config push (audit T-gap 4)
+        state["config_push"] = params.get("settings")
+        continue
+    elif method == "fake/state":
+        reply(rid, {"config_push": state["config_push"],
+                    "languages": state["languages"]})
+        continue
     elif method in ("initialized", "textDocument/didSave",
                     "textDocument/didClose"):
         continue

@@ -368,6 +368,31 @@ check("4h4 lsp_idle_timeout_s=0 disables the reaper",
       _off["reaped"] == [] and _off["alive"])
 
 
+# ── 4i. workspace settings are PUSHED after the handshake ──────────────
+async def _cfgpush_flow():
+    ws = Path(tempfile.mkdtemp(prefix="hm_lsp_push_"))
+    (ws / ".vscode").mkdir()
+    (ws / ".vscode" / "settings.json").write_text(
+        '{"python": {"analysis": {"typeCheckingMode": "basic"}}}',
+        encoding="utf-8")
+    mgr = LC.LspManager(ws, settings=make_settings("normal"))
+    try:
+        out = {"start": await mgr.start_language("python")}
+        # the fake answers a non-LSP probe with its recorded state
+        conn = mgr._conns.get("python")
+        out["state"] = await conn.request("fake/state", {}, timeout=5)
+        return out
+    finally:
+        await mgr.close_all()
+
+
+_push = asyncio.run(_cfgpush_flow())
+check("4i didChangeConfiguration carries the workspace settings",
+      _push["start"] and _push["state"]["config_push"]
+      == {"python": {"analysis": {"typeCheckingMode": "basic"}}},
+      f"({_push['state']['config_push']})")
+
+
 # ── 5. Server->client requests are answered -----------------------------
 async def _cfgprobe_flow():
     ws, sample = new_ws()

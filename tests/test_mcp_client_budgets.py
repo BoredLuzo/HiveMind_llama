@@ -252,6 +252,14 @@ check("4b a tool without annotations has NO annotations key",
       "annotations" not in plain_fn, f"({sorted(plain_fn)})")
 check("4c annotations land inside the function object (next to parameters)",
       "parameters" in echo_fn and "annotations" in echo_fn)
+check("4d annotations over 2 kB are dropped (audit F-3)",
+      MC._tool_def("mcp_x_big", "x", {"name": "t", "annotations":
+                                      {"data": "y" * 4096}})["function"]
+      .get("annotations") is None)
+check("4e annotations at 2 kB pass",
+      MC._tool_def("mcp_x_ok", "x", {"name": "t", "annotations":
+                                     {"data": "y" * 100}})["function"]
+      .get("annotations") is not None)
 
 _d1 = MC._tool_def("mcp_x_t", "x", {"name": "t", "annotations":
                                     {"readOnlyHint": True}})

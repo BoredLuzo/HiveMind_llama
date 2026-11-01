@@ -70,6 +70,8 @@ def read_workspace_settings(workspace: Path) -> dict:
         import json
         data = json.loads(path.read_text(encoding="utf-8"))
         data = data if isinstance(data, dict) else {}
+        if len(_WS_SETTINGS_CACHE) > 32:
+            _WS_SETTINGS_CACHE.clear()   # audit R5: bounded, tiny entries
         _WS_SETTINGS_CACHE[str(path)] = (mtime, data)
         return data
     except (OSError, ValueError):
@@ -889,14 +891,23 @@ class LspManager:
         self._now = time.monotonic          # injectable clock for tests
         self._last_used: dict[str, float] = {}
         self._reaper_task: asyncio.Task | None = None
+        # Tracked fire-and-forget tasks (audit R2/R7): GC can drop an
+        # unreferenced task mid-close, and its exception would be unretrieved.
+        self._bg_tasks: set[asyncio.Task] = set()
+        # Restart backoff (audit P1 gap): a crashing server (bad config, OOM)
+        # must not be restarted on every tool call with the full handshake.
+        self._start_failed_at: dict[str, float] = {}
+        self._start_backoff_s = 60.0
 
     # -- connections ---------------------------------------------------
     async def _conn(self, language_id: str) -> _LspConnection:
         """The live connection for a language, started on first use. A dead
         connection is reaped and restarted here (lazy self-healing)."""
         async with self._lifecycle:
+            self.reap_idle()   # FIRST (audit R1): a conn exactly at the idle
+            # boundary is popped (and its close scheduled) here — fetching it
+            # before the reap handed out a connection that was already dying.
             conn = self._conns.get(language_id)
-            self.reap_idle()
             self._last_used[language_id] = self._now()
             if conn is not None:
                 if not conn.dead:
@@ -904,6 +915,12 @@ class LspManager:
                 self._conns.pop(language_id, None)
                 self._last_used.pop(language_id, None)
                 await conn.close()
+            _failed_at = self._start_failed_at.get(language_id)
+            if _failed_at is not None and                     (self._now() - _failed_at) < self._start_backoff_s:
+                raise LspError(
+                    f"{language_id} server failed to start less than "
+                    f"{self._start_backoff_s:.0f}s ago - backing off instead "
+                    f"of restarting on every call")
             argv = registry.resolve(language_id, self._override)
             if argv is None:
                 tried = registry.candidates(language_id, self._override)
@@ -916,14 +933,30 @@ class LspManager:
             try:
                 await conn.start()
             except LspError as exc:
+                self._start_failed_at[language_id] = self._now()
                 logger.info("[LSP] starting %s failed: %s", language_id, exc)
                 raise
+            self._start_failed_at.pop(language_id, None)
             self._conns[language_id] = conn
             self._last_used[language_id] = self._now()
             self._ensure_reaper()
             logger.info("[LSP] started %s: %s", language_id,
                         " ".join(argv))
             return conn
+
+    def _spawn(self, coro) -> None:
+        """Tracked fire-and-forget task (audit R2/R7): keep a strong
+        reference and log (never raise) on unexpected completion errors."""
+        try:
+            task = asyncio.get_running_loop().create_task(coro)
+        except RuntimeError:
+            return
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        def _log_exc(t: asyncio.Task) -> None:
+            if not t.cancelled() and t.exception() is not None:
+                logger.info("[LSP] background task failed: %s", t.exception())
+        task.add_done_callback(_log_exc)
 
     def _ensure_reaper(self) -> None:
         if self._reaper_task is not None and not self._reaper_task.done():
@@ -933,15 +966,21 @@ class LspManager:
         self._reaper_task = asyncio.create_task(self._reaper_loop())
 
     async def _reaper_loop(self) -> None:
-        try:
-            while True:
+        # Audit R3: a non-cancel exception must not kill the reaper silently —
+        # log it and keep sweeping until cancelled or the conns are empty.
+        while True:
+            try:
                 await asyncio.sleep(min(REAPER_SWEEP_S,
                                         max(5.0, self._idle_timeout_s / 4)
                                         if self._idle_timeout_s > 0
                                         else REAPER_SWEEP_S))
                 self.reap_idle()
-        except asyncio.CancelledError:
-            return
+                if not self._conns and self._reaper_task is not None                         and self._reaper_task.done():
+                    return
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.info("[LSP] reaper sweep failed: %s", exc)
 
     def reap_idle(self, now: float | None = None) -> list[str]:
         """Close every connection idle beyond the timeout; returns languages.
@@ -956,17 +995,15 @@ class LspManager:
         for lang, conn in list(self._conns.items()):
             last = self._last_used.get(lang, now)
             if conn.dead or (now - last) >= self._idle_timeout_s:
+                if not conn.dead and getattr(conn, "_pending", None):
+                    continue   # a request is in flight; do not kill mid-call
                 self._conns.pop(lang, None)
                 self._last_used.pop(lang, None)
                 closed.append(lang)
                 if not conn.dead:
                     logger.info("[LSP] idle reaper: closed %s (idle %.0fs)",
                                 lang, now - last)
-                    try:
-                        loop = asyncio.get_running_loop()
-                        loop.create_task(conn.close())
-                    except RuntimeError:
-                        pass
+                    self._spawn(conn.close())
         if not self._conns and self._reaper_task is not None:
             self._reaper_task.cancel()
             self._reaper_task = None
@@ -1004,6 +1041,9 @@ class LspManager:
         for raw in (paths or []):
             try:
                 p = self._resolve_path(raw)
+                # Containment (audit 19a): a path outside the workspace must
+                # not leak as a watched-change URI to the server.
+                p.relative_to(self.workspace)
                 changes.append({"uri": canonical_uri(path_to_uri(p)),
                                 "type": 2})   # Changed
             except (OSError, ValueError):

@@ -222,12 +222,15 @@ check("2e a second call reports fine (cache + fresh flow)",
       "Language servers: 1/2 found" in out2 and mgr2 is not None)
 
 set_settings(lsp_servers={"python": "custom-server --stdio"},
-             lsp_client_timeout_s=7)
+             lsp_client_timeout_s=7, lsp_idle_timeout_s=600)
 out, mgr = run("lsp_status", {}, ws1)
 check("2f lsp_servers + timeout settings are forwarded to the client",
       mgr.settings.get("lsp_servers") == {"python": "custom-server --stdio"}
       and mgr.settings.get("lsp_client_timeout_s") == 7,
       f"({mgr.settings})")
+check("2f2 lsp_idle_timeout_s is forwarded too (audit R4)",
+      mgr.settings.get("lsp_idle_timeout_s") == 600,
+      f"({mgr.settings.get('lsp_idle_timeout_s')})")
 restore_settings()
 
 # ── 3. diagnostics: formatting, cap, wait forwarding ────────────────────────
@@ -633,6 +636,82 @@ check("16d dotted sections resolve", _r == 7)
 check("16e missing sections answer None",
       LC2._lookup_section({"a": 1}, "x.y") is None
       and LC2._lookup_section({}, None) == {})
+
+# ── 19. LspManager.broadcast_watched_change at client level ──────────────
+
+# ── 17. _apply_text_edits: order, UTF-16 astral columns, empty newText ───
+from tools.handlers.lsp import _apply_text_edits as _apply
+
+_NL = chr(10)
+_txt = "alpha" + _NL + "beta" + _NL
+_r = lambda l1, c1, l2, c2: {
+    "start": {"line": l1, "character": c1},
+    "end": {"line": l2, "character": c2}}
+check("17a simple replace",
+      _apply(_txt, [{"range": _r(0, 0, 0, 5), "newText": "ALPHA"}])
+      == "ALPHA" + _NL + "beta" + _NL)
+check("17b bottom-up order does not matter for correctness",
+      _apply(_txt, [
+          {"range": _r(1, 0, 1, 4), "newText": "BETA"},
+          {"range": _r(0, 0, 0, 5), "newText": "ALPHA"},
+      ]) == "ALPHA" + _NL + "BETA" + _NL)
+check("17c empty newText deletes the line content",
+      _apply(_txt, [{"range": _r(0, 0, 0, 5), "newText": ""}])
+      == _NL + "beta" + _NL)
+_emoji = chr(0x1F600)
+_astral = 's = "' + _emoji + '"  # emoji is 2 UTF-16 units' + _NL
+# UTF-16 col 14-15 sits past the emoji (2 units) -> code points 13-15,
+# i.e. the "oj" of "emoji" is replaced by "!" — the astral shift by one.
+check("17d a UTF-16 column past an astral char lands correctly",
+      _apply(_astral, [{"range": _r(0, 14, 0, 15), "newText": "!"}])
+      == 's = "' + _emoji + '"  # em!ji is 2 UTF-16 units' + _NL,
+      f"({_apply(_astral, [{'range': _r(0, 14, 0, 15), 'newText': '!'}])!r})")
+check("17e a column beyond the line clamps to the line end",
+      _apply(_txt, [{"range": _r(0, 99, 0, 99), "newText": "!"}])
+      == "alpha!" + _NL + "beta" + _NL)
+check("17f inverted ranges are normalized",
+      _apply(_txt, [{"range": _r(0, 5, 0, 0), "newText": ""}])
+      == _NL + "beta" + _NL)
+_CRLF = chr(13) + _NL
+_crlf = "a" + _CRLF + "b" + _CRLF
+check("17g CRLF lines keep the carriage return",
+      _apply(_crlf, [{"range": _r(0, 1, 0, 1), "newText": "!"}])
+      == "a!" + _CRLF + "b" + _CRLF)
+
+def _broadcast_flow():
+    async def _go():
+        from infra.lsp_client import LspManager
+        ws = Path(tempfile.mkdtemp(prefix="hm_lsp_bcast_"))
+        (ws / "sub").mkdir()
+        (ws / "f.py").write_text("x = 1" + chr(10), encoding="utf-8")
+        mgr = LspManager(ws, {"lsp_idle_timeout_s": 0})
+
+        class _Conn:
+            def __init__(self):
+                self.dead = False
+                self.notes = []
+            async def notify(self, method, params):
+                self.notes.append((method, params))
+
+        live, dead = _Conn(), _Conn()
+        dead.dead = True
+        mgr._conns = {"python": live, "rust": dead}
+        n = mgr.broadcast_watched_change(["f.py", r"sub\g.rs", r"..\outside.py"])
+        await asyncio.sleep(0.05)
+        return live, n
+    return asyncio.run(_go())
+
+_live, _n = _broadcast_flow()
+_bnote = next((p for m, p in _live.notes if m == "workspace/didChangeWatchedFiles"), None)
+_buris = [c["uri"] for c in (_bnote or {}).get("changes", [])]
+check("19a the broadcast fans out type-2 events with canonical URIs",
+      _n == 1 and len(_buris) == 2
+      and _buris[0].startswith("file:///") and _buris[0].endswith("/f.py"),
+      f"({_n}, {_buris})")
+check("19b dead connections are skipped", len(_live.notes) == 1)
+check("19c a path outside the workspace is not broadcast",
+      len(_buris) == 2 and all("/f.py" in u or "/sub/g.rs" in u
+                               for u in _buris), f"({_buris})")
 
 # ── 13. manager cap closes evicted servers (audit P1-2) ──────────────────
 async def _evict_flow():
