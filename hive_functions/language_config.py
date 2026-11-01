@@ -10,8 +10,8 @@ LANGUAGE_RUNNERS: dict[str, dict] = {
         # DETECT-FALLBACK (2026-10-17, live): a plain folder with .py files and
         # NO pyproject/setup/requirements was reported as "no test runner", so
         # the verify gate stayed "untested" even after the coder wrote and ran a
-        # Python test file (owner: "the last test is still reported as
-        # untested"). Test-looking .py files are the marker that matters here.
+        # Python test file (the verify gate used to report it as untested).
+        # Test-looking .py files are the marker that matters here.
         "detect_files_fallback": ["test_*.py", "*_test.py", "tests/*.py"],
         # MODULE FORM (2026-10-23): `python -m pytest` works whenever pytest
         # is importable by the ENGINE's interpreter — a bare `pytest` exe is

@@ -1306,7 +1306,7 @@ async def run() -> int:
     # /gate on|off is the OWNER's voice (2026-10-07): a persisted override
     # on the toml force_approval_gate floor. Without it, /gate off silently
     # degraded phone runs to DENY (the floor re-pinned the gate) while the
-    # chat claimed approvals were off - the "weird" the owner reported.
+    # chat claimed approvals were off - the reported "weird" case.
     if "gate_force" in state.data:
         cfg.force_approval_gate = bool(state.data.get("gate_force"))
         log.info("gate force overridden by chat state: %s",

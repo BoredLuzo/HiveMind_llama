@@ -458,7 +458,7 @@ async def execute_tool_round(
             _dname, _dargs, _dargs_with_model, _i, _pre_results,
             trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws)
         # HARNESS-STATS (2026-10-17): count invalid arguments per model. Pure
-        # measurement - no behaviour depends on it (owner: no model-dependent cap).
+        # measurement - no behaviour depends on it (no model-dependent cap).
         try:
             from core.harness_stats import note as _hs_note
             from tools.errors import tool_error_has_code as _hs_has

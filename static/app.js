@@ -4827,9 +4827,8 @@ function _planStepDisplay(stepText) {
             : file ? ('Implement changes to ' + file)
             : s;
   if (title.length > 110) title = title.slice(0, 110) + '\u2026';
-  // PLAN-STEP-CLEAN (2026-10-17, owner: "the open tasks look ass, especially the
-  // info glyph"): no inline marker on every row - the file is set as code and
-  // the full planner contract becomes the row's tooltip instead.
+  // PLAN-STEP-CLEAN: no inline marker on every row - the file is set as code
+  // and the full planner contract becomes the row's tooltip instead.
   var _fmt = _mdInlinePlan(title);
   if (file) {
     var _fi = _fmt.indexOf(_escHtml(file));

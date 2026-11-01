@@ -2522,7 +2522,7 @@ app.include_router(context_router)
 app.include_router(core_router)
 # DEBUG-GATE (2026-10-18): the debug endpoints leak internals (asyncio task
 # stacks, registry paths) on an unauthenticated API - mount them only when
-# the owner asked for them.
+# the setting explicitly enables them.
 if settings.get("debug_api_enabled", False):
     app.include_router(debug_router)
 app.include_router(git_router)

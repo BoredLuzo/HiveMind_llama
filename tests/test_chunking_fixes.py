@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Chunking fixes 2026-10-27 (owner: chunking/pre_explore stay default-off
-but must WORK when enabled):
+"""Chunking fixes: chunking/pre_explore stay default-off but must WORK when
+enabled:
 
   1. honest chunking-off status (once, with the real subtask count;
      the old text claimed the run "continues with chunking")

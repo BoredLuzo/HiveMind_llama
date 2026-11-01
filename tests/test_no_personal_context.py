@@ -29,8 +29,12 @@ BANNED = [
     (re.compile(r"\bNtheP\b"), "maintainer user name"),
     (re.compile(r"C:\\\\?Users\\\\?Nicolas", re.I), "personal profile path"),
     (re.compile(r"owner request", re.I), "attribution to a person"),
-    (re.compile(r"\bOwner:\s"), "attribution to a person"),
     (re.compile(r"owner feedback", re.I), "attribution to a person"),
+    (re.compile(r"owner (?:wants|said|asked|reported)", re.I),
+     "attribution to a person"),
+    # "owner:" as a comment preface - NOT the identifier `_owner:` (a word
+    # boundary does not match between `_` and `o`).
+    (re.compile(r"\bowner\s*:"), "attribution to a person"),
 ]
 
 # Files that are allowed to mention the rule itself (this suite) and docs that

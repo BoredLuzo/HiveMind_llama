@@ -332,7 +332,7 @@ header{grid-column:1/-1;background:var(--bg2);border-bottom:1px solid #222a38;
 .ibtn:hover{border-color:var(--amber);color:var(--amber)}
 /* VOICE (1.4): the mic sits left of send. A red circle, only visible while
    Speech to text is enabled; a recording state pulses so it is obvious. */
-/* Same footprint as #send (40x40, radius 7px) - the owner wants the mic to read
+/* Same footprint as #send (40x40, radius 7px) - the mic should read
    as a peer of the send button, not as a round bubble. Red, so it stays obvious. */
 #mic-btn{background:#c8403f;border:none;border-radius:7px;width:40px;height:40px;
   color:#fff;font-size:17px;cursor:pointer;align-items:center;justify-content:center;

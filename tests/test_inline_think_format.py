@@ -57,7 +57,7 @@ check("inline block shows the char count",
 check("the char count is only set when the body has content",
       "_tbb && _tbb.textContent.trim()" in _block)
 
-# the main streaming block stays as before (owner: streaming is fine)
+# the main streaming block stays as before (streaming is fine)
 _main = _js.find("THINK-CODE-FORMAT: fenced code in reasoning renders as code blocks")
 _mblock = _js[_main:_main + 400] if _main > 0 else ""
 check("main live block still formats its fences", "_renderThinkCodeBlocks(_tkBody)" in _mblock)

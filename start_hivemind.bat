@@ -16,9 +16,8 @@ echo   \__/   \__/
 echo      \___/
 echo.
 echo    H I V E M I N D
-REM Version lives in server.py - single source of truth (R5, owner: plain
-REM Version lives in server.py - single source of truth (R5, owner: plain
-REM title, no build clutter; byline back on request 2026-10-07).
+REM Version lives in server.py - single source of truth (R5: plain title,
+REM no build clutter; the byline is back).
 set "HM_VER="
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path '%~dp0server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "HM_VER=%%V"
 if not defined HM_VER set "HM_VER=dev"
