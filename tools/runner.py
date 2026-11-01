@@ -1754,12 +1754,15 @@ async def _run_inline_tool(
                 # when a language server is already warm. Silent by design -
                 # a broken/missing server must never turn a successful
                 # write into a tool error, and a cold server is only warmed
-                # for the next write.
+                # for the next write. The file_ops handlers already attach a
+                # pyright/per-language lint block for Python — skip the LSP
+                # block then, or the model reads the same errors twice.
                 try:
-                    from tools.handlers.lsp import auto_diagnostics_block as _lsp_auto
-                    _lsp_note = await _lsp_auto(workspace, args["path"])
-                    if _lsp_note:
-                        _result += "\n\n" + _lsp_note
+                    if "[lint/" not in _result:
+                        from tools.handlers.lsp import auto_diagnostics_block as _lsp_auto
+                        _lsp_note = await _lsp_auto(workspace, args["path"])
+                        if _lsp_note:
+                            _result += "\n\n" + _lsp_note
                     from tools.handlers.lsp import notify_watched_change as _lsp_watch
                     _lsp_watch(workspace, [args["path"]])
                 except (ImportError, OSError, RuntimeError, ValueError,
