@@ -2125,9 +2125,15 @@ class LlamaLoadMixin:
                 _gguf_gb = (_os_diag.path.getsize(gguf_path) / (1024 ** 3)) if gguf_path and _os_diag.path.exists(gguf_path) else -1.0
             except Exception:
                 _gguf_gb = -1.0
+            # 2026-11-01: this logged the HiveMind MLOCK_MODEL setting, which
+            # is NOT what the server does — the effective switch is the
+            # resolved --load-mode (a profile "mmap+mlock" locks RAM even
+            # with llama_mlock=false). Log the effective mode.
             logger.info(
-                "[LOAD-DIAG] mlock=%s ctx=%d gguf=%.1fGB ram_free=%.1fGB",
-                bool(_llama_cfg.MLOCK_MODEL), num_ctx, _gguf_gb, _available_ram_gb(),
+                "[LOAD-DIAG] load_mode=%s settings_mlock=%s ctx=%d gguf=%.1fGB "
+                "ram_free=%.1fGB",
+                _load_mode, bool(_llama_cfg.MLOCK_MODEL), num_ctx,
+                _gguf_gb, _available_ram_gb(),
             )
 
             slot._ready_event.clear()
