@@ -874,7 +874,7 @@ async def t_audit_fixes():
     check("from_voice: tagged as telegram-voice",
           _body_fv["overrides"].get("source") == "telegram-voice")
     check("from_voice: answered", _res_fv is not None)
-    # VOICE-KEEPS-MODE (2026-11-01, owner request): with an explicitly selected
+    # VOICE-KEEPS-MODE: with an explicitly selected
     # frontend mode a spoken note must NOT be rerouted to auto - it used to, so
     # voice and typed text took different routes.
     br.hive.settings_body = {"mode": "chat"}
@@ -1153,7 +1153,7 @@ async def t_audit_fixes():
     out = await br_g.gate_text("nuclear")
     check("gate: invalid rejected", "ask|deny|off" in out)
 
-    # Tool-Call-Relay (owner request): tool activity becomes compact
+    # Tool-Call-Relay: tool activity becomes compact
     # lines on the phone; consecutive identical lines are suppressed
     ev_t = [{"type": "run_id", "run_id": "r-t"},
             {"type": "tool_call", "name": "run_bash",

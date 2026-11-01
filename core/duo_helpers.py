@@ -770,8 +770,8 @@ CPU_CTX_WARN_TOKENS = 32768
 def cpu_prefill_warning(ctx_tokens, backend: str = "") -> str:
     """Warn when a CPU-only install is configured with a large context.
 
-    TIME-NOT-SIZE (2026-10-17, ThinkPad report "1500 s for one write_file with a
-    2B model"): without GPU offload every prompt token is processed on the CPU,
+    TIME-NOT-SIZE: without GPU offload every prompt token is processed on the CPU
+    (a 2B model can need many minutes for one write_file),
     so n_ctx stops being a memory setting and becomes a *time* setting - the
     first prompt alone can take many minutes and each re-prefill repeats it. The
     failure looks like a hang, not like a wrong setting, so say it once with the
@@ -796,8 +796,8 @@ def vision_note_for_coder(img_plan: dict, coder_slot_vision) -> str:
     with its projector (slot.vision_active is True, set from
     /props.modalities.vision after a load).
 
-    STRICT-VISION (2026-10-17, owner request "vision only when mmproj is
-    loaded"): False (projector missing) and None (unproven - slot not loaded
+    STRICT-VISION (a note may only claim vision when the projector is
+    loaded): False (projector missing) and None (unproven - slot not loaded
     yet, /props unreachable) both keep the note out. A note that claims "you
     can see it" while the projector is absent makes the model invent visual
     details; saying nothing is the honest default. The post-load gate adds the

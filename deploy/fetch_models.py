@@ -68,8 +68,8 @@ def _persist_models_dir(mdir: Path) -> None:
 # pulled Jackrong/DeepSeek-V4-Pro... for the qwen3.5:4b-mtp spec because
 # unsloth names its MTP files WITHOUT "mtp": unsloth/Qwen3.5-4B-MTP-GGUF →
 # "Qwen3.5-4B-Q4_K_M.gguf". Pinned specs never fall back to search.)
-# ESSENTIAL-SET (2026-11-01, ThinkPad test): this is now a WHITELIST. The old
-# skip-list shipped 15 models - including the 20.8 GB Qwen3.6 - which is not
+# ESSENTIAL-SET: a WHITELIST of the default route, not a skip-list. The old
+# skip-list shipped 15 models - including a 20.8 GB one - which is not
 # "essential" on a small machine. The set is exactly the default route:
 # one Duo coder/planner (qwen3.5:4b-mtp), an all-rounder with vision
 # (gemma-4:e4b-it-qat), the refiner (qwen3.5:2b-mtp) and the text subagent
@@ -731,8 +731,7 @@ def main() -> int:
         return 0
 
     if getattr(args, 'print_essential', False):
-        # ESSENTIAL-EXPLAIN (2026-11-01, ThinkPad: "Essential set? Was soll das
-        # sein?"): the menu now shows the real list instead of a vague sentence.
+        # The menu shows the real list instead of a vague sentence.
         _ess = [sp for sp in SPECS if sp['key'] in ESSENTIAL_KEYS]
         _ess_mb = 0
         for sp in _ess:
@@ -873,9 +872,9 @@ def main() -> int:
         if args.list_only:
             print(f"    Would download: {main_file['path']}")
         else:
-            # DECLINE-SKIPS-MODEL (2026-11-01, ThinkPad test): answering "n" to a
-            # 20 GB GGUF still downloaded its 0.8 GB projector and then wrote a
-            # models.json entry for a model that is not on disk. Declining the
+            # Declining a large GGUF must skip the WHOLE spec: the projector
+            # and the models.json entry belong to a model that is not on disk.
+            # The old path downloaded the projector anyway and registered it.
             # main file now skips the whole spec.
             if not download_file(repo, main_file, mdir, args.yes):
                 print("    Skipped - model not downloaded "
@@ -949,9 +948,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # CTRL-C-CLEAN (2026-11-01, ThinkPad test): Ctrl+C during a download dumped a
-    # 20-line ssl/socket traceback. A partial file is kept on purpose - the next
-    # run resumes it with a Range request.
+    # Ctrl+C during a download must not dump an ssl/socket traceback. A partial
+    # file is kept on purpose - the next run resumes it with a Range request.
     try:
         sys.exit(main())
     except KeyboardInterrupt:

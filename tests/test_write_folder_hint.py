@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Write-Fehler nennen bei Desktop/Dokumenten die echte Windows-Ursache.
 
-ThinkPad-Fall (2026-10-26): write_file auf C:\\Users\\Nicolas\\Desktop\\Test
-scheiterte mit WRITE_FILE_PERMISSION, und das 4B-Modell probierte danach
+Fall: write_file auf einen Desktop-Ordner scheiterte mit
+WRITE_FILE_PERMISSION, und das 4B-Modell probierte danach
 /Users/...-Pfade, test -w und whoami. Die Meldung sagte nur "environment
 restriction", nicht dass Controlled Folder Access oder OneDrive die Ursache ist.
 """
@@ -39,7 +39,7 @@ def msg_for(parent: str) -> str:
 
 
 # ── 1. Die Hinweise erscheinen nur, wo sie hingehoeren ─────────────────
-for folder in (r"C:\Users\Nicolas\Desktop\Test", r"C:\Users\N\Documents\Proj",
+for folder in (r"C:\Users\Test\Desktop\Test", r"C:\Users\Test\Documents\Proj",
                r"C:\Users\N\Pictures", r"C:\Users\N\OneDrive\Work"):
     hint = _protected_folder_hint(folder)
     check(f"1 hint for {folder}", "Controlled Folder Access" in hint, f"({len(hint)} Zeichen)")
@@ -49,10 +49,10 @@ for folder in (r"C:\Work\Proj", r"D:\code\app", r"C:\Users\N\hivemind_ws"):
     check(f"3 no hint for {folder}", _protected_folder_hint(folder) == "")
 
 # ── 2. Die Meldung bleibt lesbar ───────────────────────────────────────
-m = msg_for(r"C:\Users\Nicolas\Desktop\Test")
+m = msg_for(r"C:\Users\Test\Desktop\Test")
 check("4 the base sentence ends before the hint",
       "restricting sandbox. Common cause" in m, f"({m[150:230]!r})")
-check("5 the message names the folder", r"C:\Users\Nicolas\Desktop\Test" in m)
+check("5 the message names the folder", r"C:\Users\Test\Desktop\Test" in m)
 check("6 the message offers a way out", "HiveMind_ws" in m or "outside" in m)
 m2 = msg_for(r"C:\Work\Proj")
 check("7 a normal folder gets no Windows lecture", "Controlled Folder Access" not in m2)

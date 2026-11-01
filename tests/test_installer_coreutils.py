@@ -62,7 +62,7 @@ check("every branch jumps to coreutils_done", TEXT.count("goto coreutils_done") 
       f"({TEXT.count('goto coreutils_done')})")
 check("the skipped path mentions the manual command",
       "Skipped - add it later with: winget install --source msstore" in TEXT)
-# 2026-11-01 (ThinkPad): the winget id is not in every source snapshot - the
+# The winget id is not in every source snapshot - the
 # Store product id is the documented fallback and must stay in the script.
 check("the msstore product id fallback exists",
       "--id 9NBLGGH4R32N" in TEXT)
@@ -71,10 +71,10 @@ check("the fallback only runs after the first attempt failed",
       < TEXT.index("--source msstore --id 9NBLGGH4R32N"))
 check("the missing-winget path points at the docs",
       "learn.microsoft.com/en-us/windows/core-utils" in TEXT)
-# GITBASH-COVERS-IT + VERIFY-BY-PACKAGE (2026-11-01, ThinkPad log): the
-# installer claimed "did not complete" although winget said the Store package
-# was already installed - the gate was `where grep`, which fails when the App
-# Execution Alias is not on the running cmd's PATH.
+# GITBASH-COVERS-IT + VERIFY-BY-PACKAGE: the installer claimed "did not
+# complete" although winget said the Store package was already installed -
+# the gate was `where grep`, which fails when the App Execution Alias is not
+# on the running cmd's PATH.
 check("Git Bash short-circuits the prompt",
       "Git Bash is installed" in TEXT and "HAVE_GITBASH" in TEXT)
 check("the Git Bash check looks at usr/bin/grep.exe",

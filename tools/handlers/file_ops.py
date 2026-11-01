@@ -100,7 +100,7 @@ def _write_error_code(exc: BaseException) -> str | None:
     return None
 
 
-# FOLDER-HINT (2026-10-27, ThinkPad feedback): a write to Desktop or Documents
+# FOLDER-HINT: a write to Desktop or Documents
 # that fails with a real EACCES/WinError 32 is almost always one of two Windows
 # features, not a path problem. Naming them saves the model a round of flailing.
 _PROTECTED_FOLDER_HINTS = (

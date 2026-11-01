@@ -114,8 +114,8 @@ REM No download, no network access needed.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --scan-only
 
 :more_models
-REM AFTER-ANY-SET (2026-11-01, ThinkPad): after a whole set finishes, offer to
-REM add single models on top instead of exiting the menu.
+REM After a whole set finishes, offer single models on top instead of
+REM dropping out of the menu.
 echo.
 choice /c YN /n /m "Add more models now (single downloads on top)? [Y/N] "
 if not errorlevel 2 goto menu

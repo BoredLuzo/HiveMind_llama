@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Installer download flow — the two bugs the ThinkPad test found (2026-11-01).
+"""Installer download flow — declining a model and the essential set.
 
 1. Answering "n" to a 20.8 GB GGUF still downloaded its 0.8 GB projector and
    then registered the model. Declining the main file must skip the whole spec.

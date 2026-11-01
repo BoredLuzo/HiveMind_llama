@@ -1,9 +1,9 @@
 """duo_coder_after_run: keep the coder warm or release it at the run end.
 
-Owner request 2026-10-17: "a toggle in the Configs tab that decides whether the
-coder unloads after the round or stays loaded - then the user can decide whether
-to prompt straight on (without planner) and the coder continues, or the coder
-evicts and the machine is free for the next prompt, whatever model/mode".
+The toggle in the Configs tab decides whether the coder unloads after the
+round or stays loaded - the user can prompt straight on (without planner) and
+the coder continues, or the coder evicts and the machine is free for the next
+prompt, whatever model/mode.
 
 keep (default) = exactly today's behaviour: the pin is released, the slot stays
 warm, the idle TTL decides (test pins the default so nothing changes silently).
@@ -58,7 +58,7 @@ check("keep is a no-op (no evict call outside the evict branch)",
       'if str(ctx.settings.get("duo_coder_after_run", "keep")).strip().lower() == "evict"' in _src)
 
 # ── UI ──────────────────────────────────────────────────────────────────────
-# ON/OFF toggle (owner request 2026-10-17: "just make the coder thing an on/off
+# ON/OFF toggle ("just make the coder thing an on/off
 # toggle"), in the Keep-Alive / Pinning card.
 check("index.html has the toggle", 'id="duo-coder-after-run-toggle"' in _html)
 check("the toggle posts the real key",

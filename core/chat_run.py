@@ -518,8 +518,8 @@ async def run_stream(
         yield await emit(_done_event(0.0, "blocked",
                                     summary=f"Workspace invalid: {str(_wfi.raw)[:120]}"))
         return
-    # REQUEST-INVALID-FALLBACK (2026-10-17, live ThinkPad regression "on 1.3.9
-    # the model forgets the workspace, it worked before"): 1.3.9 lets the
+    # REQUEST-INVALID-FALLBACK: a regression report ("the model forgets the
+    # workspace, it worked before") showed that 1.3.9 lets the
     # /stream workspace parameter beat every other source (the gravSandbox
     # incident). Correct for stray API runs - but when the UI keeps sending a
     # path that no longer exists on THIS machine (another box's folder, a renamed
@@ -553,8 +553,7 @@ async def run_stream(
             _ws_str, _ws_src = _fb_ws, _fb_src
     # ENV-Sync: Subprozesse (run_bash/run_python/browser) + Fallback-Lesezugriffe
     _sync_env_workspace(_ws_str)
-    # WS-FALLBACK-WARN (2026-10-17, ThinkPad report "the model forgets the
-    # workspace"): with nothing configured the resolver falls back to the
+    # WS-FALLBACK-WARN: with nothing configured the resolver falls back to the
     # process CWD (= the install folder) and the run then persists THAT as
     # "last used" - so one accidental run pins the install directory as the
     # workspace for every later run and the model keeps writing next to the

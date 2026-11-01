@@ -249,7 +249,7 @@ class HiveClient:
         return r.json()
 
     async def purge_models(self) -> dict:
-        """R4 (owner request): /purge on the phone - kill ALL loaded
+        """/purge on the phone - kill ALL loaded
         llama-servers (free VRAM). Engine route: POST /vram/kill_all."""
         return await self._post_json("/vram/kill_all", {})
 

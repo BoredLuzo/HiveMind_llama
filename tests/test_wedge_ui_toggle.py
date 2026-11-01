@@ -2,8 +2,8 @@
 
 duo_wedge_handoff_enabled defaults to False, so the fix agent never runs on a
 fresh install - and until now the only way to switch it on was editing
-settings.json by hand (the key was in no UI control). Owner request
-2026-10-17: "the fix agent should be togglable in the UI".
+settings.json by hand (the key was in no UI control); the fix agent belongs
+in the UI.
 
 Pins:
   (a) index.html carries the checkbox with the real settings key + id
@@ -49,7 +49,7 @@ check("the toggle has a visible label",
       "Wedge handoff" in _html)
 check("the toggle explains what it does",
       "fresh-context repair agent" in _html)
-# BETA WARNING (owner request 2026-10-17): the feature is young and off by
+# BETA WARNING: the feature is young and off by
 # default - the row says both, in the same badge style the other cards use.
 check("the row carries a BETA badge",
       'class="cfl-badge"' in _html and ">BETA</span>" in _html)

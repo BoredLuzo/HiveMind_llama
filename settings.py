@@ -286,7 +286,7 @@ DEFAULT_SETTINGS = {
     "duo_coder_always_vision": False,
     # CODER LIFETIME (2026-10-17): keep = the slot stays warm after the
     # run (idle TTL decides), evict = release it at the run end so the next
-    # prompt can load any model/mode. Owner request.
+    # prompt can load any model/mode without evicting anything.
     "duo_coder_after_run":     "keep",
     "plan_tracker_classifier": "heuristic",
 

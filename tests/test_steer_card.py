@@ -1,6 +1,6 @@
 """Steer card visibility (2026-10-06).
 
-Owner: steering a run was invisible — the drain sites emitted a 60-char
+Symptom: steering a run was invisible — the drain sites emitted a 60-char
 "🧭 steered:" STATUS line that drowned in the status stream, rendered as a
 transient divider and was never persisted. Now every drained steer emits a
 dedicated `{"type": "steer"}` event that:

@@ -99,8 +99,8 @@ def resolve_workspace(
     # ignored entirely and runs silently landed in "last used" (the
     # gravSandbox contamination: a stray API run committed 1186 files there).
     _req = str(request_workspace or "").strip()
-    # UI-DEFAULT-IS-NOT-A-REQUEST (2026-10-17, ThinkPad regression on 1.3.9:
-    # "the model forgets the workspace, before that it worked"): the web UI sends
+    # UI-DEFAULT-IS-NOT-A-REQUEST (regression on 1.3.9: "the model forgets the
+    # workspace, before that it worked"): the web UI sends
     # the *global* Workspace field with EVERY run, so treating it as an explicit
     # request made that field override a chat's own workspace and bypass the
     # workspace_force_ui check - and a stale value (a folder that only exists on
@@ -225,7 +225,7 @@ def commit_allowed_for(request_workspace: str, chat_ctx: dict | None) -> bool:
 def fallback_for_invalid_request(settings, chat_ctx, user_input: str = "") -> tuple[str, str]:
     """Interactive fallback when the /stream workspace parameter is invalid.
 
-    REQUEST-INVALID-FALLBACK (2026-10-17, live ThinkPad regression): 1.3.9 lets
+    REQUEST-INVALID-FALLBACK (1.3.9 regression): 1.3.9 lets
     the request parameter beat every other source (gravSandbox fix). When the UI
     keeps sending a path that does not exist on this machine - another box's
     folder, a moved project - the run used to lose its workspace completely

@@ -36,7 +36,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_autolint_python_engine` | str | `auto` |  |
 | `duo_caps` | object | `{}` |  |
 | `duo_chunking` | bool | `False` | CHUNKING DEFAULT OFF (2026-10-27, owner): stays a working opt-in, but a fresh install runs one coder pass (the planner subtasks are skipped with an honest status) instead of silently chunking. |
-| `duo_coder_after_run` | str | `keep` | CODER LIFETIME (2026-10-17): keep = the slot stays warm after the run (idle TTL decides), evict = release it at the run end so the next prompt can load any model/mode. Owner request. |
+| `duo_coder_after_run` | str | `keep` | CODER LIFETIME (2026-10-17): keep = the slot stays warm after the run (idle TTL decides), evict = release it at the run end so the next prompt can load any model/mode without evicting anything. |
 | `duo_coder_always_vision` | bool | `False` | Send images to the coder even when the task looks text-only. |
 | `duo_coder_briefing_think_tokens` | int | `1500` | CODER-BRIEFING-STAGE (2026-10-17, owner): the planner's thinking is only useful as a briefing while it is SMALL. A planner that thinks 8-16k tokens before writing a plan poisons the coder prompt (and the coder's window), so above this many ESTIMATED tokens only the pure plan is… |
 | `duo_coder_ctx_agentic` | null | `None` |  |

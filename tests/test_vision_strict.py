@@ -1,8 +1,8 @@
 """STRICT-VISION: the [VISION] note ("you can see the image") may only appear
 when the coder slot is CONFIRMED to run with its projector.
 
-Owner request 2026-10-17: "vision should only come when mmproj is also loaded".
-Before this, the note was appended whenever the PLAN said the coder would get
+A note may only claim vision when the projector is also loaded. Before this,
+the note was appended whenever the PLAN said the coder would get
 the raw image - including a fresh load where the slot did not exist yet and
 /props had never been read. Only a post-load retraction cleaned that up, and it
 deliberately stayed silent when the vision state was unknown (None).

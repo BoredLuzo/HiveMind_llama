@@ -407,7 +407,7 @@ async def t_g9_edits():
           gw.bridge.runs == ["echter Lauf"])
 
 
-# /help: a real instruction list (owner request), not a whitelist dump
+# /help: a real instruction list, not a whitelist dump
 async def t_help():
     gw, st, api = _gw("gwcmd_help_")
     await gw.handle_owner_update(_p("/help", 50))

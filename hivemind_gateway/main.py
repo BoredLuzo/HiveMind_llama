@@ -650,7 +650,7 @@ class Gateway:
                                  f"🔌 engine unreachable: {_cron_cmd_exc}",
                                  reply_to_message_id=p.message_id)
         elif name == "purge":
-            # R4 (owner request): /purge kills ALL loaded models - instant
+            # /purge kills ALL loaded models - instant
             # VRAM freed, next run reloads on demand.
             try:
                 _res = await self.hive.purge_models()

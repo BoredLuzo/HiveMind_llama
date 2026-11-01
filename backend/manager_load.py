@@ -1613,7 +1613,7 @@ class LlamaLoadMixin:
         # OFF-SWITCH (2026-10-19): HIVEMIND_DSPARK_SPEC=0 disables the drafter
         # for every model without touching any profile. Measured with the app's
         # own llama flags (Sharp-MiniCPM5-2B Q4 + this drafter, AMD Radeon iGPU,
-        # 16 threads, ThinkPad E15): target alone 14.1 tok/s, DSpark n-max 2
+        # 16 threads): target alone 14.1 tok/s, DSpark n-max 2
         # 10.6 (49% acceptance), n-max 4 7.7 (34%). Slower at every setting,
         # hence switchable.
         _draft_fn = None

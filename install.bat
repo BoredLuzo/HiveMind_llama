@@ -209,9 +209,9 @@ echo  ==========================================================
 echo   [playwright] Installing Chromium browser
 echo  ==========================================================
 echo.
-REM PLAYWRIGHT-HARDENING (2026-10-26, ThinkPad): the venv python is the
-REM deterministic context (uv run could resolve elsewhere); on failure say
-REM the exact manual retry - a blocked Chromium download is the usual cause
+REM The venv python is the deterministic context (uv run could resolve
+REM elsewhere); on failure say the exact manual retry - a blocked Chromium
+REM download is the usual cause
 REM (proxy/firewall) and must not look like a broken install.
 "%~dp0.venv\Scripts\python.exe" -m playwright install chromium
 if errorlevel 1 (
@@ -392,10 +392,9 @@ if not defined HAVE_COREUTILS goto coreutils_ask
 echo   [OK] POSIX tools are already available - nothing to do.
 goto coreutils_done
 :coreutils_ask
-REM GITBASH-COVERS-IT (2026-11-01, ThinkPad): run_bash runs Git Bash when it is
-REM installed (settings run_bash_shell=auto), and Git ships grep/sed/awk/find
-REM in usr\bin. CoreUtils only matters for the PowerShell fallback - asking
-REM for it anyway confused owners whose setup already had the tools.
+REM run_bash uses Git Bash when it is installed (run_bash_shell=auto) and Git
+REM ships grep/sed/awk/find in usr\bin. CoreUtils only matters for the
+REM PowerShell fallback, so an install with Git Bash does not need the prompt.
 set "HAVE_GITBASH="
 if exist "%ProgramFiles%\Git\usr\bin\grep.exe" set "HAVE_GITBASH=1"
 if not defined HAVE_GITBASH if exist "%ProgramFiles(x86)%\Git\usr\bin\grep.exe" set "HAVE_GITBASH=1"
@@ -415,16 +414,14 @@ if errorlevel 2 goto coreutils_skipped
 echo.
 winget install --id Microsoft.CoreUtils -e --silent --accept-package-agreements --accept-source-agreements
 if not errorlevel 1 goto coreutils_verify
-REM WINGET-FALLBACK (2026-11-01, ThinkPad: "Es wurde kein Paket gefunden"):
-REM the id is not in every winget source snapshot. The Store product id is the
-REM documented route and works through the msstore source.
+REM The package id is not in every winget source snapshot. The Store product
+REM id is the documented route and resolves through the msstore source.
 echo   [INFO] The winget id did not resolve - trying the Store product id...
 winget install --source msstore --id 9NBLGGH4R32N --accept-package-agreements --accept-source-agreements
 :coreutils_verify
-REM VERIFY-BY-PACKAGE (2026-11-01, ThinkPad): the old gate was `where grep`.
-REM On a machine where the Store package was ALREADY installed that gate
-REM failed anyway (the App Execution Alias is not on the PATH of the running
-REM cmd), so the installer claimed "did not complete" for a finished install.
+REM Verify by package, not only by PATH: when the Store package is already
+REM installed, the App Execution Alias is not yet on the PATH of the running
+REM cmd, and a PATH-only gate would report a finished install as failed.
 where grep >nul 2>&1
 if not errorlevel 1 goto coreutils_ok
 if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\grep.exe" goto coreutils_ok_alias

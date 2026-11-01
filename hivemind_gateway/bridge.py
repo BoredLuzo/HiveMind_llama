@@ -537,7 +537,7 @@ class RunBridge:
         _direct_mdl = (_agents.get("direct") or {}).get("model") or ""
         _ov_model = (self.state.data.get("run_overrides") or {}).get("model")
         _eff = _eff_mode
-        # VOICE-KEEPS-MODE (2026-11-01, owner request): a spoken note used to be
+        # VOICE-KEEPS-MODE: a spoken note used to be
         # forced to "auto" even when the UI sat in chat mode, so a voice message
         # silently took a different route than typed text. The CONVERSATIONAL
         # modes (chat/simple/direct) now apply to voice as well. code_duo and

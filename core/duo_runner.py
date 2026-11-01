@@ -688,8 +688,7 @@ async def _duo_planner_phase(
             )
         except Exception:
             pass
-        # CPU-CONTEXT-GUARD (2026-10-17, ThinkPad report "1500 s for one
-        # write_file with a 2B model"): on a CPU-only install the ctx setting
+        # CPU-CONTEXT-GUARD: on a CPU-only install the ctx setting
         # is a *time* setting - the first prompt alone can take many minutes
         # and every re-prefill repeats it. Say so once, with the number, so
         # the fix (smaller ctx) is obvious instead of looking like a hang.
@@ -2071,7 +2070,7 @@ async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
                 _lsm_unpin.unpin(_m)
     except Exception:
         pass
-    # CODER LIFETIME (2026-10-17, owner request): with
+    # CODER LIFETIME: with
     # duo_coder_after_run = "evict" the coder slot is released here - the
     # next prompt can then load any model/mode without evicting something
     # first. "keep" (default) leaves the slot warm; the idle TTL decides.

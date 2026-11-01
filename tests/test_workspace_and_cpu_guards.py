@@ -1,7 +1,7 @@
-"""Two fixes for the ThinkPad report (2026-10-17).
+"""Two fixes for a workspace + CPU-only regression report.
 
-Owner: "on the ThinkPad the model forgets the workspace and cannot get a
-write_file done, 1500 s for a write_file with a 2B model".
+Symptom: the model forgets the workspace and cannot get a write_file done;
+a write_file with a 2B model on CPU took 1500 s.
 
 1. WS-FALLBACK-WARN (`core/chat_run.py`): with no workspace configured the
    resolver falls back to the process CWD (= the engine folder) and the run then
@@ -100,7 +100,7 @@ _ws, _src = resolve_workspace({}, None, "")
 check("empty settings resolve to the cwd fallback",
       _src == "cwd_fallback", f" (source={_src})")
 
-# ── 3. invalid request workspace (the 1.3.9 ThinkPad regression) ─────────────
+# ── 3. invalid request workspace (the 1.3.9 regression) ─────────────────────
 # 1.3.9 made the /stream workspace parameter win over everything. When the UI
 # sends a path that does not exist on this machine, the run lost its workspace
 # entirely ("the model forgot the project", no write_file) while 1.3.8 ignored
@@ -126,7 +126,7 @@ check("a valid explicit request is routed as a request, not re-routed",
       and resolve_workspace({"workspace": str(ROOT.parent)}, None, "",
                             request_workspace=str(ROOT))[1] == "request")
 
-# ── 4. UI default vs explicit request (the actual ThinkPad trigger) ─────────
+# ── 4. UI default vs explicit request (the actual trigger) ──────────────────
 # The web UI sends the global Workspace field with EVERY run
 # (static/app.js: `workspace: S.workspace || ''`). Treating that as an explicit
 # request is what broke the chat's own workspace and the stale-path case.
