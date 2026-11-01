@@ -2290,6 +2290,41 @@ async def stt_transcribe(request: Request):
         stt_audio.cleanup(wav_path)
 
 
+@app.post("/documents/extract")
+async def documents_extract(request: Request):
+    """Extract text from one uploaded document (raw body) -> {"text": ...}.
+
+    Mirrors /stt: the caller sends bytes, the engine answers text or a DOC_*
+    code. PDF only for now; the size cap keeps a huge upload off the event
+    loop (extraction runs in a worker thread)."""
+    from core import documents as _docs
+
+    settings = load_settings()
+    try:
+        max_chars = int(settings.get("document_max_chars") or _docs.DEFAULT_MAX_CHARS)
+    except (TypeError, ValueError):
+        max_chars = _docs.DEFAULT_MAX_CHARS
+    try:
+        max_pages = int(settings.get("document_max_pages") or _docs.DEFAULT_MAX_PAGES)
+    except (TypeError, ValueError):
+        max_pages = _docs.DEFAULT_MAX_PAGES
+    try:
+        raw = await request.body()
+        if len(raw) > 32 * 1024 * 1024:
+            return JSONResponse({"code": "DOC_TOO_LARGE",
+                                 "error": "document larger than 32 MB"},
+                                status_code=413)
+        info = await asyncio.to_thread(
+            _docs.extract_pdf_text, raw, max_pages=max_pages, max_chars=max_chars)
+        _logger.info("[DOC] extracted %d chars from %d/%d pages (empty=%d, cut=%s)",
+                     len(info["text"]), info["pages_read"], info["pages"],
+                     info["empty_pages"], info["truncated"])
+        return JSONResponse(info)
+    except _docs.DocumentError as exc:
+        _logger.info("[DOC] %s", exc.code)
+        return JSONResponse(exc.as_dict(), status_code=400)
+
+
 @app.post("/gateway/heartbeat", include_in_schema=False)
 async def gateway_heartbeat(req: Request):
     try:

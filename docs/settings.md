@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**265 settings keys.**
+**267 settings keys.**
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -27,6 +27,8 @@ its comment) in `settings.py`, then re-run the generator.
 | `direct_tools_max_rounds` | int | `12` |  |
 | `direct_tools_tier` | str | `readonly` | off \| readonly(websearch only) \| python(read+python) \| full |
 | `disable_thinking_in_planner` | bool | `False` |  |
+| `document_max_chars` | int | `120000` | PDF/text extraction limits (engine /documents/extract). The gateway sends bytes, the engine answers text or a DOC_* code. |
+| `document_max_pages` | int | `40` |  |
 | `duo_action_approval_enabled` | bool | `False` | When on, the run pauses before everything that changes the project — code/cmd execution (run_bash, run_python, install_package, start_background), file writes (write_file, edit_file, write_file_append) and git_commit. "Approve" buttons: once, or remember EXACTLY this call for… |
 | `duo_action_approval_timeout_s` | int | `0` | Auto-DENY an unanswered approval card after N seconds (0 = off, attended runs wait as before). With N > 0 and nobody at the desk the gated call is DENIED once (fail closed, 2026-10-03 review: the old auto-approve-once behavior approved unseen actions) - the gate wait ends… |
 | `duo_agentic_mode` | bool | `False` |  |

@@ -474,6 +474,11 @@ class Gateway:
                 # existed, only the gateway dropped the picture.
                 await self.handle_image(p)
                 return
+            if p.kind == "message" and p.document_file_id:
+                # DOCUMENTS (2026-11-01): a PDF/text file is extracted by the
+                # engine and becomes a normal run with the caption as question.
+                await self.handle_document(p)
+                return
             if p.kind == "message" and not p.is_forwarded:
                 # non-text update (sticker, unsupported document): rejected
                 await self.reply(p.chat_id,
@@ -875,6 +880,76 @@ class Gateway:
             message_id=p.message_id, callback_id=p.callback_id,
             images=(data_url,))
         await self.start_owner_run(withimg)
+
+    async def handle_document(self, p: gw_auth.ParsedUpdate) -> None:
+        """Extract a PDF/text document and run it as prompt text.
+
+        The engine owns the extraction (pypdf there), so the gateway stays
+        dependency-free; a scanned PDF comes back as DOC_NO_TEXT and the
+        reply tells the owner to send photos instead.
+        """
+        cap = int(getattr(self.cfg, "document_max_bytes", 25 * 1024 * 1024))
+        name = p.document_name or "document"
+        try:
+            blob = await self.api.download_file(p.document_file_id, max_bytes=cap)
+        except TelegramApiError as exc:
+            await self.reply(p.chat_id,
+                             f"❌ Could not download {name}: {exc}",
+                             reply_to_message_id=p.message_id)
+            return
+        if not blob:
+            await self.reply(p.chat_id, "❌ The document arrived empty.",
+                             reply_to_message_id=p.message_id)
+            return
+        await self.reply(p.chat_id, f"📄 Reading {name}...",
+                         reply_to_message_id=p.message_id)
+        info = await self.hive.extract_document(blob)
+        text = str(info.get("text") or "").strip()
+        if not text:
+            hints = {
+                "DOC_NO_TEXT": ("the PDF has no text layer (scanned?) - send the "
+                                "pages as photos and I read them as images"),
+                "DOC_UNSUPPORTED": ("PDF support is missing on the engine "
+                                    "(`pip install pypdf`)"),
+                "DOC_UNREADABLE": "the file is not a readable PDF",
+                "DOC_TOO_LARGE": "the file is too large",
+                "DOC_TRANSPORT": "the engine did not answer in time",
+            }
+            code = str(info.get("code") or "DOC_ERROR")
+            await self.reply(p.chat_id,
+                             "❌ " + hints.get(code, f"could not read it ({code})"),
+                             reply_to_message_id=p.message_id)
+            return
+        pages = int(info.get("pages") or 0)
+        read = int(info.get("pages_read") or pages or 0)
+        caption = (p.text or "").strip()
+        if len(caption) > self.cfg.max_text_chars:
+            await self.reply(p.chat_id,
+                             f"❌ Caption too long ({len(caption)} > "
+                             f"{self.cfg.max_text_chars} characters).",
+                             reply_to_message_id=p.message_id)
+            return
+        header = f"[FILE: {name} - {read}/{pages} page(s)"
+        if info.get("truncated"):
+            header += ", CUT - only the first part is below"
+        header += "]"
+        question = caption or "Summarize this document."
+        prompt = "\n\n".join([header, text, "---", question])
+        if len(prompt) > self.cfg.max_text_chars:
+            # a 120k character PDF does not fit Telegram's input cap - the
+            # engine gets the text, the phone gets an honest note
+            await self.reply(p.chat_id,
+                             f"📄 {name}: {len(text)} characters of text - more "
+                             f"than one phone run accepts. Ask about a part "
+                             f"(e.g. \"summarize page 3\") or use the desktop UI.",
+                             reply_to_message_id=p.message_id)
+            return
+        withdoc = gw_auth.ParsedUpdate(
+            update_id=p.update_id, kind=p.kind, from_id=p.from_id,
+            chat_id=p.chat_id, chat_type=p.chat_type,
+            text=prompt, date=p.date, is_forwarded=p.is_forwarded,
+            message_id=p.message_id, callback_id=p.callback_id)
+        await self.start_owner_run(withdoc)
 
     async def _image_in_enabled(self) -> bool:
         """Engine setting wins, gateway config is the fallback - same rule the

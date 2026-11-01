@@ -196,6 +196,7 @@ SUITES = [
     ("gateway_state_path",     "tests/test_gateway_state_path.py",              60),
     ("gateway_bridge",         "tests/test_gateway_bridge.py",                  60),
     ("gateway_images",         "tests/test_gateway_images.py",                  40),
+    ("documents",              "tests/test_documents.py",                    40),
     ("gateway_commands2",      "tests/test_gateway_commands2.py",               60),
     ("gateway_transport",      "tests/test_gateway_transport.py",               60),
     ("gateway_confinement",    "tests/test_gateway_confinement.py",             90),

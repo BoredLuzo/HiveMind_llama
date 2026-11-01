@@ -433,6 +433,10 @@ DEFAULT_SETTINGS = {
     # Needs a vision-capable model for the active route, or a configured
     # vision agent that preprocesses the picture into text.
     "telegram_image_in":         True,
+    # PDF/text extraction limits (engine /documents/extract). The gateway
+    # sends bytes, the engine answers text or a DOC_* code.
+    "document_max_chars":        120000,
+    "document_max_pages":        40,
     # What a phone run sends back (1.4.2). "both" = text + voice note, "text" =
     # text only, "voice" = only the model-generated answer as a voice note (the
     # progress lines stay text). telegram_progress_msgs turns the info lines off

@@ -197,6 +197,20 @@ the engine still enforces its own 8-images / ~14 MB-per-url limits. Switch:
 active route gets the picture directly, otherwise the vision agent preprocesses
 it into text.
 
+**PDFs and text files** sent to the bot are extracted on the engine
+(`/documents/extract`, pypdf) and run as prompt text with the caption as the
+question — "summarize this" works. Caps: 40 pages / 120k characters (the
+answer says when it was cut), 25 MB upload, and a scanned PDF without a text
+layer answers "send the pages as photos" instead of pretending. Plain
+`.txt/.md/.log/.csv` documents work the same way. New dependency: `pypdf`
+(pure Python).
+
+The vision projector now also attaches for **user-registered** models: the
+loader honours a `mmproj_filename` declared in the registry even when the
+model's base is not in the built-in vision list. An image request against a
+warm text-only slot triggers the existing vision reload, so the projector is
+loaded on demand — no manual preload.
+
 Voice notes also keep the selected conversational mode now (chat/simple/direct
 used to be rerouted to `auto`, so speaking took a different route than typing).
 

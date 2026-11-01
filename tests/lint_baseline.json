@@ -119,6 +119,10 @@
   "broad_except": 11,
   "except_pass": 2
  },
+ "core/documents.py": {
+  "broad_except": 3,
+  "except_pass": 0
+ },
  "core/duo/__init__.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -879,6 +883,10 @@
   "broad_except": 1,
   "except_pass": 1
  },
+ "tests/test_documents.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_duo_e2e_smoke.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -968,6 +976,10 @@
   "except_pass": 0
  },
  "tests/test_gateway_confinement.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_gateway_images.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1064,6 +1076,10 @@
   "except_pass": 0
  },
  "tests/test_installer_coreutils.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_installer_download_skip.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1292,6 +1308,10 @@
   "except_pass": 0
  },
  "tests/test_preset_never_keys_apply.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_preset_prompt_roles.py": {
   "broad_except": 0,
   "except_pass": 0
  },

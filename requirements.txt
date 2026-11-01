@@ -34,3 +34,4 @@ keyring>=25 ; sys_platform == 'win32'
 #   pip install -r requirements-voice.txt
 soundfile>=0.13
 numpy>=2.0
+pypdf>=5.0            # PDF text for Telegram/document uploads (/documents/extract)

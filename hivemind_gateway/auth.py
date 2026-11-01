@@ -56,6 +56,11 @@ class ParsedUpdate:
     # caption then (or stays empty - the caller substitutes a default prompt).
     image_file_id: str | None = None
     image_mime: str = ""
+    # DOCUMENTS (2026-11-01): a PDF or plain-text file sent as a document.
+    # The engine extracts the text (/documents/extract), the caption leads.
+    document_file_id: str | None = None
+    document_mime: str = ""
+    document_name: str = ""
     # data: URLs handed to the engine (/stream accepts up to 8 per run).
     # Populated by handle_image after the download; a tuple because the
     # dataclass is frozen.
@@ -110,14 +115,28 @@ def parse_update(raw: dict) -> ParsedUpdate | None:
             if _sizes:
                 _img_id = _sizes[-1]["file_id"]
                 _img_mime = "image/jpeg"
+        # DOCUMENTS (2026-11-01): a PDF (or a plain-text file) sent "as file"
+        # arrives as a document too. Keep it separate from images so the
+        # caller decides: PDF -> engine text extraction, image -> vision.
+        _doc_id = None
+        _doc_mime = ""
+        _doc_name = ""
         if not _img_id:
             _doc = payload.get("document")
             _doc = _doc if isinstance(_doc, dict) else {}
             _dmime = str(_doc.get("mime_type") or "").lower()
+            _dname = str(_doc.get("file_name") or "")
             if _dmime.startswith("image/") and isinstance(_doc.get("file_id"), str):
                 _img_id = _doc["file_id"]
                 _img_mime = _dmime
-        if _img_id and not text:
+            elif isinstance(_doc.get("file_id"), str) and (
+                    _dmime == "application/pdf"
+                    or _dmime.startswith("text/")
+                    or _dname.lower().endswith((".pdf", ".txt", ".md", ".log", ".csv"))):
+                _doc_id = _doc["file_id"]
+                _doc_mime = _dmime or "application/octet-stream"
+                _doc_name = _dname
+        if (_img_id or _doc_id) and not text:
             _cap = payload.get("caption")
             if isinstance(_cap, str):
                 text = _cap
@@ -137,6 +156,9 @@ def parse_update(raw: dict) -> ParsedUpdate | None:
             voice_mime=str(_media.get("mime_type") or ""),
             image_file_id=_img_id,
             image_mime=_img_mime,
+            document_file_id=_doc_id,
+            document_mime=_doc_mime,
+            document_name=_doc_name,
         )
     return None
 

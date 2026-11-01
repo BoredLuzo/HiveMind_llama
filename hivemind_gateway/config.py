@@ -52,6 +52,9 @@ class GatewayConfig:
     image_in: bool = True
     image_max_bytes: int = 10 * 1024 * 1024
     image_max_per_run: int = 4
+    # DOCUMENTS (2026-11-01): PDFs/plain text go through the engine's
+    # /documents/extract; the engine owns the page/char caps.
+    document_max_bytes: int = 25 * 1024 * 1024
 
     def validate(self) -> None:
         base = self.hive_base_url.rstrip("/").lower()

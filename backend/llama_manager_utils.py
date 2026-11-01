@@ -266,6 +266,17 @@ def _needs_mmproj(model: str, vision: bool = False) -> bool:
         return True
     if vision and base in _VISION_CAPABLE_BASES:
         return True
+    # REGISTRY-PROJECTOR (2026-11-01): a model the registry declares a
+    # projector for is vision-capable even when its base is not in the list
+    # above (user-registered models). Without this an image run attached to a
+    # text-only load and llama-server answered "image input is not supported".
+    if vision:
+        try:
+            from model_configs.models_registry import get_profile as _gp
+            if (_gp(model) or {}).get("mmproj_filename"):
+                return True
+        except (ImportError, AttributeError, TypeError, ValueError):
+            return False
     return False
 
 def _gguf_path_to_model_name(gguf_path: str) -> str | None:

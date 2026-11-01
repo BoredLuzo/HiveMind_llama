@@ -106,6 +106,28 @@ class HiveClient:
         the same key)."""
         return await self._post_json("/settings", {key: value})
 
+    async def extract_document(self, raw: bytes) -> dict:
+        """POST /documents/extract with the raw file body.
+
+        Returns {"text", "pages", ...} on success or {"code", "error"} - the
+        engine answers 4xx with a DOC_* code for every handled failure, so a
+        caller never sees an exception for a bad PDF.
+        """
+        try:
+            r = await self._client.post(
+                "/documents/extract", content=raw,
+                headers={"Content-Type": "application/pdf"},
+                timeout=httpx.Timeout(120.0, connect=5.0))
+        except httpx.HTTPError as exc:
+            return {"code": "DOC_TRANSPORT",
+                    "error": f"transport: {type(exc).__name__}"}
+        try:
+            data = r.json()
+        except ValueError:
+            return {"code": "DOC_BAD_RESPONSE",
+                    "error": "engine answered without JSON"}
+        return data if isinstance(data, dict) else {"code": "DOC_BAD_RESPONSE"}
+
     async def stt(self, audio: bytes) -> tuple[str, str]:
         """Transcribe an audio blob. Returns (text, error_code).
 
