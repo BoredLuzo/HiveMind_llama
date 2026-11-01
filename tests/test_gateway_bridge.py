@@ -426,7 +426,7 @@ async def t_mode():
     check("default sends NO mode field",
           br.hive.stream_bodies[-1]["mode"] == "")
     # set via alias
-    out = br.mode_text("chat")
+    out = await br.mode_text("chat")
     check("alias chat -> simple", "simple" in out)
     await br.start_text_run("q2")
     check("set mode travels in stream BODY",
@@ -434,11 +434,11 @@ async def t_mode():
     check("mode persisted", st.data["mode"] == "simple")
     check("status shows mode", "simple" in await br.status_text())
     # invalid rejected, mode unchanged
-    out = br.mode_text("nuclear")
+    out = await br.mode_text("nuclear")
     check("invalid mode rejected", "Unknown mode" in out
           and st.data["mode"] == "simple")
     # agentic: phone-side composite (engine mode auto + body flag)
-    out = br.mode_text("agentic")
+    out = await br.mode_text("agentic")
     check("agentic mode set", "agentic" in out)
     await br.start_text_run("q4")
     check("agentic rides body as auto+flag",
@@ -446,13 +446,13 @@ async def t_mode():
           and br.hive.stream_bodies[-1]["overrides"].get(
               "duo_agentic_mode") is True)
     check("bare /mode lists explanations",
-          "agentic" in br.mode_text("") and "NO file tools" in br.mode_text(""))
+          "agentic" in (await br.mode_text("")) and "NO file tools" in (await br.mode_text("")))
 
     # PHONE-AUTO-DECIDER (2026-10-28): /mode auto must give the decision to
     # the engine decider. mode="auto" alone lost against the PERSISTED
     # duo_agentic_mode=true (decider off) - the live smalltalk "was geht"
     # ran the pathtracer planner instead of being answered.
-    out = br.mode_text("auto")
+    out = await br.mode_text("auto")
     check("auto mode set", "auto" in out)
     await br.start_text_run("was geht")
     check("/mode auto travels as auto",
@@ -461,7 +461,7 @@ async def t_mode():
           br.hive.stream_bodies[-1]["overrides"].get("duo_agentic_mode") is False)
 
     # off -> follow settings again
-    out = br.mode_text("off")
+    out = await br.mode_text("off")
     await br.start_text_run("q3")
     check("off clears mode", "follow the engine settings again" in out
           and br.hive.stream_bodies[-1]["mode"] == "")
@@ -469,7 +469,7 @@ async def t_mode():
     # CHAT-RUNCONF (2026-10-28): a chat keeps the phone parameters it
     # started with; answering inherits them; a phone command re-snapshots.
     st.data["run_overrides"] = {"model": "m-one"}
-    out = br.mode_text("agentic")
+    out = await br.mode_text("agentic")
     await br.start_text_run("start the chat")
     _b1 = br.hive.stream_bodies[-1]
     check("runconf: chat 1 starts with m-one + agentic",
@@ -486,7 +486,7 @@ async def t_mode():
           f"(model={_b2['overrides'].get('duo_coder_model')!r}, "
           f"agentic={_b2['overrides'].get('duo_agentic_mode')})")
     # an explicit phone command re-snapshots: the command wins
-    out = br.mode_text("auto")
+    out = await br.mode_text("auto")
     await br.start_text_run("same chat after /mode auto")
     _b3 = br.hive.stream_bodies[-1]
     check("runconf: a phone command re-snapshots the chat",
@@ -502,8 +502,21 @@ async def t_mode():
     check("runconf: both chats are pinned separately",
           set((st.data.get("chat_runconf") or {})) == {"chat01", "chat02"})
     # bare /mode = status only
-    out = br.mode_text("")
+    out = await br.mode_text("")
     check("bare /mode shows status", "Mode (Telegram)" in out)
+    # MODE-BASELINE: /mode remembers the engine mode at that moment, so a later
+    # UI mode change drops the phone override. Recorded lazily on the next run
+    # it missed a change made in between, and the phone kept running "auto".
+    br.hive.settings_body = {"mode": "chat"}
+    await br.mode_text("auto")
+    check("a /mode override records the engine baseline right away",
+          st.data.get("mode_engine_seen") == "chat")
+    br.hive.settings_body = {"mode": "code_duo"}
+    _mode, _src = br.effective_phone_mode({"mode": "code_duo"})
+    check("a UI mode change drops the phone override", _src == "frontend"
+          and _mode == "code_duo")
+    br.hive.settings_body = {}
+    await br.mode_text("off")
 
 # ── 7. /stop behavior ───────────────────────────────────────────────────
 async def t_stop():
@@ -855,6 +868,14 @@ async def t_audit_fixes():
     _st_r2 = await br.status_text()
     check("status without decider config shows the off line",
           "decider off (keyword rules)" in _st_r2)
+    # ROUTING-N/A: in a conversational mode the decider is never consulted -
+    # naming it there made owners think the route was still decider-driven.
+    st.data["mode"] = "chat"
+    _st_r3 = await br.status_text()
+    check("chat mode does not advertise the decider",
+          "routing: not used in chat mode" in _st_r3
+          and "decider on" not in _st_r3)
+    st.data["mode"] = ""
     # version-skew detection: an engine WITHOUT the gateway_overrides
     # marker must downgrade /status instead of promising the invariant
     br.ms.engine_gate_support = False

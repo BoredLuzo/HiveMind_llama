@@ -287,6 +287,16 @@ The routing-decider install also writes `logs\decider_install.log` and falls
 back to the venv pip when `uv` is missing, so a failed 2.5 GB download leaves a
 trace instead of a closed window.
 
+## Telegram mode vs UI mode
+
+`/mode` on the phone remembered the engine mode only on the **next run**, so a
+mode change made in the browser in between never counted as a change and a
+stale `auto` override kept the phone on the decider route while the UI said
+chat. The baseline is recorded the moment `/mode` is used, so switching the
+mode in the UI reliably takes the phone back. `/status` also stops advertising
+the decider in a conversational mode — in chat the routing decider is never
+consulted, and naming it there read like the run was still decider-driven.
+
 ## Code panel & UI
 
 The code panel no longer rebuilds every line on every stream tick: plain

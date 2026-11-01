@@ -1172,7 +1172,12 @@ class RunBridge:
         except (HiveUnreachable, OSError, AttributeError):
             _rs = {}  # fakes/old engines without a settings endpoint
         _rd = str((_rs or {}).get("routing_decider") or "").strip()
-        if _rd:
+        _mode_now = str(mode or "").lower()
+        if _mode_now in ("chat", "simple", "direct"):
+            # ROUTING-N/A: a conversational mode answers directly; the decider
+            # is never consulted, so naming it here only caused confusion.
+            _routing = f"routing: not used in {_mode_now} mode"
+        elif _rd:
             _routing = (f"routing: decider {_rd}"
                         + (f" · planner {(_rs or {}).get('routing_planner') or 'auto'}"
                            if (_rs or {}).get("routing_planner") else "")
@@ -1225,7 +1230,7 @@ class RunBridge:
             return (override, "phone")
         return (engine_mode or "auto", "frontend")
 
-    def mode_text(self, arg: str) -> str:
+    async def mode_text(self, arg: str) -> str:
         """/mode            -> current mode + per-mode explanations
         /mode <name>      -> set for TELEGRAM runs only
         /mode off         -> follow the engine settings again
@@ -1254,9 +1259,15 @@ class RunBridge:
             return ("❌ Unknown mode.\n\n" + listing +
                     "\n\nSet with /mode <name> or /mode off.")
         self.state.data["mode"] = name
-        # baseline is filled on the next run (we do not fetch settings here);
-        # effective_phone_mode() clears the override once the UI changes modes
-        self.state.data["mode_engine_seen"] = ""
+        # MODE-BASELINE: remember the engine mode AT THE MOMENT of the
+        # override. Filling it lazily on the next run meant a UI change made
+        # in between never counted as a change, and a stale "auto" override
+        # kept the phone on the decider route while the browser said chat.
+        try:
+            _s = await self.hive.settings()
+            self.state.data["mode_engine_seen"] = str((_s or {}).get("mode") or "")
+        except (HiveUnreachable, OSError, AttributeError, ValueError):
+            self.state.data["mode_engine_seen"] = ""
         self._invalidate_chat_runconf()
         self.state.save()
         why = ("File-capable - use this for tasks."

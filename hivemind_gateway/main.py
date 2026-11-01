@@ -704,7 +704,7 @@ class Gateway:
             await self.reply(p.chat_id, self.bridge.toggle_verbose(),
                              reply_to_message_id=p.message_id)
         elif name == "mode":
-            await self.reply(p.chat_id, self.bridge.mode_text(arg),
+            await self.reply(p.chat_id, await self.bridge.mode_text(arg),
                              reply_to_message_id=p.message_id)
         elif name == "follow":
             a = (arg or "").strip().lower()
