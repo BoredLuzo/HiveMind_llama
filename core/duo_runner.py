@@ -3018,9 +3018,30 @@ async def run_code_duo(ctx):
                             break
                         except asyncio.TimeoutError:
                             logger.warning(
-                                "Coder load timeout (attempt %d/3) ctx=%d",
+                                "Coder load timeout (attempt %d/5) ctx=%d",
                                 _cl_attempt + 1, _coder_ctx_try,
                             )
+                            # LOAD-RACE FIX (2026-11-01): a timeout is usually
+                            # a STALE half-initialized server from a racing
+                            # load (live: a queued groot@131072 preload from
+                            # run-end starved the real run's coder load — the
+                            # old code logged "attempt 1/3" and hard-stopped
+                            # IMMEDIATELY, no attempt 2 ever ran). Evict the
+                            # stuck attempt and ride the same ctx ladder the
+                            # other branches use; hard-stop only at the floor.
+                            try:
+                                from backend.llama_server_manager import manager as _lsm_to
+                                await _lsm_to.evict(exec_mdl)
+                            except Exception:
+                                pass
+                            if _cl_attempt < 4 and _coder_ctx_try > 8192:
+                                _next_ctx = max(8192, int(_coder_ctx_try / 2))
+                                yield await ctx.emit({"type": "status",
+                                    "content": f"⟳ Coder load timeout at ctx={_coder_ctx_try} — evicting the "
+                                              f"stuck load, retry {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
+                                await asyncio.sleep(4.0)
+                                _coder_ctx_try = _next_ctx
+                                continue
                             yield await ctx.emit({
                                 "type": "status",
                                 "content": (

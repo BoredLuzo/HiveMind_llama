@@ -152,8 +152,8 @@
   "except_pass": 2
  },
  "core/duo_runner.py": {
-  "broad_except": 93,
-  "except_pass": 26
+  "broad_except": 94,
+  "except_pass": 27
  },
  "core/error_rollup.py": {
   "broad_except": 0,
@@ -1135,6 +1135,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_mcp_2026.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_mcp_audit_fixes.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1628,6 +1632,10 @@
   "except_pass": 0
  },
  "tests/test_wedge_ui_toggle.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_worker_warm_pin.py": {
   "broad_except": 0,
   "except_pass": 0
  },

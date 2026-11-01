@@ -3269,7 +3269,12 @@ function _setPresetHeader() {
 async function loadPresets() {
   try {
     const d = await (await fetch('/presets')).json();
-    renderPresets(d);
+    // PRESET-VISIBILITY (2026-11-01): fetch the active-preset state so the
+    // tab shows WHICH preset is in effect and whether settings were edited
+    // since (autoload skipped) — after a startup this was invisible.
+    var _pstatus = null;
+    try { _pstatus = await (await fetch('/presets/active')).json(); } catch (e) {}
+    renderPresets(d, _pstatus);
     var sel = document.getElementById('prompt-agent-sel');
     if (sel) {
       sel.innerHTML = '';
@@ -3286,14 +3291,42 @@ async function loadPresets() {
   }
 }
 
-function renderPresets(presets) {
+function renderPresets(presets, pstatus) {
   var c = document.getElementById('preset-list');
   if (!c) return;
+  var _ps = pstatus || {};
+  var _activeName = _ps.name || S.activePreset || '';
+  var _head = document.getElementById('preset-active-line');
+  if (_head) {
+    _head.innerHTML = '';
+    if (_activeName) {
+      var _b = document.createElement('span');
+      _b.className = 'preset-active-badge';
+      _b.textContent = 'ACTIVE: ' + _activeName;
+      _head.appendChild(_b);
+      if (_ps.stale) {
+        var _s2 = document.createElement('span');
+        _s2.className = 'preset-stale-note';
+        _s2.textContent = ' settings edited after apply \u2014 the edited settings win (autoload skipped).';
+        _head.appendChild(_s2);
+      } else if (_ps.applied_at) {
+        var _t = document.createElement('span');
+        _t.className = 'preset-stale-note';
+        _t.textContent = ' applied ' + String(_ps.applied_at).replace('T', ' ').slice(0, 16);
+        _head.appendChild(_t);
+      }
+    } else {
+      var _n = document.createElement('span');
+      _n.className = 'preset-stale-note';
+      _n.textContent = 'No preset active \u2014 the settings run as edited.';
+      _head.appendChild(_n);
+    }
+  }
   var keys = Object.keys(presets || {});
   if (!keys.length) { c.innerHTML = '<div class="empty">No presets saved</div>'; return; }
   c.innerHTML = '';
   keys.forEach(function(name) {
-    var isActive = name === S.activePreset;
+    var isActive = name === _activeName;
     var item = document.createElement('div');
     item.className = 'preset-item';
     var nd = document.createElement('div');
@@ -3302,7 +3335,7 @@ function renderPresets(presets) {
     if (isActive) {
       var dot = document.createElement('span');
       dot.className = 'preset-active';
-      dot.textContent = ' \u25CF active';
+      dot.textContent = ' \u25CF ' + (_ps.stale ? 'applied (edited since)' : 'ACTIVE');
       nd.appendChild(dot);
     }
     var bp = document.createElement('button'); bp.className = 'ghost'; bp.textContent = 'Prompts';

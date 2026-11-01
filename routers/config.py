@@ -781,6 +781,30 @@ async def get_registry():
     return registry_all()
 
 
+@router.get("/presets/active")
+async def get_presets_active():
+    """The preset-visibility state for the UI (2026-11-01).
+
+    active_preset persists even when the startup auto-load skipped the
+    re-apply (settings edited after apply) — the UI must be able to show
+    BOTH the name and the staleness, or "after a startup" you cannot tell
+    whether you are inside a preset."""
+    name = str(settings.get("active_preset", "") or "")
+    applied_at = settings.get("preset_applied_at")
+    saved_at = settings.get("settings_saved_at")
+    stale = preset_autoload_stale(applied_at, saved_at) if name else False
+    return {
+        "name": name,
+        "applied_at": applied_at or "",
+        "stale": stale,
+        "autoload_skipped": bool(stale),
+        "message": (
+            f"'{name}' was applied, but settings were edited afterwards — "
+            f"the edited settings win." if stale and name else
+            (f"'{name}' is applied." if name else "No preset active."))
+    }
+
+
 @router.get("/presets")
 async def get_presets():
     return load_presets()

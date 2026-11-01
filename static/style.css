@@ -423,6 +423,8 @@ select:focus,.sinput:focus{border-color:var(--amber2)}
 .preset-name{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);flex:1;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .preset-active{font-size:9px;color:var(--green);margin-left:2px}
+.preset-active-badge{font-size:10px;color:var(--green);border:1px solid rgba(58,153,96,.45);border-radius:4px;padding:2px 8px;margin-right:8px}
+.preset-stale-note{font-size:9px;color:var(--tx2)}
 .pload{background:none;border:1px solid var(--b2);border-radius:4px;padding:3px 8px;
   color:var(--tx2);font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;transition:all .15s}
 .pload:hover{border-color:var(--green);color:var(--green)}
