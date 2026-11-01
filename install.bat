@@ -66,7 +66,7 @@ if not defined UV_DIR if exist "%LOCALAPPDATA%\Microsoft\WinGet\Links\uv.exe" se
 
 if not defined UV_DIR (
     echo  [uv] uv not found - installing...
-    echo  [uv] Target: %USERPROFILE%\.local\bin (added to PATH)
+    echo  [uv] Target: %USERPROFILE%\.local\bin ^(added to PATH^)
     where winget >nul 2>&1
     if not errorlevel 1 (
         REM --source winget supresses the MS store license agreement prompt
@@ -119,7 +119,7 @@ if errorlevel 1 (
     REM A foreign python3.14.exe (e.g. a manual install in %USERPROFILE%\
     REM .local\bin) blocks uv from placing its managed copy. --force takes
     REM the name over; the interpreter version stays 3.14 either way.
-    echo   [python] retrying with --force (an unmanaged python3.14.exe exists)
+    echo   [python] retrying with --force ^(an unmanaged python3.14.exe exists^)
     uv python install 3.14 --force
 )
 REM Hard gate: without a usable 3.14 the next step would silently pick
@@ -506,7 +506,7 @@ echo   (~2.5 GB env) plus the model (~1-2 GB). Enable it later in
 echo   Settings -^> Routing. Without it, keyword rules decide.
 choice /c YN /n /t 30 /d N /m "Pre-install the decider environment + model? [y/N] "
 if errorlevel 2 (
-    echo   Skipped (default). Enable later: Settings -^> Routing -^> Decider.
+    echo   Skipped - the default. Enable later: Settings -^> Routing -^> Decider.
     echo   The engine downloads the encoder on first use if it is missing.
     goto searxng_step
 )
@@ -545,11 +545,11 @@ REM INSTALLER-AUDIT (2026-11-01): the "ready" message used to key only on
 REM the snapshot exit - huggingface_hub succeeds even when torch/gliner2
 REM failed, and offline it is the snapshot that fails. Gate on BOTH.
 if errorlevel 1 (
-    echo   [NOTE] Environment incomplete (torch/gliner2 import failed).
+    echo   [NOTE] Environment incomplete ^(torch/gliner2 import failed^).
     echo          Keyword rules decide; re-run this step to retry.
     echo          Details: %DEC_LOG%
 ) else if not "%DEC_SNAP%"=="0" (
-    echo   [NOTE] Model download failed (offline?) - environment is ready,
+    echo   [NOTE] Model download failed ^(offline?^) - environment is ready,
     echo          the engine fetches the model on first use when online.
     echo          Details: %DEC_LOG%
 ) else (
@@ -640,7 +640,7 @@ if defined UV_PATH_ADDED (
 echo.
 echo   NOTE: uv was installed into %UV_DIR% and that folder was added to
 echo   NOTE: your PATH. If you want to run "uv" yourself in a terminal,
-echo   NOTE: open a NEW terminal first (this window has the PATH, others
+echo   NOTE: open a NEW terminal first ^(this window has the PATH, others
 echo   NOTE: opened before the install may not see it.
 )
 echo  ==============================================================

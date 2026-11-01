@@ -195,7 +195,7 @@ if "%VCMP%"=="older" (
     REM the ^) escapes the closing paren: unescaped, it ends THIS if-block
     REM at parse time and the pause/exit below runs unconditionally - which
     REM silently aborted every real (newer) update after the version check.
-    echo         (Not downgrading.^)
+    echo         ^(Not downgrading.^)
     if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
     echo  Press any key to continue... & pause >nul & exit /b 0
 )

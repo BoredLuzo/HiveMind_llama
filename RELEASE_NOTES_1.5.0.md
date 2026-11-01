@@ -283,9 +283,13 @@ even with the agentic switch off. The run now records the route it actually
 took (complexity event, `pipeline_start`, `duo_start`) and speaks the final
 answer with the switch that belongs to it.
 
-The routing-decider install also writes `logs\decider_install.log` and falls
-back to the venv pip when `uv` is missing, so a failed 2.5 GB download leaves a
-trace instead of a closed window.
+The **routing-decider step no longer closes the installer window**. Answering
+"y" ran into a cmd parsing trap: an unescaped `)` inside an `echo` line ends
+the surrounding `if (` block, the following `) else (` line becomes a stray
+`)` and cmd aborts the whole script — with a double-clicked installer the
+window simply vanishes. Every such line is escaped (`^(` / `^)`), a scan suite
+refuses them from now on, and the step also writes `logs\decider_install.log`
+and falls back to the venv pip when `uv` is missing.
 
 ## Telegram mode vs UI mode
 
