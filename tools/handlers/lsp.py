@@ -40,6 +40,7 @@ _LSP_FALLBACKS: dict = {
     "lsp_enabled": True,
     "lsp_servers": {},
     "lsp_client_timeout_s": 30,
+    "lsp_idle_timeout_s": 600,
     "lsp_diagnostics_wait_s": 5.0,
     "lsp_auto_diagnostics": True,
     "lsp_max_diagnostics": 50,
@@ -89,6 +90,17 @@ def _coerce_int(value, default: int, lo: int, hi: int) -> int:
 # manager's asyncio.Lock objects loop-correct.
 _MANAGERS: dict = {}
 _MANAGERS_CAP = 8
+_bg_format_tasks: set = set()   # tracked eviction closes (audit R2)
+
+
+def _manager_key(workspace: Path, loop) -> tuple:
+    """The (workspace, loop) cache key. One place (audit: the key logic was
+    computed 3x here plus a 4th copy in server._shutdown)."""
+    try:
+        ws_key = str(Path(workspace).resolve())
+    except OSError:
+        ws_key = str(workspace)
+    return (ws_key.lower() if os.name == "nt" else ws_key, id(loop))
 
 
 def _get_manager(workspace: Path):
@@ -97,17 +109,16 @@ def _get_manager(workspace: Path):
     infra.lsp_client.LspManager is looked up at call time (not bound at
     import), so tests can swap the class on the module."""
     loop = asyncio.get_running_loop()
-    try:
-        ws_key = str(Path(workspace).resolve())
-    except OSError:
-        ws_key = str(workspace)
-    key = (ws_key.lower() if os.name == "nt" else ws_key, id(loop))
+    key = _manager_key(workspace, loop)
     mgr = _MANAGERS.get(key)
     if mgr is None:
         settings = _lsp_settings()
+        # Forward every knob the client reads (audit R4: lsp_idle_timeout_s
+        # was documented but silently dropped here).
         mgr = _lsp.LspManager(workspace, {
             "lsp_servers": settings.get("lsp_servers") or {},
             "lsp_client_timeout_s": settings.get("lsp_client_timeout_s"),
+            "lsp_idle_timeout_s": settings.get("lsp_idle_timeout_s"),
         })
         if len(_MANAGERS) >= _MANAGERS_CAP:
             # Closing the evicted managers is not optional: clearing the
@@ -118,9 +129,14 @@ def _get_manager(workspace: Path):
                         if isinstance(k, tuple) and len(k) == 2
                         and k[1] == id(loop)]
             _MANAGERS.clear()
+            # Managers of OTHER loops (tests) cannot be closed cross-loop —
+            # they are dropped on purpose. Current-loop closes are tracked
+            # (audit R2).
             for _key, _old in _evicted:
                 try:
-                    asyncio.create_task(_old.close_all())
+                    _t = asyncio.create_task(_old.close_all())
+                    _bg_format_tasks.add(_t)
+                    _t.add_done_callback(_bg_format_tasks.discard)
                 except RuntimeError:
                     pass
         _MANAGERS[key] = mgr
@@ -800,9 +816,16 @@ def _apply_text_edits(text: str, edits: list[dict]) -> str:
         base = line_starts[line]
         line_text = lines[line] if line < len(lines) else ""
         # LSP columns are UTF-16 code units; python str indices are code
-        # points. They only differ for astral characters — clamp instead of
-        # failing, a formatting edit never targets emoji columns precisely.
-        return base + max(0, min(int(character), len(line_text)))
+        # points (audit R6): walking the line and counting astral characters
+        # (surrogate pairs) as 2 units converts exactly. Beyond the line end
+        # the remaining width is clamped to the line length.
+        target = max(0, int(character))
+        units = 0
+        for idx, ch in enumerate(line_text):
+            if units >= target:
+                return base + idx
+            units += 2 if 0x10000 <= ord(ch) <= 0x10FFFF else 1
+        return base + len(line_text)
 
     out = text
     for edit in sorted(edits, key=lambda e: (
@@ -875,5 +898,6 @@ def notify_watched_change(workspace: Path, paths) -> int:
         if mgr is None:
             return 0
         return mgr.broadcast_watched_change(list(paths or []))
-    except Exception:
+    except Exception as exc:
+        logger.debug("[LSP] watched-change notify skipped: %s", exc)
         return 0
