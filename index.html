@@ -676,14 +676,14 @@
       </div>
       <div class="opt-row" style="margin-top:2px">
         <div class="opt-row-left">
-          <span class="opt-name">Git tools</span>
-          <span class="opt-hint">git_status / git_commit in the tool list (auto = a git credential is set)</span>
+          <span class="opt-name">Git tools for the agent</span>
+          <span class="opt-hint">Whether the model sees git_status (repo state) and git_commit (commits only the files it lists, approval-gated). auto = on when a git credential is set below. This does NOT affect Auto-Commit / Checkpoints in Settings — those run regardless.</span>
         </div>
         <select id="git-tools-mode-sel" onchange="postSettings({git_tools_enabled:this.value})"
-          style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:120px;flex-shrink:0">
-          <option value="auto">auto</option>
+          style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:150px;flex-shrink:0">
+          <option value="auto">auto (credentials)</option>
           <option value="true">always on</option>
-          <option value="false">off</option>
+          <option value="false">always off</option>
         </select>
       </div>
       <div id="git-branch-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(58,153,96,.25);margin-left:10px;margin-top:2px">
@@ -1470,6 +1470,7 @@
       <div id="git-init-status" class="fld-hint" style="font-size:9px;margin-bottom:4px"></div>
       <!-- Git Operations v0.96.5 -->
       <div class="fld-label" style="margin-top:10px">Git Operations</div>
+      <div class="fld-hint" style="font-size:9px;margin-bottom:4px">Manual owner actions on the repo above — the agent has no access to these buttons. Hard Reset discards ALL uncommitted changes.</div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
         <button class="btn" onclick="gitStash('push')" style="font-size:9px;padding:3px 9px">Stash</button>
         <button class="btn" onclick="gitStash('pop')" style="font-size:9px;padding:3px 9px">Stash Pop</button>
