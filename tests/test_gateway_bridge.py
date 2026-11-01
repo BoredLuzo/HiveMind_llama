@@ -873,6 +873,21 @@ async def t_audit_fixes():
     check("from_voice: tagged as telegram-voice",
           _body_fv["overrides"].get("source") == "telegram-voice")
     check("from_voice: answered", _res_fv is not None)
+    # VOICE-KEEPS-MODE (2026-11-01, owner request): with an explicitly selected
+    # frontend mode a spoken note must NOT be rerouted to auto - it used to, so
+    # voice and typed text took different routes.
+    br.hive.settings_body = {"mode": "chat"}
+    _res_fv2 = await br.start_text_run("erzaehl was", from_voice=True)
+    _body_fv2 = br.hive.stream_bodies[-1]
+    check("from_voice honours an explicit chat mode", _body_fv2["mode"] == "chat",
+          f"({_body_fv2['mode']})")
+    check("from_voice still tags the run",
+          _body_fv2["overrides"].get("source") == "telegram-voice")
+    br.hive.settings_body = {"mode": "auto"}
+    await br.start_text_run("erzaehl was", from_voice=True)
+    check("from_voice keeps auto as auto",
+          br.hive.stream_bodies[-1]["mode"] == "auto")
+    br.hive.settings_body = {}
 
     # DECIDER command (2026-10-22): /decider off posts routing_decider to
     # the engine settings (RAM release), bare = status.

@@ -534,9 +534,13 @@ class RunBridge:
         _direct_mdl = (_agents.get("direct") or {}).get("model") or ""
         _ov_model = (self.state.data.get("run_overrides") or {}).get("model")
         _eff = _eff_mode
-        if from_voice and not _sel:
-            # the engine decides the route for a spoken note
-            _eff = "auto"
+        # VOICE-KEEPS-MODE (2026-11-01, owner request): a spoken note used to be
+        # forced to "auto" even when the UI sat in chat mode, so a voice message
+        # silently took a different route than typed text. The CONVERSATIONAL
+        # modes (chat/simple/direct) now apply to voice as well. code_duo and
+        # friends still hand the route to the engine: forcing them on a spoken
+        # note is the old "what time is it started a coder run" bug.
+        _voice_mode = _eff if str(_eff).lower() in ("chat", "simple", "direct") else "auto"
         # PIN-WINS (2026-10-31, audit): the note used to show the live phone
         # mode even when this chat was pinned to another one.
         _eff_label = (
@@ -544,7 +548,8 @@ class RunBridge:
             else f"{_eff} (phone override)" if _mode_src == "phone"
             else _eff)
         if from_voice and not _sel:
-            _eff_label = "auto (HiveMind decides)"
+            _eff_label = (f"{_voice_mode} (voice)" if _voice_mode != "auto"
+                          else "auto (HiveMind decides)")
         if from_voice and not _sel and not _ov_model:
             _model_line = ("model: follows the route "
                            f"(direct: {_direct_mdl or 'engine default'} / "
@@ -639,18 +644,20 @@ class RunBridge:
                 stream_mode = "auto"
                 ov["duo_agentic_mode"] = False
             elif from_voice and not sel_mode:
-                # VOICE-DECIDER (2026-10-21): a spoken note carries no mode.
-                # Without this it ran as settings["mode"] (code_duo) - so
-                # "what time is it" started a coder run. "auto" lets the
-                # engine's decider pick the route, and the route picks the
-                # model (direct -> direct model, agentic -> planner/coder).
-                stream_mode = "auto"
+                # VOICE-DECIDER (2026-10-21) with VOICE-KEEPS-MODE (2026-11-01):
+                # a spoken note has no pin. In the conversational modes the
+                # frontend mode wins (_voice_mode); otherwise "auto" lets the
+                # engine's decider pick the route - forcing code_duo on a
+                # spoken note is the old "what time is it started a coder run"
+                # bug.
+                stream_mode = _voice_mode
                 ov["source"] = "telegram-voice"
-                # The engine short-circuits mode="auto" to code_duo whenever
-                # settings["duo_agentic_mode"] is true (chat_run.py:1322).
-                # An explicit False keeps the decider in charge for a spoken
-                # note without touching the owner's saved preference.
-                ov["duo_agentic_mode"] = False
+                if _voice_mode == "auto":
+                    # The engine short-circuits mode="auto" to code_duo whenever
+                    # settings["duo_agentic_mode"] is true (chat_run.py:1322).
+                    # An explicit False keeps the decider in charge for a spoken
+                    # note without touching the owner's saved preference.
+                    ov["duo_agentic_mode"] = False
             async for ev in self.hive.stream(q, chat_id,
                                              mode=stream_mode,
                                              overrides=ov):
