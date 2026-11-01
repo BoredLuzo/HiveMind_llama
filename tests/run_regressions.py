@@ -156,6 +156,7 @@ SUITES = [
     ("no_personal_context",    "tests/test_no_personal_context.py",         20),
     ("updater_optionals",      "tests/test_updater_optionals.py",           30),
     ("default_config",         "tests/test_default_config.py",             30),
+    ("read_aloud_routing",     "tests/test_read_aloud_routing.py",        20),
     ("compress_local_only",    "tests/test_compress_local_only.py",             60),
     ("pre_explore_globals",  "tests/test_pre_explore_globals.py",     25),
     ("installer_coreutils", "tests/test_installer_coreutils.py",      20),

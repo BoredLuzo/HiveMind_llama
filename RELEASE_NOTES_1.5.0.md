@@ -273,6 +273,20 @@ scanned PDF without a text layer answers "send the pages as photos" instead of
 pretending, and a document larger than one phone run accepts is refused with a
 hint to ask about a part. New dependency: `pypdf` (pure Python).
 
+## Read aloud follows the run
+
+The four read-aloud switches (direct / agentic / ask / gate) were partly
+ignored: the final answer was classified by the **mode**, and in `auto` the
+mode never says agentic — the decider picks the route per message. So an
+agentic or pipeline answer counted as "direct" and `tts_read_direct` spoke it
+even with the agentic switch off. The run now records the route it actually
+took (complexity event, `pipeline_start`, `duo_start`) and speaks the final
+answer with the switch that belongs to it.
+
+The routing-decider install also writes `logs\decider_install.log` and falls
+back to the venv pip when `uv` is missing, so a failed 2.5 GB download leaves a
+trace instead of a closed window.
+
 ## Code panel & UI
 
 The code panel no longer rebuilds every line on every stream tick: plain

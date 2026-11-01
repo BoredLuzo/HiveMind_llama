@@ -515,10 +515,30 @@ REM without the gliner2 package and CPU torch - the first version of this
 REM step downloaded only the weights and the decider still fell back to
 REM rules. CPU wheel index keeps torch lean (~200 MB instead of the CUDA
 REM monolith); failures degrade gracefully (rules fallback at runtime).
-uv pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu torch --quiet
-if errorlevel 1 uv pip install --python "%PY%" torch --quiet
-uv pip install --python "%PY%" gliner2 transformers huggingface_hub --quiet
-"%PY%" -c "from huggingface_hub import snapshot_download; snapshot_download('fastino/GLiNER2.5-Decide')"
+REM
+REM Every command here writes to logs\decider_install.log as well: a step that
+REM downloads ~2.5 GB can fail in ways the console scrolls past, and without
+REM the log there is nothing to diagnose afterwards.
+if not exist "logs" mkdir "logs" 2>nul
+set "DEC_LOG=logs\decider_install.log"
+echo  Working - the environment download can take a few minutes...
+echo  Log: %DEC_LOG%
+echo. >> "%DEC_LOG%"
+echo ==== %DATE% %TIME% ==== >> "%DEC_LOG%"
+where uv >nul 2>&1
+if errorlevel 1 (
+    echo   [INFO] uv not found - installing torch with the venv pip instead.
+    echo [INFO] uv missing, using venv pip >> "%DEC_LOG%"
+    "%PY%" -m pip install --index-url https://download.pytorch.org/whl/cpu torch >> "%DEC_LOG%" 2>&1
+    if errorlevel 1 "%PY%" -m pip install torch >> "%DEC_LOG%" 2>&1
+    "%PY%" -m pip install gliner2 transformers huggingface_hub >> "%DEC_LOG%" 2>&1
+) else (
+    uv pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu torch --quiet >> "%DEC_LOG%" 2>&1
+    if errorlevel 1 uv pip install --python "%PY%" torch --quiet >> "%DEC_LOG%" 2>&1
+    uv pip install --python "%PY%" gliner2 transformers huggingface_hub --quiet >> "%DEC_LOG%" 2>&1
+)
+echo  Fetching the model weights...
+"%PY%" -c "from huggingface_hub import snapshot_download; snapshot_download('fastino/GLiNER2.5-Decide')" >> "%DEC_LOG%" 2>&1
 set "DEC_SNAP=%errorlevel%"
 "%PY%" -c "import torch, gliner2" >nul 2>&1
 REM INSTALLER-AUDIT (2026-11-01): the "ready" message used to key only on
@@ -527,9 +547,11 @@ REM failed, and offline it is the snapshot that fails. Gate on BOTH.
 if errorlevel 1 (
     echo   [NOTE] Environment incomplete (torch/gliner2 import failed).
     echo          Keyword rules decide; re-run this step to retry.
+    echo          Details: %DEC_LOG%
 ) else if not "%DEC_SNAP%"=="0" (
     echo   [NOTE] Model download failed (offline?) - environment is ready,
     echo          the engine fetches the model on first use when online.
+    echo          Details: %DEC_LOG%
 ) else (
     echo   Decider environment + model ready - enabling it later is instant.
 )

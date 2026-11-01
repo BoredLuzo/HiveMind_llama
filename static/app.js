@@ -6671,6 +6671,11 @@ async function sendMsg() {
   S.streaming = true;
   S.currentRunId = null;
   S._runIsDuo = false;
+  // ROUTE-FOR-SPEECH: which route this run actually took. The final answer is
+  // read with the "agentic" switch only when the run really was multi-agent;
+  // the mode alone cannot tell (auto routes to either, and the decider decides
+  // per message).
+  S._routeMultiAgent = false;
   S._lastRunStats = null;   // RUN-STATS: a new run must never inherit the old line
   if (S._runAbortCtrl) { S._runAbortCtrl.abort(); }
   S._runAbortCtrl = new AbortController();
@@ -6909,7 +6914,9 @@ async function sendMsg() {
       var _lastBody = _bodies.length ? _bodies[_bodies.length - 1] : null;
       var _answerTxt = _lastBody ? _answerTextOnly(_lastBody) : '';
       if (_answerTxt && _answerTxt.indexOf('[Run abgebrochen]') !== 0) {
-        var _isDuo = ['code_duo', 'duo', 'autoagent'].indexOf(String(S.mode || '')) >= 0;
+        var _isDuo = S._routeMultiAgent === true
+          || S._runIsDuo === true
+          || ['code_duo', 'duo', 'autoagent'].indexOf(String(S.mode || '')) >= 0;
         _readAloud(_isDuo ? 'fazit' : 'direct', _answerTxt);
       }
     } catch (e) { /* never break the run for speech */ }
@@ -7577,6 +7584,9 @@ function handleEvent(d) {
     _toolGenStream(d);
   }
   else if (d.type === 'complexity') {
+    // ROUTE-FOR-SPEECH: "complex" (pipeline) and "code_duo" are multi-agent
+    // runs - their final answer belongs to the agentic read-aloud switch.
+    S._routeMultiAgent = (d.content === 'code_duo' || d.content === 'complex');
     // COMPLEXITY-UI (2026-08-27): badge only in the pipeline/automap/duo context
     // — in "simple" and agentic mode no complexity is shown.
     const _cxShow = !(S.mode === 'simple' || (S.mode === 'code_duo' && S.duoAgenticMode));
@@ -7597,6 +7607,7 @@ function handleEvent(d) {
     el.style.display = 'inline-block';
   }
   else if (d.type === 'pipeline_start') {
+    S._routeMultiAgent = true;
     _setVramFast(60000);  // 60s fast polling while the pipeline runs
     if (S.mode === 'code_duo') {
       // duo → pipeline synthesis badge
@@ -7678,6 +7689,7 @@ function handleEvent(d) {
   // ── Code Events ──────────────────────────────────────────
   else if (d.type === 'duo_start') {
     S._runIsDuo = true;   // chunked agentic run → graceful stop-after-chunk applies
+    S._routeMultiAgent = true;
     _setVramFast(120000);  // 2min fast polling for the duo loop
     window._prexModelVariantSeen = Object.create(null);
     window._prexLaneVariantByKey = Object.create(null);
