@@ -55,26 +55,35 @@ logger = logging.getLogger("hivemind.lsp_client")
 # sees its section. Read the workspace's .vscode/settings.json once per
 # mtime and answer both the pull request and a didChangeConfiguration push
 # with it. Tolerant: missing/broken file -> {}.
-_WS_SETTINGS_CACHE: dict[str, tuple[float, dict]] = {}
+_WS_SETTINGS_CACHE: dict[str, tuple[tuple[float, int], dict]] = {}
 
 
 def read_workspace_settings(workspace: Path) -> dict:
+    # EOD fix (lsp_tools 16b): the cache key used mtime only — two writes
+    # within one mtime tick served STALE content (a broken file answered
+    # with the previous good config). Size is part of the stamp now, and a
+    # parse failure evicts the cached entry instead of leaving it behind.
     try:
         path = Path(workspace) / ".vscode" / "settings.json"
         if not path.is_file():
             return {}
-        mtime = path.stat().st_mtime
+        st = path.stat()
+        stamp = (st.st_mtime, st.st_size)
         cached = _WS_SETTINGS_CACHE.get(str(path))
-        if cached and cached[0] == mtime:
+        if cached and cached[0] == stamp:
             return cached[1]
         import json
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data = data if isinstance(data, dict) else {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data = data if isinstance(data, dict) else {}
+        except ValueError:
+            _WS_SETTINGS_CACHE.pop(str(path), None)
+            return {}
         if len(_WS_SETTINGS_CACHE) > 32:
             _WS_SETTINGS_CACHE.clear()   # audit R5: bounded, tiny entries
-        _WS_SETTINGS_CACHE[str(path)] = (mtime, data)
+        _WS_SETTINGS_CACHE[str(path)] = (stamp, data)
         return data
-    except (OSError, ValueError):
+    except OSError:
         return {}
 
 

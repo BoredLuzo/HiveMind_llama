@@ -140,7 +140,7 @@
   "except_pass": 2
  },
  "core/duo/preflight.py": {
-  "broad_except": 26,
+  "broad_except": 27,
   "except_pass": 9
  },
  "core/duo_config.py": {

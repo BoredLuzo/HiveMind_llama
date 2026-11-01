@@ -358,6 +358,13 @@ if "%HAD_MANIFEST%"=="1" if not "%PRUNED%"=="0" (
 if "%HAD_MANIFEST%"=="0" echo  Manifest        : first manifest-managed update - nothing to prune.
 if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
 
+REM -- 9a-3. Desktop shortcut refresh (ICON-FIX 2026-11-01) --------------
+REM Installs from older zips carry a .lnk without IconLocation - the icon
+REM stays missing forever because update.bat never touches the shortcut.
+REM The quiet refresh re-creates it idempotently and refreshes the shell
+REM icon cache (create_shortcut.bat --quiet).
+if exist "%~dp0create_shortcut.bat" call "%~dp0create_shortcut.bat" --quiet
+
 REM -- 9b. Refresh Python dependencies (.venv) -------------------------------
 REM The update may ship new/changed requirements; the .venv itself is NOT
 REM replaced, so missing imports would only surface on the next start.

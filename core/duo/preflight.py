@@ -666,9 +666,28 @@ async def warm_workers_after_run(slots: list, coder_mdl: str,
 
 
 async def unpin_duo_models(ctx, pinned: list, ka: str) -> None:
+    # REPIN RACE FIX (2026-11-01): this loop re-LOADS every pinned model
+    # (keep_alive=ka, num_ctx=profile) - including a coder that
+    # `duo_coder_after_run=evict` had just deliberately evicted 1 s earlier.
+    # Live: run ends -> coder evicted -> unpin reloads groot@131072 (profile
+    # ctx) -> preflight BLOCK -> the user's follow-up run then timed out
+    # against that half-initialized 131k server (hard_stop). Unpinning a
+    # model that is no longer loaded is a no-op by definition - skip it.
     async with httpx.AsyncClient(timeout=5.0) as _uc:
+        try:
+            from backend.llama_server_manager import manager as _lsm_unpin
+            _loaded = {str(getattr(_s, "model", "") or "").strip()
+                       for _s in (getattr(_lsm_unpin, "_slots", None) or [])
+                       if getattr(_s, "is_running", False)}
+        except Exception:
+            _loaded = None   # manager unavailable: keep the old behavior
         for _um in pinned:
             try:
+                if _loaded is not None and str(_um).strip() not in _loaded:
+                    logger.debug(
+                        "[DUO] unpin skipped for %s - not loaded anymore "
+                        "(evicted after run)", _um)
+                    continue
                 _unpin_ctx = ctx.get_num_ctx(_um)
                 _unpin_payload: dict = {"model": _um, "keep_alive": ka, "stream": False}
                 # rnj-1:8b default=32768 → ~2GB extra KV-Cache → VRAM-Spike auf 8GB GPU
