@@ -2725,6 +2725,10 @@ function _setDuoModeAccordion(open) {
 function toggleDuoModeAccordion() {
   var body = document.getElementById('duo-mode-body');
   if (!body) return;
+  // CODE-MODE LOCK (2026-11-01, owner request): in code mode the settings
+  // panel stays open — a header click is a no-op. Other modes have no
+  // visible accordion anyway.
+  if (typeof S !== 'undefined' && S.mode === 'code_duo') return;
   _setDuoModeAccordion(body.style.display === 'none');
 }
 
