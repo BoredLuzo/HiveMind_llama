@@ -81,8 +81,11 @@ _txt = (_out.stdout or "") + (_out.stderr or "")
 check("5a --print-essential exits clean", _out.returncode == 0, f"(rc={_out.returncode})")
 for _k in ESSENTIAL_KEYS:
     check(f"5b printed: {_k}", _k in _txt)
-check("5c the big model is listed as optional", "qwen3.6:35b-a3b-ud" in _txt.split("also offered")[-1]
-      if "also offered" in _txt else False)
+_opt = _txt.split("ALSO AVAILABLE")[-1] if "ALSO AVAILABLE" in _txt else ""
+check("5c the big model is listed as optional, not as essential",
+      "qwen3.6:35b-a3b-ud" in _opt)
+check("5d the listing is roomy (blank line between models)",
+      _txt.count("\n\n") >= len(ESSENTIAL_KEYS))
 
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

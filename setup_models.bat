@@ -52,20 +52,22 @@ if exist "%~dp0.venv\Scripts\python.exe" (
 
 :menu
 REM ---- Catalog: single source of truth is fetch_models.py SPECS ----
-echo  Download catalog (existing models stay untouched and get registered):
 echo.
-"%PY%" deploy\fetch_models.py --print-catalog
-echo.
-echo    LFM2.5 24B-A2B also downloads its DSpark spec-dec drafter.
-echo    Gemma-4 E4B/E2B QAT also download their MTP drafter.
-echo.
-echo  D = download all missing,
-echo  E = essential set - the default route only (listed below),
-echo  S = select single models,
-echo  C = add own model with config, R = register folder only (no download),
-echo  A = abort.
+echo  WHAT CAN BE INSTALLED
+echo  ====================================================================
 echo.
 "%PY%" deploy\fetch_models.py --print-essential
+echo  HOW TO PROCEED
+echo  ====================================================================
+echo.
+echo    [E]  essential set - the four models above (recommended start)
+echo    [S]  pick single models from the full catalog
+echo    [D]  everything missing from the catalog
+echo    [C]  add your own model, with a config
+echo    [R]  register an existing models folder, no download
+echo    [A]  abort
+echo.
+echo    Vision projectors and MTP drafters are downloaded with their model.
 echo.
 choice /c DESCRA /m "Your choice"
 if errorlevel 6 exit /b 0
@@ -81,13 +83,18 @@ goto more_models
 :essential_set
 echo.
 echo  Essential set only. Answering "n" to a model skips it completely.
+echo.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-missing --essential
 goto more_models
 
 :select_single
 echo.
-echo  Single-model download - enter numbers, comma-separated, e.g. 1,4
-echo  (empty input = register the folder only, no download):
+echo  SINGLE MODELS
+echo  ====================================================================
+echo.
+"%PY%" deploy\fetch_models.py --print-catalog
+echo  Enter the numbers, comma-separated (e.g. 1,4).
+echo  Empty input = register the folder only, no download.
 echo.
 set "MODELS_SEL="
 set /p "MODELS_SEL=Numbers: "

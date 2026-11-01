@@ -162,7 +162,7 @@ def _filter_vision_images(images: list) -> tuple[list, str | None]:
     status = None
     if dropped_tiny_png:
         status = (
-            f"[Vision-Input verworfen: {dropped_tiny_png} PNG(s) kleiner als 2x2 Pixel]"
+            f"[Vision input dropped: {dropped_tiny_png} PNG(s) smaller than 2x2 pixels]"
         )
     return valid, status
 

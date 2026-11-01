@@ -703,8 +703,13 @@ def main() -> int:
         print("           (Gemma-4 MTP and the DSpark models lose ~50 % decode).")
 
     if args.print_catalog:
+        # Wide, two-line layout: key on its own line, description underneath.
+        # A single 120-character line wrapped in narrow terminals and cut the
+        # description mid-word.
         for _i, _s in enumerate(SPECS):
-            print(f"  {_i + 1}. {_s['key']:<45s} {_s['desc']}")
+            print(f"  [{_i + 1:>2}] {_s['key']}")
+            print(f"       {_s['desc']}")
+            print()
         return 0
 
     mdir = Path(args.models_dir).expanduser() if args.models_dir else \
@@ -733,16 +738,22 @@ def main() -> int:
     if getattr(args, 'print_essential', False):
         # The menu shows the real list instead of a vague sentence.
         _ess = [sp for sp in SPECS if sp['key'] in ESSENTIAL_KEYS]
-        _ess_mb = 0
-        for sp in _ess:
-            _mb = int(sp.get('size_mb') or 0)
-            _ess_mb += _mb
-            print(f"  {sp['key']:<26} {sp['desc'][:70]}")
-        print(f"  -> {len(_ess)} models"
-              + (f", about {_ess_mb / 1024:.1f} GB" if _ess_mb else "")
-              + " (vision projectors and drafters included)")
-        print("  also offered (not essential, choose S): "
-              + ", ".join(sp['key'] for sp in SPECS if sp['key'] not in ESSENTIAL_KEYS))
+        print("  ESSENTIAL SET - the default route, nothing else is needed to start")
+        print("  " + "-" * 68)
+        print()
+        for _sp in _ess:
+            print(f"    {_sp['key']}")
+            print(f"        {_sp['desc']}")
+            print()
+        print(f"  {len(_ess)} models, vision projectors and drafters included.")
+        print()
+        _rest = [sp['key'] for sp in SPECS if sp['key'] not in ESSENTIAL_KEYS]
+        print("  ALSO AVAILABLE - choose S to pick single models")
+        print("  " + "-" * 68)
+        print()
+        for _i in range(0, len(_rest), 2):
+            print("    " + "".join(f"{k:<34}" for k in _rest[_i:_i + 2]).rstrip())
+        print()
         return 0
 
     specs = [s for s in SPECS

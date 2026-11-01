@@ -118,7 +118,7 @@ class LlamaProcessMixin:
                     return slot
                 else:
                     logger.warning(
-                        f"Port {slot.port} hat keine llama-API — "
+                        f"Port {slot.port} answers no llama API - "
                         f"discarding stale slot for {model}"
                     )
                     slot.model = None

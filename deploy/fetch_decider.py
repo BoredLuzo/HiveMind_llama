@@ -59,9 +59,9 @@ def main(argv: list[str] | None = None) -> int:
 
     cli = _hf_cli()
     if cli is None:
-        print("Kein 'hf'/'huggingface-cli' gefunden. Alternativen:")
+        print("No 'hf' / 'huggingface-cli' found on PATH. Alternatives:")
         print(f"  - uvx --from huggingface_hub hf download {args.model} --local-dir \"{target}\"")
-        print(f"  - oder in der UI als routing_decider_model direkt die HF-ID lassen: {args.model}")
+        print(f"  - or keep the HF id as routing_decider_model in the UI: {args.model}")
         return 1
 
     cmd = cli + ["download", args.model, "--local-dir", str(target)]

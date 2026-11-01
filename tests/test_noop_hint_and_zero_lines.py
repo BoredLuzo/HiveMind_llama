@@ -175,7 +175,7 @@ def test_source_guards():
 
 if __name__ == "__main__":
     if not _REAL:
-        print(f"  NOTE  Real-Import nicht verfuegbar: {_imp_reason} — nur Source-Guards/Replikas laufen")
+        print(f"  NOTE  real import unavailable: {_imp_reason} - only source guards/replicas run")
     test_first_noop_counts_no_hint()
     test_second_noop_fires_hint()
     test_compression_resilience_no_hint_recomputed_from_msgs()

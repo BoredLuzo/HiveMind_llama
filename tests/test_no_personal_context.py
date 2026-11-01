@@ -81,6 +81,47 @@ def main() -> int:
     return 0
 
 
+# Words that only appear in German prose. They are fine in internal comments
+# but must not reach a print(), an echo or any text the user reads.
+GERMAN_HINTS = re.compile(
+    r"\b(nicht|wird|wurde|keine|bereits|gefunden|Bitte|Auswahl|Abbruch|verworfen|Größe|Groesse|Speicher|Datei|Zeichen|Aufgabe|Antwort|Ergebnis|läuft|laeuft|startet|geladen|unterstuetzt|unterstützt)\b")
+# only lines that produce user-visible output
+OUTPUT_CALL = re.compile(
+    r"^(?:print\(|echo |logger\.|emit\(|console\.log|h\(|content=|"
+    r"yield |stdout\.write|sys\.stderr\.write)")
+
+
+def check_english_output() -> int:
+    offenders = []
+    for path in tracked_files():
+        rel = path.relative_to(ROOT).as_posix()
+        if rel in ALLOW_FILES or rel.endswith(ALLOW_SUFFIXES):
+            continue
+        if not rel.endswith((".py", ".bat", ".js", ".html")):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith(("#", "//", "REM", "/*", "*", "\"\"\"", "'''")):
+                continue                      # comments may be German
+            if not OUTPUT_CALL.search(line):
+                continue
+            if GERMAN_HINTS.search(line):
+                offenders.append(f"{rel}:{lineno}: {stripped[:90]}")
+    if offenders:
+        print("  FAIL German text in user-facing output:")
+        for o in offenders[:20]:
+            print(f"    {o}")
+        return 1
+    print("  PASS user-facing output is English")
+    return 0
+
+
 if __name__ == "__main__":
     print("=== no_personal_context ===")
-    sys.exit(main())
+    rc = main()
+    rc |= check_english_output()
+    sys.exit(rc)

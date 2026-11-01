@@ -1551,13 +1551,13 @@ class LlamaLoadMixin:
                 if type(self)._kv_flag_supported:
                     _moe_kv = moe_kv_cache_types(_moe_model_key)
                     cmd += ["--cache-type-k", _moe_kv, "--cache-type-v", _moe_kv]
-                    logger.info("MoE KV-Cache: %s (ctx=%d, VRAM-optimiert)",
+                    logger.info("MoE KV cache: %s (ctx=%d, VRAM optimised)",
                                 _moe_kv, num_ctx)
             else:
                 logger.warning(
-                    f"--n-cpu-moe {_moe_count} nicht unterstuetzt von "
-                    f"{LLAMA_BIN.name} — MoE-Modell laeuft ohne Expert-Offloading. "
-                    "Neueres Binary verwenden (b8278+)."
+                    f"--n-cpu-moe {_moe_count} is not supported by "
+                    f"{LLAMA_BIN.name} - the MoE model runs without expert "
+                    "offloading. Use a newer binary (b8278+)."
                 )
 
         # ── MTP (Multi-Token Prediction / Speculative Decoding) ────────────────
