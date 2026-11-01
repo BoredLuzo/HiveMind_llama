@@ -399,6 +399,12 @@ if defined UV_EXE (
     echo         If the new release needs new packages, run install.bat once.
 )
 
+REM -- 9c. Optional components -------------------------------------------------
+REM A release can add optional pieces (voice, decider, browser tool). After
+REM every update, ask once for those that are NOT on this machine - an
+REM install that already has them all gets a single informational line.
+if exist "%~dp0deploy\check_optionals.bat" call "%~dp0deploy\check_optionals.bat"
+
 echo.
 echo  +=============================================================+
 echo  ^|    UPDATE DONE                                              ^|
