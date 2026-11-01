@@ -814,6 +814,19 @@ Change them in the UI (or `POST /settings`): the running engine holds the
 authoritative copy and rewrites the file on the next save, so a hand edit
 made while it runs is lost on the next settings write.
 
+A fresh install ships this working default configuration (the installer
+wires the agent roles to whatever `models.json` actually contains, see
+`deploy/apply_model_defaults.py`):
+
+| Area | Default |
+|------|---------|
+| Mode | `chat` (direct answers); `code_duo` starts in **agentic** (one model, solo) |
+| Planner | on, and it shares the coder context — no second model load |
+| Agent roles | `direct`/pipeline → gemma-4:e4b-it-qat, `duo_coder`/`duo_critic`/`duo_planner` → qwen3.5:4b-mtp, `refiner`/`judge` → minicpm5:2b-sharp, subagent ladder lfm3:1.7b-qad → minicpm5:2b-sharp → qwen3.5:4b-mtp |
+| Vision | `vision_agent_model` = gemma-4:e4b-it-qat (used when the vision agent is enabled) |
+| Context | coder ctx follows the VRAM budget, planner = coder ctx, compression on with automatic floor |
+| Unchanged / off | smart preload, pre-explore, chunking, git autocommit/checkpoints, web search, routing decider |
+
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `vram_budget_gb` | 7.5 | GPU VRAM limit for model loading |
@@ -822,7 +835,7 @@ made while it runs is lost on the next settings write.
 | `duo_static_map_chars` | 0 | static repo-map budget (0 = auto) |
 | `duo_pre_explore` | false | LLM pre-explore before planning |
 | `duo_chunking` | false | task decomposition into subtasks (opt-in) |
-| `duo_agentic_mode` | false | agentic (single-model) instead of duo |
+| `duo_agentic_mode` | true | agentic (single-model) instead of duo |
 | `duo_git_autocommit` | false | auto-commit after each chunk |
 | `duo_git_checkpoints` | false | git commit at chunk start (writes to your repo - opt-in) |
 | `duo_websearch_enabled` | false | web search as real tool calls in coding |

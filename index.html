@@ -1437,6 +1437,7 @@
         rename plan, format) in the coding modes. Nothing is bundled: a language is active as
         soon as ITS server is on PATH &mdash; the tools follow the file type.
         <div style="margin-top:6px;line-height:1.7">
+          Install the server for each language you actually write:<br>
           <code>Python</code> &nbsp;npm i -g pyright<br>
           <code>TS / JS / TSX</code> &nbsp;npm i -g typescript typescript-language-server<br>
           <code>Rust</code> &nbsp;rustup component add rust-analyzer<br>
@@ -1463,17 +1464,22 @@
       <div class="fld-hint">Attaches an 8-line <code>[LSP auto-diagnostics]</code> block to a write
         when a server is already warm. Never starts a cold server.</div>
       <div class="tgl-row">
-        <span class="tgl-text">Python auto-lint engine</span>
+        <span class="tgl-text">Auto-lint after writes</span>
         <select id="autolint-engine-sel"
           style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;max-width:230px"
           onchange="S.autolintEngine=this.value;postSettings({duo_autolint_python_engine:S.autolintEngine})">
-          <option value="auto">Auto (pyright if installed)</option>
-          <option value="pyright">Pyright only</option>
-          <option value="basic">Syntax only (py_compile)</option>
+          <option value="auto">Python: auto (pyright if installed)</option>
+          <option value="pyright">Python: pyright only</option>
+          <option value="basic">Python: syntax only (py_compile)</option>
         </select>
       </div>
-      <div class="fld-hint">Runs after a Python write. "Auto" uses pyright when it is on PATH and
-        falls back to <code>py_compile</code>; "Syntax only" skips the type check.
+      <div class="fld-hint">Runs after every write, in the language of the file:
+        <code>py_compile</code>/pyright (Python), <code>node --check</code> (JS),
+        <code>tsc --noEmit</code> (TS), <code>cargo check</code> (Rust), <code>go vet</code>,
+        <code>javac</code>, <code>dotnet build</code>, <code>g++ -fsyntax-only</code>,
+        <code>astro check</code>, <code>docker compose config</code>.
+        The selector above only affects <b>Python</b> - every other language has one obvious
+        compiler command, so there is nothing to choose.
         Set <code>duo_pyright_path</code> in settings.json when the engine runs headless
         and cannot see the npm global bin.</div>
       <div class="cfg-grid" style="margin-top:6px">

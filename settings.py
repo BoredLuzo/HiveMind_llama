@@ -49,7 +49,10 @@ DEFAULT_SETTINGS = {
     "models_dir":              "",
     "agents":                  DEFAULT_AGENT_CFG,
     "max_iterations":          2,
-    "mode":                    "simple",
+    # DEFAULT-MODE: a fresh install answers in the chat/direct route. The old
+    # value "simple" is the same route under a legacy name - the UI calls it
+    # CHAT, so the default says chat.
+    "mode":                    "chat",
     "active_preset":           None,
 
     # ════════════════════════════════════════════════════════════════════════
@@ -127,7 +130,9 @@ DEFAULT_SETTINGS = {
     "duo_runtime_profile":     "balanced",
     "duo_profile_speed_model": "",
     "duo_profile_quality_model": "",
-    "duo_agentic_mode":        False,
+    # DEFAULT-SUBMODE: the agentic coder (one model, solo in VRAM) is the
+    # default; the Critic-Duo is one click away and costs a second model.
+    "duo_agentic_mode":        True,
     # ── ROUTING (2026-10-20): zwei unabhaengige Entscheider, beide schaltbar ──
     # Der LLM-Judge kostet einen Modell-Load in den VRAM (60 s + Verdraengung)
     # und liefert Text, der geparst werden muss. Der Decider ist ein Encoder
@@ -264,7 +269,9 @@ DEFAULT_SETTINGS = {
     # PLANNER-OUTPUT-BUDGET (0.99.2, User-Entscheidung): sichtbares Aufgabenbudget
     "duo_planner_max_tokens":  8000,
     # Planner on/off for the request path (server.py reads this key).
-    "duo_planner_enabled":     False,
+    # DEFAULT-PLANNER: plan first. The planner shares the coder context
+    # (duo_planner_use_coder_ctx), so this costs no second model load.
+    "duo_planner_enabled":     True,
     # Thinking → hermes-MoE thought until the 600s wall timeout and delivered empty
     # output. 4k was too tight for complex plans → 8k default (2026-08-31).
     "duo_planner_thinking_budget": 8000,
@@ -489,7 +496,7 @@ DEFAULT_SETTINGS = {
     # K) VISION
     # ════════════════════════════════════════════════════════════════════════
     "vision_agent_enabled":    False,
-    "vision_agent_model":      "",
+    "vision_agent_model":      "gemma-4:e4b-it-qat",
     "vision_preprocess_timeout_seconds": 30,
     "vision_preprocess_load_timeout_seconds": 120,
     # PIPELINE-VISION (2026-08-19): feed images directly to multimodal pipeline agents?
@@ -525,7 +532,8 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # SUBAGENT-LITE (2026-08-24, option A from the feasibility report): serial
     "subagent_lite_enabled":   True,
-    "subagent_lite_model_ladder": [],
+    "subagent_lite_model_ladder": ["lfm3:1.7b-qad", "minicpm5:2b-sharp",
+                                   "qwen3.5:4b-mtp"],
     "subagent_lite_ctx_default": 8192,
     "subagent_lite_min_free_ram_gb": 5.0,
     "subagent_lite_max_tools": 12,

@@ -284,6 +284,26 @@ since (the startup autoload then deliberately skips — the edited settings
 win). The git-tools select and the Git Operations row explain what they
 gate (model tool visibility vs. owner-only manual actions).
 
+## Default configuration for a fresh install
+
+An install no longer starts blank. `deploy/apply_model_defaults.py` (called at
+the end of the model setup) wires the agent roles to whatever `models.json`
+actually contains — empty or uninstalled slots only, a model the user picked is
+never replaced — and the shipped defaults describe the same route:
+
+| Area | Default |
+|------|---------|
+| Mode | `chat` (direct). `code_duo` starts **agentic**: one model, solo in VRAM |
+| Planner | on, sharing the coder context — no second model load |
+| Roles | direct/pipeline → gemma-4:e4b-it-qat, duo_coder/duo_critic/planner → qwen3.5:4b-mtp, refiner/judge → minicpm5:2b-sharp |
+| Subagents | ladder lfm3:1.7b-qad → minicpm5:2b-sharp → qwen3.5:4b-mtp |
+| Vision | `vision_agent_model` = gemma-4:e4b-it-qat |
+| Off by default | smart preload, pre-explore, chunking, git autocommit/checkpoints, web search, routing decider |
+
+The wiring prints a table when it changes something, and a second run reports
+"already wired". The installer's model step runs it before the first start, so
+the very first run has a working configuration.
+
 ## Settings & presets
 
 Settings the code read were never shipped as defaults

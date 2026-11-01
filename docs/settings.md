@@ -31,7 +31,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `document_max_pages` | int | `40` |  |
 | `duo_action_approval_enabled` | bool | `False` | When on, the run pauses before everything that changes the project — code/cmd execution (run_bash, run_python, install_package, start_background), file writes (write_file, edit_file, write_file_append) and git_commit. "Approve" buttons: once, or remember EXACTLY this call for… |
 | `duo_action_approval_timeout_s` | int | `0` | Auto-DENY an unanswered approval card after N seconds (0 = off, attended runs wait as before). With N > 0 and nobody at the desk the gated call is DENIED once (fail closed, 2026-10-03 review: the old auto-approve-once behavior approved unseen actions) - the gate wait ends… |
-| `duo_agentic_mode` | bool | `False` |  |
+| `duo_agentic_mode` | bool | `True` | DEFAULT-SUBMODE: the agentic coder (one model, solo in VRAM) is the default; the Critic-Duo is one click away and costs a second model. |
 | `duo_agentic_thinking` | bool | `False` |  |
 | `duo_autolint_python_engine` | str | `auto` |  |
 | `duo_caps` | object | `{}` |  |
@@ -85,7 +85,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_planner_ctx_cap` | null | `None` |  |
 | `duo_planner_ctx_target` | null | `None` |  |
 | `duo_planner_default_thinking` | bool | `True` |  |
-| `duo_planner_enabled` | bool | `False` | Planner on/off for the request path (server.py reads this key). |
+| `duo_planner_enabled` | bool | `True` | Planner on/off for the request path (server.py reads this key). DEFAULT-PLANNER: plan first. The planner shares the coder context (duo_planner_use_coder_ctx), so this costs no second model load. |
 | `duo_planner_ensure_load_timeout_s` | int | `300` |  |
 | `duo_planner_max_steps` | int | `0` |  |
 | `duo_planner_max_tokens` | int | `8000` | PLANNER-OUTPUT-BUDGET (0.99.2, User-Entscheidung): sichtbares Aufgabenbudget |
@@ -192,7 +192,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `mcp_server_budgets` | object | `{}` | Per-server MCP client call budgets: {"server-name": max calls per rolling hour}. Absent/0 = unlimited (previous behavior). |
 | `mcp_servers` | list | `[]` | {"name": "...", "command": "npx", "args": ["-y", "@playwright/mcp@latest"]}   (stdio) {"name": "...", "url": "http://localhost:9000/mcp"}                            (streamable HTTP) as additional tools. External MCP servers (client direction): every entry is a stdio or… |
 | `mem_watch_enabled` | bool | `True` | [MEM] commit-charge snapshots at startup/load/evict/run-end. |
-| `mode` | str | `simple` |  |
+| `mode` | str | `chat` | DEFAULT-MODE: a fresh install answers in the chat/direct route. The old value "simple" is the same route under a legacy name - the UI calls it CHAT, so the default says chat. |
 | `model_capability_overrides` | object | `{}` |  |
 | `models_dir` | str | `` |  |
 | `moe_cpu_experts` | object | `{}` |  |
@@ -241,7 +241,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `subagent_lite_max_tokens` | int | `700` |  |
 | `subagent_lite_max_tools` | int | `12` |  |
 | `subagent_lite_min_free_ram_gb` | float | `5.0` |  |
-| `subagent_lite_model_ladder` | list | `[]` |  |
+| `subagent_lite_model_ladder` | list | `[3 items]` |  |
 | `subagent_lite_safety_margin_mib` | int | `256` |  |
 | `subagent_lite_timeout_s` | int | `120` |  |
 | `telegram_approval_mode` | str | `deny` |  |
@@ -266,7 +266,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `tts_volume` | float | `1.0` | Browser playback level (0..1). The engine already normalises the WAV to -1.5 dBFS peak, so this is the user's "how loud do I want it here" knob. |
 | `until_finished` | bool | `True` | ON by default (2026-10-27, owner): a coding run should finish the job instead of stopping at the round limit. Turn off for a quick answer. |
 | `vision_agent_enabled` | bool | `False` |  |
-| `vision_agent_model` | str | `` |  |
+| `vision_agent_model` | str | `gemma-4:e4b-it-qat` |  |
 | `vision_preprocess_load_timeout_seconds` | int | `120` |  |
 | `vision_preprocess_timeout_seconds` | int | `30` |  |
 | `vram_budget_gb` | float | `7.5` |  |

@@ -137,6 +137,11 @@ goto done
 
 :done
 echo.
+REM Wire the agent roles to what is on disk. Only empty or uninstalled slots
+REM are touched; a model the user picked stays. Runs before the first start so
+REM a default install is configured the moment the models land.
+"%PY%" deploy\apply_model_defaults.py
+echo.
 echo  Done. models.json was populated from the models folder.
 echo  Then start HiveMind with start_hivemind.bat
 echo.
