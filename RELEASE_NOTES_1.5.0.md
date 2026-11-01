@@ -177,6 +177,13 @@ the ungated `undo_last` hard reset takes a recoverable
   idempotently after every update (`create_shortcut.bat --quiet`) and
   refreshes the shell icon cache — no more installs whose icon went
   missing and stayed missing.
+- **The updater asks for optional components.** After the dependency refresh
+  it detects what this machine does not have yet — speech to text, text to
+  speech, the routing decider, the Playwright browser engine, POSIX tools
+  (skipped when Git Bash covers them) — lists it and asks once whether to
+  install it. A fully equipped install gets one line and no prompt; every
+  install is failure-tolerant. `deploy\check_optionals.bat --dry-run` shows
+  the detection without touching anything.
 - **Startup update check**: one `[Y/n]` offer at startup, cached for 24 h,
   silent offline, pre-releases only for preview installs, sha256 gate on
   the download, warnings digest with word-boundary matching ("Keine

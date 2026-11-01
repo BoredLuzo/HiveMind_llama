@@ -154,6 +154,7 @@ SUITES = [
     ("lint",                   "tests/test_lint.py",                            60),
     ("no_new_silent_excepts",  "tests/test_no_new_silent_excepts.py",           60),
     ("no_personal_context",    "tests/test_no_personal_context.py",         20),
+    ("updater_optionals",      "tests/test_updater_optionals.py",           30),
     ("compress_local_only",    "tests/test_compress_local_only.py",             60),
     ("pre_explore_globals",  "tests/test_pre_explore_globals.py",     25),
     ("installer_coreutils", "tests/test_installer_coreutils.py",      20),
