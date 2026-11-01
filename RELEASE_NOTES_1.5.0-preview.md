@@ -89,6 +89,11 @@ prompt could never appear, because `choice /d N` without `/t` errors out on
 every install. The startup update check now prints a small warnings digest
 and cleans up its downloaded zip.
 
+"Keep workers warm after run" now pins the reloaded worker models
+(`keep_alive=-1`, same primitive as "Pin direct") so nothing evicts them
+between runs; the next run start unpins everything. The SMART PRELOAD
+settings carry visible explanations now instead of hover-only titles.
+
 ## Settings and presets
 
 The code read several settings that were never shipped as defaults

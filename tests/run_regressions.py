@@ -264,6 +264,7 @@ SUITES = [
     ("update_check",            "tests/test_update_check.py",                30),
     ("compression_whole_drop",  "tests/test_compression_whole_drop.py",      30),
     ("mem_watch",               "tests/test_mem_watch.py",                   30),
+    ("worker_warm_pin",         "tests/test_worker_warm_pin.py",             30),
 
 ]
 

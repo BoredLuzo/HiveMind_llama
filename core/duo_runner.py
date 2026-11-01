@@ -7726,7 +7726,9 @@ async def run_code_duo(ctx):
     if bool(ctx.settings.get("preload_workers_after_run", False)):
         _wk_slots_run = _worker_slots or []
         if _wk_slots_run:
-            spawn(_warm_workers_fn(list(_wk_slots_run), exec_mdl))
+            # WORKER-PIN (2026-11-01): the opt-in now also pins the reloaded
+            # workers — unpin_all() at the next run start releases them.
+            spawn(_warm_workers_fn(list(_wk_slots_run), exec_mdl, pin=True))
     spawn(_refresh_judge_keepalive())
     # ── Insight Extractor: Post-loop structured learning ──────────────────
     # Fire-and-forget background task — extracts structured insights from the

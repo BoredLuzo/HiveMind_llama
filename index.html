@@ -1837,14 +1837,20 @@
     <div class="cfg-card">
       <div class="cfg-card-title">Smart Preload <span class="cfl-badge" style="color:var(--green);border-color:rgba(58,153,96,.4)">VRAM</span></div>
       <div class="tgl-row">
-        <span class="tgl-text">Automatic preload</span>
+        <div class="opt-row-left">
+          <span class="tgl-text">Automatic preload</span>
+          <span class="opt-hint">Prefetches the NEXT agent's model while the current one still works (lead time below). Latency win on a big card — on a tight VRAM budget it can evict the model that is answering. Off by default for that reason.</span>
+        </div>
         <label class="cfl-sw">
           <input type="checkbox" id="smart-preload-toggle" onchange="setSmartPreload(this.checked)">
           <span class="sl"></span>
         </label>
       </div>
-      <div class="tgl-row">
-        <span class="tgl-text" title="Pre-explore workers are loaded only AFTER the run ends (before that it would unload the coder). Prevents a worker load from killing the running run.">Keep workers warm after run <em style="color:var(--amber)">OPT-IN</em></span>
+      <div class="tgl-row" style="margin-top:6px">
+        <div class="opt-row-left">
+          <span class="tgl-text">Keep workers warm after run <em style="color:var(--amber)">OPT-IN</em></span>
+          <span class="opt-hint">Reloads the pre-explore/planner worker models after the run ends (before that, loading them would kill the running run) and PINS them — they stay in VRAM until the next run starts (a run start unpins everything, so nothing blocks a fresh load).</span>
+        </div>
         <label class="cfl-sw">
           <input type="checkbox" id="workers-after-run-toggle" onchange="setWorkersAfterRun(this.checked)">
           <span class="sl"></span>

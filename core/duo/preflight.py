@@ -624,7 +624,8 @@ def loop_detect_file_snapshot(ws_str: str, explore_ctx, pre_explore_msgs, writte
         return None
 
 
-async def warm_workers_after_run(slots: list, coder_mdl: str) -> None:
+async def warm_workers_after_run(slots: list, coder_mdl: str,
+                                 pin: bool = False) -> None:
     try:
         from backend.llama_server_manager import manager as _lsm_aw
         try:
@@ -632,12 +633,22 @@ async def warm_workers_after_run(slots: list, coder_mdl: str) -> None:
         except Exception:
             pass
         for _wsk in slots:
+            _mdl = str(_wsk.get("model", ""))
+            _wctx = int(_wsk.get("num_ctx") or _wsk.get("ctx") or 16384)
             try:
                 await _lsm_aw.ensure_loaded(
-                    str(_wsk.get("model", "")),
-                    num_ctx=int(_wsk.get("num_ctx") or _wsk.get("ctx") or 16384),
+                    _mdl,
+                    num_ctx=_wctx,
                     n_parallel=int(_wsk.get("n_parallel", 1) or 1),
                 )
+                if pin and _mdl:
+                    # WORKER-PIN (2026-11-01): keep-warm now also pins the
+                    # reloaded workers (keep_alive=-1, the same primitive as
+                    # "Pin direct") so prefetch/unrelated loads cannot evict
+                    # them. The NEXT run start runs unpin_all(), so a stale
+                    # pin never blocks a fresh run's loads.
+                    from vram.loader import _bk_pin
+                    await _bk_pin(_mdl, num_ctx=_wctx)
             except Exception as _err:
                 if isinstance(_err, (
                     GeneratorExit,

@@ -122,6 +122,14 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
   "commit grows across loads and stays until restart" observation measurable
   per process.
 
+### Smart Preload: keep-warm pins (2026-11-01)
+- **Keep workers warm after run now pins**: the reloaded pre-explore/planner
+  workers get `keep_alive=-1` (the same primitive as "Pin direct") so
+  prefetch and unrelated loads cannot evict them between runs. The next run
+  start runs `unpin_all()`, so a stale pin never blocks a fresh load.
+- The SMART PRELOAD rows carry visible explanations now (what prefetch
+  does, why it is off by default, what keep-warm+pinned means).
+
 ### Installer/Updater (audit fixes, 2026-11-01)
 - **Release notes render properly** (P1): the old inline render double-
   mangled UTF-8 (ANSI read → OEM `type` — every umlaut became `├ñ`),
