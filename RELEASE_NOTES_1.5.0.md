@@ -146,6 +146,31 @@ the ungated `undo_last` hard reset takes a recoverable
   only routing extra; the essential set skips only the optional omni
   vision worker.
 
+## Prompt editor, search, LSP controls
+
+The prompt editor now offers **exactly the roles a runner reads**, driven by
+one server-side list (`/presets/prompt-roles`): analyst, refiner, critic,
+synthesizer, duo_synthesizer, direct, vision_agent, duo_coder,
+duo_critic_code and duo_critic_general. Before, the dropdown came from the
+agent-card metadata: it offered `intent` (rule-based, no prompt) and a bare
+`duo_critic` (both runners read `duo_critic_code`/`duo_critic_general`), so
+those edits wrote files nothing loaded, while the two real critic keys and
+`duo_synthesizer` were not editable at all. A legacy `duo_critic` file is
+still read for both critic keys, so existing edits became effective instead
+of staying dead; an unknown role now answers an empty prompt instead of
+silently showing the Direct prompt. The vision prompt honours the preset
+override now (it was passed as the built-in constant).
+
+Feature search: a new **Language Servers & Auto-Lint** card in CONFIGS makes
+`lsp_enabled`, `lsp_auto_diagnostics`, the diagnostics wait, the idle
+timeout and the Python auto-lint engine configurable in the UI (they were
+settings.json-only, so the search had nothing to find: "lsp", "pyright",
+"linter" returned zero results). The indexer also covers bare
+checkbox+span rows, so "mlock" finds "Lock in RAM"; the VRAM-TTL row is
+searchable as "keep alive"/"ttl"; and the alias table gained the German and
+acronym forms people actually type (kompression, zeit, speicher, lsp,
+pyright, keep alive, …).
+
 ## Code panel & UI
 
 The code panel no longer rebuilds every line on every stream tick: plain

@@ -1101,6 +1101,21 @@ async function loadSettings() {
     if (configMoeWrap) configMoeWrap.style.display = 'block';
     rebuildMoeModelDropdowns();
     updateMoeVisibility();
+    // LSP + AUTO-LINT (2026-11-01): the card was settings.json-only before.
+    S.lspEnabled = s.lsp_enabled !== false;
+    S.lspAutoDiag = s.lsp_auto_diagnostics !== false;
+    S.autolintEngine = s.duo_autolint_python_engine || 'auto';
+    var _lspT = document.getElementById('lsp-enabled-toggle');
+    if (_lspT) _lspT.checked = S.lspEnabled;
+    var _lspA = document.getElementById('lsp-auto-diag-toggle');
+    if (_lspA) _lspA.checked = S.lspAutoDiag;
+    var _alSel = document.getElementById('autolint-engine-sel');
+    if (_alSel) _alSel.value = S.autolintEngine;
+    var _lspW = document.getElementById('lsp-wait-input');
+    if (_lspW) _lspW.value = parseInt(s.lsp_diagnostics_wait_s, 10) || 5;
+    var _lspI = document.getElementById('lsp-idle-input');
+    if (_lspI) _lspI.value = parseInt(s.lsp_idle_timeout_s, 10) || 600;
+    updateLspHint();
     S.llamaMlock = s.llama_mlock !== false;
     var mlockEl = document.getElementById('llama-mlock-toggle');
     if (mlockEl) mlockEl.checked = S.llamaMlock;
@@ -3280,6 +3295,38 @@ function _setPresetHeader() {
   }
 }
 
+var _PROMPT_ROLES = null;
+async function fillPromptRoleSelect() {
+  var sel = document.getElementById('prompt-agent-sel');
+  if (!sel) return;
+  if (!_PROMPT_ROLES) {
+    try {
+      var d = await (await fetch('/presets/prompt-roles')).json();
+      _PROMPT_ROLES = (d && d.roles) || [];
+    } catch (e) { _PROMPT_ROLES = []; }
+  }
+  var roles = _PROMPT_ROLES;
+  if (!roles.length) {
+    // Fallback if the endpoint is unavailable: at least the roles the runner
+    // reads, with the base prompt key as label.
+    roles = [{key:'duo_coder',label:'Duo Coder'},{key:'duo_critic_code',label:'Duo Critic (code)'},
+             {key:'duo_critic_general',label:'Duo Critic (general)'},{key:'duo_synthesizer',label:'Duo Synthesizer'},
+             {key:'analyst',label:'Analyst'},{key:'refiner',label:'Refiner'},{key:'critic',label:'Critic'},
+             {key:'synthesizer',label:'Synthesizer'},{key:'direct',label:'Direct'},
+             {key:'vision_agent',label:'Vision Agent'}];
+  }
+  var keep = sel.value;
+  sel.innerHTML = '';
+  roles.forEach(function(r) {
+    var opt = document.createElement('option');
+    opt.value = r.key;
+    opt.textContent = r.label || r.key;
+    if (r.hint) opt.title = r.hint;
+    sel.appendChild(opt);
+  });
+  if (keep && roles.some(function(r) { return r.key === keep; })) sel.value = keep;
+}
+
 async function loadPresets() {
   try {
     const d = await (await fetch('/presets')).json();
@@ -3289,17 +3336,11 @@ async function loadPresets() {
     var _pstatus = null;
     try { _pstatus = await (await fetch('/presets/active')).json(); } catch (e) {}
     renderPresets(d, _pstatus);
-    var sel = document.getElementById('prompt-agent-sel');
-    if (sel) {
-      sel.innerHTML = '';
-      Object.entries(AGENT_META || {}).forEach(function(e) {
-        if (e[0] === 'judge') return;
-        var opt = document.createElement('option');
-        opt.value = e[0];
-        opt.textContent = (e[1] && e[1].label) || e[0];
-        sel.appendChild(opt);
-      });
-    }
+    // PROMPT-ROLES (2026-11-01): the dropdown is driven by the SERVER's list of
+    // preset-overridable prompt keys, not by the agent-card metadata. The old
+    // list offered `intent` and `duo_critic` (files no runner reads) and hid
+    // duo_critic_code / duo_critic_general / duo_synthesizer.
+    await fillPromptRoleSelect();
   } catch(e) {
     showStatus('Could not load presets: ' + e);
   }
@@ -9918,6 +9959,18 @@ function toggleRunDetail(id) {
   if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
 }
 
+function updateLspHint() {
+  var h = document.getElementById('lsp-hint');
+  if (!h) return;
+  var base = 'Offers <code>lsp_*</code> tools (diagnostics, definition, references, rename plan, format) ' +
+    'in the coding modes. Needs a server for the file type on PATH - e.g. ' +
+    '<code>npm i -g pyright</code>, <code>rustup component add rust-analyzer</code>.';
+  h.innerHTML = (S.lspEnabled === false)
+    ? "Off. The <code>lsp_*</code> tools are removed from the model's tool list; " +
+      "auto-lint keeps working (settings.json: <code>lsp_enabled</code>)."
+    : base;
+}
+
 function updateMlockHint() {
   var mlockEl = document.getElementById('llama-mlock-toggle');
   if (mlockEl) mlockEl.checked = S.llamaMlock;
@@ -13960,6 +14013,7 @@ function _updateDuoRoleStatus(elId, label, model) {
     // explicitly (once, panel=agents), visible or not.
     [['wrapper-ctx-agentic', 'Context Coder (Agentic)', 'duo coder agentic'],
      ['wrapper-ctx-planner', 'Context Planner', 'duo planner'],
+     ['wrapper-planner-coder-toggle', 'Planner = Coder (shared context)', 'planner coder same shared ctx context window'],
      ['wrapper-ctx-normal', 'Context (Coder + Critic Dual)', 'duo dual'],
      ['wrapper-ctx-critic', 'Context Critic', 'duo critic']].forEach(function(d) {
       var w = document.getElementById(d[0]);
@@ -14083,12 +14137,40 @@ function _updateDuoRoleStatus(elId, label, model) {
         var txt = (row.textContent || '').replace(/\s+/g, ' ').trim();
         if (txt.length >= 3) _push(pid, txt.slice(0, 80), row, 'Checkbox');
       });
+      // BARE CHECKBOX ROWS (2026-11-01): several controls are a checkbox plus a
+      // plain <span> label without .tgl-row/.cfl-label/label markup - "Lock in
+      // RAM (--load-mode mmap+mlock)" was unfindable, so "mlock" searched
+      // nothing. Index the parent row's text for exactly those.
+      panel.querySelectorAll('input[type="checkbox"]').forEach(function(inp) {
+        if (inp.closest('label') || inp.closest('.tgl-row')) return; // handled above
+        var row = inp.parentElement;
+        if (!row || _dead(row)) return;
+        // the live hint ("○ off") sits in the same row - keep it out of the label
+        var txt = '';
+        Array.prototype.forEach.call(row.childNodes, function(n) {
+          if (n.nodeType === 3) { txt += n.textContent; return; }
+          if (n.nodeType !== 1) return;
+          if (n.tagName === 'INPUT') return;
+          if (/(hint|est)$/i.test(n.id || '')) return;
+          txt += n.textContent;
+        });
+        txt = txt.replace(/\s+/g, ' ').trim();
+        if (txt.length >= 3 && txt.length <= 120) _push(pid, txt.slice(0, 90), row, 'Option');
+      });
       // OPT-NAME ROWS (2026-10-31, audit): the Duo panel uses .opt-name
       // labels without checkbox markup; "Tool rounds", "Chunking",
       // "Until Finished" etc. were not searched at all.
       panel.querySelectorAll('.opt-name').forEach(function(opt) {
         var t = (opt.textContent || '').replace(/\s+/g, ' ').trim();
         if (t.length >= 3 && !_dead(opt)) _push(pid, t, opt, 'Duo option');
+      });
+      // VRAM TTL / keep-alive row (2026-11-01): "VRAM TTL" is the label, the
+      // setting is documented as keep_alive - neither "ttl" nor "keep alive"
+      // found it before.
+      panel.querySelectorAll('.keep-alive-lbl').forEach(function(lbl) {
+        if (_dead(lbl)) return;
+        _push(pid, 'VRAM TTL (keep alive)', lbl, 'Setting',
+              null, 'vram ttl keep alive keepalive 10m 30m 1h unload idle');
       });
       // dynamic agent cards: ONE entry per agent with comprehensive
       // keywords. The old 5-entries-per-agent approach produced noise

@@ -963,10 +963,55 @@ def save_presets(presets: dict):
                 pass
 
 
+# PRESET-PROMPT-ROLES (2026-11-01): the ONE list of prompt keys a preset can
+# really override at runtime, with the base prompt each one falls back to.
+# The prompt editor used to build its dropdown from the UI's agent metadata,
+# so it offered `intent` (rule-based intent detection - no prompt at all) and
+# `duo_critic` (the Duo runner reads duo_critic_code / duo_critic_general),
+# while hiding the two real critic keys and duo_synthesizer. Editing a role
+# that nothing reads writes a file that is never loaded - a silent no-op.
+# `base` is the key in hive_functions.prompts.PROMPTS the role falls back to.
+PRESET_PROMPT_ROLES = (
+    {"key": "analyst", "label": "Analyst", "base": "analyst",
+     "hint": "Pipeline: breaks the problem into components"},
+    {"key": "refiner", "label": "Refiner", "base": "refiner",
+     "hint": "Pipeline: fixes the constraints the critic found"},
+    {"key": "critic", "label": "Critic", "base": "critic",
+     "hint": "Pipeline: ERR / MISS / FIX / CONTRA verdict"},
+    {"key": "synthesizer", "label": "Synthesizer", "base": "synthesizer",
+     "hint": "Pipeline: integrates the roles into the final answer"},
+    {"key": "duo_synthesizer", "label": "Duo Synthesizer", "base": "duo_synthesizer",
+     "hint": "Agentic runs: the final report"},
+    {"key": "direct", "label": "Direct", "base": "direct",
+     "hint": "Direct chat answers (simple mode)"},
+    {"key": "vision_agent", "label": "Vision Agent", "base": "vision_agent",
+     "hint": "Image preprocessing before a run"},
+    {"key": "duo_coder", "label": "Duo Coder", "base": "duo_coder",
+     "hint": "Agentic coder (tool calls + thinking)"},
+    {"key": "duo_critic_code", "label": "Duo Critic (code)", "base": "duo_critic_code",
+     "hint": "Critic in code mode (Duo + agentic review)"},
+    {"key": "duo_critic_general", "label": "Duo Critic (general)", "base": "duo_critic_general",
+     "hint": "Critic in non-code Duo mode"},
+)
+
+# LEGACY-KEYS (2026-11-01): the old editor saved the Duo critic under the bare
+# key `duo_critic`, which no runner reads. Reading it as a fallback for both
+# real critic keys makes those existing edits effective instead of dead; new
+# saves always write the specific key.
+_PROMPT_READ_ALIASES = {
+    "duo_critic_code": ("duo_critic",),
+    "duo_critic_general": ("duo_critic",),
+}
+
+
 def get_custom_prompt(preset_name: str, agent_key: str) -> str | None:
     path = CUSTOM_PROMPTS_DIR / f"{preset_name}_{agent_key}.txt"
     if path.exists():
         return path.read_text(encoding="utf-8").strip()
+    for _legacy in _PROMPT_READ_ALIASES.get(agent_key, ()):
+        _lp = CUSTOM_PROMPTS_DIR / f"{preset_name}_{_legacy}.txt"
+        if _lp.exists():
+            return _lp.read_text(encoding="utf-8").strip()
     return None
 
 

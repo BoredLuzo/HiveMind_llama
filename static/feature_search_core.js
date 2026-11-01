@@ -33,7 +33,30 @@
     stimme: ['voice'],
     routing: ['decider', 'judge', 'plan step', 'route'],
     auto: ['mode', 'routing'],
-    modus: ['mode']
+    modus: ['mode'],
+    // 2026-11-01: the German words people actually type, plus the acronyms
+    // that never appear in a label ("mlock" is "Lock in RAM", "lsp" is
+    // "Language servers", "keep alive" is "VRAM TTL").
+    kompression: 'compression',
+    komprimieren: 'compression',
+    zusammenfassen: 'compression',
+    zeit: 'timeout',
+    zeitlimit: 'timeout',
+    speicher: ['ram', 'vram'],
+    mlock: ['lock in ram', 'mmap'],
+    'keep alive': ['ttl', 'vram ttl'],
+    keepalive: ['ttl', 'vram ttl'],
+    ttl: ['vram ttl', 'keep alive'],
+    lsp: ['language server', 'language servers', 'pyright', 'rust-analyzer'],
+    pyright: ['language server', 'lsp'],
+    'language server': ['lsp'],
+    gegencheck: ['critic', 'review'],
+    pruefung: ['critic', 'review', 'test'],
+    suche: ['websearch', 'search'],
+    internet: ['websearch'],
+    sandbox: ['sandbox tool spawns'],
+    linter: ['auto-lint', 'lint'],
+    lint: ['auto-lint', 'linting']
   };
 
   function expandTerms(q, aliases) {

@@ -205,6 +205,7 @@ SUITES = [
     ("profile_launch_flags",   "tests/test_profile_launch_flags.py",         60),
     ("model_filter",            "tests/test_model_filter.py",                  30),
     ("preset_prompts_refix",    "tests/test_preset_prompts_refix.py",          30),
+    ("preset_prompt_roles",     "tests/test_preset_prompt_roles.py",           40),
     ("mcp_audit_fixes",         "tests/test_mcp_audit_fixes.py",               60),
     ("mcp_client",              "tests/test_mcp_client.py",                    90),
     ("mcp_client_budgets",      "tests/test_mcp_client_budgets.py",             60),

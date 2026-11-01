@@ -13,6 +13,7 @@ from settings import (
     load_presets, save_presets,
     get_custom_prompt, save_custom_prompt,
     delete_custom_prompts_for_preset, copy_prompts_to_preset,
+    PRESET_PROMPT_ROLES,
     DEFAULT_AGENT_CFG, DEFAULT_SETTINGS,
     _now_iso,
 )
@@ -907,10 +908,26 @@ async def startup_preset_autoload() -> None:
     await asyncio.to_thread(save_settings, copy.deepcopy(settings))
 
 
+@router.get("/presets/prompt-roles")
+async def get_prompt_roles():
+    """The prompt keys a preset can actually override (single source for the
+    editor dropdown). Unknown keys used to fall back to the `direct` prompt,
+    so the editor showed the wrong text for roles no runner reads."""
+    return {"roles": [dict(r) for r in PRESET_PROMPT_ROLES]}
+
+
 @router.get("/presets/{name}/prompts/{agent}")
 async def get_prompt(name: str, agent: str):
     custom = get_custom_prompt(name, agent)
+    # STRICT-FALLBACK (2026-11-01): only fall back to the role's own base
+    # prompt. `PROMPTS.get(agent, PROMPTS["direct"])` made an unknown key
+    # look like a real, editable prompt that was really the Direct prompt.
     default = PROMPTS.get(agent, "")
+    if not default:
+        for _r in PRESET_PROMPT_ROLES:
+            if _r["key"] == agent:
+                default = PROMPTS.get(_r["base"], "")
+                break
     return {"content": custom or default, "is_custom": custom is not None}
 
 

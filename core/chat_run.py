@@ -1686,7 +1686,13 @@ async def run_stream(
             do_prefetch=_do_prefetch,
             runtime_telemetry_snapshot=_runtime_telemetry_snapshot,
             runtime_delta=_runtime_delta,
-            vision_agent_prompt=VISION_AGENT_PROMPT,
+            # VISION-PROMPT-PRESET (2026-11-01): the vision role is stored per
+            # preset but was passed as the built-in constant - an edit in the
+            # prompt editor never reached a run. Preset override wins now.
+            vision_agent_prompt=(
+                get_effective_prompt_with_override(
+                    "vision_agent", active_preset, use_learned)
+                or VISION_AGENT_PROMPT),
             phase_timer=_phase_timer,
             resolve_duo_runtime_profile=_resolve_duo_runtime_profile,
             resolve_duo_run_timeout_seconds=_resolve_duo_run_timeout_seconds,

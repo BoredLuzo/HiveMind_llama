@@ -22,6 +22,18 @@ ok('empty query -> no terms', t.length === 0);
 t = FSCore.expandTerms('planner');
 ok('non-alias query stays itself', t.length === 1 && t[0] === 'planner');
 
+// 2026-11-01: acronym + German aliases (the words users actually type)
+t = FSCore.expandTerms('mlock');
+ok('mlock expands to the RAM lock label', t.includes('lock in ram'));
+t = FSCore.expandTerms('lsp');
+ok('lsp expands to language server', t.includes('language server'));
+t = FSCore.expandTerms('kompression');
+ok('kompression expands to compression', t.includes('compression'));
+t = FSCore.expandTerms('keep alive');
+ok('keep alive expands to ttl', t.includes('ttl'));
+t = FSCore.expandTerms('zeit');
+ok('zeit expands to timeout', t.includes('timeout'));
+
 // dedupe: first occurrence wins, others survive
 const idx = [
   { panel: 'presets', label: 'Overwrite this preset with the current config', el: 'a' },

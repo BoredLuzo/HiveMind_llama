@@ -1420,6 +1420,63 @@
   <!-- CONFIGS -->
   <div class="panel" id="p-configs">
     <!-- Compression & Context Fixes (2026-09-07) -->
+    <!-- Language servers + auto-lint (2026-11-01): both shipped in 1.5.0 with
+         settings.json only - no control, and the search had nothing to find. -->
+    <div class="cfg-card" id="lsp-cfg-card">
+      <div class="cfg-card-title">Language Servers &amp; Auto-Lint</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Language servers (LSP)</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="lsp-enabled-toggle"
+            onchange="S.lspEnabled=this.checked;postSettings({lsp_enabled:S.lspEnabled});updateLspHint()">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint" id="lsp-hint">
+        Offers <code>lsp_*</code> tools (diagnostics, definition, references, rename plan, format)
+        in the coding modes. Needs a server for the file type on PATH - e.g.
+        <code>npm i -g pyright</code>, <code>rustup component add rust-analyzer</code>.
+      </div>
+      <div class="tgl-row">
+        <span class="tgl-text">Diagnostics after every write</span>
+        <label class="cfl-sw">
+          <input type="checkbox" id="lsp-auto-diag-toggle"
+            onchange="S.lspAutoDiag=this.checked;postSettings({lsp_auto_diagnostics:S.lspAutoDiag})">
+          <span class="sl"></span>
+        </label>
+      </div>
+      <div class="fld-hint">Attaches an 8-line <code>[LSP auto-diagnostics]</code> block to a write
+        when a server is already warm. Never starts a cold server.</div>
+      <div class="tgl-row">
+        <span class="tgl-text">Python auto-lint engine</span>
+        <select id="autolint-engine-sel"
+          style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;max-width:230px"
+          onchange="S.autolintEngine=this.value;postSettings({duo_autolint_python_engine:S.autolintEngine})">
+          <option value="auto">Auto (pyright if installed)</option>
+          <option value="pyright">Pyright only</option>
+          <option value="basic">Syntax only (py_compile)</option>
+        </select>
+      </div>
+      <div class="fld-hint">Runs after a Python write. "Auto" uses pyright when it is on PATH and
+        falls back to <code>py_compile</code>; "Syntax only" skips the type check.
+        Set <code>duo_pyright_path</code> in settings.json when the engine runs headless
+        and cannot see the npm global bin.</div>
+      <div class="cfg-grid" style="margin-top:6px">
+        <div class="fld">
+          <div class="fld-label">Diagnostics wait (s)</div>
+          <input class="fld-input" type="number" id="lsp-wait-input" min="1" max="30" step="1"
+            onchange="postSettings({lsp_diagnostics_wait_s:parseInt(this.value,10)||5})">
+        </div>
+        <div class="fld">
+          <div class="fld-label">Idle close (s)</div>
+          <input class="fld-input" type="number" id="lsp-idle-input" min="60" max="7200" step="60"
+            onchange="postSettings({lsp_idle_timeout_s:parseInt(this.value,10)||600})">
+        </div>
+      </div>
+      <div class="fld-hint">Wait: how long a cold <code>lsp_diagnostics</code> blocks for the first
+        publication before answering "still analyzing". Idle: seconds without a call before the
+        server process is closed (it restarts lazily).</div>
+    </div>
     <!-- Git Integration -->
     <div class="cfg-card" id="git-cfg-card">
       <div class="cfg-card-title">Git Integration</div>
@@ -2320,7 +2377,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
-        <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261101-03"></script>
+        <script src="/static/feature_search_core.js?v=20261101-1"></script>
+        <script src="/static/app.js?v=20261101-05"></script>
 </body>
 </html>
