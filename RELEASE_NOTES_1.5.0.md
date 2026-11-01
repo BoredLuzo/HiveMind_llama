@@ -143,8 +143,20 @@ the ungated `undo_last` hard reset takes a recoverable
   downloaded zip is cleaned up after a successful install.
 - There is no judge-specific model download: the Judge role can use any
   installed LLM. The optional routing decider (CPU classifier) remains the
-  only routing extra; the essential set skips only the optional omni
-  vision worker.
+  only routing extra.
+- **The "essential" set is the default route, and it says so.** It used to
+  be a skip-list of 15 models — including the 20.8 GB Qwen3.6 — which is not
+  "essential" on a small machine. It is now a whitelist of four models
+  (gemma-4:e4b-it-qat, qwen3.5:4b-mtp, qwen3.5:2b-mtp, lfm3:1.7b-qad), the
+  menu prints that list before asking, and after any set finishes it offers
+  to add single models on top instead of exiting.
+- **Declining a model skips it completely.** Answering "n" to a large GGUF
+  used to still download its projector (~0.8 GB) and register the model in
+  `models.json`. Ctrl+C during a download now exits with a plain message
+  (the partial file stays and resumes next run) instead of an ssl traceback.
+- **Core Utils install has a Store fallback**: when `Microsoft.CoreUtils` is
+  not in the local winget source, the installer tries the documented msstore
+  product id (`9NBLGGH4R32N`) before giving up with instructions.
 
 ## Prompt editor, search, LSP controls
 

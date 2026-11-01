@@ -68,11 +68,22 @@ def _persist_models_dir(mdir: Path) -> None:
 # pulled Jackrong/DeepSeek-V4-Pro... for the qwen3.5:4b-mtp spec because
 # unsloth names its MTP files WITHOUT "mtp": unsloth/Qwen3.5-4B-MTP-GGUF →
 # "Qwen3.5-4B-Q4_K_M.gguf". Pinned specs never fall back to search.)
-# ESSENTIAL-SET (2026-10-26, ThinkPad feedback): `--essential` downloads the
-# direct/coder core and skips helper models a small machine may not want.
-# lfm3-omni is the optional vision worker. LFM3 1.7B stays in the essential
-# set because it also serves direct/subagent. The judge role is deliberately
-# not tied to a downloaded model: any installed LLM can be assigned to it.
+# ESSENTIAL-SET (2026-11-01, ThinkPad test): this is now a WHITELIST. The old
+# skip-list shipped 15 models - including the 20.8 GB Qwen3.6 - which is not
+# "essential" on a small machine. The set is exactly the default route:
+# one Duo coder/planner (qwen3.5:4b-mtp), an all-rounder with vision
+# (gemma-4:e4b-it-qat), the refiner (qwen3.5:2b-mtp) and the text subagent
+# (lfm3:1.7b-qad). Everything else is one menu entry away (S = select models),
+# and setup_models.bat asks afterwards whether to add more.
+# The judge role is deliberately not tied to a downloaded model: any
+# installed LLM can be assigned to it.
+ESSENTIAL_KEYS = {
+    "gemma-4:e4b-it-qat",
+    "qwen3.5:4b-mtp",
+    "qwen3.5:2b-mtp",
+    "lfm3:1.7b-qad",
+}
+# kept for callers that only want to know the one optional extra
 ESSENTIAL_SKIP_KEYS = {"lfm3-omni:2b"}
 # DRAFTER-SKIP (2026-10-27, corrected): speculative decoding is ON again for
 # the profiles that ship an MTP head, so a drafter sidecar is NOT dead weight.
@@ -668,6 +679,8 @@ def main() -> int:
     ap.add_argument("--no-drafters", action="store_true",
                     help="skip the drafter sidecars (costs ~50%% decode for the "
                          "models that need one)")
+    ap.add_argument("--print-essential", action="store_true",
+                    help="print the essential-set models (key + size) and exit")
     ap.add_argument("--essential", action="store_true",
                     help="skip the optional omni vision worker - core models only")
     ap.add_argument("--list-only", action="store_true")
@@ -717,9 +730,25 @@ def main() -> int:
         print(f"[OK] models.json written: {n} entries -> {ROOT / 'models.json'}")
         return 0
 
+    if getattr(args, 'print_essential', False):
+        # ESSENTIAL-EXPLAIN (2026-11-01, ThinkPad: "Essential set? Was soll das
+        # sein?"): the menu now shows the real list instead of a vague sentence.
+        _ess = [sp for sp in SPECS if sp['key'] in ESSENTIAL_KEYS]
+        _ess_mb = 0
+        for sp in _ess:
+            _mb = int(sp.get('size_mb') or 0)
+            _ess_mb += _mb
+            print(f"  {sp['key']:<26} {sp['desc'][:70]}")
+        print(f"  -> {len(_ess)} models"
+              + (f", about {_ess_mb / 1024:.1f} GB" if _ess_mb else "")
+              + " (vision projectors and drafters included)")
+        print("  also offered (not essential, choose S): "
+              + ", ".join(sp['key'] for sp in SPECS if sp['key'] not in ESSENTIAL_KEYS))
+        return 0
+
     specs = [s for s in SPECS
-               if not (getattr(args, 'essential', False)
-                       and s.get('key') in ESSENTIAL_SKIP_KEYS)] or SPECS
+               if not getattr(args, 'essential', False)
+               or s.get('key') in ESSENTIAL_KEYS] or SPECS
     if getattr(args, 'only_keys', ''):
         _ok = [k.strip() for k in args.only_keys.split(',') if k.strip()]
         _found = set(sp.get('key') for sp in SPECS)
@@ -844,7 +873,14 @@ def main() -> int:
         if args.list_only:
             print(f"    Would download: {main_file['path']}")
         else:
-            download_file(repo, main_file, mdir, args.yes)
+            # DECLINE-SKIPS-MODEL (2026-11-01, ThinkPad test): answering "n" to a
+            # 20 GB GGUF still downloaded its 0.8 GB projector and then wrote a
+            # models.json entry for a model that is not on disk. Declining the
+            # main file now skips the whole spec.
+            if not download_file(repo, main_file, mdir, args.yes):
+                print("    Skipped - model not downloaded "
+                      "(projector/drafter/registration skipped too)")
+                continue
             local_files[main_file["path"].lower()] = mdir / Path(main_file["path"]).name
             if spec.get("tag"):
                 _record_known_filename(Path(main_file["path"]).name, spec["tag"])
@@ -913,4 +949,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # CTRL-C-CLEAN (2026-11-01, ThinkPad test): Ctrl+C during a download dumped a
+    # 20-line ssl/socket traceback. A partial file is kept on purpose - the next
+    # run resumes it with a Range request.
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print()
+        print("  [CANCELLED] Download interrupted. A partial file stays on disk and "
+              "the next run resumes it.")
+        sys.exit(130)

@@ -50,6 +50,7 @@ if exist "%~dp0.venv\Scripts\python.exe" (
     )
 )
 
+:menu
 REM ---- Catalog: single source of truth is fetch_models.py SPECS ----
 echo  Download catalog (existing models stay untouched and get registered):
 echo.
@@ -58,11 +59,13 @@ echo.
 echo    LFM2.5 24B-A2B also downloads its DSpark spec-dec drafter.
 echo    Gemma-4 E4B/E2B QAT also download their MTP drafter.
 echo.
-echo  D = download all missing, E = essential set (core models; skips
-echo      the optional omni vision worker - for small machines),
+echo  D = download all missing,
+echo  E = essential set - the default route only (listed below),
 echo  S = select single models,
 echo  C = add own model with config, R = register folder only (no download),
 echo  A = abort.
+echo.
+"%PY%" deploy\fetch_models.py --print-essential
 echo.
 choice /c DESCRA /m "Your choice"
 if errorlevel 6 exit /b 0
@@ -73,13 +76,13 @@ if errorlevel 2 goto essential_set
 
 echo.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-missing
-goto done
+goto more_models
 
 :essential_set
 echo.
-echo  Essential set: direct/coder core, optional omni vision worker skipped.
+echo  Essential set only. Answering "n" to a model skips it completely.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only-missing --essential
-goto done
+goto more_models
 
 :select_single
 echo.
@@ -90,7 +93,7 @@ set "MODELS_SEL="
 set /p "MODELS_SEL=Numbers: "
 if "%MODELS_SEL%"=="" goto import_only
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --only "%MODELS_SEL%"
-goto done
+goto more_models
 
 :custom_add
 echo.
@@ -109,6 +112,14 @@ echo.
 REM Scan-only: auto-detect own models and register them in models.json.
 REM No download, no network access needed.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --scan-only
+
+:more_models
+REM AFTER-ANY-SET (2026-11-01, ThinkPad): after a whole set finishes, offer to
+REM add single models on top instead of exiting the menu.
+echo.
+choice /c YN /n /m "Add more models now (single downloads on top)? [Y/N] "
+if not errorlevel 2 goto menu
+goto done
 
 :done
 echo.

@@ -156,6 +156,7 @@ SUITES = [
     ("compress_local_only",    "tests/test_compress_local_only.py",             60),
     ("pre_explore_globals",  "tests/test_pre_explore_globals.py",     25),
     ("installer_coreutils", "tests/test_installer_coreutils.py",      20),
+    ("installer_download_skip", "tests/test_installer_download_skip.py",     40),
     ("shell_env",           "tests/test_shell_env.py",               20),
     ("follow_ui",           "tests/test_follow_ui.py",               30),
     ("post_run_model",      "tests/test_post_run_model.py",          20),

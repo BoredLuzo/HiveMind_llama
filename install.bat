@@ -401,7 +401,15 @@ if errorlevel 2 goto coreutils_skipped
 echo.
 winget install --id Microsoft.CoreUtils -e --silent --accept-package-agreements --accept-source-agreements
 where grep >nul 2>&1
+if not errorlevel 1 goto coreutils_ok
+REM WINGET-FALLBACK (2026-11-01, ThinkPad: "Es wurde kein Paket gefunden"):
+REM the id is not in every winget source snapshot. The Store product id is the
+REM documented route and works through the msstore source.
+echo   [INFO] The winget id did not resolve - trying the Store product id...
+winget install --source msstore --id 9NBLGGH4R32N --accept-package-agreements --accept-source-agreements
+where grep >nul 2>&1
 if errorlevel 1 goto coreutils_failed
+:coreutils_ok
 echo.
 echo   [OK] Core Utils installed. The agent can use grep/sed/awk/find now.
 goto coreutils_done
@@ -409,7 +417,8 @@ goto coreutils_done
 echo.
 echo   [NOTE] The install did not complete. Nothing is broken:
 echo   HiveMind tells the coder to use its own tools instead.
-echo   Retry later with:  winget install Microsoft.CoreUtils
+echo   Retry later with:  winget install --source msstore --id 9NBLGGH4R32N
+echo   Or install "Coreutils for Windows" from the Microsoft Store.
 goto coreutils_done
 :coreutils_nowinget
 echo   [NOTE] winget is not available, so Core Utils cannot be installed
@@ -417,7 +426,7 @@ echo   automatically. HiveMind works without them.
 echo   Manual: https://learn.microsoft.com/en-us/windows/core-utils/overview
 goto coreutils_done
 :coreutils_skipped
-echo   Skipped - add it later with: winget install Microsoft.CoreUtils
+echo   Skipped - add it later with: winget install --source msstore --id 9NBLGGH4R32N
 :coreutils_done
 echo.
 
