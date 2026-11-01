@@ -1433,9 +1433,24 @@
         </label>
       </div>
       <div class="fld-hint" id="lsp-hint">
-        Offers <code>lsp_*</code> tools (diagnostics, definition, references, rename plan, format)
-        in the coding modes. Needs a server for the file type on PATH - e.g.
-        <code>npm i -g pyright</code>, <code>rustup component add rust-analyzer</code>.
+        Offers <code>lsp_*</code> tools (diagnostics, definition, references, symbol search,
+        rename plan, format) in the coding modes. Nothing is bundled: a language is active as
+        soon as ITS server is on PATH &mdash; the tools follow the file type.
+        <div style="margin-top:6px;line-height:1.7">
+          <code>Python</code> &nbsp;npm i -g pyright<br>
+          <code>TS / JS / TSX</code> &nbsp;npm i -g typescript typescript-language-server<br>
+          <code>Rust</code> &nbsp;rustup component add rust-analyzer<br>
+          <code>Go</code> &nbsp;go install golang.org/x/tools/gopls@latest<br>
+          <code>C / C++</code> &nbsp;install LLVM/clangd (ships with the LLVM installer)<br>
+          <code>Bash</code> &nbsp;npm i -g bash-language-server<br>
+          <code>Lua</code> &nbsp;npm i -g lua-language-server<br>
+          <code>JSON / YAML / HTML / CSS</code> &nbsp;npm i -g vscode-langservers-extracted
+        </div>
+        A custom command per language goes into <code>lsp_servers</code> (settings.json).
+      </div>
+      <div class="fld-hint" id="lsp-hint-off" style="display:none;color:var(--amber)">
+        Off. The <code>lsp_*</code> tools are removed from the model's tool list
+        (settings.json: <code>lsp_enabled</code>). Auto-lint keeps working.
       </div>
       <div class="tgl-row">
         <span class="tgl-text">Diagnostics after every write</span>

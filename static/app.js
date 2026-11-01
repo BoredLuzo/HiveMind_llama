@@ -9960,15 +9960,13 @@ function toggleRunDetail(id) {
 }
 
 function updateLspHint() {
-  var h = document.getElementById('lsp-hint');
-  if (!h) return;
-  var base = 'Offers <code>lsp_*</code> tools (diagnostics, definition, references, rename plan, format) ' +
-    'in the coding modes. Needs a server for the file type on PATH - e.g. ' +
-    '<code>npm i -g pyright</code>, <code>rustup component add rust-analyzer</code>.';
-  h.innerHTML = (S.lspEnabled === false)
-    ? "Off. The <code>lsp_*</code> tools are removed from the model's tool list; " +
-      "auto-lint keeps working (settings.json: <code>lsp_enabled</code>)."
-    : base;
+  // The hint text lives in index.html (one place, full language list); this
+  // only swaps the on-state for the off-state when LSP is disabled.
+  var on = document.getElementById('lsp-hint');
+  var off = document.getElementById('lsp-hint-off');
+  var enabled = S.lspEnabled !== false;
+  if (on) on.style.display = enabled ? '' : 'none';
+  if (off) off.style.display = enabled ? 'none' : '';
 }
 
 function updateMlockHint() {
