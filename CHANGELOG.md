@@ -1,11 +1,11 @@
-## [1.5.0-preview] - 2026-10-31
+## [1.5.0] - 2026-11-01
 
-Preview scope: the MCP hardening/phase-2 work, the settings/preset pass, the
-generic LSP client and the code-panel/compression/update-check improvements on
-top of 1.4.14. Groot stays **experimental**; the live validation on the
-ThinkPad is the next step. A GitHub pre-release is not offered by
-`/releases/latest`, so other installs update only through `update.bat --zip`
-(or the new startup check, which includes pre-releases for preview installs).
+1.5.0 scope: the MCP hardening/phase-2 work, the settings/preset pass, the
+generic LSP client, the code-panel/compression/update-check improvements and
+the 2026-11-01 audit fixes (installer/updater rendering, git commit scoping,
+reprompt reliability) on top of 1.4.14. Groot stays **experimental**. The
+startup update check offers new releases directly (including pre-releases
+for preview installs).
 
 ### MCP (both directions)
 - **Exec and mutating tools over HTTP need the shared secret.**
