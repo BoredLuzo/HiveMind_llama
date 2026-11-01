@@ -403,26 +403,53 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
     # live run) and refuse otherwise.
     _scope = [f for f in (files or []) if (Path(workspace) / f).exists()]
 
+    # EOD-GIT-AUDIT (2026-11-01): three holes closed at once.
+    #   A) the fold commit was BARE — a foreign already-STAGED file survived
+    #      the scoped add but was still committed by `git commit -m`. The
+    #      commit is now pathspec-scoped to the run files too.
+    #   B) files=None kept `git add -A` — reachable from the auto-commit
+    #      path with an empty written-files chunk. A live-run squash without
+    #      a list is refused now (consolidate-only keeps add -A: it folds
+    #      existing checkpoints, not a live run's index).
+    #   C) the empty-staged fallback was `git reset --hard HEAD` — it
+    #      silently wiped foreign UNSTAGED modifications. Now a safe
+    #      `git reset` (mixed: index back to HEAD, worktree untouched).
+    _scope = [f for f in (files or []) if (Path(workspace) / f).exists()]
+
     if consolidate_only:
         msg = f"{_checkpoint_marker()} session consolidated ({cp_count} checkpoints)"
-        add = await _git("git", "add", "-A") if not files             else await _git("git", "add", "--", *_scope)
+        if files:
+            if not _scope:
+                return "ℹ️ squash-consolidate: none of the run files exist."
+            add = await _git("git", "add", "--", *_scope)
+            if add.returncode != 0:
+                return f"❌ git add failed: {add.stderr.strip()}"
+        else:
+            add = await _git("git", "add", "-A")
         staged = await _git("git", "diff", "--cached", "--name-only")
         cc = await _git("git", "commit", "-m", msg[:72],
-                        *(["--allow-empty"] if not staged.stdout.strip() else []))
+                        *(["--allow-empty"] if not staged.stdout.strip() else []),
+                        *(["--", *_scope] if files else []))
         if cc.returncode != 0:
             return f"❌ squash-consolidate failed: {cc.stderr.strip()}"
         return f"✅ {cp_count} Checkpoints konsolidiert"
 
-    if files and not _scope:
+    if not files:
+        return ("ℹ️ squash: no run file list — refusing to fold the whole "
+                "index (2026-10-14 policy).")
+    if not _scope:
         return "ℹ️ squash: none of the run files exist — nothing to fold."
-    add = await _git("git", "add", "-A") if not files         else await _git("git", "add", "--", *_scope)
+    add = await _git("git", "add", "--", *_scope)
     if add.returncode != 0:
         return f"❌ git add failed: {add.stderr.strip()}"
     staged = await _git("git", "diff", "--cached", "--name-only")
     if not staged.stdout.strip():
-        cc = await _git("git", "reset", "--hard", "HEAD")
+        # nothing of ours to fold — NEVER hard-reset here: the soft reset
+        # above moved foreign work into the index and a --hard would wipe
+        # foreign UNSTAGED edits with it (probed data loss).
+        await _git("git", "reset")
         return ""
-    cc = await _git("git", "commit", "-m", message[:72])
+    cc = await _git("git", "commit", "-m", message[:72], "--", *_scope)
     if cc.returncode != 0:
         return f"❌ squash-commit failed: {cc.stderr.strip()}"
     h = await _git("git", "rev-parse", "--short", "HEAD")

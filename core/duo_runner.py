@@ -2977,6 +2977,16 @@ async def run_code_duo(ctx):
                                     "content": f"🧹 Planner unloaded — full VRAM for the coder."})
                         except (RuntimeError, OSError, asyncio.TimeoutError) as _serial_err:
                             logger.debug("[SERIAL-SLOTS] planner evict failed: %s", _serial_err)
+                    # WORKER-PIN RELEASE (EOD-audit P2-1, 2026-11-01):
+                    # unpin_all used to live only in the planner phase —
+                    # planner-off/resume/skip runs never released the
+                    # keep-warm pins, so pinned workers could block this
+                    # coder pre-flight. Released here, right before the
+                    # ladder; the planner phase re-pins nothing.
+                    try:
+                        _lsm2.unpin_all()
+                    except Exception as _ua_err:
+                        logger.debug("[SERIAL-SLOTS] unpin_all failed: %s", _ua_err)
                     for _cl_attempt in range(5):
                         try:
                             # VISION RELOAD HINT (2026-10-01): if the coder
@@ -3029,6 +3039,28 @@ async def run_code_duo(ctx):
                             # IMMEDIATELY, no attempt 2 ever ran). Evict the
                             # stuck attempt and ride the same ctx ladder the
                             # other branches use; hard-stop only at the floor.
+                            # EOD-AUDIT P1-1: the abort check MUST run before
+                            # the retry — /stop is a cooperative Event (the
+                            # emit succeeds anyway), so without this an
+                            # aborted run burned ~10 min of load/kill churn.
+                            if ctx.aborted():
+                                yield await ctx.emit({"type": "status",
+                                    "content": "⏹ Coder load aborted (run was stopped)"})
+                                ctx.phase_timer.skip("coder_loop")
+                                clear_graceful_stop(ctx.run_id)
+                                _cleanup_pause_state(ctx.run_id)
+                                if ctx.chat_id:
+                                    _clear_pause_state(ctx.chat_id)
+                                _cleanup_governor(ctx.chat_id or ctx.run_id)
+                                _pre_loop_resume(ctx, _ws_str, _explore_ctx,
+                                                 _done_tasks, _written_files, "aborted")
+                                ctx.duo_stop_reason = "aborted"
+                                yield await ctx.emit(ctx.done_event(
+                                    round(time.time() - ctx.t_total, 1),
+                                    ctx.duo_stop_reason,
+                                    **ctx.collect_done_metrics(),
+                                ))
+                                return
                             try:
                                 from backend.llama_server_manager import manager as _lsm_to
                                 await _lsm_to.evict(exec_mdl)
@@ -3040,6 +3072,25 @@ async def run_code_duo(ctx):
                                     "content": f"⟳ Coder load timeout at ctx={_coder_ctx_try} — evicting the "
                                               f"stuck load, retry {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
                                 await asyncio.sleep(4.0)
+                                if ctx.aborted():
+                                    # the sleep is the second abort window
+                                    yield await ctx.emit({"type": "status",
+                                        "content": "⏹ Coder load aborted (run was stopped during retry wait)"})
+                                    ctx.phase_timer.skip("coder_loop")
+                                    clear_graceful_stop(ctx.run_id)
+                                    _cleanup_pause_state(ctx.run_id)
+                                    if ctx.chat_id:
+                                        _clear_pause_state(ctx.chat_id)
+                                    _cleanup_governor(ctx.chat_id or ctx.run_id)
+                                    _pre_loop_resume(ctx, _ws_str, _explore_ctx,
+                                                     _done_tasks, _written_files, "aborted")
+                                    ctx.duo_stop_reason = "aborted"
+                                    yield await ctx.emit(ctx.done_event(
+                                        round(time.time() - ctx.t_total, 1),
+                                        ctx.duo_stop_reason,
+                                        **ctx.collect_done_metrics(),
+                                    ))
+                                    return
                                 _coder_ctx_try = _next_ctx
                                 continue
                             yield await ctx.emit({

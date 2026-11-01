@@ -341,23 +341,22 @@ def _download_asset(result: CheckResult, root: Path,
     return dest
 
 
-_WARN_RE = None
-
+# Module-level compiled (EOD-UI audit P1-2: _NO_BREAK lived only inside
+# the lazy-init branch without a global statement -> UnboundLocalError
+# on the second warnings_digest call in one process).
+_WARN_RE = re.compile(
+    r"\b(warnings?|breaking|known issues?|migrat\w*|attention|caution|"
+    r"deprecat\w*)\b", re.IGNORECASE)
+_NO_BREAK = re.compile(r"\b(no|keine|nicht)\b[^.]*\bbreaking\b", re.IGNORECASE)
 
 def warnings_digest(body: str, limit: int = 3) -> list[str]:
     """Up to `limit` lines the release author flags as important.
 
     Word-boundary regex (installer audit: the old substring match flagged
-    "Keine breaking changes" — a line saying there are NONE) and the same
-    no-breaking suppression as update.bat.
+    "Keine breaking changes" - a line saying there are NONE). Regexes are
+    module-level (EOD-UI audit P1-2: the lazy-init variant raised
+    UnboundLocalError on the second call in one process).
     """
-    global _WARN_RE
-    if _WARN_RE is None:
-        import re
-        _WARN_RE = re.compile(
-            r"\b(warning|breaking|known issues?|migrat\w*|attention|caution|"
-            r"deprecat\w*)\b", re.IGNORECASE)
-        _NO_BREAK = re.compile(r"\bno\b[^.]*\bbreaking\b", re.IGNORECASE)
     out: list[str] = []
     for raw in str(body or "").splitlines():
         line = raw.strip()

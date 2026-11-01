@@ -206,7 +206,8 @@ REM UTF-8 (ANSI read -> OEM type), never wrapped 200-char lines, misaligned
 REM the header box for every tag and erased code fences. The renderer is a
 REM probe-verified PS script now (same extraction precedent as
 REM deploy\update_prune.ps1) and prints the whole box with a computed width.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\render_release_notes.ps1" -JsonPath "%TMPDIR%\release.json" -Width 61 | powershell -NoProfile -Command "$tag = '%TAG%'; $w = 61; $inner = ' RELEASE NOTES - ' + $tag + ' '; '+' + ('-' * $w) + '+'; $pad = [Math]::Max(0, $w - $inner.Length); '| ' + $inner + (' ' * $pad) + '|'; '+' + ('-' * $w) + '+'"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\render_release_notes.ps1" -JsonPath "%TMPDIR%\release.json" -Width 61 -Title "RELEASE NOTES - %TAG%"
+
 echo.
 
 REM -- 4b. Warnings from the release notes -----------------------------------

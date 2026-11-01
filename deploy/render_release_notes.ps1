@@ -8,7 +8,8 @@
 # Probe-verified on PS 5.1 against a realistic release body.
 param(
     [Parameter(Mandatory = $true)][string]$JsonPath,
-    [int]$Width = 61
+    [int]$Width = 61,
+    [string]$Title = ""
 )
 $body = ''
 try {
@@ -28,6 +29,7 @@ function Convert-Line([string]$l) {
     if ($t -match '^\s*[-*+]\s+(.*)$') { return (' - ' + $Matches[1]) }
     return $t
 }
+$lines = @()
 $inCode = $false
 foreach ($l in ($body -split "`n")) {
     $t = Convert-Line $l
@@ -41,8 +43,19 @@ foreach ($l in ($body -split "`n")) {
         $cut = $t.Substring(0, $Width)
         $sp = $cut.LastIndexOf(' ')
         if ($sp -lt 20) { $sp = $Width }
-        Write-Output $t.Substring(0, $sp).TrimEnd()
+        $lines += $t.Substring(0, $sp).TrimEnd()
         $t = '   ' + $t.Substring($sp).TrimStart()
     }
-    Write-Output $t
+    $lines += $t
 }
+# The box is drawn here (EOD-UI audit P1-1): update.bat used to pipe the
+# body into a second powershell that never read stdin — cmd dropped the
+# whole body and only the 3-line header printed.
+$line = '+' + ('-' * $Width) + '+'
+if ($Title) {
+    $inner = ' ' + $Title + ' '
+    $pad = [Math]::Max(0, $Width - $inner.Length)
+    $lines = @($line, ('| ' + $inner + (' ' * $pad) + '|'), $line) + $lines
+}
+$lines += $line
+$lines | ForEach-Object { Write-Output $_ }

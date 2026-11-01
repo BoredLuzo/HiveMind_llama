@@ -64,6 +64,17 @@ async def _inline_tool_git_commit(args: dict, workspace: Path, _workspace_lock: 
             "(workspace-relative). The whole index is never swept.",
             tool="git_commit")
     _paths = [str(x).strip() for x in _paths if str(x).strip()]
+    # EOD-GIT-AUDIT: "." / ".." sweep the whole workspace through a scoped
+    # pathspec — reject them explicitly; a pathspec cannot start with "-"
+    # anyway (protected by the "--" separator on add AND commit).
+    _bad = [x for x in _paths if x in (".", "..") or x.startswith("../") or x.startswith("..\\")]
+    if _bad:
+        return _tool_error_response(
+            "INVALID_ARGUMENT",
+            f"git_commit paths must stay inside the workspace and must not "
+            f"be '.'/'..' — got: {', '.join(_bad[:3])}",
+            tool="git_commit")
+    _paths = list(dict.fromkeys(_paths))
     try:
         result = await _shared.exec_git_commit(message=message, workspace=ws,
                                                files=_paths,

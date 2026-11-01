@@ -292,6 +292,12 @@ def _drop_whole_oldest(
     out: list[dict] = []
     dropped = 0
     evicted: list[str] = []
+    # EOD-AUDIT P1-2 (2026-11-01): appending the remainder as one block can
+    # join two user messages once the span between them was dropped —
+    # strict-alternation templates reject user,user right after compression.
+    # The remainder is therefore appended one-by-one with a guard that skips
+    # a user message directly following another one (dropping MORE is always
+    # safe; a forbidden sequence is not).
     _i = 0
     while _i < len(messages):
         _m = messages[_i]
@@ -300,7 +306,12 @@ def _drop_whole_oldest(
             _i += 1
             continue
         if _est <= _target:
-            out.extend(messages[_i:])
+            for _rest in messages[_i:]:
+                if (_rest.get("role") == "user" and out
+                        and out[-1].get("role") == "user"):
+                    continue
+                out.append(_rest)
+            break
             break
         # A write/edit/read call and its results are one turn. DROP-INTEGRITY
         # (2026-10-31): deleting the assistant half alone leaves an orphaned

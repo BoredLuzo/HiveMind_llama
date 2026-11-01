@@ -94,6 +94,16 @@ and cleans up its downloaded zip.
 between runs; the next run start unpins everything. The SMART PRELOAD
 settings carry visible explanations now instead of hover-only titles.
 
+Four end-of-day audits re-checked every change of the day; findings fixed
+immediately: the coder-load timeout ladder now honors /stop (an aborted
+run no longer churns loads for minutes), whole-turn compression can no
+longer join two user messages, the git squash fold commit is pathspec-
+scoped (foreign staged work survived the scoped add but still rode the
+bare commit — probed), the git_commit tool rejects `.`/`..` paths, the
+release-notes box survives the update.bat pipe (the body used to be
+dropped), and the startup digest flags the plural "Warnings" now and
+survives a second call.
+
 ## Settings and presets
 
 The code read several settings that were never shipped as defaults

@@ -130,6 +130,29 @@ ThinkPad is the next step. A GitHub pre-release is not offered by
 - The SMART PRELOAD rows carry visible explanations now (what prefetch
   does, why it is off by default, what keep-warm+pinned means).
 
+### EOD audits (2026-11-01) — every slice of the day re-audited
+Four end-of-day audits over all changes; findings fixed immediately:
+- **Duo core**: the coder-load timeout retry ladder skipped the abort
+  check (an aborted run burned ~10 min of load/kill churn) — abort is now
+  checked at entry and after each retry wait. Whole-turn compression could
+  join two user messages (`user,user` — strict-alternation templates reject
+  that); the remainder is appended one-by-one with a guard now.
+- **Git**: the checkpoint-squash fold commit was still BARE (foreign staged
+  work folded; probed) — now pathspec-scoped; `files=None` no longer keeps
+  `add -A` (live-run squash without a list is refused); the empty-fold
+  fallback is a safe mixed `git reset` instead of `--hard` (probed data
+  loss); the `git_commit` tool rejects `.`/`..` paths.
+- **MCP**: F-1/F-2/F-3 verified correct by live probes (48/0); two P2s
+  documented (a `_meta`-carried 2025 version without a session header is
+  served stateless; `Mcp-Protocol-Version` header values are not
+  validated) — spec-consistency, no capability gain.
+- **UI/installer**: the release-notes box is drawn inside the renderer (the
+  update.bat pipe discarded the body — only the header printed);
+  `warnings_digest` survives a second call and flags the plural
+  "Warnings" now (word-boundary + German "keine" suppression);
+  `style.css` cache buster bumped (the preset-badge CSS was stale).
+Reports: DOKU/audits/EOD_*.md, DOKU/mcp/EOD_AUDIT_20261101.md.
+
 ### Installer/Updater (audit fixes, 2026-11-01)
 - **Release notes render properly** (P1): the old inline render double-
   mangled UTF-8 (ANSI read → OEM `type` — every umlaut became `├ñ`),

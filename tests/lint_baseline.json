@@ -152,7 +152,7 @@
   "except_pass": 2
  },
  "core/duo_runner.py": {
-  "broad_except": 94,
+  "broad_except": 95,
   "except_pass": 27
  },
  "core/error_rollup.py": {

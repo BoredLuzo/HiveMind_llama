@@ -153,6 +153,26 @@ with tempfile.TemporaryDirectory() as td:
     check("H3: missing digest rejected", not verify_sha256(blob, ""))
     check("H4: malformed digest rejected", not verify_sha256(blob, "sha256:xyz"))
 
+# warnings_digest: double-call + word boundaries (EOD-UI audit P1-2)
+from tools.update_check import warnings_digest as _wdigest
+
+_digest_body = chr(10).join([
+    "Keine breaking changes gegenueber 1.4.14.",
+    "WARNING: backup your settings first.",
+    "A groundbreaking feature was added.",
+    "Warnings: two hints follow.",
+    "Migration required for presets."])
+_d1 = _wdigest(_digest_body)
+_d2 = _wdigest(_digest_body)
+check("D1: the digest survives a second call (no UnboundLocalError)",
+      _d1 == _d2 and len(_d1) >= 2, f"({_d1})")
+check("D2: WARNING/Warnings/Migration flagged, plural included",
+      any("WARNING" in x for x in _d1) and any("Warnings" in x for x in _d1)
+      and any("Migration" in x for x in _d1))
+check("D3: no-break suppression (German keine) + word boundary (groundbreaking)",
+      not any("Keine breaking" in x for x in _d1)
+      and not any("groundbreaking" in x for x in _d1))
+
 check("R1: read_current_version", read_current_version(Path(__file__).parent.parent) != "")
 check("R2: CheckResult roundtrip",
       CheckResult.from_dict(CheckResult(status="current", current="1.5.0").as_dict()).status
