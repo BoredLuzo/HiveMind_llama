@@ -71,6 +71,20 @@ check("the fallback only runs after the first attempt failed",
       < TEXT.index("--source msstore --id 9NBLGGH4R32N"))
 check("the missing-winget path points at the docs",
       "learn.microsoft.com/en-us/windows/core-utils" in TEXT)
+# GITBASH-COVERS-IT + VERIFY-BY-PACKAGE (2026-11-01, ThinkPad log): the
+# installer claimed "did not complete" although winget said the Store package
+# was already installed - the gate was `where grep`, which fails when the App
+# Execution Alias is not on the running cmd's PATH.
+check("Git Bash short-circuits the prompt",
+      "Git Bash is installed" in TEXT and "HAVE_GITBASH" in TEXT)
+check("the Git Bash check looks at usr/bin/grep.exe",
+      r"Git\usr\bin\grep.exe" in TEXT)
+check("success is verified by package, not only PATH",
+      "Get-AppxPackage -Name Microsoft.Coreutils" in TEXT)
+check("an installed-but-not-on-PATH alias is a success",
+      ":coreutils_ok_alias" in TEXT and "app aliases" in TEXT)
+check("the WindowsApps alias path is checked",
+      r"Microsoft\WindowsApps\grep.exe" in TEXT)
 check("no exit /b inside the tools step",
       "exit /b" not in TEXT[TEXT.index("REM [4/9] Windows tools"):
                            TEXT.index("REM [5/9] Desktop shortcut")])

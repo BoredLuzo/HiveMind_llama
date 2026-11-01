@@ -387,10 +387,24 @@ echo.
 set "HAVE_COREUTILS="
 where grep >nul 2>&1
 if not errorlevel 1 set "HAVE_COREUTILS=1"
+if not defined HAVE_COREUTILS if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\grep.exe" set "HAVE_COREUTILS=1"
 if not defined HAVE_COREUTILS goto coreutils_ask
 echo   [OK] POSIX tools are already available - nothing to do.
 goto coreutils_done
 :coreutils_ask
+REM GITBASH-COVERS-IT (2026-11-01, ThinkPad): run_bash runs Git Bash when it is
+REM installed (settings run_bash_shell=auto), and Git ships grep/sed/awk/find
+REM in usr\bin. CoreUtils only matters for the PowerShell fallback - asking
+REM for it anyway confused owners whose setup already had the tools.
+set "HAVE_GITBASH="
+if exist "%ProgramFiles%\Git\usr\bin\grep.exe" set "HAVE_GITBASH=1"
+if not defined HAVE_GITBASH if exist "%ProgramFiles(x86)%\Git\usr\bin\grep.exe" set "HAVE_GITBASH=1"
+if not defined HAVE_GITBASH goto coreutils_winget
+echo   [OK] Git Bash is installed - run_bash uses it and it already ships
+echo        grep/sed/awk/find. No Core Utils needed (only a PowerShell-only
+echo        setup would want them).
+goto coreutils_done
+:coreutils_winget
 set "HAVE_WINGET="
 where winget >nul 2>&1
 if not errorlevel 1 set "HAVE_WINGET=1"
@@ -400,15 +414,30 @@ choice /c YN /n /m "Install Core Utils? [Y/N] "
 if errorlevel 2 goto coreutils_skipped
 echo.
 winget install --id Microsoft.CoreUtils -e --silent --accept-package-agreements --accept-source-agreements
-where grep >nul 2>&1
-if not errorlevel 1 goto coreutils_ok
+if not errorlevel 1 goto coreutils_verify
 REM WINGET-FALLBACK (2026-11-01, ThinkPad: "Es wurde kein Paket gefunden"):
 REM the id is not in every winget source snapshot. The Store product id is the
 REM documented route and works through the msstore source.
 echo   [INFO] The winget id did not resolve - trying the Store product id...
 winget install --source msstore --id 9NBLGGH4R32N --accept-package-agreements --accept-source-agreements
+:coreutils_verify
+REM VERIFY-BY-PACKAGE (2026-11-01, ThinkPad): the old gate was `where grep`.
+REM On a machine where the Store package was ALREADY installed that gate
+REM failed anyway (the App Execution Alias is not on the PATH of the running
+REM cmd), so the installer claimed "did not complete" for a finished install.
 where grep >nul 2>&1
-if errorlevel 1 goto coreutils_failed
+if not errorlevel 1 goto coreutils_ok
+if exist "%LOCALAPPDATA%\Microsoft\WindowsApps\grep.exe" goto coreutils_ok_alias
+powershell -NoProfile -Command "if (Get-AppxPackage -Name Microsoft.Coreutils) { exit 0 } else { exit 1 }" >nul 2>&1
+if not errorlevel 1 goto coreutils_ok_alias
+goto coreutils_failed
+:coreutils_ok_alias
+echo.
+echo   [OK] Core Utils are installed. Windows exposes grep/sed/awk/find as
+echo        app aliases in %LOCALAPPDATA%\Microsoft\WindowsApps - a shell that
+echo        was already open does not see them yet. HiveMind picks them up on
+echo        its next start (or after a fresh login).
+goto coreutils_done
 :coreutils_ok
 echo.
 echo   [OK] Core Utils installed. The agent can use grep/sed/awk/find now.

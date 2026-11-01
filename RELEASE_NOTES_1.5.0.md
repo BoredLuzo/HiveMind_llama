@@ -195,9 +195,15 @@ the ungated `undo_last` hard reset takes a recoverable
   used to still download its projector (~0.8 GB) and register the model in
   `models.json`. Ctrl+C during a download now exits with a plain message
   (the partial file stays and resumes next run) instead of an ssl traceback.
-- **Core Utils install has a Store fallback**: when `Microsoft.CoreUtils` is
-  not in the local winget source, the installer tries the documented msstore
-  product id (`9NBLGGH4R32N`) before giving up with instructions.
+- **Core Utils: no false alarm, and usually not needed at all.** `run_bash`
+  uses Git Bash when it is installed, and Git already ships
+  grep/sed/awk/find — the installer now says so and skips the prompt instead
+  of asking for a package the machine does not need. When there is no Git
+  Bash, the winget id falls back to the Store product id (`9NBLGGH4R32N`),
+  and success is verified by the **package** (`Get-AppxPackage
+  Microsoft.Coreutils`) and the WindowsApps alias, not by `where grep` — a
+  finished install no longer reports "did not complete" just because the
+  running shell cannot see a fresh app alias yet.
 
 ## Prompt editor, search, LSP controls
 
