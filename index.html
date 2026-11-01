@@ -255,7 +255,8 @@
     <span id="duo-mode-badge" style="font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid rgba(32,176,160,.4);color:#20b0a0;background:rgba(32,176,160,.07)">CRITIC</span>
     <span id="duo-mode-chevron" style="margin-left:auto;font-size:10px;color:#7a8fa8;transition:transform .2s">&#9660;</span>
   </div>
-  <div id="duo-mode-body" style="display:none;padding:0 12px 12px;border-top:1px solid rgba(32,176,160,.15)">
+  <!-- HTML default OPEN (2026-11-01): in code mode the settings panel is simply there; app.js collapses it only for non-code modes -->
+  <div id="duo-mode-body" style="padding:0 12px 12px;border-top:1px solid rgba(32,176,160,.15)">
 
     <!-- Modus-Auswahl -->
     <div style="display:flex;gap:4px;margin:10px 0 8px">
@@ -2320,6 +2321,6 @@ document.getElementById('prefetch-lead-val').textContent=v;">
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>
 
         <script src="/static/feature_search_core.js?v=20261005-3"></script>
-        <script src="/static/app.js?v=20261101-01"></script>
+        <script src="/static/app.js?v=20261101-02"></script>
 </body>
 </html>

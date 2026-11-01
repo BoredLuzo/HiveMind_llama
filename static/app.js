@@ -2643,8 +2643,8 @@ function setMode(mode, el) {
   if (_duoAcc) _duoAcc.style.display = mode === 'code_duo' ? 'block' : 'none';
   // AGENTIC-VISIBILITY (2026-11-01): in code mode the whole settings panel
   // is expanded automatically — only the ADVANCED subsection keeps its own
-  // collapse. Other modes keep the accordion closed.
-  if (mode === 'code_duo') _setDuoModeAccordion(true);
+  // collapse. Other modes collapse the body again.
+  _setDuoModeAccordion(mode === 'code_duo');
   updateAutomapAdvancedVisibility();
   updateWebsearchHint();
   updateChatToolsBadge();
@@ -2679,7 +2679,7 @@ function setModeUI(mode) {
   updateDuoPairHint();
   var _duoAcc2 = document.getElementById('duo-mode-accordion');
   if (_duoAcc2) _duoAcc2.style.display = mode === 'code_duo' ? 'block' : 'none';
-  if (mode === 'code_duo') _setDuoModeAccordion(true);
+  _setDuoModeAccordion(mode === 'code_duo');
   updateAutomapAdvancedVisibility();
   updateWebsearchHint();
   updateChatToolsBadge();
