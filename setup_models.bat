@@ -112,7 +112,7 @@ echo   Optional: assign it to an agent role in settings.json.
 echo  --------------------------------------------------------------
 echo.
 "%PY%" deploy\add_model.py "%MODELS_DIR%"
-goto done
+goto more_models
 
 :import_only
 echo.
@@ -121,10 +121,17 @@ REM No download, no network access needed.
 "%PY%" deploy\fetch_models.py --models-dir "%MODELS_DIR%" --scan-only
 
 :more_models
-REM After a whole set finishes, offer single models on top instead of
-REM dropping out of the menu.
+REM Step finished. Ask explicitly: more models, or move on. Two named keys beat
+REM a [Y/N] that does not say what "no" does.
 echo.
-choice /c YN /n /m "Add more models now (single downloads on top)? [Y/N] "
+echo  --------------------------------------------------------------------
+echo   Step finished. What now?
+echo.
+echo     [M]  download more models (back to the list)
+echo     [P]  proceed (finish this step)
+echo  --------------------------------------------------------------------
+echo.
+choice /c MP /n /m "Your choice [M/P] "
 if not errorlevel 2 goto menu
 goto done
 

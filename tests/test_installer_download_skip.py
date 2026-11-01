@@ -55,8 +55,12 @@ check("2a essential keys exist in the catalog", ESSENTIAL_KEYS <= _keys,
       f"(unknown: {ESSENTIAL_KEYS - _keys})")
 check("2b essential set is small", len(ESSENTIAL_KEYS) <= 5, f"({len(ESSENTIAL_KEYS)})")
 check("2c the 20 GB model is NOT essential", "qwen3.6:35b-a3b-ud" not in ESSENTIAL_KEYS)
-for _need in ("qwen3.5:4b-mtp", "gemma-4:e4b-it-qat", "lfm3:1.7b-qad", "qwen3.5:2b-mtp"):
+for _need in ("qwen3.5:4b-mtp", "gemma-4:e4b-it-qat", "lfm3:1.7b-qad",
+              "minicpm5:2b-sharp"):
     check(f"2d default route in the essential set: {_need}", _need in ESSENTIAL_KEYS)
+check("2f the Q6 sharp tier is the one, not the Q4",
+      "minicpm5:2b-sharp-q4" not in ESSENTIAL_KEYS)
+check("2g the old refiner model is not essential", "qwen3.5:2b-mtp" not in ESSENTIAL_KEYS)
 check("2e --essential filters BY whitelist",
       "or s.get('key') in ESSENTIAL_KEYS" in FM)
 
@@ -71,6 +75,11 @@ check("4b every set jumps to more_models", SM.count("goto more_models") >= 3,
       f"({SM.count('goto more_models')})")
 check("4c more_models returns to the menu", ":more_models" in SM and
       "if not errorlevel 2 goto menu" in SM)
+check("4e the step end asks M/P, not Y/N",
+      "Your choice [M/P]" in SM and "download more models" in SM and
+      "proceed (finish this step)" in SM)
+check("4f a custom model also asks what is next",
+      SM.count("goto more_models") >= 4)
 check("4d the menu prints the real essential list",
       "--print-essential" in SM)
 

@@ -188,9 +188,9 @@ the ungated `undo_last` hard reset takes a recoverable
 - **The "essential" set is the default route, and it says so.** It used to
   be a skip-list of 15 models — including the 20.8 GB Qwen3.6 — which is not
   "essential" on a small machine. It is now a whitelist of four models
-  (gemma-4:e4b-it-qat, qwen3.5:4b-mtp, qwen3.5:2b-mtp, lfm3:1.7b-qad), the
-  menu prints that list before asking, and after any set finishes it offers
-  to add single models on top instead of exiting.
+  (gemma-4:e4b-it-qat, qwen3.5:4b-mtp, minicpm5:2b-sharp, lfm3:1.7b-qad),
+  the menu prints that list before asking, and every finished step ends with
+  `[M] download more models` / `[P] proceed` instead of dropping out.
 - **Declining a model skips it completely.** Answering "n" to a large GGUF
   used to still download its projector (~0.8 GB) and register the model in
   `models.json`. Ctrl+C during a download now exits with a plain message

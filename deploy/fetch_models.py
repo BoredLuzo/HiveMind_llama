@@ -72,15 +72,16 @@ def _persist_models_dir(mdir: Path) -> None:
 # skip-list shipped 15 models - including a 20.8 GB one - which is not
 # "essential" on a small machine. The set is exactly the default route:
 # one Duo coder/planner (qwen3.5:4b-mtp), an all-rounder with vision
-# (gemma-4:e4b-it-qat), the refiner (qwen3.5:2b-mtp) and the text subagent
-# (lfm3:1.7b-qad). Everything else is one menu entry away (S = select models),
-# and setup_models.bat asks afterwards whether to add more.
+# (gemma-4:e4b-it-qat), the light refiner/helper (minicpm5:2b-sharp, Q6_K_XL)
+# and the text subagent (lfm3:1.7b-qad). Everything else is one menu entry
+# away (S = select models), and setup_models.bat asks afterwards whether to
+# add more.
 # The judge role is deliberately not tied to a downloaded model: any
 # installed LLM can be assigned to it.
 ESSENTIAL_KEYS = {
     "gemma-4:e4b-it-qat",
     "qwen3.5:4b-mtp",
-    "qwen3.5:2b-mtp",
+    "minicpm5:2b-sharp",
     "lfm3:1.7b-qad",
 }
 # kept for callers that only want to know the one optional extra
