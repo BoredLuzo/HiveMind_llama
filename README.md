@@ -203,9 +203,11 @@ Tool scoping per phase: `duo_full`, `duo_readonly`, `pre_explore`,
 ### Language servers (LSP)
 
 Beyond the built-in analysis tools, the coding modes can use the language
-servers already installed on the machine through one generic client. There
-are no per-language flags: `lsp_enabled` (default on) is the single switch,
-and `lsp_servers` overrides a command.
+servers already installed on the machine through one generic client. LSP is
+**on by default** — it activates through `lsp_enabled: true` in
+`settings.json` (shipped default; no UI switch needed): once a language
+server for the file type is installed, the `lsp_*` tools appear. There are
+no per-language flags, and `lsp_servers` overrides a command.
 
 | LSP tool | What it does |
 |---|---|
@@ -363,11 +365,11 @@ Compression itself is cheap: the local compressor truncates tool output and
 drops old turns in milliseconds. The expensive part is the **re-prefill**.
 llama.cpp caches an exact token prefix; when compression replaces early
 messages with a summary, the new prompt diverges near the start and the whole
-prompt is recomputed. Measured on the Groot 19B run: 20,978 -> 13,571 tokens
+prompt is recomputed. Measured on a 19B MoE run: 20,978 -> 13,571 tokens
 compressed in 9 ms, then the next round had 15,000 prompt tokens, `cached=0`,
 and paid ~117 s at ~128 t/s. Before compression the same slot reused 98-100 %.
 
-Groot and qwen3.6 are hybrid models (`full_attention_interval=4`): only every
+Hybrid models (`full_attention_interval=4`, e.g. qwen3.6): only every
 fourth layer carries a growing KV cache, and a recurrent state cannot be
 shifted or partially rewound. `--cache-reuse`/KV-shift therefore does not help
 there; `--ctx-checkpoints` is the only restore path. Keep retained messages
@@ -397,7 +399,7 @@ dropped `read_file` paths.
 | `duo_tool_output_ttl` | `3` | How many rounds a tool output stays in context. Evicting earlier mutates history; do it at compression time, not between rounds. |
 | `llama_cache_ram_mib` | `1024` | Host-side prompt cache. Roughly 18 KiB/token: 32k ~0.6 GB, 100k ~1.8 GB. It only helps when the prefix matches. |
 | `llama_ctx_checkpoints` | `4` | Restore points per slot. More can provide a reuse point before the summary, at host-RAM cost. |
-| `llama_cache_reuse` | `256` | Chunk reuse for non-hybrid models. Hybrid/recurrent models cannot shift, so it does not help Groot/qwen3.6. |
+| `llama_cache_reuse` | `256` | Chunk reuse for non-hybrid models. Hybrid/recurrent models cannot shift, so it does not help hybrid models (e.g. qwen3.6). |
 
 Rules of thumb:
 
@@ -467,7 +469,6 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `gemma-4:e4b-uncensored-hauhaucs-aggressive` | HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive | uncensored all-rounder | 5.4 GB + 1.0 GB mmproj |
 | `qwen3.6:35b-a3b-ud` | unsloth/Qwen3.6-35B-A3B-GGUF | coder / planner (MoE) | 22.4 GB + 0.9 GB mmproj |
 | `hermes3.6:35b-a3b-uncensored-genesis-apex-mini` | LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-GGUF | coder / hermes agent (MoE + MTP + vision) | 20.2 GB + 0.9 GB mmproj |
-| `groot:19b-a3b-261023` | GrootTeam/Groot-19B-A3B-261023-GGUF | agent coder (MoE 19B/3B, 128 experts, 128K target ctx) | 11.7 GB |
 | `qwen3.5:9b-mtp` | unsloth/Qwen3.5-9B-MTP-GGUF | heavy duo coder (MTP) | 5.9 GB + 0.9 GB mmproj |
 | `qwen3.5:4b-mtp` | unsloth/Qwen3.5-4B-MTP-GGUF | duo coder/planner default (MTP) | 2.8 GB + 0.7 GB mmproj |
 | `qwen3.5:2b-mtp` | unsloth/Qwen3.5-2B-MTP-GGUF | refiner (MTP) | 1.3 GB + 0.7 GB mmproj |
@@ -493,8 +494,8 @@ back to the vision-agent preprocessing path.
 
 Chat templates: a profile's `chat_template` wins; without one, qwen3.5/3.6/
 hermes models launch with the bundled `model_configs/chat_template_sharp_v22.5.0.jinja`
-(22.5 is the fallback). Groot uses its own GGUF template; gemma-4 uses its
-built-in one. Per-model overrides live in `model_configs/models/<tag>.json`.
+(22.5 is the fallback). gemma-4 uses its built-in GGUF template. Per-model
+overrides live in `model_configs/models/<tag>.json`.
 
 ## UI and control
 

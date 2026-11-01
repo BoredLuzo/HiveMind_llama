@@ -303,7 +303,7 @@ SPECS: list[dict] = [
         # ub is not a profile key: duo_ubatch/llama_ubatch_size (shipped 256).
         "key": "groot:19b-a3b-261023",
         "tag": "groot:19b-a3b-261023",
-        "desc": "Groot 19B-A3B-261023 Q4_K_M (Agent-Coder, 128 Experten, ~11.7GB)",
+        "desc": "Groot 19B-A3B-261023 Q4_K_M (EXPERIMENTAL Agent-Coder, 128 Experten, ~11.7GB)",
         "repo": "GrootTeam/Groot-19B-A3B-261023-GGUF",
         "file_regex": [
             r"(?i)^groot-19b-a3b-261023-q4_k_m\.gguf$",

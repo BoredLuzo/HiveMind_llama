@@ -48,9 +48,14 @@ _FM = (ROOT / "deploy" / "fetch_models.py").read_text(encoding="utf-8", errors="
 # ── (a) catalog parity ──────────────────────────────────────────────────────
 _installer = re.findall(r'"key":\s*"([^"]+)"', _FM)
 check("installer lists models", len(_installer) >= 10, f" ({len(_installer)})")
-_missing = [k for k in _installer if f"`{k}`" not in _RD]
-check("every installer model is named in the README", not _missing,
-      f" (missing: {_missing})")
+# EXPERIMENTAL-MODELS (2026-11-01): these ship in the installer catalog but
+# are deliberately NOT advertised in the README (owner decision: Groot stays
+# experimental until it is ready to ship).
+_EXPERIMENTAL = {"groot:19b-a3b-261023"}
+_missing = [k for k in _installer
+            if f"`{k}`" not in _RD and k not in _EXPERIMENTAL]
+check("every installer model is named in the README (experimental models exempt)",
+      not _missing, f" (missing: {_missing})")
 
 # documented model tags: backticked strings that look like a model tag
 _tags = set(re.findall(r"`([a-z0-9][a-z0-9.\-]*:[a-z0-9.\-]+)`", _RD))
@@ -65,8 +70,9 @@ _catalog_section = _RD[_cat_start:_cat_end]
 # of any data row, whatever the remaining column count is
 _catalog_rows = re.findall(r"^\|\s*`([^`]+)`\s*\|", _catalog_section, re.M)
 _unknown_rows = [r for r in _catalog_rows if r.split(" ")[0] not in _installer]
-check("the catalog table lists every installer model", len(_catalog_rows) == len(_installer),
-      f" ({len(_catalog_rows)} rows vs {len(_installer)} models)")
+check("the catalog table lists every installer model",
+      len(_catalog_rows) == len(_installer) - len(_EXPERIMENTAL),
+      f" ({len(_catalog_rows)} rows vs {len(_installer) - len(_EXPERIMENTAL)} advertised models)")
 check("the catalog table only lists installer models", not _unknown_rows,
       f" (unknown rows: {_unknown_rows})")
 # the old failure was a section that CLAIMED to list everything while listing

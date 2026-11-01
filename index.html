@@ -767,7 +767,33 @@
             <span class="ctx-card-title">Context &mdash; agentic</span>
             <span class="ctx-card-sub">tokens per call</span>
           </div>
-        <div id="wrapper-ctx-agentic" style="display:none">
+        <!-- PLANNER/CODER ORDER (2026-11-01): planner first, coder second -->
+<div id="wrapper-planner-coder-toggle" style="display:none;">
+          <div class="ctx-row ctx-row-toggle">
+            <span class="ctx-label ctx-label-plan">Planner = Coder</span>
+            <label class="cfl-sw" style="margin:0">
+              <input type="checkbox" id="duo-planner-use-coder-ctx" checked
+                onchange="togglePlannerUseCoderCtx(this.checked)">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <div class="ctx-hint">Both calls share one context &mdash; no second window in VRAM.</div>
+        </div>
+
+<div id="wrapper-ctx-planner" style="display:none;">
+          <div class="ctx-row">
+            <span class="ctx-label ctx-label-plan">Planner context</span>
+            <span class="ctx-field"><input type="number" min="1024" step="1024" id="duo-ctx-planner" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
+              class="ctx-num"
+              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxPlanner=v;postSettings({duo_planner_ctx_target:v});refreshVram();_vramEstimate(S.duoPlannerModel,v,'vram-est-planner')"><span class="ctx-unit">tok</span></span>
+          </div>
+          <div class="ctx-hint">
+            Separate num_ctx for the planner call &mdash; passed through uncapped.
+            <span id="vram-est-planner" class="ctx-est ctx-est-plan"></span>
+          </div>
+
+        </div>
+<div id="wrapper-ctx-agentic" style="display:none">
           <div class="ctx-row">
             <span class="ctx-label">Coder context</span>
             <span class="ctx-field"><input type="number" min="1024" step="1024" id="duo-ctx-agentic" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
@@ -780,36 +806,8 @@
             Speed: the context buffer itself costs nothing &mdash; decode slows as the context <em>fills</em> (~20 tok/s early vs ~16 late in long runs, 35B coder). Compression keeps it bounded automatically.
           </div>
         </div>
-
-        <!-- Planner = Coder Toggle (nur Agentic) -->
-        <div id="wrapper-planner-coder-toggle" style="display:none;">
-          <div class="ctx-row ctx-row-toggle">
-            <span class="ctx-label ctx-label-plan">Planner = Coder</span>
-            <label class="cfl-sw" style="margin:0">
-              <input type="checkbox" id="duo-planner-use-coder-ctx" checked
-                onchange="togglePlannerUseCoderCtx(this.checked)">
-              <span class="sl"></span>
-            </label>
-          </div>
-          <div class="ctx-hint">Both calls share one context &mdash; no second window in VRAM.</div>
-        </div>
-
-        <!-- Ctx Planner (separat) -->
-        <div id="wrapper-ctx-planner" style="display:none;">
-          <div class="ctx-row">
-            <span class="ctx-label ctx-label-plan">Planner context</span>
-            <span class="ctx-field"><input type="number" min="1024" step="1024" id="duo-ctx-planner" value="16384" oninput="scheduleDuoCtxCommit()" onkeydown="if(event.key==='Enter'){this.blur();}"
-              class="ctx-num"
-              onchange="var v=parseInputAsOptionalInt(this.value,16384);S.duoCtxPlanner=v;postSettings({duo_planner_ctx_target:v});refreshVram();_vramEstimate(S.duoPlannerModel,v,'vram-est-planner')"><span class="ctx-unit">tok</span></span>
-          </div>
-          <div class="ctx-hint">
-            Separate num_ctx for the planner call &mdash; passed through uncapped.
-            <span id="vram-est-planner" class="ctx-est ctx-est-plan"></span>
-          </div>
-        </div>
         </div><!-- /ctx-agentic-card -->
-
-        <!-- Ctx Duo Normal -->
+<!-- Ctx Duo Normal -->
         <div id="wrapper-ctx-normal" style="margin-bottom:10px; display:none;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx);flex:1;font-weight:600">Context (Coder + Critic Dual)</span>

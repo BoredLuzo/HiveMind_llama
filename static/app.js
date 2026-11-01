@@ -2641,6 +2641,10 @@ function setMode(mode, el) {
   if (dr) dr.classList.toggle('on', mode === 'code_duo');
   var _duoAcc = document.getElementById('duo-mode-accordion');
   if (_duoAcc) _duoAcc.style.display = mode === 'code_duo' ? 'block' : 'none';
+  // AGENTIC-VISIBILITY (2026-11-01): in code mode the whole settings panel
+  // is expanded automatically — only the ADVANCED subsection keeps its own
+  // collapse. Other modes keep the accordion closed.
+  if (mode === 'code_duo') _setDuoModeAccordion(true);
   updateAutomapAdvancedVisibility();
   updateWebsearchHint();
   updateChatToolsBadge();
@@ -2675,6 +2679,7 @@ function setModeUI(mode) {
   updateDuoPairHint();
   var _duoAcc2 = document.getElementById('duo-mode-accordion');
   if (_duoAcc2) _duoAcc2.style.display = mode === 'code_duo' ? 'block' : 'none';
+  if (mode === 'code_duo') _setDuoModeAccordion(true);
   updateAutomapAdvancedVisibility();
   updateWebsearchHint();
   updateChatToolsBadge();
@@ -2709,13 +2714,18 @@ function _isNoTc(modelName) {
 }
 
 
-function toggleDuoModeAccordion() {
+function _setDuoModeAccordion(open) {
   var body = document.getElementById('duo-mode-body');
   var chev = document.getElementById('duo-mode-chevron');
   if (!body) return;
-  var open = body.style.display !== 'none';
-  body.style.display = open ? 'none' : 'block';
-  if (chev) chev.style.transform = open ? '' : 'rotate(180deg)';
+  body.style.display = open ? 'block' : 'none';
+  if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
+}
+
+function toggleDuoModeAccordion() {
+  var body = document.getElementById('duo-mode-body');
+  if (!body) return;
+  _setDuoModeAccordion(body.style.display === 'none');
 }
 
 function setPassFiles(val) {

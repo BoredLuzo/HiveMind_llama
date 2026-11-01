@@ -4,12 +4,7 @@
 MCP surface (server + client), a generic language-server client for the
 coding agent, compression and context-reliability work for long agentic
 runs, and a round of installer/updater/git audits whose findings are all
-fixed in this build. Groot stays **experimental**; Hermes stays the default
-coder. Live validation on this machine: two agentic Groot runs (Tetris
-restyle + follow-up) completed back-to-back through the exact load-race
-window that used to hard-stop follow-up prompts, with the LSP tools used
-for real edits (pyright errors found and fixed, rust-analyzer formatting
-applied, cargo check green).
+fixed in this build. Hermes stays the default coder.
 
 Upgrade: run `update.bat` (or the new startup check offers the update
 directly), or extract the zip next to the old install. Settings, models,
@@ -55,7 +50,10 @@ automatically.
 
 ## Language servers (LSP)
 
-One generic client drives whatever language servers are installed
+LSP is **on by default** — it activates through `lsp_enabled: true` in
+`settings.json`: once a language server for the file type is installed,
+the `lsp_*` tools appear in the coding modes. One generic client drives
+whatever language servers are installed
 (pyright, typescript-language-server, gopls, rust-analyzer, clangd, and
 the html/css/json/yaml/bash/lua servers). `lsp_enabled` is the only
 switch; `lsp_servers` overrides a command.
@@ -172,11 +170,9 @@ keys are dropped on load. `docs/settings.md` is generated (264 keys).
 
 ## Models
 
-- Groot is offered by the installer from
-  `GrootTeam/Groot-19B-A3B-261023-GGUF` (Q4_K_M) with the shipped
-  profile: ctx 131072, ncmoe 32 (calibrated — a 24/16/8 sweep measured
-  *worse* decode with more experts on the GPU), KV q4_0, MTP on, native
-  GGUF template.
+- The installer catalog also carries an **experimental** 19B MoE
+  agent-coder (off by default, not documented here — evaluate before
+  relying on it).
 - The Judge role can use any installed LLM (no dedicated download). The
   optional routing decider stays the only routing extra.
 
