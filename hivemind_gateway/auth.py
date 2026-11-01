@@ -52,6 +52,14 @@ class ParsedUpdate:
     # raised FrozenInstanceError on this frozen dataclass and the swallow
     # left it False forever - spoken notes ran as settings["mode"].
     from_voice: bool = False
+    # IMAGES (2026-11-01): a photo or an image document. `text` carries the
+    # caption then (or stays empty - the caller substitutes a default prompt).
+    image_file_id: str | None = None
+    image_mime: str = ""
+    # data: URLs handed to the engine (/stream accepts up to 8 per run).
+    # Populated by handle_image after the download; a tuple because the
+    # dataclass is frozen.
+    images: tuple[str, ...] = ()
 
 
 def _from_of(payload: dict) -> dict | None:
@@ -89,6 +97,30 @@ def parse_update(raw: dict) -> ParsedUpdate | None:
             _dur = int(_media.get("duration") or 0)
         except (TypeError, ValueError):
             _dur = 0
+        # IMAGES (2026-11-01): a photo arrives as a list of sizes - the LAST
+        # entry is the largest Telegram produced. An image sent "as file"
+        # arrives as a document, so both paths are parsed here. The caption
+        # becomes the prompt; without one the caller supplies a default.
+        _img_id = None
+        _img_mime = ""
+        _photo = payload.get("photo")
+        if isinstance(_photo, list) and _photo:
+            _sizes = [s for s in _photo if isinstance(s, dict) and
+                      isinstance(s.get("file_id"), str)]
+            if _sizes:
+                _img_id = _sizes[-1]["file_id"]
+                _img_mime = "image/jpeg"
+        if not _img_id:
+            _doc = payload.get("document")
+            _doc = _doc if isinstance(_doc, dict) else {}
+            _dmime = str(_doc.get("mime_type") or "").lower()
+            if _dmime.startswith("image/") and isinstance(_doc.get("file_id"), str):
+                _img_id = _doc["file_id"]
+                _img_mime = _dmime
+        if _img_id and not text:
+            _cap = payload.get("caption")
+            if isinstance(_cap, str):
+                text = _cap
         return ParsedUpdate(
             update_id=update_id,
             kind=kind,
@@ -103,6 +135,8 @@ def parse_update(raw: dict) -> ParsedUpdate | None:
             voice_file_id=_file_id,
             voice_duration=max(0, _dur),
             voice_mime=str(_media.get("mime_type") or ""),
+            image_file_id=_img_id,
+            image_mime=_img_mime,
         )
     return None
 

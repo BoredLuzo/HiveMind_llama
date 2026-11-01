@@ -467,11 +467,18 @@ class Gateway:
                                  "the gateway config to dictate runs.",
                                  reply_to_message_id=p.message_id)
                 return
+            if p.kind == "message" and p.image_file_id:
+                # IMAGES (2026-11-01): a photo or an image document becomes a
+                # normal run with the caption as prompt. Was rejected with
+                # "Text only in this build" - the engine's vision path already
+                # existed, only the gateway dropped the picture.
+                await self.handle_image(p)
+                return
             if p.kind == "message" and not p.is_forwarded:
-                # non-text update (photo/document/sticker): rejected with a note
+                # non-text update (sticker, unsupported document): rejected
                 await self.reply(p.chat_id,
-                                 "Text only in this build (photos and "
-                                 "steering arrive with WP5).",
+                                 "Text, voice notes and images only "
+                                 "(stickers and other files are not run).",
                                  reply_to_message_id=p.message_id)
             return
         name, arg = cmd
@@ -812,6 +819,74 @@ class Gateway:
             from_voice=True)
         await self.start_owner_run(voiced)
 
+    async def handle_image(self, p: gw_auth.ParsedUpdate) -> None:
+        """Download a photo/image document and run it with the caption.
+
+        Same owner/private/rate gates as text (they ran before this call).
+        The engine takes up to 8 images per run; each is capped here by
+        bytes so a 50 MP scan does not blow the request body.
+        """
+        if not await self._image_in_enabled():
+            await self.reply(p.chat_id,
+                             "Images are off. Enable 'Images in' in HiveMind's "
+                             "settings (or image_in in the gateway config).",
+                             reply_to_message_id=p.message_id)
+            return
+        cap = int(getattr(self.cfg, "image_max_bytes", 10 * 1024 * 1024))
+        try:
+            blob = await self.api.download_file(p.image_file_id, max_bytes=cap)
+        except TelegramApiError as exc:
+            await self.reply(p.chat_id,
+                             f"❌ Could not download the image: {exc}",
+                             reply_to_message_id=p.message_id)
+            return
+        if not blob:
+            await self.reply(p.chat_id, "❌ The image arrived empty.",
+                             reply_to_message_id=p.message_id)
+            return
+        import base64 as _b64
+        mime = (p.image_mime or "image/jpeg").lower()
+        data_url = f"data:{mime};base64," + _b64.b64encode(blob).decode("ascii")
+        # the engine drops anything above ~14 MB per data URL (server.py)
+        if len(data_url) > 14_000_000:
+            await self.reply(p.chat_id,
+                             "❌ Image too large after encoding - send it "
+                             "smaller (Telegram compresses photos in chat, "
+                             "'send as file' does not).",
+                             reply_to_message_id=p.message_id)
+            return
+        caption = (p.text or "").strip()
+        if len(caption) > self.cfg.max_text_chars:
+            await self.reply(p.chat_id,
+                             f"❌ Caption too long ({len(caption)} > "
+                             f"{self.cfg.max_text_chars} characters).",
+                             reply_to_message_id=p.message_id)
+            return
+        if not caption:
+            # no caption: describe it. The model answers in the chat language
+            # it is prompted with, so this stays neutral.
+            caption = "Describe this image."
+        await self.reply(p.chat_id, "🖼 Got it - looking at the image...",
+                         reply_to_message_id=p.message_id)
+        withimg = gw_auth.ParsedUpdate(
+            update_id=p.update_id, kind=p.kind, from_id=p.from_id,
+            chat_id=p.chat_id, chat_type=p.chat_type,
+            text=caption, date=p.date, is_forwarded=p.is_forwarded,
+            message_id=p.message_id, callback_id=p.callback_id,
+            images=(data_url,))
+        await self.start_owner_run(withimg)
+
+    async def _image_in_enabled(self) -> bool:
+        """Engine setting wins, gateway config is the fallback - same rule the
+        voice switches use, so flipping it in the UI needs no restart."""
+        try:
+            _s = await self.hive.settings()
+            if isinstance(_s, dict) and "telegram_image_in" in _s:
+                return bool(_s.get("telegram_image_in"))
+        except (HiveUnreachable, OSError, ValueError):
+            pass
+        return bool(getattr(self.cfg, "image_in", True))
+
     async def start_owner_run(self, p: gw_auth.ParsedUpdate) -> None:
         """A plain owner text message = a run — unless a mirrored engine
         run consumes it (approval answer / steering, checked FIRST: audit
@@ -849,7 +924,8 @@ class Gateway:
         # owner). Commands/intercepts above stay synchronous on purpose.
         async def _own_run_task() -> None:
             note = await self.bridge.start_text_run(
-                q, from_voice=bool(getattr(p, "from_voice", False)))
+                q, from_voice=bool(getattr(p, "from_voice", False)),
+                images=list(getattr(p, "images", ()) or ()) or None)
             if note and note.startswith(("⏳", "🔌", "❌")):
                 await self.reply(p.chat_id, note,
                                  reply_to_message_id=p.message_id)

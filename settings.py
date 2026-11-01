@@ -428,6 +428,11 @@ DEFAULT_SETTINGS = {
     # tts_enabled (a voice note needs STT, a voice answer needs TTS).
     "telegram_voice_in":         False,
     "telegram_voice_out":        False,
+    # IMAGES (2026-11-01): a photo sent to the bot becomes a run with the
+    # caption as prompt and the picture attached (engine /stream images).
+    # Needs a vision-capable model for the active route, or a configured
+    # vision agent that preprocesses the picture into text.
+    "telegram_image_in":         True,
     # What a phone run sends back (1.4.2). "both" = text + voice note, "text" =
     # text only, "voice" = only the model-generated answer as a voice note (the
     # progress lines stay text). telegram_progress_msgs turns the info lines off

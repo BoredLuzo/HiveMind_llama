@@ -183,6 +183,23 @@ searchable as "keep alive"/"ttl"; and the alias table gained the German and
 acronym forms people actually type (kompression, zeit, speicher, lsp,
 pyright, keep alive, …).
 
+## Telegram: images
+
+A photo (or an image sent as a file) to the bot now becomes a normal run with
+its **caption as the prompt** and the picture attached — "what is wrong in this
+screenshot?" works from the phone. The gateway used to answer "Text only in
+this build" while the engine's `/stream` already accepted `images`. The largest
+photo size is used, image documents are recognised by mime type, an empty
+caption falls back to "Describe this image.", downloads are capped at 10 MB and
+the engine still enforces its own 8-images / ~14 MB-per-url limits. Switch:
+**Images in** in the Telegram card (or `telegram_image_in`), on by default;
+`image_in` in `gateway.toml` is the fallback. A vision-capable model on the
+active route gets the picture directly, otherwise the vision agent preprocesses
+it into text.
+
+Voice notes also keep the selected conversational mode now (chat/simple/direct
+used to be rerouted to `auto`, so speaking took a different route than typing).
+
 ## Code panel & UI
 
 The code panel no longer rebuilds every line on every stream tick: plain

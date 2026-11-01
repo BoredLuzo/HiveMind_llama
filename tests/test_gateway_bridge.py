@@ -102,6 +102,7 @@ class FakeHive:
     async def stream(self, q, chat_id, images=None, mode="",
                      overrides=None):
         self.stream_bodies.append({"q": q, "chat_id": chat_id,
+                                   "images": images,
                                    "mode": mode, "overrides": overrides or {}})
         for ev in self.events:
             yield ev
@@ -888,6 +889,12 @@ async def t_audit_fixes():
     check("from_voice keeps auto as auto",
           br.hive.stream_bodies[-1]["mode"] == "auto")
     br.hive.settings_body = {}
+    # IMAGES (2026-11-01): images ride along to the engine unchanged.
+    await br.start_text_run("was ist das?", images=["data:image/png;base64,AAAA"])
+    check("images reach the engine", br.hive.stream_bodies[-1]["images"] ==
+          ["data:image/png;base64,AAAA"])
+    await br.start_text_run("ohne bild")
+    check("no images -> None (engine default)", br.hive.stream_bodies[-1]["images"] is None)
 
     # DECIDER command (2026-10-22): /decider off posts routing_decider to
     # the engine settings (RAM release), bare = status.

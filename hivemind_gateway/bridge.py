@@ -231,7 +231,8 @@ class RunBridge:
 
     # -- the run -----------------------------------------------------------
 
-    async def start_text_run(self, q: str, from_voice: bool = False) -> str:
+    async def start_text_run(self, q: str, from_voice: bool = False,
+                             images: list | None = None) -> str:
         """Returns the final chat note (for tests); sends everything to the
         phone itself. Never raises to the caller. httpx.HTTPError is
         caught as belt-and-braces - hive_client normally wraps transport
@@ -245,7 +246,8 @@ class RunBridge:
             return ("⏳ A run is already active - /stop aborts it.")
         async with self._run_lock:
             try:
-                return await self._start_text_run_inner(q, from_voice=from_voice)
+                return await self._start_text_run_inner(
+                    q, from_voice=from_voice, images=images)
             except (HiveUnreachable, HTTPError, OSError) as exc:
                 self._clear_run()
                 return await self._fail(f"🔌 HiveMind unreachable "
@@ -463,7 +465,8 @@ class RunBridge:
         except (ValueError, TypeError):
             return False
 
-    async def _start_text_run_inner(self, q: str, from_voice: bool = False) -> str:
+    async def _start_text_run_inner(self, q: str, from_voice: bool = False,
+                                     images: list | None = None) -> str:
         if self.state.data.get("active_run"):
             if self._active_run_fresh_unconfirmed():
                 # fresh starting window (POST /stream sent, run_id not yet
@@ -658,7 +661,7 @@ class RunBridge:
                     # An explicit False keeps the decider in charge for a spoken
                     # note without touching the owner's saved preference.
                     ov["duo_agentic_mode"] = False
-            async for ev in self.hive.stream(q, chat_id,
+            async for ev in self.hive.stream(q, chat_id, images=images,
                                              mode=stream_mode,
                                              overrides=ov):
                 etype = ev.get("type")

@@ -62,13 +62,17 @@ async def _flow():
     sample.write_text(BAD, encoding="utf-8")
     # Warm cargo's target dir first; rust-analyzer's flycheck is otherwise
     # occasionally slower than the wait on a cold registry.
+    # LOAD-TOLERANT (2026-11-01, gate flake): with a chat model resident
+    # (~4 GB + KV) rust-analyzer's first flycheck can take well over 30 s on
+    # this box - the suite then failed only inside the full gate, never alone.
+    # The warm-up gets the full budget and the wait is doubled.
     subprocess.run(["cargo", "check"], cwd=ws, capture_output=True,
-                   text=True, timeout=120, check=False)
+                   text=True, timeout=300, check=False)
     mgr = LspManager(ws, {"lsp_client_timeout_s": 60})
     out = {}
     try:
         out["start"] = await mgr.start_language("rust")
-        out["bad"] = await mgr.diagnostics("src/main.rs", wait_s=30.0)
+        out["bad"] = await mgr.diagnostics("src/main.rs", wait_s=60.0)
         sample.write_text(GOOD, encoding="utf-8")
         out["good"] = await mgr.diagnostics("src/main.rs", wait_s=5.0)
     finally:

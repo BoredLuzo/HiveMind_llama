@@ -46,6 +46,12 @@ class GatewayConfig:
     voice_out: bool = False
     voice_max_seconds: int = 300
     voice_max_bytes: int = 20 * 1024 * 1024     # Telegram bot download limit
+    # IMAGES (2026-11-01): a photo (or an image document) becomes a run with
+    # the caption as prompt and the picture attached. The engine accepts up to
+    # 8 images per run (/stream) and caps each at ~14 MB base64.
+    image_in: bool = True
+    image_max_bytes: int = 10 * 1024 * 1024
+    image_max_per_run: int = 4
 
     def validate(self) -> None:
         base = self.hive_base_url.rstrip("/").lower()

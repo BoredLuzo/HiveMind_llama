@@ -2073,6 +2073,15 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       </label>
     </div>
     <div class="fld-hint" id="tg-voice-in-hint">ON: a voice note from your phone is transcribed by HiveMind and runs exactly like typed text (same gates and approvals). Needs <b>Speech to text</b> enabled in the Voice card - the switch is greyed out otherwise.</div>
+    <div class="tgl-row" style="margin-top:10px">
+      <span class="tgl-text">Images in <em>(photos as prompt)</em></span>
+      <label class="cfl-sw">
+        <input type="checkbox" id="tg-image-in-toggle"
+          onchange="S.tgImageIn=this.checked;postSettings({telegram_image_in:this.checked})">
+        <span class="sl"></span>
+      </label>
+    </div>
+    <div class="fld-hint" id="tg-image-in-hint">ON: a photo (or an image sent as file) from your phone becomes a run with its caption as the prompt and the picture attached - "what is wrong in this screenshot?" works. Needs a vision-capable model on the active route, or the vision agent to preprocess it into text. Images above 10 MB are refused; Telegram compresses chat photos, "send as file" does not.</div>
     <div class="tgl-row">
       <span class="tgl-text">Answers as voice notes</span>
       <label class="cfl-sw">

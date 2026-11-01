@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**264 settings keys.**
+**265 settings keys.**
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -243,6 +243,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `subagent_lite_safety_margin_mib` | int | `256` |  |
 | `subagent_lite_timeout_s` | int | `120` |  |
 | `telegram_approval_mode` | str | `deny` |  |
+| `telegram_image_in` | bool | `True` | IMAGES (2026-11-01): a photo sent to the bot becomes a run with the caption as prompt and the picture attached (engine /stream images). Needs a vision-capable model for the active route, or a configured vision agent that preprocesses the picture into text. |
 | `telegram_mirror_enabled` | bool | `False` | Gateway-owned keys (phone UI and /gate write them). telegram_gateway_enabled is deliberately NOT defaulted: the gateway treats "key absent" as "not configured, the toml master switch decides" and "key present and false" as a veto. A shipped False would shut down every toml-only… |
 | `telegram_phone_restricted` | bool | `True` |  |
 | `telegram_progress_msgs` | bool | `True` |  |

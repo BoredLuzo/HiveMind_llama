@@ -718,7 +718,7 @@ work for you.
 | `start_mcp.bat` | MCP HTTP server for IDEs, port 8090 |
 | `searxng.bat` | SearXNG manager |
 | `watchdog_engine.bat` | keeps the engine up: restarts it headless when port 8001 dies; `watchdog_engine.bat stop` ends the loop |
-| `start_gateway.bat` / `start_gateway_headless.bat` | Telegram gateway (mirrors chats to your phone, voice notes in, approvals out) |
+| `start_gateway.bat` / `start_gateway_headless.bat` | Telegram gateway (mirrors chats to your phone, voice notes and photos in, approvals out) |
 
 ### Updating
 
