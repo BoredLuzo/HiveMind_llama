@@ -702,6 +702,27 @@ def main() -> int:
               "every model that needs a drafter sidecar")
         print("           (Gemma-4 MTP and the DSpark models lose ~50 % decode).")
 
+    if getattr(args, 'print_essential', False):
+        # The menu shows the real list instead of a vague sentence.
+        _ess = [sp for sp in SPECS if sp['key'] in ESSENTIAL_KEYS]
+        print("  ESSENTIAL SET - the default route, nothing else is needed to start")
+        print("  " + "-" * 68)
+        print()
+        for _sp in _ess:
+            print(f"    {_sp['key']}")
+            print(f"        {_sp['desc']}")
+            print()
+        print(f"  {len(_ess)} models, vision projectors and drafters included.")
+        print()
+        _rest = [sp['key'] for sp in SPECS if sp['key'] not in ESSENTIAL_KEYS]
+        print("  ALSO AVAILABLE - choose S to pick single models")
+        print("  " + "-" * 68)
+        print()
+        for _i in range(0, len(_rest), 2):
+            print("    " + "".join(f"{k:<34}" for k in _rest[_i:_i + 2]).rstrip())
+        print()
+        return 0
+
     if args.print_catalog:
         # Wide, two-line layout: key on its own line, description underneath.
         # A single 120-character line wrapped in narrow terminals and cut the
@@ -733,27 +754,6 @@ def main() -> int:
                 print(f"    found: {g.name}")
         n = write_models_json(mdir)
         print(f"[OK] models.json written: {n} entries -> {ROOT / 'models.json'}")
-        return 0
-
-    if getattr(args, 'print_essential', False):
-        # The menu shows the real list instead of a vague sentence.
-        _ess = [sp for sp in SPECS if sp['key'] in ESSENTIAL_KEYS]
-        print("  ESSENTIAL SET - the default route, nothing else is needed to start")
-        print("  " + "-" * 68)
-        print()
-        for _sp in _ess:
-            print(f"    {_sp['key']}")
-            print(f"        {_sp['desc']}")
-            print()
-        print(f"  {len(_ess)} models, vision projectors and drafters included.")
-        print()
-        _rest = [sp['key'] for sp in SPECS if sp['key'] not in ESSENTIAL_KEYS]
-        print("  ALSO AVAILABLE - choose S to pick single models")
-        print("  " + "-" * 68)
-        print()
-        for _i in range(0, len(_rest), 2):
-            print("    " + "".join(f"{k:<34}" for k in _rest[_i:_i + 2]).rstrip())
-        print()
         return 0
 
     specs = [s for s in SPECS
