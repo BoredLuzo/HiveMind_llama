@@ -313,6 +313,15 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
         settings["settings_saved_at"] = _stamp
         await asyncio.to_thread(save_settings, copy.deepcopy(settings), saved_at=_stamp)
     registry_sync_from_pipeline()
+    # RUNTIME-SYNC: a preset can change loader settings as well. The helper
+    # lives in backend/runtime_sync (NOT in server) so importing it cannot
+    # drag the whole server module - model index validation included - into
+    # the preset path.
+    try:
+        from backend.runtime_sync import sync_loader_settings as _resync_preset
+        _resync_preset(settings)
+    except (ImportError, AttributeError) as _rs_err:
+        logger.debug("[preset] backend runtime sync skipped: %s", _rs_err)
     return True
 
 
@@ -653,6 +662,15 @@ async def post_settings(req: Request):
     except Exception as e:
         logger.warning("[settings] save_settings failed: %s", e, exc_info=True)
         return JSONResponse({"error": f"Save failed: {str(e)[:120]}"}, status_code=500)
+    # RUNTIME-SYNC (2026-11-02): settings that the LOADER reads were only
+    # pushed to the backend modules at startup - a changed moe_cpu_experts or
+    # llama_mlock therefore did nothing until the next restart (live: the MoE
+    # override stayed at the profile value for every run).
+    try:
+        from backend.runtime_sync import sync_loader_settings as _resync
+        _resync(settings)
+    except (ImportError, AttributeError) as _rs_err:
+        logger.debug("[settings] backend runtime sync skipped: %s", _rs_err)
     _settings_rev += 1
     # DECIDER-UNLOAD (2026-10-22, user request): switching routing_decider
     # to off must free the encoder model (~1.8 GB RAM) immediately, not at
