@@ -178,7 +178,7 @@ SPECS: list[dict] = [
     {
         "key": "lfm3:1.7b-qad",
         "tag": "lfm3:1.7b-qad",
-        "desc": "LFM3 1.7B QAD Q4_0 (text-only subagent, ~1GB)",
+        "desc": "LFM3 1.7B QAD Q4_0 (tool-calling subagent, ~1GB, needs llama.cpp b12001+)",
         "repo": "LiquidAI/LFM3-1.7B-GGUF",
         "file_regex": [
             r"(?i)^lfm3-1\.7b-qad-q4_0\.gguf$",

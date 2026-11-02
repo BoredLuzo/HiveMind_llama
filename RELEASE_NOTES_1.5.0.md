@@ -273,6 +273,17 @@ scanned PDF without a text layer answers "send the pages as photos" instead of
 pretending, and a document larger than one phone run accepts is refused with a
 hint to ask about a part. New dependency: `pypdf` (pure Python).
 
+## LFM3 does tool calls
+
+The agentic UI showed a **NO TC** badge for `lfm3:*` and skipped tool rounds:
+`routing/model_automap.py` had no `lfm3` entry, so the capability lookup
+answered "no tool support". LFM3 is post-trained for agentic harnesses — the
+profile now says `tool_call: true`, `--jinja` is enabled for the base so the
+model's own template is applied, and the build gate (`b12001+`) stays: with
+the older b11889 llama.cpp the architecture does not even load. Verified
+against llama.cpp b12032: a `tools=` request answers
+`finish_reason: tool_calls` with `{"path":"."}`.
+
 ## Read aloud follows the run
 
 The four read-aloud switches (direct / agentic / ask / gate) were partly

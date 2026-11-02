@@ -50,7 +50,7 @@ logger = logging.getLogger("llama_manager")
 
 # ── Load-path family sets (module level so tests can pin them) ─────────────
 # --jinja fallback when the registry JSON sets no explicit "jinja" key.
-_JINJA_BASES = {"qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "lfm2.5", "minicpm-v", "minicpm-v-4.7"}
+_JINJA_BASES = {"qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "lfm2.5", "lfm3", "minicpm-v", "minicpm-v-4.7"}
 # Server <think>-Inhalte in reasoning_content → split_thinking +
 # thinking_budget greifen. Fallback when the registry sets no "reasoning".
 # NOTE: "lfm2.5" stays OUT on purpose — the small LFM models are
