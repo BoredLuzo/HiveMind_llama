@@ -2478,6 +2478,12 @@ async def run_code_duo(ctx):
         # SKIP-CHECK: Skip Planner if skip pressed — go straight to Coder
         _planner_skipped = False
         _fup_task_ctx = state.get("_follow_up_task_ctx", "") or ""
+        # FOLLOW-UP-NOPLAN: the coder already gets the previous plan + files
+        # through the follow-up hint. Planning again cost a model load and
+        # produced generic "clarify scope" steps whenever the plan text did not
+        # parse - exactly the "new plan out of nowhere" the follow-up must not
+        # do.
+        _follow_up_active = bool(state.get("_follow_up_active"))
         if (ctx.duo_config.chunking or ctx.duo_config.planner) and ctx.step_skipped() and not ctx.aborted():
             ctx.clear_step_skip()
             yield await ctx.emit({"type":"status",
@@ -2505,7 +2511,11 @@ async def run_code_duo(ctx):
         # later read (vision gates, traces, attach) crashed the whole run
         # with UnboundLocalError. Same class as the _coder_port init.
         _img_plan = {"planner": "none", "coder": "none", "warnings": [], "mode": None}
-        if (ctx.duo_config.chunking or ctx.duo_config.planner) and not ctx.aborted() and not _resume_data and not _planner_skipped:
+        if _follow_up_active and (ctx.duo_config.chunking or ctx.duo_config.planner):
+            yield await ctx.emit({"type": "status",
+                "content": "🔁 Follow-up: continuing the previous plan - no new plan"})
+        if ((ctx.duo_config.chunking or ctx.duo_config.planner) and not ctx.aborted()
+                and not _resume_data and not _planner_skipped and not _follow_up_active):
             _plan_ps = _DuoPlannerPhaseState(
                 subtasks=_subtasks, plan_thinking=_plan_thinking, plan_content_txt=_plan_content_txt,
                 plan_result=_plan_result, planner_used_fallback=_planner_used_fallback,

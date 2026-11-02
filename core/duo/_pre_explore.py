@@ -275,6 +275,11 @@ async def _phase_pre_explore_bootstrap(ctx, state: dict):
         _follow_up_task_ctx = ""
     state["_follow_up_hint"] = _follow_up_hint
     state["_follow_up_task_ctx"] = _follow_up_task_ctx
+    # FOLLOW-UP-NOPLAN (2026-11-02): a follow-up continues an existing plan.
+    # Running the planner again produced "clarify scope" boilerplate whenever
+    # its output did not parse - the user asked for a small addition and got a
+    # fresh, unrelated plan. The runner skips the planner when this is set.
+    state["_follow_up_active"] = bool(_follow_up_hint)
     _parallel_explore_ran = False
     #
     _duo_pre_explore_user_explicit: bool = bool(ctx.duo_config.pre_explore)

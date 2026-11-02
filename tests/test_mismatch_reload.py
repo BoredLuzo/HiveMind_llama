@@ -152,7 +152,8 @@ def test_planner_default_defined_unconditionally():
     (so planerless runs have it) — textual order check against the phase gate."""
     txt = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
     i_default = txt.find("_planner_model = coder_mdl")
-    i_gate = txt.find("if (ctx.duo_config.chunking or ctx.duo_config.planner) and not ctx.aborted()")
+    # the gate gained two conditions (skip + follow-up); match its tail
+    i_gate = txt.find("and not _planner_skipped and not _follow_up_active")
     if 0 <= i_default < i_gate:
         ok("Planner-Default steht vor der Planner-Phase (planerlose Runs abgedeckt)")
     else:
