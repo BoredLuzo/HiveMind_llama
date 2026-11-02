@@ -104,6 +104,24 @@ def main() -> int:
         print(f"\n  {bad} unescaped parenthesis/parentheses inside echo blocks.")
         print("  Escape them as ^( and ^) - otherwise cmd aborts the installer.")
         return 1
+    # LSP packs: the installer must offer verified sets only
+    _packs = ROOT / "deploy" / "install_lsp_packs.bat"
+    if not _packs.exists():
+        print("  FAIL deploy/install_lsp_packs.bat missing")
+        return 1
+    _pt = _packs.read_text(encoding="utf-8", errors="replace")
+    for _need, _why in (('"typescript@5"', "typescript pinned to v5"),
+                        ("yaml-language-server", "yaml server is separate"),
+                        ("lsp_selftest.py", "installs are verified"),
+                        ("Not offered: Go", "go/lua documented as manual")):
+        if _need not in _pt:
+            print(f"  FAIL lsp packs: {_why} missing ({_need})")
+            return 1
+    _inst = (ROOT / "install.bat").read_text(encoding="utf-8", errors="replace")
+    if "install_lsp_packs.bat" not in _inst:
+        print("  FAIL install.bat does not offer the language packs")
+        return 1
+
     _opt = ROOT / "deploy" / "check_optionals.bat"
     check_ok = browser_refresh_present(_opt) if _opt.exists() else True
     if not check_ok:

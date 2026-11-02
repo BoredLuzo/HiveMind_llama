@@ -557,6 +557,27 @@ if errorlevel 1 (
 )
 goto searxng_step
 
+REM [6c] Language servers (optional) -----------------------------------------
+REM Verified packs only; the installer script lists what is not offered (Go,
+REM Lua) and why. Skipped silently when the user says no.
+echo.
+echo   Language servers (optional): gives the coding agent real diagnostics,
+echo   definition/reference lookup and formatting for the languages you use.
+echo   Nothing is required - the built-in analysis works without them.
+choice /c YN /n /t 30 /d N /m "Install language-server packs now? [y/N] "
+if errorlevel 2 (
+    echo   Skipped. Add later: deploy\install_lsp_packs.bat
+    goto searxng_step
+)
+echo.
+deploy\install_lsp_packs.bat --list
+echo.
+set /p "LSP_PICK=Pack numbers (e.g. 1,2,3 - Enter = skip): "
+if not defined LSP_PICK goto searxng_step
+REM the script takes space-separated numbers; commas are what people type
+set "LSP_PICK=%LSP_PICK:,= %"
+call "%~dp0deploy\install_lsp_packs.bat" %LSP_PICK%
+
 :searxng_step
 REM [7/9] SearXNG (optional)
 REM ======================================================

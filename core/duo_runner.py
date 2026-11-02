@@ -5277,6 +5277,19 @@ async def run_code_duo(ctx):
                                 # threshold, drop the oldest whole tail turns.
                                 target_tokens=int(_compress_threshold),
                             )
+                            # REPO-MAP-DELTA (2026-11-02): the pinned map is
+                            # frozen for the run, so files created or deleted
+                            # since the pin are invisible to it. Compression
+                            # rewrites the prefix anyway - the delta rides
+                            # along for free at exactly that moment.
+                            if ctx.settings.get("duo_pin_static_map", True):
+                                try:
+                                    from core.repomap_pin import append_repo_map_delta as _rmd
+                                    if _rmd(_dtool_msgs, list(_written_files or [])):
+                                        logger.info("[REPO-MAP-DELTA] appended %d changed path(s) at compression",
+                                                    len(list(_written_files or [])))
+                                except Exception as _rmd_err:   # never break a run for the map (logged)
+                                    logger.debug("[REPO-MAP-DELTA] skipped: %s", _rmd_err)
                             _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(messages=_dtool_msgs, **_comp_kwargs)
                             # MINI-SHRINK-RETRY (2026-09-07): if the full compression
                             # barely shrank (<15% of the before value), an early

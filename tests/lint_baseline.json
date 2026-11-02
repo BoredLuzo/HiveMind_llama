@@ -45,7 +45,7 @@
  },
  "backend/manager_health.py": {
   "broad_except": 10,
-  "except_pass": 4
+  "except_pass": 3
  },
  "backend/manager_load.py": {
   "broad_except": 40,
@@ -156,7 +156,7 @@
   "except_pass": 2
  },
  "core/duo_runner.py": {
-  "broad_except": 95,
+  "broad_except": 96,
   "except_pass": 27
  },
  "core/error_rollup.py": {
@@ -277,6 +277,10 @@
  },
  "deploy/gen_settings_docs.py": {
   "broad_except": 0,
+  "except_pass": 0
+ },
+ "deploy/lsp_selftest.py": {
+  "broad_except": 2,
   "except_pass": 0
  },
  "deploy/recommend_models.py": {
@@ -960,6 +964,10 @@
   "except_pass": 0
  },
  "tests/test_follow_ui.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_followup_no_plan.py": {
   "broad_except": 0,
   "except_pass": 0
  },

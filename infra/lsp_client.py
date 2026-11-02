@@ -320,9 +320,17 @@ class _LspConnection:
 
     # -- process -------------------------------------------------------
     async def start(self) -> None:
+        # CMD-SHIM (2026-11-02): npm installs language servers as .cmd shims on
+        # Windows ("typescript-language-server.CMD"). CreateProcess cannot run
+        # those directly - the old code failed with OSError 193 and reported
+        # "server not found" for a server that was installed and on PATH.
+        _argv = list(self.argv)
+        if (sys.platform == "win32" and _argv
+                and str(_argv[0]).lower().endswith((".cmd", ".bat"))):
+            _argv = [os.environ.get("COMSPEC", "cmd.exe"), "/c", *_argv]
         try:
             self._proc = await asyncio.create_subprocess_exec(
-                *self.argv,
+                *_argv,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
