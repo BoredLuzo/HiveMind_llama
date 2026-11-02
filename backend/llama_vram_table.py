@@ -454,10 +454,35 @@ def get_live_gpu_free_mib() -> float | None:
         # TOTAL_VRAM_MIB guess). CPU-only hosts: debug + None — the static
         # tables stay the fallback (same as before).
         import shutil as _shutil, subprocess as _subprocess
+        # AMD/Intel on Linux: the kernel exposes VRAM usage per card under
+        # sysfs (amdgpu: mem_info_vram_total/used). No driver tool needed.
+        try:
+            from pathlib import Path as _P
+            _sysfs_total = 0.0
+            _sysfs_used = 0.0
+            for _card in _P("/sys/class/drm").glob("card[0-9]*/device"):
+                _t = _card / "mem_info_vram_total"
+                _u = _card / "mem_info_vram_used"
+                if not (_t.exists() and _u.exists()):
+                    continue
+                try:
+                    _tv = float(_t.read_text().strip())
+                    _uv = float(_u.read_text().strip())
+                except (OSError, ValueError):
+                    continue
+                if _tv > 0:
+                    _sysfs_total = max(_sysfs_total, _tv)
+                    _sysfs_used = max(_sysfs_used, _uv)
+            if _sysfs_total > 0:
+                _free = max(0.0, (_sysfs_total - _sysfs_used) / (1024 * 1024))
+                _logger.debug("get_live_gpu_free_mib: sysfs amdgpu %.0f MiB free", _free)
+                return round(_free, 1)
+        except Exception:            # no sysfs (container) -> try nvidia-smi
+            _logger.debug("sysfs VRAM probe unavailable, falling back")
         try:
             _nsmi = _shutil.which("nvidia-smi")
             if not _nsmi:
-                _logger.debug("get_live_gpu_free_mib: no nvidia-smi on PATH - no live VRAM source")
+                _logger.debug("get_live_gpu_free_mib: no sysfs VRAM and no nvidia-smi - no live VRAM source")
                 return None
             _r = _subprocess.run(
                 [_nsmi, "--query-gpu=memory.free", "--format=csv,noheader,nounits"],

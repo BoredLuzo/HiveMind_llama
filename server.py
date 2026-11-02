@@ -102,7 +102,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.5.0"
+HIVEMIND_VERSION = "1.5.1"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -1327,10 +1327,12 @@ def _run_journal_touch(run_id: str) -> dict:
 # force_kill_all does the taskkill sweep (every llama-server.exe, tree
 # kill) plus per-slot http shutdown; manager.shutdown resets the registry.
 @app.post("/vram/kill_all", include_in_schema=False)
-async def vram_kill_all_ep():
+async def vram_kill_all_ep(all: bool = False):
+    """Free VRAM. Default: only this engine's own servers. `?all=true` also
+    sweeps every llama-server by name (kills other apps' instances too)."""
     try:
         from backend.llama_compat import force_kill_all as _fka
-        _res = await _fka()
+        _res = await _fka(include_foreign=bool(all))
     except Exception as _e:
         logger.error("[VRAM-PURGE] force_kill_all failed: %s", _e)
         return JSONResponse({"ok": False, "error": str(_e)[:160]}, status_code=500)

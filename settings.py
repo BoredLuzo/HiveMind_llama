@@ -545,7 +545,10 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # O) SOUL & LEARNING
     # ════════════════════════════════════════════════════════════════════════
-    "soul_skill_distillation": True,
+    # DEFAULT OFF: the distiller spends one extra LLM call after a run. It is
+    # useful, but a fresh install should not grow background model work
+    # nobody asked for - switch it on in the SOUL tab.
+    "soul_skill_distillation": False,
     "soul_skill_writing":      False,
     "learning_preset_mode":    False,
 

@@ -14,6 +14,24 @@ What you need before starting:
 - While you're in that menu, remove old sessions you don't recognize.
 - The PC stays on as long as you want to use the bot.
 
+## What leaves the machine
+
+The engine itself never contacts a cloud LLM — everything runs on your
+hardware. The gateway is different: it is a bridge to Telegram, and a bot's
+traffic is **not end-to-end encrypted**. Anything you send to or receive from
+the bot passes through Telegram's servers and stays in that chat history.
+
+| What | Where it goes |
+|---|---|
+| your texts, voice notes, photos and PDFs | Telegram, then to your engine over loopback |
+| answers, plans, tool-call summaries and approval cards | engine -> Telegram -> your phone |
+| the bot token | stored in `gateway.toml`, only used against `api.telegram.org` |
+
+Nothing is sent to the developer, and no analytics are involved. Keep secrets
+out of phone prompts, use a private chat (the gateway answers nothing else),
+and remember that `/purge` and the approval gate exist for exactly this
+surface.
+
 ## 1. Create the bot
 
 1. Open a chat with **@BotFather**, send `/newbot`.

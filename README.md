@@ -133,7 +133,7 @@ the Coder context.
 | Mode | When | What happens |
 |------|------|--------------|
 | Simple / Direct | trivial tasks (default) | single model, direct answer, optional web-search tool calls |
-| Auto *(experimental)* | judge-routed | the model assigned to the Judge role (any installed LLM) classifies complexity, routes to Direct / Pipeline / Duo |
+| Auto | judge-routed | the model assigned to the Judge role (any installed LLM) classifies complexity, routes to Direct / Pipeline / Duo |
 | Pipeline | analysis, complex docs | Analyst -> Refiner -> Critic -> Synthesizer, optional constraint loop |
 | Map (AutoMap, *experimental*) | mixed tasks | heuristic scorer picks the best model per agent role |
 | Code Duo | coding | Coder + Critic loop, sub-modes Critic-Duo and Agentic |

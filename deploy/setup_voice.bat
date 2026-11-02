@@ -83,13 +83,34 @@ goto summary
 
 :tts_model_fail
 echo   [WARN] The model could not be fetched.
-echo          Most likely the Hugging Face terms are not accepted yet:
-echo            1. hf auth login          (needs huggingface_hub, see below)
-echo            2. open https://huggingface.co/kyutai/pocket-tts and accept
+echo.
+echo          The Pocket TTS model is gated. Two things are needed once:
+echo            1. accept the terms on
+echo               https://huggingface.co/kyutai/pocket-tts
+echo            2. a Hugging Face Read token on this machine
+echo.
 echo          Full guide: docs\huggingface_token.md
-echo          Token in a shell with the hub CLI:
-echo            uvx --from huggingface_hub hf auth login
-echo          Afterwards the first request in the UI fetches the model.
+echo.
+choice /c YN /n /m "Log in to Hugging Face now? (token prompt is hidden) [Y/N] "
+if errorlevel 2 goto tts_model_skip
+echo.
+echo   The token is read hidden and stored by the Hugging Face CLI in
+echo   %%USERPROFILE%%\.cache\huggingface\token - never in this batch or a log.
+uvx --from huggingface_hub hf auth login
+if errorlevel 1 goto tts_model_skip
+echo.
+echo   Retrying the model download...
+uvx --python 3.12 --index https://download.pytorch.org/whl/cpu pocket-tts generate --text "Voice setup complete." --output-path "%TEMP%\hivemind_tts_check.wav" >nul 2>&1
+if errorlevel 1 goto tts_model_skip
+del "%TEMP%\hivemind_tts_check.wav" >nul 2>&1
+echo   [OK] Model ready.
+echo.
+goto summary
+
+:tts_model_skip
+echo.
+echo          Skipped - the first request in the UI fetches the model once the
+echo          token is in place.
 echo.
 goto summary
 

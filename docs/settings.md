@@ -223,7 +223,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `smart_preload_enabled` | bool | `False` | OFF by default : prefetch/keep-warm loads the NEXT agent's model while the current one works - great on a big card, but on a tight VRAM budget it can evict the model that is actually answering. Opt in when the card has room. |
 | `smart_preload_keep_alive` | str | `10m` |  |
 | `soul_evolve_agent` | object | `{...}` |  |
-| `soul_skill_distillation` | bool | `True` |  |
+| `soul_skill_distillation` | bool | `False` | DEFAULT OFF: the distiller spends one extra LLM call after a run. It is useful, but a fresh install should not grow background model work nobody asked for - switch it on in the SOUL tab. |
 | `soul_skill_writing` | bool | `False` |  |
 | `startup_preload_enabled` | bool | `False` |  |
 | `stt_enabled` | bool | `False` | Scope for 1.4 (docs/plan_1.4_voice.md): English only, one CLI call per request, model tier chosen by RAM unless set explicitly. |

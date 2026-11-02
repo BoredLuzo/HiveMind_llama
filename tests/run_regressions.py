@@ -159,6 +159,8 @@ SUITES = [
     ("read_aloud_routing",     "tests/test_read_aloud_routing.py",        20),
     ("bat_block_parens",       "tests/test_bat_block_parens.py",           20),
     ("lfm3_tool_calls",        "tests/test_lfm3_tool_calls.py",            20),
+    ("memory_fts",             "tests/test_memory_fts.py",                 30),
+    ("safety_review_fixes",    "tests/test_safety_review_fixes.py",        30),
     ("compress_local_only",    "tests/test_compress_local_only.py",             60),
     ("pre_explore_globals",  "tests/test_pre_explore_globals.py",     25),
     ("installer_coreutils", "tests/test_installer_coreutils.py",      20),

@@ -74,8 +74,9 @@ async def model_pin(model: str, num_ctx: Optional[int] = None):
         raise
 
 
-async def force_kill_all() -> dict:
-    return await manager.force_kill_all()
+async def force_kill_all(include_foreign: bool = False) -> dict:
+    """Kill this manager's servers; include_foreign also sweeps by name."""
+    return await manager.force_kill_all(include_foreign=include_foreign)
 
 
 

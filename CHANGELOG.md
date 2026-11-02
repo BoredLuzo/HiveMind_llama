@@ -1,3 +1,14 @@
+## [1.5.1] - 2026-11-02
+
+Memory retrieval now uses SQLite FTS5 (bm25, porter stemming, prefix match)
+instead of the 96-bin hash vectors, with the old cosine path as the fallback
+when a sqlite build lacks FTS5. Soul skill distillation is off by default. The
+README lists what leaves the machine and when, and the gateway guide states
+that bot traffic is not end-to-end encrypted. `force_kill_all` kills only this
+install's own servers (name-wide sweep behind `?all=true`), Linux VRAM is read
+from sysfs for AMD/Intel, and the voice setup can log in to Hugging Face
+itself.
+
 ## [1.5.0] - 2026-11-01
 
 1.5.0 scope: the MCP hardening/phase-2 work, the settings/preset pass, the

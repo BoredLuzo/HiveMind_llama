@@ -36,7 +36,7 @@
   "except_pass": 4
  },
  "backend/llama_vram_table.py": {
-  "broad_except": 8,
+  "broad_except": 9,
   "except_pass": 4
  },
  "backend/manager_evict.py": {
@@ -44,8 +44,8 @@
   "except_pass": 1
  },
  "backend/manager_health.py": {
-  "broad_except": 9,
-  "except_pass": 5
+  "broad_except": 10,
+  "except_pass": 4
  },
  "backend/manager_load.py": {
   "broad_except": 40,
@@ -251,6 +251,10 @@
   "broad_except": 6,
   "except_pass": 1
  },
+ "deploy/apply_model_defaults.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "deploy/backfill_speeds.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -320,7 +324,7 @@
   "except_pass": 0
  },
  "hive_functions/memory.py": {
-  "broad_except": 4,
+  "broad_except": 6,
   "except_pass": 1
  },
  "hive_functions/num_ctx_config.py": {
@@ -715,6 +719,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_bat_block_parens.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_bat_encoding.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -860,6 +868,10 @@
   "except_pass": 0
  },
  "tests/test_decider_unload.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_default_config.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1091,6 +1103,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_lfm3_tool_calls.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_lint.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1183,6 +1199,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_memory_fts.py": {
+  "broad_except": 1,
+  "except_pass": 0
+ },
  "tests/test_memory_routing.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1224,6 +1244,10 @@
   "except_pass": 0
  },
  "tests/test_no_new_silent_excepts.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_no_personal_context.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1335,6 +1359,10 @@
   "broad_except": 0,
   "except_pass": 0
  },
+ "tests/test_read_aloud_routing.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
  "tests/test_read_ladder.py": {
   "broad_except": 0,
   "except_pass": 0
@@ -1400,6 +1428,10 @@
   "except_pass": 0
  },
  "tests/test_safe_profile_choice.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_safety_review_fixes.py": {
   "broad_except": 0,
   "except_pass": 0
  },
@@ -1584,6 +1616,10 @@
   "except_pass": 0
  },
  "tests/test_update_zip_layout.py": {
+  "broad_except": 0,
+  "except_pass": 0
+ },
+ "tests/test_updater_optionals.py": {
   "broad_except": 0,
   "except_pass": 0
  },

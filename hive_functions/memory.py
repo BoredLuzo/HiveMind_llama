@@ -62,6 +62,73 @@ def _hash_embedding(text: str, dims: int = 96) -> list[float]:
     return [v / norm for v in vec]
 
 
+_FTS_STATE: bool | None = None
+
+
+def _fts_available() -> bool:
+    """SQLite FTS5 is compiled into Python's bundled sqlite on Windows and most
+    Linux builds. Probed once."""
+    global _FTS_STATE
+    if _FTS_STATE is None:
+        try:
+            import sqlite3
+            _c = sqlite3.connect(":memory:")
+            _c.execute("CREATE VIRTUAL TABLE _probe USING fts5(x)")
+            _c.close()
+            _FTS_STATE = True
+        except Exception:            # sqlite3 missing FTS5: use the fallback
+            _FTS_STATE = False
+    return bool(_FTS_STATE)
+
+
+_FTS_WORD = re.compile(r"[\w]+", re.UNICODE)
+
+
+def _fts_query(text: str) -> str:
+    """Turn free text into a safe FTS5 MATCH expression (OR of quoted terms)."""
+    terms = [t for t in _FTS_WORD.findall((text or "").lower()) if len(t) >= 2]
+    if not terms:
+        return ""
+    # prefix match for longer words catches "authentication" for "auth"
+    parts = [f'"{t}"*' if len(t) >= 3 else f'"{t}"' for t in terms[:12]]
+    return " OR ".join(parts)
+
+
+def _fts_rank(query: str, docs: list[tuple[int, str]], limit: int) -> list[tuple[int, float]]:
+    """BM25 ranking over (index, text) pairs. Returns [(index, score 0..1)].
+
+    FTS5 (bm25 + porter stemming + prefix match) replaces the old hash-bin
+    cosine as the primary retriever: it ranks real term overlap instead of
+    random bin collisions. Nothing is persisted - the table is built from the
+    in-memory insights, which are capped at 500 entries.
+    """
+    match = _fts_query(query)
+    if not match or not docs:
+        return []
+    import sqlite3
+    try:
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE VIRTUAL TABLE docs USING fts5(body, "
+                     "tokenize='porter unicode61')")
+        conn.executemany("INSERT INTO docs(rowid, body) VALUES (?, ?)",
+                         [(i + 1, text) for i, (_idx, text) in enumerate(docs)])
+        rows = conn.execute(
+            "SELECT rowid, bm25(docs) AS rank FROM docs WHERE docs MATCH ? "
+            "ORDER BY rank LIMIT ?", (match, max(1, int(limit)))).fetchall()
+        conn.close()
+    except Exception:                # FTS5 parse/IO error: caller falls back
+        return []
+    # bm25() is negative and "smaller is better". Its MAGNITUDE depends on the
+    # corpus size (three documents give ~1e-06, so a fixed 0..1 mapping would
+    # filter every hit), so the score is normalized to the best hit instead:
+    # the top result is 1.0 and the rest are relative to it.
+    strengths = [(int(rowid) - 1, max(0.0, -float(rank))) for rowid, rank in rows]
+    best = max((st for _i, st in strengths), default=0.0)
+    if best <= 0.0:
+        return [(idx, 0.5) for idx, _st in strengths]
+    return [(idx, round(st / best, 4)) for idx, st in strengths]
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
@@ -298,21 +365,49 @@ class Memory:
         q = (query or '').strip()
         if not q:
             return []
-        q_emb = _hash_embedding(q)
         tp = _norm_path(trigger_path)
+        limit = max(1, int(top_k or 2))
         scored: list[dict] = []
-        for rec in insights_snapshot:
-            emb = rec.get('embedding') or []
-            if not isinstance(emb, list):
-                continue
-            score = _cosine(q_emb, emb)
+
+        # FTS5 first: real term overlap with stemming + prefix match.
+        ranked: list[tuple[int, float]] = []
+        if _fts_available():
+            docs = [(i, str(rec.get('insight') or ''))
+                    for i, rec in enumerate(insights_snapshot)]
+            ranked = _fts_rank(q, docs, limit * 8)
+
+        def _path_match(rec: dict) -> int:
             rp = _norm_path(rec.get('trigger_path', ''))
-            if tp and rp and (tp.startswith(rp) or rp.startswith(tp)):
-                score += 0.08
-            if score >= float(min_score):
-                scored.append({'score': score, **rec})
-        scored.sort(key=lambda r: r.get('score', 0.0), reverse=True)
-        return scored[:max(1, int(top_k or 2))]
+            return 1 if (tp and rp and (tp.startswith(rp) or rp.startswith(tp))) else 0
+
+        if ranked or _fts_available():
+            for idx, score in ranked:
+                rec = insights_snapshot[idx]
+                if score >= float(min_score):
+                    scored.append({'score': round(score, 4),
+                                   '_pm': _path_match(rec), **rec})
+        else:
+            # fallback: the old hash-bin cosine (no FTS5 in this sqlite build)
+            q_emb = _hash_embedding(q)
+            for rec in insights_snapshot:
+                emb = rec.get('embedding') or []
+                if not isinstance(emb, list):
+                    continue
+                score = _cosine(q_emb, emb)
+                if score >= float(min_score):
+                    scored.append({'score': round(score, 4),
+                                   '_pm': _path_match(rec), **rec})
+        # PATH FIRST (the caller asks for hints about a file): a same-path
+        # insight outranks a better-scoring one from elsewhere. An additive
+        # bonus could not do that once the scores are normalized to the best
+        # hit (a 0.35 gap swallows any small bonus).
+        scored.sort(key=lambda r: (r.get('_pm', 0), r.get('score', 0.0)), reverse=True)
+        out = []
+        for rec in scored[:limit]:
+            rec = dict(rec)
+            rec.pop('_pm', None)
+            out.append(rec)
+        return out
 
     def _maybe_persist_insights(self):
         """PERF-3: Debounced persist — only writes if enough time has elapsed."""

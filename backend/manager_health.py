@@ -169,31 +169,56 @@ class LlamaHealthMixin:
                              "pinned": pinned, "loaded_at": loaded_at, "loading": False})
         return live
 
-    async def force_kill_all(self) -> dict:
+    async def force_kill_all(self, include_foreign: bool = False) -> dict:
+        '''Kill OUR llama-servers.
 
-
+        PID-TRACKED (2026-11-02): the old version ran `taskkill /IM
+        llama-server.exe` (POSIX: `pkill -f llama-server`), which also kills
+        every other llama-server on the machine - LM Studio, another
+        HiveMind install, a manual test. It now kills the PIDs this manager
+        started; the name-wide sweep only runs on an explicit request
+        (`include_foreign=True`, e.g. phone `/purge all`).
+        '''
         killed = []
+        _own_pids = []
+        for _s in self._slots:
+            _proc = getattr(_s, "process", None)
+            _pid = getattr(_proc, "pid", None)
+            if _pid:
+                _own_pids.append(int(_pid))
 
-        if platform.system() == "Windows":
+        for _pid in _own_pids:
             try:
-                r = subprocess.run(
-                    ["taskkill", "/F", "/IM", "llama-server.exe", "/T"],
-                    capture_output=True, text=True, timeout=10,
-                    encoding="utf-8", errors="replace",
-                )
-                if r.returncode == 0:
-                    killed.append("taskkill:llama-server.exe")
-                    logger.info("force_kill_all: taskkill OK")
+                if platform.system() == "Windows":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(_pid)],
+                                   capture_output=True, text=True, timeout=10,
+                                   encoding="utf-8", errors="replace")
                 else:
-                    logger.info(f"force_kill_all: taskkill returncode={r.returncode} (maybe nothing was running)")
-            except Exception as e:
-                logger.warning(f"force_kill_all: taskkill failed: {e}")
-        else:
-            try:
-                subprocess.run(["pkill", "-9", "-f", "llama-server"], timeout=5)
-                killed.append("pkill:llama-server")
-            except Exception:
-                pass
+                    subprocess.run(["kill", "-9", str(_pid)],
+                                   capture_output=True, timeout=5)
+                killed.append(f"pid:{_pid}")
+            except Exception as _e:      # already gone / no permission
+                logger.debug("force_kill_all: pid %s not killed (%s)", _pid, _e)
+
+        if include_foreign:
+            if platform.system() == "Windows":
+                try:
+                    r = subprocess.run(
+                        ["taskkill", "/F", "/IM", "llama-server.exe", "/T"],
+                        capture_output=True, text=True, timeout=10,
+                        encoding="utf-8", errors="replace",
+                    )
+                    if r.returncode == 0:
+                        killed.append("taskkill:llama-server.exe")
+                        logger.info("force_kill_all: name-wide sweep OK (explicit)")
+                except Exception as e:
+                    logger.warning(f"force_kill_all: taskkill failed: {e}")
+            else:
+                try:
+                    subprocess.run(["pkill", "-9", "-f", "llama-server"], timeout=5)
+                    killed.append("pkill:llama-server")
+                except Exception:    # pkill missing/denied: the HTTP path still runs
+                    logger.debug("force_kill_all: pkill unavailable")
 
         c = self._get_shared_http_client()
         for s in self._slots:
