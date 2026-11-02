@@ -48,6 +48,28 @@ def risky_lines(path: Path) -> list[tuple[int, str]]:
     return out
 
 
+def silent_pauses(path: Path) -> list[tuple[int, str]]:
+    """`pause >nul` without a visible prompt above it: the script then waits
+    for a key while the screen shows nothing - it reads as a freeze (live:
+    right after the TTS download, before step [9/9])."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    out: list[tuple[int, str]] = []
+    for i, raw in enumerate(lines, 1):
+        if not re.match(r"^\s*pause\s*>nul\s*$", raw, re.I):
+            continue
+        # the enclosing block may be the guard itself
+        guard = any("HIVEMIND_NO_PAUSE" in lines[k]
+                    for k in range(max(0, i - 6), i))
+        above = " ".join(lines[max(0, i - 4):i - 1]).lower()
+        visible = re.search(r"press any key|press a key|continue|close", above) is not None
+        if not (visible or guard):
+            out.append((i, raw.strip()))
+    return out
+
+
 def main() -> int:
     checked = 0
     bad = 0
@@ -59,14 +81,20 @@ def main() -> int:
         hits = risky_lines(p)
         if hits:
             bad += len(hits)
-            print(f"  FAIL {rel}")
+            print(f"  FAIL {rel} (unescaped paren in an echo block)")
             for i, t in hits[:6]:
+                print(f"        line {i}: {t}")
+        silent = silent_pauses(p)
+        if silent:
+            bad += len(silent)
+            print(f"  FAIL {rel} (pause without a visible prompt)")
+            for i, t in silent[:6]:
                 print(f"        line {i}: {t}")
     if bad:
         print(f"\n  {bad} unescaped parenthesis/parentheses inside echo blocks.")
         print("  Escape them as ^( and ^) - otherwise cmd aborts the installer.")
         return 1
-    print(f"  PASS {checked} batch files: no echo line can close its block")
+    print(f"  PASS {checked} batch files: no block-breaking echo, no silent pause")
     return 0
 
 

@@ -98,7 +98,10 @@ echo.
 echo  [ERROR] Speech-to-text download failed. Check the network, or use the
 echo          Download button in Settings -^> Voice.
 echo.
-pause >nul
+if not defined HIVEMIND_NO_PAUSE (
+    echo  Press any key to continue...
+    pause >nul
+)
 exit /b 1
 
 :summary
@@ -110,5 +113,8 @@ echo   Telegram voice notes: Settings -^> Telegram Gateway
 echo     - greyed out until the matching feature above is on.
 echo  ------------------------------------------------------------
 echo.
-pause >nul
+if not defined HIVEMIND_NO_PAUSE (
+    echo  Press any key to continue...
+    pause >nul
+)
 exit /b 0

@@ -148,6 +148,7 @@ if not defined HIVEMIND_NO_UPDATE_CHECK (
         echo.
         echo  [INFO] Update installed. Start HiveMind again to use it.
         echo.
+        echo  Press any key to continue...
         pause >nul
         exit /b 0
     )

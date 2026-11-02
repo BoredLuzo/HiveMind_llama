@@ -283,6 +283,12 @@ even with the agentic switch off. The run now records the route it actually
 took (complexity event, `pipeline_start`, `duo_start`) and speaks the final
 answer with the switch that belongs to it.
 
+The voice step no longer looks frozen: `setup_voice.bat` paused with `pause >nul`,
+which swallows its own "press any key" line — after the TTS download the
+installer waited for a key with nothing on screen. It now prints the prompt
+(and the installer calls it with `HIVEMIND_NO_PAUSE=1`, so it does not stop at
+all between step 8 and 9). A scan suite rejects silent pauses from now on.
+
 The **routing-decider step no longer closes the installer window**. Answering
 "y" ran into a cmd parsing trap: an unescaped `)` inside an `echo` line ends
 the surrounding `if (` block, the following `) else (` line becomes a stray

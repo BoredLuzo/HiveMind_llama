@@ -2734,20 +2734,8 @@ function _isNoTc(modelName) {
 
 function _setDuoModeAccordion(open) {
   var body = document.getElementById('duo-mode-body');
-  var chev = document.getElementById('duo-mode-chevron');
   if (!body) return;
   body.style.display = open ? 'block' : 'none';
-  if (chev) chev.style.transform = open ? 'rotate(180deg)' : '';
-}
-
-function toggleDuoModeAccordion() {
-  var body = document.getElementById('duo-mode-body');
-  if (!body) return;
-  // CODE-MODE LOCK: in code mode the settings
-  // panel stays open — a header click is a no-op. Other modes have no
-  // visible accordion anyway.
-  if (typeof S !== 'undefined' && S.mode === 'code_duo') return;
-  _setDuoModeAccordion(body.style.display === 'none');
 }
 
 function setPassFiles(val) {

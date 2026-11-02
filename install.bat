@@ -602,9 +602,13 @@ echo.
 set "VOICE_PICK="
 set /p VOICE_PICK=Choose [1-4, default 4]: 
 if not defined VOICE_PICK set "VOICE_PICK=4"
+REM The voice script pauses for a key on its own; inside the installer that
+REM looks like a freeze right before step [9/9]. It honours this flag.
+set "HIVEMIND_NO_PAUSE=1"
 if "%VOICE_PICK%"=="1" call "%~dp0deploy\setup_voice.bat"
 if "%VOICE_PICK%"=="2" call "%~dp0deploy\setup_voice.bat" --both
 if "%VOICE_PICK%"=="3" call "%~dp0deploy\setup_voice.bat" --tts
+set "HIVEMIND_NO_PAUSE="
 if "%VOICE_PICK%"=="4" echo   Skipped - add it later with no reinstall: Settings -^> Voice, or deploy\setup_voice.bat.
 echo.
 
