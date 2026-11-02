@@ -69,5 +69,21 @@ from backend.llama_vram_table import get_live_gpu_free_mib  # noqa: E402
 _val = get_live_gpu_free_mib()
 check("3a the live probe answers", _val is None or _val >= 0.0, f"({_val})")
 
+# ── 4. unlimited runs are bounded, shutdown is PID-scoped ────────────────
+SET = (ROOT / "settings.py").read_text(encoding="utf-8")
+RUN = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
+check("4a until_finished has a wall-clock bound in settings",
+      "duo_until_finished_max_hours" in SET)
+check("4b the 24 h literal is gone",
+      "86400.0 if ctx.duo_config.until_finished" not in RUN)
+check("4c the deadline reads the setting",
+      'duo_until_finished_max_hours", 3' in RUN)
+_sh_start = HEALTH.index("async def shutdown(")
+_sh = HEALTH[_sh_start:_sh_start + 2600]          # the shutdown method only
+check("4d shutdown no longer sweeps by image name",
+      '"/IM", "llama-server.exe"' not in _sh)
+check("4e shutdown kills tracked PIDs instead",
+      'taskkill", "/F", "/T", "/PID"' in HEALTH)
+
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

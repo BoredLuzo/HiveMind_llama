@@ -167,6 +167,11 @@ DEFAULT_SETTINGS = {
     "duo_run_timeout_seconds": 420,
     "duo_run_timeout_critical_seconds": 900,
     "duo_until_finished_cap":  999999,
+    # UNTIL-FINISHED-BOUND (2026-11-02, external review): "unlimited" runs
+    # used a hardcoded 24 h deadline and a 999999 round budget, so a
+    # misbehaving model could hold the PC for a day. The wall clock is the
+    # real bound; the round budget stays generous for long tasks.
+    "duo_until_finished_max_hours": 3,
     "duo_rounds_balanced_cap": 3,
     "duo_read_timeout":        390,
     "duo_run_bash_build_timeout_s": 600,

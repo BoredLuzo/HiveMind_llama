@@ -102,15 +102,24 @@ class LlamaHealthMixin:
         self._pending_prefetch.clear()
         for slot in self._slots:
             await _kill_slot_async(slot)
+        # SHUTDOWN-PID-SCOPE (2026-11-02): the shutdown sweep killed EVERY
+        # llama-server by image name - LM Studio and a second HiveMind install
+        # died with it. Slots are killed above; only leftovers this manager
+        # still tracks are swept here, by PID.
         if platform.system() == "Windows":
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/IM", "llama-server.exe"],
-                    capture_output=True, timeout=5,
-                    creationflags=_WIN_CNF,
-                )
-            except Exception:
-                pass
+            for _s in self._slots:
+                _proc = getattr(_s, "process", None)
+                _pid = getattr(_proc, "pid", None)
+                if not _pid:
+                    continue
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(_pid)],
+                        capture_output=True, timeout=5,
+                        creationflags=_WIN_CNF,
+                    )
+                except Exception as _e:      # already gone / no permission
+                    logger.debug("shutdown: pid %s not killed (%s)", _pid, _e)
         if self._shared_http_client is not None and not self._shared_http_client.is_closed:
             try:
                 await self._shared_http_client.aclose()

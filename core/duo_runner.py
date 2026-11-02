@@ -3310,8 +3310,17 @@ async def run_code_duo(ctx):
         # time.monotonic() — a wall-clock (NTP) jump used to expire or extend
         # runs spuriously. Every consumer swaps in the same commit; the log
         # line keeps its human-readable wall-clock estimate separately.
+        # UNTIL-FINISHED-BOUND: a fixed 24 h (86400 s) was the only limit on
+        # an "unlimited" run. The wall clock now comes from
+        # duo_until_finished_max_hours (default 3 h, clamped to 1..24).
+        _uf_hours = 3.0
+        try:
+            _uf_hours = max(1.0, min(24.0, float(
+                ctx.settings.get("duo_until_finished_max_hours", 3) or 3)))
+        except (TypeError, ValueError):
+            _uf_hours = 3.0
         _duo_deadline_at = time.monotonic() + (
-            86400.0 if ctx.duo_config.until_finished else _duo_run_timeout_s
+            _uf_hours * 3600.0 if ctx.duo_config.until_finished else _duo_run_timeout_s
         )
         ctx.phase_timer.start("coder_loop")
         logger.debug(
