@@ -70,6 +70,28 @@ def _comments() -> dict[str, str]:
     return out
 
 
+_DATE_PAREN = re.compile(r"\(\s*20\d\d-\d\d-\d\d[^)]*\)")
+_TAG_PAREN = re.compile(r"\(\s*(?:audit|owner|user request|live)[^)]*\)", re.I)
+
+
+def _clean_note(note: str) -> str:
+    """Strip engineering bookkeeping from a user-facing description.
+
+    This doc ships with the release; dated decision markers, "audit" tags and
+    "owner" attributions belong in the source comments, not in the manual.
+    """
+    note = _DATE_PAREN.sub("", note)
+    note = _TAG_PAREN.sub("", note)
+    note = re.sub(r"\bOWNER\b", "the operator", note)
+    note = re.sub(r"\bowner\b", "the operator", note)
+    note = re.sub(r"\baudit\b", "review", note, flags=re.I)
+    note = re.sub(r"\(?\s*[a-z-]*tested\s*20\d\d-\d\d-\d\d\s*\)?", "", note, flags=re.I)
+    note = re.sub(r"\b20\d\d-\d\d-\d\d\b", "", note)
+    note = re.sub(r"\s*\(\s*\)", "", note)
+    note = re.sub(r"\s{2,}", " ", note)
+    return re.sub(r"^[\s:,-]+", "", note).strip()
+
+
 def _cell(value: object) -> str:
     if isinstance(value, bool):
         return f"`{value}`"
@@ -99,7 +121,7 @@ def render() -> str:
                 "list" if isinstance(value, list) else
                 "object" if isinstance(value, dict) else
                 "null" if value is None else type(value).__name__)
-        note = comments.get(key, "").replace("|", "\\|")
+        note = _clean_note(comments.get(key, "")).replace("|", "\\|")
         rows.append(f"| `{key}` | {kind} | {_cell(value)} | {note} |")
     body = "\n".join(rows) + "\n"
     return HEADER.format(count=len(DEFAULT_SETTINGS)) + body

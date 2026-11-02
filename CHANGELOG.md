@@ -2,7 +2,7 @@
 
 1.5.0 scope: the MCP hardening/phase-2 work, the settings/preset pass, the
 generic LSP client, the code-panel/compression/update-check improvements and
-the 2026-11-01 audit fixes (installer/updater rendering, git commit scoping,
+the fix round of 2026-11-01 (installer/updater rendering, git commit scoping,
 reprompt reliability) on top of 1.4.14. Groot stays **experimental**. The
 startup update check offers new releases directly (including pre-releases
 for preview installs).
@@ -23,11 +23,11 @@ for preview installs).
   shared path only, after the tier check.
 - `docs/mcp.md` / `docs/mcp_client.md` state the token-gated set, the real
   retry statuses (502/503/504) and that `has_auth` appears on both endpoints.
-- **The remaining 34 audit findings are closed.** Client: streaming SSE with a
+- **The remaining 34 findings are closed.** Client: streaming SSE with a
   body cap, 404 session recovery, JSON-id check, off-loop taskkill, stdio/URL
   redaction, config-decay warnings, string-id match, multi-line SSE,
   call/refresh guard, structuredContent + truncation marker, cmd quoting.
-  Server: budget seeding for the IDE path, timeout audit line,
+  Server: budget seeding for the IDE path, timeout log line,
   `notifications/cancelled` + stdio timeout, correct error codes, id-less
   notifications without a response, non-dict batches, narrow `isError`,
   log-name sanitizer, 2 MB stdio cap, body-read timeout + connection cap,
@@ -88,7 +88,7 @@ for preview installs).
   it off. A cold explicit `lsp_diagnostics` now waits up to 5s for the first
   publication (`lsp_diagnostics_wait_s=5`) and only then says "still
   analyzing" instead of falsely reporting a clean file.
-- **Lifecycle fixes from the agentic audit**: engine shutdown closes every
+- **Lifecycle fixes**: engine shutdown closes every
   cached LSP manager (previously pyright/gopls/rust-analyzer survived the
   engine), and manager-cache eviction closes the evicted servers instead of
   dropping them. Pyright's percent-encoded, lower-case drive URIs
@@ -153,7 +153,7 @@ Four end-of-day audits over all changes; findings fixed immediately:
   `style.css` cache buster bumped (the preset-badge CSS was stale).
 Reports: DOKU/audits/EOD_*.md, DOKU/mcp/EOD_AUDIT_20261101.md.
 
-### Installer/Updater (audit fixes, 2026-11-01)
+### Installer / Updater
 - **Release notes render properly** (P1): the old inline render double-
   mangled UTF-8 (ANSI read → OEM `type` — every umlaut became `├ñ`),
   never wrapped 200-char lines (box 63 chars), misaligned the header box
@@ -170,7 +170,7 @@ Reports: DOKU/audits/EOD_*.md, DOKU/mcp/EOD_AUDIT_20261101.md.
 - Startup check itself verified working: cache live, prerelease policy,
   sha256 gate, offline-silent (36/36 checks).
 
-### Git (audit fixes, 2026-11-01)
+### Git
 - **Auto-commit commits new files again** (P1-1): the 2026-10-14 scoped
   commit (`git commit -- paths`) matches tracked paths only, so a run's
   brand-new files failed with "pathspec did not match". The scoped
