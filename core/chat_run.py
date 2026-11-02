@@ -586,6 +586,13 @@ async def run_stream(
     _vram_budget = float(_raw_budget) if _raw_budget is not None else DEFAULT_VRAM_BUDGET_GB
     abort_ev      = _register_abort(run_id)
     step_skip_ev = _register_step_skip(run_id)  # NEW
+    # TAINT-RESET (2026-11-02): every run starts with no untrusted content
+    # seen; a previous run's web/MCP reads must not gate this one.
+    try:
+        from tools import taint as _run_taint
+        _run_taint.clear()
+    except ImportError:
+        pass
     logger.warning("[RUN-TRACE] abort/stepskip registered run_id=%s", run_id)
     _agent_elapsed: dict = {}   # agent_key - elapsed seconds, fÃƒÂ¼r Log + Prefetch-Kalibrierung
     _vram_cache:    set  = await _get_loaded_models_set() if smart_preload else set()

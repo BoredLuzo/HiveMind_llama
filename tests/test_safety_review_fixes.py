@@ -77,7 +77,8 @@ check("4a until_finished has a wall-clock bound in settings",
 check("4b the 24 h literal is gone",
       "86400.0 if ctx.duo_config.until_finished" not in RUN)
 check("4c the deadline reads the setting",
-      'duo_until_finished_max_hours", 3' in RUN)
+      'duo_until_finished_max_hours", 24' in RUN)
+check("4d the default allows a long run (24 h)", "duo_until_finished_max_hours\": 24" in SET)
 _sh_start = HEALTH.index("async def shutdown(")
 _sh = HEALTH[_sh_start:_sh_start + 2600]          # the shutdown method only
 check("4d shutdown no longer sweeps by image name",

@@ -523,10 +523,25 @@ def _approval_gate_on() -> bool:
         return False
 
 
+_EXEC_TOOLS = frozenset({"run_bash", "run_python", "install_package",
+                         "start_background"})
+
+
 def _approval_active_for(name: str) -> bool:
     """Settings + tool-set gate shared by staging and the pause path."""
     if _approval_gate_on() and name.startswith("mcp_"):
         return True   # H7: every dynamic MCP tool is potentially mutating
+    if name in _EXEC_TOOLS:
+        # TAINT-GATE (2026-11-02): once this run has read web/MCP/browser
+        # content, a shell command is exactly the step an injected instruction
+        # wants. Ask, even with duo_action_approval_enabled off - a command is
+        # not reversible like a file edit.
+        try:
+            from tools import taint as _taint
+            if _taint.exec_needs_approval():
+                return True
+        except ImportError:
+            pass
     return _approval_gate_on() and name in _APPROVAL_TOOLS
 
 
@@ -1696,6 +1711,14 @@ async def _run_inline_tool(
             _result = await handler(args or {}, workspace, workspace_lock)
         finally:
             _dispatch_active_cv.reset(_tok)
+
+        # TAINT-WRAP (2026-11-02): web/MCP/browser results are marked as data
+        # and put this run behind the exec-approval gate (see tools/taint.py).
+        try:
+            from tools import taint as _taint
+            _result = _taint.wrap_result(name, _result)
+        except ImportError:
+            pass
 
         if _appr_note:
             # user note from the approval card rides along with the result,

@@ -3312,13 +3312,13 @@ async def run_code_duo(ctx):
         # line keeps its human-readable wall-clock estimate separately.
         # UNTIL-FINISHED-BOUND: a fixed 24 h (86400 s) was the only limit on
         # an "unlimited" run. The wall clock now comes from
-        # duo_until_finished_max_hours (default 3 h, clamped to 1..24).
-        _uf_hours = 3.0
+        # duo_until_finished_max_hours (default 24 h, clamped to 1..72).
+        _uf_hours = 24.0
         try:
-            _uf_hours = max(1.0, min(24.0, float(
-                ctx.settings.get("duo_until_finished_max_hours", 3) or 3)))
+            _uf_hours = max(1.0, min(72.0, float(
+                ctx.settings.get("duo_until_finished_max_hours", 24) or 24)))
         except (TypeError, ValueError):
-            _uf_hours = 3.0
+            _uf_hours = 24.0
         _duo_deadline_at = time.monotonic() + (
             _uf_hours * 3600.0 if ctx.duo_config.until_finished else _duo_run_timeout_s
         )

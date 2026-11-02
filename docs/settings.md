@@ -137,7 +137,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_tree_scout_max_files` | int | `200` |  |
 | `duo_ubatch` | int | `256` | Prompt-processing chunk size (llama.cpp --ubatch-size). Larger values (512/1024) speed up prefill substantially for MoE models with CPU expert offloading (fewer RAM-streaming passes over the expert weights), at the cost of a larger VRAM compute buffer. Test lever for slow… |
 | `duo_until_finished_cap` | int | `999999` |  |
-| `duo_until_finished_max_hours` | int | `3` | UNTIL-FINISHED-BOUND : "unlimited" runs used a hardcoded 24 h deadline and a 999999 round budget, so a misbehaving model could hold the PC for a day. The wall clock is the real bound; the round budget stays generous for long tasks. |
+| `duo_until_finished_max_hours` | int | `24` | UNTIL-FINISHED-BOUND : until-finished runs are meant to work for hours - the the operator can always kill a run (/stop, the Stop button, the phone). The wall clock is therefore generous by default (24 h) and only there so a wedged model cannot hold the machine forever;… |
 | `duo_use_pipeline` | bool | `False` |  |
 | `duo_websearch_enabled` | bool | `False` |  |
 | `duo_websearch_max_calls` | int | `20` |  |

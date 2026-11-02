@@ -562,7 +562,7 @@ async def _compress_tool_context(
     aggressive_retry: bool = False,
     tail_tool_max_chars: int = 0,
     target_tokens: int = 0,
-) -> list:
+) -> tuple[list, dict, dict]:
 
 
     _keep_recent = max(0, int(keep_recent_msgs or 0))
