@@ -89,5 +89,19 @@ check("4j the engine still accepts images", 'images = body.get("images", [])' in
 check("4k the engine keeps its own caps", "len(b) <= 14_000_000" in ENG and
       "if len(images) > 8:" in ENG)
 
+# MEDIA-DISPATCH: the POLL path must route media to its handlers - it used to
+# call start_owner_run, which only sees the caption (the image payload is
+# filled by handle_image), so the model answered "I cannot see an image".
+_dispatch = MAIN[MAIN.index("async def process_update"):]
+_dispatch = _dispatch[:_dispatch.index("def ensure_enabled")]
+check("4l the poll path routes photos to handle_image",
+      "handle_image(p)" in _dispatch)
+check("4m ... and documents to handle_document",
+      "handle_document(p)" in _dispatch)
+check("4n ... before the plain text run",
+      _dispatch.index("handle_image(p)") < _dispatch.index("start_owner_run(p)"))
+check("4o an open /command does not swallow a photo",
+      "p.image_file_id or p.document_file_id" in MAIN)
+
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

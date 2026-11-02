@@ -1184,6 +1184,17 @@ async def process_update(gw: Gateway, raw: dict) -> None:
                                    "the gateway config to dictate runs.",
                                    reply_to_message_id=p.message_id)
                 return
+            # MEDIA-DISPATCH (2026-11-02): a photo/document reached
+            # start_owner_run directly, which only sees the caption - the
+            # image itself stayed empty (`images` is filled by handle_image),
+            # so the model answered "I cannot see an image". Route media to
+            # its handlers; text keeps the old path.
+            if p.kind == "message" and p.image_file_id:
+                await gw.handle_image(p)
+                return
+            if p.kind == "message" and p.document_file_id:
+                await gw.handle_document(p)
+                return
             await gw.start_owner_run(p)
         return
     if verdict == "pair_window":
