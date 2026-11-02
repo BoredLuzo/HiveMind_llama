@@ -70,9 +70,14 @@ _catalog_section = _RD[_cat_start:_cat_end]
 # of any data row, whatever the remaining column count is
 _catalog_rows = re.findall(r"^\|\s*`([^`]+)`\s*\|", _catalog_section, re.M)
 _unknown_rows = [r for r in _catalog_rows if r.split(" ")[0] not in _installer]
+# the catalog lists every installer model; experimental ones are marked as
+# such in the row instead of being hidden
 check("the catalog table lists every installer model",
-      len(_catalog_rows) == len(_installer) - len(_EXPERIMENTAL),
-      f" ({len(_catalog_rows)} rows vs {len(_installer) - len(_EXPERIMENTAL)} advertised models)")
+      len(_catalog_rows) == len(_installer),
+      f" ({len(_catalog_rows)} rows vs {len(_installer)} models)")
+check("experimental models are marked in the catalog",
+      all("**experimental**" in line for line in _catalog_section.splitlines()
+          if any(f"`{k}`" in line for k in _EXPERIMENTAL)))
 check("the catalog table only lists installer models", not _unknown_rows,
       f" (unknown rows: {_unknown_rows})")
 # the old failure was a section that CLAIMED to list everything while listing

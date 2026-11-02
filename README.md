@@ -525,6 +525,7 @@ projector/drafter. A repo can rename or re-quantise a file, so
 | `gemma-4:e4b-uncensored-hauhaucs-aggressive` | HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive | uncensored all-rounder | 5.4 GB + 1.0 GB mmproj |
 | `qwen3.6:35b-a3b-ud` | unsloth/Qwen3.6-35B-A3B-GGUF | coder / planner (MoE) | 22.4 GB + 0.9 GB mmproj |
 | `hermes3.6:35b-a3b-uncensored-genesis-apex-mini` | LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-Hermes-GGUF | coder / hermes agent (MoE + MTP + vision) | 20.2 GB + 0.9 GB mmproj |
+| `groot:19b-a3b-261023` | GrootTeam/Groot-19B-A3B-261023-GGUF | agent coder, **experimental** (MoE 19B/3B, 128 experts, 128K ctx) | 11.7 GB |
 | `qwen3.5:9b-mtp` | unsloth/Qwen3.5-9B-MTP-GGUF | heavy duo coder (MTP) | 5.9 GB + 0.9 GB mmproj |
 | `qwen3.5:4b-mtp` | unsloth/Qwen3.5-4B-MTP-GGUF | duo coder/planner default (MTP) | 2.8 GB + 0.7 GB mmproj |
 | `qwen3.5:2b-mtp` | unsloth/Qwen3.5-2B-MTP-GGUF | refiner (MTP) | 1.3 GB + 0.7 GB mmproj |
@@ -562,7 +563,7 @@ overrides live in `model_configs/models/<tag>.json`.
   hard-pause when the agent asks too often (>5/10min).
 - Graceful stop (finish at chunk boundary, then force) and multi-state pause,
   both persisted for resume.
-- Context meter with pressure warnings at 60% and 85%, tooltips on every
+- Context meter with pressure warnings at 70% and 90%, tooltips on every
   perf field, and a model filter that accepts several search terms.
 - Presets: full settings snapshots (all keys, agent cards and per-preset
   prompts) saved under one name and restored in one click; loading merges
@@ -580,7 +581,7 @@ started until you switch it on.
 - **Speech to text** (English only): a Telegram voice note or the UI microphone
   becomes text. whisper.cpp/Parakeet on the CPU; you pick the tier - `parakeet-q4k`
   (396 MB, 3.6 % WER) down to `tiny` (74 MB, weak CPUs).
-- **Text to speech**: answers spoken aloud with Pocket TTS (`cosette` by default,
+- **Text to speech**: answers spoken aloud with Pocket TTS (`anna` by default,
   speed `1.08x`). The model is gated, so a one-time `hf auth login` is needed; the
   engine runs via `uvx`, so PyTorch never enters HiveMind's environment.
 - The installer asks once (speech to text / both / text to speech / skip) and
@@ -599,6 +600,8 @@ started until you switch it on.
 | whisper.cpp / parakeet.cpp | 21 MB | the STT binaries | `whisper-cli`, `whisper-server`, `parakeet-cli` |
 
 Voices: `anna` (default), `alba`, `cosette`, `eve`, `jane`, `vera`, `bill_boerst`.
+`cosette` is the Expresso recording (**CC BY-NC 4.0** - non-commercial only);
+the others are CC BY 4.0 or CC0. Nothing is selected for you.
 `cosette` is a **non-commercial** recording (Expresso, CC BY-NC 4.0) - available,
 but no longer the shipped default; `bill_boerst` is CC0. Speech to text lands in
 `<install>/stt/`, TTS in uv's and the Hugging Face cache - never in the repository,
@@ -796,6 +799,7 @@ work for you.
 | `start_mcp.bat` | MCP HTTP server for IDEs, port 8090 |
 | `searxng.bat` | SearXNG manager |
 | `watchdog_engine.bat` | keeps the engine up: restarts it headless when port 8001 dies; `watchdog_engine.bat stop` ends the loop |
+| `Ctrl+K` in the web UI | Feature search: every setting, button and tab by name or alias (`ctx`, `tts`, `mlock`, …) |
 | `start_gateway.bat` / `start_gateway_headless.bat` | Telegram gateway (mirrors chats to your phone, voice notes and photos in, approvals out) |
 
 ### Updating

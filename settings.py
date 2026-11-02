@@ -216,7 +216,7 @@ DEFAULT_SETTINGS = {
     "duo_mask_before_compress":  True,
     "duo_compress_overflow_reserve": 1024,
     # Chars kept from tool output when a compression tail-caps it (read by
-    # duo_runner with an 8000 fallback; not persisted before 2026-10-31).
+    # duo_runner with an 8000 fallback).
     "duo_compress_tail_tool_max_chars": 8000,
     "duo_max_compressions":      40,
     "duo_compress_model":        "auto",

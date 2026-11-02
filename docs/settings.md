@@ -55,7 +55,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_compress_local_only` | bool | `False` |  |
 | `duo_compress_model` | str | `auto` |  |
 | `duo_compress_overflow_reserve` | int | `1024` |  |
-| `duo_compress_tail_tool_max_chars` | int | `8000` | Chars kept from tool output when a compression tail-caps it (read by duo_runner with an 8000 fallback; not persisted before ). |
+| `duo_compress_tail_tool_max_chars` | int | `8000` | Chars kept from tool output when a compression tail-caps it (read by duo_runner with an 8000 fallback). |
 | `duo_compress_threshold` | int | `0` |  |
 | `duo_critic_ctx` | null | `None` |  |
 | `duo_critic_model` | str | `` |  |
