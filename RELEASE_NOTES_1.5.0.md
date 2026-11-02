@@ -284,6 +284,16 @@ the older b11889 llama.cpp the architecture does not even load. Verified
 against llama.cpp b12032: a `tools=` request answers
 `finish_reason: tool_calls` with `{"path":"."}`.
 
+## MoE expert offload honours the UI
+
+The per-model `MoE CPU Experts` field had **no effect** for models with a
+shipped profile (groot: 32): the loader consulted the registry profile first
+and only used the override when the profile was silent — the documented order
+was override > profile > table. Worse, the loader held a by-value import of
+the override dict from boot, and a settings change replaces the attribute, so
+the map it looked at stayed empty. The override wins now, the dict is read
+live, and the load logs `MoE experts: <model> -> N (-n-cpu-moe, source=…)`.
+
 ## Read aloud follows the run
 
 The four read-aloud switches (direct / agentic / ask / gate) were partly
@@ -292,7 +302,10 @@ mode never says agentic — the decider picks the route per message. So an
 agentic or pipeline answer counted as "direct" and `tts_read_direct` spoke it
 even with the agentic switch off. The run now records the route it actually
 took (complexity event, `pipeline_start`, `duo_start`) and speaks the final
-answer with the switch that belongs to it.
+answer with the switch that belongs to it. The switches are also **re-read from
+the server** at every run start, after every voice write and when the tab
+comes back - a preset load or a second tab could leave the page believing
+"speak everything" while every switch showed off.
 
 The voice step no longer looks frozen: `setup_voice.bat` paused with `pause >nul`,
 which swallows its own "press any key" line — after the TTS download the

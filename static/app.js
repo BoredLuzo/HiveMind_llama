@@ -1520,7 +1520,15 @@ async function _flushQueuedSettings() {
 
 function postSettings(patch) {
   if (!patch || typeof patch !== 'object') return Promise.resolve();
+  // a voice/read-aloud write is re-read from the server once it lands, so the
+  // client cannot keep a value the engine rejected
+  var _voicePatch = Object.keys(patch).some(function(k) {
+    return k.indexOf('tts_') === 0;
+  });
   _settingsPatchQueue = Object.assign(_settingsPatchQueue || {}, patch);
+  if (_voicePatch) {
+    setTimeout(function() { refreshVoiceFlags(); }, 400);
+  }
   return new Promise(function(resolve) {
     _settingsPostWaiters.push(resolve);
     if (_settingsPostTimer) clearTimeout(_settingsPostTimer);
@@ -2047,6 +2055,30 @@ async function voicePlaySample() {
 // spoken while TTS is off, and speech never queues up behind older speech.
 var _readAloudQueue = [];
 var _readAloudBusy = false;
+
+// VOICE-FLAG-SYNC (2026-11-02): the read-aloud switches are client state, and
+// it drifted from the engine - a preset load, a second tab or a reload during a
+// run left S.ttsRead* true while the card showed them off, so answers were
+// still spoken. Re-read them from the server and repaint the switches.
+async function refreshVoiceFlags() {
+  try {
+    var s = await (await fetch('/settings')).json();
+    S.ttsEnabled = s.tts_enabled === true;
+    S.ttsReadDirect = s.tts_read_direct === true;
+    S.ttsReadAgentic = s.tts_read_agentic === true;
+    S.ttsReadAsk = s.tts_read_ask === true;
+    S.ttsReadGate = s.tts_read_gate === true;
+    [['tts-enabled-toggle', S.ttsEnabled],
+     ['tts-read-direct-toggle', S.ttsReadDirect],
+     ['tts-read-agentic-toggle', S.ttsReadAgentic],
+     ['tts-read-ask-toggle', S.ttsReadAsk],
+     ['tts-read-gate-toggle', S.ttsReadGate]].forEach(function (pair) {
+      var el = document.getElementById(pair[0]);
+      if (el) el.checked = pair[1];
+    });
+    return S.ttsEnabled;
+  } catch (e) { return S.ttsEnabled; }
+}
 
 function _readAloudWanted(kind) {
   if (!(S && S.ttsEnabled)) return false;
@@ -6659,6 +6691,9 @@ async function sendMsg() {
   S.streaming = true;
   S.currentRunId = null;
   S._runIsDuo = false;
+  // the switches may have changed in another tab or via a preset - the answer
+  // at the end of this run must use the CURRENT server truth
+  refreshVoiceFlags();
   // ROUTE-FOR-SPEECH: which route this run actually took. The final answer is
   // read with the "agentic" switch only when the run really was multi-agent;
   // the mode alone cannot tell (auto routes to either, and the decider decides

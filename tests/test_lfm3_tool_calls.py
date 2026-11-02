@@ -72,5 +72,24 @@ check("5a the installer describes the tool-calling support",
       "tool-calling subagent" in CAT)
 check("5b the build requirement is named", "b12001+" in CAT)
 
+# ── 6. the MoE override must beat the profile (groot case) ────────────────
+LOAD = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+_i_ovr = LOAD.index('getattr(_lc_live, "MOE_CPU_EXPERTS"')
+_i_reg = LOAD.index("_try_registry_moe as _reg_moe")
+check("6a the per-model override is resolved first", _i_ovr < _i_reg)
+check("6b the override dict is read live, not from the boot import",
+      "from . import llama_config as _lc_live" in LOAD)
+check("6c the log names the source", "source=%s" in LOAD)
+SERVER = (ROOT / "server.py").read_text(encoding="utf-8")
+check("6d the settings sync writes the canonical module",
+      "_lc_moe.MOE_CPU_EXPERTS = dict(_moe_map)" in SERVER)
+
+# ── 7. the read-aloud flags are re-read from the server ──────────────────
+check("7a a refresh helper exists", "function refreshVoiceFlags(" in APP)
+check("7b a run start refreshes them", "refreshVoiceFlags();" in APP)
+check("7c a tts write refreshes them too", "k.indexOf('tts_') === 0" in APP)
+check("7d the switches are repainted from the server",
+      "'tts-read-direct-toggle', S.ttsReadDirect" in APP)
+
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

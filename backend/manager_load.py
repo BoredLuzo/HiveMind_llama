@@ -1438,27 +1438,42 @@ class LlamaLoadMixin:
             _moe_pinned_off = False
         if _moe_pinned_off:
             logger.info("MoE pin: %s is dense per model config — expert offload skipped", _moe_model_key)
+        # ORDER (2026-11-02): the per-model OVERRIDE comes first. It used to be
+        # the other way round - the registry profile won, so a model with a
+        # shipped moe_cpu_experts (groot: 32) ignored the UI value entirely.
+        # The override is also read LIVE: a module-level `from ... import
+        # MOE_CPU_EXPERTS` binds the dict from boot, and server.py replaces
+        # the attribute on a settings change - the loader then kept looking at
+        # an empty dict and the toggle did nothing.
+        _moe_src = "table"
         try:
-            from .llama_config import _try_registry_moe as _reg_moe
-            _reg_moe_v = _reg_moe(_moe_model_key)
-            if _reg_moe_v:
-                _moe_count = _reg_moe_v
+            from . import llama_config as _lc_live
+            _moe_map = getattr(_lc_live, "MOE_CPU_EXPERTS", None)
+            if not _moe_map:
+                from . import llama_server_manager as _lsm_live
+                _moe_map = getattr(_lsm_live, "MOE_CPU_EXPERTS", {})
+            if isinstance(_moe_map, dict):
+                _moe_count = int(_moe_map.get(_moe_model_key, 0) or 0)
+                if _moe_count <= 0:
+                    for _ok, _ov in _moe_map.items():
+                        if _moe_model_key.startswith(_ok) and int(_ov or 0) > 0:
+                            _moe_count = int(_ov)
+                            break
+            else:
+                _moe_count = int(_moe_map or 0)
+            if _moe_count > 0:
+                _moe_src = "override"
         except Exception:
-            pass
+            _moe_count = 0
         if _moe_count <= 0:
             try:
-                _moe_map = MOE_CPU_EXPERTS
-                if isinstance(_moe_map, dict):
-                    _moe_count = int(_moe_map.get(_moe_model_key, 0) or 0)
-                    if _moe_count <= 0:
-                        for _ok, _ov in _moe_map.items():
-                            if _moe_model_key.startswith(_ok) and int(_ov or 0) > 0:
-                                _moe_count = int(_ov)
-                                break
-                else:
-                    _moe_count = int(_moe_map or 0)
+                from .llama_config import _try_registry_moe as _reg_moe
+                _reg_moe_v = _reg_moe(_moe_model_key)
+                if _reg_moe_v:
+                    _moe_count = _reg_moe_v
+                    _moe_src = "profile"
             except Exception:
-                _moe_count = 0
+                pass
         if _moe_count <= 0:
             _moe_count = _MOE_EXPERT_COUNTS.get(_moe_model_key, 0)
             if _moe_count == 0 and _moe_model_key:
@@ -1476,6 +1491,10 @@ class LlamaLoadMixin:
                 _moe_count = 0
         if _moe_pinned_off:
             _moe_count = 0
+            _moe_src = "pinned-dense"
+        if _moe_count > 0:
+            logger.info("MoE experts: %s -> %d (-n-cpu-moe, source=%s)",
+                        _moe_model_key, _moe_count, _moe_src)
 
         # ── VRAM calibration guard (soft) ──
         # Prefix-aware (2026-10-21): the table keys carry no tag suffixes, so an

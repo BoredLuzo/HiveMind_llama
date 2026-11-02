@@ -359,10 +359,13 @@ def _sync_backend_runtime_config() -> None:
         _raw = settings.get("vram_budget_gb")
         _lsm_init.VRAM_BUDGET_GB = float(_raw) if _raw is not None else DEFAULT_VRAM_BUDGET_GB
         _moe_cfg = settings.get("moe_cpu_experts", {})
-        if isinstance(_moe_cfg, dict):
-            _lsm_init.MOE_CPU_EXPERTS = {str(k): int(v or 0) for k, v in _moe_cfg.items()}
-        else:
-            _lsm_init.MOE_CPU_EXPERTS = {}
+        # ONE canonical attribute: the load path reads llama_config live (the
+        # manager module only holds a by-value import from boot).
+        _moe_map = ({str(k): int(v or 0) for k, v in _moe_cfg.items()}
+                    if isinstance(_moe_cfg, dict) else {})
+        import backend.llama_config as _lc_moe
+        _lc_moe.MOE_CPU_EXPERTS = dict(_moe_map)
+        _lsm_init.MOE_CPU_EXPERTS = _moe_map
         # MLOCK-PROPAGATION (audit 2026-10-24): the setting used to land only
         # on the manager module - the load path (manager_load) holds a by-value
         # import from boot, so llama_mlock=false never reached the flags.
