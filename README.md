@@ -6,9 +6,23 @@
 [![python](https://img.shields.io/badge/python-3.14-3776ab)](pyproject.toml)
 
 Local multi-agent coding assistant on top of llama.cpp. Runs on your own
-hardware, no cloud, no API keys, nothing leaves your machine.
+hardware: no cloud LLM, no API keys, your prompts, code and answers are
+processed locally.
 
 Author: Luzo (BoredLuzo) | https://github.com/BoredLuzo
+
+**What does leave the machine** — only with the feature switched on:
+
+| Feature | What leaves | Where to |
+|---|---|---|
+| Telegram gateway | every message, answer and file you send from or receive on the phone | Telegram's servers (bot traffic is not end-to-end encrypted) |
+| Web search | your search terms | your own SearXNG instance and the engines it queries |
+| Model download | model names | Hugging Face (plus a one-time `hf auth login` for gated models) |
+| Startup update check | no personal data | GitHub API (disable with `HIVEMIND_NO_UPDATE_CHECK=1`) |
+| MCP client | the arguments of the tools you call | the external MCP server you configured |
+
+Everything else stays on disk: settings, chats, memory and logs live in the
+install folder.
 
 
 ## What it is
@@ -119,9 +133,9 @@ the Coder context.
 | Mode | When | What happens |
 |------|------|--------------|
 | Simple / Direct | trivial tasks (default) | single model, direct answer, optional web-search tool calls |
-| Auto | judge-routed | the model assigned to the Judge role (any installed LLM) classifies complexity, routes to Direct / Pipeline / Duo |
+| Auto *(experimental)* | judge-routed | the model assigned to the Judge role (any installed LLM) classifies complexity, routes to Direct / Pipeline / Duo |
 | Pipeline | analysis, complex docs | Analyst -> Refiner -> Critic -> Synthesizer, optional constraint loop |
-| Map (AutoMap) | mixed tasks | heuristic scorer picks the best model per agent role |
+| Map (AutoMap, *experimental*) | mixed tasks | heuristic scorer picks the best model per agent role |
 | Code Duo | coding | Coder + Critic loop, sub-modes Critic-Duo and Agentic |
 
 Mode buttons live in the sidebar (Agents tab). AutoMap routing can learn from
@@ -657,12 +671,13 @@ restart needed.
 
 ## Learning and memory
 
-- Soul engine: peer-rating-based personality evolution, injects learned traits
-  into system prompts.
+- Soul engine *(experimental)*: peer-rating-based personality evolution,
+  injects learned traits into system prompts.
 - Skill distiller: semantic insight compaction (decay/merge/evict), top
   insights exported to `learning_logs/skills/`.
-- Persistent memory: 96-dim hash embeddings with cosine retrieval, path-based
-  relevance boosting, deduplicated debounced persistence.
+- Persistent memory: lightweight hash-based keyword vectors (no model
+  download, lexical not semantic), path-based relevance boosting,
+  deduplicated debounced persistence.
 - Post-run insight extraction and per-run/per-phase token stats.
 
 ## Safety and reliability
