@@ -50,8 +50,14 @@ for %%F in ("%DEC_DIR%\*") do if exist "%%~F" set "HAVE_DEC=1"
 if not defined HAVE_DEC set "MISS_DEC=1"
 
 REM --- browser tool ----------------------------------------------------------
+REM A dependency refresh can bump playwright past the installed browser build
+REM (then every launch fails with "Executable doesn't exist ..."). Comparing
+REM directory names cannot catch that, so the check asks playwright itself:
+REM when the package is there, run the idempotent install (no download when
+REM the build already matches).
 set "HAVE_BROWSER="
-for /d %%D in ("%LOCALAPPDATA%\ms-playwright\chromium-*") do set "HAVE_BROWSER=1"
+"%PY%" -c "import playwright" >nul 2>&1
+if not errorlevel 1 set "HAVE_BROWSER=1"
 if not defined HAVE_BROWSER set "MISS_BROWSER=1"
 
 REM --- POSIX tools: Git Bash covers it already -------------------------------
@@ -123,6 +129,7 @@ if defined MISS_DEC (
 if defined MISS_BROWSER (
     echo.
     echo  --- browser tool -------------------------------------------
+    REM idempotent: installs only what this playwright build is missing
     "%PY%" -m playwright install chromium
     if errorlevel 1 echo   [WARN] Chromium download failed - the browser tool stays off.
 )
@@ -134,6 +141,18 @@ if defined MISS_POSIX (
     if errorlevel 1 winget install --source msstore --id 9NBLGGH4R32N --accept-package-agreements --accept-source-agreements
     where grep >nul 2>&1
     if errorlevel 1 echo   [NOTE] Core Utils may need a fresh login before grep is on PATH.
+)
+
+REM BROWSER-MATCH (2026-11-02): an update refreshes requirements, which can
+REM bump playwright past the installed browser build - then every launch fails
+REM with "Executable doesn't exist ... chromium_headless_shell-<new>". This run
+REM is idempotent (no download when the build matches) and cheap, so it always
+REM happens, not only when the component looks missing.
+if defined HAVE_BROWSER (
+    echo.
+    echo  --- browser engine -------------------------------------------
+    "%PY%" -m playwright install chromium
+    if errorlevel 1 echo   [WARN] Browser refresh failed - the browser tool stays off.
 )
 
 echo.

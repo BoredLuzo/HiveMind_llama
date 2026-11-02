@@ -243,7 +243,26 @@ def _ensure_page():
             "pip install playwright && playwright install chromium"
         )
     _playwright = sync_playwright().start()
-    _browser = _playwright.chromium.launch(headless=True)
+    try:
+        _browser = _playwright.chromium.launch(headless=True)
+    except Exception as _launch_err:  # browser build/launch failures
+        # BROWSER-BINARIES (2026-11-02): a requirement refresh can bump
+        # playwright past the installed browser build ("Executable doesn't
+        # exist ... chromium_headless_shell-1248"). Try the full browser
+        # first (it ships with the same build), then say exactly what to run.
+        _msg = str(_launch_err)
+        if "Executable doesn't exist" not in _msg:
+            raise
+        try:
+            _browser = _playwright.chromium.launch(
+                headless=True, channel="chromium")
+        except Exception:            # the fallback failed too - explain it
+            raise RuntimeError(
+                "The Playwright browser build does not match the installed "
+                "playwright package. Fix once with: "
+                + ".venv\\Scripts\\python.exe -m playwright install chromium "
+                + f"(original error: {_msg.splitlines()[0][:160]})"
+            ) from None
     _page = _browser.new_page()
     _console_msgs = []
     _pageerrors = []

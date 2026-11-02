@@ -1732,7 +1732,7 @@
   "except_pass": 6
  },
  "tools/browser.py": {
-  "broad_except": 9,
+  "broad_except": 11,
   "except_pass": 3
  },
  "tools/definitions.py": {

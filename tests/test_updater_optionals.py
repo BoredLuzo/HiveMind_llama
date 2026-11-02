@@ -45,7 +45,7 @@ for marker, what in (
         ("stt\\models\\*", "speech-to-text model"),
         ("models--kyutai--pocket-tts", "text-to-speech cache"),
         ("models\\decider\\gliner25-decide", "routing decider"),
-        ("ms-playwright\\chromium-*", "browser engine"),
+        ('import playwright', "browser engine (package probe)"),
         ("Git\\usr\\bin\\grep.exe", "Git Bash covers POSIX")):
     check(f"2 detects {what}", marker in SCRIPT)
 

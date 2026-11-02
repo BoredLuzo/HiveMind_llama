@@ -70,6 +70,16 @@ def silent_pauses(path: Path) -> list[tuple[int, str]]:
     return out
 
 
+def browser_refresh_present(path: Path) -> bool:
+    """The updater must refresh the Playwright build on every run: a
+    requirements refresh can bump the package past the installed browser."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return '"-m playwright install chromium"' in text or " -m playwright install chromium" in text
+
+
 def main() -> int:
     checked = 0
     bad = 0
@@ -94,7 +104,13 @@ def main() -> int:
         print(f"\n  {bad} unescaped parenthesis/parentheses inside echo blocks.")
         print("  Escape them as ^( and ^) - otherwise cmd aborts the installer.")
         return 1
-    print(f"  PASS {checked} batch files: no block-breaking echo, no silent pause")
+    _opt = ROOT / "deploy" / "check_optionals.bat"
+    check_ok = browser_refresh_present(_opt) if _opt.exists() else True
+    if not check_ok:
+        print("  FAIL deploy/check_optionals.bat: no Playwright refresh")
+        return 1
+    print(f"  PASS {checked} batch files: no block-breaking echo, no silent pause, "
+          f"browser build refreshed")
     return 0
 
 
