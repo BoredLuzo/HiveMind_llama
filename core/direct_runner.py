@@ -509,15 +509,25 @@ async def run_direct(ctx):
                             parts.append(_cont)
                             yield await ctx.emit({"type": "token", "content": _cont})
                 else:
-                    async for tok in ctx.pipeline.ollama.chat_stream(
+                    # LEAK-FIX (2026-11-02): models whose chat template reasons
+                    # BY DEFAULT (LFM3, and any "thinking" model loaded without
+                    # the per-agent switch) shipped their reasoning inside
+                    # `content` - the answer started with "Also note system
+                    # says ...". Ask for the split even here and drop the
+                    # reasoning: with the switch off it is not part of the
+                    # answer.
+                    async for _tok, _thk_off in ctx.pipeline.ollama.chat_stream(
                             _direct_model, _stream_msgs, _direct_temp, _direct_tokens,
                             ctx=ctx.get_num_ctx(_direct_model, "direct") or 8192,
                             no_cache=ctx.prepro_success,
                             think=False,
+                            split_thinking=True,
                             usage_out=_usage):
                         if ctx.aborted(): break
-                        parts.append(tok)
-                        yield await ctx.emit({"type": "token", "content": tok})
+                        if not _tok:
+                            continue
+                        parts.append(_tok)
+                        yield await ctx.emit({"type": "token", "content": _tok})
             except Exception as _direct_err:
                 _err_tok = f"[Direct error: {str(_direct_err)[:120]}]"
                 parts.append(_err_tok)
