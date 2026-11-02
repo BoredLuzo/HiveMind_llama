@@ -429,7 +429,11 @@ class Gateway:
         pend = self._pending_get()
         if not pend or p is None or p.kind != "message":
             return False
-        if p.is_forwarded or p.voice_file_id:
+        # PHOTO-NOT-AN-ARGUMENT (2026-11-02): an open command prompt (/setModel
+        # without a number) swallowed the NEXT message - including a photo with
+        # a caption, which then became an invalid command argument instead of a
+        # run. Media never answers a command.
+        if p.is_forwarded or p.voice_file_id or p.image_file_id or p.document_file_id:
             return False
         value = str(p.text or "").strip()
         if not value or value.startswith("/"):
@@ -448,8 +452,12 @@ class Gateway:
         # POLL-DEBUG (2026-10-22): the gateway consumed a voice note silently
         # once (no Transcribing reply, no error) - log the entry decision at
         # INFO so a silent drop between poll and voice handler is visible.
-        log.info("[OWNER-UPDATE] kind=%s voice_file=%s text=%r",
-                 p.kind, bool(p.voice_file_id), str(p.text or "")[:40])
+        # PHOTO-DIAG (2026-11-02): a photo message produced a plain text run
+        # with no image at the engine - log what the parser saw, or the next
+        # report is guesswork again.
+        log.info("[OWNER-UPDATE] kind=%s voice_file=%s photo=%s doc=%s text=%r",
+                 p.kind, bool(p.voice_file_id), bool(p.image_file_id),
+                 bool(p.document_file_id), str(p.text or "")[:40])
         if not _internal and await self._run_pending_as_arg(p):
             return
         cmd = gw_commands.command_from_message(p)
