@@ -402,6 +402,11 @@ _APPROVAL_TOOLS = frozenset({
     # belt-and-braces in case it is ever offered again).
     "edit_ast", "replace_lines", "patch_file",
     "git_commit",
+    # AUDIT 2026-11-02 (README said "before everything that changes the
+    # project"): run_tests executes arbitrary project code, undo_last reverts
+    # files, and the browser drives a real page (clicks, form posts). All three
+    # are approval-worthy like the write tools.
+    "run_tests", "undo_last", "browser",
     # LSP-RENAME (2026-10-31): a project-wide rename is a multi-file
     # mutation, so it shows the approval card like the write tools. The
     # handler itself never writes - it returns the summarized WorkspaceEdit

@@ -34,13 +34,17 @@ check("first completion after a write -> veto",
       completion_verdict(mutation_serial=5, last_ok_serial=1,
                          has_written_files=True, vetoes=0) == "veto")
 
-# ── the retry is accepted, but marked ────────────────────────────────────
-check("retry without verification -> unverified (never ok)",
+# ── the veto budget: three nags, then accepted-but-marked ────────────────
+for _v in (1, 2):
+    check(f"veto {_v+1} still asks for the test run",
+          completion_verdict(mutation_serial=5, last_ok_serial=1,
+                             has_written_files=True, vetoes=_v) == "veto")
+check("after the budget -> unverified (never ok)",
       completion_verdict(mutation_serial=5, last_ok_serial=1,
-                         has_written_files=True, vetoes=1) == "unverified")
+                         has_written_files=True, vetoes=3) == "unverified")
 check("a green test after the write flips it back to ok",
       completion_verdict(mutation_serial=5, last_ok_serial=5,
-                         has_written_files=True, vetoes=1) == "ok")
+                         has_written_files=True, vetoes=2) == "ok")
 
 # ── the runner must surface it, not swallow it ───────────────────────────
 src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")

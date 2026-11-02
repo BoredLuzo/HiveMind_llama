@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**268 settings keys.**
+**270 settings keys.**
 
 | Key | Type | Default | Note |
 |---|---|---|---|
@@ -13,6 +13,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `agents` | object | `{...}` |  |
 | `allow_cpu_offload` | bool | `True` |  |
 | `ask_user_auto_answer` | str | `Use best judgment, document decision ...` |  |
+| `ask_user_auto_proceed` | bool | `False` | ASK-USER-AUTO-PROCEED : the UI toggle existed, wrote this key - and the loader popped it as a stale key on every start, so the switch silently reset. It is a real setting: on timeout the open question is answered automatically instead of pausing the run. |
 | `ask_user_max_per_10min` | int | `5` |  |
 | `ask_user_throttle_pause_message` | str | `Agent is asking too many questions — ...` |  |
 | `ask_user_timeout_until_finished_seconds` | int | `300` |  |
@@ -60,6 +61,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_critic_model` | str | `` |  |
 | `duo_critic_tools` | bool | `False` |  |
 | `duo_error_rollup` | bool | `True` | ERROR ROLLUP : deterministic dedup of repeating test/compile failures in the fix-loop (core/error_rollup.py). First failure full, repeats rendered as PERSISTS/FIXED/REOPENED. Runtime state per run. |
+| `duo_evict_on_pause` | bool | `False` | EVICT-ON-PAUSE : while a run waits for an ask_user answer (or an approval card) the coder sits in VRAM untouched. On a small card that blocks every other model load; this releases it until the run resumes. Off by default - the reload costs a few seconds. |
 | `duo_evict_planner_on_coder` | bool | `True` | SERIAL-SLOTS : unload the planner when the coder phase starts and the models differ (frees VRAM for coder ctx; costs one reload when switching back). |
 | `duo_git_autocommit` | bool | `False` |  |
 | `duo_git_checkpoints` | bool | `False` | OFF : a checkpoint is a real git commit in the user's repo. Opt-in; a bad write is still covered by undo_last + the write transaction. |

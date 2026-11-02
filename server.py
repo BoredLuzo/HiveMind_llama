@@ -1582,6 +1582,7 @@ async def stream(req: Request):
                        duo_coder_tool_thinking=duo_coder_tool_thinking,
                        duo_coder_tool_thinking_explicit=_duo_coder_tool_thinking_explicit,
                        duo_coder_tool_thinking_auto_mode=duo_coder_tool_thinking_auto_mode,
+                       duo_evict_on_pause=bool(settings.get("duo_evict_on_pause", False)),
                        until_finished=until_finished,
                        duo_runtime_profile=duo_runtime_profile,
                        duo_runtime_profile_lock_override=duo_runtime_profile_lock_override,

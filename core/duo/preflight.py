@@ -900,18 +900,25 @@ async def stuck_handler(tn, ta, tr, *, ctx, ws_str: str, total_tool_rounds: int,
             ctx.exec_ctrl.reset_stuck_detection()
     return False, loop_detected, last_write_round, round_wrote_file
 
+_VERIFY_VETO_BUDGET = 3
+
+
 def completion_verdict(*, mutation_serial: int, last_ok_serial: int,
                        has_written_files: bool, vetoes: int) -> str:
     """Decide what a task_complete call means for this run.
 
     "ok"         - nothing to verify (no write since the last green test)
-    "veto"       - block once and ask for a test run (the model gets one chance)
-    "unverified" - accept, but mark the result as unverified. The early design
-                   accepted the second call silently, so a model that retried
-                   without verifying looked exactly like a verified run
-                   (benchmark T1: failing self-test, "correct" claim).
+    "veto"       - block and ask for a test run
+    "unverified" - accept, but mark the result as unverified.
+
+    VETO-BUDGET (2026-11-02, audit): one veto meant a model could ignore the
+    first "run the tests" nudge, retry immediately and end the run - the README
+    promised a required test run. The budget is now three: a real model that
+    cannot run tests gets a clear instruction three times, and the loop guard
+    still bounds the run (the verdict only decides the wording of the last
+    acceptance).
     """
     needs_verify = mutation_serial > last_ok_serial and bool(has_written_files)
     if not needs_verify:
         return "ok"
-    return "veto" if vetoes < 1 else "unverified"
+    return "veto" if vetoes < _VERIFY_VETO_BUDGET else "unverified"
