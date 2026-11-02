@@ -1,26 +1,34 @@
 # Release 1.5.0
 
-1.5.0 builds on 1.4.14 with five workstreams: a hardened, protocol-current
-MCP surface (server + client), a generic language-server client for the
-coding agent, compression and context-reliability work for long agentic runs,
-a phone surface that now takes pictures and documents, and a round of
-installer/updater/git audits whose findings are all fixed in this build.
-Hermes stays the default coder, Groot stays experimental.
+1.5.0 makes HiveMind reachable from more places and lets it talk to more
+tools. It speaks MCP in both directions (other programs can use HiveMind's
+tools, and HiveMind can use external MCP servers), it drives the language
+servers that are already installed on your machine, and the Telegram bot now
+takes voice notes, photos and PDFs.
 
-Highlights, if you read nothing else:
+Long agentic runs got calmer too: a follow-up prompt no longer dies because
+the coder was reloaded right after the previous run, compression keeps the
+context bounded without breaking the tool history, and the settings a fresh
+install starts with actually match the models the installer downloaded.
 
-- **MCP both directions** — 2024/2025/2026 protocols, resources, prompts,
-  23 annotated tools, token-gated writes, per-server budgets, one-command
-  IDE configs.
-- **LSP for every installed language server** — ten `lsp_*` tools,
-  automatic diagnostics after edits, workspace `.vscode/settings.json`
-  honoured, on by default.
-- **Reprompting is reliable** — the post-run reload race that hard-stopped
-  follow-up prompts is gone; the coder-load ladder survives aborts.
-- **Telegram takes photos and PDFs** — caption becomes the prompt, the
-  projector loads on demand, scanned PDFs say so instead of pretending.
-- **Installer fixes** — release notes render, the decider prompt appears,
-  the essential set is the default route, declining a model skips it whole.
+Hermes stays the default coder. Groot stays experimental.
+
+If you read nothing else:
+
+- **MCP in both directions** — 2024/2025/2026 protocol versions, resources,
+  prompts, 23 annotated tools, token-gated writes, per-server call budgets
+  and copy-paste configs for the common IDEs.
+- **Language servers for the coding agent** — ten `lsp_*` tools (diagnostics,
+  definition, references, symbols, rename plan, format), automatic
+  diagnostics after every edit, on by default, no per-language switches.
+- **Follow-up prompts work** — the post-run reload race is gone and the
+  coder-load retry survives an abort instead of churning model loads.
+- **Photos and PDFs from the phone** — the caption becomes the prompt, the
+  vision projector loads on demand, a scanned PDF says so instead of
+  pretending it read something.
+- **Installer** — release notes render properly, the decider question
+  appears, the essential set is the four models of the default route, and
+  answering "no" to a model really skips it.
 
 Upgrade: run `update.bat` (or the new startup check offers the update
 directly), or extract the zip next to the old install. Settings, models,
