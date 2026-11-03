@@ -1,0 +1,127 @@
+# Settings keys that are intentionally settings.json-only.
+#
+# The web UI does not read these names (index.html / static/app.js), so they
+# are tuned by editing settings.json or POST /settings. The engine owns the
+# file and rewrites it on save - edit while the engine is stopped, or send the
+# value through POST /settings.
+#
+# This list is a product decision, not a dump: before adding a key here, ask
+# whether it belongs in the settings panel or the feature search. The
+# regression test (tests/test_settings_ui.py) fails for a new DEFAULT_SETTINGS
+# key that is neither in the UI nor listed below.
+#
+# Format: one key per line, '#' starts a comment.
+
+server_port
+models_dir
+safe_profile_policy
+safe_profile_matrix_file
+debug_dump_request
+max_concurrent_models
+allow_cpu_offload
+warn_on_cpu_offload
+max_model_size_gb
+prefer_smaller_models
+duo_worker_slots
+llama_gpu_layers_auto
+gpu_backend
+duo_runtime_profile
+routing_decider_model
+duo_critic_model
+duo_caps
+duo_until_finished_max_hours
+duo_rounds_balanced_cap
+duo_llm_slow_timeout_s
+duo_tool_output_ttl
+duo_compress_threshold
+duo_compress_auto_floor
+duo_mask_before_compress
+duo_compress_overflow_reserve
+duo_max_compressions
+duo_compress_llm_timeout_s
+session_compress_threshold
+session_history_budget_tokens
+duo_tree_scout_enabled
+duo_tree_scout_max_depth
+duo_tree_scout_max_files
+duo_pre_explore_timeout_seconds
+duo_pre_explore_ctx_char_ratio
+duo_pre_explore_llm_timeout_s
+duo_pre_explore_max_files_est
+duo_pre_explore_timeout_per_file_s
+duo_repo_memory_enabled
+duo_repo_memory_top_k
+duo_repo_memory_min_score
+duo_symbol_ref_enabled
+duo_symbol_ref_top_k
+duo_symbol_ref_max_items
+duo_planner_use_exec_model
+duo_planner_default_thinking
+disable_thinking_in_planner
+duo_planner_thinking_budget
+duo_planner_ctx_cap
+duo_planner_ensure_load_timeout_s
+duo_planner_thinking_timeout_s
+duo_soft_planner_wall_timeout_s
+plan_tracker_classifier
+duo_evict_planner_on_coder
+duo_write_chars_per_token
+duo_coder_fallback_model
+duo_tool_autopromote_max_rounds
+duo_tool_sandbox_max_mem_mb
+duo_tool_sandbox_max_procs
+duo_tool_sandbox_max_cpu_s
+debug_api_enabled
+read_guard_enabled
+duo_wedge_handoff_streak_threshold
+duo_wedge_handoff_max_per_run
+duo_wedge_handoff_timeout_s
+duo_wedge_handoff_max_rounds
+duo_wedge_handoff_max_tokens
+duo_wedge_handoff_model
+desktop_notifications
+stt_translate
+stt_timeout_s
+stt_log_transcripts
+tts_timeout_s
+tts_idle_stop_s
+document_max_chars
+document_max_pages
+tts_normalize
+searxng_engines
+searxng_language
+websearch_auto_trigger
+duo_websearch_max_calls
+duo_install_max_calls
+duo_websearch_timeout_fast_seconds
+duo_websearch_timeout_critical_seconds
+run_bash_shell
+vision_preprocess_timeout_seconds
+vision_preprocess_load_timeout_seconds
+judge_prefetch_before_complexity
+prefetch_agent_avgs
+automap_excluded
+model_capability_overrides
+subagent_lite_min_free_ram_gb
+subagent_lite_max_tools
+subagent_lite_max_tokens
+subagent_lite_timeout_s
+subagent_lite_cooldown_s
+subagent_lite_safety_margin_mib
+ask_user_throttle_pause_message
+duo_evict_on_pause
+duo_max_tool_errors
+lsp_client_timeout_s
+lsp_max_diagnostics
+lsp_max_results
+mcp_server_budgets
+mem_watch_enabled
+
+# Agent-card bookkeeping written by the save path (not a control).
+agents_user_model_choice
+agents_user_sampling_choice
+# Expert MCP client budget (settings.json only).
+mcp_client_max_calls_per_run
+
+# LSP security: repo .vscode/settings.json forwarding is opt-in.
+lsp_forward_workspace_settings

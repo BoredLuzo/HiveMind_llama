@@ -136,7 +136,9 @@ def _tool_allowed(tool_name: str, transport: str) -> tuple[bool, str]:
         if _env_flag("MCP_ALLOW_QUERY"):
             return True, ""
         return False, "'query' is disabled (opt-in: MCP_ALLOW_QUERY=1)."
-    return True, ""
+    # P2 (audit 2026-11-03): an untiered tool used to be allowed by default.
+    # Deny instead; a new tool must be classified before it is exposed.
+    return False, f"Tool '{tool_name}' has no tier and is denied by default."
 
 
 # ── HTTP-Guards (Host-Anti-Rebinding + Bearer) ────────────────────────────────
@@ -655,6 +657,37 @@ def _audit_tool_call(tool_name: str, transport: str, *, ok: bool,
         pass
 
 
+def _shared_tool_secret_guard(tool_name: str, args: dict) -> str | None:
+    """P0 (audit 2026-11-03): the shared tools run engine-side.
+
+    The local handler guards never execute for a forwarded call, so the same
+    denylist must be applied BEFORE the forward. Path and file_glob are the
+    two carriers.
+    """
+    _p = ""
+    for _k in ("path", "file", "filepath", "target"):
+        _v = (args or {}).get(_k)
+        if isinstance(_v, str) and _v.strip():
+            _p = _v.strip()
+            break
+    if _p:
+        try:
+            _rp = _resolve_path(_p)
+        except ToolPathError:
+            _rp = None
+        if _rp is not None:
+            _g = _secret_path_guard(_rp, tool_name)
+            if _g:
+                return _g
+    _glob = str((args or {}).get("file_glob") or "")
+    if _glob and _is_blocked_secret(_glob.replace("\\", "/")):
+        return _tool_error_response(
+            "SECRET_PATH_DENIED",
+            f"'{_glob}' is a protected secret file.",
+            tool=tool_name)
+    return None
+
+
 async def _dispatch_tool(tool_name: str, args: dict, local_handler=None,
                          transport: str = "stdio") -> str:
     """Zentraler Pfad fuer Tools, die nicht direkt aus tools/call kommen.
@@ -667,6 +700,11 @@ async def _dispatch_tool(tool_name: str, args: dict, local_handler=None,
         _audit_tool_call(tool_name, transport, ok=False, reason=reason)
         return _tool_error_response("TOOL_NOT_ALLOWED", reason, tool=tool_name)
     if tool_name in _MCP_SHARED_TOOL_NAMES:
+        _guard = _shared_tool_secret_guard(tool_name, args or {})
+        if _guard:
+            _audit_tool_call(tool_name, transport, ok=False,
+                             reason="secret_path_denied")
+            return _guard
         if not MCP_SHARED_TOOL_ENABLED:
             return _tool_error_response(
                 "MCP_SHARED_DISABLED",
@@ -757,11 +795,23 @@ async def tool_shell(cmd: str, timeout: int = 30) -> str:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(WORKSPACE),
+                # Linux audit 2026-11-03: own process group so a timeout can
+                # kill the whole tree instead of orphaning grandchildren.
+                start_new_session=True,
             )
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         result = _decode(out) + (f"\n[stderr]: {_decode(err)}" if err.strip() else "")
         return prefix + (result.strip() or "(no output)")
     except asyncio.TimeoutError:
+        try:
+            if not IS_WINDOWS:
+                import os as _os_kill
+                import signal as _sig_kill
+                _os_kill.killpg(_os_kill.getpgid(proc.pid), _sig_kill.SIGKILL)
+            else:
+                proc.kill()
+        except (OSError, ProcessLookupError):
+            pass
         return _tool_error_response(
             "RUN_BASH_TIMEOUT",
             f"Command timed out after {timeout}s.",
@@ -782,6 +832,8 @@ async def tool_read_file(path: str, max_kb: int = 64,
                          end_line: int | None = None) -> str:
     try:
         p = _resolve_path(path)
+        if _guard := _secret_path_guard(p, "read_file"):
+            return _guard
         if not p.exists():
             return _tool_error_response(
                 "FILE_NOT_FOUND",
@@ -827,6 +879,8 @@ async def tool_read_file(path: str, max_kb: int = 64,
 async def tool_write_file(path: str, content: str, mode: str = "write") -> str:
     try:
         p = _resolve_path(path)
+        if _guard := _secret_path_guard(p, "write_file"):
+            return _guard
         p.parent.mkdir(parents=True, exist_ok=True)
         if mode == "append":
             with p.open("a", encoding="utf-8") as f:
@@ -884,6 +938,15 @@ async def tool_list_dir(path: str = ".", depth: int = 2) -> str:
 async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") -> str:
     """rg.exe → findstr (Windows) → grep (Unix) → Python-Fallback."""
     p = _resolve_path(path)
+    if _guard := _secret_path_guard(p, "search_code"):
+        return _guard
+    # P2 (deep audit 2026-11-03): a single-file glob (findstr) prints
+    # "line:text" without a path, which the row filter cannot match.
+    if _is_blocked_secret(str(file_glob or "").replace("\\", "/")):
+        return _tool_error_response(
+            "SECRET_PATH_DENIED",
+            f"'{file_glob}' is a protected secret file.",
+            tool="search_code")
 
     # 1. ripgrep (Windows: rg.exe, Unix: rg)
     rg_bin = "rg.exe" if IS_WINDOWS else "rg"
@@ -897,6 +960,9 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
         result = _decode(out).strip()
         if result:
+            result = _filter_secret_rows(result)
+            if not result:
+                return "(no matches)"
             rows = result.split("\n")
             return "\n".join(rows[:50]) + (f"\n... ({len(rows) - 50} more)" if len(rows) > 50 else "")
         return "(no matches)"
@@ -917,7 +983,7 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
                 cwd=str(p),
             )
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-            return _decode(out).strip() or "(no matches)"
+            return _filter_secret_rows(_decode(out).strip()) or "(no matches)"
         except Exception as e:
             return f"[findstr error: {e}]"
 
@@ -929,7 +995,8 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
             stderr=asyncio.subprocess.PIPE,
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-        return out.decode("utf-8", errors="replace").strip() or "(no matches)"
+        return _filter_secret_rows(
+            out.decode("utf-8", errors="replace").strip()) or "(no matches)"
     except Exception as e:
         return f"[grep error: {e}]"
 
@@ -952,7 +1019,8 @@ async def tool_find_files(pattern: str = "**/*", path: str = ".", max_results: i
                 retryable=True,
             )
         max_results = max(1, min(2000, int(max_results or 150)))
-        files = sorted([p for p in base.glob(pattern) if p.is_file()])
+        files = [p for p in sorted(base.glob(pattern))
+                 if p.is_file() and not _is_blocked_secret(p.as_posix())]
         if not files:
             return f"(no matches for '{pattern}' in {base})"
         lines = []
@@ -976,6 +1044,8 @@ async def tool_find_files(pattern: str = "**/*", path: str = ".", max_results: i
 async def tool_get_signatures(path: str, max_items: int = 400) -> str:
     try:
         p = _resolve_path(path)
+        if _guard := _secret_path_guard(p, "get_signatures"):
+            return _guard
         max_items = max(20, min(1200, int(max_items or 400)))
         return await asyncio.to_thread(get_signatures_report, p, max_items)
     except Exception as e:
@@ -990,6 +1060,8 @@ async def tool_get_signatures(path: str, max_items: int = 400) -> str:
 async def tool_find_references(symbol: str, path: str = ".", max_items: int = 160) -> str:
     try:
         base = _resolve_path(path)
+        if _guard := _secret_path_guard(base, "find_references"):
+            return _guard
         if not str(symbol or "").strip():
             return _tool_error_response(
                 "INVALID_ARGUMENT",
@@ -998,7 +1070,9 @@ async def tool_find_references(symbol: str, path: str = ".", max_items: int = 16
                 retryable=True,
             )
         max_items = max(20, min(2000, int(max_items or 160)))
-        return await asyncio.to_thread(find_references_report, base, str(symbol).strip(), max_items)
+        return await asyncio.to_thread(
+            find_references_report, base, str(symbol).strip(), max_items,
+            exclude_fn=lambda _p: _is_blocked_secret(_p.as_posix()))
     except Exception as e:
         return _tool_error_response(
             "FIND_REFERENCES_FAILED",
@@ -1011,6 +1085,8 @@ async def tool_find_references(symbol: str, path: str = ".", max_items: int = 16
 async def tool_edit_ast(path: str, target_type: str, target_name: str, new_code: str) -> str:
     try:
         p = _resolve_path(path)
+        if _guard := _secret_path_guard(p, "edit_ast"):
+            return _guard
         ok, msg = await asyncio.to_thread(edit_ast_file, p, target_type, target_name, new_code)
         if ok:
             return msg
@@ -1032,6 +1108,8 @@ async def tool_edit_ast(path: str, target_type: str, target_name: str, new_code:
 async def tool_patch_file(path: str, old_str: str, new_str: str) -> str:
     try:
         p = _resolve_path(path)
+        if _guard := _secret_path_guard(p, "patch_file"):
+            return _guard
         if not p.exists():
             return _tool_error_response(
                 "FILE_NOT_FOUND",
@@ -1894,7 +1972,8 @@ _RESOURCE_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv",
 
 _RESOURCE_SECRET_RE = re.compile(
     r"(^|/)(\.env|\.env\..*|settings\.json|gateway\.toml|\.git-credentials|"
-    r"\.netrc|.*\.pem|.*\.key|id_rsa.*|id_ed25519.*|id_ecdsa.*|"
+    r"\.netrc|\.npmrc|\.pypirc|\.kube/config|.*\.kdbx|.*\.pem|.*\.key|"
+    r"id_rsa.*|id_ed25519.*|id_ecdsa.*|"
     r"credentials.*|secrets?\..*)$",
     re.IGNORECASE)
 
@@ -1909,6 +1988,44 @@ class _ResourceError(Exception):
 
 def _is_blocked_secret(rel_posix: str) -> bool:
     return bool(_RESOURCE_SECRET_RE.search(str(rel_posix or "")))
+
+
+def _secret_path_guard(p: Path, tool: str) -> str | None:
+    """B3 (audit 2026-11-03): the tool API shares the resources denylist.
+
+    `_default_workspace()` is the install root, so settings.json and
+    gateway.toml live inside the workspace; without this check every MCP
+    client could read the bot token and the git token through read_file.
+    """
+    try:
+        rel = p.resolve().relative_to(WORKSPACE.resolve()).as_posix()
+    except (OSError, ValueError):
+        rel = p.as_posix()
+    # P2 (security audit 2026-11-03): transcripts of other chats are not
+    # install secrets but equally private; resources/* already prunes them.
+    if any(part in {"sessions", "chats"} for part in Path(rel).parts):
+        return _tool_error_response(
+            "SECRET_PATH_DENIED",
+            f"'{p.name}' is inside a private transcript directory.",
+            tool=tool)
+    if _is_blocked_secret(rel):
+        return _tool_error_response(
+            "SECRET_PATH_DENIED",
+            f"'{p.name}' is a protected secret file and cannot be read or "
+            "written through the MCP tool API.",
+            tool=tool)
+    return None
+
+
+def _filter_secret_rows(text: str) -> str:
+    """Drop search hits whose file part is a protected secret (B3)."""
+    kept = []
+    for line in (text or "").splitlines():
+        m = re.match(r"^(.*?):\d+:", line)
+        if m and _is_blocked_secret(m.group(1).replace("\\", "/")):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def _guess_mime(p: Path) -> str:
@@ -2475,7 +2592,7 @@ async def _stdio_loop():
             if not line:
                 break
             text = line.decode("utf-8", errors="replace")
-            if len(text) > _buf_max:
+            if len(text.encode("utf-8")) > _buf_max:
                 # HARDENING: eine zu lange Zeile wird verworfen und beantwortet -
                 # frueher wurde der Puffer komplett resettet (Request verloren).
                 print(f"[MCP-stdio] request line too long ({len(text)} bytes) - dropped",
@@ -2487,6 +2604,19 @@ async def _stdio_loop():
                 buf = ""
                 continue
             buf += text
+            # B8 (audit 2026-11-03): the per-line cap did not bound the
+            # accumulated buffer - split JSON could grow it without limit
+            # (and re-parse it every line). Same 2 MB budget, total.
+            if len(buf.encode("utf-8")) > _buf_max:
+                print(f"[MCP-stdio] accumulated request too large "
+                      f"({len(buf)} bytes) - dropped", file=sys.stderr)
+                _bad = json.dumps({"jsonrpc": "2.0", "id": None, "error": {
+                    "code": -32600,
+                    "message": f"request too large (max {_buf_max} bytes)"}})
+                await loop.run_in_executor(None, _writeline,
+                                           (_bad + "\n").encode("utf-8"))
+                buf = ""
+                continue
             try:
                 req = json.loads(buf.strip())
                 buf = ""

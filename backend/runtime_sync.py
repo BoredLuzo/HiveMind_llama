@@ -11,6 +11,7 @@ This module holds exactly the keys the LOAD path reads and must follow a
 settings save:
 
   moe_cpu_experts   -> llama_config.MOE_CPU_EXPERTS (read live by the loader)
+  moe_cache_mib     -> llama_config.MOE_CACHE_MIB (--moe-cache-mib)
   llama_mlock       -> llama_config.MLOCK_MODEL
   vram_budget_gb    -> llama_server_manager.VRAM_BUDGET_GB
 
@@ -21,6 +22,7 @@ and changes behaviour under tests.
 from __future__ import annotations
 
 import logging
+import sys
 
 logger = logging.getLogger("hivemind.runtime_sync")
 
@@ -47,6 +49,23 @@ def sync_loader_settings(settings: dict) -> None:
     except (TypeError, ValueError):
         logger.warning("runtime sync: moe_cpu_experts ignored (bad value)")
 
+    # Expert cache (MiB) for the MoE offload path
+    try:
+        _cache = int(settings.get("moe_cache_mib", 0) or 0)
+        _lc.MOE_CACHE_MIB = _cache
+        _lsm.MOE_CACHE_MIB = _cache
+    except (TypeError, ValueError):
+        logger.warning("runtime sync: moe_cache_mib ignored (bad value)")
+
+    # --fit (layers/ctx sized to the free VRAM)
+    try:
+        _lc.LLAMA_FIT = bool(settings.get("llama_fit", False))
+        _lc.LLAMA_FIT_TARGET_MIB = int(settings.get("llama_fit_target_mib", 0) or 0)
+        _lsm.LLAMA_FIT = _lc.LLAMA_FIT
+        _lsm.LLAMA_FIT_TARGET_MIB = _lc.LLAMA_FIT_TARGET_MIB
+    except (TypeError, ValueError):
+        logger.warning("runtime sync: llama_fit ignored (bad value)")
+
     # mlock intent (the resolver turns it into mmap+mlock / mmap / none)
     try:
         _mlock = bool(settings.get("llama_mlock", True))
@@ -55,10 +74,22 @@ def sync_loader_settings(settings: dict) -> None:
     except (TypeError, ValueError):
         pass
 
-    # VRAM budget for the pre-flight gate
+    # VRAM budget for the pre-flight gate. The load/evict/health modules bind
+    # it BY VALUE (`from backend.llama_manager_utils import VRAM_BUDGET_GB`),
+    # so writing one module attribute is a no-op for the code that actually
+    # gates loads - every importer has to be updated. Modules not imported yet
+    # pick up the new value from llama_manager_utils at import time.
     try:
         _raw = settings.get("vram_budget_gb")
         if _raw is not None:
-            _lsm.VRAM_BUDGET_GB = float(_raw)
+            _budget = float(_raw)
+            import backend.llama_manager_utils as _lmu
+            _lmu.VRAM_BUDGET_GB = _budget
+            for _mod_name in ("llama_server_manager", "manager_load",
+                              "manager_evict", "manager_health",
+                              "manager_prefetch", "manager_process"):
+                _mod = sys.modules.get(f"backend.{_mod_name}")
+                if _mod is not None and hasattr(_mod, "VRAM_BUDGET_GB"):
+                    _mod.VRAM_BUDGET_GB = _budget
     except (TypeError, ValueError):
         logger.warning("runtime sync: vram_budget_gb ignored (bad value)")

@@ -15,7 +15,12 @@ def init_pause_state(sessions_dir):
 def _pause_path(chat_id: str) -> Path | None:
     if not chat_id or not _SESSIONS_DIR:
         return None
-    return _SESSIONS_DIR / f".{chat_id}.pause_state.json"
+    # B8 (audit 2026-11-03): raw chat_id was interpolated into a filename;
+    # project_state has the sanitizer, pause_state did not.
+    safe = "".join(c for c in str(chat_id) if c.isalnum() or c in "-_")
+    if not safe:
+        return None
+    return _SESSIONS_DIR / f".{safe}.pause_state.json"
 
 
 def persist_pause_state(chat_id: str, run_id: str, chunks_done: int,

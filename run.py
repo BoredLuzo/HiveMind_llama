@@ -42,8 +42,11 @@ try:
     # the WHOLE forensics block (heartbeat, signal handlers, atexit marker)
     # never ran - every start logged "death forensics unavailable". Guard the
     # POSIX-only call instead of losing the feature.
-    if hasattr(_fh, "register"):
-        _fh.register(_faulthandler_stream)
+    _sigusr1 = getattr(_signal, "SIGUSR1", None)
+    if hasattr(_fh, "register") and _sigusr1 is not None:
+        # Linux audit 2026-11-03: register(signum, file=...) - passing the
+        # stream as the signum raised TypeError and skipped the whole block.
+        _fh.register(_sigusr1, file=_faulthandler_stream, all_threads=True)
 
     def _log_death_signal(signum, frame):
         try:

@@ -248,14 +248,22 @@ class LlamaHealthMixin:
             for s in self._slots:
                 if s.process is not None:
                     try:
-                        await _kill_slot_async(s.process)
+                        await _kill_slot_async(s)
                     except Exception:
                         pass
                 s.process  = None
                 s.model    = None
                 s._loading = False
-                s._ready_event.clear()
+                # EVENT-WAKE (audit 2026-11-03): clear() left an in-flight
+                # ensure_loaded waiting the full 240s and then reporting
+                # "did not start in time" instead of the real cause. Set it
+                # so the waiter wakes and sees the killed slot.
+                s._ready_event.set()
                 s.pinned   = False
+                # A9d (audit 2026-11-03): a killed slot with in_flight > 0
+                # stayed non-evictable forever; the only producer has no
+                # finally, so the slot never came back.
+                s.in_flight = 0
                 s._orphan_port = None
             self._pending_prefetch = []
             self._prefetch_tasks.clear()

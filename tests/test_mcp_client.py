@@ -273,8 +273,11 @@ check("8a dispatch refuses MCP tools while the client is off",
 MC.McpClient.enabled = staticmethod(lambda settings=None: True)  # type: ignore[assignment]
 MC.call = _fake_call  # type: ignore[assignment]
 out = asyncio.run(R._run_inline_tool("mcp_fake_echo", {"text": "x"}))
+# TAINT-MCP (2026-11-03): the forwarded result is untrusted and must carry
+# the marker, otherwise a poisoned server can steer run_bash without a card.
 check("8b dispatch routes mcp_ names to the client",
-      out == "[stub] mcp_fake_echo ['text']", f"({out[:60]!r})")
+      "[stub] mcp_fake_echo ['text']" in out
+      and "[UNTRUSTED CONTENT" in out, f"({out[:60]!r})")
 
 MC.McpClient.enabled = _orig_enabled  # type: ignore[assignment]
 MC.call = _orig_call  # type: ignore[assignment]

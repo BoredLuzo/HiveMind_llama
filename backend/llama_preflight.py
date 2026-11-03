@@ -137,6 +137,13 @@ def kill_process_tree(pid: int, timeout_s: float = 10.0) -> bool:
         except (OSError, subprocess.SubprocessError):
             return False
     else:
+        # Linux audit 2026-11-03: pkill -P reaches only direct children; the
+        # root was never signalled, so the verify loop saw it alive forever.
+        try:
+            import signal as _sig
+            os.kill(pid, _sig.SIGTERM)
+        except (OSError, AttributeError):
+            pass
         try:
             subprocess.run(["pkill", "-TERM", "-P", str(pid)],
                            capture_output=True, timeout=timeout_s)
@@ -164,5 +171,19 @@ def kill_process_tree(pid: int, timeout_s: float = 10.0) -> bool:
         except (OSError, subprocess.SubprocessError):
             return True  # query itself broken -> taskkill above was best effort
         time.sleep(0.2)
+    if os.name != "nt":
+        # escalation: the root ignored SIGTERM; SIGKILL it once.
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+        time.sleep(0.3)
+        try:
+            out = subprocess.run(["ps", "-p", str(pid)],
+                                 capture_output=True, text=True, timeout=5)
+            if out.returncode != 0 or str(pid) not in (out.stdout or ""):
+                return True
+        except (OSError, subprocess.SubprocessError):
+            return True
     return False
 

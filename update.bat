@@ -304,7 +304,7 @@ REM Gateway files (2026-10-05, WP1): a wrongly built zip must never
 REM overwrite gateway.toml; state/audit/kill-switch live in
 REM %LOCALAPPDATA%\HiveMindGateway and are listed anyway.
 echo  Applying update   : over this folder
-robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /XF update.bat settings.json presets.json models.json vision_model.json routing_weights.json memory.json gateway.toml gateway_state.json gateway_state.json.corrupt gateway.disabled gateway.lock gateway_audit.jsonl gateway_audit.jsonl.* gateway_state.tmp /XD sessions .hive_uploads learning_logs logs .venv llama /NFL /NDL /NJH /NP /NJS
+robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /XF update.bat settings.json presets.json models.json vision_model.json routing_weights.json memory.json gateway.toml gateway_state.json gateway_state.json.corrupt gateway.disabled gateway.lock gateway_audit.jsonl gateway_audit.jsonl.* gateway_state.tmp /XD sessions .hive_uploads learning_logs logs .venv llama models /NFL /NDL /NJH /NP /NJS
 if errorlevel 8 (
     echo  [ERROR] Applying the update failed. Restore by copying the
     echo         contents of %BK%\ back over this folder.

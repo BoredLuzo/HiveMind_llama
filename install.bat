@@ -610,14 +610,18 @@ echo   This step is OPTIONAL and can be run at any time later -
 echo   NO reinstall needed, nothing else in the install changes:
 echo     - Settings -^> Voice -^> Download  (UI, with progress)
 echo     - or deploy\setup_voice.bat [model] [--tts^|--both]
-echo   Text-to-speech is separate and needs a one-time
-echo   "hf auth login" (gated model) - see docs\voice_setup.md
-echo   token step by step: docs\huggingface_token.md
+echo   Text-to-speech is separate and uses a gated model ^(Pocket TTS^).
+echo   One-time setup, three steps:
+echo     1. Accept the terms:  huggingface.co/kyutai/pocket-tts
+echo     2. Create a Read token:  huggingface.co/settings/tokens
+echo     3. Run:  uvx --from huggingface_hub hf auth login
+echo   The Hugging Face CLI stores the token on this machine.
+echo   HiveMind never creates a token. Public models need none.
 echo.
 echo   [1] Speech to text only              (~420 MB, English)
-echo   [2] Speech to text + text to speech  (adds ~200 MB PyTorch, needs hf login)
-echo   [3] Text to speech only              (~200 MB PyTorch, needs hf login)
-echo   [4] Skip (recommended if unsure) - add it later without reinstalling:
+echo   [2] Speech to text + text to speech  ^(adds ~200 MB; one-time HF login^)
+echo   [3] Text to speech only              ^(~200 MB; one-time HF login^)
+echo   [4] Skip ^(recommended if unsure^) - add it later without reinstalling:
 echo       Settings -^> Voice, or deploy\setup_voice.bat
 echo.
 set "VOICE_PICK="

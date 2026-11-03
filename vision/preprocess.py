@@ -199,6 +199,10 @@ async def _preprocess_images_to_text(images: list, user_query: str) -> str | Non
     )
 
     from backend.llama_server_manager import manager as _lsm_v
+    # PYRIGHT-AUDIT (2026-11-03): the timeout was read inside the try and used
+    # in the TimeoutError handler - a bad settings value could leave it
+    # unbound exactly where the error is reported.
+    _vp_load_timeout = 45.0
     try:
         _vp_load_timeout = float(settings.get("vision_preprocess_load_timeout_seconds", 45.0) or 45.0)
         _vp_port = await asyncio.wait_for(
@@ -235,6 +239,12 @@ async def _preprocess_images_to_text(images: list, user_query: str) -> str | Non
     logger.debug("[Vision-Prepro] Sende Request an port=%d content_parts=%d img_count=%d", _vp_port, len(_vp_content), len(img_data))
 
     parts: list[str] = []
+    # REASONING-FALLBACK (2026-11-02): a qwen3.5 template reasons by default;
+    # if the server ignores enable_thinking the answer only arrives in
+    # `reasoning_content`. Reading `content` alone returned 0 tokens and the
+    # image description was replaced by an error string (live log:
+    # "returned 0 tokens ... reasoning_chars=3988").
+    _vp_reason: list[str] = []
     try:
         _vp_read_s = float(settings.get("duo_llm_slow_timeout_s", 300))
         async with httpx.AsyncClient(timeout=httpx.Timeout(
@@ -255,6 +265,7 @@ async def _preprocess_images_to_text(images: list, user_query: str) -> str | Non
                     "repeat_last_n":  64,
                     "stop":           ["<|im_end|>", "<|endoftext|>", "\n\n\n"],
                     "cache_prompt":   False,
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             ) as _vp_resp:
                 async for _vp_line in _vp_resp.aiter_lines():
@@ -265,11 +276,14 @@ async def _preprocess_images_to_text(images: list, user_query: str) -> str | Non
                         break
                     try:
                         _vp_d   = json.loads(_vp_raw)
-                        _vp_tok = (_vp_d.get("choices", [{}])[0]
-                                       .get("delta", {})
-                                       .get("content", "") or "")
+                        _vp_ch  = (_vp_d.get("choices", [{}])[0]
+                                       .get("delta", {}))
+                        _vp_tok = _vp_ch.get("content", "") or ""
                         if _vp_tok:
                             parts.append(_vp_tok)
+                        _vp_rsn = _vp_ch.get("reasoning_content") or ""
+                        if _vp_rsn:
+                            _vp_reason.append(_vp_rsn)
                     except Exception:
                         continue
     except Exception as _ve:
@@ -280,6 +294,10 @@ async def _preprocess_images_to_text(images: list, user_query: str) -> str | Non
         return f"[Vision-Preprocessing-Error ({_err_cls}): {_err_txt[:120]}]"
 
     result = _re_think_cleanup.sub("", "".join(parts)).strip()
+    if not result and _vp_reason:
+        result = _re_think_cleanup.sub("", "".join(_vp_reason)).strip()
+        logger.warning("[Vision-Prepro] content empty - using reasoning_content (%d chars)",
+                       len(result))
     logger.debug("[Vision-Prepro] response received: %d tokens, result_len=%d, start=%r", len(parts), len(result), result[:60])
     if not result:
         logger.error(

@@ -440,11 +440,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     _print_box(result)
     try:
-        answer = input("  Install it now? [Y/n]: ").strip().lower()
+        answer = input("  Install it now? [y/N]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
         return 0
-    if answer in ("n", "no"):
+    if answer not in ("y", "yes"):
         dismiss_update(result, root / "logs" / "update_check.json")
         return 0
     return install_update(result, root)

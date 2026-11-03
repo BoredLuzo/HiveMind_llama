@@ -371,14 +371,25 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
     await ensure_commit_identity(workspace)
 
     cp_count = 0
-    log = await _git("git", "log", "--pretty=%s", "-n", "200")
-    for subj in log.stdout.strip().splitlines():
+    _cp_shas: list[str] = []
+    log = await _git("git", "log", "--pretty=%H%x09%s", "-n", "200")
+    for _row in log.stdout.strip().splitlines():
+        _sha, _, subj = _row.partition("\t")
         if subj and _is_checkpoint_subject(subj):
             cp_count += 1
+            _cp_shas.append(_sha)
         else:
             break
     if cp_count == 0:
         return ""
+
+    # B4 (audit 2026-11-03): the fold scope is what the checkpoint commits
+    # actually touched. The old no-list branch ran `git add -A` + a
+    # pathspec-less commit, sweeping foreign staged/untracked work in.
+    _cp_files: set[str] = set()
+    for _sha in _cp_shas:
+        _show = await _git("git", "show", "--pretty=format:", "--name-only", _sha)
+        _cp_files.update(x.strip() for x in _show.stdout.splitlines() if x.strip())
 
     base = await _find_fold_base(workspace)
     if base is None:
@@ -396,40 +407,54 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
         return f"❌ squash: git reset failed: {reset.stderr.strip()}"
 
     # GIT-AUDIT P1-2 (2026-11-01): the soft-reset folds every change since
-    # the base into the index — `git add -A` then swept FOREIGN uncommitted
-    # work into the folded commit (probed). Scope the add to the run's
-    # files when a list is provided; without a list keep the old behavior
-    # only for consolidate-only (which folds existing checkpoints, not a
-    # live run) and refuse otherwise.
-    _scope = [f for f in (files or []) if (Path(workspace) / f).exists()]
-
+    # the base into the index — an unscoped `git add` then swept FOREIGN
+    # uncommitted work into the folded commit (probed). The scope is now the
+    # caller's file list, or for a checkpoint-only consolidation the files
+    # the checkpoint commits themselves touched (B4, 2026-11-03).
+    #
     # EOD-GIT-AUDIT (2026-11-01): three holes closed at once.
     #   A) the fold commit was BARE — a foreign already-STAGED file survived
     #      the scoped add but was still committed by `git commit -m`. The
     #      commit is now pathspec-scoped to the run files too.
-    #   B) files=None kept `git add -A` — reachable from the auto-commit
-    #      path with an empty written-files chunk. A live-run squash without
-    #      a list is refused now (consolidate-only keeps add -A: it folds
-    #      existing checkpoints, not a live run's index).
+    #   B) files=None kept `git add -A` for consolidate-only; the checkpoint
+    #      file set above replaces it, so no branch sweeps the index.
     #   C) the empty-staged fallback was `git reset --hard HEAD` — it
     #      silently wiped foreign UNSTAGED modifications. Now a safe
     #      `git reset` (mixed: index back to HEAD, worktree untouched).
-    _scope = [f for f in (files or []) if (Path(workspace) / f).exists()]
+    _scope = []
+    for _f in (files or []):
+        if (Path(workspace) / _f).exists():
+            _scope.append(_f)
+        elif (await _git("git", "cat-file", "-e", f"HEAD:{_f}")).returncode == 0:
+            _scope.append(_f)   # deleted file: still part of the commit
 
     if consolidate_only:
+        _fold = list(files) if files else sorted(_cp_files)
+        # P1 (deep audit 2026-11-03): a path deleted in a checkpoint is in
+        # `git show --name-only` but not on disk. Filtering by exists() dropped
+        # it from the pathspec and the base version was silently restored.
+        _fold_scope = []
+        for _f in _fold:
+            if (Path(workspace) / _f).exists():
+                _fold_scope.append(_f)
+            elif (await _git("git", "cat-file", "-e", f"HEAD:{_f}")).returncode == 0:
+                _fold_scope.append(_f)   # deletion still has to be committed
+        if not _fold_scope:
+            return ("ℹ️ squash-consolidate: none of the checkpoint/run files "
+                    "exist — nothing to fold.")
         msg = f"{_checkpoint_marker()} session consolidated ({cp_count} checkpoints)"
-        if files:
-            if not _scope:
-                return "ℹ️ squash-consolidate: none of the run files exist."
-            add = await _git("git", "add", "--", *_scope)
+        # Deletions are already staged by the soft reset; `git add` on a
+        # missing path is a pathspec error, so only existing files are added.
+        _add_list = [f for f in _fold_scope if (Path(workspace) / f).exists()]
+        if _add_list:
+            add = await _git("git", "add", "-A", "--", *_add_list)
             if add.returncode != 0:
                 return f"❌ git add failed: {add.stderr.strip()}"
-        else:
-            add = await _git("git", "add", "-A")
-        staged = await _git("git", "diff", "--cached", "--name-only")
+        staged = await _git("git", "diff", "--cached", "--name-only",
+                            "--", *_fold_scope)
         cc = await _git("git", "commit", "-m", msg[:72],
                         *(["--allow-empty"] if not staged.stdout.strip() else []),
-                        *(["--", *_scope] if files else []))
+                        "--", *_fold_scope)
         if cc.returncode != 0:
             return f"❌ squash-consolidate failed: {cc.stderr.strip()}"
         return f"✅ {cp_count} Checkpoints konsolidiert"
@@ -439,10 +464,13 @@ async def exec_git_squash_checkpoints(message: str, workspace: str,
                 "index (2026-10-14 policy).")
     if not _scope:
         return "ℹ️ squash: none of the run files exist — nothing to fold."
-    add = await _git("git", "add", "--", *_scope)
-    if add.returncode != 0:
-        return f"❌ git add failed: {add.stderr.strip()}"
-    staged = await _git("git", "diff", "--cached", "--name-only")
+    _add_list = [f for f in _scope if (Path(workspace) / f).exists()]
+    if _add_list:
+        add = await _git("git", "add", "-A", "--", *_add_list)
+        if add.returncode != 0:
+            return f"❌ git add failed: {add.stderr.strip()}"
+    staged = await _git("git", "diff", "--cached", "--name-only",
+                        "--", *_scope)
     if not staged.stdout.strip():
         # nothing of ours to fold — NEVER hard-reset here: the soft reset
         # above moved foreign work into the index and a --hard would wipe
@@ -490,6 +518,22 @@ async def file_changed_since(workspace: str, cp_hash: str, rel_path: str) -> boo
     return r.returncode == 0 and bool(r.stdout.strip())
 
 
+def _undo_backup_root(workspace: str) -> Path:
+    """Where undo_full moves untracked files (P1, deep audit 2026-11-03).
+
+    A linked worktree has `.git` as a FILE, so a backup under .git is not
+    possible there; fall back to the temp dir instead of deleting the file.
+    """
+    import os as _os
+    import tempfile as _tempfile
+    import time as _time
+    _stamp = _time.strftime("%Y%m%d-%H%M%S") + f"-{_os.getpid()}"
+    _git_dir = Path(workspace) / ".git"
+    if _git_dir.is_dir():
+        return _git_dir / "hive_undo_backup" / _stamp
+    return Path(_tempfile.gettempdir()) / "hivemind_undo_backup" / _stamp
+
+
 async def exec_git_undo_full(workspace: str) -> str:
 
     import asyncio as _asyncio
@@ -515,6 +559,13 @@ async def exec_git_undo_full(workspace: str) -> str:
     reset = await _git("git", "reset", "--hard", cp)
     if reset.returncode != 0:
         return f"❌ undo: reset failed: {reset.stderr.strip()}"
+    # B5 (audit 2026-11-03): the untracked cleanup could not tell a file the
+    # run created from one the user had before it — stash create covers
+    # tracked changes only, so unlinking destroyed user data. Move them into
+    # .git/hive_undo_backup instead (outside the worktree, ignored by git).
+    import time as _time
+    _backup_root = _undo_backup_root(workspace)
+    _backed_up = 0
     removed = []
     for rel in added:
         p = Path(workspace) / rel
@@ -523,12 +574,25 @@ async def exec_git_undo_full(workspace: str) -> str:
                 subprocess.run, ["git", "ls-files", "--error-unmatch", rel],
                 cwd=workspace, capture_output=True, text=True, encoding="utf-8", errors="replace")
             if p.is_file() and tracked.returncode != 0:
-                p.unlink(missing_ok=True)
+                try:
+                    _dst = _backup_root / rel
+                    _dst.parent.mkdir(parents=True, exist_ok=True)
+                    p.replace(_dst)
+                    _backed_up += 1
+                except OSError:
+                    # Never delete: keep the content next to the original.
+                    try:
+                        p.rename(p.with_name(p.name + ".undo-bak"))
+                    except OSError:
+                        pass
                 removed.append(rel)
         except Exception:
             pass
     h = await _git("git", "rev-parse", "--short", "HEAD")
     msg = f"restored to checkpoint [{h.stdout.strip()}]"
+    if _backed_up:
+        msg += (f"; {_backed_up} untracked file(s) backed up to "
+                f"{_backup_root}")
     if removed:
         msg += f"; removed new files: {', '.join(removed[:8])}"
     if _safety_sha:

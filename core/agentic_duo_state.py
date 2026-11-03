@@ -33,6 +33,13 @@ class DuoRoundState:
     tool_fail_streak: int = 0
     reactive_think_activated: bool = False
 
+    # ── Loop guards that must survive per-round loop construction ──
+    # TAIL-GUARD/DECODE-DROP (audit 2026-11-03): a fresh AgenticToolLoop is
+    # built every round, so counters on `self` never exceeded 1. They live on
+    # the run-shared state instead.
+    tail_guard_fires: int = 0
+    decode_hist: list = field(default_factory=list)
+
     # ── S2 (2026-08-23): Constrained Decoding ──
     force_grammar: bool = False
 

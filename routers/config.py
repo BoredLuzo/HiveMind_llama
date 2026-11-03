@@ -71,9 +71,10 @@ _UI_REV_PROTECTED_KEYS = {
 #     leak;
 #   * machine paths (models_dir) - an absolute install path that a snapshot on
 #     another machine must not overwrite.
-# `_registry` is internal bookkeeping, and image_processing_mode /
-# vision_agent_mode have no backend reader (the truth lives in
-# vision_model.json via /vision/config).
+# `_registry` is internal bookkeeping. image_processing_mode / vision_agent_mode
+# are UI state (not preset state); vision_agent_mode IS read live by
+# core/pipeline_runner.py, so it must persist in settings.json even though a
+# preset never carries it.
 _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
                       "image_processing_mode", "vision_agent_mode",
                       # BOOKKEEPING (2026-10-28, preset audit): these three are
@@ -82,6 +83,10 @@ _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
                       # into every exported file and came back as stale state
                       # on load.
                       "active_preset", "settings_saved_at", "preset_applied_at"}
+
+# Valid preset keys that are intentionally not in DEFAULT_SETTINGS: they are
+# read at runtime and must survive a preset apply (P1, audit 2026-11-03).
+_PRESET_EXTRA_KEYS = {"mcp_client_max_calls_per_run", "telegram_gateway_enabled"}
 
 # PRESET-CTX-OVERLAY (2026-09-04): nur diese Keys darf der Client beim
 # Preset-Save explizit uebergeben (verhindert das Race zwischen debounced
@@ -216,9 +221,11 @@ async def _apply_preset_internal(name: str, *, persist: bool = True,
             continue
         if key in _PRESET_NEVER_KEYS:
             continue
-        if key not in DEFAULT_SETTINGS:
+        if key not in DEFAULT_SETTINGS and key not in _PRESET_EXTRA_KEYS:
             # STALE-KEY (2026-10-31): old presets carry keys with no reader;
             # applying them put them back into settings.json on every load.
+            # P1 (audit 2026-11-03): say so instead of dropping silently.
+            logger.warning("[PRESET] key %r has no default - skipped", key)
             continue
         if key == "workspace" and isinstance(value, str) and value.strip():
             if not Path(value.strip()).exists():
@@ -489,6 +496,28 @@ def _sync_recommended_sampling(settings: dict, roles: list[str]) -> None:
             _cfg["temperature"] = _rec
 
 
+_GET_ONLY_SETTINGS = frozenset({
+    "_registry", "_safe_profile_state", "settings_rev", "git_token_saved",
+    # derived at GET time (P2, audit 2026-11-03): echoing them back used to
+    # persist derived state and pull it into presets.
+    "moe_expert_defaults", "moe_autodetect", "moe_pins", "ctx_defaults",
+})
+
+
+def _strip_get_only_settings(data: dict) -> dict:
+    """B6 (audit 2026-11-03): never persist keys that GET /settings injects.
+
+    GET adds runtime state (_registry, _safe_profile_state, settings_rev,
+    git_token_saved); a client echoing the GET body back wrote those into
+    settings.json. Private (underscore) keys are dropped generically.
+    """
+    return {k: v for k, v in (data or {}).items()
+            if k not in _GET_ONLY_SETTINGS
+            # A real setting may be underscore-prefixed
+            # (_thinking_before_chunking is read/written by the UI).
+            and (not str(k).startswith("_") or k in DEFAULT_SETTINGS)}
+
+
 @router.post("/settings")
 async def post_settings(req: Request):
     global _settings_rev
@@ -616,6 +645,7 @@ async def post_settings(req: Request):
     if isinstance(data, dict) and data.get("git_token") in ("****", ""):
         # mask echo or empty field: never destroy the stored credential
         data.pop("git_token", None)
+    data = _strip_get_only_settings(data)
     settings.update(data)
     # UI-SAVE-FLAG-SYNC (2026-10-31, audit F6): a ubatch/cache/checkpoint
     # change through POST /settings used to wait for a restart while the same

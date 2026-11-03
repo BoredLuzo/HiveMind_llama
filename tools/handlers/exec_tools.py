@@ -266,6 +266,10 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
             "RUN_BASH_BLOCKED",
             f"Command blocked: dangerous pattern '{_bl_hit}' detected. Use safer alternatives.",
             tool="run_bash" , details={"cmd": cmd[:400]})
+    # A3 (audit 2026-11-03): POSIX has no translation layer. This used to be
+    # assigned only inside the win32 block below, so every POSIX run_bash read
+    # an unbound name and died as RUN_BASH_EXEC_ERROR.
+    _cmd_translated = cmd
     try:
         if sys.platform == "win32":
             _re_win = re

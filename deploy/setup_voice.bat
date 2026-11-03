@@ -67,7 +67,7 @@ uvx --python 3.12 --index https://download.pytorch.org/whl/cpu --from pocket-tts
 if errorlevel 1 goto tts_env_fail
 echo   [OK] Environment ready.
 echo.
-echo   Fetching the model - gated, needs a one-time "hf auth login"...
+echo   Fetching the gated model (one-time Hugging Face login if not done)...
 uvx --python 3.12 --index https://download.pytorch.org/whl/cpu pocket-tts generate --text "Voice setup complete." --output-path "%TEMP%\hivemind_tts_check.wav" >nul 2>&1
 if errorlevel 1 goto tts_model_fail
 echo   [OK] Model ready.
@@ -84,14 +84,18 @@ goto summary
 :tts_model_fail
 echo   [WARN] The model could not be fetched.
 echo.
-echo          The Pocket TTS model is gated. Two things are needed once:
-echo            1. accept the terms on
+echo          Pocket TTS is gated. Three steps, once:
+echo            1. Accept the terms:
 echo               https://huggingface.co/kyutai/pocket-tts
-echo            2. a Hugging Face Read token on this machine
+echo            2. Create a Read token:
+echo               https://huggingface.co/settings/tokens
+echo            3. Log in here - the token input stays hidden.
 echo.
-echo          Full guide: docs\huggingface_token.md
+echo          The Hugging Face CLI stores the token in
+echo          %%USERPROFILE%%\.cache\huggingface\token
+echo          HiveMind itself never creates or stores a token.
 echo.
-choice /c YN /n /m "Log in to Hugging Face now? (token prompt is hidden) [Y/N] "
+choice /c YN /n /m "Log in to Hugging Face now? (token input hidden) [Y/N] "
 if errorlevel 2 goto tts_model_skip
 echo.
 echo   The token is read hidden and stored by the Hugging Face CLI in

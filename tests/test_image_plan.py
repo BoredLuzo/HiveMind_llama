@@ -248,7 +248,7 @@ class VisionReloadRule(unittest.TestCase):
         m = LlamaEvictMixin()
         m._slots = [SimpleNamespace(model="coder", pinned=True),
                     SimpleNamespace(model="other", pinned=True)]
-        n = m.unpin("coder")
+        n = m.clear_pin("coder")
         self.assertEqual(n, 1)
         self.assertFalse(m._slots[0].pinned)
         self.assertTrue(m._slots[1].pinned)  # other model untouched

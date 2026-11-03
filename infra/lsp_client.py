@@ -57,6 +57,23 @@ logger = logging.getLogger("hivemind.lsp_client")
 # with it. Tolerant: missing/broken file -> {}.
 _WS_SETTINGS_CACHE: dict[str, tuple[tuple[float, int], dict]] = {}
 
+# LSP-SECURITY (2026-11-03): a server (and any build script it starts) must
+# not inherit the engine's secrets. Only tool discovery + toolchain homes are
+# forwarded; tokens/keys/internal secrets stay in the engine process.
+_LSP_ENV_ALLOW = {
+    "PATH", "HOME", "USERPROFILE", "TEMP", "TMP", "SYSTEMROOT", "WINDIR",
+    "COMSPEC", "PATHEXT", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "HOMEDRIVE", "HOMEPATH", "PWD",
+    "SHELL", "LANG", "LC_ALL", "GOPATH", "GOROOT", "CARGO_HOME",
+    "RUSTUP_HOME", "NODE_PATH", "NODE_OPTIONS",
+}
+
+
+def _lsp_child_env() -> dict:
+    return {k: v for k, v in os.environ.items()
+            if k.upper() in _LSP_ENV_ALLOW
+            or k.upper().startswith(("RUST", "CARGO", "GO"))}
+
 
 def read_workspace_settings(workspace: Path) -> dict:
     # EOD fix (lsp_tools 16b): the cache key used mtime only — two writes
@@ -335,6 +352,7 @@ class _LspConnection:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(self.workspace) if self.workspace.is_dir() else None,
+                env=_lsp_child_env(),
                 # POSIX: own process group so the whole tree can be signalled.
                 # Windows: no console window (the engine often runs under
                 # pythonw); the tree kill itself happens in _kill().
@@ -894,6 +912,11 @@ class LspManager:
                 settings.get("lsp_client_timeout_s", DEFAULT_TIMEOUT_S)))
         except (TypeError, ValueError):
             self._timeout_s = DEFAULT_TIMEOUT_S
+        # LSP-SECURITY (2026-11-03): repo-controlled .vscode/settings.json can
+        # choose the command a server runs (rust-analyzer overrideCommand).
+        # Forward it only when the user opts in.
+        self._allow_ws_settings = bool(
+            settings.get("lsp_forward_workspace_settings", False))
         self._lifecycle = asyncio.Lock()
         self._conns: dict[str, _LspConnection] = {}
         # IDLE REAPER (2026-10-31): language servers used to run until engine
@@ -946,7 +969,8 @@ class LspManager:
                                f"'{language_id}' (tried: {names})")
             conn = _LspConnection(language_id, argv, self.workspace,
                                   self._timeout_s)
-            conn.config_settings = read_workspace_settings(self.workspace)
+            if self._allow_ws_settings:
+                conn.config_settings = read_workspace_settings(self.workspace)
             try:
                 await conn.start()
             except LspError as exc:

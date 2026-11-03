@@ -12,6 +12,9 @@ ExecStart=/opt/hivemind/.venv/bin/python run.py
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
+# llama_mlock defaults to true; without this the server only warns and the
+# model pages from disk (Linux audit 2026-11-03).
+LimitMEMLOCK=infinity
 
 Environment=PYTHONUNBUFFERED=1
 

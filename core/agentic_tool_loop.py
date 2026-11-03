@@ -94,7 +94,12 @@ class AgenticToolLoop(ToolLoop):
         _dr_stream_partial = False
         _dr_aborted_mid = False
         if dtool_msgs and dtool_msgs[-1].get("role") == "assistant":
-            self._tail_guard_fires = getattr(self, "_tail_guard_fires", 0) + 1
+            # COUNTERS-ON-STATE (audit 2026-11-03): a fresh loop instance is
+            # built per round, so `self` counters reset and the 4x guard was
+            # unreachable. Keep the count on the run-shared round_state.
+            self.round_state.tail_guard_fires = int(
+                getattr(self.round_state, "tail_guard_fires", 0) or 0) + 1
+            self._tail_guard_fires = self.round_state.tail_guard_fires
             logger.warning(
                 "[TAIL-GUARD] Messages end with assistant — fixing before POST "
                 "(consecutive=%d, last 500 body: %s, first_err_body: %s)",
@@ -245,6 +250,9 @@ class AgenticToolLoop(ToolLoop):
                             if self.round_state.parse_errors >= 3:
                                 _parts.append(f"[JSON parse error {self.round_state.parse_errors}x: too large patches]")
                                 await self._emit({"type": "token", "content": _parts[-1]})
+                                # A5 (audit 2026-11-03): a loop-detected stop
+                                # is a handled end, not a missing stream.
+                                result["dr_stream_ok"] = True
                                 result["loop_detected"] = True
                                 break
                             self.round_state.force_grammar = True
@@ -321,6 +329,7 @@ class AgenticToolLoop(ToolLoop):
                                 continue
                             _parts.append("[Tool loop HTTP 404: endpoint still unavailable after recovery.]")
                             await self._emit({"type": "token", "content": _parts[-1]})
+                            result["dr_stream_ok"] = True   # A5: handled stop
                             result["loop_detected"] = True
                             break
 
@@ -344,6 +353,7 @@ class AgenticToolLoop(ToolLoop):
                             _dr_post_errors["400-other"] = _dr_post_errors.get("400-other", 0) + 1
                             _parts.append(f"[Tool round error HTTP 400: {_err_body[:200]}]")
                             await self._emit({"type": "token", "content": _parts[-1]})
+                            result["dr_stream_ok"] = True   # A5: handled stop
                             result["loop_detected"] = True
                             break
 
@@ -511,10 +521,11 @@ class AgenticToolLoop(ToolLoop):
                                         from utils.perf_log import decode_warn_enabled as _ddw_on
                                         _dt = float(getattr(self.round_state, "decode_tps", 0.0) or 0.0)
                                         if _ddw_on() and _dt > 0:
-                                            _hist = getattr(self, "_decode_hist", None)
+                                            _hist = getattr(self.round_state, "decode_hist", None)
                                             if _hist is None:
                                                 _hist = []
-                                                self._decode_hist = _hist
+                                                self.round_state.decode_hist = _hist
+                                            self._decode_hist = _hist
                                             _prev = _hist[-8:]
                                             _hist.append(_dt)
                                             if len(_prev) >= 5:

@@ -375,7 +375,10 @@ async def _cfgpush_flow():
     (ws / ".vscode" / "settings.json").write_text(
         '{"python": {"analysis": {"typeCheckingMode": "basic"}}}',
         encoding="utf-8")
-    mgr = LC.LspManager(ws, settings=make_settings("normal"))
+    _cfg = make_settings("normal")
+    # LSP-SECURITY (2026-11-03): repo settings are forwarded only on opt-in.
+    _cfg["lsp_forward_workspace_settings"] = True
+    mgr = LC.LspManager(ws, settings=_cfg)
     try:
         out = {"start": await mgr.start_language("python")}
         # the fake answers a non-LSP probe with its recorded state

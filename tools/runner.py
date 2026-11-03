@@ -528,26 +528,42 @@ def _approval_gate_on() -> bool:
         return False
 
 
+# TAINT-EXEC (audit 2026-11-03): run_tests executes arbitrary project code
+# (a tainted run may have written a conftest.py first), so it belongs in the
+# taint gate even when the action-approval toggle is off.
 _EXEC_TOOLS = frozenset({"run_bash", "run_python", "install_package",
-                         "start_background"})
+                         "start_background", "run_tests"})
 
 
-def _approval_active_for(name: str) -> bool:
-    """Settings + tool-set gate shared by staging and the pause path."""
-    if _approval_gate_on() and name.startswith("mcp_"):
-        return True   # H7: every dynamic MCP tool is potentially mutating
-    if name in _EXEC_TOOLS:
-        # TAINT-GATE (2026-11-02): once this run has read web/MCP/browser
-        # content, a shell command is exactly the step an injected instruction
-        # wants. Ask, even with duo_action_approval_enabled off - a command is
-        # not reversible like a file edit.
+def _needs_approval(name: str, gated: bool = False) -> bool:
+    """One predicate for both the staged card and the execution-time pause.
+
+    TAINT-GATE (2026-11-02): once this run has read web/MCP/browser content,
+    a shell command is exactly the step an injected instruction wants. Ask,
+    even with duo_action_approval_enabled off - a command is not reversible
+    like a file edit. Keeping this in one place matters: the pause path used
+    to early-return on `not _approval_gate_on()` before it ever looked at the
+    taint, so the card was staged but the command ran ungated.
+
+    MCP-TAINT (audit 2026-11-03): dynamic MCP tools are potentially mutating
+    (H7) but were only gated when the toggle was on. A tainted run must ask
+    for them too, independent of the toggle.
+    """
+    if name in _EXEC_TOOLS or name.startswith("mcp_"):
         try:
             from tools import taint as _taint
             if _taint.exec_needs_approval():
                 return True
         except ImportError:
             pass
-    return _approval_gate_on() and name in _APPROVAL_TOOLS
+    return _approval_gate_on() and (gated or name in _APPROVAL_TOOLS)
+
+
+def _approval_active_for(name: str) -> bool:
+    """Settings + tool-set gate shared by staging and the pause path."""
+    if _approval_gate_on() and name.startswith("mcp_"):
+        return True   # H7: every dynamic MCP tool is potentially mutating
+    return _needs_approval(name)
 
 
 # One-shot free pass (2026-09-18): after an approved WRITE the next gated
@@ -596,7 +612,7 @@ def _approval_preview(args: dict) -> str:
     for _k in ("cmd", "command", "code", "packages", "package", "url", "path"):
         _v = args.get(_k)
         if isinstance(_v, str) and _v.strip():
-            _v = _v.strip()
+            _v = _redact_secret_text(_v.strip())
             return _v[:300] + ("\u2026" if len(_v) > 300 else "")
     _joined = "; ".join(f"{k}={str(v)[:60]}" for k, v in list(args.items())[:3]
                         if not str(k).startswith("__"))
@@ -615,6 +631,20 @@ async def _safe_emit(ev) -> None:
         pass
 
 
+_REDACT_SECRET_RE = re.compile(
+    r"(?i)((?:authorization\s*[=:]?\s*)?\bbearer\s+|"
+    r"(?:token|api[_-]?key|password|passwd|secret)\s*[=:]\s*)([^\s'\";]+)")
+
+
+def _redact_secret_text(text: str) -> str:
+    """B8 (audit 2026-11-03): the destructive gate logged the full command.
+
+    Mask credential-shaped values before they reach the log or the card; the
+    command stays readable, the secret does not.
+    """
+    return _REDACT_SECRET_RE.sub(lambda m: m.group(1) + "***", text or "")
+
+
 async def _check_action_approval(name: str, args: dict, workspace,
                                  gated: bool = False):
     """Returns None to let the tool run, ("NOTE", text) to run with a user
@@ -625,7 +655,7 @@ async def _check_action_approval(name: str, args: dict, workspace,
     mutating, so the set cannot list them."""
     import logging as _appr_log
     _lg = _appr_log.getLogger("hivemind.tools")
-    if not _approval_gate_on() or (name not in _APPROVAL_TOOLS and not gated):
+    if not _needs_approval(name, gated):
         return None
     # NO gate-mode bypass (2026-09-18, live bug): until_finished duo runs set
     # the ask_user gate to "throttled_autonomous" — approvals must still fire
@@ -633,6 +663,21 @@ async def _check_action_approval(name: str, args: dict, workspace,
     # only control.
     run_id = _current_run_id.get()
     if not run_id:
+        # B2 (audit 2026-11-03): fail closed for anything that changes the
+        # workspace or runs code. Without a run id no card can be shown, and
+        # the destructive gate 600 lines below already denies in this case -
+        # the approval gate must not be the weaker one. Read-only tools are
+        # not in these sets and keep working.
+        # EXCEPTION: /internal/tool/exec (token/CSRF-guarded, MCP mode) has no
+        # run context by design and marks itself via _external_dispatch.
+        if _is_external_dispatch():
+            return None
+        if name in _APPROVAL_TOOLS or name in _EXEC_TOOLS or gated:
+            return ("DENY", _tool_error_response(
+                "GATE_NO_RUN_ID",
+                f"{name} changes the workspace or runs code but has no run id, "
+                "so no approval card can be shown. Start a chat run.",
+                tool=name))
         return None
     if _repo_approval_granted(workspace, name, args or {}):
         return None
@@ -1217,6 +1262,9 @@ _DESTRUCTIVE_BASH_PATTERNS = [
 # chmod; Windows behält das strenge Pattern (dort ist chmod exotisch).
 if os.name != "nt":
     _DESTRUCTIVE_BASH_PATTERNS.append(r"\bchmod\s+(-R|--recursive)\b")
+    # Linux audit 2026-11-03: chmod -w/-x strips access without -R and was
+    # ungated; +x stays routine and is not matched.
+    _DESTRUCTIVE_BASH_PATTERNS.append(r"\bchmod\s+(-R\s+)?-[rwx]")
 else:
     _DESTRUCTIVE_BASH_PATTERNS.append(r"\bchmod\s+[-+]\w")
 
@@ -1306,6 +1354,9 @@ async def _destructive_gate(name: str, args: dict) -> str | None:
 
     if not _destructive:
         return None
+
+    # B8: never log or show a credential-shaped value.
+    _details = _redact_secret_text(_details)
 
     run_id = _current_run_id.get()
     if not run_id:
@@ -1629,7 +1680,10 @@ async def _run_inline_tool(
                 tool=name,
                 mode=str(tool_mode or "") )
         _mcp_note = ""
-        if _approval_gate_on():
+        # MCP-TAINT (audit 2026-11-03): _approval_active_for also returns True
+        # for mcp_* under taint with the toggle off, so a poisoned context
+        # cannot drive a mutating external tool without a card.
+        if _approval_active_for(name):
             _mcp_appr = await _check_action_approval(name, args or {}, workspace,
                                                      gated=True)
             if _mcp_appr is not None:
@@ -1660,6 +1714,13 @@ async def _run_inline_tool(
             _mcp_result = f"{_mcp_result}\n[USER NOTE]: {_mcp_note}"
         if _resolve_hint:
             _mcp_result = _resolve_hint + _mcp_result
+        # TAINT-MCP (2026-11-03): this branch returned before the wrap below,
+        # so a poisoned MCP server could drive run_bash with no card.
+        try:
+            from tools import taint as _taint_mcp
+            _mcp_result = _taint_mcp.wrap_result(name, _mcp_result)
+        except ImportError:
+            pass
         return _mcp_result
     handler = _INLINE_TOOL_HANDLER_MAP.get(name)
     if handler is not None:

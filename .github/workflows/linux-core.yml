@@ -1,0 +1,47 @@
+name: linux-core
+
+# Linux audit 2026-11-03: the POSIX-only paths had no automation, so 38 suites
+# were red on Linux and nobody saw it. This runs the portable core checks.
+on:
+  push:
+  pull_request:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install minimal deps
+        run: pip install -q httpx
+      - name: Portable regression subset
+        run: |
+          python tests/test_unbound_guards.py
+          python tests/test_posix_run_bash.py
+          python tests/test_gpu_backend.py
+          python tests/test_path_case.py
+          python tests/test_tool_args_nonobject.py
+          python tests/test_max_rounds_truth.py
+          python tests/test_telegram_split.py
+          python tests/test_safe_profile_models.py
+          python tests/test_preset_token_scrub.py
+          python tests/test_loader_audit_2026_11_03.py
+
+  types:
+    # pyright baseline: existing typing debt is frozen; NEW errors fail.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps (pyright resolves the real imports)
+        run: |
+          pip install -q -r requirements.txt
+      - name: Pyright baseline
+        run: python deploy/pyright_baseline.py

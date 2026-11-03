@@ -332,6 +332,8 @@
       <div class="opt-group">
         <div class="opt-group-label">Execution</div>
 
+        <div class="fld-hint" style="margin:0 0 6px">Multi-turn: with <b>Settings &rarr; Unload coder after run = OFF</b> the coder stays loaded between follow-up prompts and the next round reuses the warm KV cache. If it is released, the next prompt reloads the model and re-prefills the full context first (slower, but frees VRAM for other roles).</div>
+
         <div class="opt-row">
           <div class="opt-row-left">
             <span class="opt-name">Pre-Explore</span>
@@ -852,6 +854,37 @@
             Offload MoE experts to CPU. Higher = more RAM, less GPU VRAM.
           </div>
           <div id="moe-default-hint" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#9a74dc;margin-top:4px;line-height:1.5"></div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#b090e0;flex:1;font-weight:600">MoE expert cache (MiB)</span>
+            <input type="number" min="0" step="256" id="moe-cache-mib" value="0"
+              style="width:76px;background:var(--bg2);border:1px solid rgba(168,126,242,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;padding:4px 6px;text-align:center;outline:none"
+              onchange="postSettings({moe_cache_mib: parseInt(this.value)||0})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55;margin-top:3px">
+            Opt-in <code>--moe-cache-mib</code>: keeps hot MoE experts in VRAM.
+            Helps decode, not prompt processing. 0 = off; start near 10&nbsp;% of the
+            expert size. Vulkan builds can crash at load (#30697) &mdash; the loader
+            retries once without the flag.
+          </div>
+          <div class="tgl-row" style="margin-top:8px">
+            <span class="tgl-text">Fit to VRAM (--fit)</span>
+            <label class="cfl-sw">
+              <input type="checkbox" id="llama-fit-toggle"
+                onchange="postSettings({llama_fit:this.checked})">
+              <span class="sl"></span>
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);flex:1">Fit target margin (MiB)</span>
+            <input type="number" min="0" step="128" id="llama-fit-target" value="0"
+              style="width:76px;background:var(--bg2);border:1px solid rgba(168,126,242,.4);border-radius:4px;color:#b090e0;font-family:'IBM Plex Mono',monospace;font-size:12px;padding:3px 6px;text-align:center;outline:none"
+              onchange="postSettings({llama_fit_target_mib: parseInt(this.value)||0})">
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2);line-height:1.55;margin-top:3px">
+            <code>--fit on</code> lets llama.cpp size unset arguments (layers, ctx)
+            to the free VRAM; the target is the margin kept free per device.
+            With fit on, <code>--n-gpu-layers</code> is omitted.
+          </div>
           <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
             <input type="checkbox" id="llama-mlock-toggle" onchange="S.llamaMlock=this.checked;postSettings({llama_mlock:S.llamaMlock});updateMlockHint()">
             <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);font-weight:600">Lock in RAM (--load-mode mmap+mlock)</span>
@@ -1731,7 +1764,7 @@
           <span class="sl"></span>
         </label>
       </div>
-      <div class="fld-hint">What happens to the coder's model slot when a run ends. <b>OFF</b>: the slot stays warm for the next prompt (the Coder TTL under Advanced decides when it is released). <b>ON</b>: the slot is released at the end of the run (also on abort), so the next prompt can load any model or mode without evicting something first.</div>
+      <div class="fld-hint">What happens to the coder's model slot when a run ends. <b>OFF</b>: the slot stays warm for the next prompt (the Coder TTL under Advanced decides when it is released) &mdash; follow-ups reuse the KV cache and start faster. <b>ON</b>: the slot is released at the end of the run (also on abort), so the next prompt reloads the model and re-prefills the whole context first (slower, but frees VRAM).</div>
     </div>
 
     <!-- Voice (1.4): everything here is opt-in. Off by default means: no
@@ -2355,12 +2388,12 @@ document.getElementById('prefetch-lead-val').textContent=v;">
     <div id="config-moe-experts" style="display:none;margin-top:8px">
       <div class="sec" style="margin-top:4px">MoE CPU experts (per model)</div>
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);white-space:nowrap">Model type:</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);white-space:nowrap">Expert offload:</span>
         <select id="config-moe-pin-select" onchange="onMoePinChange(this.value)"
           style="flex:1;min-width:0;background:var(--bg);border:1px solid var(--b);border-radius:5px;padding:5px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txh);outline:none">
-          <option value="">Auto (detect from name)</option>
-          <option value="true">MoE — expert offload on</option>
-          <option value="false">Dense — no MoE offload</option>
+          <option value="">Auto — from model name</option>
+          <option value="true">MoE — offload experts to CPU</option>
+          <option value="false">Dense — no expert offload</option>
         </select>
       </div>
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
@@ -2373,6 +2406,25 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2)">CPU layers</span>
       </div>
       <div id="config-moe-default-hint" style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#9a74dc;margin-bottom:6px;line-height:1.5"></div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);flex:1">MoE expert cache (MiB) — 0 = off</span>
+        <input type="number" min="0" step="256" id="config-moe-cache-mib" value="0"
+          onchange="postSettings({moe_cache_mib: parseInt(this.value)||0})"
+          style="width:70px;background:var(--bg2);border:1px solid var(--b);border-radius:5px;
+          padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--txh);outline:none">
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <input type="checkbox" id="config-llama-fit-toggle"
+          onchange="postSettings({llama_fit:this.checked})">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2)">Fit to VRAM (--fit) — default on; turn off for a manual MoE split</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--tx2);flex:1">Fit target margin (MiB)</span>
+        <input type="number" min="0" step="128" id="config-llama-fit-target" value="0"
+          onchange="postSettings({llama_fit_target_mib: parseInt(this.value)||0})"
+          style="width:70px;background:var(--bg2);border:1px solid var(--b);border-radius:5px;
+          padding:5px 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--txh);outline:none">
+      </div>
       <div style="display:flex;align-items:center;gap:6px">
         <input type="checkbox" id="config-mlock-toggle" onchange="S.llamaMlock=this.checked;postSettings({llama_mlock:S.llamaMlock});updateMlockHint()">
         <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx);font-weight:600">Lock in RAM (--load-mode mmap+mlock)</span>

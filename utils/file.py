@@ -186,7 +186,10 @@ def normalize_tool_path(file_path: str, workspace: str | Path | None = None) -> 
         p = p.resolve()
     except Exception:
         p = Path(file_path)
-    return str(p).replace("\\", "/").lower()
+    _out = str(p).replace("\\", "/")
+    # Linux audit 2026-11-03: POSIX is case-sensitive; App.py and app.py are
+    # different files and must not share a read-guard/claim key.
+    return _out.lower() if os.name == "nt" else _out
 
 
 def fuzzy_resolve_path(requested_path: str, workspace: str) -> str | None:

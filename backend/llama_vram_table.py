@@ -216,7 +216,10 @@ def moe_cfg_for(model_name: str) -> dict | None:
     exact, -ud-stripped, then prefix (GGUF auto-discovery appends quant/finetune
     suffixes the table keys deliberately do not carry)."""
     key = model_name.strip().lower()
-    cfg = _MOE_TABLE.get(key) or _MOE_TABLE.get(key.replace("-ud", ""))
+    # SUFFIX-ONLY (audit 2026-11-03): replace("-ud", "") also rewrote a
+    # "-ud" substring inside a real name; only a trailing tag is a tag.
+    _key_no_ud = key[:-3] if key.endswith("-ud") else key
+    cfg = _MOE_TABLE.get(key) or _MOE_TABLE.get(_key_no_ud)
     if not cfg:
         # PREFIX-WITH-MARKER (2026-10-31, audit): prefix matching is for the
         # GGUF auto-discovery suffixes on MoE families. A bare row such as

@@ -312,7 +312,6 @@ def _drop_whole_oldest(
                     continue
                 out.append(_rest)
             break
-            break
         # A write/edit/read call and its results are one turn. DROP-INTEGRITY
         # (2026-10-31): deleting the assistant half alone leaves an orphaned
         # role=tool message, which the server rejects.

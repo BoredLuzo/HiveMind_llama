@@ -165,6 +165,13 @@ def cleanup_pause(run_id: str):
     _user_answers.pop(run_id, None)
     _user_questions.pop(run_id, None)
     _decision_ids.pop(run_id, None)
+    # P1 (edge audit 2026-11-03): a resolved pause must not leave a resume
+    # signal behind - a later /abort would take the "abort_during_pause" path
+    # and never set the real abort event.
+    _RESUME_SIGNALS.pop(run_id, None)
+    # The abort-during-pause flag must survive this wake-up: a waiter that
+    # wakes at the same instant must still see the user's stop. It is cleared
+    # in cleanup_pause_state() at run end.
 
 
 # -- Run-Abort Registry (per-run_id, not chat_id) --
@@ -203,6 +210,12 @@ def _register_abort(run_id: str) -> asyncio.Event:
         _user_answers.pop(rid, None)
         _user_questions.pop(rid, None)
         _pause_events.pop(rid, None)
+        # edge audit 2026-11-03: these maps grew for runs that never reached
+        # the cleanup path; is_pause_pending could stay true forever.
+        _graceful_stop_flags.pop(rid, None)
+        _PAUSE_AFTER_CHUNK_FLAGS.pop(rid, None)
+        _RESUME_SIGNALS.pop(rid, None)
+        _ABORT_DURING_PAUSE_SIGNALS.pop(rid, None)
     ev = asyncio.Event()
     _run_abort_registry[run_id] = ev
     _run_abort_registry_ts[run_id] = now
@@ -236,7 +249,11 @@ def clear_graceful_stop(run_id: str) -> None:
 
 
 def is_pause_pending(run_id: str) -> bool:
-    return is_pause_requested(run_id) or run_id in _RESUME_SIGNALS
+    """True only while a pause still WAITS. A resume signal that was already
+    set belongs to a resolved pause and must not swallow an abort."""
+    _sig = _RESUME_SIGNALS.get(run_id)
+    return (is_pause_requested(run_id) or is_pause_waiting(run_id)
+            or (_sig is not None and not _sig.is_set()))
 
 
 # -- Manual Pause Registry (per-run_id) --

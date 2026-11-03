@@ -1093,6 +1093,18 @@ async function loadSettings() {
     S.duoCoderModel = s.duo_coder_model || (s.agents && s.agents.duo_coder && s.agents.duo_coder.model) || '';
     var _moeRaw = s.moe_cpu_experts;
     S.moeCpuExpertsMap = (typeof _moeRaw === 'object' && _moeRaw !== null && !Array.isArray(_moeRaw)) ? _moeRaw : {};
+    var _moeCacheEl = document.getElementById('moe-cache-mib');
+    if (_moeCacheEl) _moeCacheEl.value = parseInt(s.moe_cache_mib) || 0;
+    var _fitEl = document.getElementById('llama-fit-toggle');
+    if (_fitEl) _fitEl.checked = !!s.llama_fit;
+    var _fitTargetEl = document.getElementById('llama-fit-target');
+    if (_fitTargetEl) _fitTargetEl.value = parseInt(s.llama_fit_target_mib) || 0;
+    var _cfgCacheEl = document.getElementById('config-moe-cache-mib');
+    if (_cfgCacheEl) _cfgCacheEl.value = parseInt(s.moe_cache_mib) || 0;
+    var _cfgFitEl = document.getElementById('config-llama-fit-toggle');
+    if (_cfgFitEl) _cfgFitEl.checked = !!s.llama_fit;
+    var _cfgFitTargetEl = document.getElementById('config-llama-fit-target');
+    if (_cfgFitTargetEl) _cfgFitTargetEl.value = parseInt(s.llama_fit_target_mib) || 0;
     S.moeExpertDefaults = s.moe_expert_defaults || {};
     S.moeAutodetect = s.moe_autodetect || {};
     S.moePins = s.moe_pins || {};
@@ -8772,6 +8784,12 @@ function handleEvent(d) {
   }
   else if (d.type === 'memory_saved') {
     loadMemory();
+  }
+  else if (d.type === 'stream_gap') {
+    // STREAM-GAP (audit 2026-11-03): the server dropped frames because the
+    // consumer fell behind. Say so instead of showing a silently truncated
+    // answer; the run journal still has the full text.
+    _journalNote((d.dropped || 'Some') + ' stream frame(s) were dropped - the answer may be incomplete. The run journal has the full text.');
   }
   else if (d.type === 'done') {
     S._sawDoneEvent = true;

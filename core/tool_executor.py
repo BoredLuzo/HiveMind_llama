@@ -366,13 +366,26 @@ async def execute_tool_round(
             _assistant_idx = _ai
             break
 
-    _pre_results: dict[int, str] = await _prefetch_readonly_tools(
-        tool_calls, exec_model, workspace_lock, tool_mode, duo_ws)
+    # A7 (audit 2026-11-03): the read-only prefetch (can include run_tests for
+    # up to 90 s) used to fire before the deadline/abort checks, so an already
+    # stopped or aborted round still ran tests whose results were discarded.
+    _pre_results: dict[int, str] = {}
+    # P2 (deep audit 2026-11-03): an unset deadline is 0.0 - do not treat that
+    # as "already over"; only a real deadline can block the prefetch.
+    _deadline_ok = (not trs.duo_deadline_at
+                    or time.monotonic() < trs.duo_deadline_at)
+    if _deadline_ok and not hooks.is_aborted(chat_id):
+        _pre_results = await _prefetch_readonly_tools(
+            tool_calls, exec_model, workspace_lock, tool_mode, duo_ws)
+    else:
+        _logger.info("[PREFETCH] skipped: round already over deadline or aborted")
 
     _warn_duplicate_write_targets(tool_calls, dtool_msgs)
 
     for _i, _dtc_call in enumerate(tool_calls):
-        if time.monotonic() >= trs.duo_deadline_at:
+        # P3 (audit 2026-11-03): same truthiness guard as the prefetch above —
+        # an unset 0.0 deadline is not "already over".
+        if trs.duo_deadline_at and time.monotonic() >= trs.duo_deadline_at:
             result.duo_timed_out = True
             _logger.warning("[EXEC-LD-RAW] loop_detected gesetzt (tool=%s)", _dname)
             result.loop_detected = True
@@ -781,12 +794,30 @@ async def execute_tool_round(
                             break
 
                 elif _last_bash_idx == -1:
+                    # VERIFY-WRITES (audit 2026-11-03): mutations were made
+                    # but nothing was ever executed. Accepting outright left
+                    # the change unverified with the approval toggle off; the
+                    # sibling branches route the same case through the ladder
+                    # (bounded nudge, still allows completion when exhausted).
                     if _chunk_incomplete_p():
                         pass  # blocked with message; loop continues
                     else:
-                        result.task_complete_called = True
-                    
-                        break
+                        _gate = _task_complete_ladder(
+                            trs, dtool_msgs, result, bool(_tc_blocked),
+                            "[VERIFY REQUIRED] Code was changed this run but "
+                            "nothing was executed. Call run_tests now; if it "
+                            "reports no suite, run the project's documented "
+                            "check via run_bash (e.g. python selftest.py) and "
+                            "ensure exit code 0. Then call task_complete.",
+                            _TC_ALLOWED_MSG if _tc_blocked else None)
+                        if _gate == "allow_break":
+                            break
+                        if _gate == "allow":
+                            _logger.info("[TASK-COMPLETE] accepted without any "
+                                         "verification (nudge escalated, tool=%s)", _dname)
+                        else:
+                            result.task_complete_called = True
+                            break
 
                 elif _last_bash_idx <= _last_edit_idx:
                     _gate = _task_complete_ladder(

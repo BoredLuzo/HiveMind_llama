@@ -61,14 +61,21 @@ def resolve_token() -> str:
         return tok
     try:
         import keyring  # optional dependency; guarded on purpose
-        tok = (keyring.get_password("hivemind_gateway", "bot_token") or "").strip()
+        from keyring.errors import NoKeyringError
+        try:
+            tok = (keyring.get_password("hivemind_gateway", "bot_token") or "").strip()
+        except NoKeyringError:
+            # Linux audit 2026-11-03: headless Linux has no keyring backend;
+            # this raised NoKeyringError (not ImportError) and killed startup.
+            tok = ""
     except ImportError:
         tok = ""
     if tok:
         return tok
     raise StartupError(
-        f"no bot token: set {TOKEN_ENV_VAR} or store it in the Windows "
-        "Credential Manager under hivemind_gateway/bot_token")
+        f"no bot token: set {TOKEN_ENV_VAR} (Linux/headless) or store it in "
+        "the OS keyring (Windows Credential Manager) under "
+        "hivemind_gateway/bot_token")
 
 
 # -- single instance ------------------------------------------------------
@@ -1287,13 +1294,21 @@ async def _mirror_loop(gw: Gateway) -> None:
         # process birth (FILETIME) lets /gateway/stop verify the pid was
         # not recycled by another process inside the freshness window
         # (deep audit 2026-10-05).
-        await gw.hive.heartbeat(os.getpid(), {
-            "paired": gw.owner_id is not None,
-            "mode": gw.state.data.get("mode") or "",
-            "restricted": getattr(gw, "phone_restricted", None),
-            "birth": _process_birth(os.getpid()),
-        })
-        await gw.bridge.mirror_tick()
+        # C8 (audit 2026-11-03): a single unexpected error in heartbeat or
+        # mirror_tick used to kill the whole loop (heartbeat, cron and the
+        # approval relay) while the process stayed alive. One bad tick must
+        # not take the gateway down.
+        try:
+            await gw.hive.heartbeat(os.getpid(), {
+                "paired": gw.owner_id is not None,
+                "mode": gw.state.data.get("mode") or "",
+                "restricted": getattr(gw, "phone_restricted", None),
+                "birth": _process_birth(os.getpid()),
+            })
+            await gw.bridge.mirror_tick()
+        except (HiveUnreachable, OSError, ValueError, TypeError, KeyError,
+                IndexError, RuntimeError, AttributeError, TimeoutError) as _hb_exc:
+            log.warning("[HEARTBEAT] tick failed: %s", _hb_exc)
         # R7 (owner, 1.3.2): cron - fire due scheduled runs as normal phone
         # runs. Every error is contained; the cron must never take the
         # gateway down.
@@ -1387,9 +1402,14 @@ async def run() -> int:
         try:
             _nc = await gw.bridge.new_chat()
             log.info("[STARTUP] fresh chat for the phone: %s", _nc)
-            await gw.bridge.ms.send_message(
-                "🆕 Fresh chat started (gateway restarted) - the old "
-                "conversation is archived in the UI.")
+            if "New HiveMind chat" in _nc:
+                # P2 (edge audit 2026-11-03): a busy engine returns a note,
+                # not a chat - do not claim a fresh chat that was not created.
+                await gw.bridge.ms.send_message(
+                    "🆕 Fresh chat started (gateway restarted) - the old "
+                    "conversation is archived in the UI.")
+            else:
+                log.warning("[STARTUP] fresh chat postponed: %s", _nc)
         except (HiveUnreachable, HTTPError, OSError, TelegramApiError) as _nc_exc:
             log.warning("[STARTUP] fresh chat failed (non-fatal): %s", _nc_exc)
 

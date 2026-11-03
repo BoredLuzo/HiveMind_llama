@@ -572,7 +572,6 @@ async def run_stream(
 
     _exec_ctrl                = None  # duo_runner / pipeline_runner
     _resolve_resume_block     = None  # Runner bei Resume
-    _resolve_duo_rounds_cap   = None  # Runner
     _do_prefetch              = None  # _schedule_prefetch()
     _prefetch_judge_once      = None
     run_peer_ratings          = None
@@ -965,31 +964,20 @@ async def run_stream(
                 if bool((_model_profile(m) or {}).get("vision", False))
                 and m.split(":")[0] in ("qwen3.5", "qwen3.6", "hermes3.6", "hermes", "gemma-4")
             ]
-            if _multimodal_available:
-                _direct_is_vision = True
-                _logger.debug("[Vision-Trigger] No multimodal Direct configured but available: %s - image direct",
-                              _multimodal_available[:3])
+            # NO FLAG INFLATION (2026-11-02, live): this used to set
+            # `_direct_is_vision = True` when ANY multimodal model was merely
+            # INSTALLED. The run still used the text-only direct model, the
+            # preprocessor was skipped, and the model answered "I cannot see an
+            # image" (reproduced with a warm /models cache). Availability is
+            # not capability: only the run's own direct model may claim vision;
+            # otherwise the preprocessor below looks at the image.
 
         if _direct_is_vision:
-            if _configured_direct and bool((_model_profile(_configured_direct) or {}).get("vision", False)):
-                _direct_disp = _configured_direct
-                yield await emit({"type": "status",
-                    "content": f"Multimodal model ({_direct_disp}) processes the image directly -- no vision preprocessing"})
-                _logger.info("[Vision-Trigger] Image direct to multimodal model - prepro skipped (direct=%r, avail=%s)",
-                             _configured_direct, _multimodal_available[:3] if _multimodal_available else "configured")
-            else:
-                # VISION-LIE (2026-10-28, live): this branch fired when ANY
-                # multimodal model existed while the run's own direct model
-                # has no vision profile - the status claimed "multimodal
-                # model (gemma-4) processes the image" and the image went to
-                # a text model, which answered "I see no image". Say what
-                # actually happens instead.
-                yield await emit({"type": "status",
-                    "content": f"⚠ Direct model ({_configured_direct or 'engine default'}) has no vision profile - "
-                               f"the image will most likely be ignored. Switch to a vision model "
-                               f"(available: {', '.join(_multimodal_available[:3]) or 'none configured'})"})
-                _logger.warning("[Vision-Trigger] direct=%r has no vision profile, image may be ignored (avail=%s)",
-                                _configured_direct, _multimodal_available[:3])
+            _direct_disp = _configured_direct or "multimodal model"
+            yield await emit({"type": "status",
+                "content": f"Multimodal model ({_direct_disp}) processes the image directly -- no vision preprocessing"})
+            _logger.info("[Vision-Trigger] Image direct to multimodal model - prepro skipped (direct=%r, avail=%s)",
+                         _configured_direct, _multimodal_available[:3] if _multimodal_available else "configured")
         else:
             yield await emit({"type": "status", "content": "Vision model (" + _vision_model_name + ") describes images..."})
             _vp_t0 = time.monotonic()
@@ -1129,14 +1117,8 @@ async def run_stream(
             registry_get("direct") if "direct" in _state.pipeline.agents else "")
         _direct_caps2 = _model_profile(_direct_eff2)
         _direct_is_vision2 = bool((_direct_caps2 or {}).get("vision", False))
-        _multimodal_avail2: list = []
-        if not _direct_is_vision2:
-            _multimodal_avail2 = [
-                m for m in (S_models_cache or [])
-                if bool((_model_profile(m) or {}).get("vision", False))
-                and m.split(":")[0] in ("qwen3.5", "qwen3.6", "hermes3.6", "hermes", "gemma-4")
-            ]
-            _direct_is_vision2 = bool(_multimodal_avail2)
+        # NO FLAG INFLATION (2026-11-02): an installed vision model does not
+        # make THIS direct model multimodal; the image stays out of its request.
         if mode == "code_duo":
             # DUO IMAGE PLAN (2026-10-01): the gate must NOT judge by the
             # direct model — in agentic duo runs resolve_image_plan decides
@@ -1152,11 +1134,8 @@ async def run_stream(
             yield await emit({"type": "status", "content": duo_gate_status_text(_plan)})
         elif _direct_is_vision2:
             effective_images = images
-            _disp2 = (_direct_eff2 if _direct_eff2
-                      and bool((_model_profile(_direct_eff2) or {}).get("vision", False))
-                      else (_multimodal_avail2[0] if _multimodal_avail2 else "multimodal model"))
             yield await emit({"type": "status",
-                "content": f"Multimodal model ({_disp2}) processes the image directly"})
+                "content": f"Multimodal model ({_direct_eff2 or 'engine default'}) processes the image directly"})
         elif _va_cfg_enabled:
             yield await emit({"type": "status", "content": "[Vision preprocessing off - vision-agent uses raw image]"})
         else:
@@ -1716,7 +1695,6 @@ async def run_stream(
             run_skill_distillation=_run_skill_distillation,
             resolve_resume_block=_resolve_resume_block,
             load_resume_block=_load_resume_block,
-            resolve_duo_rounds_cap=_resolve_duo_rounds_cap,
             append_learning_log=append_learning_log,
         )
 

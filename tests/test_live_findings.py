@@ -45,7 +45,7 @@ _duo_src = io.open(ROOT / "core" / "duo_runner.py", encoding="utf-8").read()
 
 # ── 1. faulthandler.register must be guarded (Windows) ──────────────────────
 check("register() is behind a hasattr guard",
-      'if hasattr(_fh, "register"):' in _run_src)
+      'hasattr(_fh, "register")' in _run_src and "_sigusr1" in _run_src)
 check("register() is not called unguarded",
       "\n    _fh.register(_faulthandler_stream)\n" not in _run_src)
 check("enable() still runs unconditionally (works on Windows)",
@@ -59,7 +59,7 @@ check(f"this platform: faulthandler.register present={hasattr(faulthandler, 'reg
       True)
 if not hasattr(faulthandler, "register"):
     check("guard is what keeps the block alive here (no AttributeError path)",
-          'if hasattr(_fh, "register"):' in _run_src)
+          'hasattr(_fh, "register")' in _run_src)
 
 # ── 2. the coder tool loop carries the model name ───────────────────────────
 check("coder ToolLoopConfig gets model=exec_mdl",

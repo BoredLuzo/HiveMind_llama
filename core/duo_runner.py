@@ -99,17 +99,31 @@ from hive_functions.test_runner import (
     run_tests as _run_test_suite, TestResult as _TestResult, NO_TESTS_RE,
 )
 
+def _claim_abs_path(fp: str, workspace: str) -> str:
+    """Absolute path for a task_complete file claim.
+
+    Windows models sometimes emit "/C:/dir/file" - os.path.isabs accepts it,
+    os.path.exists does not. Strip the extra leading slash on Windows.
+    """
+    _p = str(fp or "")
+    if os.name == "nt" and re.match(r"^/[A-Za-z]:", _p):
+        _p = _p[1:]
+    return _p if os.path.isabs(_p) else os.path.join(workspace, _p)
+
+
 # VERIFY-GATE PROMPT: shared by the veto fallback and the auto-verify
 # no-tests branch - one wording, two call sites.
-_VERIFY_REQUIRED_PROMPT = "[VERIFY REQUIRED] You called task_complete but the last file write "
-"has not been followed by a successful test run.\n"
-"Do this NOW, in this order:\n"
-"1. Call run_tests. If it reports no suite, write a minimal smoke test "
-"that exercises the created files and run it via run_bash instead "
-"(e.g. python selftest.py).\n"
-"2. Ensure it exits with code 0.\n"
-"3. Then call task_complete again with status "
-"{completed, blockers, build_status}."
+_VERIFY_REQUIRED_PROMPT = (
+    "[VERIFY REQUIRED] You called task_complete but the last file write "
+    "has not been followed by a successful test run.\n"
+    "Do this NOW, in this order:\n"
+    "1. Call run_tests. If it reports no suite, write a minimal smoke test "
+    "that exercises the created files and run it via run_bash instead "
+    "(e.g. python selftest.py).\n"
+    "2. Ensure it exits with code 0.\n"
+    "3. Then call task_complete again with status "
+    "{completed, blockers, build_status}."
+)
 
 from hive_functions.language_config import build_test_hint as _build_test_hint
 from hive_functions.num_ctx_config import resolve_ctx
@@ -1211,7 +1225,8 @@ async def _duo_critic_review(
                     _ctc = _cmsg.get("tool_calls", [])
                     if not _ctc:
                         # No more tool calls — this is the final verdict
-                        _parts.append(_cmsg.get("content", "").strip())
+                        _parts.append((_cmsg.get("content") or "").strip()
+                                      or (_cmsg.get("reasoning_content") or "").strip())
                         break
                     # Execute tool calls, append results
                     _critic_tc_msgs.append(_cmsg)
@@ -1314,7 +1329,20 @@ async def _duo_critic_review(
                 if jm: _critic_verdict = json.loads(jm.group())
             except (json.JSONDecodeError, AttributeError):
                 logger.debug("Critic JSON parse failed for: %.200s", _critic_raw)
-        if _critic_verdict.get("approved") is None:
+        if not _critic_raw:
+            # A8 (audit 2026-11-03, fail-closed): an empty critic is NOT an
+            # approval - it means the completion is unverified. The old code
+            # fabricated {"approved": False, "issues": [""]}, which triggered a
+            # fix round on an empty string; the fix is an explicit issue, not a
+            # silent pass.
+            logger.warning("[CRITIC] empty verdict - completion stays unapproved")
+            _critic_verdict = {
+                "approved": False,
+                "issues": ["Critic returned no verdict (empty response). "
+                           "Re-run the critic or verify the result manually."],
+                "verdict": "empty",
+            }
+        elif _critic_verdict.get("approved") is None:
             _critic_verdict = {"approved": False, "issues": [_critic_raw[:300]], "verdict": "Parsing error"}
 
         critic_issues  = _critic_verdict.get("issues", [])
@@ -1981,6 +2009,7 @@ async def _duo_resolve_tool_budgets(
         _max_tool_rounds = _resolve_tool_budget(
             _max_tool_rounds_cfg,
             ctx.duo_config.until_finished,
+            settings=ctx.settings,
             profile=_duo_runtime_profile,
         ) + _accumulated_replan_bonus
     finally:
@@ -2067,7 +2096,7 @@ async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
         from backend.llama_server_manager import manager as _lsm_unpin
         for _m in (_planner_model, exec_mdl):
             if _m:
-                _lsm_unpin.unpin(_m)
+                _lsm_unpin.clear_pin(_m)
     except Exception:
         pass
     # CODER LIFETIME: with
@@ -2511,6 +2540,18 @@ async def run_code_duo(ctx):
         # later read (vision gates, traces, attach) crashed the whole run
         # with UnboundLocalError. Same class as the _coder_port init.
         _img_plan = {"planner": "none", "coder": "none", "warnings": [], "mode": None}
+        # IMAGE-PLAN-INDEPENDENT (P1, audit 2026-11-03): the planner phase is
+        # the only caller of resolve_image_plan. Follow-ups skip it, so an
+        # attached image was dropped although chat_run had announced a real
+        # plan. Resolve it here; the planner phase recomputes with its refined
+        # model when it actually runs.
+        if ctx.images:
+            try:
+                _img_plan = resolve_image_plan(
+                    _planner_model, exec_mdl, ctx.settings, ctx)
+            except (ImportError, AttributeError, TypeError, ValueError,
+                    KeyError) as _img_exc:
+                logger.debug("image plan pre-resolve failed: %s", _img_exc)
         if _follow_up_active and (ctx.duo_config.chunking or ctx.duo_config.planner):
             yield await ctx.emit({"type": "status",
                 "content": "🔁 Follow-up: continuing the previous plan - no new plan"})
@@ -4344,6 +4385,16 @@ async def run_code_duo(ctx):
                                         _duo_run_timeout_s,
                                     )
                                     _inloop_plan_task.cancel()
+                                    # P2 (deep audit 2026-11-03): cancel() is
+                                    # only scheduled; awaiting the task here
+                                    # prevents a pending-task leak and makes
+                                    # result() a clean CancelledError.
+                                    try:
+                                        await asyncio.wait_for(
+                                            _inloop_plan_task, timeout=2.0)
+                                    except (asyncio.CancelledError,
+                                            asyncio.TimeoutError):
+                                        pass
                                     break
                                 while not _inloop_event_q.empty():
                                     try:
@@ -4354,7 +4405,12 @@ async def run_code_duo(ctx):
                                 await asyncio.sleep(0.3)
                             try:
                                 _inloop_plan_text, _inloop_plan_thinking, _inloop_plan_fallback = _inloop_plan_task.result()
-                            except asyncio.CancelledError:
+                            except (asyncio.CancelledError, asyncio.InvalidStateError):
+                                # DEADLINE-CANCEL-RACE (2026-11-03, live): after
+                                # cancel() the task is still pending, so
+                                # result() raised InvalidStateError and the
+                                # broad handler below turned a deadline stop
+                                # into "Thinking plan error - fallback plan".
                                 _inloop_plan_text = ""
                                 _inloop_plan_thinking = ""
                                 _inloop_plan_fallback = True
@@ -5290,6 +5346,19 @@ async def run_code_duo(ctx):
                                                     len(list(_written_files or [])))
                                 except Exception as _rmd_err:   # never break a run for the map (logged)
                                     logger.debug("[REPO-MAP-DELTA] skipped: %s", _rmd_err)
+                                # DELTA-BEFORE-COMPRESS (audit 2026-11-03):
+                                # _sys_for_compress was captured before the
+                                # delta was appended; compression then rebuilt
+                                # the prefix from the stale string and threw
+                                # the delta away. Re-capture after the append.
+                                _delta_sys = (
+                                    _dtool_msgs[0].get("content", "")
+                                    if _dtool_msgs and isinstance(_dtool_msgs[0], dict)
+                                    and _dtool_msgs[0].get("role") == "system"
+                                    else ""
+                                )
+                                if _delta_sys:
+                                    _sys_for_compress = str(_delta_sys)
                             _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(messages=_dtool_msgs, **_comp_kwargs)
                             # MINI-SHRINK-RETRY (2026-09-07): if the full compression
                             # barely shrank (<15% of the before value), an early
@@ -6603,8 +6672,12 @@ async def run_code_duo(ctx):
                                 # Verify that files claimed in task_complete actually exist on disk
                                 _missing = []
                                 for _fp in sorted(_written_files or []):
-                                    _abs = _fp if os.path.isabs(_fp) else os.path.join(_ws_str, _fp)
-                                    if not os.path.exists(_abs):
+                                    # CLAIM-PATH (2026-11-03, live): a model
+                                    # wrote "/C:/.../big.py"; os.path.isabs
+                                    # says True and exists() says False, so a
+                                    # real file was reported missing.
+                                    _fp_n = _claim_abs_path(_fp, _ws_str)
+                                    if not os.path.exists(_fp_n):
                                         _missing.append(_fp)
                                 if _missing:
                                     logger.warning(

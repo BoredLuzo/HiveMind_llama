@@ -56,6 +56,11 @@ class ModelSlot:
         # still be in flight - live run 17:57:36 killed exactly that slot for
         # another role's load and the round died with ConnectError.
         self.in_flight: int = 0
+        # A9c (audit 2026-11-03): the producer has no finally, so a cancelled
+        # round could leave the counter at 1 forever. The timestamp lets the
+        # eviction guards age a stale mark out instead of blocking the slot
+        # until restart.
+        self.in_flight_since: float = 0.0
         # VRAM-HEADROOM (2026-10-27): set when a fresh load left almost no free
         # VRAM. Surfaced by /vram/ps so the UI can say "this will be slow".
         self.last_warning: str = ""
@@ -70,10 +75,30 @@ class ModelSlot:
 
     def mark_in_flight(self) -> None:
         """A round starts using this slot (see in_flight in __init__)."""
+        import time as _t
+        # P1 (deep audit 2026-11-03): after a leaked mark ages out, the NEXT
+        # mark must refresh the stamp - otherwise the counter rises to 2 while
+        # the stamp stays old and the slot looks free mid-round.
+        if (int(getattr(self, "in_flight", 0)) <= 0
+                or not self.in_flight_active()):
+            self.in_flight_since = _t.monotonic()
         self.in_flight = int(getattr(self, "in_flight", 0)) + 1
 
     def clear_in_flight(self) -> None:
         self.in_flight = max(0, int(getattr(self, "in_flight", 0)) - 1)
+        if self.in_flight == 0:
+            self.in_flight_since = 0.0
+
+    def in_flight_active(self, max_age_s: float = 1800.0) -> bool:
+        """True while a round is using this slot; a mark older than
+        `max_age_s` is treated as leaked (no finally on the producer)."""
+        import time as _t
+        if int(getattr(self, "in_flight", 0)) <= 0:
+            return False
+        _since = float(getattr(self, "in_flight_since", 0.0) or 0.0)
+        if _since <= 0.0:
+            return True          # older mark without a stamp: stay conservative
+        return (_t.monotonic() - _since) < max_age_s
 
     @property
     def evictable(self) -> bool:
@@ -84,7 +109,7 @@ class ModelSlot:
         instead of a clean "does not fit" refusal."""
         if self.pinned:
             return False
-        if int(getattr(self, "in_flight", 0)) > 0:
+        if self.in_flight_active():
             return False
         return not getattr(self, "_loading", False)
 

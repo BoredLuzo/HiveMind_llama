@@ -372,7 +372,7 @@ check("[b1] _duo_final_cleanup is module-level async",
 if _h is not None:
     _seg = ast.get_source_segment(SRC, _h) or ""
     check("[b1] cleanup helper owns unpin + evict + pause-cleanup + project save",
-          "unpin(" in _seg and "duo_coder_after_run" in _seg
+          ("clear_pin(" in _seg or "unpin(" in _seg) and "duo_coder_after_run" in _seg
           and "cleanup_pause(" in _seg and "ProjectStateManager().save" in _seg)
     n_unpack = 0
     for s2 in _h.body:

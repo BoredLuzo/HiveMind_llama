@@ -373,6 +373,15 @@ def _sync_backend_runtime_config() -> None:
         import backend.llama_config as _lc_init
         _lc_init.MLOCK_MODEL = bool(settings.get("llama_mlock", True))
         _lsm_init.MLOCK_MODEL = _lc_init.MLOCK_MODEL
+        # EXPERT-CACHE (2026-11-03): live --moe-cache-mib value
+        _cache_mib = int(settings.get("moe_cache_mib", 0) or 0)
+        _lc_init.MOE_CACHE_MIB = _cache_mib
+        _lsm_init.MOE_CACHE_MIB = _cache_mib
+        _lc_init.LLAMA_FIT = bool(settings.get("llama_fit", False))
+        _lc_init.LLAMA_FIT_TARGET_MIB = int(
+            settings.get("llama_fit_target_mib", 0) or 0)
+        _lsm_init.LLAMA_FIT = _lc_init.LLAMA_FIT
+        _lsm_init.LLAMA_FIT_TARGET_MIB = _lc_init.LLAMA_FIT_TARGET_MIB
         _gb = str(settings.get("gpu_backend", "") or "").strip().lower()
         # ENV-WINS (2026-09-19): a repo-shipped settings.json must not defeat
         # a container/systemd deployment — HIVEMIND_GPU_BACKEND has priority
@@ -1524,6 +1533,13 @@ async def stream(req: Request):
     duo_coder_tool_thinking = _as_bool(_body_or_settings("duo_coder_tool_thinking", default=False))
     duo_coder_tool_thinking_auto_mode = str(_body_or_settings("duo_coder_tool_thinking_auto_mode", default="off")).strip().lower()
     chat_id                = body.get("chat_id") or None
+    # B1 (audit 2026-11-03): the same shape check routers/chats.py applies.
+    # A garbage id fed the adoption glob (*_{id}.json) and the sessions path
+    # (standalone_{id}.context.json) - "*" matched a foreign chat and ".."
+    # escaped the directory.
+    if chat_id is not None and not re.fullmatch(r"[a-f0-9-]{4,64}", str(chat_id)):
+        from fastapi.responses import JSONResponse as _JSONRespChat
+        return _JSONRespChat({"detail": "invalid chat_id"}, status_code=400)
     # REQUEST-WINS (2026-10-14, security fix): an explicit workspace in the
     # body overrides last-used/settings for THIS run; a run WITHOUT one is
     # commit-gated (workspace_commit_allowed=False in chat_run).
@@ -1659,7 +1675,36 @@ async def stream(req: Request):
                     _jr_record(_chunk)
                     # backpressure cap for a detached run nobody watches
                     if _q.qsize() < 5000:
+                        if _state.get("dropped"):
+                            # P0 (edge audit 2026-11-03): tell the consumer
+                            # about the gap instead of silently truncating.
+                            _gap = json.dumps(
+                                {"type": "stream_gap",
+                                 "dropped": int(_state["dropped"])})
+                            await _q.put(("chunk", f"data: {_gap}\n\n"))
+                            _state["dropped"] = 0
                         await _q.put(("chunk", _chunk))
+                    elif isinstance(_chunk, str) and '"type": "done"' in _chunk:
+                        # DONE-ALWAYS (audit 2026-11-03): the terminal frame
+                        # must not be dropped either — a full queue right at
+                        # the end otherwise left a truncated answer that the
+                        # consumer could not distinguish from a complete one.
+                        # Gap marker + done bypass the cap (two frames).
+                        if _state.get("dropped"):
+                            _gap = json.dumps(
+                                {"type": "stream_gap",
+                                 "dropped": int(_state["dropped"])})
+                            await _q.put(("chunk", f"data: {_gap}\n\n"))
+                            _state["dropped"] = 0
+                        await _q.put(("chunk", _chunk))
+                    else:
+                        # C7 (audit 2026-11-03): frames vanished without any
+                        # trace. Journal has them; say so in the log.
+                        _state["dropped"] = int(_state.get("dropped", 0)) + 1
+                        if _state["dropped"] == 1 or _state["dropped"] % 100 == 0:
+                            logger.warning(
+                                "[SSE] queue full (5000) - %d frame(s) dropped "
+                                "(journal keeps them)", _state["dropped"])
             except BaseException as _se:
                 if isinstance(_se, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
                     _state["aborted"] = True
@@ -1862,9 +1907,17 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
         _tool_args = dict(args or {})
         _tool_args["__model__"] = model_for_limits
         try:
-            return await _run_inline_tool(name, _tool_args,
-                workspace_lock=_OPENAI_WORKSPACE_LOCK,
-                tool_mode="openai_agent", include_websearch=_OPENAI_WS_ENABLED)
+            # P1 (deep audit 2026-11-03): this OpenAI-compatible endpoint has
+            # no run context by design; without the marker the approval gate
+            # denied every write/exec when the toggle was on.
+            from tools.runner import _external_dispatch as _ext_cv_ag
+            _ext_tok_ag = _ext_cv_ag.set(True)
+            try:
+                return await _run_inline_tool(name, _tool_args,
+                    workspace_lock=_OPENAI_WORKSPACE_LOCK,
+                    tool_mode="openai_agent", include_websearch=_OPENAI_WS_ENABLED)
+            finally:
+                _ext_cv_ag.reset(_ext_tok_ag)
         except Exception as e:
             return _tool_error_response("TOOL_EXEC_EXCEPTION",
                 f"{type(e).__name__}: {str(e)[:220]}",

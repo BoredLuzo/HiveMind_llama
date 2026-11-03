@@ -35,6 +35,7 @@ Stdlib only — no huggingface_hub dependency.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -48,6 +49,75 @@ sys.path.insert(0, str(ROOT))
 
 HF_API = "https://huggingface.co/api/models"
 HF_RESOLVE = "https://huggingface.co/{repo}/resolve/main/{path}"
+HF_API_TREE = "https://huggingface.co/api/models/{repo}/tree/main?recursive=1"
+_LFS_OID_CACHE: dict[str, str] = {}
+_LFS_TREE_CACHE: dict[str, dict[str, str]] = {}
+
+
+def _hf_token() -> str:
+    """HF token: env first, then the file `hf auth login` writes.
+
+    No token is ever generated here. Public repos work anonymously; gated
+    repos need a user-created token (env or the HF CLI token file).
+    """
+    _tok = (os.environ.get("HF_TOKEN")
+            or os.environ.get("HUGGING_FACE_HUB_TOKEN") or "").strip()
+    if _tok:
+        return _tok
+    _paths = []
+    if os.environ.get("HF_TOKEN_PATH"):
+        _paths.append(Path(os.environ["HF_TOKEN_PATH"]))
+    if os.environ.get("HF_HOME"):
+        _paths.append(Path(os.environ["HF_HOME"]) / "token")
+    _paths.append(Path.home() / ".cache" / "huggingface" / "token")
+    for _p in _paths:
+        try:
+            _v = _p.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if _v:
+            return _v
+    return ""
+
+
+def _hf_auth_headers() -> dict:
+    """HF token from the environment or the HF CLI, for gated repos."""
+    _tok = _hf_token()
+    return {"Authorization": f"Bearer {_tok}"} if _tok else {}
+
+
+def _hf_lfs_sha256(repo: str, path: str) -> str:
+    """LFS sha256 (``lfs.oid``) for one file, or "" when unavailable.
+
+    B7 (audit 2026-11-03): the redirect's X-Linked-Etag is a 40-hex git blob
+    id, NOT the content hash - verified against a real HF download. The file
+    API exposes the true LFS oid (sha256). The tree is fetched ONCE per repo
+    (P2) and the token, when set, authenticates gated repos; network failure
+    degrades to the size check and says so in the log.
+    """
+    key = f"{repo}::{path}"
+    if key in _LFS_OID_CACHE:
+        return _LFS_OID_CACHE[key]
+    tree = _LFS_TREE_CACHE.get(repo)
+    if tree is None:
+        tree = {}
+        try:
+            req = urllib.request.Request(
+                HF_API_TREE.format(repo=repo),
+                headers={"User-Agent": "HiveMind-Installer",
+                         **_hf_auth_headers()})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                entries = json.loads(r.read().decode("utf-8", "replace"))
+            for entry in entries or []:
+                _p = str((entry or {}).get("path") or "")
+                if _p:
+                    tree[_p] = str(((entry or {}).get("lfs") or {}).get("oid") or "")
+        except (OSError, ValueError, urllib.error.URLError):
+            tree = {}
+        _LFS_TREE_CACHE[repo] = tree
+    oid = tree.get(path, "")
+    _LFS_OID_CACHE[key] = oid
+    return oid
 
 
 def _persist_models_dir(mdir: Path) -> None:
@@ -458,7 +528,38 @@ def disk_space_free_gb(path: Path) -> float:
         return -1.0
 
 
-def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool) -> bool:
+class _EtagRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """B7: Hugging Face puts X-Linked-Etag on the 302, not on the CDN answer.
+
+    urllib follows the redirect automatically; without this handler the
+    checksum header was lost and the sha256 check silently became a size-only
+    check. Capture it from the 3xx response before following.
+    """
+
+    def __init__(self):
+        self.etag = ""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not self.etag:
+            for _key in ("X-Linked-Etag", "ETag"):
+                _val = headers.get(_key)
+                if _val:
+                    self.etag = str(_val).strip()
+                    break
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _sha256_file(path: Path) -> str:
+    """Streaming sha256 for a downloaded file (B7)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
+                  _no_resume: bool = False) -> bool:
     url = HF_RESOLVE.format(repo=repo, path=f["path"])
     size_gb = int(f.get("size") or 0) / (1024 ** 3)
     dest = dest_dir / Path(f["path"]).name
@@ -476,20 +577,28 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool) -> bool:
     # RESUME (2026-10-27, audit): an 18 GB download that died at 12.6 GB started
     # from zero. A partial file is continued with a Range request, and the result
     # is checked against the expected size before it counts as done.
-    _have = dest.stat().st_size if dest.exists() else 0
+    _have = 0 if _no_resume else (dest.stat().st_size if dest.exists() else 0)
+    _had_partial = bool(_have)
     _expected = int(f.get("size") or 0)
     if _have and _expected and _have >= _expected:
         print(f"    Already complete: {dest.name} ({_have / (1024**3):.2f} GB)")
         return True
     print(f"    Downloading -> {dest} ({size_gb:.1f} GB)"
           + (f" - resuming at {_have / (1024**3):.2f} GB" if _have else "") + "...")
-    headers = {"User-Agent": "HiveMind-Installer"}
+    headers = {"User-Agent": "HiveMind-Installer", **_hf_auth_headers()}
     if _have:
         headers["Range"] = f"bytes={_have}-"
     req = urllib.request.Request(url, headers=headers)
+    _redirect = _EtagRedirectHandler()
+    _opener = urllib.request.build_opener(_redirect)
     try:
-        resp = urllib.request.urlopen(req, timeout=120)
+        resp = _opener.open(req, timeout=120)
     except urllib.error.HTTPError as he:
+        if he.code in (401, 403):
+            print("    [ERROR] access denied (gated/private repo). Create a "
+                  "token at huggingface.co/settings/tokens and run "
+                  "`hf auth login` or set HF_TOKEN.")
+            return False
         if he.code == 416 and _have:
             # 416 means the server has no bytes past _have. The pre-check
             # above already returned when _have >= _expected, so a 416 here
@@ -527,27 +636,70 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool) -> bool:
             print(f"    Already complete: {dest.name}")
             return True
         raise
-    with resp as r, open(dest, "ab" if (_have and r.status == 206) else "wb") as out:
-        if not (_have and r.status == 206):
+    with resp as r:
+        # B7 (audit 2026-11-03): a 206 must start exactly at our partial size;
+        # anything else appends new bytes onto old ones. Restart clean instead.
+        _cr = r.headers.get("Content-Range") or ""
+        if _have and r.status == 206 and _cr:
+            _crm = re.match(r"bytes\s+(\d+)-", _cr)
+            if _crm and int(_crm.group(1)) != _have:
+                print(f"    [WARNING] server resumed at byte {_crm.group(1)}, "
+                      f"partial is {_have} - restarting from scratch")
+                try:
+                    dest.unlink()
+                except OSError:
+                    pass
+                return download_file(repo, f, dest_dir, auto_yes, _no_resume=True)
+        _append = bool(_have and r.status == 206)
+        if not _append:
             _have = 0        # server ignored the range: start over, do not append
         total = int(r.headers.get("Content-Length") or 0) + _have
         done = _have
-        while True:
-            chunk = r.read(1024 * 512)
-            if not chunk:
-                break
-            out.write(chunk)
-            done += len(chunk)
-            if total:
-                _pct = done * 100 // max(total, 1)
-                sys.stdout.write(f"\r    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)")
-                sys.stdout.flush()
+        with open(dest, "ab" if _append else "wb") as out:
+            while True:
+                chunk = r.read(1024 * 512)
+                if not chunk:
+                    break
+                out.write(chunk)
+                done += len(chunk)
+                if total:
+                    _pct = done * 100 // max(total, 1)
+                    sys.stdout.write(f"\r    {done / (1024**3):.2f} / {total / (1024**3):.2f} GB ({_pct}%)")
+                    sys.stdout.flush()
+        _etag_raw = (_redirect.etag
+                     or r.headers.get("ETag")
+                     or r.headers.get("X-Linked-Etag") or "").strip()
+        _etag_raw = re.sub(r'^W/', "", _etag_raw).strip('"')
     sys.stdout.write("\n")
     _final = dest.stat().st_size if dest.exists() else 0
     if _expected and _final and _final != _expected:
         print(f"    [WARNING] size mismatch: {_final} bytes on disk, {_expected} expected "
               f"- re-run to resume")
         return False
+    # B7: Hugging Face serves the LFS sha256 as ETag/X-Linked-Etag. A hybrid
+    # file (old partial + new bytes) has the right size but the wrong hash.
+    # B7: prefer the file API's LFS oid; a 64-hex redirect ETag (local mirrors,
+    # other CDNs) is the fallback. A 40-hex git blob id is NOT a content hash.
+    _oid = _hf_lfs_sha256(repo, str(f.get("path") or ""))
+    if not re.fullmatch(r"[a-f0-9]{64}", _oid.lower()):
+        _oid = (_etag_raw.lower()
+                if re.fullmatch(r"[a-f0-9]{64}", _etag_raw.lower()) else "")
+    if _oid:
+        print("    [INFO] checksum: sha256 available - verifying")
+        if _sha256_file(dest) != _oid:
+            print("    [WARNING] checksum mismatch: file does not match the "
+                  "upstream ETag - deleting")
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+            if _had_partial and not _no_resume:
+                print("    [INFO] re-downloading from scratch (resume came "
+                      "from a different upstream generation)")
+                return download_file(repo, f, dest_dir, auto_yes, _no_resume=True)
+            return False
+    else:
+        print("    [INFO] checksum: no sha256 available - size check only")
     return True
 
 

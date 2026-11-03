@@ -766,10 +766,19 @@ async def _safe_web_search(query: str, max_results: int, *, phase: str, profile:
         return "[web_search: websearch module unavailable]"
     _timeout_s = _get_websearch_timeout_seconds(profile=profile)
     try:
-        return await asyncio.wait_for(
+        _res = await asyncio.wait_for(
             _st._websearch.web_search(query, max_results=max_results),
             timeout=_timeout_s,
         )
+        # TAINT-PIPELINE (2026-11-03): text from the pipeline search enters the
+        # run prompt without a tool result - mark the run so a later shell
+        # command still requires the card.
+        try:
+            from tools import taint as _taint_ws
+            _taint_ws.mark(f"web_search:{phase}")
+        except ImportError:
+            pass
+        return _res
     except asyncio.TimeoutError:
         return f"[web_search: timeout after {_timeout_s:.0f}s ({phase})]"
     except Exception as e:

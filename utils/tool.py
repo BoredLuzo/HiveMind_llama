@@ -13,14 +13,17 @@ def _repair_json_backslashes(raw: str) -> str:
 
 
 def parse_tool_args(raw) -> dict:
-
-
+    # A6 (audit 2026-11-03): valid JSON that is not an OBJECT ("5", "null",
+    # "[]") used to be returned as-is; the caller then did {**args} and the
+    # whole tool round died with TypeError. Only a dict is usable as args.
     if isinstance(raw, str):
         try:
-            return json.loads(raw)
+            _parsed = json.loads(raw)
+            return _parsed if isinstance(_parsed, dict) else {}
         except Exception:
             try:
-                return json.loads(_repair_json_backslashes(raw))
+                _parsed = json.loads(_repair_json_backslashes(raw))
+                return _parsed if isinstance(_parsed, dict) else {}
             except Exception:
                 return {}
     return raw if isinstance(raw, dict) else {}

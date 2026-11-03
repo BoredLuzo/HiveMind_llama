@@ -50,10 +50,10 @@ INSTALL_HINT = {
     "javascript": "npm i -g typescript typescript-language-server",
     "rust": "rustup component add rust-analyzer",
     "go": "go install golang.org/x/tools/gopls@latest",
-    "c": "install LLVM (clangd): winget install LLVM.LLVM",
-    "cpp": "install LLVM (clangd): winget install LLVM.LLVM",
+    "c": "install LLVM (clangd): winget install LLVM.clangd",
+    "cpp": "install LLVM (clangd): winget install LLVM.clangd",
     "bash": "npm i -g bash-language-server",
-    "lua": "npm i -g lua-language-server",
+    "lua": "download the LuaLS win32-x64 release and set lsp_servers.lua to its bin/lua-language-server.exe",
     "json": "npm i -g vscode-langservers-extracted",
     "yaml": "npm i -g yaml-language-server",
     "html": "npm i -g vscode-langservers-extracted",
@@ -67,7 +67,14 @@ async def _probe(lang: str, timeout_s: float = 20.0) -> tuple[bool, str]:
     name, body = SAMPLES[lang]
     ws = Path(tempfile.mkdtemp(prefix=f"hm_lsp_{lang}_"))
     (ws / name).write_text(body, encoding="utf-8")
-    mgr = LspManager(ws, {"lsp_client_timeout_s": 25})
+    from settings import load_settings
+    _s = load_settings()
+    mgr = LspManager(ws, {
+        "lsp_client_timeout_s": 25,
+        "lsp_servers": _s.get("lsp_servers") or {},
+        "lsp_forward_workspace_settings": bool(
+            _s.get("lsp_forward_workspace_settings", False)),
+    })
     try:
         started = await mgr.start_language(lang)
         if not started:

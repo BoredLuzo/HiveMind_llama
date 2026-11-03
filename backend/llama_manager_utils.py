@@ -358,7 +358,10 @@ def _probe_backend_devices(llama_bin: str, backend: str) -> bool | None:
         text = (r.stdout or "") + (r.stderr or "")
         if not text.strip():
             return None
-        _kw = "cuda" if backend == "cuda" else "vulkan"
+        # ROCM-PROBE (audit 2026-11-03): a ROCm build lists devices as
+        # "ROCm0"/"ROCm1" and ships libggml-rocm (older: libggml-hip). The
+        # vulkan/cuda-only probes hard-blocked every ROCm load.
+        _kw = {"cuda": "cuda", "rocm": r"(?:rocm|hip)"}.get(backend, "vulkan")
         return bool(_re_dev.search(rf"{_kw}\s*\d+", text.lower()))
     except Exception:
         return None
@@ -383,6 +386,13 @@ def _probe_backend_dlls(llama_bin: str, backend: str) -> bool | None:
                 for _base in ("cudart64", "cublas64", "cublasLt64"):
                     if not _glob_dll.glob(str(dll_dir / f"{_base}*.dll")):
                         return False
+        elif backend == "rocm":
+            # ROCM-PROBE (audit 2026-11-03): llama.cpp ROCm builds ship
+            # libggml-rocm.so (older releases: libggml-hip.so). Both are
+            # valid HIP/ROCm runtime libraries.
+            if not (list(dll_dir.rglob(f"*ggml-rocm{_so}"))
+                    or list(dll_dir.rglob(f"*ggml-hip{_so}"))):
+                return False
         else:
             # Enumerate, don't stat: while antivirus scans a fresh DLL, stat()
             # can fail while the name is still listed in the directory.
@@ -466,20 +476,14 @@ def _kill_port_sync(port: int):
 
 
     if platform.system() != "Windows":
-        # POSIX chain (2026-09-08): fuser (psmisc) -> /proc/net/tcp inode
-        # scan (always available, port-scoped + cmdline-checked).
-        _killed = False
+        # POSIX (Linux audit 2026-11-03): `fuser -k` killed whatever owned the
+        # port - including a user's dev server on 8101-8103. Only the
+        # cmdline-checked /proc scan may kill, and only a llama-server.
         try:
-            _r = subprocess.run(["fuser", "-k", f"{port}/tcp"],
-                                capture_output=True, timeout=5)
-            _killed = _r.returncode == 0
-        except Exception:
-            _killed = False
-        if not _killed:
-            try:
-                _killed = _kill_port_via_proc(port)
-            except Exception:
-                _killed = False
+            _kill_port_via_proc(port)
+        except Exception as _pe:
+            logger.warning("Port-Cleanup: proc scan failed: %s", _pe)
+        return
         # PKILL-DROPPED (2026-09-19): the old last resort 'pkill -9 -f
         # llama-server' was name-based and killed EVERY llama-server on the
         # host — other slots and foreign processes included. The /proc scan

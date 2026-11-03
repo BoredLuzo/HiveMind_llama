@@ -112,9 +112,10 @@ if defined MISS_STT (
 if defined MISS_TTS (
     echo.
     echo  --- text to speech -----------------------------------------
-    echo   The TTS model is behind a Hugging Face gate. If the download
-    echo   asks for a token: accept the terms on the model page and run
-    echo   "uvx --from huggingface_hub hf auth login" once.
+    echo   Text to speech uses a gated model ^(Pocket TTS^).
+    echo   The setup below walks you through the one-time Hugging Face
+    echo   login: accept the terms, create a Read token, paste it when
+    echo   asked. HiveMind never creates a token; public models need none.
     call "%~dp0setup_voice.bat" --tts
 )
 if defined MISS_DEC (

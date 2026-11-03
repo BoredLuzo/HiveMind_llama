@@ -19,12 +19,12 @@ def _resolve_gpu_backend() -> str:
 
 
     _env = os.environ.get("HIVEMIND_GPU_BACKEND", "").strip().lower()
-    if _env in ("vulkan", "cuda", "cpu"):
+    if _env in ("vulkan", "cuda", "rocm", "cpu"):
         return _env
     try:
         from settings import load_settings as _ls
         _g = str(_ls().get("gpu_backend", "") or "").strip().lower()
-        if _g in ("vulkan", "cuda", "cpu"):
+        if _g in ("vulkan", "cuda", "rocm", "cpu"):
             return _g
     except Exception:
         pass
@@ -42,7 +42,9 @@ def _find_llama_server() -> Path:
 
     # Auto-Discovery: <repo>/llama/<folder>/llama-server[.exe].
     _bin_name = "llama-server.exe" if platform.system() == "Windows" else "llama-server"
-    _backend_tag = "cuda" if GPU_BACKEND == "cuda" else ("vulkan" if GPU_BACKEND == "vulkan" else "cpu")
+    _backend_tag = ("cuda" if GPU_BACKEND == "cuda"
+                    else "rocm" if GPU_BACKEND == "rocm"
+                    else "vulkan" if GPU_BACKEND == "vulkan" else "cpu")
     _best: tuple[tuple, Path] | None = None
     if _LLAMA_ROOT.is_dir():
         # NESTED-LAYOUT (2026-09-13): the ubuntu tarballs carry a top-level
@@ -181,6 +183,9 @@ LLAMA_UBATCH_DEFAULT = 256
 LLAMA_UBATCH_MIN = 64
 LLAMA_UBATCH_MAX = 4096
 LLAMA_BATCH_DEFAULT = 1024
+# --fit on sizes unset args to free VRAM; target = per-device margin MiB.
+LLAMA_FIT = False
+LLAMA_FIT_TARGET_MIB = 0
 
 
 def resolve_ubatch_sizes(settings: dict | None = None) -> tuple[int, int]:
@@ -227,6 +232,9 @@ def ubatch_extra_mib(ubatch: int) -> float:
 
 # Per-model CPU-experts override: {model_key: n_cpu_moe}. 0/missing = from _MOE_EXPERT_COUNTS.
 MOE_CPU_EXPERTS = {}
+# Opt-in llama.cpp expert cache (--moe-cache-mib, PR #29887). 0 = off.
+# Read live by the loader; pushed from settings by runtime_sync.
+MOE_CACHE_MIB = 0
 
 #   Override (moe_cpu_experts) > _MOE_EXPERT_COUNTS (kalibriert) > Autodetect.
 _MOE_AUTODETECT_MIN_TOTAL_B = 30
@@ -578,6 +586,11 @@ def physical_cores() -> int | None:
                             text=True, timeout=5)
                 _n = int((r.stdout or "").strip() or 0)
             except Exception:
+                _n = 0
+            if not _n:
+                # Linux audit 2026-11-03: sysctl exits non-zero on Linux with
+                # empty stdout, which is not an exception - the /proc fallback
+                # never ran and physical_cores() returned None.
                 with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as _f:
                     _pairs = set()
                     _phys_id = _core_id = None

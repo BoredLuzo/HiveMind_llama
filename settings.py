@@ -48,6 +48,9 @@ DEFAULT_SETTINGS = {
     "server_port":             8001,
     "models_dir":              "",
     "agents":                  DEFAULT_AGENT_CFG,
+    # CARD-BOOKKEEPING (written by the agent-card save path; read by presets)
+    "agents_user_model_choice": {},
+    "agents_user_sampling_choice": {},
     "max_iterations":          2,
     # DEFAULT-MODE: a fresh install answers in the chat/direct route. The old
     # value "simple" is the same route under a legacy name - the UI calls it
@@ -70,20 +73,30 @@ DEFAULT_SETTINGS = {
     # of requiring a hand-edited file.
     "debug_dump_request":      False,
     "smart_preload_keep_alive": "10m",
-    "max_concurrent_models":   None,
+    "max_concurrent_models":   2,
     "allow_cpu_offload":       True,
-    "warn_on_cpu_offload":     False,
-    "max_model_size_gb":       None,
-    "prefer_smaller_models":   False,
+    "warn_on_cpu_offload":     True,
+    "max_model_size_gb":       6.0,
+    "prefer_smaller_models":   True,
     "pin_direct_after_response": False,
     "judge_keepalive_enabled": False,
     "duo_worker_slots":        2,
     "moe_cpu_experts":         {},
+    # EXPERT-CACHE (2026-11-03): opt-in llama.cpp --moe-cache-mib. Keeps hot
+    # MoE experts in VRAM (decode only, small batches). 0 = off. Vulkan builds
+    # can crash at load (#30697); the loader retries once without the flag.
+    "moe_cache_mib":           0,
     "llama_mlock":             True,
     # Auto-fit (audit B3): omit --n-gpu-layers so llama.cpp fits the layers
     # to the free VRAM itself — it refuses while the flag pins 99. Default
     # keeps the explicit full-offload behavior.
     "llama_gpu_layers_auto":   False,
+    # FIT (2026-11-03): default ON - llama.cpp --fit sizes unset args
+    # (layers, ctx) to the free VRAM. Turn it OFF when you set your own MoE
+    # distribution (moe_cpu_experts) or a fixed --n-gpu-layers. Target is the
+    # per-device margin in MiB (0 = llama default).
+    "llama_fit":               True,
+    "llama_fit_target_mib":    0,
     "gpu_backend":             "",
     # 0 = off, 256 = llama.cpp recommendation.
     "llama_cache_reuse":       256,
@@ -334,7 +347,6 @@ DEFAULT_SETTINGS = {
     "duo_test_feedback_chunk": True,
     # TESTING-DEFAULT (2026-08-12): finaler Auto-Test standardmaessig aktiv —
     "duo_test_feedback_final": True,
-    "duo_p3_max_fix_attempts": 3,
     # ERROR ROLLUP (2026-09-06): deterministic dedup of repeating test/compile
     # failures in the fix-loop (core/error_rollup.py). First failure full,
     # repeats rendered as PERSISTS/FIXED/REOPENED. Runtime state per run.
@@ -503,6 +515,7 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     "vision_agent_enabled":    False,
     "vision_agent_model":      "gemma-4:e4b-it-qat",
+    "vision_agent_mode":       "sequential",
     "vision_preprocess_timeout_seconds": 30,
     "vision_preprocess_load_timeout_seconds": 120,
     # PIPELINE-VISION (2026-08-19): feed images directly to multimodal pipeline agents?
@@ -596,9 +609,10 @@ DEFAULT_SETTINGS = {
     # so a stale click can never approve the following gated call.
     "duo_action_approval_timeout_s": 0,
     # EVICT-ON-PAUSE (2026-11-02): while a run waits for an ask_user answer
-    # (or an approval card) the coder sits in VRAM untouched. On a small card
-    # that blocks every other model load; this releases it until the run
-    # resumes. Off by default - the reload costs a few seconds.
+    # the coder sits in VRAM untouched. On a small card that blocks every
+    # other model load; this releases it until the run resumes. Off by
+    # default - the reload costs a few seconds. Approval cards keep the model
+    # loaded: that answer usually arrives within seconds.
     "duo_evict_on_pause":        False,
 
     # Duo image plan (2026-10-01, replaces duo_coder_raw_images): how the
@@ -652,6 +666,7 @@ DEFAULT_SETTINGS = {
     # phone runs stay blocked by the phone restriction gate.
     "mcp_client_enabled":      False,
     "mcp_client_timeout_s":    30,
+    "mcp_client_max_calls_per_run": 40,
 
     # ════════════════════════════════════════════════════════════════════════
     # Q2) LANGUAGE SERVERS (LSP, 2026-10-31)
@@ -669,6 +684,9 @@ DEFAULT_SETTINGS = {
     # and must resolve (otherwise the language reports as missing - no
     # silent fallback to a different server).
     "lsp_servers":             {},
+    # LSP-SECURITY (2026-11-03): repo .vscode/settings.json can select the
+    # command a server runs; forward it only in trusted workspaces.
+    "lsp_forward_workspace_settings": False,
     # Per-request timeout in seconds for one LSP request; also caps the
     # initialize handshake. A hung server is killed and lazily restarted on
     # the next call.
@@ -817,7 +835,7 @@ def _load_settings_from_disk() -> dict:
                     "searxng_enabled", "tool_profile", "budget_schema_budget",
                     "budget_tool_result_cap", "judge_bias",
                     "duo_candidate_models",
-                    "git_branch", "vision_agent_mode"):
+                    "git_branch"):
                 data.pop(_stale_key, None)
     # MIGRATION: duo_test_feedback → new split toggles (chunk/final)
             _legacy_tf = data.get("duo_test_feedback") if "duo_test_feedback" in data else None
@@ -967,7 +985,8 @@ def load_presets() -> dict:
                 for _p in data.values():
                     if isinstance(_p, dict):
                         for _k in ("active_preset", "settings_saved_at",
-                                   "preset_applied_at"):
+                                   "preset_applied_at", "git_token",
+                                   "models_dir", "_registry"):
                             _p.pop(_k, None)
             return data
         except Exception:

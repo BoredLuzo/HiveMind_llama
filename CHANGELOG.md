@@ -1,4 +1,33 @@
-## [1.5.1] - 2026-11-02
+## [1.5.1] - 2026-11-03
+
+Security and reliability round on top of 1.5.0. MCP file/search tools now
+enforce the secret denylist on every path (including the forwarded engine
+path), `/settings` no longer persists GET-only keys, preset exports are
+scrubbed of tokens, and the approval gate fails closed without a run id.
+`run_tests` and dynamic MCP tools now honor the taint gate even with the
+approval toggle off, and `/abort` during an approval pause actually stops the
+run instead of reporting success. The repo-map delta survives the compression
+it is appended for, the tail/decode guards keep counting across rounds, and a
+queue-full drop at the end of a stream still delivers a gap marker plus the
+done frame. The
+taint from web/MCP content survives prefetched tools, chat-id and gateway
+stop/start races are fixed, and dropped SSE frames are marked as an incomplete
+answer instead of being persisted silently. `write_file` preserves CRLF,
+downloads verify the Hugging Face LFS SHA256, and git undo/consolidate no
+longer lose untracked files or deletions.
+
+New MoE expert cache (`moe_cache_mib`, `--moe-cache-mib`, opt-in) and a VRAM
+fit toggle (`llama_fit`, `--fit`/`--fit-target`, on by default), both
+capability-checked and part of the VRAM pre-flight; a failed cache load retries once without the flag.
+The expert-cache surcharge now also survives the grace and post-reclaim
+rechecks (it could previously be evicted into an overflow crash), an explicit
+layer override wins over the model registry (the CPU fallback stays on the
+CPU), the CPU backend no longer evicts peers for a VRAM budget that does not
+apply, and ROCm devices are probed by their own device/library names instead
+of being rejected as a missing Vulkan build.
+MoE loads use half the logical CPUs. LSP now verifies 13 languages end to end
+(installer packs for Go, C/C++ and Lua), runs servers with a scrubbed
+environment and no repo-controlled settings by default.
 
 Memory retrieval now uses SQLite FTS5 (bm25, porter stemming, prefix match)
 instead of the 96-bin hash vectors, with the old cosine path as the fallback

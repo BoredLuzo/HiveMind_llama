@@ -53,12 +53,17 @@ class LlamaEvictMixin:
                     self._metric_inc("evictions_manual")
                     await _kill_slot_async(slot)
 
-    def unpin(self, model: str) -> int:
+    def clear_pin(self, model: str) -> int:
         """Clear the pinned flag on every slot running `model` (2026-10-01).
 
         Duo runs pin their planner/coder slots so the vision-preprocessing
         load cannot LRU-evict them mid-run; callers unpin when the run ends
-        so normal eviction can reclaim VRAM again."""
+        so normal eviction can reclaim VRAM again.
+
+        A9b (audit 2026-11-03): named `unpin` before, which shadowed the async
+        LlamaHealthMixin.unpin in the MRO — `await manager.unpin(...)` awaited
+        an int and the slot stayed pinned.
+        """
         _n = 0
         for slot in self._slots:
             if slot.model == model and slot.pinned:
@@ -105,7 +110,8 @@ class LlamaEvictMixin:
 
     def can_fit(self, model_name: str, num_ctx: int,
                 safety_margin_mib: int = VRAM_PRE_FLIGHT_MARGIN_MIB,
-                exclude_slot_id: Optional[int] = None) -> CanFitResult:
+                exclude_slot_id: Optional[int] = None,
+                extra_needed_mib: float = 0.0) -> CanFitResult:
 
 
         try:
@@ -127,7 +133,7 @@ class LlamaEvictMixin:
             _ub_now = 256
         _ub_extra_mib = ubatch_extra_mib(int(_ub_now))
         needed_mib = round(vram_of_moe(_strip_alias(model_name), num_ctx) * 1024
-                           + _ub_extra_mib, 1)
+                           + _ub_extra_mib + float(extra_needed_mib or 0.0), 1)
         free_mib = get_live_gpu_free_mib()
         source = "live"
         if free_mib is None:
@@ -150,12 +156,17 @@ class LlamaEvictMixin:
                                         slot: ModelSlot, grace_s: float = _VRAM_PRE_FLIGHT_GRACE_S,
                                         poll_interval: float = 2.0,
                                         safety_margin_mib: int = VRAM_PRE_FLIGHT_MARGIN_MIB,
-                                        progress_abort_s: float = 0.0) -> CanFitResult:
-
+                                        progress_abort_s: float = 0.0,
+                                        extra_needed_mib: float = 0.0) -> CanFitResult:
+        # RECHECK-SURCHARGE (audit 2026-11-03): the grace recheck is the
+        # gate that lets a blocked load proceed after eviction. Dropping the
+        # MoE-cache surcharge here made it pass while the real command still
+        # carried --moe-cache-mib -> VRAM overflow crash.
 
         _t0 = time.time()
         _fit = self.can_fit(model_name, num_ctx, exclude_slot_id=slot.slot_id,
-                            safety_margin_mib=safety_margin_mib)
+                            safety_margin_mib=safety_margin_mib,
+                            extra_needed_mib=extra_needed_mib)
         _deadline = _t0 + grace_s
         _first_free: float | None = _fit.free_mib
         _best_free: float | None = _first_free
@@ -163,7 +174,8 @@ class LlamaEvictMixin:
         while not _fit.ok and time.time() < _deadline:
             await asyncio.sleep(poll_interval)
             _fit = self.can_fit(model_name, num_ctx, exclude_slot_id=slot.slot_id,
-                                safety_margin_mib=safety_margin_mib)
+                                safety_margin_mib=safety_margin_mib,
+                                extra_needed_mib=extra_needed_mib)
             if _fit.ok:
                 logger.info(
                     "[PRE-FLIGHT-GRACE] %s @ctx=%d free after %.0fs (%.0fMiB, margin %dMiB) — continuing",

@@ -205,7 +205,6 @@ def _build(monkey_events: list):
                     agents=_agents, memory=None),
         websearch_available=False,
         resolve_duo_run_timeout_seconds=lambda *a: 300,
-        resolve_duo_rounds_cap=lambda *a: 3,
         resolve_duo_runtime_profile=lambda *a, **kw: "balanced",
     )
     return ctx

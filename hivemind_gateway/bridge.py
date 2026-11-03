@@ -90,6 +90,10 @@ class RunBridge:
         self.cfg = cfg
         self.ms = messenger
         self.verbose = bool(state.data.get("verbose", False))
+        # P0 (edge audit 2026-11-03): /stop can arrive between "active_run
+        # persisted" and the run_id frame. Clearing the latch there crashed the
+        # late frame and left the engine run alive; this flag defers the abort.
+        self._stop_requested = False
         # ask-mode: the ONE waiting own-run approval (rid/decision_id/tool)
         self._open_own_approval: dict | None = None
         # R3 (audit r3): own runs execute as tasks now - without this
@@ -326,6 +330,7 @@ class RunBridge:
         # the run is over - a waiting own approval is moot (the engine
         # resolved or lost it); never answer a stale card late
         self._open_own_approval = None
+        self._stop_requested = False
 
     @staticmethod
     def _tool_line(ev: dict) -> str:
@@ -384,13 +389,15 @@ class RunBridge:
             decision_id=oa.get("decision_id") or "",
             tool=oa.get("tool") or "")
         code = getattr(resp, "status_code", 500)
+        if code >= 300:
+            # P1 (edge audit 2026-11-03): keep the card. A 5xx/restart leaves
+            # the engine run paused; clearing here lost the only answer path.
+            return (f"❌ Decision not accepted (HTTP {code}) - the card is "
+                    "still open; reply 1/2/3 again or /stop.")
         self._open_own_approval = None
         self.state.data.setdefault("open_approvals", {}).pop(
             oa.get("rid"), None)
         self.state.save()
-        if code >= 300:
-            return (f"❌ Decision not accepted (HTTP {code}) - maybe "
-                    "answered in the UI.")
         try:
             routed = str((resp.json() or {}).get("routed") or "")
         except (ValueError, TypeError, AttributeError):
@@ -463,7 +470,10 @@ class RunBridge:
             t0 = _dt.datetime.fromisoformat(str(run.get("started")))
             return (_dt.datetime.now().astimezone() - t0).total_seconds() >= 120
         except (ValueError, TypeError):
-            return False
+            # P2 (edge audit 2026-11-03): a malformed `started` used to look
+            # fresh forever while the stale check said no - /stop was the only
+            # way out. Treat an unparseable start as stale.
+            return True
 
     async def _start_text_run_inner(self, q: str, from_voice: bool = False,
                                      images: list | None = None) -> str:
@@ -492,6 +502,7 @@ class RunBridge:
         # persist BEFORE the stream: a crash here loses the update
         # (at-most-once), never runs it twice
         import datetime as _dt
+        self._stop_requested = False
         self.state.data["active_run"] = {
             "run_id": None,
             "chat_id": chat_id,
@@ -591,6 +602,7 @@ class RunBridge:
             self._log_note(f"start note failed ({exc}) - run continues")
 
         parts: list[str] = []
+        truncated = False
         self._last_tool_line = ""  # Tool-Relay dedupe reset per run
         self._own_ctx_marks = set()
         self._own_ctx_compression_noted = False
@@ -666,11 +678,31 @@ class RunBridge:
                                              overrides=ov):
                 etype = ev.get("type")
                 if etype == "run_id" and ev.get("run_id"):
-                    self.state.data["active_run"]["run_id"] = \
-                        str(ev["run_id"])
-                    self.state.save()
+                    _new_rid = str(ev["run_id"])
+                    _ar = self.state.data.get("active_run")
+                    if _ar is None:
+                        # P0 (edge audit 2026-11-03): a stop or a state wipe
+                        # cleared the latch before this frame. Abort the run;
+                        # never index None.
+                        try:
+                            await self.hive.abort_run(_new_rid)
+                        except (HiveUnreachable, OSError, ValueError):
+                            pass
+                    else:
+                        _ar["run_id"] = _new_rid
+                        self.state.save()
+                        if self._stop_requested:
+                            try:
+                                await self.hive.abort_run(_new_rid)
+                            except (HiveUnreachable, OSError, ValueError):
+                                pass
                 elif etype == "token":
                     parts.append(str(ev.get("content") or ""))
+                elif etype == "stream_gap":
+                    # P0 (edge audit 2026-11-03): the server dropped frames
+                    # under backpressure; never persist the truncation as a
+                    # complete answer.
+                    truncated = True
                 elif etype == "error":
                     error_text = str(ev.get("content") or "unknown")
                 elif etype == "approval_request":
@@ -854,7 +886,7 @@ class RunBridge:
                 try:
                     final_note = await self._finish(
                         chat_id, q, parts, stop_reason, error_text, denied,
-                        status_id)
+                        status_id, truncated=truncated)
                 except (TelegramApiError, HTTPError, HiveUnreachable, OSError,
                         ValueError, TypeError, KeyError, AttributeError) as exc:
                     self._log_note(
@@ -955,9 +987,12 @@ class RunBridge:
             self._log_note(f"voice answer send failed: {exc}")
 
     async def _finish(self, chat_id, q, parts, stop_reason, error_text,
-                      denied, status_id) -> str:
+                      denied, status_id, truncated: bool = False) -> str:
         answer = "".join(parts).strip()
         answer = render.filter_secrets(answer)
+        if truncated:
+            answer = (answer + "\n\n[⚠️ Answer incomplete: tokens were dropped "
+                      "by the Telegram rate limit.]").strip()
         notes = []
         if denied:
             notes.append(f"🔒 {denied} approval(s) auto-denied.")
@@ -1048,11 +1083,13 @@ class RunBridge:
         rid = run.get("run_id")
         if not rid:
             if run:
-                # unconfirmed starting-state: nothing to abort engine-side
-                # (no run_id = the engine never started it) - clear it
-                self._clear_run()
-                return ("Cleared a starting-state that never got a run id "
-                        "(the engine never confirmed it). Try again.")
+                # P0 (edge audit 2026-11-03): the engine may still be starting.
+                # Clearing the latch here made the late run_id frame crash and
+                # left the engine run alive. Ask for a stop; the run_id frame
+                # aborts as soon as it arrives.
+                self._stop_requested = True
+                return ("⏹ Stop requested - the run will be aborted as soon "
+                        "as the engine confirms it.")
             return "No run active."
         try:
             resp = await self.hive.abort_run(rid)
@@ -1065,8 +1102,9 @@ class RunBridge:
                 # The run's own chat_id is the reliable fallback target
                 # (tg_chat can be absent after a state wipe).
                 self._clear_run()
-                chat_id = ((self._tg_chat() or {}).get("hive_chat_id")
-                           or run.get("chat_id") or "")
+                chat_id = (run.get("chat_id")
+                           or (self._tg_chat() or {}).get("hive_chat_id")
+                           or "")
                 if chat_id:
                     await self.hive.abort_chat(chat_id)
                     return (f"⏹ Run {rid} was unknown to the server - "

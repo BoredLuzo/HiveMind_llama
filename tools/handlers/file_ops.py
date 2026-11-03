@@ -560,7 +560,11 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
     if existed:
         try:
             _old_raw = await asyncio.to_thread(p.read_text, encoding="utf-8", errors="replace", newline="")
-            _had_crlf = "\r\n" in _old_raw
+            # Dominant style decides (P2, deep audit 2026-11-03): a mixed file
+            # keeps its majority EOL instead of being rewritten wholesale.
+            _crlf_n = _old_raw.count("\r\n")
+            _lf_n = _old_raw.replace("\r\n", "").count("\n")
+            _had_crlf = _crlf_n > _lf_n
             _old_n = len([l for l in _old_raw.splitlines() if l.strip()])
         except Exception:
             _old_raw, _had_crlf, _old_n = "", False, 0
@@ -592,8 +596,16 @@ async def _inline_tool_write_file(args: dict, workspace: Path, workspace_lock: s
                 tool="write_file")
 
 
+    # EOL-PRESERVE (2026-11-03): the payload may already contain CRLF. The
+    # old code re-expanded every "\n", turning "a\r\nb" into "a\r\r\nb" on
+    # disk (A2, data corruption on the main platform). Normalize the incoming
+    # side first, then match the style the file already uses. A NEW file keeps
+    # the payload's style (a CRLF payload must not silently become LF).
     if _had_crlf:
-        content = content.replace("\n", "\r\n")
+        content = (content.replace("\r\n", "\n").replace("\r", "\n")
+                   .replace("\n", "\r\n"))
+    elif existed:
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
 
     _chk = _recheck_workspace_before_replace(p, workspace_lock, "write_file")
 

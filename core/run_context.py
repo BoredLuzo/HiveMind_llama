@@ -52,15 +52,12 @@ class RunContext:
     image_paths: list = field(default_factory=list)  # saved copies in workspace/.hive_uploads
     effective_images: list = field(default_factory=list)
     vision_cfg: dict = field(default_factory=dict)
-    images_with_prepro_text: bool = False
     vision_agent_prompt: str = ""
 
     # ── Models cache & routing tables ──
     models_cache: set = field(default_factory=set)
     simple_direct_models: dict = field(default_factory=dict)
     complex_direct_models: dict = field(default_factory=dict)
-    task_profiles: dict = field(default_factory=dict)
-    similarity_cache: dict = field(default_factory=dict)
     vram_lookup_gb: dict = field(default_factory=dict)
 
     # ── Pipeline / settings / memory references ──
@@ -71,20 +68,9 @@ class RunContext:
     exec_ctrl: Any = None
     pipeline_soul: str = ""
     duo_stop_reason: str = ""
-    duo_rounds_done: int = 0
-    duo_rounds_cap: int = 5
-    duo_hard_stop: bool = False
     duo_timed_out: bool = False
-    duo_tool_timeout_total: float = 300.0
-    duo_tool_timeout_acc: float = 0.0
-    duo_tool_timeout_start: float = 0.0
-    duo_tool_fail_streak: int = 0
     chunks_total: int = 0
     chunks_done: int = 0
-    chunks_total_original: int = 0
-    combined_coder_out: str = ""
-    planner_model: str = ""
-    planner_step_cap: int = 6
     duo_start: float = 0.0
     duo_deadline_at: float = 0.0
     vram_budget: float = 7.5
@@ -158,7 +144,6 @@ class RunContext:
     run_skill_distillation: Callable = lambda *a, **kw: None
     resolve_resume_block: Callable = lambda *a, **kw: {}
     load_resume_block: Callable = lambda *a, **kw: {}
-    resolve_duo_rounds_cap: Callable = lambda *a: 5
     is_aborted_chat: Callable = lambda *a: False
     append_learning_log: Callable = lambda *a, **kw: None
     build_soul_prompt_layer: Callable = lambda *a, **kw: ""

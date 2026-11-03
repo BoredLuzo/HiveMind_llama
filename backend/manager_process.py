@@ -21,6 +21,19 @@ import time
 import logging
 logger = logging.getLogger("llama_manager")
 
+
+def _slot_in_flight(slot) -> bool:
+    """A9c: age-aware in-flight check (raw counter for test doubles).
+
+    The producer has no finally; a mark older than ModelSlot.in_flight_active's
+    max age is treated as leaked and no longer blocks eviction.
+    """
+    fn = getattr(slot, "in_flight_active", None)
+    if callable(fn):
+        return bool(fn())
+    return int(getattr(slot, "in_flight", 0) or 0) > 0
+
+
 class LlamaProcessMixin:
 
     async def _port_alive(self, port: int) -> bool:
@@ -148,9 +161,12 @@ class LlamaProcessMixin:
                 return False
             return (getattr(s, "pinned_at", 0.0) or 0.0) > _now - 1800
         candidates = [s for s in self._slots if s is not exclude_slot and s.is_running
+                      and not _slot_in_flight(s)   # A9c: never kill a slot with a round in flight
                       and not getattr(s, "_loading", False) and not _protected(s)]  # H-audit: never kill a mid-load slot
         if not candidates:
-            candidates = [s for s in self._slots if s is not exclude_slot and not s.pinned and not s._loading]
+            candidates = [s for s in self._slots if s is not exclude_slot and not s.pinned
+                          and not _slot_in_flight(s)
+                          and not s._loading]
         if not candidates:
             return None
         lru = min(candidates, key=lambda s: s.last_used)

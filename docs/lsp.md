@@ -5,6 +5,14 @@ HiveMind drives any installed language server through one generic client
 language is available when its server command is found, and `lsp_enabled`
 (default `true`) is the single switch.
 
+**Security:** language servers execute project toolchains (rust-analyzer runs
+`cargo check`, which runs `build.rs` and proc macros). Only open workspaces you
+trust. Servers get a scrubbed environment (no engine tokens/keys), and a repo's
+`.vscode/settings.json` is **not** forwarded unless you opt in with
+`lsp_forward_workspace_settings` (a repo could otherwise choose the command a
+server runs). Phone runs exclude every `lsp_*` tool while the default
+`telegram_phone_restricted` is on.
+
 - A server starts lazily on the first `lsp_*` call for its files, never at
   boot. A missing server answers `LSP_UNAVAILABLE` with an install hint.
 - Servers are cached per `(workspace, event loop)`; engine shutdown closes

@@ -53,5 +53,15 @@ check("3a a normal run still plans when the toggle is on",
       "(ctx.duo_config.chunking or ctx.duo_config.planner) and not ctx.aborted()" in RUN)
 check("3b resume still skips the planner", "not _resume_data" in RUN)
 
+# ── 4. an attached image still gets a plan on a follow-up ──────────────────
+# P1 (audit 2026-11-03): resolve_image_plan only ran inside the planner phase,
+# so a follow-up left it at "none" and silently dropped the image.
+_i_img = RUN.index("if ctx.images:")
+_i_fup = RUN.index("Follow-up: continuing the previous plan")
+check("4a the image plan is resolved before the follow-up skip",
+      0 <= _i_img < _i_fup)
+check("4b the pre-resolve uses the real planner/coder roles",
+      "resolve_image_plan(" in RUN[_i_img:_i_img + 400])
+
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

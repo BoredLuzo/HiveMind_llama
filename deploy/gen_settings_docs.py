@@ -31,8 +31,8 @@ its comment) in `settings.py`, then re-run the generator.
 
 **{count} settings keys.**
 
-| Key | Type | Default | Note |
-|---|---|---|---|
+| Key | Type | Default | UI | Note |
+|---|---|---|---|---|
 """
 
 
@@ -82,8 +82,10 @@ def _clean_note(note: str) -> str:
     """
     note = _DATE_PAREN.sub("", note)
     note = _TAG_PAREN.sub("", note)
-    note = re.sub(r"\bOWNER\b", "the operator", note)
-    note = re.sub(r"\bowner\b", "the operator", note)
+    # "the owner" must not become "the the operator": consume the article.
+    note = re.sub(r"\bthe\s+owner\b", "the operator", note, flags=re.I)
+    note = re.sub(r"\bOWNER\b", "operator", note)
+    note = re.sub(r"\bowner\b", "operator", note)
     note = re.sub(r"\baudit\b", "review", note, flags=re.I)
     note = re.sub(r"\(?\s*[a-z-]*tested\s*20\d\d-\d\d-\d\d\s*\)?", "", note, flags=re.I)
     note = re.sub(r"\b20\d\d-\d\d-\d\d\b", "", note)
@@ -111,6 +113,8 @@ def _cell(value: object) -> str:
 
 def render() -> str:
     comments = _comments()
+    from deploy.settings_ui_scan import in_ui
+    exposed = in_ui(DEFAULT_SETTINGS)
     rows = []
     for key in sorted(DEFAULT_SETTINGS):
         value = DEFAULT_SETTINGS[key]
@@ -122,7 +126,8 @@ def render() -> str:
                 "object" if isinstance(value, dict) else
                 "null" if value is None else type(value).__name__)
         note = _clean_note(comments.get(key, "")).replace("|", "\\|")
-        rows.append(f"| `{key}` | {kind} | {_cell(value)} | {note} |")
+        rows.append(f"| `{key}` | {kind} | {_cell(value)} | "
+                    f"{'yes' if key in exposed else '-'} | {note} |")
     body = "\n".join(rows) + "\n"
     return HEADER.format(count=len(DEFAULT_SETTINGS)) + body
 

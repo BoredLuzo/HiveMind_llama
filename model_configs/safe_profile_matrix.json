@@ -7,14 +7,14 @@
     "default_keep_alive": "10m",
     "smart_preload_keep_alive": "10m",
     "model_overrides": {
-      "analyst": {"model": "qwen3.5:4b-ud", "max_tokens": 1100},
-      "refiner": {"model": "qwen3.5:2b",      "max_tokens": 400},
-      "critic":  {"model": "qwen3.5:4b-ud", "max_tokens": 600},
-      "synthesizer": {"model": "qwen3.5:4b-ud", "max_tokens": 900},
+      "analyst": {"model": "qwen3.5:4b-mtp", "max_tokens": 1100},
+      "refiner": {"model": "minicpm5:2b-sharp", "max_tokens": 400},
+      "critic":  {"model": "qwen3.5:4b-mtp", "max_tokens": 600},
+      "synthesizer": {"model": "qwen3.5:4b-mtp", "max_tokens": 900},
       "direct":  {"model": "lfm3:1.7b-qad",    "max_tokens": 600},
       "judge":   {"model": "lfm3:1.7b-qad",    "max_tokens": 120},
       "duo_coder":  {"model": "lfm3:1.7b-qad"},
-      "duo_critic": {"model": "qwen3.5:4b-ud", "max_tokens": 600}
+      "duo_critic": {"model": "qwen3.5:4b-mtp", "max_tokens": 600}
     },
     "guardrails": {
       "allow_cpu_offload": true,

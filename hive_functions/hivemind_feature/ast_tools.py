@@ -61,15 +61,17 @@ def _iter_py_assign_names(node: ast.AST) -> list[str]:
     return names
 
 
-def _iter_reference_files(base: Path, max_files: int) -> list[Path]:
+def _iter_reference_files(base: Path, max_files: int, exclude_fn=None) -> list[Path]:
     if base.is_file():
-        return [base]
+        return [] if (exclude_fn and exclude_fn(base)) else [base]
 
     files: list[Path] = []
     for p in base.rglob("*"):
         if len(files) >= max_files:
             break
         if not p.is_file():
+            continue
+        if exclude_fn and exclude_fn(p):
             continue
         if any(part in _REFERENCE_SKIP_DIRS for part in p.parts):
             continue
@@ -98,7 +100,8 @@ def _looks_like_definition_line(line: str, symbol: str, ext: str) -> bool:
     return False
 
 
-def find_references_report(path_or_root: str | Path, symbol: str, max_items: int = 160, max_files: int = 1200) -> str:
+def find_references_report(path_or_root: str | Path, symbol: str, max_items: int = 160,
+                           max_files: int = 1200, exclude_fn=None) -> str:
     """
     Lightweight LSP-like reference finder.
 
@@ -118,7 +121,8 @@ def find_references_report(path_or_root: str | Path, symbol: str, max_items: int
     exact_pat = re.compile(re.escape(target))
     short_pat = re.compile(rf"\b{re.escape(short)}\b")
 
-    files = _iter_reference_files(base, max_files=max(1, int(max_files)))
+    files = _iter_reference_files(base, max_files=max(1, int(max_files)),
+                                  exclude_fn=exclude_fn)
     if not files:
         return f"[references] symbol={target}\n(no source files found under {base})"
 

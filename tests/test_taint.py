@@ -64,8 +64,13 @@ _saved = R._approval_gate_on
 try:
     R._approval_gate_on = lambda: False        # approval feature OFF
     check("4a clean run: exec needs no approval", not R._approval_active_for("run_bash"))
+    check("4a2 the execution predicate agrees", not R._needs_approval("run_bash"))
     T.mark("web_search")
     check("4b tainted run: exec needs approval", R._approval_active_for("run_bash"))
+    # ENFORCEMENT (2026-11-02): the pause path used to early-return on the
+    # toggle alone - the staged card existed, but run_bash still executed.
+    check("4b2 the EXECUTION gate asks too (not just the staged card)",
+          R._needs_approval("run_bash"))
     check("4c tainted run: run_python too", R._approval_active_for("run_python"))
     check("4d writes stay ungated", not R._approval_active_for("write_file"))
     check("4e read tools stay ungated", not R._approval_active_for("read_file"))
@@ -73,11 +78,40 @@ finally:
     R._approval_gate_on = _saved
     T.clear()
 
+# 4f: pin the wiring - a future edit must not reintroduce the raw-toggle
+# early return in _check_action_approval.
+_RUNNER_SRC = (ROOT / "tools" / "runner.py").read_text(encoding="utf-8")
+check("4f the pause gate calls the shared predicate",
+      "if not _needs_approval(name, gated):" in _RUNNER_SRC)
+
 # ── 5. a new run resets the taint ──────────────────────────────────────────
 T.mark("mcp_x")
 T.clear()
 check("5a clear() removes the taint", not T.is_tainted())
 check("5b clear() removes the sources", T.sources() == ())
+
+# ── 6. taint survives the prefetch gather (child tasks) ────────────────────
+# P1 (audit 2026-11-03): prefetched tools run as child tasks; a ContextVar
+# write there never reached the parent, so run_bash ran untainted.
+import asyncio                              # noqa: E402
+
+T.clear()
+
+
+async def _child_mark():
+    T.mark("web_fetch")
+
+
+async def _gather_case():
+    await asyncio.gather(_child_mark(), _child_mark())
+    return T.is_tainted(), T.sources()
+
+
+_tainted, _sources = asyncio.run(_gather_case())
+check("6a a taint marked in a child task reaches the parent", _tainted)
+check("6b its source is recorded", _sources == ("web_fetch",))
+T.clear()
+check("6c clear() isolates the next run", not T.is_tainted())
 
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

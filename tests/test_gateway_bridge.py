@@ -693,9 +693,10 @@ async def t_takeover():
     note = await br_l.start_text_run("q")
     check("fresh unconfirmed -> wait note", "starting" in note.lower())
     note = await br_l.stop()
-    check("stop clears fresh unconfirmed latch",
-          "cleared" in note.lower()
-          and st_l.data.get("active_run") is None)
+    check("stop on a fresh unconfirmed run requests the late abort",
+          "stop requested" in note.lower()
+          and st_l.data.get("active_run") is not None
+          and br_l._stop_requested)
 
     # done frame ends the session
     hive.journal_body = {"active": True, "run_id": "ui-run-1", "done": True,

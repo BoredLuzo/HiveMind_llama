@@ -358,9 +358,14 @@ class Pipeline:
             return False
         if len(t or "") > self._MEMORY_CMD_MAX_CHARS:
             return False
+        # "note: ..." is a command form; "note.txt" is not (live 2026-11-03).
+        if re.search(r"\bnote\s*[:\-]\s*\S", (t or "").lower()):
+            return True
         return _has_keyword(t,
-            ["remember", "remember that", "store", "save this", "keep in mind", "note",
-             "merke dir", "merk dir", "speichere", "denke daran", "behalte", "notiere"])
+            ["remember", "remember that", "store this", "store that",
+             "save this", "keep in mind", "note that", "note down",
+             "note this down", "take a note", "merke dir", "merk dir",
+             "speichere das", "denke daran", "behalte", "notiere"])
 
     def _is_forget_request(self, t: str) -> bool:
         if len(t or "") > self._MEMORY_CMD_MAX_CHARS:

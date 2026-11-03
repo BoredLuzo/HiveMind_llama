@@ -139,6 +139,13 @@ def normalize_override(raw) -> dict[str, list[str]]:
         if not argv:
             logger.warning("[LSP] lsp_servers[%s] is empty - ignored", lang)
             continue
+        # LSP-SECURITY (2026-11-03): the Windows shim path is built with
+        # cmd.exe; cmd expands %VAR% even inside quotes and splits on
+        # metacharacters. Reject such overrides instead of passing them on.
+        if any(c in "%&|<>^\x00\n\r" for c in "".join(argv)):
+            logger.warning("[LSP] lsp_servers[%s] contains shell "
+                           "metacharacters - ignored", lang)
+            continue
         out[lang] = argv
     return out
 
@@ -174,6 +181,9 @@ def _wrap_windows_shell(argv: list[str]) -> list[str]:
     if not exe.lower().endswith((".cmd", ".bat")):
         return argv
     _META = set('&|<>^%!"()')
+    _exe_q = exe
+    if any(c in _META or c.isspace() for c in exe):
+        _exe_q = '"' + exe.replace('"', '""') + '"'
     args = []
     for arg in argv[1:]:
         if any(c in _META or c.isspace() for c in arg):
@@ -181,7 +191,7 @@ def _wrap_windows_shell(argv: list[str]) -> list[str]:
             # escape - double the quotes (see mcp_client audit C13)
             arg = '"' + arg.replace('"', '""') + '"'
         args.append(arg)
-    return ["cmd", "/d", "/c", exe, *args]
+    return ["cmd", "/d", "/c", _exe_q, *args]
 
 
 def resolve(language_id: str, override=None) -> list[str] | None:

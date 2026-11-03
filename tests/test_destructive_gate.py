@@ -215,7 +215,9 @@ _src_ex = (_P_ex(__file__).resolve().parent.parent / "tools" / "handlers" / "exe
 check("the drive rewrite re-runs the blocklist on the fixed command",
       "BLOCKLIST-RECHECK" in _src_ex
       and _src_ex.index("_cmd_unix_fixed = re.sub(") < _src_ex.index("_bl_rewrite = _bash_blocklisted(cmd)")
-      < _src_ex.index("_cmd_translated = cmd"))
+      # A3 adds an identity init before the win32 block; the rewrite-time
+      # assignment is the last one.
+      < _src_ex.rindex("_cmd_translated = cmd"))
 
 
 print(f"{'='*50}")

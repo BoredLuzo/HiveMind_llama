@@ -25,6 +25,21 @@ _log = logging.getLogger("hivemind.tool_loop")
 from core.model_sampling import get_sampling_profile
 from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
 
+# ── A4: round-limit truth ──────────────────────────────────────────────
+
+def _final_stop_reason(stop_reason: str, rounds_used: int, max_rounds: int,
+                       exhausted: bool) -> str:
+    """Only a loop that ran out of rounds is a round-limit hit.
+
+    Breaking on a final answer in the last allowed round is a success; the old
+    check rewrote it to max_tool_rounds and chat_run appended the limit note to
+    a complete answer.
+    """
+    if stop_reason == "completed" and exhausted and rounds_used >= max_rounds:
+        return "max_tool_rounds"
+    return stop_reason
+
+
 # ── K1: Multi-Format Tool-Call Fallback Extraction ─────────────────────
 
 _TC_FALLBACK_PATTERNS: list = [
@@ -297,6 +312,7 @@ class ToolLoop:
         _MAX_FEEDBACK_ROUNDS = 3
         _feedback_injected_count = 0
 
+        _exhausted = False
         for _round in range(self.cfg.max_rounds):
             if self._abort_check and self._abort_check():
                 state.stop_reason = "aborted"
@@ -566,14 +582,21 @@ class ToolLoop:
                     if state.stop_reason == "completed":
                         state.stop_reason = "callback_abort"  # H-audit: was dead (init truthy)
                     break
+        else:
+            _exhausted = True   # A4: the for loop ran out, no break was taken
 
         # ── Final verification guard for openai_agent ──
         if self.cfg.verify_guard and state.verify_mutation_serial > state.verify_last_ok_serial:
             state.stop_reason = "verification_required_after_write"
             yield {"type": "token", "content": "Verification required: latest file mutations were not followed by a successful run_bash."}
 
-        if state.stop_reason == "completed" and state.rounds_used >= self.cfg.max_rounds:
-            state.stop_reason = "max_tool_rounds"  # H-audit: was dead (init truthy)
+        # A4 (audit 2026-11-03): only a loop that ran OUT of rounds is
+        # "max_tool_rounds". A final answer delivered in the last allowed
+        # round (break on content) is a success and must not be labelled a
+        # limit hit - that appended "[Max. N tool rounds reached]" to a
+        # complete answer.
+        state.stop_reason = _final_stop_reason(
+            state.stop_reason, state.rounds_used, self.cfg.max_rounds, _exhausted)
 
         if state.rounds_used >= self.cfg.max_rounds and not state.content_parts:
             _fallback = "[Tool-Agent: Max rounds reached, no output.]"

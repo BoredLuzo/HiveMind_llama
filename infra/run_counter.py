@@ -43,15 +43,13 @@ def _increment_run_counter() -> int:
     with _run_counter_lock:
         count = _load_run_counter() + 1
         _run_counter_cache = count
-        logger.info(f"[RUN-COUNTER] incremented: new_count={count}")
-
-    def _persist_counter(v: int):
+        # P2 (edge audit 2026-11-03): persisting from a daemon thread outside
+        # the lock let two increments land out of order or vanish at exit.
         try:
-            _write_json_atomic(_pipeline_run_counter_file, {"count": int(v)})
-            logger.debug(f"[RUN-COUNTER] persisted to disk: count={v}")
+            _write_json_atomic(_pipeline_run_counter_file, {"count": int(count)})
+            logger.debug(f"[RUN-COUNTER] persisted to disk: count={count}")
         except Exception as e:
             logger.error(f"[RUN-COUNTER] persist failed: {e}")
-
-    threading.Thread(target=_persist_counter, args=(count,), daemon=True).start()
+        logger.info(f"[RUN-COUNTER] incremented: new_count={count}")
     return count
 

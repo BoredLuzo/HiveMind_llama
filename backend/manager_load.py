@@ -572,6 +572,12 @@ class LlamaLoadMixin:
         """Committed-VRAM guard before a start: wait for active workers,
         evict LRU twice if the budget is still oversubscribed. Kills peer
         slots; *slot* itself is never a candidate (exclude_slot)."""
+        # CPU-BACKEND (audit 2026-11-03): there is no VRAM to guard. Applying
+        # the GPU budget to a CPU-only host made two loaded slots exceed it
+        # and evict each other on every load (thrash). can_fit already
+        # short-circuits cpu; this guard must too.
+        if GPU_BACKEND == "cpu":
+            return
         async with self._lock:
             _committed = sum(
                 vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
@@ -749,6 +755,41 @@ class LlamaLoadMixin:
                                           vision=vision, n_parallel=n_parallel,
                                           ctx_graceful=ctx_graceful)
             except RuntimeError as _start_exc:
+                # EXPERT-CACHE-RETRY (2026-11-03): a load crash caused by
+                # --moe-cache-mib (Vulkan #30697) is cured by dropping the
+                # flag; retry once before any other fallback.
+                _cache_live = 0
+                try:
+                    from . import llama_config as _lc_retry
+                    _cache_live = int(getattr(_lc_retry, "MOE_CACHE_MIB", 0) or 0)
+                except (ImportError, AttributeError, TypeError, ValueError):
+                    _cache_live = 0
+                # ONLY the flag on the failed command matters (audit
+                # 2026-11-03): re-deriving MoE-ness from registry/table
+                # missed a UI-forced moe_cpu_experts override and skipped
+                # the cure. slot._moe_cache_used is set in the same
+                # _start_process call that built the argv.
+                _cache_wanted = bool(getattr(slot, "_moe_cache_used", False))
+                if _cache_live > 0 and _cache_wanted:
+                    logger.warning(
+                        "Load failed with --moe-cache-mib=%d - retrying once "
+                        "without the expert cache", _cache_live)
+                    await _kill_slot_async(slot)
+                    slot._loading = True
+                    slot.model = model
+                    try:
+                        await self._start_process(
+                            slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
+                            vision=vision, n_parallel=n_parallel,
+                            ctx_graceful=ctx_graceful, moe_cache=False)
+                        return slot.port
+                    except Exception as _cache_exc:
+                        # Fall through to the normal error handling with the
+                        # ORIGINAL exception instead of swallowing the AMD /
+                        # CPU fallback paths.
+                        logger.warning(
+                            "Retry without --moe-cache-mib failed too: %s",
+                            _cache_exc)
                 # AMD-VULKAN-KOLLISIONS-RETRY:
                 _has_running_peers = any(
                     s.is_running for s in self._slots if s.slot_id != slot.slot_id
@@ -950,7 +991,8 @@ class LlamaLoadMixin:
     async def _start_process(self, slot: ModelSlot, model: str, num_ctx: int,
                              vision: bool = False, n_parallel: int = 1,
                              gpu_layers_override: Optional[int] = None,
-                             ctx_graceful: bool = True):
+                             ctx_graceful: bool = True,
+                             moe_cache: bool = True):
         """Starts llama-server. Sets _ready_event when /health is OK."""
         _evicted_here = False
         if slot.is_running:
@@ -998,7 +1040,10 @@ class LlamaLoadMixin:
                 )
 
         running_slots = [s for s in self._slots if s.is_running and s.slot_id != slot.slot_id]
-        if running_slots:
+        # CPU-BACKEND (audit 2026-11-03): the eviction heuristic below is
+        # pure VRAM math; on a CPU host it killed peers for a budget that
+        # does not apply. Keep the peers.
+        if running_slots and GPU_BACKEND != "cpu":
             current_vram = sum(
                 vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
                 for s in running_slots if s.model
@@ -1132,9 +1177,28 @@ class LlamaLoadMixin:
         # ── Befehlszeile aufbauen ─────────────────────────────────────────────
         # B3 (audit): resolve_gpu_layers returns None in auto mode = omit the
         # flag so llama.cpp fits the layers to free VRAM itself.
+        _fit_on = False
+        _fit_target = 0
+        try:
+            from . import llama_config as _lc_fit
+            _fit_on = bool(getattr(_lc_fit, "LLAMA_FIT", False))
+            _fit_target = int(getattr(_lc_fit, "LLAMA_FIT_TARGET_MIB", 0) or 0)
+        except (ImportError, AttributeError, TypeError, ValueError):
+            _fit_on = False
+            _fit_target = 0
+        _fit_supported = bool(_fit_on and gpu_layers_override is None
+                              and GPU_BACKEND != "cpu"
+                              and await _help_supports("--fit"))
+        if _fit_on and not _fit_supported:
+            logger.info("--fit not applied (pinned layers/cpu backend or "
+                        "binary lacks the flag)")
         _gpu_layers = resolve_gpu_layers(model, gpu_layers_override,
                                          _GPU_LAYERS_TABLE, llama_gpu_layers_auto())
-        if _gpu_layers is not None:
+        # OVERRIDE-PRECEDENCE (audit 2026-11-03): an explicit override wins
+        # over the registry. The CPU fallback passes 0 — the registry block
+        # used to replace it with the profile value, re-offloading the layers
+        # that just crashed and defeating the fallback.
+        if _gpu_layers is not None and gpu_layers_override is None:
             try:
                 from .llama_config import _try_registry_gpu_layers as _reg_gl
                 _gl_reg = _reg_gl(_strip_alias(model))
@@ -1162,7 +1226,7 @@ class LlamaLoadMixin:
             "--port",         str(slot.port),
             "--ctx-size",     str(num_ctx),
         ]
-        if _gpu_layers is not None:
+        if _gpu_layers is not None and not _fit_supported:
             cmd += ["--n-gpu-layers", str(_gpu_layers)]
         # UBATCH-VRAM-NOTE (audit 2026-10-30): the VRAM pre-flight does NOT
         # model the ubatch compute buffer. Measured on the 35B MoE: ub 512
@@ -1186,6 +1250,13 @@ class LlamaLoadMixin:
             "--threads-batch",str(_def_threads_batch),
             "--split-mode",   "none",
         ]
+        if _fit_supported:
+            cmd += ["--fit", "on"]
+            if _fit_target > 0:
+                cmd += ["--fit-target", str(_fit_target)]
+            logger.info(
+                "--fit on%s (--n-gpu-layers omitted, layers/ctx sized to VRAM)",
+                f", target={_fit_target}MiB" if _fit_target else "")
 
         # CACHE-BUDGET-WARN (2026-10-30): the prompt-cache entry grows with
         # the context and is ~18 KiB per token. If --cache-ram cannot hold
@@ -1255,6 +1326,10 @@ class LlamaLoadMixin:
             # CUDA → "CUDA<N>" (DEVICE-FORMAT-FIX 2026-08-27: llama.cpp
             if GPU_BACKEND == "cuda":
                 cmd += ["--device", f"CUDA{VULKAN_DEVICE}"]
+            elif GPU_BACKEND == "rocm":
+                # HIP/ROCm names devices differently (ROCm0/HIP0 by build);
+                # let llama.cpp pick the single visible device.
+                pass
             else:
                 cmd += ["--device", f"VULKAN{VULKAN_DEVICE}"]
         else:
@@ -1293,7 +1368,10 @@ class LlamaLoadMixin:
                 f"'{GPU_BACKEND}' are missing under {LLAMA_BIN.parent}.\n\n"
                 f"  Required ({GPU_BACKEND}): "
                 + ("*ggml-cuda.{dll,so} (+ Windows: cudart64_*.dll, cublas64_*.dll, cublasLt64_*.dll)"
-                   if GPU_BACKEND == "cuda" else "*ggml-vulkan.dll"
+                   if GPU_BACKEND == "cuda" else
+                   "*ggml-rocm.{dll,so} or *ggml-hip.{dll,so}"
+                   if GPU_BACKEND == "rocm" else
+                   "*ggml-vulkan.dll"
                    if not _posix_dll else "lib/libggml-vulkan.so (or flat ggml-vulkan.so)")
                 + "\n"
                 f"  Binary folder: {LLAMA_BIN.parent}\n\n"
@@ -1347,6 +1425,11 @@ class LlamaLoadMixin:
                 f"binary (\"gpu_backend\": \"vulkan\" or \"cuda\")."
             )
 
+        # A9a (audit 2026-11-03): the capability branch below is optional, but
+        # the [LOAD-DIAG] log after Popen reads _load_mode unconditionally.
+        # Binaries without --load-mode died with UnboundLocalError AFTER a
+        # successful spawn.
+        _load_mode = "none"
         # (2026-08-17, Hermes-35B-MoE auf Windows-Vulkan):
         #   --load-mode mlock      → GGML_ASSERT(addr) in llama-mmap.cpp (crasht)
         if type(self)._load_mode_supported:
@@ -1537,6 +1620,17 @@ class LlamaLoadMixin:
                     )
 
         # ── MoE-Offloading ────────────────────────────────────────────────────
+        _moe_cache_mib = 0
+        try:
+            from . import llama_config as _lc_cache
+            _moe_cache_mib = int(getattr(_lc_cache, "MOE_CACHE_MIB", 0) or 0)
+        except (ImportError, AttributeError, TypeError, ValueError):
+            _moe_cache_mib = 0
+        _moe_cache_used = 0
+        try:
+            slot._moe_cache_used = False
+        except AttributeError:
+            pass
         if _moe_count > 0 and GPU_BACKEND != "cpu":
             if type(self)._moe_flag_supported:
                 cmd += ["--n-cpu-moe", str(_moe_count)]
@@ -1544,24 +1638,52 @@ class LlamaLoadMixin:
                     f"MoE offloading active: {_moe_count} experts on CPU "
                     f"({_moe_model_key})"
                 )
-                # THREADS-MOE (2026-10-19): experts in RAM make decode a
-                # memory-bound CPU gather; the logical-thread default
-                # oversubscribes an SMT CPU (measured 12.6 vs 16.5 tok/s at
-                # 16 vs 8 threads on an 8c/16t Ryzen). Cap at physical cores.
+                # THREADS-MOE (2026-10-19, revised 2026-11-03): experts in RAM
+                # make decode a memory-bound CPU gather. Use HALF of the
+                # logical CPUs (the SMT sibling adds contention, not
+                # throughput; measured 12.6 vs 16.5 tok/s at 16 vs 8 threads
+                # on an 8c/16t Ryzen).
                 try:
-                    from .llama_config import physical_cores as _phys_cores
-                    _phys = _phys_cores()
-                except Exception:
-                    _phys = None
-                if _phys and _phys < _def_threads:
+                    import os as _os_thr
+                    try:
+                        # respect cgroup/affinity limits where available
+                        _logical = len(_os_thr.sched_getaffinity(0))
+                    except (AttributeError, OSError):
+                        _logical = int(_os_thr.cpu_count() or 0)
+                except (TypeError, ValueError):
+                    _logical = 0
+                _half = max(1, _logical // 2) if _logical else 0
+                _target = min(_def_threads, _half) if _half else _def_threads
+                if _target < _def_threads:
                     for _tflag in ("--threads", "--threads-batch"):
                         if _tflag in cmd:
                             _ti = cmd.index(_tflag)
-                            cmd[_ti + 1] = str(_phys)
+                            cmd[_ti + 1] = str(_target)
                     logger.info(
-                        "MoE threads: %d -> %d (physical cores, experts on CPU)",
-                        _def_threads, _phys,
+                        "MoE threads: %d -> %d (half of %d logical CPUs, "
+                        "experts on CPU)", _def_threads, _target, _logical,
                     )
+                # EXPERT-CACHE (2026-11-03): opt-in --moe-cache-mib.
+                if moe_cache and _moe_cache_mib > 0:
+                    if await _help_supports("--moe-cache-mib"):
+                        if GPU_BACKEND == "vulkan":
+                            logger.warning(
+                                "MoE expert cache on Vulkan: llama.cpp #30697 "
+                                "reports load crashes - a failed load is "
+                                "retried once without the flag")
+                        cmd += ["--moe-cache-mib", str(_moe_cache_mib)]
+                        _moe_cache_used = int(_moe_cache_mib)
+                        try:
+                            slot._moe_cache_used = True
+                        except AttributeError:
+                            pass
+                        logger.info(
+                            "MoE expert cache: %d MiB (--moe-cache-mib)",
+                            _moe_cache_mib)
+                    else:
+                        logger.warning(
+                            "--moe-cache-mib is not supported by %s - ignored",
+                            LLAMA_BIN.name)
                 # MoE-spezifische Optimierungen
                 cmd += ["--no-warmup"]
                 if not type(self)._load_mode_supported and _llama_cfg.MLOCK_MODEL:
@@ -1842,7 +1964,8 @@ class LlamaLoadMixin:
         _append_chat_template(cmd, _model_base, _reg_template)
 
         # ── HARTER PRE-FLIGHT-VRAM-GATE ───────────────────────────────────────
-        _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id)
+        _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
+                            extra_needed_mib=_moe_cache_used)
         logger.info(
             "[PRE-FLIGHT] %s @ctx=%d: needed=%.0fMiB + margin=%dMiB vs free=%.0fMiB (%s) → %s",
             model, num_ctx, _fit.needed_mib, _fit.margin_mib, _fit.free_mib, _fit.source,
@@ -1853,6 +1976,7 @@ class LlamaLoadMixin:
                 model, num_ctx, slot,
                 safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
                 progress_abort_s=12.0,
+                extra_needed_mib=_moe_cache_used,
             )
         if not _fit.ok:
             # RECLAIM-WAIT (2026-10-03): a just-killed slot (planner evict,
@@ -1873,7 +1997,8 @@ class LlamaLoadMixin:
                             "[PRE-FLIGHT] VRAM reclaimed after wait - re-checking fit for %s @ctx=%d",
                             model, num_ctx,
                         )
-                        _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id)
+                        _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
+                                            extra_needed_mib=_moe_cache_used)
             except Exception as _rw_exc:
                 logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
         #      gepinnte Slots bleiben unantastbar).
@@ -1892,16 +2017,19 @@ class LlamaLoadMixin:
                     "[PRE-FLIGHT] %d ungetrackte Port-Aktion(en) (adopt/kill) nach Block",
                     _scan_actions,
                 )
-                _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id)
+                _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
+                                    extra_needed_mib=_moe_cache_used)
                 if not _fit.ok:
                     _fit = await self._pre_flight_grace_recheck(
                         model, num_ctx, slot,
                         safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
                         progress_abort_s=12.0,
+                        extra_needed_mib=_moe_cache_used,
                     )
                 _recovered = _fit.ok
             if not _recovered and not _fit.ok:
-                while not self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id).ok:
+                while not self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
+                                       extra_needed_mib=_moe_cache_used).ok:
                     _cands = _pre_flight_evict_candidates(self._slots, slot)
                     if not _cands:
                         # IN-USE GUARD (2026-10-17): refuse instead of killing a
@@ -1933,6 +2061,7 @@ class LlamaLoadMixin:
                         model, num_ctx, slot,
                         safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
                         progress_abort_s=12.0,
+                        extra_needed_mib=_moe_cache_used,
                     )
                     if _fit.ok:
                         break
@@ -1982,7 +2111,8 @@ class LlamaLoadMixin:
                                 cmd[_ci + 1] = str(num_ctx)
                                 break
                         _fit = self.can_fit(model, num_ctx, safety_margin_mib=_chosen_margin,
-                                            exclude_slot_id=slot.slot_id)
+                                            exclude_slot_id=slot.slot_id,
+                                            extra_needed_mib=_moe_cache_used)
                         logger.warning(
                             "[PRE-FLIGHT-CTX-DOWN] %s @ctx=%d does not fit with full margin "
                             "(%dMiB free) — using ctx=%d with margin %dMiB (graceful=%s)",
@@ -1992,7 +2122,8 @@ class LlamaLoadMixin:
                         _downgraded = True
                     else:
                         _fit = self.can_fit(model, num_ctx, safety_margin_mib=_chosen_margin,
-                                            exclude_slot_id=slot.slot_id)
+                                            exclude_slot_id=slot.slot_id,
+                                            extra_needed_mib=_moe_cache_used)
                         logger.warning(
                             "[PRE-FLIGHT-REDUCED-MARGIN] %s @ctx=%d does not fit with full margin "
                             "(%dMiB free < %dMiB needed) — loading with reduced margin %dMiB (VRAM tight)",
@@ -2057,7 +2188,8 @@ class LlamaLoadMixin:
                         )
                         if _rw:
                             _fit = self.can_fit(model, num_ctx,
-                                                exclude_slot_id=getattr(slot, "slot_id", None))
+                                                exclude_slot_id=getattr(slot, "slot_id", None),
+                                                extra_needed_mib=_moe_cache_used)
                             logger.info(
                                 "[PRE-FLIGHT] VRAM reclaimed after wait - refit %s @ctx=%d: %s",
                                 model, num_ctx, "OK" if _fit.ok else "BLOCK",
@@ -2345,7 +2477,7 @@ class LlamaLoadMixin:
                         "[VRAM-TIGHT] %s @ctx=%s leaves only %d MiB free after load "
                         "(< 700). Decode will slow down as the context fills; "
                         "lower duo_coder_ctx_agentic or the preset ctx.",
-                        model, slot.num_ctx, int(_head))
+                        model, slot._num_ctx, int(_head))
                     slot.last_warning = (
                         f"tight VRAM: {int(_head)} MiB free after load - expect "
                         f"slow decode as the context fills")
