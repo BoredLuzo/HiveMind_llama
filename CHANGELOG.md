@@ -1,3 +1,47 @@
+## [1.5.3] - 2026-11-04
+
+Hardening release on top of 1.5.2. Telegram documents are binary-safe again:
+secret redaction decodes known text types (UTF-8, UTF-16 and legacy
+single-byte) and leaves binary payloads untouched, so PNG, PDF, DOCX and ZIP
+bytes reach the phone unchanged. Own phone runs poll the pending
+approval source, so approval cards appear while the engine is paused;
+ask_user questions are relayed as questions with free-text answers; `/stop`
+suppresses late cards and a late duplicate staged approval frame is ignored;
+an expired engine-side pause clears the phone latch instead of swallowing the
+next message, and a gateway restart leaves an ask question to its timeout
+instead of answering the literal "3". A non-2xx abort is reported as a failure
+instead of "Abort sent"; and `/purge` parses the engine body instead of
+formatting an httpx.Response. Phone runs adopted as a mirror after a gateway
+restart can deliver `send_file` to the phone too, and
+a gateway restart keeps the phone chat unless
+`HIVEMIND_GATEWAY_FRESH_CHAT_ON_RESTART=1` is set.
+
+Documents cover plain text (UTF-8, UTF-16 and cp1252) alongside PDFs and use
+`document_limit_chars` instead of the 4096-character message cap. Images sent
+in a chat re-attach in every mode, and reattached context images are no longer
+duplicated into `.hive_uploads`. `send_file` accepts files written by
+`edit_file`, `patch_file`, `replace_lines`, `edit_ast`, `run_python` and
+`run_bash`, maps equivalent path spellings to one canonical workspace path,
+and a resumed chunked run restores its explicit send queue. The in-loop
+planner's output is distilled before it reaches the coder, so planner markdown
+and reasoning stay in the planner and UI. Agentic runs that only change static
+assets (HTML, CSS, Markdown, SVG) no longer force the workspace test suite;
+unrelated pre-existing test failures used to derail `task_complete` into an
+edit/test loop. The `run_tests` tool itself is skipped for those runs before
+an approval card appears, and the agentic prompt no longer asks for a test
+run on static assets. If the loop guard still stops such a run, the explicitly
+queued file is delivered instead of being dropped silently.
+
+`install.bat` and `update.bat` sync with `uv sync --inexact`, keeping optional
+decider and voice packages across updates, and update no longer installs the
+dev group into the user venv. `pypdf` is a declared core dependency in
+`pyproject.toml` and `uv.lock`. The Linux installer now resolves the repo root
+from `deploy/`, installs uv into the directory it checks, passes `--inexact`,
+protects the uv-managed `.local` runtime from re-sync, and installs
+`python3-venv` for the pip fallback. The Linux push gate installs `pypdf` and
+runs the gateway, document, image, send-file, planner-briefing and resume
+suites.
+
 ## [1.5.2] - 2026-11-04
 
 Telegram file delivery and agent polish on top of 1.5.1. `/send <path>`

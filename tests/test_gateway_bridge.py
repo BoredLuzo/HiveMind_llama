@@ -557,6 +557,44 @@ async def t_stop():
           ("chat", "chat01") in hive404.aborts)
     check("stop 404: honest note", "cleared" in note4 and "r11" in note4)
 
+    # A rejected abort (5xx) must NOT read as success - the run may still
+    # hold VRAM and the latch stays armed.
+    class RejectHive(FakeHive):
+        async def abort_run(self, run_id):
+            return FakeResponse(500, {"ok": False})
+
+    br5, st5, ms5 = _mk("gwbr_stop5_", RejectHive())
+    st5.data["active_run"] = {"run_id": "r12", "chat_id": "chat01"}
+    note5 = await br5.stop()
+    check("stop non-2xx: honest failure",
+          "not accepted" in note5 and "HTTP 500" in note5)
+    check("stop non-2xx: latch kept for a retry",
+          st5.data.get("active_run") is not None)
+    check("stop non-2xx: stop flag not armed on failure",
+          br5._stop_requested is False)
+
+    # /purge parses the engine body instead of formatting a Response object
+    from hivemind_gateway.hive_client import HiveClient
+    _hc = HiveClient("http://127.0.0.1:1")
+
+    async def _purge_ok(path, body):
+        return FakeResponse(200, {"killed": 2, "killed_pids": [7, 8]})
+
+    _hc._post_json = _purge_ok
+    _p = await _hc.purge_models()
+    check("purge returns the parsed body", _p.get("killed") == 2)
+
+    async def _purge_bad(path, body):
+        return FakeResponse(503, {"error": "busy"})
+
+    _hc._post_json = _purge_bad
+    try:
+        await _hc.purge_models()
+        check("purge non-2xx raises", False)
+    except (HiveUnreachable, httpx.HTTPError):
+        check("purge non-2xx raises", True)
+    await _hc.close()
+
 
 # ── 7. P10 run takeover: mirror, approval relay, steer, workspace ──────
 async def t_takeover():
@@ -740,10 +778,16 @@ async def t_takeover():
     ws_dir = Path(tempfile.mkdtemp(prefix="gwbr_wsp_dir_"))
     note = await br2.workspace_text(str(ws_dir))
     _home = str(Path.home())
+    _under_home = str(ws_dir).startswith(_home)
     _expect = ("~" + str(ws_dir)[len(_home):]
-               if str(ws_dir).startswith(_home) else str(ws_dir))
-    check("workspace confirmed (path collapsed for Telegram)",
-          _expect in note and str(ws_dir) not in note)
+               if _under_home else str(ws_dir))
+    if _under_home:
+        check("workspace confirmed (path collapsed for Telegram)",
+              _expect in note and str(ws_dir) not in note)
+    else:
+        # /tmp is outside $HOME on Linux CI; the full path is correct.
+        check("workspace confirmed (full path outside home)",
+              _expect in note)
     check("workspace 409 adopted and retried",
           len(hive2.meta_puts) == 2
           and hive2.meta_puts[1]["base_rev"] == 7)
@@ -1158,6 +1202,85 @@ async def t_audit_fixes():
           br_a.own_approval_pending() is False)
     hold.set()
     await run_task
+
+    # ASK relay in an OWN phone run: the question must not render as an
+    # approval card, and free text must ride decide_approval as the answer.
+    await br_a._relay_own_approval({
+        "run_id": "ask-own-1", "tool": "ask_user", "kind": "ask",
+        "decision_id": "d-ask", "preview": "Postgres or sqlite?",
+        "question": "Postgres or sqlite?"})
+    check("ask own: question relayed as a question card",
+          "❓ The agent asks" in ms_a.messages[-1]
+          and "🛡 Approval needed" not in ms_a.messages[-1])
+    check("ask own: pending while the engine waits",
+          br_a.own_approval_pending())
+    _out = await br_a.own_answer("Postgres, please")
+    check("ask own: free text is the answer",
+          _out.startswith("✅") and
+          ("ask-own-1", "Postgres, please") in hive_a.denies)
+    check("ask own: card cleared after the answer",
+          br_a.own_approval_pending() is False)
+
+    # /stop suppresses a late card from the aborted run
+    br_a._stop_requested = True
+    _count = len(ms_a.messages)
+    await br_a._relay_own_approval({
+        "run_id": "ask-own-2", "tool": "ask_user", "kind": "ask",
+        "decision_id": "d-late", "preview": "late?",
+        "question": "late?"})
+    check("ask own: no card after /stop",
+          len(ms_a.messages) == _count and
+          not br_a.own_approval_pending())
+    br_a._stop_requested = False
+
+    # APPROVAL-DUPLICATE: the engine's staged card frame (empty
+    # decision_id) arrives after the real card was answered; it must not
+    # produce a second, unanswerable card.
+    await br_a._relay_own_approval({
+        "run_id": "appr-own-1", "tool": "write_file", "kind": "",
+        "decision_id": "d-appr", "preview": "write_file live.html"})
+    check("approval own: card pending", br_a.own_approval_pending())
+    _ans = await br_a.own_answer("1")
+    check("approval own: allowed", _ans.startswith("✅"))
+    _count = len(ms_a.messages)
+    await br_a._relay_own_approval({
+        "run_id": "appr-own-1", "tool": "write_file", "kind": "",
+        "decision_id": "", "preview": "write_file live.html"})
+    check("approval own: late staged frame is suppressed",
+          len(ms_a.messages) == _count and
+          not br_a.own_approval_pending())
+
+    # A stale card's button must not answer the newer card.
+    br_a._open_own_approval = {
+        "rid": "appr-cb", "decision_id": "d-ok", "tool": "write_file",
+        "sig": "s", "base_sig": "b", "kind": ""}
+    _d0 = len(hive_a.denies)
+    _toast = await br_a.approval_callback("cb", "appr:appr-cb:3:wrong")
+    check("stale card button is refused",
+          "outdated" in _toast and len(hive_a.denies) == _d0)
+    _toast = await br_a.approval_callback("cb", "appr:appr-cb:3:d-ok")
+    check("current card button still works",
+          ("appr-cb", "3") in hive_a.denies and "denied" in _toast)
+
+    # The early "(generating...)" card is ignored entirely; only the real
+    # pause card is relayed.
+    _count = len(ms_a.messages)
+    await br_a._relay_own_approval({
+        "run_id": "appr-own-2", "tool": "write_file", "kind": "",
+        "decision_id": "", "preview": "(generating, content streams in the panel)"})
+    check("approval own: generating-stage card is not relayed",
+          len(ms_a.messages) == _count and
+          not br_a.own_approval_pending())
+    _br_src = (Path(__file__).parent.parent / "hivemind_gateway" /
+               "bridge.py").read_text(encoding="utf-8", errors="replace")
+    _main_src = (Path(__file__).parent.parent / "hivemind_gateway" /
+                 "main.py").read_text(encoding="utf-8", errors="replace")
+    check("persisted approvals record their kind",
+          '"kind": kind' in _br_src)
+    check("a vanished engine pause clears the own-approval latch",
+          "expired engine-side - latch cleared" in _br_src)
+    check("gateway restart does not answer an ask question with '3'",
+          "ask question for %s left to timeout" in _main_src)
     # off + force=false: no gate key
     from hivemind_gateway.config import GatewayConfig as _GC
     hive_o = FakeHive(_run_events())
@@ -1321,7 +1444,9 @@ async def t_relay_hardening():
         "frames": ['data: {"type": "token", "content": "spaet fertig."}',
                    'data: {"type": "done", "stop_reason": "completed"}']}
     br2, st2, ms2 = _mk("gwbr_late_", hive2)
-    hive2.journal_body["ts"] = time.time()
+    # Windows time.time() can be coarse (15.6 ms) on older Pythons: a ts
+    # taken right after construction may compare equal to _proc_start.
+    hive2.journal_body["ts"] = br2._proc_start + 1
     await br2.mirror_tick()
     check("R6 late result delivered",
           any("spaet fertig." in m for m in ms2.messages))
@@ -1339,7 +1464,7 @@ async def t_relay_hardening():
     check("R6 pre-start journal not replayed",
           not any("alt." in m for m in ms2.messages))
     hive2.journal_body["run_id"] = "own-1"
-    hive2.journal_body["ts"] = time.time()
+    hive2.journal_body["ts"] = br2._proc_start + 1
     st2.data["active_run"] = {"run_id": "own-1", "chat_id": "chat01"}
     await br2.mirror_tick()
     check("R6 own done run not late-relayed",
@@ -1371,6 +1496,30 @@ async def t_relay_hardening():
     await br3.mirror_tick()
     check("R6 post-adoption repeat deduped (counter not re-flood)",
           not any("web_fetch" in m for m in ms3.messages[before:]))
+
+    # 5) MIRROR SEND-FILE (2026-11-04): a UI-started run that calls
+    #    send_file must deliver the document to the phone as well.
+    _ws = Path(tempfile.mkdtemp(prefix="gwbr_sendws_"))
+    (_ws / "page.html").write_text("<html>mirror</html>", encoding="utf-8")
+    _sf_frame = "data: " + json.dumps({
+        "type": "send_file", "path": "page.html", "workspace": str(_ws)})
+    hive4 = RelayHive()
+    hive4.journal_body = {
+        "active": True, "run_id": "sf-1", "done": False, "aborted": False,
+        "ts": time.time(), "n": 1,
+        "frames": ['data: {"type": "run_id", "run_id": "sf-1"}']}
+    br4, st4, ms4 = _mk("gwbr_mirrorsf_", hive4)
+    hive4.journal_body["ts"] = time.time()
+    await br4.mirror_tick()   # adoption
+    hive4.journal_body["frames"].append(_sf_frame)
+    hive4.journal_body["n"] = 2
+    await br4.mirror_tick()   # frame processing
+    check("R6 mirror run delivers send_file to the phone",
+          any(name == "page.html" and b"mirror" in data
+              for data, name in ms4.documents))
+    await br4.mirror_tick()
+    check("R6 mirror send_file is not uploaded twice",
+          len(ms4.documents) == 1)
 
 
 # ── TG-VISIBILITY (2026-10-07): duo_start, ctx_meter, file_change, ─────

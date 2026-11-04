@@ -472,7 +472,7 @@ def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ct
     except Exception:
         pass
     try:
-        if (str((ctx.settings or {}).get("source") or "") == "telegram"
+        if (str((ctx.settings or {}).get("source") or "").startswith("telegram")
                 and not bool((ctx.settings or {}).get("phone_restricted"))):
             parts.append(
                 "FILE DELIVERY: when the task asks for a deliverable, write the "

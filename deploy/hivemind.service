@@ -1,6 +1,6 @@
 [Unit]
 Description=HiveMind AI Coding Assistant
-After=network.target
+After=network.target network-online.target
 Wants=network-online.target
 
 [Service]

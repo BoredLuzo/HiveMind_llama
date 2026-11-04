@@ -478,9 +478,26 @@ async def execute_tool_round(
                 "Telegram chat.",
                 tool=_dname, mode=tool_mode)
         else:
-            _dresult = await _execute_one_tool(
-                _dname, _dargs, _dargs_with_model, _i, _pre_results,
-                trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws)
+            _static_only_tests = False
+            if _dname == "run_tests" and (trs.file_changes or trs.run_written_files):
+                try:
+                    from core.duo.preflight import (
+                        needs_test_verification as _needs_tests_te)
+                    _rt_paths = (list(trs.file_changes or {})
+                                 + list(trs.run_written_files or []))
+                    _static_only_tests = not _needs_tests_te(_rt_paths)
+                except (ImportError, AttributeError, TypeError):
+                    _static_only_tests = False
+            if _static_only_tests:
+                _logger.info(
+                    "[AUTO-TEST] run_tests skipped: only static assets changed")
+                _dresult = ("[TEST-RESULT] ⏭ No testable code changed "
+                            "(static assets only) - test run skipped. Do not "
+                            "call run_tests again in this run.")
+            else:
+                _dresult = await _execute_one_tool(
+                    _dname, _dargs, _dargs_with_model, _i, _pre_results,
+                    trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws)
         # SEND-FILE (2026-11-04): validate now, deliver LATER. The model's
         # path is queued on the run result; the runner emits the actual
         # send_file event only after the final verification has passed, as
@@ -639,6 +656,53 @@ async def execute_tool_round(
                 _auto_test_skips_gate = False
                 # SMOKE-NUDGE flag persists in trs (was function-local: reset every round)
                 if auto_test_before_complete and _mutations_made:
+                    # STATIC-ONLY (2026-11-04): a run that only wrote HTML/
+                    # CSS/MD/JSON must not be forced through the workspace
+                    # test suite. Unrelated pre-existing test failures used
+                    # to block task_complete and send the coder into an
+                    # edit/test loop.
+                    _te_written = list(trs.run_written_files or [])
+                    if not _te_written:
+                        try:
+                            from tools.runner import (
+                                _files_written_in_run as _fw_ctx_te)
+                            _te_written = list(_fw_ctx_te.get(None) or ())
+                        except (ImportError, AttributeError, TypeError):
+                            _te_written = []
+                    try:
+                        from core.duo.preflight import (
+                            needs_test_verification as _needs_tests)
+                    except (ImportError, AttributeError, TypeError):
+                        _needs_tests = None
+                    if (_needs_tests is not None and _te_written
+                            and not _needs_tests(_te_written)):
+                        # CHUNK-INCOMPLETE (audit 2026-11-04): do not accept a
+                        # static-only completion while the last mutation was a
+                        # write_file_append; that is how a split file was
+                        # delivered truncated. Fall through to the normal
+                        # ordered check, which owns _chunk_incomplete_p().
+                        _te_append_idx = -1
+                        _te_write_idx = -1
+                        for _te_i, _te_m in enumerate(dtool_msgs):
+                            if _te_m.get("role") != "tool":
+                                continue
+                            _te_n = _te_m.get("name", "")
+                            if _te_n in ("write_file", "edit_file",
+                                         "patch_file", "replace_lines"):
+                                _te_write_idx = _te_i
+                            elif _te_n == "write_file_append":
+                                _te_append_idx = _te_i
+                        if _te_append_idx > _te_write_idx:
+                            _logger.info(
+                                "[AUTO-TEST] static-only but last write was an "
+                                "append - deferring to the chunk-complete check")
+                        else:
+                            _logger.info(
+                                "[AUTO-TEST] no testable code changed (%d file(s)) "
+                                "- task_complete accepted without tests",
+                                len(_te_written))
+                            result.task_complete_called = True
+                            break
                     _last_write_idx_at = -1
                     _last_test_idx_at = -1
                     for _at_idx, _at_m in enumerate(dtool_msgs):
@@ -785,8 +849,13 @@ async def execute_tool_round(
                     elif _tname == "run_tests":
                         _content = str(_m.get("content") or "")
                         _last_bash_idx = _idx
-                        _last_bash_failed = ("[TEST-RESULT] ✅" not in _content
-                                             and "[TEST-RESULT] ⚠️" not in _content)
+                        # A static-only skip ("⏭") is not a failed test run;
+                        # treating it as red produced a false VERIFY FAILED
+                        # nudge and a run_tests/task_complete loop.
+                        _last_bash_failed = (
+                            "[TEST-RESULT] ✅" not in _content
+                            and "[TEST-RESULT] ⚠️" not in _content
+                            and "⏭" not in _content)
                         _last_bash_verified = not _last_bash_failed
 
                 def _chunk_incomplete_p():

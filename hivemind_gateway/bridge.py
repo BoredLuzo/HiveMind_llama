@@ -113,6 +113,15 @@ class RunBridge:
         self._own_ctx_compression_noted: bool = False
         self._handed_over: dict[str, str] = {}
         self._late_relayed: set[str] = set()
+        # SEND-FILE dedupe: own runs reset this, mirror runs need it from
+        # the first tick (a UI run may be the first thing the gateway sees).
+        self._sent_files: set[str] = set()
+        # APPROVAL-DUPLICATE (2026-11-04 live): the engine stages an
+        # approval card (no decision_id) and later pauses with the real
+        # decision_id. Both frames can reach the gateway; remember which
+        # tool+preview was already answered so the late staged frame does
+        # not produce a second, unanswerable card.
+        self._answered_own_approvals: set[str] = set()
         self._proc_start: float = time.time()
 
     # -- small helpers ----------------------------------------------------
@@ -434,7 +443,11 @@ class RunBridge:
         paused, a second run would only get the busy note anyway."""
         oa = self._open_own_approval or {}
         t = (text or "").strip()
-        if t not in ("1", "2", "3"):
+        _is_ask = oa.get("kind") == "ask"
+        if not t:
+            return ("❓ The agent is waiting for your answer - reply with "
+                    "text. /stop aborts.")
+        if not _is_ask and t not in ("1", "2", "3"):
             return ("🛡 Approval is waiting - reply 1 (once), "
                     "2 (always, this chat) or 3 (deny). /stop aborts.")
         resp = await self.hive.decide_approval(
@@ -446,7 +459,7 @@ class RunBridge:
             # P1 (edge audit 2026-11-03): keep the card. A 5xx/restart leaves
             # the engine run paused; clearing here lost the only answer path.
             return (f"❌ Decision not accepted (HTTP {code}) - the card is "
-                    "still open; reply 1/2/3 again or /stop.")
+                    f"still open; reply again or /stop.")
         self._open_own_approval = None
         self.state.data.setdefault("open_approvals", {}).pop(
             oa.get("rid"), None)
@@ -455,6 +468,11 @@ class RunBridge:
             routed = str((resp.json() or {}).get("routed") or "")
         except (ValueError, TypeError, AttributeError):
             routed = ""
+        if (not _is_ask and routed not in ("stale", "expired")
+                and oa.get("base_sig")):
+            # Approved/denied: the engine may still push its earlier staged
+            # card frame (same tool+preview, empty decision_id). Suppress it.
+            self._answered_own_approvals.add(str(oa["base_sig"]))
         if routed == "duplicate":
             return "ℹ️ Already answered - nothing changed."
         if routed == "expired":
@@ -463,6 +481,8 @@ class RunBridge:
             # TOAST-HONESTY (2026-10-06): nonce mismatch - the card was
             # replaced by a newer one; the engine dropped this answer.
             return "ℹ️ That card is outdated (a newer one replaced it) - nothing changed."
+        if _is_ask:
+            return "✅ Answer delivered - the run continues."
         return ("✅ allowed (once) - the run continues."
                 if t == "1" else
                 "📁 always (this chat, this exact call) - the run "
@@ -480,11 +500,43 @@ class RunBridge:
         decision_id = str(ev.get("decision_id") or "")
         tool = str(ev.get("tool") or "")
         preview = str(ev.get("preview") or "")
+        kind = str(ev.get("kind") or "")
+        question = str(ev.get("question") or preview)
+        # STAGED-CARD (2026-11-04 live): the engine emits an early card while
+        # the tool call is still generating ("(generating, ...)") and the
+        # real card with decision_id when it pauses. Relaying both produced
+        # two cards for one call, and answering the staged one stored a
+        # pre-decision that skipped the real pause. The poll always sees the
+        # real card, so the staged frame is ignored on the phone.
+        if preview.lstrip().startswith("(generating"):
+            return
+        if self._stop_requested:
+            return
+        _sig = f"{rid}|{decision_id}|{tool}|{preview[:80]}"
+        _base_sig = f"{rid}|{tool}|{preview[:80]}"
+        if _base_sig in self._answered_own_approvals:
+            return
+        if (self._open_own_approval or {}).get("sig") == _sig:
+            return
+        if (self._open_own_approval or {}).get("base_sig") == _base_sig:
+            return
         self.state.data.setdefault("open_approvals", {})[rid] = {
-            "decision_id": decision_id, "tool": tool}
+            "decision_id": decision_id, "tool": tool, "kind": kind}
         self.state.save()
         self._open_own_approval = {"rid": rid, "decision_id": decision_id,
-                                   "tool": tool}
+                                   "tool": tool, "sig": _sig,
+                                   "base_sig": _base_sig, "kind": kind}
+        if kind == "ask":
+            # ASK-USER (own phone run): a question is not an approval card.
+            # The engine's pause accepts free text as the answer, so relay
+            # it as a plain question and let the next text message through.
+            await self.ms.send_message(
+                f"❓ The agent asks (run {rid})\n\n"
+                f"{question}\n\n"
+                "Reply with your answer as text - it goes straight back to "
+                "the agent. /stop aborts.\n"
+                "(This is the agent's own question - NOT the approval gate.)")
+            return
         await self.ms.send_message(
             f"🛡 Approval needed (run {rid})\n\n"
             f"tool: {tool}\n\n"
@@ -492,11 +544,72 @@ class RunBridge:
             "Buttons below; or reply 1 (once) / 2 (always, this chat) / "
             "3 (deny).",
             reply_markup={"inline_keyboard": [[
-                {"text": "✅ Once", "callback_data": f"appr:{rid}:1"},
+                {"text": "✅ Once",
+                 "callback_data": f"appr:{rid}:1:{decision_id}"},
                 {"text": "📁 Always (chat)",
-                 "callback_data": f"appr:{rid}:2"},
-                {"text": "⛔ Deny", "callback_data": f"appr:{rid}:3"},
+                 "callback_data": f"appr:{rid}:2:{decision_id}"},
+                {"text": "⛔ Deny",
+                 "callback_data": f"appr:{rid}:3:{decision_id}"},
             ]]})
+
+    async def _poll_own_approval(self, run_id: str, stop_ev: asyncio.Event,
+                                 appr_mode: str) -> None:
+        """Phone-side replacement for the buffered approval SSE frame.
+
+        ToolLoop emits approval_request only AFTER the blocking tool call, so
+        an own phone run could wait forever with no card. Poll the same
+        /approval/pending source the browser uses.
+        """
+        last_sig = ""
+        while not stop_ev.is_set():
+            if self._stop_requested:
+                return
+            try:
+                resp = await self.hive.pending_approval(run_id)
+                body = resp.json() if hasattr(resp, "json") else {}
+                code = getattr(resp, "status_code", 200)
+            except (HiveUnreachable, HTTPError, OSError, ValueError):
+                body, code = {}, 0
+            if code == 200 and body.get("active"):
+                _kind = str(body.get("kind") or "")
+                sig = "|".join(str(body.get(k) or "") for k in (
+                    "decision_id", "tool", "preview", "kind"))
+                if sig != last_sig:
+                    last_sig = sig
+                    # The approval mode governs TOOL approval. An ask_user
+                    # question is answered by the owner, never auto-denied
+                    # with "3" (that would arrive as the literal answer).
+                    if appr_mode == "deny" and _kind != "ask":
+                        try:
+                            await self.hive.decide_approval(
+                                run_id, "3",
+                                decision_id=str(body.get("decision_id") or ""),
+                                tool=str(body.get("tool") or ""))
+                        except (HiveUnreachable, HTTPError, OSError):
+                            pass
+                    else:
+                        await self._relay_own_approval({
+                            "run_id": run_id,
+                            "decision_id": str(body.get("decision_id") or ""),
+                            "tool": str(body.get("tool") or ""),
+                            "preview": str(body.get("preview") or ""),
+                            "kind": _kind,
+                            "question": str(body.get("question") or ""),
+                        })
+            elif last_sig:
+                # The engine-side pause vanished (ask timeout or fail-closed
+                # deny). Drop the stale latch; otherwise the next owner text
+                # is swallowed by own_answer with a false "delivered" note.
+                _oa = self._open_own_approval or {}
+                if _oa.get("rid") == run_id:
+                    self._open_own_approval = None
+                    self.state.data.setdefault("open_approvals", {}).pop(
+                        run_id, None)
+                    self.state.save()
+                    self._log_note(
+                        f"own approval for {run_id} expired engine-side - latch cleared")
+                    last_sig = ""
+            await asyncio.sleep(1.0)
 
     def _active_run_fresh_unconfirmed(self) -> bool:
         """True while active_run exists but the engine has not confirmed
@@ -540,7 +653,8 @@ class RunBridge:
                 # stale unconfirmed latch (crash in the starting window):
                 # self-heal instead of the busy-forever deadlock
                 self._clear_run()
-                return await self._start_text_run_inner(q)
+                return await self._start_text_run_inner(
+                    q, from_voice=from_voice, images=images)
             return self._busy_note()
         journal_note = await self._journal_busy()
         if journal_note:
@@ -664,6 +778,9 @@ class RunBridge:
         self._own_ctx_compression_noted = False
         self._tool_relay_seen = {}  # R6: repeat-counter reset per run
         self._sent_files: set[str] = set()  # SEND-FILE dedupe per run
+        self._answered_own_approvals = set()  # approval dedupe per run
+        _approval_poll_stop = asyncio.Event()
+        _approval_poll_task: asyncio.Task | None = None
         self._skip_finish = False  # R4: stream-broke handover skips _finish
         # R4 relay: phase/plan/thinking visibility on the phone
         last_phase = ""
@@ -749,6 +866,11 @@ class RunBridge:
                     else:
                         _ar["run_id"] = _new_rid
                         self.state.save()
+                        if _approval_poll_task is None:
+                            _approval_poll_task = asyncio.create_task(
+                                self._poll_own_approval(
+                                    _new_rid, _approval_poll_stop,
+                                    _appr_mode))
                         if self._stop_requested:
                             try:
                                 await self.hive.abort_run(_new_rid)
@@ -765,6 +887,8 @@ class RunBridge:
                     error_text = str(ev.get("content") or "unknown")
                 elif etype == "approval_request":
                     run_id = str(ev.get("run_id") or "")
+                    if self._stop_requested:
+                        continue
                     if run_id and _appr_mode == "deny":
                         resp = await self.hive.decide_approval(
                             run_id, "3",
@@ -934,6 +1058,13 @@ class RunBridge:
                         "and is mirrored here.")
             raise  # engine truly unreachable: keep the honest failure path
         finally:
+            _approval_poll_stop.set()
+            if _approval_poll_task is not None:
+                try:
+                    await asyncio.wait_for(_approval_poll_task, timeout=2.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError,
+                        RuntimeError):
+                    _approval_poll_task.cancel()
             # R4: a stream-broke handover already cleared the latch and told
             # the phone - _finish would only add "finished without any text
             # output" on top of the takeover.
@@ -1187,7 +1318,12 @@ class RunBridge:
                             "chat abort sent as fallback; run cleared.")
                 return (f"⏹ Run {rid} was unknown to the server - it "
                         "had already ended; run cleared.")
-            return f"⏹ Abort sent for {rid}."
+            if code < 300:
+                self._stop_requested = True
+                return f"⏹ Abort sent for {rid}."
+            # A rejected abort is NOT a success: the run may still hold VRAM.
+            return (f"❌ /stop not accepted (HTTP {code}) - run {rid} may "
+                    "still be running, please check the PC!")
         except HTTPError as exc:
             # deep audit N6: raise_for_status in the fallback must not
             # break the visible-failure invariant of /stop
@@ -1655,6 +1791,8 @@ class RunBridge:
                                   "tool_relay_seen": {}, "answer_parts": [],
                   "ctx_marks": set(), "ctx_compression_noted": False,
                   "answer_sent_upto": 0})
+        # A new mirror run may legitimately send the same filename again.
+        self._sent_files.clear()
 
     def _own_run_id(self) -> str | None:
         run = self.state.data.get("active_run") or {}
@@ -2033,6 +2171,11 @@ class RunBridge:
                 _fc = f"📝 {_fp} ({_op}" + (f", {_ln} lines)" if _ln else ")")
                 if not tool_lines or tool_lines[-1] != _fc:
                     tool_lines.append(_fc)
+            elif ev.get("type") == "send_file":
+                # MIRROR-SEND (2026-11-04): a UI-started run that calls
+                # send_file must reach the owner's phone too; the engine
+                # already validated the path, the gateway gates it again.
+                await self._deliver_send_file(ev)
             elif ev.get("type") == "usage_meta":
                 # CODER OUTPUT (user feedback: relay real coder text instead of a bare
                 # "round finished"): when a coder LLM call ends, relay the
@@ -2309,8 +2452,13 @@ class RunBridge:
         exact-call memory. Returns the toast text for
         answerCallbackQuery."""
         m = self._mirror()
+        card_did = ""
         try:
-            _, rid, answer = data.split(":", 2)
+            _parts = data.split(":", 3)
+            if len(_parts) == 4:
+                _, rid, answer, card_did = _parts
+            else:
+                _, rid, answer = _parts
         except ValueError:
             return "malformed button"
         if data.startswith("ask:"):
@@ -2354,16 +2502,20 @@ class RunBridge:
             return "unknown button"
         own = self._open_own_approval or {}
         if rid == own.get("rid"):
+            if card_did and card_did != (own.get("decision_id") or ""):
+                return "ℹ️ card outdated - nothing changed"
             resp = await self.hive.decide_approval(
                 rid, answer,
                 decision_id=own.get("decision_id") or "",
                 tool=own.get("tool") or "")
             code = getattr(resp, "status_code", 500)
+            if code >= 300:
+                # Keep the card answerable on a 4xx/5xx (the pause may still
+                # be waiting); the text path already does the same.
+                return f"not accepted (HTTP {code})"
             self._open_own_approval = None
             self.state.data.setdefault("open_approvals", {}).pop(rid, None)
             self.state.save()
-            if code >= 300:
-                return f"not accepted (HTTP {code})"
             try:
                 routed = str((resp.json() or {}).get("routed") or "")
             except (ValueError, TypeError, AttributeError):

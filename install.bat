@@ -161,7 +161,9 @@ goto uv_done
 REM --frozen (2026-10-18): without a lockfile every install resolved the
 REM newest package of the day - one machine got pydantic 2.14.1/2.50.1 and
 REM another a different pair. uv.lock ships with the zip and pins all 64.
-uv sync --all-extras --frozen --python 3.14
+REM --inexact (2026-11-04): a re-run over an existing .venv must not remove
+REM the optional decider/voice packages that are not part of the lock.
+uv sync --all-extras --frozen --inexact --python 3.14
 if errorlevel 1 goto uv_failed
 
 :uv_done

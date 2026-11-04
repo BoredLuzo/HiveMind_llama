@@ -251,7 +251,13 @@ class HiveClient:
     async def purge_models(self) -> dict:
         """/purge on the phone - kill ALL loaded
         llama-servers (free VRAM). Engine route: POST /vram/kill_all."""
-        return await self._post_json("/vram/kill_all", {})
+        r = await self._post_json("/vram/kill_all", {})
+        r.raise_for_status()
+        try:
+            data = r.json()
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
 
     async def abort_run(self, run_id: str) -> httpx.Response:
         return await self._post_json(f"/abort/{run_id}", {})

@@ -674,9 +674,17 @@ class Gateway:
             # VRAM freed, next run reloads on demand.
             try:
                 _res = await self.hive.purge_models()
-                _killed = _res.get("killed") or _res.get("killed_pids") or _res
+                _killed = _res.get("killed") or _res.get("killed_pids") or []
+                if isinstance(_killed, list):
+                    _kn = len(_killed)
+                elif _killed:
+                    _kn = 1
+                else:
+                    _kn = 0
+                _detail = (f"{_kn} model process(es) stopped."
+                           if _kn else "No model process was loaded.")
                 await self.reply(p.chat_id,
-                                 f"🧹 All models purged from VRAM. {_killed}"[:300],
+                                 f"🧹 VRAM purged. {_detail}"[:300],
                                  reply_to_message_id=p.message_id)
             except (HiveUnreachable, HTTPError, OSError) as _pg_exc:
                 await self.reply(p.chat_id, f"❌ purge failed: {_pg_exc}",
@@ -906,9 +914,9 @@ class Gateway:
     async def handle_document(self, p: gw_auth.ParsedUpdate) -> None:
         """Extract a PDF/text document and run it as prompt text.
 
-        The engine owns the extraction (pypdf there), so the gateway stays
-        dependency-free; a scanned PDF comes back as DOC_NO_TEXT and the
-        reply tells the owner to send photos instead.
+        The engine owns the extraction (pypdf for PDFs, UTF-8/UTF-16 for
+        text), so the gateway stays dependency-free; a scanned PDF comes
+        back as DOC_NO_TEXT and the reply tells the owner to send photos.
         """
         cap = int(getattr(self.cfg, "document_max_bytes", 25 * 1024 * 1024))
         name = p.document_name or "document"
@@ -932,8 +940,9 @@ class Gateway:
                 "DOC_NO_TEXT": ("the PDF has no text layer (scanned?) - send the "
                                 "pages as photos and I read them as images"),
                 "DOC_UNSUPPORTED": ("PDF support is missing on the engine "
-                                    "(`pip install pypdf`)"),
-                "DOC_UNREADABLE": "the file is not a readable PDF",
+                                    "(re-run install.bat or update.bat)"),
+                "DOC_UNREADABLE": "the file is not a readable PDF or text file",
+                "DOC_EMPTY": "the file contains no text",
                 "DOC_TOO_LARGE": "the file is too large",
                 "DOC_TRANSPORT": "the engine did not answer in time",
             }
@@ -957,7 +966,7 @@ class Gateway:
         header += "]"
         question = caption or "Summarize this document."
         prompt = "\n\n".join([header, text, "---", question])
-        if len(prompt) > self.cfg.max_text_chars:
+        if len(prompt) > self.cfg.document_limit_chars:
             # a 120k character PDF does not fit Telegram's input cap - the
             # engine gets the text, the phone gets an honest note
             await self.reply(p.chat_id,
@@ -966,11 +975,21 @@ class Gateway:
                              f"(e.g. \"summarize page 3\") or use the desktop UI.",
                              reply_to_message_id=p.message_id)
             return
+        # A document must not become steering for an unrelated active run
+        # (the extracted text can be very large). Ask the owner to resend it
+        # when the current run is done.
+        if self.bridge.mirror_intercept(prompt) or self.bridge.own_approval_pending():
+            await self.reply(p.chat_id,
+                             "⏳ A run is active - the document was not injected "
+                             "into it. Send it again when the run has finished.",
+                             reply_to_message_id=p.message_id)
+            return
         withdoc = gw_auth.ParsedUpdate(
             update_id=p.update_id, kind=p.kind, from_id=p.from_id,
             chat_id=p.chat_id, chat_type=p.chat_type,
             text=prompt, date=p.date, is_forwarded=p.is_forwarded,
-            message_id=p.message_id, callback_id=p.callback_id)
+            message_id=p.message_id, callback_id=p.callback_id,
+            document_prompt=True)
         await self.start_owner_run(withdoc)
 
     async def _image_in_enabled(self) -> bool:
@@ -994,12 +1013,6 @@ class Gateway:
             return
         # Narrow once: ParsedUpdate.chat_id is str | None.
         _chat_id = p.chat_id if p.chat_id is not None else ""
-        # PENDING-ARG (2026-11-04): plain text reaches this method directly
-        # from process_update, NOT through handle_owner_update. The numeric
-        # answer to "/setModel" (ask-back) therefore used to start a run
-        # instead of being consumed as the model number.
-        if await self._run_pending_as_arg(p):
-            return
         # SLASH-GUARD (2026-11-04): known commands are dispatched before this
         # method; a prompt that still starts with "/" came from a voice
         # transcript, an image/document caption or a forgotten command. It
@@ -1027,10 +1040,18 @@ class Gateway:
             await self.reply(_chat_id, note,
                              reply_to_message_id=p.message_id)
             return
-        if len(q) > self.cfg.max_text_chars:
+        # PENDING-ARG (2026-11-04): an approval/steering answer wins over a
+        # pending /setModel ask-back (audit G8), so consume the numeric
+        # command value only after the intercepts above.
+        if await self._run_pending_as_arg(p):
+            return
+        _limit = (self.cfg.document_limit_chars
+                  if getattr(p, "document_prompt", False)
+                  else self.cfg.max_text_chars)
+        if len(q) > _limit:
             await self.reply(_chat_id,
                              f"❌ Text zu lang ({len(q)} > "
-                             f"{self.cfg.max_text_chars} Zeichen).",
+                             f"{_limit} Zeichen).",
                              reply_to_message_id=p.message_id)
             return
         # G2 (audit r2): the run executes as a TASK - awaiting it inline
@@ -1147,13 +1168,25 @@ async def recover_orphan_run(gw: Gateway) -> None:
         # restart-deny contract (ask mode): a waiting approval must not
         # silently survive the gateway restart — deny it on the engine.
         for _rid, _oa in list(gw.state.data["open_approvals"].items()):
+            if (_oa or {}).get("kind") == "ask":
+                # A persisted ask question has no safe auto-answer: posting
+                # "3" would reach the agent as the literal reply "3". Let the
+                # engine's ask timeout decide instead.
+                log.warning("[RECOVER] ask question for %s left to timeout",
+                            _rid)
+                continue
             try:
-                await gw.hive.decide_approval(
+                _resp = await gw.hive.decide_approval(
                     _rid, "3",
                     decision_id=(_oa or {}).get("decision_id") or "",
                     tool=(_oa or {}).get("tool") or "")
-                log.warning("[RECOVER] denied persisted approval for %s",
-                            _rid)
+                _code = getattr(_resp, "status_code", 500)
+                if _code >= 300:
+                    log.warning("[RECOVER] deny for %s answered HTTP %s",
+                                _rid, _code)
+                else:
+                    log.warning("[RECOVER] denied persisted approval for %s",
+                                _rid)
             except (HiveUnreachable, OSError) as exc:
                 log.warning("[RECOVER] deny failed for %s: %s", _rid, exc)
         gw.state.data["open_approvals"] = {}
@@ -1466,24 +1499,30 @@ async def run() -> int:
     else:
         log.warning("owner already bound (%s) — pairing disabled",
                     _mask_tid(gw.owner_id))
-        # FRESH-CHAT-ON-RESTART (2026-10-06, owner): after a gateway/engine
-        # restart the next phone prompt must land in a NEW chat - the old
-        # transcript carries the conversation (and any stale model
-        # hallucinations) into every new run via history seeding.
-        # Non-fatal: a busy engine only postpones the fresh chat.
-        try:
-            _nc = await gw.bridge.new_chat()
-            log.info("[STARTUP] fresh chat for the phone: %s", _nc)
-            if "New HiveMind chat" in _nc:
-                # P2 (edge audit 2026-11-03): a busy engine returns a note,
-                # not a chat - do not claim a fresh chat that was not created.
-                await gw.bridge.ms.send_message(
-                    "🆕 Fresh chat started (gateway restarted) - the old "
-                    "conversation is archived in the UI.")
-            else:
-                log.warning("[STARTUP] fresh chat postponed: %s", _nc)
-        except (HiveUnreachable, HTTPError, OSError, TelegramApiError) as _nc_exc:
-            log.warning("[STARTUP] fresh chat failed (non-fatal): %s", _nc_exc)
+        # CHAT-CONTINUITY (2026-11-04): keep the existing phone chat across
+        # gateway restarts by default. The old "fresh chat on every restart"
+        # reset history/workspace/image context and made continuity tests
+        # meaningless. Opt in with
+        # HIVEMIND_GATEWAY_FRESH_CHAT_ON_RESTART=1 if a clean chat is wanted.
+        _fresh_restart = os.environ.get(
+            "HIVEMIND_GATEWAY_FRESH_CHAT_ON_RESTART", "").strip().lower() in (
+                "1", "true", "yes", "on")
+        if _fresh_restart:
+            try:
+                _nc = await gw.bridge.new_chat()
+                log.info("[STARTUP] fresh chat for the phone: %s", _nc)
+                if "New HiveMind chat" in _nc:
+                    await gw.bridge.ms.send_message(
+                        "🆕 Fresh chat started (gateway restarted) - the old "
+                        "conversation is archived in the UI.")
+                else:
+                    log.warning("[STARTUP] fresh chat postponed: %s", _nc)
+            except (HiveUnreachable, HTTPError, OSError, TelegramApiError) as _nc_exc:
+                log.warning("[STARTUP] fresh chat failed (non-fatal): %s", _nc_exc)
+        else:
+            _keep = (state.data.get("tg_chat") or {}).get("hive_chat_id")
+            log.info("[STARTUP] keeping phone chat across restart: %s",
+                     _keep or "(none yet)")
 
     # BACKLOG DROP: jump to the newest update, discard everything older.
     try:

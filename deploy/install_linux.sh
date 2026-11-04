@@ -7,6 +7,11 @@ INSTALL_DIR="/opt/hivemind"
 SERVICE_FILE="/etc/systemd/system/hivemind.service"
 LOG_DIR="/var/log/hivemind"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# The script lives in deploy/ in the repo, but every sync path below is
+# relative to the repo root. Documented usage is `sudo deploy/install_linux.sh`.
+if [ -f "$SCRIPT_DIR/../pyproject.toml" ] && [ ! -f "$SCRIPT_DIR/pyproject.toml" ]; then
+  SCRIPT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
 LLAMA_BACKEND="${HIVEMIND_GPU_BACKEND:-vulkan}"
 # VOICE=1 (or --voice) also downloads the optional speech-to-text engine
 # + model (English, CPU only, ~420 MB). Default: skip.
@@ -48,12 +53,12 @@ echo "[2/8] Installing system dependencies..."
 # step [4/8]) an air-gapped re-run still completes. Warn loudly instead.
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update -qq || echo "  [WARN] apt-get update failed (offline?) - continuing" >&2
-  apt-get install -y -qq curl ca-certificates \
-    || echo "  [WARN] apt-get install curl failed (offline?) - continuing" >&2
+  apt-get install -y -qq curl ca-certificates python3 python3-venv python3-pip \
+    || echo "  [WARN] apt-get install failed (offline?) - continuing" >&2
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y curl || echo "  [WARN] dnf install curl failed (offline?) - continuing" >&2
+  dnf install -y curl python3 python3-pip || echo "  [WARN] dnf install failed (offline?) - continuing" >&2
 elif command -v pacman >/dev/null 2>&1; then
-  pacman -Sy --noconfirm curl || echo "  [WARN] pacman install curl failed (offline?) - continuing" >&2
+  pacman -Sy --noconfirm curl python || echo "  [WARN] pacman install failed (offline?) - continuing" >&2
 else
   echo "  (unknown package manager — install curl manually)"
 fi
@@ -63,9 +68,10 @@ command -v uv >/dev/null 2>&1 || {
   # OFFLINE (audit r4): a failed curl|sh used to abort the whole installer
   # (pipefail + set -e). Fall through instead - step [4/8] has a
   # python3+pip fallback.
-  if ! curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_PATH="/usr/local/bin" sh; then
+  if ! curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/local/bin" sh; then
     echo "  [WARN] uv could not be installed (offline?) - step [4/8] falls back to python3+pip." >&2
   fi
+  export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 }
 # UV-PATH (2026-10-17): uv is installed to /usr/local/bin, which a normal
 # login shell has on PATH - but a sudo session with a hardened secure_path, a
@@ -96,6 +102,7 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       --exclude '.git' --exclude '.venv' --exclude '__pycache__' \
       --exclude '/sessions' --exclude '/logs' --exclude '/stt' \
       --exclude '/models' --exclude '/llama' --exclude '/.cache' \
+      --exclude '/.local' \
       --exclude 'node_modules' --exclude 'settings.json' --exclude 'presets.json' \
       --exclude 'gateway.toml' --exclude '/model_configs/gguf_filename_tags.json' \
       --exclude '/models.json' --exclude '/memory.json' --exclude '/vision_model.json' \
@@ -106,9 +113,10 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
       "$SCRIPT_DIR"/ "$INSTALL_DIR"/
   else
     tar -C "$SCRIPT_DIR" \
-      --exclude='./.git' --exclude='./.venv' --exclude='./__pycache__' \
+      --exclude='./.git' --exclude='./.venv' --exclude='__pycache__' \
       --exclude='./sessions' --exclude='./logs' --exclude='./stt' \
       --exclude='./models' --exclude='./llama' --exclude='./.cache' \
+      --exclude='./.local' \
       --exclude='./node_modules' --exclude='./settings.json' \
       --exclude='./presets.json' --exclude='./gateway.toml' \
       --exclude='./model_configs/gguf_filename_tags.json' \
@@ -134,7 +142,7 @@ if command -v uv >/dev/null 2>&1 && [ -f pyproject.toml ]; then
   # execute .venv/bin/python at all. Provision under $INSTALL_DIR (chowned to
   # hivemind in step [6/8], protected from rsync --delete via /.cache).
   if UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv python install 3.14 \
-     && UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv sync --all-extras --frozen; then
+     && UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv sync --all-extras --frozen --inexact; then
     _uv_sync_ok=1
   else
     # OFFLINE (audit r4): a uv failure (no network, lock mismatch) used to

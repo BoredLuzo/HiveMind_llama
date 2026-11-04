@@ -375,6 +375,7 @@ def build_resume_block(
     last_summary: str,
     plan_msgs: list,
     explore_ctx: str,
+    pending_send_files: list[str] | None = None,
 ) -> dict:
     """Build a resume block dict suitable for writing to chat context.
 
@@ -384,6 +385,9 @@ def build_resume_block(
     """
     _resume_files = collect_resume_file_snapshot(workspace, written_files, chunks_remaining)
     _resume_chunks = normalize_resume_chunks(chunks_remaining)
+    # SEND-FILE-RESUME: keep the explicit send_file queue across a resume
+    # (stringified, empties dropped, capped at 50 like the written-file list).
+    _pending_sf = [str(p) for p in (pending_send_files or []) if str(p).strip()][:50]
     return {
         "workspace": workspace,
         "explore_ctx": explore_ctx,
@@ -394,6 +398,7 @@ def build_resume_block(
             "chunks_done": chunks_done,
             "chunks_remaining": _resume_chunks,
             "written_files": written_files,
+            "pending_send_files": _pending_sf,
             "last_summary": last_summary,
             "plan_msgs": plan_msgs,
             "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -595,6 +600,7 @@ class ChunkState:
     # Tracked state
     done_tasks: list[str] = field(default_factory=list)
     written_files: list[str] = field(default_factory=list)
+    send_files: list[str] = field(default_factory=list)  # SEND-FILE-RESUME: explicit send_file queue
     coder_outputs: list[str] = field(default_factory=list)
     completion_notes: list[str] = field(default_factory=list)
 
@@ -907,6 +913,9 @@ class ChunkState:
         _rb = resume_data["resume"]
         self.done_tasks = list(_rb.get("chunks_done", []))
         self.written_files = list(_rb.get("written_files", []))
+        # SEND-FILE-RESUME: restore the explicit send_file queue (validated,
+        # stringified, capped at 50 — mirrors build_resume_block).
+        self.send_files = [str(p) for p in _rb.get("pending_send_files", []) if str(p).strip()][:50]
 
     def get_remaining_items(self, loop_items: list, current_di: int) -> list[dict]:
         """Build the chunks_remaining list for a resume save.

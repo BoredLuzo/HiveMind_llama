@@ -48,6 +48,31 @@ def _normalise_raw(raw: str) -> str:
     return raw
 
 
+def canonical_workspace_path(path: str | Path,
+                             workspace: str | Path | None = None) -> str:
+    """One canonical spelling for a workspace path.
+
+    Returns the resolved absolute path with forward slashes, lowercased on
+    Windows, or "" when the path cannot be resolved. Relative paths are
+    joined onto `workspace` when one is given; the same quote/MSYS fixes as
+    `_normalise_raw` are applied first. This is pure normalisation so that
+    equivalent spellings of the same file compare equal - it enforces
+    nothing by itself, callers keep their guards.
+    """
+    text = _normalise_raw(path)
+    if not text:
+        return ""
+    try:
+        candidate = Path(text).expanduser()
+        if not candidate.is_absolute() and workspace:
+            candidate = Path(workspace) / candidate
+        target = candidate.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return ""
+    out = str(target).replace("\\", "/")
+    return out.lower() if os.name == "nt" else out
+
+
 def _is_secret_path(p: Path) -> bool:
     name = p.name.rstrip(". ").lower()
     if name in _SECRET_EXACT:
@@ -134,21 +159,35 @@ _DELIVERABLE_SUFFIXES = {
 
 
 def choose_deliverables(pending: list[str] | None,
-                        written: list[str] | None) -> list[str]:
+                        written: list[str] | None,
+                        workspace: str | Path | None = None) -> list[str]:
     """Files a completed run should deliver, in order.
 
     Explicit `send_file` paths win. If the model queued none, exactly one
     deliverable-looking file written by the run is sent automatically; with
-    several candidates the owner decides manually (no guessing).
+    several candidates the owner decides manually (no guessing). Paths are
+    deduped via `canonical_workspace_path`, so two spellings of the same
+    file queue once; the first spelling is kept for delivery.
     """
     out: list[str] = []
+    seen: set[str] = set()
     for raw in pending or []:
         p = str(raw or "").strip()
-        if p and p not in out:
-            out.append(p)
+        if not p:
+            continue
+        key = canonical_workspace_path(p, workspace)
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        elif p in out:
+            # Unresolvable spelling: fall back to exact-string dedupe.
+            continue
+        out.append(p)
     if out:
         return out
     candidates: list[str] = []
+    cand_seen: set[str] = set()
     for raw in written or []:
         p = str(raw or "").strip()
         if not p:
@@ -157,28 +196,54 @@ def choose_deliverables(pending: list[str] | None,
             suffix = Path(p).suffix.lower()
         except (TypeError, ValueError):
             continue
-        if suffix in _DELIVERABLE_SUFFIXES and p not in candidates:
-            candidates.append(p)
+        if suffix not in _DELIVERABLE_SUFFIXES:
+            continue
+        key = canonical_workspace_path(p, workspace)
+        if key:
+            if key in cand_seen:
+                continue
+            cand_seen.add(key)
+        elif p in candidates:
+            continue
+        candidates.append(p)
     return candidates if len(candidates) == 1 else []
 
 
 def is_written_file(path: str | Path, workspace: str | Path,
-                    written: set[str] | None = None) -> bool:
+                    written: set[str] | None = None,
+                    run_started_at: float | None = None) -> bool:
     """True when `path` is one of the files this run wrote.
 
-    `written` holds normalised workspace-relative paths (the same form
-    tools.runner uses). An empty/None set means the run has no write
-    record, so the tool must refuse rather than guess.
+    `written` holds canonical workspace paths (the exact form
+    `canonical_workspace_path` returns, which tools.runner registers).
+    An empty/None set means the run has no write record, so the tool must
+    refuse rather than guess. `run_started_at` additionally accepts a
+    workspace file whose mtime falls inside this run - files produced by
+    run_python/run_bash never pass the explicit write tools.
     """
-    if not written:
+    key = canonical_workspace_path(path, workspace)
+    ws_key = canonical_workspace_path(workspace, workspace)
+    if not key or not ws_key:
         return False
-    try:
-        target = Path(path).resolve()
-        ws = Path(workspace).resolve()
-        target.relative_to(ws)
-    except (OSError, RuntimeError, ValueError):
+    # Containment stays mandatory: a path outside the workspace can never
+    # count as run-written, not even via the mtime fallback below.
+    prefix = ws_key if ws_key.endswith("/") else ws_key + "/"
+    if not key.startswith(prefix):
         return False
-    norm = str(target).replace("\\", "/")
-    if os.name == "nt":
-        norm = norm.lower()
-    return norm in written
+    if written and key in written:
+        return True
+    if run_started_at is not None:
+        try:
+            st = Path(key).stat()
+            start = float(run_started_at)
+            if st.st_mtime < start:
+                return False
+            # Windows: st_ctime is the creation time. A file that existed
+            # before the run (e.g. touched by an editor or another process)
+            # must not become deliverable via the mtime fallback.
+            if os.name == "nt" and st.st_ctime < start:
+                return False
+            return True
+        except (OSError, TypeError, ValueError):
+            return False
+    return False

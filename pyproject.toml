@@ -1,6 +1,6 @@
 [project]
 name = "hivemind-llama"
-version = "1.5.1"
+version = "1.5.3"
 description = "HiveMind is a local, privacy-first AI assistant and multi-agent coding platform powered by llama.cpp."
 readme = "README.md"
 authors = [
@@ -17,6 +17,9 @@ dependencies = [
     "rich>=13.7",
     "uvicorn>=0.30",
     "watchfiles>=0.21",
+    # PDF text extraction for desktop/Telegram document uploads
+    # (/documents/extract). Pure Python, no binaries.
+    "pypdf>=5.0",
     # Windows Credential Manager for the optional Telegram gateway (P8
     # supervisor spawns the gateway from this venv - vault access).
     "keyring>=25 ; sys_platform == 'win32'",

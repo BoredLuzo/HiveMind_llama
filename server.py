@@ -103,7 +103,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.5.2"
+HIVEMIND_VERSION = "1.5.3"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -1537,8 +1537,9 @@ async def stream(req: Request):
     # engine can suppress redundant DESKTOP toasts (the phone surface
     # answers approvals/questions; a Windows toast for an auto-answered
     # approval is noise). Only the exact tag value is accepted.
-    if str(body.get("source") or "").strip() == "telegram":
-        _model_overrides["source"] = "telegram"
+    _source_tag = str(body.get("source") or "").strip()
+    if _source_tag in ("telegram", "telegram-voice"):
+        _model_overrides["source"] = _source_tag
 
     _duo_tool_rounds_raw = body.get("duo_tool_rounds", None)
     if _duo_tool_rounds_raw is None:
@@ -2439,8 +2440,8 @@ async def documents_extract(request: Request):
     """Extract text from one uploaded document (raw body) -> {"text": ...}.
 
     Mirrors /stt: the caller sends bytes, the engine answers text or a DOC_*
-    code. PDF only for now; the size cap keeps a huge upload off the event
-    loop (extraction runs in a worker thread)."""
+    code. PDF and plain-text (UTF-8/UTF-16) uploads; the size cap keeps a
+    huge upload off the event loop (extraction runs in a worker thread)."""
     from core import documents as _docs
 
     settings = load_settings()

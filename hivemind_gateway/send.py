@@ -46,12 +46,41 @@ async def send(api, owner_chat_id: str | int | None,
     if new_text is not None:
         new_text = _render.filter_secrets(new_text)
     if document_bytes is not None:
-        try:
-            document_bytes = _render.filter_secrets(
-                document_bytes.decode("utf-8", "replace")
-            ).encode("utf-8")
-        except (UnicodeError, ValueError):
-            pass  # keep the document unfiltered rather than dropping it
+        # BINARY-SAFE (2026-11-04): redaction is text-only. Decoding every
+        # document with errors="replace" silently corrupted PNG/PDF/DOCX/ZIP
+        # bytes into U+FFFD. Only known text types are decoded and filtered;
+        # binary payloads go through untouched.
+        _text_suffixes = {
+            ".txt", ".md", ".markdown", ".html", ".htm", ".css", ".js",
+            ".mjs", ".ts", ".tsx", ".jsx", ".json", ".jsonl", ".csv",
+            ".log", ".xml", ".yml", ".yaml", ".toml", ".ini", ".cfg",
+            ".py", ".sh", ".bat", ".ps1", ".sql", ".svg", ".r", ".go",
+            ".rs", ".c", ".h", ".cpp", ".hpp", ".java", ".kt", ".php",
+            ".rb", ".lua", ".tex", ".rtf",
+        }
+        _suffix = "." + str(filename or "").rsplit(".", 1)[-1].lower() if "." in str(filename or "") else ""
+        _is_text = _suffix in _text_suffixes
+        _looks_binary = b"\x00" in document_bytes[:4096]
+        _text = None
+        _encoding = "utf-8"
+        if document_bytes.startswith((b"\xff\xfe", b"\xfe\xff")):
+            # UTF-16 text (PowerShell Out-File default) must not bypass the
+            # secret filter just because its bytes contain NULs.
+            try:
+                _text = document_bytes.decode("utf-16")
+                _encoding = "utf-16"
+            except UnicodeDecodeError:
+                _text = None
+        elif _is_text or not _looks_binary:
+            try:
+                _text = document_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                if _is_text:
+                    # A text-suffixed file with legacy bytes: redact a
+                    # lossy decode rather than sending the secret unread.
+                    _text = document_bytes.decode("utf-8", "replace")
+        if _text is not None:
+            document_bytes = _render.filter_secrets(_text).encode(_encoding)
     if new_text is not None:
         if message_id is None:
             raise ValueError("edit requires message_id")

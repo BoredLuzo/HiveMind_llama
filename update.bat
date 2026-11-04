@@ -490,12 +490,17 @@ for /f "usebackq delims=" %%U in (`where uv 2^>nul`) do (
 )
 if not defined UV_EXE if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_EXE=%USERPROFILE%\.local\bin\uv.exe"
 if defined UV_EXE (
+    REM Keep pytest/ruff out of the end-user venv on update, matching
+    REM install.bat's UV_NO_DEV=1 (otherwise every update bloats the venv).
+    set "UV_NO_DEV=1"
     REM FROZEN (2026-10-18, audit): pyproject.toml + uv.lock install exactly
     REM the versions this release was tested with - without a lockfile every
     REM update resolved the newest package of the day. Older zips carry only
     REM requirements.txt; then the pip path is the honest fallback.
+    REM --inexact (2026-11-04): optional decider/voice packages installed
+    REM after the release are not in the lock; a plain sync deletes them.
     if exist "%BASE%\uv.lock" if exist "%BASE%\pyproject.toml" (
-        "%UV_EXE%" sync --frozen --all-extras --python "%BASE%\.venv\Scripts\python.exe" --project "%BASE%" --quiet
+        "%UV_EXE%" sync --frozen --all-extras --inexact --python "%BASE%\.venv\Scripts\python.exe" --project "%BASE%" --quiet
     ) else (
         "%UV_EXE%" pip install --python "%BASE%\.venv\Scripts\python.exe" -r "%BASE%\requirements.txt" --quiet
     )

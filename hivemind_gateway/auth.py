@@ -61,6 +61,9 @@ class ParsedUpdate:
     document_file_id: str | None = None
     document_mime: str = ""
     document_name: str = ""
+    # True once handle_document turned extracted text into the prompt: that
+    # prompt may use document_limit_chars, not Telegram's 4096-char cap.
+    document_prompt: bool = False
     # data: URLs handed to the engine (/stream accepts up to 8 per run).
     # Populated by handle_image after the download; a tuple because the
     # dataclass is frozen.

@@ -27,14 +27,16 @@ async def _inline_tool_send_file(args: dict, workspace: Path,
     try:
         from tools import runner as _runner
         written = _runner._files_written_in_run.get(None)
+        started_at = _runner._run_file_epoch.get(None)
     except (ImportError, AttributeError, TypeError, OSError):
         written = None
-    if not is_written_file(str(target), workspace, written):
+        started_at = None
+    if not is_written_file(str(target), workspace, written, started_at):
         return _tool_error_response(
             "SEND_FILE_UNTRACKED",
             "Only files written by THIS run can be sent. Create the file "
-            "first with write_file/edit_file, then call send_file with its "
-            "path.",
+            "first with write_file/edit_file/run_python, then call send_file "
+            "with its path.",
             tool="send_file",
             details={"path": raw[:300]})
 

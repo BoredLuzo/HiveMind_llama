@@ -93,9 +93,10 @@ else:
     check("2c pages are marked", "--- page 1 ---" in info["text"])
     check("2d nothing was cut", info["truncated"] is False)
 
-    # junk is a clean error, never a traceback
+    # junk is a clean error, never a traceback (plain UTF-8 text is a
+    # valid document now, so use real binary content here)
     try:
-        D.extract_pdf_text(b"not a pdf at all")
+        D.extract_pdf_text(b"\x00\x01\x02not a pdf at all")
         check("2e junk -> DOC_UNREADABLE", False)
     except D.DocumentError as exc:
         check("2e junk -> DOC_UNREADABLE", exc.code == "DOC_UNREADABLE")
@@ -117,6 +118,28 @@ else:
     except D.DocumentError as exc:
         check("3f empty text -> DOC_NO_TEXT", exc.code == "DOC_NO_TEXT")
 
+# ── 3g. plain-text uploads (no pypdf needed) ────────────────────────────────
+_txt = D.extract_pdf_text("Hallo HiveMind\nZeile zwei".encode())
+check("3g text file is accepted",
+      "Hallo HiveMind" in _txt["text"] and _txt["pages"] == 1)
+_utf16 = D.extract_pdf_text("Hallo UTF-16".encode("utf-16"))
+check("3h UTF-16 text is decoded", "Hallo UTF-16" in _utf16["text"])
+_latin = D.extract_pdf_text("Grüße aus Köln".encode("cp1252"))
+check("3i legacy single-byte text is decoded", "Grüße" in _latin["text"])
+_txt_cut = D.extract_pdf_text(("x" * 500).encode(), max_chars=100)
+check("3j text files honour the char cap",
+      len(_txt_cut["text"]) == 100 and _txt_cut["truncated"] is True)
+try:
+    D.extract_pdf_text(b"\x00\x01binary")
+    check("3k binary without PDF header is refused", False)
+except D.DocumentError as exc:
+    check("3k binary without PDF header is refused", exc.code == "DOC_UNREADABLE")
+try:
+    D.extract_pdf_text(b"   \n\t  ")
+    check("3l whitespace-only text -> DOC_EMPTY", False)
+except D.DocumentError as exc:
+    check("3l whitespace-only text -> DOC_EMPTY", exc.code == "DOC_EMPTY")
+
 # ── 4. gateway wiring ───────────────────────────────────────────────────────
 MAIN = (ROOT / "hivemind_gateway" / "main.py").read_text(encoding="utf-8")
 AUTH = (ROOT / "hivemind_gateway" / "auth.py").read_text(encoding="utf-8")
@@ -133,10 +156,19 @@ check("4f the client posts the raw body", "/documents/extract" in CLIENT)
 check("4g scanned PDFs point at photos", "DOC_NO_TEXT" in MAIN)
 check("4h a too-long document answers honestly",
       "more " in MAIN and "than one phone run accepts" in MAIN)
-check("4i pypdf is declared as a dependency",
-      "pypdf" in (ROOT / "requirements.txt").read_text(encoding="utf-8"))
+check("4i pypdf is declared in requirements and pyproject",
+      "pypdf" in (ROOT / "requirements.txt").read_text(encoding="utf-8")
+      and "pypdf" in (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 check("4j image and document are mutually exclusive",
       "if not _img_id:" in AUTH)
+check("4k documents use the document limit, not the 4096-char message cap",
+      "len(prompt) > self.cfg.document_limit_chars" in MAIN)
+check("4l the document run carries the larger-limit flag",
+      "document_prompt=True" in MAIN)
+check("4m start_owner_run honors document_prompt",
+      'getattr(p, "document_prompt", False)' in MAIN)
+check("4n a document is not injected into an active run",
+      "document was not injected" in MAIN)
 
 print(f"\n=== Results: {passed} passed, {failed} failed, {skipped} skipped ===")
 sys.exit(1 if failed else 0)

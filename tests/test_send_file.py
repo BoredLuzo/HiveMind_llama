@@ -18,6 +18,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 passed = 0
 failed = 0
+skipped = 0
 
 
 def check(name, cond, extra=""):
@@ -28,6 +29,12 @@ def check(name, cond, extra=""):
     else:
         failed += 1
         print(f"  FAIL {name} {extra}")
+
+
+def skip(name, why=""):
+    global skipped
+    skipped += 1
+    print(f"  SKIP {name}{(' - ' + why) if why else ''}")
 
 
 def _norm(p: Path) -> str:
@@ -106,6 +113,35 @@ def main() -> int:
             check("non-deliverable files are ignored",
                   SF.choose_deliverables([], ["app.py", "style.css"]) == [])
 
+            # Canonical spellings: the same file under different forms must
+            # collapse to one entry, keeping the first spelling for delivery.
+            _abs = str(good)
+            _fwd = _abs.replace("\\", "/")
+            check("duplicate spellings collapse to one queued entry",
+                  SF.choose_deliverables([_abs, _fwd], [],
+                                         workspace=str(ws)) == [_abs])
+            check("relative and absolute spellings collapse",
+                  SF.choose_deliverables(["index.html", _abs], [],
+                                         workspace=str(ws)) == ["index.html"])
+            check("written candidates collapse canonically",
+                  SF.choose_deliverables([], [_abs, _fwd],
+                                         workspace=str(ws)) == [_abs])
+
+            # is_written_file matches every spelling of the same written
+            # file, because the written set holds the canonical form.
+            written = {SF.canonical_workspace_path(str(good), str(ws))}
+            check("is_written_file matches the canonical spelling",
+                  SF.is_written_file(str(good), ws, written))
+            check("is_written_file matches forward-slash spelling",
+                  SF.is_written_file(_fwd, ws, written))
+            check("is_written_file matches a relative spelling",
+                  SF.is_written_file("index.html", ws, written))
+            check("is_written_file still refuses an outside path",
+                  not SF.is_written_file(str(outside), ws, written))
+            if os.name == "nt":
+                check("is_written_file matches the MSYS /C:/ spelling",
+                      SF.is_written_file("/" + _abs, ws, written))
+
             _old_max = SF.MAX_SEND_BYTES
             SF.MAX_SEND_BYTES = 8
             try:
@@ -136,6 +172,44 @@ def main() -> int:
             finally:
                 R._files_written_in_run.reset(tok)
 
+            # A relative path and an absolute path to the same written file
+            # both pass the handler.
+            tok = R._files_written_in_run.set(written)
+            try:
+                out_rel = asyncio.run(_inline_tool_send_file(
+                    {"path": "index.html"}, ws, str(ws)))
+                out_abs = asyncio.run(_inline_tool_send_file(
+                    {"path": _abs}, ws, str(ws)))
+                check("handler passes the relative spelling of a written file",
+                      out_rel.startswith("[FILE_QUEUED]"))
+                check("handler passes the absolute spelling of the same file",
+                      out_abs.startswith("[FILE_QUEUED]"))
+            finally:
+                R._files_written_in_run.reset(tok)
+
+            # A file produced by run_python/run_bash never passes a write
+            # tool; its mtime inside the run epoch is the fallback signal.
+            import time as _t
+            tok = R._files_written_in_run.set(set())
+            etok = R._run_file_epoch.set(_t.time() - 60)
+            try:
+                out = asyncio.run(_inline_tool_send_file(
+                    {"path": "index.html"}, ws, str(ws)))
+                check("handler accepts a file written during the run",
+                      out.startswith("[FILE_QUEUED]"))
+            finally:
+                R._run_file_epoch.reset(etok)
+                R._files_written_in_run.reset(tok)
+
+            etok = R._run_file_epoch.set(_t.time() + 60)
+            try:
+                out = asyncio.run(_inline_tool_send_file(
+                    {"path": "index.html"}, ws, str(ws)))
+                check("a pre-existing file stays blocked",
+                      "SEND_FILE_UNTRACKED" in out)
+            finally:
+                R._run_file_epoch.reset(etok)
+
             # A symlink that points outside must not escape.
             try:
                 link = ws / "escape.html"
@@ -146,7 +220,10 @@ def main() -> int:
                 except SF.SendFileError:
                     check("a symlink escape is refused", True)
             except (OSError, NotImplementedError):
-                print("  SKIP symlink escape (not permitted here)")
+                # Windows without Developer Mode/privilege cannot create
+                # symlinks; Linux CI always can, so the escape check runs
+                # there. Report the gap explicitly instead of a silent pass.
+                skip("symlink escape", "symlinks not permitted here")
         finally:
             try:
                 outside.unlink()
@@ -186,7 +263,7 @@ def main() -> int:
             {"path": "../escape.html", "workspace": str(ws)}))
         check("gateway refuses an escaping event path", br.ms.docs == [])
 
-    print(f"\nSUMMARY send_file: {passed} passed, {failed} failed")
+    print(f"\nSUMMARY send_file: {passed} passed, {failed} failed, {skipped} skipped")
     return 1 if failed else 0
 
 

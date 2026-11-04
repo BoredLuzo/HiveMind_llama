@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install minimal deps
-        run: pip install -q httpx
+        run: pip install -q httpx pypdf
       - name: Portable regression subset
         run: |
           python tests/test_unbound_guards.py
@@ -29,6 +29,17 @@ jobs:
           python tests/test_safe_profile_models.py
           python tests/test_preset_token_scrub.py
           python tests/test_loader_audit_2026_11_03.py
+          # Gateway/document/send-file/image fixes: all of these import only
+          # stdlib + httpx (+ pypdf for real extraction) on Linux.
+          python tests/test_gateway_send.py
+          python tests/test_gateway_bridge.py
+          python tests/test_gateway_command_flow.py
+          python tests/test_gateway_commands2.py
+          python tests/test_documents.py
+          python tests/test_image_context.py
+          python tests/test_coder_briefing.py
+          python tests/test_send_file.py
+          python tests/test_chunk_resume.py
 
   types:
     # pyright baseline: existing typing debt is frozen; NEW errors fail.

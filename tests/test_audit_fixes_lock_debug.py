@@ -37,7 +37,17 @@ check("uv.lock is tracked by git", _tracked.endswith("uv.lock"),
       " (untracked -> it cannot ship)")
 check("install.bat syncs frozen", "--all-extras --frozen" in install)
 check("update.bat prefers the lock", "--frozen --all-extras" in update)
+check("install/update keep optional packages on sync",
+      install.count("--inexact") >= 1 and update.count("--inexact") >= 1)
 check("linux installer syncs frozen", "--frozen" in linux)
+_ci = (ROOT / ".github" / "workflows" / "linux-core.yml").read_text(
+    encoding="utf-8", errors="replace")
+check("Linux push gate covers the gateway/document/file suites",
+      all(name in _ci for name in (
+          "test_gateway_send.py", "test_gateway_bridge.py",
+          "test_documents.py", "test_send_file.py",
+          "test_chunk_resume.py"))
+      and "pypdf" in _ci)
 check("uv.lock is not export-ignored", "/uv.lock" not in attrs)
 
 # ── debug endpoints ──────────────────────────────────────────────────────

@@ -700,6 +700,33 @@ async def _inline_tool_run_tests(args: dict, _workspace: Path, workspace_lock: s
             "run_tests is unavailable (test runner not wired). Use run_bash with the test command instead.",
             tool="run_tests" )
     _ws_str = str(workspace_lock or _workspace or os.environ.get("HIVEMIND_WORKSPACE", "."))
+    # STATIC-ONLY (2026-11-04): a run that only wrote static assets has no
+    # testable code. Running the workspace suite here surfaced unrelated
+    # pre-existing failures and sent small models into an edit/test loop.
+    _needs_tests_rt = None
+    _rt_written = []
+    try:
+        from core.duo.preflight import (
+            needs_test_verification as _needs_tests_rt)
+        from tools.runner import _files_written_in_run as _fw_ctx_rt
+        _rt_written = [str(_p) for _p in (_fw_ctx_rt.get(None) or ())]
+    except (ImportError, AttributeError, TypeError):
+        _needs_tests_rt = None
+    if not _rt_written:
+        try:
+            from tools.runner import (
+                _current_run_id as _rt_rid_ctx,
+                _files_written_by_run as _rt_registry)
+            _rt_rid = str(_rt_rid_ctx.get(None) or "")
+            if _rt_rid:
+                _rt_written = [str(_p) for _p in
+                               _rt_registry.get(_rt_rid, set())]
+        except (ImportError, AttributeError, TypeError):
+            pass
+    if (_needs_tests_rt is not None and _rt_written
+            and not _needs_tests_rt(_rt_written)):
+        return ("[TEST-RESULT] ⏭ No testable code changed (static assets only) "
+                "- test run skipped. Do not call run_tests again in this run.")
     try:
         _timeout = int(args.get("timeout") or 90)
     except (TypeError, ValueError):

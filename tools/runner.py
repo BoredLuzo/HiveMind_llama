@@ -71,6 +71,17 @@ _files_seen_in_run: _contextvars.ContextVar[set] = _contextvars.ContextVar(
 _files_written_in_run: _contextvars.ContextVar[set] = _contextvars.ContextVar(
     "_files_written_in_run", default=None
 )
+# RUN-WIDE fallback (2026-11-04): tool calls can run in child tasks that each
+# copy the ContextVar before the first lazily-created set exists. This
+# module-level registry is keyed by run id, so the static-only test guard
+# still sees every file the run wrote.
+_files_written_by_run: dict[str, set] = {}
+# Epoch (time.time()) of the run's first tool call. Files modified after it
+# were produced by this run even when the writer was run_python/run_bash and
+# never passed through write_file (send_file guard, 2026-11-04).
+_run_file_epoch: _contextvars.ContextVar[float | None] = _contextvars.ContextVar(
+    "_run_file_epoch", default=None
+)
 
 _current_project_state: _contextvars.ContextVar = _contextvars.ContextVar(
     "current_project_state", default=None
@@ -1741,6 +1752,24 @@ async def _run_inline_tool(
 
         # ── ACTION-APPROVAL-GATE (2026-09-18): before the call burns any
         # budget, let the user approve/deny it (duo_action_approval_enabled).
+        if name == "run_tests":
+            # STATIC-ONLY (2026-11-04): skip before the approval card - a
+            # pure HTML/CSS/MD change has no testable code, and running the
+            # workspace suite would surface unrelated pre-existing failures.
+            try:
+                from core.duo.preflight import (
+                    needs_test_verification as _needs_tests_rt2)
+                _known_written = set(_written_set or ())
+                _rid_rt = str(_current_run_id.get(None) or "")
+                if _rid_rt:
+                    _known_written |= _files_written_by_run.get(_rid_rt, set())
+                if _known_written and not _needs_tests_rt2(
+                        list(_known_written)):
+                    return ("[TEST-RESULT] ⏭ No testable code changed "
+                            "(static assets only) - test run skipped. Do not "
+                            "call run_tests again in this run.")
+            except (ImportError, AttributeError, TypeError):
+                pass
         _appr_note = ""
         if name in _APPROVAL_TOOLS:
             _appr = await _check_action_approval(name, args or {}, workspace)
@@ -1812,8 +1841,10 @@ async def _run_inline_tool(
                 except OSError:
                     pass
 
-        # WRITTEN-SET (2026-08-21): erfolgreiche write_file/write_file_append
-        if name in ("write_file", "write_file_append"):
+        # WRITTEN-SET (2026-08-21, extended 2026-11-04): every successful
+        # file mutation counts as run-written, not only write_file/append.
+        if name in ("write_file", "write_file_append", "edit_file",
+                    "patch_file", "replace_lines", "edit_ast"):
             if not _result.startswith("[TOOL_ERROR") and args.get("path"):
                 _w_raw = args["path"]
                 _w_res = _fuzzy_resolve_path(_w_raw, str(workspace)) or _w_raw
@@ -1824,7 +1855,26 @@ async def _run_inline_tool(
                     _w_fp = _w_fp.resolve()
                 except Exception:
                     pass
-                _written_set.add(_normalize_tool_path(str(_w_fp), workspace))
+                # Register in the one canonical spelling core.send_files
+                # compares against, so send_file matches no matter how the
+                # model spelled the path (separators, drive case, /C:/...).
+                # core.send_files is stdlib-only; the import stays lazy to
+                # keep this module's import graph unchanged.
+                try:
+                    from core.send_files import (
+                        canonical_workspace_path as _canon_ws)
+                    _w_key = _canon_ws(str(_w_fp), workspace)
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    _w_key = ""
+                if not _w_key:
+                    # Old spelling as fallback - same rules, fewer fixes.
+                    _w_key = _normalize_tool_path(str(_w_fp), workspace)
+                if _w_key:
+                    _written_set.add(_w_key)
+                    _rid_w = str(_current_run_id.get(None) or "")
+                    if _rid_w:
+                        _files_written_by_run.setdefault(
+                            _rid_w, set()).add(_w_key)
 
         if name in ("write_file", "edit_file", "patch_file", "replace_lines", "write_file_append"):
             if not _result.startswith("[TOOL_ERROR") and args.get("path"):

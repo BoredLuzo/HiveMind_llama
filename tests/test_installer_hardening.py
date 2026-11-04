@@ -108,12 +108,21 @@ check("voice pip failure warns instead of dying silently",
       "if ! \"$INSTALL_DIR/.venv/bin/pip\" install -q -r" in SH
       and "requirements-voice.txt could not be installed" in SH)
 check("package-manager failures are non-fatal warnings",
-      "apt-get update -qq || echo" in SH and "dnf install -y curl || echo" in SH)
+      "apt-get update -qq || echo" in SH
+      and "dnf install -y curl python3 python3-pip || echo" in SH)
 check("uv install failure falls through to the pip fallback",
       "if ! curl -LsSf https://astral.sh/uv/install.sh" in SH
       and "uv could not be installed (offline?)" in SH)
+check("uv is installed where the script looks for it",
+      'UV_INSTALL_DIR="/usr/local/bin"' in SH)
+check("the script resolves the repo root from deploy/",
+      'SCRIPT_DIR/../pyproject.toml' in SH)
+check("Linux sync keeps optional packages (--inexact)",
+      "--frozen --inexact" in SH)
+check("the uv-managed .local runtime is excluded from re-sync",
+      "--exclude '/.local'" in SH and "--exclude='./.local'" in SH)
 check("uv sync failure falls back instead of aborting",
-      "uv sync --all-extras --frozen; then" in SH
+      "uv sync --all-extras --frozen --inexact; then" in SH
       and "falling back to python3+pip" in SH)
 check("pip fallback still present", "python3 -m venv \"$INSTALL_DIR/.venv\"" in SH)
 

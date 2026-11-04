@@ -46,6 +46,7 @@ def _write_resume_block(
     explore_ctx:      str,
     halt_reason:      str = "user_abort",
     graceful_stop_chunk_index: int | None = None,
+    pending_send_files: list[str] | None = None,
 ):
     def _apply(ctx: dict):
         _block = build_resume_block(
@@ -57,6 +58,7 @@ def _write_resume_block(
             last_summary=last_summary,
             plan_msgs=plan_msgs,
             explore_ctx=explore_ctx,
+            pending_send_files=pending_send_files,
         )
         ctx.update(_block)
         ctx["halt_reason"] = halt_reason
@@ -139,6 +141,7 @@ async def _check_abort_and_maybe_save_resume(
     plan_msgs:        list,
     explore_ctx:      str,
     emit_fn,
+    pending_send_files: list[str] | None = None,
 ) -> tuple[bool, list]:
 
     if not _is_aborted(chat_id):
@@ -154,6 +157,7 @@ async def _check_abort_and_maybe_save_resume(
             last_summary     = last_summary,
             plan_msgs        = plan_msgs,
             explore_ctx      = explore_ctx,
+            pending_send_files = pending_send_files,
         )
         _sse = await emit_fn({
             "type": "system",

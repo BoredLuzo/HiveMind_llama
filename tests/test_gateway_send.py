@@ -40,7 +40,7 @@ class FakeApi:
 
     async def send_document(self, chat_id, data, filename,
                             caption=None, reply_to_message_id=None):
-        self.calls.append(("send_document", chat_id, filename))
+        self.calls.append(("send_document", chat_id, filename, bytes(data)))
         return {"ok": True}
 
 
@@ -85,6 +85,30 @@ async def _run():
     # document path
     await send(api, OWNER, OWNER, document_bytes=b"x", filename="a.txt")
     check("document routed", api.calls[-1][0] == "send_document")
+
+    # BINARY-SAFE (2026-11-04): document redaction must not rewrite binary
+    # bytes into U+FFFD.
+    png = bytes([0x89]) + b"PNG" + bytes([13, 10, 26, 10]) + bytes(range(16))
+    await send(api, OWNER, OWNER, document_bytes=png, filename="chart.png")
+    check("binary document bytes survive send()",
+          api.calls[-1][3] == png, f"({len(api.calls[-1][3])} bytes)")
+
+    # UTF-16 text files (PowerShell Out-File default) must still be redacted.
+    secret = "sk-" + "A" * 24
+    utf16 = ("API_KEY=" + secret + "\n").encode("utf-16")
+    await send(api, OWNER, OWNER, document_bytes=utf16, filename="notes.txt")
+    sent16 = api.calls[-1][3]
+    check("UTF-16 text is still redacted",
+          secret.encode("utf-16") not in sent16
+          and b"API_KEY=" in sent16.decode("utf-16").encode("utf-8"))
+    check("UTF-16 document is still valid UTF-16",
+          sent16.startswith((b"\xff\xfe", b"\xfe\xff")))
+
+    # A text-suffixed file with one invalid byte must not fail open.
+    mixed = ("token=" + secret + "\n").encode("utf-8") + b"\xff"
+    await send(api, OWNER, OWNER, document_bytes=mixed, filename="legacy.txt")
+    check("invalid-UTF-8 text document is redacted too",
+          secret.encode("utf-8") not in api.calls[-1][3])
 
     # empty call rejected
     try:

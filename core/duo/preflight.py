@@ -913,6 +913,33 @@ async def stuck_handler(tn, ta, tr, *, ctx, ws_str: str, total_tool_rounds: int,
 
 _VERIFY_VETO_BUDGET = 3
 
+# Conservative policy: only a known static-asset suffix may skip the test
+# suite. Anything else (code, Makefile/Dockerfile/extensionless scripts,
+# package.json, workflows) still requires verification - an unknown suffix
+# must fail toward running tests, not toward skipping them.
+_STATIC_SUFFIXES = frozenset({
+    ".html", ".htm", ".css", ".md", ".markdown", ".txt", ".rst",
+    ".csv", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico",
+    ".pdf", ".docx", ".xlsx", ".pptx", ".woff", ".woff2", ".ttf",
+})
+
+
+def needs_test_verification(written_files: list | None) -> bool:
+    """True when at least one changed file is not a known static asset.
+
+    A run that only added a static asset (e.g. a standalone HTML page) must
+    not be forced through the workspace test suite; unrelated red tests then
+    derail task_complete into an edit/test loop.
+    """
+    for raw in written_files or []:
+        try:
+            suffix = Path(str(raw)).suffix.lower()
+        except (TypeError, ValueError, OSError):
+            return True
+        if suffix not in _STATIC_SUFFIXES:
+            return True
+    return False
+
 
 def completion_verdict(*, mutation_serial: int, last_ok_serial: int,
                        has_written_files: bool, vetoes: int) -> str:

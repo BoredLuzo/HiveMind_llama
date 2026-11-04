@@ -119,6 +119,10 @@ check("8d the dead UI control is gone",
 check("8e the header says execution plan", "YOUR EXECUTION PLAN" in src)
 check("8f the helper is re-exported by the runner",
       "coder_briefing_text," in src and callable(_runner_briefing))
+check("8g the in-loop plan is distilled before the coder sees it",
+      "_distilled_execution_steps(None, _inloop_plan_text)" in src)
+check("8h the raw in-loop plan is not appended anymore",
+      '{"role": "assistant", "content": _inloop_plan_text}' not in src)
 
 print()
 print(f"SUMMARY coder_briefing: {passed} passed, {failed} failed")

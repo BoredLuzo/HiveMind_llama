@@ -74,8 +74,8 @@ check("linux names the PATH problem", "uv is installed but NOT on this shell's P
 check("linux gives the fix", r'export PATH=\"\$PATH:/usr/local/bin\"' in _sh)
 check("linux mentions the python3+pip fallback", "falls back to python3+pip" in _sh)
 check("no bare && uv --version left", "&& uv --version" not in _sh)
-check("uv still installs to /usr/local/bin",
-      'UV_INSTALL_PATH="/usr/local/bin"' in _sh)
+check("uv installs to /usr/local/bin",
+      'UV_INSTALL_DIR="/usr/local/bin"' in _sh)
 check("the uv block is if/then/else/fi closed",
       "if command -v uv >/dev/null 2>&1; then" in _sh
       and _sh.split("if command -v uv >/dev/null 2>&1; then", 1)[1].split("\nfi\n", 1)[0]

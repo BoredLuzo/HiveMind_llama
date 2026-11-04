@@ -49,14 +49,67 @@ def _open_pdf(raw: bytes):
     return PdfReader(BytesIO(raw))
 
 
+def _extract_text_file(raw: bytes, *, max_chars: int) -> dict:
+    """Plain-text uploads (txt/md/csv/log) -> the same result shape as a PDF.
+
+    Only real text is accepted: UTF-8/UTF-16 (BOM) first, then a strict
+    printable-ratio check for legacy single-byte encodings. A binary file
+    must not be handed to the model as mojibake.
+    """
+    if b"\x00" in raw[:4096] and not raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        raise DocumentError(
+            "DOC_UNREADABLE", "the file is not a readable PDF or text file")
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            text = raw.decode("utf-16")
+        except UnicodeDecodeError:
+            raise DocumentError(
+                "DOC_UNREADABLE",
+                "the file is not a readable PDF or text file") from None
+    else:
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            try:
+                text = raw.decode("cp1252")
+            except UnicodeDecodeError:
+                raise DocumentError(
+                    "DOC_UNREADABLE",
+                    "the file is not a readable PDF or text file") from None
+            sample = text[:8192]
+            printable = sum(1 for ch in sample
+                            if ch.isprintable() or ch in "\r\n\t")
+            if sample and printable / len(sample) < 0.9:
+                raise DocumentError(
+                    "DOC_UNREADABLE",
+                    "the file is not a readable PDF or text file")
+    text = text.strip()
+    if not text:
+        raise DocumentError("DOC_EMPTY", "the document contains no text")
+    truncated = len(text) > max_chars
+    return {
+        "text": text[:max_chars],
+        "pages": 1,
+        "pages_read": 1,
+        "empty_pages": 0,
+        "truncated": truncated,
+    }
+
+
 def extract_pdf_text(raw: bytes, *, max_pages: int = DEFAULT_MAX_PAGES,
                      max_chars: int = DEFAULT_MAX_CHARS) -> dict:
-    """PDF bytes -> {text, pages, pages_read, truncated, empty_pages}.
+    """PDF or plain-text bytes -> {text, pages, pages_read, truncated,
+    empty_pages}.
 
     Raises DocumentError with DOC_* codes. Never raises a library exception.
     """
     if not raw:
         raise DocumentError("DOC_EMPTY", "the document arrived empty")
+    # Plain-text uploads arrive through the same endpoint; detect them by the
+    # missing PDF header (pypdf rejects them anyway, this just tells the user
+    # the truth instead of "not a readable PDF").
+    if b"%PDF-" not in raw[:1024]:
+        return _extract_text_file(raw, max_chars=max_chars)
     # pypdf logs "invalid pdf header" for every junk upload - at warning level
     # that spams the engine log on each rejected file. Errors only.
     logging.getLogger("pypdf").setLevel(logging.ERROR)

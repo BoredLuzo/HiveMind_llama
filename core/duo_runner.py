@@ -307,6 +307,8 @@ from core.duo.preflight import (  # noqa: F401
     _read_hb_interval,
     _resolve_fallback_model,
     _strip_stale_ctx_notices,
+    _distilled_execution_steps,
+    needs_test_verification,
     coder_briefing_text,
 )
 
@@ -1508,6 +1510,7 @@ async def _duo_exec_round_task(
                 call_sigs=_call_sigs,
                 recent_focus_paths=_recent_focus_paths,
                 file_changes=_file_changes,
+                run_written_files=_written_files,
                 duo_seen_web_queries=_duo_seen_web_queries,
                 cached_coder_port=_cached_port_ref,
                 task_complete_blocked_count=_task_complete_blocked,
@@ -1519,7 +1522,7 @@ async def _duo_exec_round_task(
                 read_ladder_fired=_read_ladder_fired,
                 ws_budget_streak=_ws_budget_streak,
                 ws_disabled=_ws_disabled,
-                allow_send_file=(str(ctx.settings.get("source") or "") == "telegram"),
+                allow_send_file=(str(ctx.settings.get("source") or "").startswith("telegram")),
             ),
             tool_mode=_tool_mode,
             duo_ws=_duo_ws,
@@ -1985,7 +1988,7 @@ async def _duo_resolve_tool_budgets(
             budget_chars=_run_budgets.schema_budget,
             # Telegram runs may deliver files the model creates; desktop and
             # API runs never see a channel they cannot use.
-            include_send_file=(str(ctx.settings.get("source") or "") == "telegram"))
+            include_send_file=(str(ctx.settings.get("source") or "").startswith("telegram")))
         state["_xtools_ws"] = _xtools_ws
         logger.info(
             "[BUDGETS] ctx=%d cpt=%.2f(%s) out=%d -> tool_cap=%d read_cap=%d schema=%d "
@@ -2686,15 +2689,22 @@ async def run_code_duo(ctx):
         # laufen via asyncio.gather (tool_executor _PARALLEL_SAFE) in Child-Tasks
         # bliebe _files_read_in_run im Parent None (Compression-Removal + SKIP-
         try:
+            import time as _time_epoch
             from tools.runner import _files_read_in_run as _fir_run_ctx
             from tools.runner import _files_seen_in_run as _fsr_run_ctx
             from tools.runner import _files_written_in_run as _fw_run_ctx
+            from tools.runner import _run_file_epoch as _epoch_run_ctx
+            from tools.runner import _files_written_by_run as _fw_registry
+            _fw_registry.pop(str(ctx.run_id), None)
             if _fir_run_ctx.get(None) is None:
                 _fir_run_ctx.set(set())
             if _fsr_run_ctx.get(None) is None:
                 _fsr_run_ctx.set(set())
             if _fw_run_ctx.get(None) is None:
                 _fw_run_ctx.set(set())
+            # Fresh epoch per run: send_file may deliver a file produced by
+            # run_python/run_bash, not only by write_file.
+            _epoch_run_ctx.set(_time_epoch.time())
         except Exception as _rg_err:
             logger.warning("[READ-GUARD] Parent context init failed: %s", _rg_err)
         _last_test_status = ""
@@ -2707,6 +2717,12 @@ async def run_code_duo(ctx):
         if _resume_data:
             _cs.load_from_resume(_resume_data)
             # _done_tasks and _written_files are now populated via _cs
+            # SEND-FILE-RESUME: restore the explicit send queue from the
+            # resume block (dedupe, keep order). A non-empty local list
+            # stays authoritative — never clobber it.
+            for _rsf in _cs.send_files:
+                if _rsf and _rsf not in _pending_send_files:
+                    _pending_send_files.append(_rsf)
             _subtasks      = [c.get("title", str(c)) if isinstance(c, dict) else str(c)
                               for c in _resume_data["resume"].get("chunks_remaining", [])]
             if not _subtasks:
@@ -3503,6 +3519,7 @@ async def run_code_duo(ctx):
                     plan_msgs        = [],
                     explore_ctx      = _explore_ctx,
                     emit_fn          = ctx.emit,
+                    pending_send_files = list(_pending_send_files),
                 )
                 for _abort_s in _abort_sse:
                     yield _abort_s
@@ -3528,6 +3545,7 @@ async def run_code_duo(ctx):
                         explore_ctx=_explore_ctx,
                         halt_reason="graceful_stop",
                         graceful_stop_chunk_index=_di - 1 if _di > 0 else None,
+                        pending_send_files=list(_pending_send_files),
                     )
                 yield await ctx.emit({
                     "type": "run_halted_graceful",
@@ -3606,6 +3624,7 @@ async def run_code_duo(ctx):
                             plan_msgs=[],
                             explore_ctx=_explore_ctx,
                             halt_reason="user_abort",
+                            pending_send_files=list(_pending_send_files),
                         )
                     yield await ctx.emit({
                         "type": "status",
@@ -4124,7 +4143,10 @@ async def run_code_duo(ctx):
                             f"  old_text must match the file exactly (whitespace included) and appear exactly once.\n"
                             f"- If a tool returns READ_REQUIRED: call read_file once on that path, then retry.\n"
                             f"- Do NOT call list_dir or find_files on directories already shown above.\n"
-                            f"- After writing/editing, run_tests (or run_bash) to verify."
+                            f"- Do not run tests before your first write/edit in this run; "
+                            f"run them only after changing code. For static assets "
+                            f"(HTML, CSS, Markdown, JSON, SVG) reading the file back is enough - "
+                            f"do NOT run the project test suite for those."
                         )
                     }
                     # Bridge message always injects _explore_ctx (contracts) into coder prompt.
@@ -4514,7 +4536,15 @@ async def run_code_duo(ctx):
                                 _err, exc_info=True
                             )
 
-                    _dtool_msgs.append({"role": "assistant", "content": _inloop_plan_text})
+                    # PLAN-CONTRACT (2026-11-04): the visible plan stays raw
+                    # for the UI/phone, but the coder gets concrete steps
+                    # without planner markdown headings - otherwise it
+                    # analyzes the plan as if another model wrote it.
+                    _plan_for_coder = (
+                        _distilled_execution_steps(None, _inloop_plan_text)
+                        or _inloop_plan_text)
+                    _dtool_msgs.append({"role": "assistant",
+                                        "content": _plan_for_coder})
                     _dtool_msgs.append({"role": "user", "content":
                         "Good. Now execute this plan step by step using the tools."})
                     yield await ctx.emit({"type": "token",
@@ -6507,6 +6537,10 @@ async def run_code_duo(ctx):
                         for _sfp in _exec_result.send_files:
                             if _sfp and _sfp not in _pending_send_files:
                                 _pending_send_files.append(_sfp)
+                            # SEND-FILE-RESUME: mirror into ChunkState so a
+                            # later resume block/checkpoint carries the queue.
+                            if _sfp and _sfp not in _cs.send_files:
+                                _cs.send_files.append(_sfp)
                         if _exec_result.extra_user_msg:
                             # SEND-FILE: hard next-step nudge after a delivery.
                             _dtool_msgs.append({
@@ -6599,6 +6633,17 @@ async def run_code_duo(ctx):
                                         "WITHOUT a green test run — result marked unverified",
                                         _verify_gate_blocks,
                                     )
+                                elif (_verdict == "veto"
+                                      and not needs_test_verification(_written_files)):
+                                    # Static-only change (HTML/CSS/MD/...): a
+                                    # repo-wide test run would only surface
+                                    # unrelated pre-existing failures and
+                                    # derail the completion into an edit/test
+                                    # loop. No test suite applies here.
+                                    logger.info(
+                                        "[VERIFY-GATE] no testable code changed "
+                                        "(%d file(s)) - completion accepted without tests",
+                                        len(_written_files or []))
                                 elif _verdict == "veto":
                                     _exec_result.task_complete_called = False
                                     _verify_gate_blocks += 1
@@ -7199,6 +7244,7 @@ async def run_code_duo(ctx):
                         plan_msgs=[],
                         explore_ctx=_explore_ctx,
                         halt_reason="tool_round_error",
+                        pending_send_files=list(_pending_send_files),
                     )
                     yield await ctx.emit({
                         "type": "status",
@@ -7569,6 +7615,7 @@ async def run_code_duo(ctx):
         # written_files=[]-true-positives) must not slip through.
         if (
             _verify_mutation_serial > _verify_last_ok_serial
+            and needs_test_verification(_written_files)
             and not ctx.aborted()
             and not _verify_warned
         ):
@@ -7598,8 +7645,11 @@ async def run_code_duo(ctx):
                     plan_msgs=[],
                     explore_ctx=_explore_ctx,
                     halt_reason="verification_required",
+                    pending_send_files=list(_pending_send_files),
                 )
-        elif _verify_mutation_serial > _verify_last_ok_serial and not ctx.aborted():
+        elif (_verify_mutation_serial > _verify_last_ok_serial
+              and needs_test_verification(_written_files)
+              and not ctx.aborted()):
             logger.warning(
                 "[VERIFY-GATE-FINAL] no hard stop (coder warned): written_files=%d _verify_warned=True (A-P0-2 fallback)",
                 len(_written_files or []),
@@ -7923,6 +7973,7 @@ async def run_code_duo(ctx):
                             plan_msgs=[],
                             explore_ctx=_explore_ctx,
                             halt_reason=ctx.duo_stop_reason,
+                            pending_send_files=list(_pending_send_files),
                         )
         except Exception as _d2_err:
             if isinstance(_d2_err, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
@@ -7967,15 +8018,33 @@ async def run_code_duo(ctx):
     # after the verify gate, so a file can never go out before the final test.
     # If the model forgot to call send_file, exactly one deliverable file in
     # the run is sent automatically; multiple candidates stay manual.
-    if (ctx.duo_stop_reason == "completed"
-            and str(ctx.settings.get("source") or "") == "telegram"
+    _loop_file_delivery = (ctx.duo_stop_reason == "loop_detected"
+                           and bool(_pending_send_files))
+    if ((ctx.duo_stop_reason == "completed" or _loop_file_delivery)
+            and str(ctx.settings.get("source") or "").startswith("telegram")
             and not ctx.aborted()):
-        try:
-            from core.send_files import choose_deliverables as _choose_sf
-            _deliver_files = _choose_sf(
-                _pending_send_files, _written_files)
-        except (ImportError, TypeError, ValueError):
+        if _loop_file_delivery:
+            # The model explicitly queued this file before the loop guard
+            # stopped the run; dropping it silently loses work the owner
+            # was already told about. Deliver only the explicit queue (no
+            # auto-pick), with a warning.
+            try:
+                yield await ctx.emit({
+                    "type": "status",
+                    "content": ("⚠ Run ended in a loop — delivering the "
+                                "explicitly queued file(s) now."),
+                })
+            except Exception:
+                logger.debug("[SEND-FILE] loop-delivery status emit failed",
+                             exc_info=True)
             _deliver_files = list(_pending_send_files)
+        else:
+            try:
+                from core.send_files import choose_deliverables as _choose_sf
+                _deliver_files = _choose_sf(
+                    _pending_send_files, _written_files, _ws_str)
+            except (ImportError, TypeError, ValueError):
+                _deliver_files = list(_pending_send_files)
         for _sfp in _deliver_files:
             logger.info("[SEND-FILE] final delivery after verification: %s",
                         _sfp)
@@ -7985,6 +8054,12 @@ async def run_code_duo(ctx):
                 "workspace": _ws_str,
             })
     yield await ctx.emit(ctx.done_event(round(time.time() - ctx.t_total, 1), ctx.duo_stop_reason, **ctx.collect_done_metrics()))
+    try:
+        from tools.runner import _files_written_by_run as _fw_cleanup
+        _fw_cleanup.pop(str(ctx.run_id), None)
+    except (ImportError, AttributeError, TypeError):
+        logger.debug("[SEND-FILE] written-file registry cleanup failed",
+                     exc_info=True)
     ctx.unregister_abort(ctx.run_id)
     ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing — step_skip event leaked after Duo runs
     clear_graceful_stop(ctx.run_id)

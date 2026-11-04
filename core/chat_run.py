@@ -235,7 +235,7 @@ async def run_stream(
     if _run_settings.get("phone_restricted"):
         from tools.runner import _tools_restricted_run as _tr_cv
         _tr_cv.set(True)
-    if str(_run_settings.get("source") or "") == "telegram":
+    if str(_run_settings.get("source") or "").startswith("telegram"):
         from tools.runner import _phone_source_run as _ps_cv
         _ps_cv.set(True)
 
@@ -787,8 +787,7 @@ async def run_stream(
     # follow-up in a direct chat used to lose the photo it referred to. Keep
     # the last image set per chat and re-attach it when this run carries none.
     _images_from_context = False
-    if (not images and chat_id
-            and str(mode or "").strip().lower() in ("simple", "direct", "chat")):
+    if not images and chat_id:
         try:
             images = load_chat_images(chat_id)
             _images_from_context = bool(images)
@@ -921,7 +920,8 @@ async def run_stream(
     # PERSIST TOGGLE (2026-10-03): OFF (default) = images live only as base64
     # parts inside this run - no disk writes, nothing to clean up. ON = saved
     # under <workspace>/.hive_uploads/ and referenced by path afterwards.
-    if images and _ws_str and bool(settings.get("image_uploads_persistent", False)):
+    if (images and _ws_str and not _images_from_context
+            and bool(settings.get("image_uploads_persistent", False))):
         try:
             import base64 as _b64mod
             from datetime import datetime as _dt

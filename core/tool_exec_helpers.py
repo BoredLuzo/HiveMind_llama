@@ -1177,6 +1177,9 @@ class ToolRoundState:
     call_sigs: list = field(default_factory=list)
     recent_focus_paths: list = field(default_factory=list)
     file_changes: dict = field(default_factory=dict)
+    # RUN-WIDE written files (2026-11-04): file_changes is reset per round;
+    # the static-only test guard needs the complete run list.
+    run_written_files: list = field(default_factory=list)
     duo_seen_web_queries: set = field(default_factory=set)
     cached_coder_port: list = field(default_factory=lambda: [None])
     task_complete_blocked_count: list = field(default_factory=lambda: [0])

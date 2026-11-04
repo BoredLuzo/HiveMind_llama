@@ -68,7 +68,8 @@ _resume.build_resume_block = None  # will be replaced below
 
 # minimal build_resume_block mirroring chunking.py's shape
 def _fake_build(workspace, chunks_total, chunks_done, chunks_remaining,
-                written_files, last_summary, plan_msgs, explore_ctx):
+                written_files, last_summary, plan_msgs, explore_ctx,
+                pending_send_files=None):
     return {
         "workspace": workspace,
         "explore_ctx": explore_ctx,
@@ -79,6 +80,7 @@ def _fake_build(workspace, chunks_total, chunks_done, chunks_remaining,
             "chunks_done": chunks_done,
             "chunks_remaining": chunks_remaining,
             "written_files": written_files,
+            "pending_send_files": list(pending_send_files or []),
             "last_summary": last_summary,
             "plan_msgs": plan_msgs,
             "saved_at": "test",
@@ -157,6 +159,42 @@ _nudge_src = (Path(__file__).resolve().parent.parent / "core" / "tool_executor.p
     encoding="utf-8")
 check("smoke nudge requires a real assertion", "at least one real assertion" in _nudge_src)
 check("nudge states non-failing files do not count", "cannot fail" in _nudge_src)
+
+print("=== 5. send-file queue survives the resume round-trip ===")
+
+from hive_functions.chunking import ChunkState  # noqa: E402
+
+_sf_block = build_resume_block(
+    workspace=str(_tmp), chunks_total=3,
+    chunks_done=["chunk one"],
+    chunks_remaining=[{"title": "chunk two"}],
+    written_files=[], last_summary="chunk one", plan_msgs=[],
+    explore_ctx="x" * 40,
+    pending_send_files=["a.html", "b.pdf"],
+)
+check("build_resume_block stores pending_send_files",
+      _sf_block["resume"].get("pending_send_files") == ["a.html", "b.pdf"])
+_cs_sf = ChunkState()
+_cs_sf.load_from_resume({"resume": _sf_block["resume"]})
+check("load_from_resume restores pending_send_files",
+      _cs_sf.send_files == ["a.html", "b.pdf"])
+_cs_empty = ChunkState()
+_cs_empty.load_from_resume({"resume": {"chunks_done": [], "written_files": []}})
+check("missing pending_send_files restores empty list", _cs_empty.send_files == [])
+_sf_none = build_resume_block(
+    workspace=str(_tmp), chunks_total=1, chunks_done=[],
+    chunks_remaining=[{"title": "only"}], written_files=[],
+    last_summary="", plan_msgs=[], explore_ctx="x" * 40,
+)
+check("build_resume_block without the arg stores empty list",
+      _sf_none["resume"].get("pending_send_files") == [])
+_sf_blank = build_resume_block(
+    workspace=str(_tmp), chunks_total=1, chunks_done=[],
+    chunks_remaining=[{"title": "only"}], written_files=[],
+    last_summary="", plan_msgs=[], explore_ctx="x" * 40,
+    pending_send_files=["", "  "],
+)
+check("blank entries are dropped", _sf_blank["resume"]["pending_send_files"] == [])
 
 shutil.rmtree(_tmp, ignore_errors=True)
 print()

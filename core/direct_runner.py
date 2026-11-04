@@ -97,7 +97,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         except (ImportError, AttributeError, TypeError, ValueError):
             _schema_budget = 0
         _send_file_on = (tool_mode == "direct_full"
-                         and str((getattr(ctx, "settings", {}) or {}).get("source") or "") == "telegram")
+                         and str((getattr(ctx, "settings", {}) or {}).get("source") or "").startswith("telegram"))
         _tools = _tools_fn(include_websearch=_ws_avail, mode=tool_mode,
                            budget_chars=_schema_budget or None,
                            include_send_file=_send_file_on)
@@ -126,13 +126,20 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         # uses, so direct mode can queue a file it just wrote.
         _written_files: set = set()
         _written_token = None
+        _epoch_token = None
         try:
+            import time as _time_epoch
             from tools.runner import _files_written_in_run as _fw_ctx
+            from tools.runner import _run_file_epoch as _epoch_ctx
+            from tools.runner import _files_written_by_run as _fw_registry
+            _fw_registry.pop(str(ctx.run_id), None)
             # A fresh set per direct run: reusing an outer context would let
             # send_file accept a file from an earlier run.
             _written_token = _fw_ctx.set(_written_files)
+            _epoch_token = _epoch_ctx.set(_time_epoch.time())
         except (ImportError, AttributeError, TypeError):
             _fw_ctx = None
+            _epoch_ctx = None
         _send_paths: list[str] = []
 
         async def _capture_tool_result(name, args, result, state):
@@ -187,6 +194,8 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
                 pass
             if _written_token is not None and _fw_ctx is not None:
                 _fw_ctx.reset(_written_token)
+            if _epoch_token is not None and _epoch_ctx is not None:
+                _epoch_ctx.reset(_epoch_token)
         _state = getattr(_loop, "state", None)
         result.content = "".join(_state.content_parts).strip() if _state is not None else ""
         result.final_msgs = _final_msgs
@@ -423,7 +432,7 @@ async def run_direct(ctx):
         if _direct_tools_active:
             sys_p += _direct_tools_note(_direct_tool_mode,
                                         ws_ok=bool(ctx.websearch_available))
-            if (str((getattr(ctx, "settings", {}) or {}).get("source") or "") == "telegram"
+            if (str((getattr(ctx, "settings", {}) or {}).get("source") or "").startswith("telegram")
                     and _direct_tool_mode == "direct_full"):
                 sys_p += (
                     "\n\nFILE OUTPUT: when the user asks for a file or webpage, "
@@ -622,12 +631,13 @@ async def run_direct(ctx):
         # exists. The gateway uploads it before the done frame.
         if (_direct_stop_reason == "completed"
                 and _dt_result is not None
-                and str((getattr(ctx, "settings", {}) or {}).get("source") or "") == "telegram"):
+                and str((getattr(ctx, "settings", {}) or {}).get("source") or "").startswith("telegram")):
             try:
                 from core.send_files import choose_deliverables as _choose_sf
                 _deliver_files = _choose_sf(
                     getattr(_dt_result, "send_files", []),
-                    getattr(_dt_result, "written_files", []))
+                    getattr(_dt_result, "written_files", []),
+                    str(getattr(ctx, "workspace", "") or ""))
             except (ImportError, TypeError, ValueError):
                 _deliver_files = list(getattr(_dt_result, "send_files", []))
             for _sfp in _deliver_files:
@@ -638,6 +648,13 @@ async def run_direct(ctx):
                     "workspace": str(getattr(ctx, "workspace", "") or ""),
                 })
         yield await ctx.emit(ctx.done_event(round(time.time() - ctx.t_total, 1), _direct_stop_reason, **ctx.collect_done_metrics()))
+        try:
+            from tools.runner import _files_written_by_run as _fw_cleanup
+            _fw_cleanup.pop(str(ctx.run_id), None)
+        except (ImportError, AttributeError, TypeError):
+            _direct_log.debug(
+                "[SEND-FILE] written-file registry cleanup failed",
+                exc_info=True)
         ctx.unregister_abort(ctx.run_id)
         ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing
         spawn(_refresh_judge_keepalive())
