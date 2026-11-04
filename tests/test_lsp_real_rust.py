@@ -74,7 +74,15 @@ async def _flow():
         out["start"] = await mgr.start_language("rust")
         out["bad"] = await mgr.diagnostics("src/main.rs", wait_s=60.0)
         sample.write_text(GOOD, encoding="utf-8")
-        out["good"] = await mgr.diagnostics("src/main.rs", wait_s=5.0)
+        # SETTLE-RETRY (2026-11-04, gate flake): rust-analyzer can publish the
+        # pre-fix flycheck diagnostic for a few seconds after the file changes.
+        # A single 5 s read then fails R4 only inside the full gate.
+        out["good"] = []
+        for _attempt in range(4):
+            out["good"] = await mgr.diagnostics("src/main.rs", wait_s=5.0)
+            if not any(d.get("severity") == 1 for d in out["good"]):
+                break
+            await asyncio.sleep(1.0)
     finally:
         await mgr.close_all()
     return out

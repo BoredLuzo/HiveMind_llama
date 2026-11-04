@@ -695,7 +695,7 @@ needs your own bot token from [@BotFather](https://t.me/BotFather) — setup:
 | Pairing | `/start` with the one-time code from the engine; only the paired owner id is answered, everything else is ignored |
 | Mirroring | runs you start in the browser appear on the phone: progress, result, approval cards. Your phone texts go **into** the running run as steering (one mirrored run at a time) |
 | Phone runs | full runs with `/mode auto\|agentic\|chat\|pipeline\|automap\|off`, `/models`, `/setModel`, `/ctx`, `/planner`, `/preset`, `/workspace`, `/send`, `/tools`, `/gate`, `/restrict`, `/status`, `/stop`, `/new`, `/follow`, `/cron`, `/purge`, `/shutdown` |
-| **Files out** | `/send <path>` delivers a workspace file immediately; in agentic phone runs `send_file` queues a file the run wrote and delivery happens after final verification, as the last action. Workspace-confined, secret names blocked, 50 MB Telegram limit |
+| **Files out** | `/send <path>` delivers a workspace file immediately; in agentic phone runs and direct runs with full tools `send_file` queues a file the run wrote; delivery happens after the run’s final verification/tool loop, as the last action. Workspace-confined, secret names blocked, 50 MB Telegram limit |
 | Voice in | a voice note is transcribed on the CPU and runs like typed text — **a spoken note keeps the selected conversational mode** (chat/simple/direct) instead of being rerouted |
 | Voice out | answers can come back as a voice note (`/tts` behaviour follows the Voice card: text, voice or both) |
 | **Images** | a photo (or an image sent as a file) becomes a run with the **caption as the prompt**; the engine loads the model's vision projector on demand. Largest Telegram size, JPEG/PNG/WebP, 10 MB cap |

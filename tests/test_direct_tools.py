@@ -52,8 +52,17 @@ check("direct_python adds run_python only",
       "run_python" in _allow["direct_python"]
       and "edit_file" not in _allow["direct_python"]
       and "run_bash" not in _allow["direct_python"])
-check("direct_full = full inline + web",
-      _allow["direct_full"] == set(_defs._INLINE_TOOL_NAMES) | {"web_search", "web_fetch"})
+check("direct_full = full inline + web + send_file",
+      _allow["direct_full"] == set(_defs._INLINE_TOOL_NAMES)
+      | {"web_search", "web_fetch", "send_file"})
+_names_plain = {t["function"]["name"]
+                for t in _defs._get_inline_tools(mode="direct_full")}
+_names_tg = {t["function"]["name"] for t in _defs._get_inline_tools(
+    mode="direct_full", include_send_file=True)}
+check("send_file is hidden in a desktop direct run",
+      "send_file" not in _names_plain)
+check("send_file is offered to a Telegram direct run",
+      "send_file" in _names_tg)
 
 print("-- 2) Tool gating (web only if available) --")
 # Without init_websearch => _WEBSEARCH_AVAILABLE=False => no web tools.

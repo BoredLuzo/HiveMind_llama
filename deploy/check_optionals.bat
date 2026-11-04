@@ -22,6 +22,15 @@ cd /d "%~dp0.."
 set "PY=%~dp0..\.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
 
+REM PREFER-UV (2026-11-04): uv-created venvs often have no pip. The update
+REM itself refreshes deps through uv; optional installs must use the same
+REM tool instead of failing silently on "No module named pip".
+set "UV_EXE="
+for /f "usebackq delims=" %%U in (`where uv 2^>nul`) do (
+    if not defined UV_EXE set "UV_EXE=%%U"
+)
+if not defined UV_EXE if exist "%USERPROFILE%\.local\bin\uv.exe" set "UV_EXE=%USERPROFILE%\.local\bin\uv.exe"
+
 set "MISS_STT="
 set "MISS_TTS="
 set "MISS_DEC="
@@ -48,6 +57,11 @@ set "DEC_DIR=models\decider\gliner25-decide"
 set "HAVE_DEC="
 for %%F in ("%DEC_DIR%\*") do if exist "%%~F" set "HAVE_DEC=1"
 if not defined HAVE_DEC set "MISS_DEC=1"
+REM MODEL-ONLY is not enough: a 1.5.2 install can have the downloaded
+REM GLiNER2 model while gliner2/PyTorch is still missing. Check the import
+REM too, or the optional install is never offered again.
+"%PY%" -c "import gliner2" >nul 2>&1
+if errorlevel 1 set "MISS_DEC=1"
 
 REM --- browser tool ----------------------------------------------------------
 REM A dependency refresh can bump playwright past the installed browser build
@@ -85,11 +99,17 @@ if "%MISS_COUNT%"=="0" (
     echo.
     goto :eof
 )
-if defined MISS_STT     echo   [missing] speech to text    - deploy\setup_voice.bat
-if defined MISS_TTS     echo   [missing] text to speech    - deploy\setup_voice.bat --tts
-if defined MISS_DEC     echo   [missing] routing decider   - deploy\fetch_decider.py
-if defined MISS_BROWSER echo   [missing] browser tool      - playwright install chromium
-if defined MISS_POSIX   echo   [missing] POSIX tools       - winget install CoreUtils
+if defined MISS_STT     echo   [missing] speech to text    - local Whisper/Parakeet binaries + model
+if defined MISS_TTS     echo   [missing] text to speech    - gated Pocket TTS model
+if defined MISS_DEC     echo   [missing] routing decider   - GLiNER2 model + gliner2[local]/PyTorch ^(~2.5 GB^)
+if defined MISS_BROWSER echo   [missing] browser tool      - Playwright Chromium
+if defined MISS_POSIX   echo   [missing] POSIX tools       - Git Bash or Microsoft CoreUtils
+echo.
+if defined MISS_DEC (
+    echo   Routing decider needs the model file AND the Python package
+    echo   "gliner2[local]" with PyTorch. The model download alone is not
+    echo   enough; this installer uses uv when available, otherwise pip.
+)
 echo.
 if /i "%~1"=="--dry-run" (
     echo   [dry run] nothing installed, %MISS_COUNT% component^(s^) missing.
@@ -121,10 +141,34 @@ if defined MISS_TTS (
 if defined MISS_DEC (
     echo.
     echo  --- routing decider ----------------------------------------
+    echo   Model: fastino/GLiNER2.5-Decide
+    echo   Package: gliner2[local] + PyTorch ^(about 2.5 GB download^)
     "%PY%" deploy\fetch_decider.py
     if exist "requirements-decider.txt" (
-        "%PY%" -m pip install -q -r requirements-decider.txt 2>nul
-        if errorlevel 1 echo   [WARN] pip install of requirements-decider.txt failed.
+        if defined UV_EXE (
+            echo   Installing with uv: "%UV_EXE%" pip install --python "%PY%"
+            "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt
+        ) else (
+            "%PY%" -m pip --version >nul 2>&1
+            if errorlevel 1 (
+                echo   pip missing - bootstrapping it with ensurepip...
+                "%PY%" -m ensurepip --upgrade
+            )
+            echo   Installing with pip: "%PY%" -m pip install -r requirements-decider.txt
+            "%PY%" -m pip install -r requirements-decider.txt
+        )
+        if errorlevel 1 (
+            echo   [WARN] routing decider package install failed.
+            echo          The model is downloaded, but gliner2/PyTorch is not usable.
+            echo          Run this yourself to see the full error:
+            if defined UV_EXE (
+                echo            "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt
+            ) else (
+                echo            "%PY%" -m pip install -r requirements-decider.txt
+            )
+        ) else (
+            echo   [OK] routing decider package installed.
+        )
     )
 )
 if defined MISS_BROWSER (

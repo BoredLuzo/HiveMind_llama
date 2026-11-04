@@ -585,7 +585,8 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
                "ask_user", "task_complete", "get_datetime"},
     "direct_python": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "run_python"}
                      | _LSP_READ_TIER_EXTRAS,
-    "direct_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
+    "direct_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch",
+                                             "send_file"},
 }
 
 

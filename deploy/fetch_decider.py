@@ -54,8 +54,11 @@ def main(argv: list[str] | None = None) -> int:
         import gliner2  # noqa: F401
         print("gliner2: installed")
     except ImportError:
-        print("gliner2: MISSING - run this after the download:")
-        print("         pip install -r requirements-decider.txt")
+        print("gliner2: MISSING - the model download alone is not enough.")
+        print("         Install gliner2[local] + PyTorch (about 2.5 GB):")
+        print("           uv pip install --python .venv\\Scripts\\python.exe -r requirements-decider.txt")
+        print("         or, when uv is unavailable:")
+        print("           .venv\\Scripts\\python.exe -m pip install -r requirements-decider.txt")
 
     cli = _hf_cli()
     if cli is None:

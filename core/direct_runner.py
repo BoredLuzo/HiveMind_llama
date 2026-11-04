@@ -54,11 +54,13 @@ class _DirectToolsResult:
     The generator streams events while it runs; after exhaustion `content` and
     `final_msgs` are filled for the fallback plain stream / persistence.
     """
-    __slots__ = ("content", "final_msgs")
+    __slots__ = ("content", "final_msgs", "send_files", "written_files")
 
     def __init__(self) -> None:
         self.content = ""
         self.final_msgs = None
+        self.send_files: list[str] = []
+        self.written_files: list[str] = []
 
 
 async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
@@ -94,8 +96,11 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             _schema_budget = schema_budget_for(_num_ctx, model)
         except (ImportError, AttributeError, TypeError, ValueError):
             _schema_budget = 0
+        _send_file_on = (tool_mode == "direct_full"
+                         and str((getattr(ctx, "settings", {}) or {}).get("source") or "") == "telegram")
         _tools = _tools_fn(include_websearch=_ws_avail, mode=tool_mode,
-                           budget_chars=_schema_budget or None)
+                           budget_chars=_schema_budget or None,
+                           include_send_file=_send_file_on)
         if not _tools:
             return
         # IMAGES (2026-10-03): raw parts need the projector — the CALLER
@@ -117,6 +122,26 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         _read_timeout = float(ctx.settings.get("duo_llm_slow_timeout_s", 300) or 300)
 
         _final_msgs: list | None = None
+        # SEND-FILE: the same run-written-file registry the shared executor
+        # uses, so direct mode can queue a file it just wrote.
+        _written_files: set = set()
+        try:
+            from tools.runner import _files_written_in_run as _fw_ctx
+            _existing_written = _fw_ctx.get(None)
+            if _existing_written is not None:
+                _written_files = _existing_written
+            else:
+                _fw_ctx.set(_written_files)
+        except (ImportError, AttributeError, TypeError):
+            pass
+        _send_paths: list[str] = []
+
+        async def _capture_tool_result(name, args, result, state):
+            if name == "send_file" and str(result).startswith("[FILE_QUEUED]"):
+                _p = str((args or {}).get("path") or "")
+                if _p and _p not in _send_paths:
+                    _send_paths.append(_p)
+            return None
 
         async def _capture_msgs(messages, _round_num, state):
             nonlocal _final_msgs
@@ -150,6 +175,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             # direct mode (the drain site keys on the same id).
             run_id=str(getattr(ctx, "run_id", "") or ""),
             abort_check=ctx.aborted,
+            on_tool_result=_capture_tool_result,
             on_before_post=_capture_msgs,
         )
         try:
@@ -163,6 +189,8 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         _state = getattr(_loop, "state", None)
         result.content = "".join(_state.content_parts).strip() if _state is not None else ""
         result.final_msgs = _final_msgs
+        result.send_files = list(_send_paths)
+        result.written_files = sorted(str(p) for p in _written_files)
     except Exception as _e:
         _direct_log.warning("[Direct-Tools] tool loop failed: %s", _e)
         yield {"type": "status", "content": f"⚠ Tool loop error: {str(_e)[:120]}"}
@@ -394,6 +422,15 @@ async def run_direct(ctx):
         if _direct_tools_active:
             sys_p += _direct_tools_note(_direct_tool_mode,
                                         ws_ok=bool(ctx.websearch_available))
+            if (str((getattr(ctx, "settings", {}) or {}).get("source") or "") == "telegram"
+                    and _direct_tool_mode == "direct_full"):
+                sys_p += (
+                    "\n\nFILE OUTPUT: when the user asks for a file or webpage, "
+                    "write it with write_file into the workspace and queue it "
+                    "with send_file. Do not paste the complete file content into "
+                    "the chat. Only say it was sent after send_file returned "
+                    "[FILE_QUEUED]."
+                )
         # DATE-FIX (2026-10-06): LAST position + explicit tomorrow anchor +
         # a direct anti-hallucination instruction - small models weight the
         # prompt tail most and this is exactly the failure that produced
@@ -423,6 +460,7 @@ async def run_direct(ctx):
         _ws_used = False
         _tool_content = ""
         _tool_final_msgs = None
+        _dt_result = None
         if _direct_tools_active:
             _dt_result = _DirectToolsResult()
             # LIVE-STREAM (2026-09-01): pass ToolLoop events through immediately —
@@ -578,6 +616,26 @@ async def run_direct(ctx):
                     ctx.chat_id, _persist_exc,
                 )
         _direct_stop_reason = "aborted" if ctx.aborted() else "completed"
+        # SEND-FILE (direct mode): a file the model wrote in this run can be
+        # queued with send_file, or auto-picked when exactly one deliverable
+        # exists. The gateway uploads it before the done frame.
+        if (_direct_stop_reason == "completed"
+                and _dt_result is not None
+                and str((getattr(ctx, "settings", {}) or {}).get("source") or "") == "telegram"):
+            try:
+                from core.send_files import choose_deliverables as _choose_sf
+                _deliver_files = _choose_sf(
+                    getattr(_dt_result, "send_files", []),
+                    getattr(_dt_result, "written_files", []))
+            except (ImportError, TypeError, ValueError):
+                _deliver_files = list(getattr(_dt_result, "send_files", []))
+            for _sfp in _deliver_files:
+                _direct_log.info("[SEND-FILE] direct delivery: %s", _sfp)
+                yield await ctx.emit({
+                    "type": "send_file",
+                    "path": _sfp,
+                    "workspace": str(getattr(ctx, "workspace", "") or ""),
+                })
         yield await ctx.emit(ctx.done_event(round(time.time() - ctx.t_total, 1), _direct_stop_reason, **ctx.collect_done_metrics()))
         ctx.unregister_abort(ctx.run_id)
         ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing
