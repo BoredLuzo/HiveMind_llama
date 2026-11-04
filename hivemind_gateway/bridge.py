@@ -1424,7 +1424,12 @@ class RunBridge:
             out["duo_coder_ctx_agentic"] = min(int(cctx), 131072)
             out["duo_coder_ctx_normal"] = min(int(cctx), 131072)
         tools = self.state.data.get("tools")
-        if tools is not None:
+        tier = str(self.state.data.get("direct_tools_tier") or "").strip().lower()
+        if tier in ("off", "websearch", "readonly", "python", "full"):
+            tier = "readonly" if tier in ("websearch", "readonly") else tier
+            out["direct_tools_tier"] = tier
+            out["direct_tools_enabled"] = tier != "off"
+        elif tools is not None:
             out["direct_tools_enabled"] = bool(tools)
         # audit G1: FORCE the engine's approval gate for every phone run -
         # this restores the documented "gated tools are auto-denied from
@@ -2611,26 +2616,40 @@ class RunBridge:
         raise HiveUnreachable("workspace write conflict (409 twice)")
 
     def tools_text(self, arg: str) -> str:
-        """/tools on|off - per-run direct tools access level (rides the
-        run body; needs the engine lift to take effect)."""
+        """/tools <off|websearch|python|full> - per-run direct access level.
+
+        Mirrors the UI's Chat Tools radio group. It rides the run body
+        (direct_tools_enabled + direct_tools_tier), so the desktop setting
+        stays untouched. File access is still confined to the workspace.
+        """
+        aliases = {"on": "full", "an": "full", "1": "full",
+                   "off": "off", "aus": "off", "0": "off",
+                   "web": "readonly", "websearch": "readonly",
+                   "read": "readonly", "readonly": "readonly",
+                   "py": "python", "python": "python",
+                   "full": "full", "all": "full"}
+        labels = {"off": "off (plain chat)", "readonly": "websearch only",
+                  "python": "read + python", "full": "full (read/write/shell)"}
         a = (arg or "").strip().lower()
-        cur = self.state.data.get("tools")
-        cur_txt = ("on" if cur is True else "off" if cur is False
-                   else "engine default")
+        cur = str(self.state.data.get("direct_tools_tier") or "").strip().lower()
+        if not cur:
+            cur = "full" if self.state.data.get("tools") is True else (
+                "off" if self.state.data.get("tools") is False else "")
         if not a:
-            return (f"Access level (direct, Telegram): {cur_txt}.\n"
-                    "Set with /tools on or /tools off.")
-        if a in ("on", "an", "1"):
-            self.state.data["tools"] = True
-        elif a in ("off", "aus", "0"):
-            self.state.data["tools"] = False
-        else:
-            return "❌ /tools on oder /tools off."
+            cur_txt = labels.get(cur, "engine default")
+            return (f"Direct access (Telegram): {cur_txt}.\n\n"
+                    "  /tools off        - plain chat, no tools\n"
+                    "  /tools websearch  - web search/fetch only\n"
+                    "  /tools python     - read files + run_python\n"
+                    "  /tools full       - read/write/shell (workspace-locked)")
+        if a not in aliases:
+            return ("❌ Use /tools off | websearch | python | full.")
+        tier = aliases[a]
+        self.state.data["direct_tools_tier"] = tier
+        self.state.data["tools"] = tier != "off"
         self.state.save()
-        new = self.state.data["tools"]
-        return (f"Access level (direct, Telegram): "
-                f"{'on' if new else 'off'} - per run "
-                "(engine lift required, see P10/T).")
+        return (f"Direct access (Telegram): {labels[tier]}. "
+                "Applies to the next phone run; the workspace lock stays on.")
 
     async def stop_mirror(self) -> str | None:
         """Abort the mirrored engine run, if any. Returns the note or

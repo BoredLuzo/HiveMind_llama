@@ -16,6 +16,10 @@ next to the old install. Settings, models, sessions and the venv are kept.
   is sent automatically on a completed run.
 - The direct prompt now tells the model not to paste a complete HTML page or
   file into the chat when the user asked for a file.
+- Telegram direct runs can select the same tiers as the UI with
+  `/tools off`, `/tools websearch`, `/tools python` or `/tools full`. The
+  choice is per phone run and does not change the desktop UI setting. File
+  access remains workspace-locked even on `full`.
 
 ## Optional components
 

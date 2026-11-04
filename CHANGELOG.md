@@ -4,7 +4,9 @@ Replacement for 1.5.2. Direct mode with full tools can now write a file and
 queue it with `send_file`; the file is delivered after the direct tool loop,
 and exactly one deliverable is sent automatically if the model forgot to queue
 it. The direct prompt no longer treats a generated HTML page as chat text when
-a file was requested.
+a file was requested. Telegram direct runs select the UI tiers with
+`/tools off`, `/tools websearch`, `/tools python` or `/tools full`, per phone
+run; file access stays workspace-locked on every tier.
 
 The optional-component installer now uses uv for `gliner2[local]`/PyTorch
 instead of assuming the venv has pip (uv-created venvs often do not), falls

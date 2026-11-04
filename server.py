@@ -1492,6 +1492,14 @@ async def stream(req: Request):
     if "direct_tools_enabled" in body:
         _model_overrides["direct_tools_enabled"] = _as_bool(
             body.get("direct_tools_enabled"))
+    # /tools <off|websearch|python|full> on the phone. Same per-run lift;
+    # invalid values are ignored so an old gateway cannot widen the tools.
+    if "direct_tools_tier" in body:
+        _dt_tier = str(body.get("direct_tools_tier") or "").strip().lower()
+        if _dt_tier in ("off", "readonly", "python", "full"):
+            _model_overrides["direct_tools_tier"] = _dt_tier
+        elif _dt_tier in ("websearch", "web"):
+            _model_overrides["direct_tools_tier"] = "readonly"
 
     # G1 (full audit 2026-10-05): the Telegram gateway sends
     # duo_action_approval_enabled=true with its runs so the documented

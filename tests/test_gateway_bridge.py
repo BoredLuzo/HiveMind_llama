@@ -761,6 +761,17 @@ async def t_takeover():
     check("tools off rides the run body",
           hive2.stream_bodies[-1]["overrides"].get(
               "direct_tools_enabled") is False)
+    br2.tools_text("full")
+    await br2.start_text_run("q")
+    _ov_full = hive2.stream_bodies[-1]["overrides"]
+    check("tools full rides the run body",
+          _ov_full.get("direct_tools_enabled") is True
+          and _ov_full.get("direct_tools_tier") == "full")
+    br2.tools_text("websearch")
+    await br2.start_text_run("q")
+    _ov_web = hive2.stream_bodies[-1]["overrides"]
+    check("websearch maps to the readonly tier",
+          _ov_web.get("direct_tools_tier") == "readonly")
 
 async def _main():
     await t_happy()
