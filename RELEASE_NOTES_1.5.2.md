@@ -26,7 +26,9 @@ next to the old install. Settings, models, sessions and the venv are kept.
   takes effect even while the desktop workspace is pinned.
 - An image sent in a direct chat stays in context: the next text-only turn
   re-attaches the last image set, so follow-up questions can refer to it.
-  The image context is stored per chat and removed when the chat is deleted.
+  The image context is stored per chat while HiveMind runs and is wiped on
+  shutdown; with the persistent-image-uploads toggle on it survives restarts.
+  Deleting the chat always removes it.
 - Direct phone runs select the UI tiers with `/tools off|websearch|python|full`
   (per phone run, desktop setting untouched). `full` still stays
   workspace-locked; `/restrict off` is required for write/shell access.

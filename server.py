@@ -688,6 +688,12 @@ async def _shutdown():
                 await _fk
         except Exception:
             pass
+    if not bool(settings.get("image_uploads_persistent", False)):
+        try:
+            from context.chat import clear_all_image_context as _clear_imgs_all
+            _clear_imgs_all(_SESSIONS_DIR)
+        except (ImportError, OSError, ValueError):
+            pass
 # Flush pending writes on shutdown.
     try:
         save_settings(settings)
@@ -711,6 +717,16 @@ async def _startup():
 
 
     global S_models_cache
+
+    # IMAGE-CONTEXT-LIFETIME (2026-11-04): chat images survive while the
+    # engine runs; a restart wipes them unless the persistent-uploads toggle
+    # is on. A hard crash is covered on the next start.
+    if not bool(settings.get("image_uploads_persistent", False)):
+        try:
+            from context.chat import clear_all_image_context as _clear_imgs_all
+            _clear_imgs_all(_SESSIONS_DIR)
+        except (ImportError, OSError, ValueError):
+            pass
 
     # UX (2026-10-24): open the browser once the server is up — but ONLY
     # when the interactive launcher asked for it (HIVEMIND_OPEN_BROWSER=1).

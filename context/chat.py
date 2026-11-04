@@ -347,3 +347,16 @@ def clear_chat_images(chat_id: str) -> None:
     folder = _image_ctx_dir(chat_id)
     if folder is not None:
         shutil.rmtree(folder, ignore_errors=True)
+
+
+def clear_all_image_context(sessions_dir=None) -> None:
+    """Remove every chat's ephemeral image context (startup/shutdown).
+
+    `sessions_dir` is needed on the startup path: context.chat is initialized
+    later in the server boot, so its module global is still None there.
+    """
+    import shutil
+    base = Path(sessions_dir) if sessions_dir else _SESSIONS_DIR
+    if not base:
+        return
+    shutil.rmtree(Path(base) / ".images", ignore_errors=True)

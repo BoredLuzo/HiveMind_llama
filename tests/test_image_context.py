@@ -66,6 +66,10 @@ def main() -> int:
         C.clear_chat_images("chat123")
         check("chat deletion clears the image context",
               C.load_chat_images("chat123") == [])
+        C.save_chat_images("chat123", [JPG])
+        C.clear_all_image_context()
+        check("a global shutdown wipes every chat image",
+              C.load_chat_images("chat123") == [])
 
     print(f"\nSUMMARY image_context: {passed} passed, {failed} failed")
     return 1 if failed else 0
