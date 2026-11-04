@@ -1,4 +1,4 @@
-"""Holt das optionale Decider-Modell (GLiNER2.5-Decide) in den models-Ordner.
+r"""Holt das optionale Decider-Modell (GLiNER2.5-Decide) in den models-Ordner.
 
 Der Encoder ist **optional**: ohne ihn entscheidet der LLM-Judge (wie bisher).
 Der Release-ZIP enthaelt keine Gewichte (er bleibt ~1,4 MB) - dieses Skript holt
@@ -14,7 +14,8 @@ Danach in den Settings:
     routing_decider       = "shadow"                             (erst vergleichen)
 
 Die Python-Abhaengigkeit (gliner2 + torch, ~2,5 GB) ist NICHT Teil der normalen
-Installation:  pip install -r requirements-decider.txt
+Installation und wird ueber uv installiert:
+  uv pip install --python .venv\Scripts\python.exe -r requirements-decider.txt
 """
 from __future__ import annotations
 
@@ -55,10 +56,9 @@ def main(argv: list[str] | None = None) -> int:
         print("gliner2: installed")
     except ImportError:
         print("gliner2: MISSING - the model download alone is not enough.")
-        print("         Install gliner2[local] + PyTorch (about 2.5 GB):")
+        print("         Install gliner2[local] + PyTorch (about 2.5 GB) with uv:")
         print("           uv pip install --python .venv\\Scripts\\python.exe -r requirements-decider.txt")
-        print("         or, when uv is unavailable:")
-        print("           .venv\\Scripts\\python.exe -m pip install -r requirements-decider.txt")
+        print("         If uv is missing, run install.bat once to provision it.")
 
     cli = _hf_cli()
     if cli is None:

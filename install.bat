@@ -529,18 +529,12 @@ echo  Working - the environment download can take a few minutes...
 echo  Log: %DEC_LOG%
 echo. >> "%DEC_LOG%"
 echo ==== %DATE% %TIME% ==== >> "%DEC_LOG%"
-where uv >nul 2>&1
-if errorlevel 1 (
-    echo   [INFO] uv not found - installing torch with the venv pip instead.
-    echo [INFO] uv missing, using venv pip >> "%DEC_LOG%"
-    "%PY%" -m pip install --index-url https://download.pytorch.org/whl/cpu torch >> "%DEC_LOG%" 2>&1
-    if errorlevel 1 "%PY%" -m pip install torch >> "%DEC_LOG%" 2>&1
-    "%PY%" -m pip install gliner2 transformers huggingface_hub >> "%DEC_LOG%" 2>&1
-) else (
-    uv pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu torch --quiet >> "%DEC_LOG%" 2>&1
-    if errorlevel 1 uv pip install --python "%PY%" torch --quiet >> "%DEC_LOG%" 2>&1
-    uv pip install --python "%PY%" gliner2 transformers huggingface_hub --quiet >> "%DEC_LOG%" 2>&1
-)
+REM UV-ONLY (2026-11-04): installer and updater both install optional Python
+REM packages through uv. The installer has already provisioned uv above;
+REM falling back to a pip that may not exist in the uv venv only hid errors.
+uv pip install --python "%PY%" --index-url https://download.pytorch.org/whl/cpu torch --quiet >> "%DEC_LOG%" 2>&1
+if errorlevel 1 uv pip install --python "%PY%" torch --quiet >> "%DEC_LOG%" 2>&1
+uv pip install --python "%PY%" gliner2 transformers huggingface_hub --quiet >> "%DEC_LOG%" 2>&1
 echo  Fetching the model weights...
 "%PY%" -c "from huggingface_hub import snapshot_download; snapshot_download('fastino/GLiNER2.5-Decide')" >> "%DEC_LOG%" 2>&1
 set "DEC_SNAP=%errorlevel%"

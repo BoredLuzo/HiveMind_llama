@@ -48,9 +48,10 @@ next to the old install. Settings, models, sessions and the venv are kept.
 
 ## Optional components
 
-- The installer uses `uv` for optional Python packages instead of assuming the
-  venv has `pip` (uv-created venvs often do not); if neither is usable, it
-  bootstraps pip with `ensurepip`.
+- Installer and updater both install optional Python packages through `uv`
+  instead of assuming the venv has `pip` (uv-created venvs often do not). If
+  uv is missing, `install.bat` provisions it once; the updater points there
+  instead of falling back to a pip that may not exist.
 - The routing decider entry now states its real footprint: the GLiNER2 model
   plus `gliner2[local]`/PyTorch, about 2.5 GB. A failed install prints the
   exact retry command instead of a silent warning, and an install that has the

@@ -19,11 +19,11 @@ installed and missing language servers, Python has exactly one linter
 (pyright, with a `py_compile` environment fallback), and the near-duplicate
 web-search guard allows eight rephrased searches instead of three.
 
-The optional-component installer uses uv for `gliner2[local]`/PyTorch instead
-of assuming the venv has pip (uv-created venvs often do not), falls back to
-`ensurepip`, names the decider's real footprint (~2.5 GB) and prints the exact
-retry command on failure. A model-only decider install is detected as missing
-the Python package.
+Installer and updater both install optional Python packages through uv
+instead of assuming the venv has pip (uv-created venvs often do not); when uv
+is missing, install.bat provisions it. The decider entry names its real
+footprint (~2.5 GB) and prints the exact retry command on failure. A
+model-only decider install is detected as missing the Python package.
 
 The Linux `types` CI job no longer reports the optional Windows-only
 `keyring` import as missing.

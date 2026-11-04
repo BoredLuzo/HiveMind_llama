@@ -108,7 +108,8 @@ echo.
 if defined MISS_DEC (
     echo   Routing decider needs the model file AND the Python package
     echo   "gliner2[local]" with PyTorch. The model download alone is not
-    echo   enough; this installer uses uv when available, otherwise pip.
+    echo   enough; installer and updater install it through uv. If uv is
+    echo   missing, run install.bat once to provision it.
 )
 echo.
 if /i "%~1"=="--dry-run" (
@@ -148,26 +149,17 @@ if defined MISS_DEC (
         if defined UV_EXE (
             echo   Installing with uv: "%UV_EXE%" pip install --python "%PY%"
             "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt
-        ) else (
-            "%PY%" -m pip --version >nul 2>&1
             if errorlevel 1 (
-                echo   pip missing - bootstrapping it with ensurepip...
-                "%PY%" -m ensurepip --upgrade
-            )
-            echo   Installing with pip: "%PY%" -m pip install -r requirements-decider.txt
-            "%PY%" -m pip install -r requirements-decider.txt
-        )
-        if errorlevel 1 (
-            echo   [WARN] routing decider package install failed.
-            echo          The model is downloaded, but gliner2/PyTorch is not usable.
-            echo          Run this yourself to see the full error:
-            if defined UV_EXE (
+                echo   [WARN] routing decider package install failed.
+                echo          The model is downloaded, but gliner2/PyTorch is not usable.
+                echo          Run this yourself to see the full error:
                 echo            "%UV_EXE%" pip install --python "%PY%" -r requirements-decider.txt
             ) else (
-                echo            "%PY%" -m pip install -r requirements-decider.txt
+                echo   [OK] routing decider package installed.
             )
         ) else (
-            echo   [OK] routing decider package installed.
+            echo   [WARN] uv is not available - the routing decider package was not installed.
+            echo          Run install.bat once ^(it provisions uv^), then re-run update.bat.
         )
     )
 )
