@@ -782,6 +782,11 @@ async def delete_chat(chat_id: str):
                     if ctx_p.exists():
                         ctx_p.unlink()
                 shutil.rmtree(_blob_dir(chat_id), ignore_errors=True)
+                try:
+                    from context.chat import clear_chat_images as _clear_imgs
+                    _clear_imgs(chat_id)
+                except (ImportError, OSError):
+                    pass
             except OSError:
                 pass
 

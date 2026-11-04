@@ -247,3 +247,103 @@ def update_test_history(chat_id: str, results: dict[str, str]) -> None:
             entry["outcomes"] = (entry["outcomes"] + [outcome])[-8:]
         ctx["test_history"] = hist
         _save_chat_context_locked(chat_id, ctx)
+
+
+# ── IMAGE CONTEXT (2026-11-04) ────────────────────────────────────────────
+# Telegram/UI images used to live only inside one run. The chat transcript is
+# text, so the next text turn could not see the photo it referred to. Keep the
+# last few images per chat on disk and re-attach them to follow-up text turns.
+_IMAGE_CONTEXT_MAX = 4
+
+
+def _image_ctx_dir(chat_id: str) -> Path | None:
+    if not _SESSIONS_DIR or not chat_id:
+        return None
+    safe = "".join(c for c in str(chat_id) if c.isalnum() or c in "-_")
+    if not safe:
+        return None
+    return Path(_SESSIONS_DIR) / ".images" / safe
+
+
+def _image_payload(raw: str) -> tuple[bytes, str] | None:
+    import base64
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if "," in s[:32]:
+        s = s.split(",", 1)[1]
+    try:
+        data = base64.b64decode(s)
+    except (ValueError, TypeError):
+        return None
+    if not data:
+        return None
+    ext = "png"
+    if data[:2] == b"\xff\xd8":
+        ext = "jpg"
+    elif data[:4] == b"\x89PNG":
+        ext = "png"
+    elif data[:4] == b"GIF8":
+        ext = "gif"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        ext = "webp"
+    return data, ext
+
+
+def save_chat_images(chat_id: str, images: list) -> None:
+    """Persist the newest image set for a chat (no-op on any error)."""
+    folder = _image_ctx_dir(chat_id)
+    if folder is None or not images:
+        return
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        keep = []
+        for idx, raw in enumerate(list(images)[-_IMAGE_CONTEXT_MAX:], 1):
+            payload = _image_payload(raw)
+            if payload is None:
+                continue
+            data, ext = payload
+            fp = folder / f"ctx_{idx}.{ext}"
+            fp.write_bytes(data)
+            keep.append(fp.name)
+        if not keep:
+            return
+        for old in folder.glob("ctx_*"):
+            if old.name not in keep:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+    except (OSError, ValueError, TypeError) as exc:
+        logger.warning("[IMAGE-CONTEXT] save failed (non-fatal): %s", exc)
+
+
+def load_chat_images(chat_id: str) -> list[str]:
+    """Return the persisted image set as data URLs (newest chat context)."""
+    import base64
+    folder = _image_ctx_dir(chat_id)
+    if folder is None or not folder.is_dir():
+        return []
+    out: list[str] = []
+    for fp in sorted(folder.glob("ctx_*")):
+        try:
+            data = fp.read_bytes()
+        except OSError:
+            continue
+        if not data:
+            continue
+        mime = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".png": "image/png", ".gif": "image/gif",
+            ".webp": "image/webp",
+        }.get(fp.suffix.lower(), "image/png")
+        out.append(f"data:{mime};base64," + base64.b64encode(data).decode("ascii"))
+    return out
+
+
+def clear_chat_images(chat_id: str) -> None:
+    """Drop the chat's persisted image context (chat deletion / privacy)."""
+    import shutil
+    folder = _image_ctx_dir(chat_id)
+    if folder is not None:
+        shutil.rmtree(folder, ignore_errors=True)

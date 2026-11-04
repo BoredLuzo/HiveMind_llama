@@ -132,6 +132,7 @@ SUITES = [
     ("chat_real_roundtrip",    "tests/test_chat_real_roundtrip.py",             60),
     ("history_source",         "tests/test_history_source.py",                  60),
     ("image_plan",             "tests/test_image_plan.py",                      60),
+    ("image_context",          "tests/test_image_context.py",                   60),
     ("approval_timeout",       "tests/test_approval_timeout.py",                 60),
     ("chat_concurrency",       "tests/test_chat_concurrency.py",                 90),
     ("bat_encoding",           "tests/test_bat_encoding.py",                     30),

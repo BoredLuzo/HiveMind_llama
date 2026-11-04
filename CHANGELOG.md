@@ -11,6 +11,9 @@ the UI tiers with `/tools off|websearch|python|full`, per phone run, without
 changing the desktop setting; `full` stays workspace-locked and still needs
 `/restrict off` for write/shell access. Phone runs now pass the chat workspace
 in the run body, so `/workspace` actually wins over the desktop workspace.
+Images sent in a direct chat stay in context: the next text-only turn
+re-attaches the last image set, and deleting the chat removes the stored
+image context.
 
 The coder no longer receives planner markdown or planner reasoning, only a
 distilled numbered execution list; with the planner off it receives only the

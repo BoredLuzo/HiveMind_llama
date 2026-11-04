@@ -154,6 +154,7 @@ async def run_stream(
         read_learning_log,
         smart_preload_if_needed,
     )
+    from context.chat import load_chat_images, save_chat_images
 
     if duo_config is None:
         duo_config = DuoConfig()
@@ -782,10 +783,32 @@ async def run_stream(
                 pass
         _judge_prefetch_task = asyncio.create_task(_prefetch_judge_once())
 
+    # IMAGE-CONTEXT (2026-11-04): the transcript stores text, so a text-only
+    # follow-up in a direct chat used to lose the photo it referred to. Keep
+    # the last image set per chat and re-attach it when this run carries none.
+    _images_from_context = False
+    if (not images and chat_id
+            and str(mode or "").strip().lower() in ("simple", "direct", "chat")):
+        try:
+            images = load_chat_images(chat_id)
+            _images_from_context = bool(images)
+            if _images_from_context:
+                logger.info("[IMAGE-CONTEXT] reattached %d image(s) for chat=%s",
+                            len(images), chat_id)
+        except (OSError, ValueError, TypeError) as _img_ctx_err:
+            logger.warning("[IMAGE-CONTEXT] load failed for chat=%s: %s",
+                           chat_id, _img_ctx_err)
+            images = []
+
     _vision_images, _vision_input_status = _filter_vision_images(images)
     if _vision_input_status:
         yield await emit({"type": "status", "content": _vision_input_status})
     images = _vision_images
+    if images and chat_id and not _images_from_context:
+        try:
+            save_chat_images(chat_id, images)
+        except (OSError, ValueError, TypeError):
+            pass
 
     image_description: str | None = None
     effective_images = images
