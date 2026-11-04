@@ -1819,10 +1819,6 @@
   "broad_except": 0,
   "except_pass": 0
  },
- "tools/sync_to_installs.py": {
-  "broad_except": 0,
-  "except_pass": 0
- },
  "tools/update_check.py": {
   "broad_except": 0,
   "except_pass": 0

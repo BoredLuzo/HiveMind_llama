@@ -423,24 +423,25 @@ def should_compress_after_truncated_drop(finish_reason, dropped_names) -> bool:
 
 def inloop_plan_should_run(agentic_thinking: bool, thinking_per_chunk: bool,
                            aborted: bool, planner_enabled: bool,
-                           has_plan: bool) -> bool:
+                           has_plan: bool,
+                           chunking_enabled: bool = True) -> bool:
     """PLAN-DUP-GUARD (2026-11-03): may the coder's tool round run the
     in-loop planner (run_inloop_planner with make_thinking_planner_sys —
     the "## Plan: / ### Open Tasks" markdown template)?
 
-    The in-loop plan is the ONLY plan for agentic runs with the planner
-    toggle off and for follow-ups (planner phase skipped). When the run
+    PLANNER-OFF (2026-11-04): when the planner is completely off (planner
+    toggle off AND chunking off), the coder gets only the user prompt. No
+    in-loop plan, no planner-format text, no plan talk.
+
+    Otherwise the in-loop plan is the rescue path for agentic runs whose
+    planner phase was skipped or produced nothing parseable. When the run
     ALREADY carries a planner plan — planner phase ran (chunking or planner
     toggle) or a resume delivered subtasks — a second plan must NOT be
-    requested: the coder system prompt is EXECUTION mode ("a plan already
-    exists"), and the second plan otherwise arrives as visible answer text
+    requested: the second plan otherwise arrives as visible answer text
     (token event, "**Plan:**"), doubling the planning wait on big prompts.
-    Live trigger (2026-11-03): the UI forces agentic_thinking=True whenever
-    chunking is on, so every chunked run with the planner toggle off hit
-    planner phase + in-loop re-plan back to back. If the planner phase ran
-    but produced nothing parseable, has_plan stays False and the in-loop
-    planner keeps its rescue role.
     """
+    if not planner_enabled and not chunking_enabled:
+        return False
     if aborted or planner_enabled or has_plan:
         return False
     return bool(agentic_thinking or thinking_per_chunk)
@@ -469,6 +470,18 @@ def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ct
                 "takes 2 seconds. When in doubt: search."
             )
     except Exception:
+        pass
+    try:
+        if (str((ctx.settings or {}).get("source") or "") == "telegram"
+                and not bool((ctx.settings or {}).get("phone_restricted"))):
+            parts.append(
+                "FILE DELIVERY: when the task asks for a deliverable, write the "
+                "file, call send_file with its workspace path exactly once, and "
+                "then finish with task_complete. Delivery happens automatically "
+                "after the final verification. Do not keep searching after the "
+                "deliverable exists."
+            )
+    except (AttributeError, TypeError, ValueError):
         pass
     if has_subtasks:
         parts.append(PROMPTS.get("duo_coder_chunking", ""))

@@ -697,10 +697,12 @@ async def _handle_ask_user(_dname, _dargs, hooks, exec_model, cached_coder_port,
 # site:wikipedia.org"). A plain Jaccard >= 0.72 was too strict for the live case
 # (the two real variants scored 0.50), so containment and a shared 3-token
 # opener count as well. After _WS_DUP_STOP attempts the tool refuses to search
-# instead of burning the per-run websearch budget.
+# instead of burning the per-run websearch budget. LIVE-TUNE (2026-11-04):
+# three was too eager for a small model that needs a few rephrasings to find
+# the right angle; eight still leaves room under the 20-call run budget.
 _WS_DUP_JACCARD = 0.55
 _WS_DUP_CONTAIN = 0.70
-_WS_DUP_STOP = 3
+_WS_DUP_STOP = 8
 
 
 def _ws_is_near_dup(a: set, b: set) -> bool:
@@ -1207,6 +1209,10 @@ class ToolRoundState:
     wide_read_streak: list = field(default_factory=lambda: [0])
     # WEBSEARCH-BUDGET-STOP (2026-09-17): consecutive budget-exhausted
     # web_search calls; >=2 stops the run (run-persistent ref).
+    # SEND-FILE (2026-11-04): true only for runs started by the Telegram
+    # gateway. The schema is also gated, but the dispatch guard keeps a
+    # hallucinated tool name from reaching the handler in desktop/API runs.
+    allow_send_file: bool = False
     ws_budget_streak: list = field(default_factory=lambda: [0])
     # WEBSEARCH-SOFT-STOP (2026-10-17): once the budget is gone the tool is
     # switched OFF for this run instead of killing it (live: 24 rounds,

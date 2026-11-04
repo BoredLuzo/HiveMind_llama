@@ -69,7 +69,7 @@ check("reshuffled variants count as the same search",
       _ws_is_near_dup(_ws_tokens(A), _ws_tokens(B)), f" (jaccard {jac(A, B):.2f})")
 check("a different topic does not",
       not _ws_is_near_dup(_ws_tokens(A), _ws_tokens(C)), f" (jaccard {jac(A, C):.2f})")
-check("the stop threshold is small but not zero", 2 <= _WS_DUP_STOP <= 5)
+check("the stop threshold leaves room for rephrasing", 6 <= _WS_DUP_STOP <= 12)
 src_help = (ROOT / "core" / "tool_exec_helpers.py").read_text(encoding="utf-8", errors="replace")
 check("the tool returns a hard stop", "[TOOL_ERROR:WEBSEARCH_LOOP]" in src_help)
 check("the stop tells the model what to do",

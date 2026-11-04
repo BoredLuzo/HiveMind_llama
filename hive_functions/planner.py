@@ -98,13 +98,11 @@ _STRUCT_OUTPUT = """
 
 === OUTPUT FORMAT ===
 
-NO TOOL CALLS: You are the PLANNER — you have NO tools and cannot read files
-or execute anything. Do NOT output <|tool_call_start|> / <|tool_call_end|>,
-tool-call markup, or "I should read X first" actions. The codebase analysis
-you need is already in your context (CONTRACT OVERVIEW / repo-map). Output
-ONLY the plan text below.
+You are the planner; the codebase context you need is already provided
+(CONTRACT OVERVIEW / repo-map), so answer with the plan itself rather than
+tool-call markup or "I should read X first" notes.
 
-Structure your answer ALWAYS like this:
+A shape that works well for the coder and the UI:
 
 ## Plan: [Short summary, max 1 sentence]
 
@@ -119,7 +117,7 @@ Structure your answer ALWAYS like this:
 ### Summary
 [Max 3 sentences: what the coder should do, order, key constraints]
 
-Do NOT omit any of these sections.
+Please keep these four sections - they are what the parser and the UI expect.
 """
 
 
@@ -136,16 +134,16 @@ def make_thinking_planner_sys(max_steps: int, model_name: str = "") -> str:
         return (
         f"Produce a concrete, ordered codebase-aware implementation plan.\n"
         f"Codebase analysis is provided if available (CONTRACT OVERVIEW with complexity scores).\n\n"
-        f"THINKING PHASE (1-2 min only - strategic, not a checklist):\n"
-        f"- What is the MINIMAL CHANGE SET? (what must NOT be changed to keep the system stable?)\n"
-        f"- What is the single blocking architectural decision that determines everything else?\n"
-        f"Only then produce your implementation plan.\n\n"
-        f"Rules:\n"
-        f"- Use exactly as many steps as the task genuinely requires - one step per file/component change.\n"
-        f"- There is NO fixed step count. A simple fix may need 2 steps, a complex feature may need 10+. Judge by scope.\n"
-        f"- NO generic boilerplate.\n"
-        f"- Each step touches exactly ONE file - never bundle files.\n"
-        f"- Base STRICTLY on CONTRACT OVERVIEW files/classes.\n"
+        f"THINKING PHASE (brief and strategic):\n"
+        f"- What is the minimal change set? What should stay untouched to keep the system stable?\n"
+        f"- What is the main architectural decision that determines everything else?\n"
+        f"Then produce your implementation plan.\n\n"
+        f"Guidelines:\n"
+        f"- Use as many steps as the task genuinely needs - usually one per file/component change.\n"
+        f"- There is no fixed step count. A simple fix may need 2 steps, a complex feature may need 10+. Judge by scope.\n"
+        f"- Avoid generic boilerplate steps.\n"
+        f"- Prefer one file per step; if a step genuinely spans files, name the main one.\n"
+        f"- Base the plan on the CONTRACT OVERVIEW files/classes.\n"
         f"- Order by dependency (interfaces first).\n"
         f"- Every listed task: file | touch | decision | risk\n\n"
         f"Place your numbered steps under ### Open Tasks.\n"
@@ -156,23 +154,23 @@ def make_thinking_planner_sys(max_steps: int, model_name: str = "") -> str:
         return (
         f"Produce a concrete, ordered codebase-aware implementation plan.\n"
         f"Codebase analysis is provided if available (CONTRACT OVERVIEW with complexity scores).\n\n"
-        f"THINKING PHASE (strategic reasoning - NOT a risk checklist):\n"
-        f"- MINIMAL CHANGE SET: What must stay untouched? Which boundaries must not move?\n"
-        f"- DEPENDENCY ORDER: What is the strict A->B->C chain? What blocks everything else?\n"
-        f"- SHARED CONTRACTS: Which interfaces/schemas must be stable before any implementation starts?\n"
-        f"- BLOCKING DECISION: Name the ONE architectural decision with the largest downstream impact.\n"
+        f"THINKING PHASE (strategic reasoning, not a risk checklist):\n"
+        f"- MINIMAL CHANGE SET: What should stay untouched? Which boundaries should not move?\n"
+        f"- DEPENDENCY ORDER: What is the expected A->B->C chain? What blocks everything else?\n"
+        f"- SHARED CONTRACTS: Which interfaces/schemas should be stable before implementation starts?\n"
+        f"- BLOCKING DECISION: Name the architectural decision with the largest downstream impact.\n"
         f"- VARIABLE/IMPORT MAP: Identify shared variables, types, imports that cross file boundaries. Map which\n"
         f"  symbols are defined where and consumed where - this prevents redundant creation across steps.\n"
-        f"Do NOT enumerate generic risks. Think about structure, not symptoms.\n"
-        f"Only then produce your implementation plan.\n\n"
-        f"Rules:\n"
-        f"- Use exactly as many steps as the task genuinely requires - one step per file/component change.\n"
-        f"- There is NO fixed step count. A simple fix may need 2 steps, a complex feature may need 10+. Judge by scope.\n"
-        f"- NO generic boilerplate (e.g. 'Setup project overview', 'Initialize dependencies', 'Test the implementation').\n"
-        f"- Each step must touch exactly ONE file or ONE interface boundary - never bundle multiple files into one step.\n"
-        f"- Base STRICTLY on existing files/classes shown in CONTRACT OVERVIEW.\n"
+        f"Keep risks specific to this task instead of listing generic ones.\n"
+        f"Then produce your implementation plan.\n\n"
+        f"Guidelines:\n"
+        f"- Use as many steps as the task genuinely needs - usually one per file/component change.\n"
+        f"- There is no fixed step count. A simple fix may need 2 steps, a complex feature may need 10+. Judge by scope.\n"
+        f"- Avoid generic boilerplate (e.g. 'Setup project overview', 'Initialize dependencies', 'Test the implementation').\n"
+        f"- Prefer one file or interface boundary per step; avoid bundling unrelated files.\n"
+        f"- Base the plan on existing files/classes shown in CONTRACT OVERVIEW.\n"
         f"- Order by dependency (interfaces before implementations, shared modules first).\n"
-        f"- Every step must include concrete file, exact touchpoint, one decision, and one risk.\n"
+        f"- Each step should include the concrete file, touchpoint, one decision, and one risk.\n"
         f"- When steps share types/imports: note the shared symbol and its origin file to prevent duplication.\n\n"
         f"Place your numbered steps under ### Open Tasks.\n"
         f"List already-completed work under ### Completed Tasks.\n"

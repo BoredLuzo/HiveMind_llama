@@ -1,31 +1,27 @@
-"""Coder briefing stage: thinking goes to the coder only while it is small.
+"""Coder briefing: concrete steps only — never planner wording or reasoning.
 
-Owner decision (2026-10-17): "a planner that thinks 8-16k tokens before a plan
-is complete poisoning for the coder" - so the planner's thinking is injected as
-"[Plan Briefing — IMPLEMENT THIS]" only up to a token limit; above it the coder
-gets the pure plan instead, with one line saying the reasoning was dropped.
-
-Contract (core/duo_runner.coder_briefing_text):
-  * limit 1500 (default) -> thinking <= limit is injected as-is ("full");
-  * above the limit      -> the plan text (or the subtask list) + a drop note
-                            ("plan-only");
-  * 0                     -> never inject thinking (always plan-only);
-  * -1                    -> old behaviour, always inject;
-  * no thinking           -> nothing to inject ("off").
+PLAN-CONTRACT (2026-11-04): the coder receives a distilled, numbered execution
+plan (user role). It must not analyze the planner's markdown ("## Plan /
+### Open Tasks") or the planner's thinking as if that came from another model.
+Chunked runs already carry the step list via build_chunk_context; the raw plan
+is injected only for the first non-chunked coder round.
 
 Run: python tests/test_coder_briefing.py
 """
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from core.duo.preflight import _est_tokens  # noqa: E402
-from core.duo_runner import (  # noqa: E402
-    BRIEFING_FULL, BRIEFING_OFF, BRIEFING_PLAN_ONLY, _briefing_limit_tokens,
+from core.duo.preflight import (  # noqa: E402
+    _inject_plan_into_coder_msgs,
     coder_briefing_text,
+)
+from core.duo_runner import (  # noqa: E402
+    BRIEFING_OFF, BRIEFING_PLAN_ONLY, coder_briefing_text as _runner_briefing,
 )
 
 passed = 0
@@ -42,85 +38,87 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name} {extra}")
 
 
-# a thinking block of a known size (cpt ~3.92 chars/token)
-SMALL = "Check the router file first. " * 20          # ~600 chars, ~150 tokens
-BIG = "Speculation about the architecture. " * 900    # ~32k chars, ~8k tokens
+SMALL = "Check the router file first. " * 20
+BIG = "Speculation about the architecture. " * 900
+PLANNER_MD = ("## Plan: build Tetris\n\n### Open Tasks\n"
+              "1. file: index.html | touch: canvas setup\n"
+              "2. file: game.js | touch: piece rotation\n")
 
-# ── limit resolution ───────────────────────────────────────────────────────
-check("default limit is 1500", _briefing_limit_tokens({}) == 1500)
-check("explicit limit is honoured",
-      _briefing_limit_tokens({"duo_coder_briefing_think_tokens": 400}) == 400)
-check("0 means plan-only", _briefing_limit_tokens({"duo_coder_briefing_think_tokens": 0}) == 0)
-check("-1 means always", _briefing_limit_tokens({"duo_coder_briefing_think_tokens": -1}) == -1)
-check("junk falls back to the default",
-      _briefing_limit_tokens({"duo_coder_briefing_think_tokens": "lots"}) == 1500)
-check("the value is clamped", _briefing_limit_tokens(
-    {"duo_coder_briefing_think_tokens": 10**9}) == 200_000)
+# ── 1. the coder gets distilled steps, never planner thinking ───────────────
+txt, mode, tok = coder_briefing_text(SMALL, PLANNER_MD, None, {}, "m")
+check("1a mode is plan-only", mode == BRIEFING_PLAN_ONLY)
+check("1b the plan steps survive", "canvas setup" in txt and "piece rotation" in txt)
+check("1c planner headings are stripped",
+      "## Plan" not in txt and "### Open Tasks" not in txt)
+check("1d no planner reasoning", "Check the router file first" not in txt)
+check("1e tokens are estimated for the injected text", tok > 0)
 
-# ── token estimate ─────────────────────────────────────────────────────────
-check("empty text is 0 tokens", _est_tokens("") == 0)
-check("the estimate is chars/cpt", 100 <= _est_tokens(SMALL, "any") <= 250,
-      f" ({_est_tokens(SMALL, 'any')})")
-check("a big block is many tokens", _est_tokens(BIG, "any") > 5000,
-      f" ({_est_tokens(BIG, 'any')})")
+txt, mode, _ = coder_briefing_text(BIG, PLANNER_MD, None, {}, "m")
+check("2a a huge thinking block is never injected",
+      "Speculation about the architecture" not in txt)
+check("2b the concrete plan is still there", "canvas setup" in txt)
 
-# ── the rule ───────────────────────────────────────────────────────────────
-txt, mode, tok = coder_briefing_text(SMALL, "PLAN: edit router.py", None,
-                                    {"duo_coder_briefing_think_tokens": 1500})
-check("small thinking is injected whole", mode == BRIEFING_FULL and txt == SMALL.strip())
-check("small thinking reports its token count", 0 < tok <= 1500, f" ({tok})")
+txt, mode, _ = coder_briefing_text(BIG, "", ["read a.py", "edit a.py"], {}, "m")
+check("3a structured subtasks win and are numbered",
+      mode == BRIEFING_PLAN_ONLY and "1. read a.py" in txt and "2. edit a.py" in txt)
 
-txt, mode, tok = coder_briefing_text(BIG, "PLAN: edit router.py", None,
-                                    {"duo_coder_briefing_think_tokens": 1500})
-check("big thinking is NOT injected", mode == BRIEFING_PLAN_ONLY)
-check("the pure plan is injected instead", "PLAN: edit router.py" in txt)
-check("the drop is explained to the coder",
-      "over the 1500-token briefing limit" in txt and "implement the PLAN" in txt)
-check("the reasoning itself is gone", "Speculation about the architecture" not in txt)
+txt, mode, tok = coder_briefing_text(SMALL, "", [], {}, "m")
+check("4a no plan and no subtasks means nothing to inject",
+      (txt, mode, tok) == ("", BRIEFING_OFF, 0))
 
-txt, mode, _ = coder_briefing_text(BIG, "", ["step one: read a.py", "step two: edit a.py"],
-                                  {"duo_coder_briefing_think_tokens": 1500})
-check("without plan text the subtasks are used", mode == BRIEFING_PLAN_ONLY
-      and "step one: read a.py" in txt and "step two: edit a.py" in txt)
+txt, _, _ = coder_briefing_text("only reasoning", "", [], {}, "m")
+check("5a reasoning alone is never sent to the coder", txt == "")
 
-txt, mode, _ = coder_briefing_text(SMALL, "PLAN: x", None,
-                                  {"duo_coder_briefing_think_tokens": 0})
-check("limit 0 always means plan-only", mode == BRIEFING_PLAN_ONLY and "PLAN: x" in txt)
+# ── 2. injection: once, distilled, user role; chunked runs skip ────────────
+class _Plan(SimpleNamespace):
+    pass
 
-txt, mode, _ = coder_briefing_text(BIG, "PLAN: x", None,
-                                  {"duo_coder_briefing_think_tokens": -1})
-check("-1 restores the old always-inject behaviour", mode == BRIEFING_FULL and txt == BIG.strip())
 
-txt, mode, tok = coder_briefing_text("", "PLAN: x", None, {})
-check("no thinking means nothing to inject", (txt, mode, tok) == ("", BRIEFING_OFF, 0))
-txt, mode, _ = coder_briefing_text("   ", "PLAN: x", None, {})
-check("whitespace thinking counts as empty", mode == BRIEFING_OFF)
+_plan = _Plan(
+    subtasks=["file: index.html | touch: canvas setup",
+              "file: game.js | touch: piece rotation"],
+    thinking="internal planner reasoning that must not leak",
+    plan_content=PLANNER_MD,
+)
 
-# ── wiring ─────────────────────────────────────────────────────────────────
+_msgs: list = []
+_ok = _inject_plan_into_coder_msgs(_msgs, _plan, chunking=True,
+                                  is_first_outer_round=True)
+check("6a chunked runs do not get the raw plan again", _ok is False and _msgs == [])
+
+_ok = _inject_plan_into_coder_msgs(_msgs, _plan, chunking=False,
+                                  is_first_outer_round=False)
+check("6b later outer rounds do not repeat the plan", _ok is False and _msgs == [])
+
+_ok = _inject_plan_into_coder_msgs(_msgs, _plan, chunking=False,
+                                  is_first_outer_round=True)
+check("7a the first non-chunked round gets the plan", _ok is True and len(_msgs) == 1)
+check("7b it is a user-role execution instruction",
+      _msgs and _msgs[0]["role"] == "user"
+      and "YOUR EXECUTION PLAN" in _msgs[0]["content"])
+check("7c it carries numbered steps, not planner markdown",
+      "1. file: index.html" in _msgs[0]["content"]
+      and "## Plan" not in _msgs[0]["content"])
+check("7d planner reasoning never reaches the coder",
+      "internal planner reasoning" not in _msgs[0]["content"])
+
+# ── 3. wiring: no planner-thinking path, no dead setting/UI ────────────────
 src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
-# 1.4.x: coder_briefing_text was moved to core/duo/preflight.py (pure move) and
-# is re-exported from duo_runner - the call sites must still be in the runner.
-_pf = (ROOT / "core" / "duo" / "preflight.py").read_text(encoding="utf-8", errors="replace")
-# 1.4.x: the definition lives in core/duo/preflight.py - the runner keeps the
-# two call sites (normal + agentic), the import and no third occurrence.
-check("both coder branches use the helper", src.count("coder_briefing_text(") >= 2)
-check("the helper is defined in preflight.py",
-      "def coder_briefing_text(" in _pf and "coder_briefing_text," in src)
-check("the decision is logged",
-      "[CODER-BRIEFING] mode=%s think_tokens=%d limit=%d" in src)
-check("the plan text comes from PlannerResult.plan_content",
-      'getattr(_plan_result, "plan_content", "")' in src)
-check("chunked runs are untouched (subtasks branch first)",
-      src.index("elif _subtasks:") < src.index("_brief_txt, _brief_mode, _brief_tok = coder_briefing_text(\n                    _plan_thinking, _plan_content_txt, _subtasks"))
-
+pf = (ROOT / "core" / "duo" / "preflight.py").read_text(encoding="utf-8", errors="replace")
 settings = (ROOT / "settings.py").read_text(encoding="utf-8", errors="replace")
-check("the setting exists with 1500", '"duo_coder_briefing_think_tokens": 1500' in settings)
 html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
-check("the UI control exists", 'id="duo-briefing-think-inp"' in html)
-check("the UI writes the setting",
-      "postSettings({duo_coder_briefing_think_tokens:S.duoBriefingThink})" in html)
-docs = (ROOT / "docs" / "settings.md").read_text(encoding="utf-8", errors="replace")
-check("the docs describe it", "duo_coder_briefing_think_tokens" in docs)
+
+check("8a both coder branches still use the helper",
+      src.count("coder_briefing_text(") >= 2)
+check("8b no thinking-size limit remains", "_briefing_limit_tokens" not in src
+      and "_briefing_limit_tokens" not in pf)
+check("8c the dead setting is gone",
+      "duo_coder_briefing_think_tokens" not in settings)
+check("8d the dead UI control is gone",
+      "duo-briefing-think-inp" not in html)
+check("8e the header says execution plan", "YOUR EXECUTION PLAN" in src)
+check("8f the helper is re-exported by the runner",
+      "coder_briefing_text," in src and callable(_runner_briefing))
 
 print()
 print(f"SUMMARY coder_briefing: {passed} passed, {failed} failed")

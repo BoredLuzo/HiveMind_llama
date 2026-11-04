@@ -173,7 +173,6 @@ DEFAULT_SETTINGS = {
     "duo_coder_model":          "",
     "duo_critic_model":         "",
     "duo_caps":                 {},
-    "duo_autolint_python_engine": "auto",
     "duo_pyright_path":         "",
 
     # ════════════════════════════════════════════════════════════════════════
@@ -295,12 +294,6 @@ DEFAULT_SETTINGS = {
     # Thinking → hermes-MoE thought until the 600s wall timeout and delivered empty
     # output. 4k was too tight for complex plans → 8k default (2026-08-31).
     "duo_planner_thinking_budget": 8000,
-    # CODER-BRIEFING-STAGE (2026-10-17, owner): the planner's thinking is only
-    # useful as a briefing while it is SMALL. A planner that thinks 8-16k tokens
-    # before writing a plan poisons the coder prompt (and the coder's window), so
-    # above this many ESTIMATED tokens only the pure plan is injected. 0 = never
-    # inject thinking (always plan-only). -1 = always inject (old behaviour).
-    "duo_coder_briefing_think_tokens": 1500,
     "duo_planner_ctx_cap":     None,
     "duo_planner_ctx_target":  None,
     "duo_planner_use_coder_ctx": True,

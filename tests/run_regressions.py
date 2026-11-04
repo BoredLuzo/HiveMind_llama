@@ -214,6 +214,7 @@ SUITES = [
     ("gateway_images",         "tests/test_gateway_images.py",                  40),
     ("documents",              "tests/test_documents.py",                    40),
     ("gateway_commands2",      "tests/test_gateway_commands2.py",               60),
+    ("send_file",              "tests/test_send_file.py",                       60),
     ("gateway_transport",      "tests/test_gateway_transport.py",               60),
     ("gateway_confinement",    "tests/test_gateway_confinement.py",             90),
     ("webfetch_guard",         "tests/test_webfetch_guard.py",                  60),

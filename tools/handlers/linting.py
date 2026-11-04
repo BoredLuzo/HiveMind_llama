@@ -93,17 +93,14 @@ async def _auto_lint_result(p: "Path", workspace: "Path") -> str:
         if not lang:
             return ""
         if lang == "python":
-            try:
-                from core.state import settings as _al_settings
-                _engine = str(_al_settings.get("duo_autolint_python_engine", "auto") or "auto").strip().lower()
-            except Exception:
-                _engine = "auto"
-            if _engine in ("auto", "pyright"):
-                _pyr = _resolve_pyright_cmd()
-                if _pyr is not None:
-                    return await _pyright_lint_result(_pyr, p, workspace)
-                logging.getLogger("hivemind.tools").debug(
-                    "[AUTO-LINT] pyright not found — falling back to py_compile for %s", p.name)
+            # ONE LINTER (2026-11-04): pyright when installed, py_compile only
+            # as an environment fallback. The user-facing engine selector is
+            # gone - there is nothing to choose.
+            _pyr = _resolve_pyright_cmd()
+            if _pyr is not None:
+                return await _pyright_lint_result(_pyr, p, workspace)
+            logging.getLogger("hivemind.tools").debug(
+                "[AUTO-LINT] pyright not found — falling back to py_compile for %s", p.name)
         cfg      = LANGUAGE_RUNNERS.get(lang, {})
         lint_tpl = cfg.get("lint_cmd")
         if not lint_tpl or "{file}" not in lint_tpl and "file" not in lint_tpl:

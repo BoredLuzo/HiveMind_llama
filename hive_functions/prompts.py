@@ -216,19 +216,18 @@ ERROR RECOVERY:
 
 
 DUO_CODER_EXECUTION = """
-EXECUTION MODE — No planning. No restating. No summarizing.
+EXECUTION MODE — implement the plan; do not re-plan or restate it.
 
-A plan already exists. Your job is NOT to think about WHAT to do.
-Your job is to IMPLEMENT what the plan says.
+The plan is already decided. Focus on implementing it rather than
+re-analyzing what to do.
 
-CRITICAL: Your first output MUST be a tool call.
-If you output text, a plan, or markdown instead of a tool call, you have failed.
+Start with a tool call when you can. A plan restatement costs an extra round.
 
 - Pick the right first tool for the plan step (read_file, write_file, edit_file, search_code, etc.).
   Only call read_file if the target file was NOT covered in pre-explore results.
-- During implementation: 1 edit + 1 run_bash per round. Never 2 reads in a row.
+- During implementation: 1 edit + 1 run_bash per round. Avoid two reads in a row.
   Before calling task_complete: if you edited any file since your last run_bash,
-  run your tests one final time — failing tests mean you are not done.
+  run your tests one final time — failing tests mean the work is not done yet.
 - Large files: one write_file call per file within your WRITE RULES char
   target. If a call is cut off, the server salvages up to the last complete
   line — continue from that line with write_file_append.
@@ -241,15 +240,15 @@ If you output text, a plan, or markdown instead of a tool call, you have failed.
 """
 
 DUO_CODER_AUTONOMOUS = """
-AUTONOMOUS MODE — No Planner. You figure it out yourself.
+AUTONOMOUS MODE — you choose the approach.
 
 RULES:
-- Your first action MUST be a tool call. No text, no plan, no markdown before the first tool call.
+- Start with a tool call; don't narrate or restate the request first.
 - When you receive [CTX CRITICAL]: stop all read_file calls immediately and switch to writing/editing.
 - When you receive a [CTX: ~N% full] warning: finish the current read sequence, then write.
 - Never call read_file on the same file more than twice without an edit in between.
 - If tests fail 3x with the same error: stop, call task_complete with status=blocked and reason.
-- Do not describe what you will do. Do it.
+- Work directly; don't describe what you will do.
 """
 
 
@@ -544,17 +543,17 @@ The contracts describe the codebase ARCHITECTURE — not the code itself:
 - data_flow: how data moves through this partition
 - touched_by_task: whether this partition likely needs changes
 
-CRITICAL RULES:
-- Files listed in the "Static Repo-Map" ALREADY EXIST on disk — plan to MODIFY them, never recreate them from scratch. If a needed file already exists, its step must describe what changes inside it (not "create" it).
-- One step = one file. Never bundle files into one step.
+RULES:
+- Files listed in the "Static Repo-Map" already exist on disk — modify them rather than recreating them from scratch. If a needed file already exists, its step should describe what changes inside it (not "create" it).
+- Prefer one file per step; avoid bundling unrelated files.
 - Order by dependency: shared types/interfaces first, consumers last.
-- Use exactly as many steps as the task genuinely requires — there is NO fixed step count. A simple fix may need 2 steps, a complex feature may need 10+. Judge by scope, not by a number.
+- Use as many steps as the task genuinely requires — there is no fixed step count. A simple fix may need 2 steps, a complex feature may need 10+. Judge by scope, not by a number.
 - The Coder may read files before editing if content is not available — only specify WHAT to change, not HOW to read.
-- touched_by_task = "unlikely": include in context for reference, but do not add steps that modify these partitions unless a dependency chain strictly requires it.
+- touched_by_task = "unlikely": include in context for reference, but do not add steps that modify these partitions unless the dependency chain genuinely requires it.
 - VARIABLE/IMPORT MAP: Before listing steps, identify shared variables, types, and imports that cross file boundaries. Map which symbols are defined where and consumed where — this prevents redundant creation across steps.
 - When steps share types/imports: note the shared symbol and its origin file to prevent duplication.
 
-OUTPUT FORMAT — one block per step, no other text:
+OUTPUT FORMAT — one block per step, keeping the plan concise:
 
 IMPORT-MAP:
   SymbolX → defined in path/to/a.py → consumed by path/to/b.py, path/to/c.py

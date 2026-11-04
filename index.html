@@ -511,16 +511,6 @@
             onchange="S.duoPlannerMaxTokens=parseInt(this.value)||0;postSettings({duo_planner_max_tokens:S.duoPlannerMaxTokens})">
         </div>
 
-        <div class="opt-row" style="margin-top:4px">
-          <div class="opt-row-left">
-            <span class="opt-name">Coder briefing limit</span>
-            <span class="opt-hint">Planner thinking goes to the coder only up to this many tokens &middot; 0 = plan only &middot; -1 = always</span>
-          </div>
-          <input type="number" id="duo-briefing-think-inp" min="-1" step="500" value="1500"
-            style="width:90px;background:var(--bg);border:1px solid var(--b2);border-radius:3px;padding:3px 6px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:10px"
-            onchange="S.duoBriefingThink=parseInt(this.value);if(isNaN(S.duoBriefingThink))S.duoBriefingThink=1500;postSettings({duo_coder_briefing_think_tokens:S.duoBriefingThink})">
-        </div>
-
         <div class="opt-row" style="margin-top:4px" id="duo-thinking-per-chunk-wrap">
           <div class="opt-row-left">
             <span class="opt-name" id="tpc-label" style="opacity:.4">Per Chunk</span>
@@ -1499,23 +1489,13 @@
       </div>
       <div class="fld-hint">Attaches an 8-line <code>[LSP auto-diagnostics]</code> block to a write
         when a server is already warm. Never starts a cold server.</div>
-      <div class="tgl-row">
-        <span class="tgl-text">Auto-lint after writes</span>
-        <select id="autolint-engine-sel"
-          style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;max-width:230px"
-          onchange="S.autolintEngine=this.value;postSettings({duo_autolint_python_engine:S.autolintEngine})">
-          <option value="auto">Python lint: auto (pyright if installed)</option>
-          <option value="pyright">Python lint: pyright only</option>
-          <option value="basic">Python lint: syntax only (py_compile)</option>
-        </select>
-      </div>
       <div class="fld-hint">Runs after every write, in the language of the file:
-        <code>py_compile</code>/pyright (Python), <code>node --check</code> (JS),
+        <code>pyright</code> for Python (<code>py_compile</code> fallback when pyright is not
+        installed), <code>node --check</code> (JS),
         <code>tsc --noEmit</code> (TS), <code>cargo check</code> (Rust), <code>go vet</code>,
         <code>javac</code>, <code>dotnet build</code>, <code>g++ -fsyntax-only</code>,
         <code>astro check</code>, <code>docker compose config</code>.
-        The selector above only affects <b>Python</b> - every other language has one obvious
-        compiler command, so there is nothing to choose.
+        Each language has exactly one lint engine - no selector needed.
         Set <code>duo_pyright_path</code> in settings.json when the engine runs headless
         and cannot see the npm global bin.</div>
       <div class="cfg-grid" style="margin-top:6px">

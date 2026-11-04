@@ -60,11 +60,16 @@ def resolve_token() -> str:
     if tok:
         return tok
     try:
-        import keyring  # optional dependency; guarded on purpose
-        from keyring.errors import NoKeyringError
+        # Optional Windows dependency. Imported through importlib so the
+        # Linux CI type check does not report a missing module that the
+        # platform marker deliberately does not install.
+        from importlib import import_module as _import_module
+        _keyring = _import_module("keyring")
+        _keyring_errors = _import_module("keyring.errors")
         try:
-            tok = (keyring.get_password("hivemind_gateway", "bot_token") or "").strip()
-        except NoKeyringError:
+            tok = (_keyring.get_password(
+                "hivemind_gateway", "bot_token") or "").strip()
+        except _keyring_errors.NoKeyringError:
             # Linux audit 2026-11-03: headless Linux has no keyring backend;
             # this raised NoKeyringError (not ImportError) and killed startup.
             tok = ""
@@ -690,6 +695,8 @@ class Gateway:
                              reply_to_message_id=p.message_id)
         elif name == "workspace":
             await self._owner_bridge_call(p, self.bridge.workspace_text(arg))
+        elif name == "send":
+            await self.cmd_send_file(p, arg)
         elif name == "tools":
             await self.reply(p.chat_id, self.bridge.tools_text(arg),
                              reply_to_message_id=p.message_id)
@@ -1041,6 +1048,38 @@ class Gateway:
         _t = asyncio.create_task(_own_run_task())
         _t.add_done_callback(lambda t: t.exception() and log.warning(
             "[RUN] own run task failed: %s", t.exception()))
+
+    async def cmd_send_file(self, p: gw_auth.ParsedUpdate, arg: str) -> None:
+        """/send <path> - deliver one workspace file to this chat.
+
+        Explicit chat request, so no run and no approval card. The same
+        confinement/secret/size guards as the agentic send_file tool apply.
+        """
+        raw = str(arg or "").strip().strip('"').strip("'")
+        from core.send_files import SendFileError, read_sendable
+        chat_id = str(p.chat_id or "")
+        try:
+            mapping = await self.bridge._ensure_chat()
+            ws = await self.bridge.workspace_for_chat(
+                str(mapping.get("hive_chat_id") or ""))
+            data, name = await asyncio.to_thread(read_sendable, ws, raw)
+        except SendFileError as exc:
+            await self.reply(chat_id, f"❌ {exc}",
+                             reply_to_message_id=p.message_id)
+            return
+        except (HiveUnreachable, HTTPError, OSError, ValueError) as exc:
+            await self.reply(chat_id, f"🔌 /send failed: {exc}",
+                             reply_to_message_id=p.message_id)
+            return
+        try:
+            await self.send_document(data, name)
+        except (TelegramApiError, OSError) as exc:
+            await self.reply(chat_id, f"❌ upload failed: {exc}",
+                             reply_to_message_id=p.message_id)
+            return
+        await self.reply(chat_id,
+                         f"📎 Sent {name} ({len(data)} bytes).",
+                         reply_to_message_id=p.message_id)
 
     async def cmd_pair(self, p: gw_auth.ParsedUpdate, arg: str) -> None:
         if self.owner_id is not None:
@@ -1554,7 +1593,8 @@ async def perform_token_setup(token: str, store=None) -> str:
     username = str(me.get("username") or "?")
     if store is None:
         try:
-            import keyring
+            from importlib import import_module as _import_module
+            _keyring = _import_module("keyring")
         except ImportError:
             raise StartupError(
                 "keyring not installed — install it into the SAME "
@@ -1562,7 +1602,7 @@ async def perform_token_setup(token: str, store=None) -> str:
                 "install keyring   (project-venv installs, which ship "
                 "without pip:  uv pip install --python "
                 ".venv\\Scripts\\python.exe keyring)") from None
-        store = keyring.set_password
+        store = _keyring.set_password
     store("hivemind_gateway", "bot_token", token)
     return username
 

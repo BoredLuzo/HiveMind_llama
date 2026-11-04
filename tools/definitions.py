@@ -494,6 +494,25 @@ _INLINE_CODING_TOOLS = [
     }},
 ]
 
+# Delivered via Telegram sendDocument. Added to the schema only for runs the
+# Telegram gateway started (`include_send_file`), so desktop/API runs never
+# see a channel they cannot use. The handler further requires that the run
+# wrote the file itself and that it stays inside the workspace.
+_SEND_FILE_TOOL = {"type": "function", "function": {
+    "name": "send_file",
+    "description": (
+        "Queue a file you created in THIS run for delivery to the Telegram "
+        "chat. Use it when the task asks for a deliverable (HTML page, "
+        "document, image); delivery happens after final verification. Only "
+        "files written by this run inside the workspace are accepted; "
+        "secrets and files over 50 MB are refused."
+    ),
+    "parameters": {"type": "object", "properties": {
+        "path": {"type": "string",
+                 "description": "File path (relative to the workspace)"}
+    }, "required": ["path"]}
+}}
+
 
 # edit_file intentionally excluded from critic — critic must not modify code.
 # Defined here, AFTER _INLINE_CODING_TOOLS, to avoid NameError at module load.
@@ -531,7 +550,8 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # old recorded sessions, but are no longer advertised (not in
     # _INLINE_CODING_TOOLS) — the coder uses edit_file (+start_line/end_line).
     "duo_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch",
-                                           "replace_lines", "edit_ast"},
+                                           "replace_lines", "edit_ast",
+                                           "send_file"},
     # WEDGE-HANDOFF (2026-09-17): fresh-context repair delegate. Read + write
     # family, deliberately NO run_bash/git/ask_user/browser — minimal-invasive
     # fix only; all handler-level guards (noop, shrink, block-sniff,
@@ -684,6 +704,7 @@ _TOOL_PRIORITY = [
     # tier 1 — the working set
     "run_tests", "search_code", "list_dir", "find_files", "get_signatures",
     "undo_last", "ask_user", "get_datetime", "write_file_append",
+    "send_file",
     # LSP: the two tools a small-ctx run needs most. Without priority they
     # were dropped first by the schema fitter (audit 2026-10-31, P2-5).
     "lsp_status", "lsp_diagnostics",
@@ -817,8 +838,11 @@ def _mcp_tool_defs() -> list:
 
 
 def _get_inline_tools(include_websearch: bool = False, mode: str | None = None,
-                      budget_chars: int | None = None) -> list:
+                      budget_chars: int | None = None,
+                      include_send_file: bool = False) -> list:
     tools = list(_INLINE_CODING_TOOLS)
+    if include_send_file:
+        tools.append(_SEND_FILE_TOOL)
     if include_websearch and _WEBSEARCH_AVAILABLE and _websearch is not None:
         tools.extend(_websearch.get_tool_defs())
     if mode:

@@ -84,6 +84,7 @@ class FakeHive:
         self.created = []
         self.journal_body = {"active": False}
         self.aborts = []
+        self.workspace = ""
 
     async def create_chat(self, title):
         self.created.append(title)
@@ -106,6 +107,12 @@ class FakeHive:
 
     async def get_models(self):
         return {"models": ["m-one", "m-two", "m-three"], "profiles": []}
+
+    async def get_chats(self):
+        return []
+
+    async def get_chat(self, chat_id):
+        return FakeResponse(200, {"workspace": self.workspace})
 
 
 class FakeBridge(RunBridge):
@@ -571,6 +578,27 @@ async def t_slash_and_pending():
           f"({[t[:40] for _, t in api.sent]})")
 
 
+async def t_send_file():
+    """SEND-FILE (2026-11-04): /send uploads a workspace file, rejects escape."""
+    gw, st, api = _gw("gwcmd_send_")
+    ws = Path(tempfile.mkdtemp(prefix="gw_send_ws_"))
+    (ws / "index.html").write_text("<html>ok</html>", encoding="utf-8")
+    gw.hive.workspace = str(ws)
+    await gw.cmd_send_file(_p("/send index.html"), "index.html")
+    check("/send uploads the workspace file",
+          bool(api.docs) and api.docs[0][1] == "index.html",
+          f"({api.docs})")
+    check("/send confirms with the byte count",
+          any("Sent index.html" in t for _, t in api.sent), f"({api.sent})")
+
+    api.docs.clear()
+    api.sent.clear()
+    await gw.cmd_send_file(_p("/send ../outside.html"), "../outside.html")
+    check("/send refuses path traversal", api.docs == [], f"({api.docs})")
+    check("/send reports the refusal",
+          any("inside the workspace" in t for _, t in api.sent), f"({api.sent})")
+
+
 async def _main():
     await t_new()
     await t_status_verbose()
@@ -588,6 +616,7 @@ async def _main():
     await t_slash_and_pending()
     await t_help()
     await t_setup_token()
+    await t_send_file()
 
 asyncio.run(_main())
 print()

@@ -28,6 +28,7 @@ Covered findings:
      own deploy helpers keep shipping
 """
 import os
+import time
 import re
 import shutil
 import subprocess
@@ -116,6 +117,19 @@ def make_zip(path, rootname, files):
 def write(p: Path, content: str):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
+
+
+def age_tree(root: Path, seconds: int = 120) -> None:
+    """Make a fake destination older than the fake source.
+
+    Robocopy skips a destination file when it is newer AND has the same size
+    (the "same" check). Two files written within the same clock tick can
+    otherwise look identical, making a copy assertion flaky under load.
+    """
+    _t = time.time() - seconds
+    for p in root.rglob("*"):
+        if p.is_file():
+            os.utime(p, (_t, _t))
 
 
 # ── A. source guards ─────────────────────────────────────────────────────
@@ -221,13 +235,15 @@ def section_b1(tmp: Path):
     write(ex / "settings.json", '{"token":"LEAK"}\n')
     write(ex / "sessions" / "s.bin", "zip session\n")
 
-    write(base / "core" / "a.py", "old core\n")
+    # Distinct size/timestamp: robocopy skips same-size+same-tick files.
+    write(base / "core" / "a.py", "old core file\n")
     write(base / "model_configs" / "models" / "m1.json", '{"old": true}\n')
     write(base / "models" / "big.gguf", "user gguf\n")
     write(base / "settings.json", '{"token":"USER"}\n')
     write(base / "sessions" / "s.bin", "user session\n")
     write(base / ".hive_uploads" / "u.bin", "user upload\n")
     write(base / "update.bat", "@echo running updater\n")
+    age_tree(base)
 
     line = next(l for l in robocopy_lines() if "%EXROOT%" in l)
     line = line.replace("%EXROOT%", str(ex)).replace("%BASE%", str(base))
@@ -260,6 +276,7 @@ def section_b2(tmp: Path):
     write(base / "settings.json", '{"token":"USER"}\n')
     write(base / "sessions" / "s.bin", "user session\n")
     write(base / "update_backup_1.3.8" / "core" / "old.py", "old backup\n")
+    age_tree(base)
 
     bk = "update_backup_1.3.9-audit"
     line = next(l for l in robocopy_lines() if "%BK%" in l)

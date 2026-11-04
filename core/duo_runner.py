@@ -233,19 +233,12 @@ _DUO_HEARTBEAT_DEFAULT = 10
 
 
 
-# ── CODER-BRIEFING-STAGE (2026-10-17, owner) ────────────────────────────────
-# The planner's thinking is injected into the coder as "[Plan Briefing —
-# IMPLEMENT THIS]". That is useful while the reasoning is SHORT and pure
-# poisoning when the planner thinks 8-16k tokens first: the coder then gets a
-# wall of speculation instead of a plan, on top of its own prompt.
-# Rule: estimate the thinking size in tokens (chars / measured cpt) and inject it
-# only up to duo_coder_briefing_think_tokens. Above that (or with 0) the coder
-# gets the pure plan text instead, plus one line saying the reasoning was
-# dropped. -1 restores the old "always inject" behaviour.
-BRIEFING_FULL = "full"
+# ── CODER-BRIEFING-STAGE (2026-11-04) ──────────────────────────────────────
+# The coder executes the plan; it does not analyze the planner's markdown or
+# reasoning as if that came from another model. Only the concrete steps are
+# injected, numbered, as a user-role execution plan.
 BRIEFING_PLAN_ONLY = "plan-only"
 BRIEFING_OFF = "off"
-BRIEFING_MAX_TOKENS_DEFAULT = 1500
 
 
 
@@ -299,7 +292,6 @@ from core.duo.preflight import (  # noqa: F401
     _apply_thinking_kwargs,
     _auto_commit_chunk,
     _await_with_hb,
-    _briefing_limit_tokens,
     _build_dtool_base,
     _build_os_hint,
     _build_plan_anchor_text,
@@ -1527,6 +1519,7 @@ async def _duo_exec_round_task(
                 read_ladder_fired=_read_ladder_fired,
                 ws_budget_streak=_ws_budget_streak,
                 ws_disabled=_ws_disabled,
+                allow_send_file=(str(ctx.settings.get("source") or "") == "telegram"),
             ),
             tool_mode=_tool_mode,
             duo_ws=_duo_ws,
@@ -1989,7 +1982,10 @@ async def _duo_resolve_tool_budgets(
         state["_budgets"] = _run_budgets
         _xtools_ws = _get_inline_tools(
             include_websearch=_duo_ws, mode="duo_full",
-            budget_chars=_run_budgets.schema_budget)
+            budget_chars=_run_budgets.schema_budget,
+            # Telegram runs may deliver files the model creates; desktop and
+            # API runs never see a channel they cannot use.
+            include_send_file=(str(ctx.settings.get("source") or "") == "telegram"))
         state["_xtools_ws"] = _xtools_ws
         logger.info(
             "[BUDGETS] ctx=%d cpt=%.2f(%s) out=%d -> tool_cap=%d read_cap=%d schema=%d "
@@ -2172,6 +2168,18 @@ async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
 
 async def run_code_duo(ctx):
     """Code-duo handler: iterative coder+critic loop."""
+    # PLANNER-OFF (2026-11-04): chunking is a planner feature ("Planner
+    # creates N subtasks"). With the planner toggle off there is no plan and
+    # therefore no chunks; otherwise an old persisted duo_chunking=true kept
+    # running the planner phase while the UI hid the row. The coder then gets
+    # only the user prompt.
+    try:
+        if not ctx.duo_config.planner and ctx.duo_config.chunking:
+            ctx.duo_config.chunking = False
+            logger.warning(
+                "[PLANNER-OFF] chunking disabled because the planner is off")
+    except AttributeError:
+        pass
     state: dict = {
         "coder_mdl": None,
         "critic_mdl": None,
@@ -2622,6 +2630,9 @@ async def run_code_duo(ctx):
 
         # Fortschritt). No-Overwrite-Guard wie im Safety-Net.
         _total_tool_rounds: int = 0
+        # SEND-FILE: paths validated by the tool, delivered only after the
+        # final verification. Run-persistent across tool rounds.
+        _pending_send_files: list[str] = []
         _max_tool_rounds: int = 0    # default before tool-round setup
         _lifetime_tool_rounds: int = 0
         _total_tool_errors_ref: list[int] = [0]
@@ -2764,7 +2775,9 @@ async def run_code_duo(ctx):
                 + ", ".join(_img_paths)
                 + ". Reference them by path if needed (binary - do not cat it).")
         _follow_up_hint = state.get("_follow_up_hint", "") or ""
-        if _follow_up_hint:
+        # PLANNER-OFF (2026-11-04): with planner and chunking both off the
+        # coder gets only the user prompt - no previous-plan hint either.
+        if _follow_up_hint and (ctx.duo_config.planner or ctx.duo_config.chunking):
             _duo_coder_sys += "\n\n" + _follow_up_hint
 
 
@@ -3809,13 +3822,12 @@ async def run_code_duo(ctx):
                 elif _plan_thinking:
                     _brief_txt, _brief_mode, _brief_tok = coder_briefing_text(
                         _plan_thinking, _plan_content_txt, None, ctx.settings, exec_mdl)
-                    logger.warning("[CODER-BRIEFING] mode=%s think_tokens=%d limit=%d",
-                                   _brief_mode, _brief_tok,
-                                   _briefing_limit_tokens(ctx.settings))
+                    logger.warning("[CODER-BRIEFING] mode=%s tokens=%d",
+                                   _brief_mode, _brief_tok)
                     if _brief_txt:
                         _coder_input = (
                             _exec_header + "\n" + _coder_input +
-                            f"\n\n[Plan Briefing — IMPLEMENT THIS]:\n{_brief_txt}"
+                            f"\n\n[YOUR EXECUTION PLAN — IMPLEMENT THIS, DO NOT RE-PLAN]:\n{_brief_txt}"
                         )
             elif _subtasks:
                 _exec_header = (
@@ -3835,13 +3847,12 @@ async def run_code_duo(ctx):
                 )
                 _brief_txt, _brief_mode, _brief_tok = coder_briefing_text(
                     _plan_thinking, _plan_content_txt, _subtasks, ctx.settings, exec_mdl)
-                logger.warning("[CODER-BRIEFING] mode=%s think_tokens=%d limit=%d",
-                               _brief_mode, _brief_tok,
-                               _briefing_limit_tokens(ctx.settings))
+                logger.warning("[CODER-BRIEFING] mode=%s tokens=%d",
+                               _brief_mode, _brief_tok)
                 if _brief_txt:
                     _coder_input = (
                         _exec_header + "\n" + _coder_input +
-                        f"\n\n[Plan Briefing — IMPLEMENT THIS]:\n{_brief_txt}"
+                        f"\n\n[YOUR EXECUTION PLAN — IMPLEMENT THIS, DO NOT RE-PLAN]:\n{_brief_txt}"
                     )
 
             _coder_skipped_images = False
@@ -4354,6 +4365,7 @@ async def run_code_duo(ctx):
                     ctx.aborted(),
                     ctx.duo_config.planner,
                     _has_plan,
+                    chunking_enabled=ctx.duo_config.chunking,
                 )
                 if _run_thinking_now:
                     ctx.exec_ctrl.transition(AgentState.PLANNING)
@@ -6492,6 +6504,15 @@ async def run_code_duo(ctx):
                             break
                         _verify_mutation_serial = _exec_result.verify_mutation_serial
                         _verify_last_ok_serial = _exec_result.verify_last_ok_serial
+                        for _sfp in _exec_result.send_files:
+                            if _sfp and _sfp not in _pending_send_files:
+                                _pending_send_files.append(_sfp)
+                        if _exec_result.extra_user_msg:
+                            # SEND-FILE: hard next-step nudge after a delivery.
+                            _dtool_msgs.append({
+                                "role": "user",
+                                "content": _exec_result.extra_user_msg})
+                            _exec_result.extra_user_msg = ""
                         _last_run_bash_failure = _exec_result.last_run_bash_failure
                         _changed_since_failure = _exec_result.changed_since_failure
                         _last_learned_insight_sig = _exec_result.last_learned_insight_sig
@@ -7941,6 +7962,28 @@ async def run_code_duo(ctx):
     except Exception:
         pass
 
+    # ── SEND-FILE: last action, after final verification ────────────────
+    # The tool only queues paths. A completed Telegram run delivers them now,
+    # after the verify gate, so a file can never go out before the final test.
+    # If the model forgot to call send_file, exactly one deliverable file in
+    # the run is sent automatically; multiple candidates stay manual.
+    if (ctx.duo_stop_reason == "completed"
+            and str(ctx.settings.get("source") or "") == "telegram"
+            and not ctx.aborted()):
+        try:
+            from core.send_files import choose_deliverables as _choose_sf
+            _deliver_files = _choose_sf(
+                _pending_send_files, _written_files)
+        except (ImportError, TypeError, ValueError):
+            _deliver_files = list(_pending_send_files)
+        for _sfp in _deliver_files:
+            logger.info("[SEND-FILE] final delivery after verification: %s",
+                        _sfp)
+            yield await ctx.emit({
+                "type": "send_file",
+                "path": _sfp,
+                "workspace": _ws_str,
+            })
     yield await ctx.emit(ctx.done_event(round(time.time() - ctx.t_total, 1), ctx.duo_stop_reason, **ctx.collect_done_metrics()))
     ctx.unregister_abort(ctx.run_id)
     ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing — step_skip event leaked after Duo runs

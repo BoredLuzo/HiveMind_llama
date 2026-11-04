@@ -95,6 +95,7 @@ def run_round(tool_calls, dtool_msgs=None, round_state=None, **over):
         attempts_per_file={}, tool_error_retries={}, call_sigs=[],
         recent_focus_paths=[], file_changes={}, duo_seen_web_queries=set(),
         cached_coder_port=[None], task_complete_blocked_count=None, total_tool_errors=None,
+        allow_send_file=False,
     )
     trs = over.pop("trs", None)
     if trs is None:
@@ -367,6 +368,25 @@ _res3, _h3, _m3, _, _, _ = run_round([tc("run_bash", {"cmd": "Test-Path x"})],
                                      trs=_rep_trs)
 check("run_bash repeat: 3x reinject still fires",
       any("[LOOP DETECTED]" in str(m.get("content", "")) for m in _m3))
+
+# ── SEND-FILE (2026-11-04): the gateway gets a dedicated event and the
+# coder a hard "finish now" nudge, so a delivered file cannot be followed by
+# a web-search loop that labels the whole run loop_detected.
+_HANDLERS["send_file"] = "[FILE_QUEUED] demo.html (12 bytes) queued"
+_sf_res, _sf_hooks, _, _, _, _ = run_round(
+    [tc("send_file", {"path": "demo.html"})], tool_mode="duo_full",
+    allow_send_file=True)
+check("send_file queues the path for the runner",
+      _sf_res.send_files == ["demo.html"])
+check("send_file does not deliver early",
+      not any(e.get("type") == "send_file" for e in _sf_hooks.events))
+check("send_file sets the finish nudge",
+      "task_complete" in _sf_res.extra_user_msg)
+_no_sf_res, _no_sf_hooks, _, _, _, _ = run_round(
+    [tc("send_file", {"path": "demo.html"})], tool_mode="duo_full")
+check("send_file is blocked outside Telegram runs",
+      not any(e.get("type") == "send_file" for e in _no_sf_hooks.events)
+      and not _no_sf_res.extra_user_msg)
 
 print()
 print(f"{'='*50}")

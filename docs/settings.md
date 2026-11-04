@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**277 settings keys.**
+**275 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -36,12 +36,10 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_action_approval_timeout_s` | int | `0` | yes | Auto-DENY an unanswered approval card after N seconds (0 = off, attended runs wait as before). With N > 0 and nobody at the desk the gated call is DENIED once (fail closed, review: the old auto-approve-once behavior approved unseen actions) - the gate wait ends… |
 | `duo_agentic_mode` | bool | `True` | yes | DEFAULT-SUBMODE: the agentic coder (one model, solo in VRAM) is the default; the Critic-Duo is one click away and costs a second model. |
 | `duo_agentic_thinking` | bool | `False` | yes |  |
-| `duo_autolint_python_engine` | str | `auto` | yes |  |
 | `duo_caps` | object | `{}` | - |  |
 | `duo_chunking` | bool | `False` | yes | CHUNKING DEFAULT OFF : stays a working opt-in, but a fresh install runs one coder pass (the planner subtasks are skipped with an honest status) instead of silently chunking. |
 | `duo_coder_after_run` | str | `keep` | yes | CODER LIFETIME : keep = the slot stays warm after the run (idle TTL decides), evict = release it at the run end so the next prompt can load any model/mode without evicting anything. |
 | `duo_coder_always_vision` | bool | `False` | yes | Send images to the coder even when the task looks text-only. |
-| `duo_coder_briefing_think_tokens` | int | `1500` | yes | CODER-BRIEFING-STAGE : the planner's thinking is only useful as a briefing while it is SMALL. A planner that thinks 8-16k tokens before writing a plan poisons the coder prompt (and the coder's window), so above this many ESTIMATED tokens only the pure plan is… |
 | `duo_coder_ctx_agentic` | null | `None` | yes |  |
 | `duo_coder_ctx_normal` | null | `None` | yes |  |
 | `duo_coder_explore_chars` | int | `0` | yes |  |

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from tools.definitions import (
     _INLINE_CODING_TOOLS,
     _INLINE_TOOL_NAMES,
+    _SEND_FILE_TOOL,
     _TOOL_MODE_ALLOWLISTS,
     _TOOL_SUBSETS,
     _filter_tools_for_mode,
@@ -59,7 +60,7 @@ def _validate_args(schema_params: dict, args: dict) -> list[str]:
 
 
 # ── Schema-Struktur aller Tools ─────────────────────────────────────────
-_tools = list(_INLINE_CODING_TOOLS)
+_tools = list(_INLINE_CODING_TOOLS) + [_SEND_FILE_TOOL]
 check("tools non-empty", len(_tools) >= 20, f" ({len(_tools)})")
 schema_bad = 0
 for t in _tools:
@@ -92,7 +93,10 @@ check("tool names unique", len(set(_names)) == len(_names))
 _KNOWN_EXTERNAL = {"web_search", "web_fetch", "hivemind_pipeline",
                    # CONSOLIDATION 2026-09-17: allowed for old recorded sessions
                    # but no longer advertised (edit_file covers both).
-                   "replace_lines", "edit_ast"}
+                   "replace_lines", "edit_ast",
+                   # SEND-FILE 2026-11-04: conditional schema, added only for
+                   # Telegram-gateway runs via include_send_file.
+                   "send_file"}
 _bad_allow = []
 for mode, allow in _TOOL_MODE_ALLOWLISTS.items():
     for name in allow:

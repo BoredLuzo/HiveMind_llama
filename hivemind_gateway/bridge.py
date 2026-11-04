@@ -186,6 +186,23 @@ class RunBridge:
         self.state.save()
         return mapping
 
+    async def workspace_for_chat(self, chat_id: str) -> str:
+        """Resolved workspace of one HiveMind chat, or '' if unset.
+
+        The chat metadata is authoritative (the engine resolves runs from
+        it). The phone-side /workspace mapping is the fallback for a chat
+        whose metadata cannot be read.
+        """
+        try:
+            r = await self.hive.get_chat(chat_id)
+            r.raise_for_status()
+            _ws = str((r.json() or {}).get("workspace") or "").strip()
+            if _ws:
+                return _ws
+        except (HiveUnreachable, HTTPError, OSError, ValueError, AttributeError):
+            pass
+        return str((self._tg_chat() or {}).get("workspace") or "").strip()
+
     async def _write_turn(self, chat_id: str, turn: dict) -> int:
         """Append one turn to the main json with CAS. 409 => adopt the
         server's messages, re-append ours, retry once. Returns the rev."""
@@ -331,6 +348,42 @@ class RunBridge:
         # resolved or lost it); never answer a stale card late
         self._open_own_approval = None
         self._stop_requested = False
+
+    async def _deliver_send_file(self, ev: dict, fallback_ws: str = "") -> None:
+        """Upload one send_file event; never lets an upload kill the run.
+
+        The engine already validated the file. This is the second, independent
+        gate: workspace confinement, secret-name block and the 50 MB cap all
+        run again on the gateway side before anything reaches send().
+        """
+        _sf_path = str(ev.get("path") or "")
+        _sf_ws = str(ev.get("workspace") or fallback_ws or "")
+        _sf_key = f"{_sf_ws}|{_sf_path}"
+        if _sf_key in self._sent_files:
+            return
+        self._sent_files.add(_sf_key)
+        try:
+            from core.send_files import (
+                SendFileError as _SfErr, read_sendable as _read_sf)
+        except ImportError as _sf_imp:
+            self._log_note(f"send_file guards unavailable: {_sf_imp}")
+            await self.ms.send_message(
+                "⚠️ File sending is unavailable on this install.")
+            return
+        try:
+            _sf_data, _sf_name = await asyncio.to_thread(
+                _read_sf, _sf_ws, _sf_path)
+            await self.ms.send_document(_sf_data, _sf_name)
+            self._log_note(
+                f"send_file delivered {_sf_name} ({len(_sf_data)} bytes)")
+            await self.ms.send_message(
+                f"📎 Sent {_sf_name} ({len(_sf_data)} bytes).")
+        except _SfErr as _sf_exc:
+            await self.ms.send_message(f"⚠️ File not sent: {_sf_exc}")
+        except (TelegramApiError, OSError) as _sf_exc:
+            self._log_note(f"send_file upload failed: {_sf_exc}")
+            await self.ms.send_message(
+                "⚠️ File upload failed; the run continues.")
 
     @staticmethod
     def _tool_line(ev: dict) -> str:
@@ -495,6 +548,9 @@ class RunBridge:
 
         mapping = await self._ensure_chat()
         chat_id = mapping["hive_chat_id"]
+        # SEND-FILE (2026-11-04): one workspace lookup per run; the engine
+        # already confined the file, this is the gateway-side re-check.
+        _run_ws = await self.workspace_for_chat(chat_id)
         await self._write_turn(chat_id, {"role": "user", "content": q})
         # VOICE-PRELOAD (1.4.2): warm the engine now, not when the answer is done
         await self._preload_voice()
@@ -607,6 +663,7 @@ class RunBridge:
         self._own_ctx_marks = set()
         self._own_ctx_compression_noted = False
         self._tool_relay_seen = {}  # R6: repeat-counter reset per run
+        self._sent_files: set[str] = set()  # SEND-FILE dedupe per run
         self._skip_finish = False  # R4: stream-broke handover skips _finish
         # R4 relay: phase/plan/thinking visibility on the phone
         last_phase = ""
@@ -675,7 +732,8 @@ class RunBridge:
                     ov["duo_agentic_mode"] = False
             async for ev in self.hive.stream(q, chat_id, images=images,
                                              mode=stream_mode,
-                                             overrides=ov):
+                                             overrides=ov,
+                                             workspace=_run_ws):
                 etype = ev.get("type")
                 if etype == "run_id" and ev.get("run_id"):
                     _new_rid = str(ev["run_id"])
@@ -781,6 +839,8 @@ class RunBridge:
                     if _ofc != self._last_tool_line:
                         await self.ms.send_message(_ofc)
                         self._last_tool_line = _ofc
+                elif etype == "send_file":
+                    await self._deliver_send_file(ev, _run_ws)
                 elif etype == "planner_thinking_token":
                     # PLANNER VISIBILITY (2026-10-11): the planning-phase tail - same
                     # treatment as the coder thinking tail, flushed with a prefix.

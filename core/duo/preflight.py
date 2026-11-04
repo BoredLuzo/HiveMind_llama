@@ -31,10 +31,8 @@ _FALLBACK_MODEL_PREFERENCE = (
     "qwen3.5:2b", "lfm3:1.7b-qad", "lfm2.5:2.6b",
     "ministral:3b-instruct-2410", "gemma-4:e4b-it-obliterated", "qwen3.5:0.8b-ud",
 )
-BRIEFING_FULL = "full"
 BRIEFING_PLAN_ONLY = "plan-only"
 BRIEFING_OFF = "off"
-BRIEFING_MAX_TOKENS_DEFAULT = 1500
 
 
 def _build_plan_pin_msg(_subtasks, _di, _n_items):
@@ -346,41 +344,60 @@ def _resolve_fallback_model(preferred: str, exclude_mdl: str = "", num_ctx: int 
     return None
 
 
+def _distilled_execution_steps(subtasks=None, plan_content: str = "",
+                               max_chars: int = 8000) -> str:
+    """Coder-facing step list: concrete steps, never planner scaffolding.
+
+    PLAN-CONTRACT (2026-11-04): the coder must execute the user's plan, not
+    analyze a planner's markdown ("## Plan / ### Open Tasks") or its
+    reasoning as if it came from another model. Structured subtasks win; a
+    raw plan is stripped of its headings before it reaches the coder.
+    """
+    steps = [str(s).strip() for s in (subtasks or []) if str(s).strip()]
+    if steps:
+        return "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))[:max_chars]
+    out: list[str] = []
+    for _ln in str(plan_content or "").splitlines():
+        _s = _ln.strip()
+        if not _s:
+            continue
+        _low = _s.lower()
+        if _s.startswith("#") or _low.startswith(
+                ("completed tasks", "open tasks", "plan:", "risk")):
+            continue
+        out.append(_s.lstrip("-* ").strip())
+    return "\n".join(out)[:max_chars]
+
+
 def _inject_plan_into_coder_msgs(dtool_msgs, plan_result, *, chunking: bool, is_first_outer_round: bool):
-
-
-    if (
-        plan_result is not None
-        and getattr(plan_result, "plan_content", None)
-    ):
-        # PLAN-INJECT (2026-09-08): also injected in chunked mode — every
-        # fresh coder context gets the planner's detailed plan, not just the
-        # subtask title list from build_chunk_context.
-        logger.warning(
-            "[PLAN-INJECT] non-bridge branch: plan injected into coder context (%d chars, first_outer_round=%s)",
-            len(plan_result.plan_content), is_first_outer_round,
-        )
-        dtool_msgs.append({
-            "role": "assistant",
-            "content": f"[IMPLEMENTATION PLAN]\n{plan_result.plan_content}",
-        })
-        return True
-    logger.warning(
-        "[PLAN-INJECT] non-bridge branch: injection skipped "
-        "(plan=%s chunking=%s first_round=%s)",
-        bool(plan_result is not None and getattr(plan_result, "plan_content", None)),
-        chunking, is_first_outer_round,
+    # PLAN-CONTRACT (2026-11-04): no planner-formatted plan at every coder
+    # start. Chunked runs already carry the step list via build_chunk_context;
+    # later outer rounds already have the plan in history. The first
+    # non-chunked coder round gets a distilled, user-role execution plan.
+    if chunking:
+        logger.info("[PLAN-INJECT] skipped: chunk context carries the step list")
+        return False
+    if not is_first_outer_round:
+        logger.info("[PLAN-INJECT] skipped: plan already in the round history")
+        return False
+    if plan_result is None:
+        return False
+    _body = _distilled_execution_steps(
+        getattr(plan_result, "subtasks", None),
+        getattr(plan_result, "plan_content", "") or "",
     )
-    return False
-
-
-def _briefing_limit_tokens(settings: dict | None = None) -> int:
-    try:
-        val = int((settings or {}).get("duo_coder_briefing_think_tokens",
-                                       BRIEFING_MAX_TOKENS_DEFAULT))
-    except (TypeError, ValueError):
-        val = BRIEFING_MAX_TOKENS_DEFAULT
-    return max(-1, min(200_000, val))
+    if not _body:
+        logger.warning("[PLAN-INJECT] skipped: no concrete plan steps")
+        return False
+    logger.warning(
+        "[PLAN-INJECT] distilled execution plan injected (%d chars)",
+        len(_body))
+    dtool_msgs.append({
+        "role": "user",
+        "content": ("[YOUR EXECUTION PLAN — already decided. Execute it; "
+                    "do not re-plan, restate or summarize it.]\n" + _body),
+    })
+    return True
 
 
 def _est_tokens(text: str, model: str = "") -> int:
@@ -401,25 +418,17 @@ def coder_briefing_text(thinking: str, plan_content: str = "",
                         subtasks: list | None = None,
                         settings: dict | None = None,
                         model: str = "") -> tuple[str, str, int]:
-    """(text_for_coder, mode, thinking_tokens) for the plan briefing.
+    """(text_for_coder, mode, tokens) for the plan briefing.
 
-    mode is "full" (thinking injected), "plan-only" (thinking replaced by the
-    plan) or "off" (nothing to inject). Never raises.
+    PLAN-CONTRACT (2026-11-04): the coder never gets the planner's reasoning
+    or planner-markdown scaffolding. It gets the concrete steps, numbered.
+    `thinking`/`settings` stay in the signature for callers, but are
+    deliberately unused (the reasoning stays in the planner/UI).
     """
-    think = str(thinking or "").strip()
-    if not think:
+    body = _distilled_execution_steps(subtasks, plan_content)
+    if not body:
         return "", BRIEFING_OFF, 0
-    tokens = _est_tokens(think, model)
-    limit = _briefing_limit_tokens(settings)
-    if limit < 0 or tokens <= limit:
-        return think, BRIEFING_FULL, tokens
-    plan = str(plan_content or "").strip()
-    if not plan and subtasks:
-        plan = "\n".join(f"- {str(s).strip()}" for s in subtasks if str(s).strip())
-    note = (f"[Planner reasoning dropped: ~{tokens} tokens is over the "
-            f"{limit}-token briefing limit - implement the PLAN, not the reasoning.]")
-    body = (plan + "\n\n" + note) if plan else note
-    return body, BRIEFING_PLAN_ONLY, tokens
+    return body, BRIEFING_PLAN_ONLY, _est_tokens(body, model)
 
 
 def _build_plan_anchor_text(subtasks: list, plan_tracker, plan_content: str = "") -> str:

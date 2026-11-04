@@ -1,3 +1,23 @@
+## [1.5.2] - 2026-11-04
+
+Telegram file delivery and agent polish on top of 1.5.1. `/send <path>`
+delivers a workspace file immediately; agentic phone runs queue `send_file`
+and deliver only after final verification, with workspace confinement,
+secret-name blocking and the 50 MB Telegram limit. A completed run with one
+deliverable file sends it automatically even if the model forgot the tool.
+Phone runs now pass the chat workspace in the run body, so `/workspace`
+actually wins over the desktop workspace.
+
+The coder no longer receives planner markdown or planner reasoning, only a
+distilled numbered execution list; with the planner off it receives only the
+user prompt. The planner prompt is less absolute. The LSP panel lists
+installed and missing language servers, Python has exactly one linter
+(pyright, with a `py_compile` environment fallback), and the near-duplicate
+web-search guard allows eight rephrased searches instead of three.
+
+The Linux `types` CI job no longer reports the optional Windows-only
+`keyring` import as missing.
+
 ## [1.5.1] - 2026-11-03
 
 Security and reliability release on top of 1.5.0. MCP file/search tools now

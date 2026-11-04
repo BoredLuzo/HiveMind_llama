@@ -100,10 +100,11 @@ class FakeHive:
         return FakeResponse(200, {"ok": True, "rev": self.chat["rev"]})
 
     async def stream(self, q, chat_id, images=None, mode="",
-                     overrides=None):
+                     overrides=None, workspace=""):
         self.stream_bodies.append({"q": q, "chat_id": chat_id,
                                    "images": images,
-                                   "mode": mode, "overrides": overrides or {}})
+                                   "mode": mode, "overrides": overrides or {},
+                                   "workspace": workspace})
         for ev in self.events:
             yield ev
 
@@ -274,7 +275,7 @@ async def t_errors():
 
     class MidStreamBreakHive(FakeHive):
         async def stream(self, q, chat_id, images=None, mode="",
-                         overrides=None):
+                         overrides=None, workspace=""):
             yield {"type": "run_id", "run_id": "r5"}
             raise httpx.ReadError("connection reset mid-stream")
 
@@ -749,6 +750,9 @@ async def t_takeover():
     check("workspace persisted in state+chat",
           st2.data["tg_chat"]["workspace"] == str(ws_dir)
           and hive2.chat.get("workspace") == str(ws_dir))
+    await br2.start_text_run("workspace body check")
+    check("workspace rides the run body",
+          br2.hive.stream_bodies[-1].get("workspace") == str(ws_dir))
 
     # /tools: state -> run body
     check("tools default = engine", "engine default" in br2.tools_text(""))
@@ -1112,7 +1116,7 @@ async def t_audit_fixes():
 
     class PausedHive(FakeHive):
         async def stream(self, q, chat_id, images=None, mode="",
-                         overrides=None):
+                         overrides=None, workspace=""):
             self.stream_bodies.append({"q": q, "chat_id": chat_id,
                                        "mode": mode,
                                        "overrides": overrides or {}})

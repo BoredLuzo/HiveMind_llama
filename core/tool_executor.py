@@ -148,6 +148,10 @@ class ToolExecResult:
     last_tool_name: str = ""       # for plan tracker
     last_tool_result: str = ""     # for plan tracker
     task_complete_called: bool = False
+    # SEND-FILE: validated paths the model asked to deliver. The runner
+    # holds them until the final verification has passed, then emits the
+    # send_file events as the last action of the run.
+    send_files: list[str] = field(default_factory=list)
     extra_user_msg: str = ""            # injected into dtool_msgs when set
     deadline_extended_to: float = 0.0   # DEADLINE-GRACE: new run deadline after write progress
     wedge_file: str = ""                # WEDGE-HANDOFF: path whose edit keeps failing
@@ -467,9 +471,30 @@ async def execute_tool_round(
         # handler in tools/runner.py is only reached via the ask_user dispatch).
         if _dname == "ask_user":
             await _handle_ask_user(_dname, _dargs, hooks, exec_model, trs.cached_coder_port, run_id_global)
-        _dresult = await _execute_one_tool(
-            _dname, _dargs, _dargs_with_model, _i, _pre_results,
-            trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws)
+        if _dname == "send_file" and not trs.allow_send_file:
+            _dresult = _tool_error_response(
+                "SEND_FILE_UNAVAILABLE",
+                "send_file is only available in runs started from the "
+                "Telegram chat.",
+                tool=_dname, mode=tool_mode)
+        else:
+            _dresult = await _execute_one_tool(
+                _dname, _dargs, _dargs_with_model, _i, _pre_results,
+                trs.duo_seen_web_queries, workspace_lock, tool_mode, duo_ws)
+        # SEND-FILE (2026-11-04): validate now, deliver LATER. The model's
+        # path is queued on the run result; the runner emits the actual
+        # send_file event only after the final verification has passed, as
+        # the last action before `done`.
+        if (_dname == "send_file"
+                and str(_dresult).startswith("[FILE_QUEUED]")):
+            _sf_path = str((_dargs or {}).get("path") or "")
+            if _sf_path and _sf_path not in result.send_files:
+                result.send_files.append(_sf_path)
+            result.extra_user_msg = (
+                "[SYSTEM] The file is queued for delivery after final "
+                "verification. Do not call web_search or any other tool now "
+                "— call task_complete with the result summary."
+            )
         # HARNESS-STATS (2026-10-17): count invalid arguments per model. Pure
         # measurement - no behaviour depends on it (no model-dependent cap).
         try:

@@ -300,7 +300,8 @@ class HiveClient:
                                      {"text": text})
 
     async def stream(self, q: str, chat_id: str, images: list | None = None,
-                     mode: str = "", overrides: dict | None = None):
+                     mode: str = "", overrides: dict | None = None,
+                     workspace: str = ""):
         """Yield parsed SSE data payloads of a run. No token streaming is
         rendered — the caller decides what becomes a status update.
         `mode` travels in the REQUEST BODY only (never via POST /settings,
@@ -314,6 +315,11 @@ class HiveClient:
                                 "chat_id": chat_id}
         if mode:
             body["mode"] = mode
+        if workspace:
+            # /workspace on the phone sets the chat metadata; without this
+            # body field the engine's workspace_force_ui setting won and the
+            # run landed in the desktop workspace (2026-11-04 live).
+            body["workspace"] = workspace
         if overrides:
             body.update(overrides)
         try:

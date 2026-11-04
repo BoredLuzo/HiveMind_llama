@@ -1116,13 +1116,10 @@ async function loadSettings() {
     // LSP + AUTO-LINT (2026-11-01): the card was settings.json-only before.
     S.lspEnabled = s.lsp_enabled !== false;
     S.lspAutoDiag = s.lsp_auto_diagnostics !== false;
-    S.autolintEngine = s.duo_autolint_python_engine || 'auto';
     var _lspT = document.getElementById('lsp-enabled-toggle');
     if (_lspT) _lspT.checked = S.lspEnabled;
     var _lspA = document.getElementById('lsp-auto-diag-toggle');
     if (_lspA) _lspA.checked = S.lspAutoDiag;
-    var _alSel = document.getElementById('autolint-engine-sel');
-    if (_alSel) _alSel.value = S.autolintEngine;
     var _lspW = document.getElementById('lsp-wait-input');
     if (_lspW) _lspW.value = parseInt(s.lsp_diagnostics_wait_s, 10) || 5;
     var _lspI = document.getElementById('lsp-idle-input');
@@ -11184,6 +11181,14 @@ function onChunkingChange(persist) {
 function updatePlannerHint() {
     var chunkRow = document.getElementById('duo-chunking-row');
     if (chunkRow) chunkRow.style.display = S.duoPlannerEnabled ? '' : 'none';
+    // PLANNER-OFF (2026-11-04): chunking needs a planner plan. Turning the
+    // planner off must clear a previously enabled chunking setting too, not
+    // just hide its row - otherwise the backend keeps planning silently.
+    if (!S.duoPlannerEnabled && S.duoChunking) {
+        S.duoChunking = false;
+        postSettings({duo_chunking: false});
+        onChunkingChange(false);
+    }
 }
 function updateAgenticCombinedWarn() {
     var warn = document.getElementById('duo-all3-warn');

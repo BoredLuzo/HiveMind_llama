@@ -91,7 +91,8 @@ class _Hive:
     async def put_chat_meta(self, chat_id, meta, base_rev=0):
         return _Resp(200, {"ok": True, "rev": base_rev + 1})
 
-    async def stream(self, q, chat_id, images=None, mode="", overrides=None):
+    async def stream(self, q, chat_id, images=None, mode="", overrides=None,
+                     workspace=""):
         self.stream_bodies.append({"q": q, "mode": mode, "overrides": dict(overrides or {})})
         yield {"type": "run_id", "run_id": "r1"}
         yield {"type": "token", "content": "ok"}

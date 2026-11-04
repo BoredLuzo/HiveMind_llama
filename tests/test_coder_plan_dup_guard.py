@@ -89,27 +89,31 @@ check("2b follow-up (planner phase skipped -> no plan in run): in-loop plan stil
       inloop_plan_should_run(True, False, False, False, False) is True)
 check("2c planner ran but produced nothing parseable (has_plan=False): rescue kept",
       inloop_plan_should_run(False, True, False, False, False) is True)
+check("2d planner completely off (planner + chunking off): no in-loop plan",
+      inloop_plan_should_run(True, True, False, False, False,
+                             chunking_enabled=False) is False)
 
 # ── 3. the runner uses the plan-aware gate ────────────────────────────────
 check("3a the runner delegates the gate to inloop_plan_should_run",
       "_run_thinking_now = _inloop_plan_should_run(" in RUN
       and "inloop_plan_should_run as _inloop_plan_should_run" in RUN)
 _i_gate = RUN.index("_run_thinking_now = _inloop_plan_should_run(")
-_gate_call = RUN[_i_gate:_i_gate + 300]
+_gate_call = RUN[_i_gate:_i_gate + 600]
 check("3b the gate passes the real plan-existence flag (_has_plan)",
       "_has_plan," in _gate_call)
 check("3c the gate still passes the planner toggle + thinking toggles",
       "ctx.duo_config.agentic_thinking" in _gate_call
       and "ctx.duo_config.thinking_per_chunk" in _gate_call
-      and "ctx.duo_config.planner" in _gate_call)
+      and "ctx.duo_config.planner" in _gate_call
+      and "chunking_enabled=ctx.duo_config.chunking" in _gate_call)
 check("3d the old toggle-only gate is gone",
       "and not ctx.duo_config.planner\n                )" not in RUN)
 
 # ── 4. the coder system prompt under a big prompt + existing plan ─────────
 sys_with_plan = _build_duo_coder_sys(
     _PromptCtx(), has_plan=True, has_subtasks=False, has_explore_ctx=False)
-check("4a with a plan the coder gets EXECUTION mode (plan already exists)",
-      "A plan already exists" in sys_with_plan)
+check("4a with a plan the coder gets EXECUTION mode (plan already decided)",
+      "The plan is already decided" in sys_with_plan)
 check("4b the coder system prompt carries NO planner-format template",
       "## Plan:" not in sys_with_plan and "### Open Tasks" not in sys_with_plan)
 sys_no_plan = _build_duo_coder_sys(
@@ -143,6 +147,14 @@ check("6d compression plan-pin helper still exists",
 check("6e the plan-format template stays with the real planners only",
       PROMPTS_PY.count("### Open Tasks") == 0
       and (ROOT / "hive_functions" / "planner.py").read_text(encoding="utf-8").count("### Open Tasks") >= 1)
+
+# ── 7. planner completely off: no chunking, no plan, only the user prompt ──
+check("7a a stale chunking setting is cleared when the planner is off",
+      "[PLANNER-OFF] chunking disabled" in RUN)
+_appjs = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+check("7b the UI clears chunking when the planner is switched off",
+      "S.duoChunking = false" in _appjs
+      and "postSettings({duo_chunking: false})" in _appjs)
 
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)
