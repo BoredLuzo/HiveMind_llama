@@ -49,7 +49,7 @@ class TelegramApi:
                 await self._client.aclose()
                 self._client = None
 
-    async def _call(self, method: str, **params: Any) -> dict:
+    async def _call(self, method: str, _retry: int = 0, **params: Any) -> dict:
         c = await self._http()
         try:
             r = await c.post(f"{self._base}/{method}", json=params)
@@ -72,16 +72,12 @@ class TelegramApi:
             # TG-AUDIT (2026-10-07): mirror ticks send BUNDLES (tool lines,
             # file changes, ctx meter) - they trip the per-chat flood limit
             # and every bundled line was silently lost. One patient retry
-            # after Telegram's own retry_after (capped) instead.
-            if retry_after:
+            # after Telegram's own retry_after (capped). RECURSION-CAP (audit
+            # 2026-11-03): persistent 429s recursed without bound and ended
+            # in RecursionError hours later; stop after 2 retries.
+            if retry_after and _retry < 2:
                 await asyncio.sleep(min(35.0, max(1.0, float(retry_after))))
-                try:
-                    return await self._call(method, **params)
-                except TelegramApiError:
-                    # one more patient attempt - long bundles can trip the
-                    # limit twice in a row
-                    await asyncio.sleep(min(35.0, max(1.0, float(retry_after))))
-                    return await self._call(method, **params)
+                return await self._call(method, _retry=_retry + 1, **params)
             raise TelegramApiError(method, params_desc, retry_after)
         result = data.get("result")
         return result if isinstance(result, dict) else {"result": result}

@@ -429,7 +429,7 @@ var _MODE_DESC = {
   auto:      'Auto \u2014 the decider picks direct or agentic (see Routing below). Tool requests run in the Direct chat loop (when Chat Tools on).',
   simple:    'Chat (Direct) \u2014 fast single-model chat. Chat Tools (read/python/web) available.',
   pipeline:  'Pipeline \u2014 multi-agent: Analyst \u2192 Refiner \u2192 Critic \u2192 Synthesizer.',
-  automap:   'AutoMap \u2014 Judge picks a model per task type.',
+  automap:   'AutoMap \u2014 heuristic scorer picks a model per task type.',
   code_duo:  'Code-Duo — agentic coder with plan, tools and test verification (optional critic). Models load on demand.',
 };
 // ROUTING (2026-10-21): the routing card lives under MODE in the Agents tab.
@@ -538,8 +538,8 @@ function checkWebsearchStatus() {
     d.style.textDecoration = 'none';
     d.style.color = color || '';
   };
-  _set(dot, 'Pruefe...', '');
-  _set(ad, 'Pruefe...', '');
+  _set(dot, 'Checking...', '');
+  _set(ad, 'Checking...', '');
   fetch('/websearch/status').then(r=>r.json()).then(d=>{
     // STATUS-FIX (2026-08-12): the real search-engine config is checked too —
     // the display now distinguishes disabled/unreachable/HTTP-error/ok.
@@ -4301,7 +4301,7 @@ function _updatePlannerTokRate() {
   var _t = S.perfRealTokens > 0 ? S.perfRealTokens : (S.perfEstTokens || 0);
   var _r = _realRate > 0 ? _realRate.toFixed(1) + ' t/s' : (S.perfTokRate > 0 ? S.perfTokRate.toFixed(1) + ' t/s~' : '');
   var _pm = document.getElementById('planner-tokrate');
-  if (_pm) _pm.textContent = (_r || _t ? _t + ' tok' + (_r ? ' \u00b7 ' + _r : '') : 'l\u00e4uft\u2026');
+  if (_pm) _pm.textContent = (_r || _t ? _t + ' tok' + (_r ? ' \u00b7 ' + _r : '') : 'running\u2026');
 }
 
 function upsertPlannerBubble(txt) {
@@ -4317,7 +4317,7 @@ function upsertPlannerBubble(txt) {
     hdr.innerHTML = ''
       + '<div class="dot" style="background:#8c64b4"></div>'
       + '<span class="aname" style="color:#9a74dc">Planner</span>'
-      + '<span class="amodel"><span id="planner-tokrate">l\u00e4uft\u2026</span> <span id="planner-elapsed">0s</span></span>';
+      + '<span class="amodel"><span id="planner-tokrate">running\u2026</span> <span id="planner-elapsed">0s</span></span>';
     wrap.appendChild(hdr);
     c.appendChild(wrap);
   }
@@ -4626,7 +4626,7 @@ function renderDuoVerdict(verdict, elapsed, approved) {
   // kein Streaming, kein leerer Agent-Block.
   const c       = document.getElementById('chat');
   const issues  = verdict.issues  || [];
-  const summary = verdict.verdict || (approved ? 'Code korrekt' : 'Probleme gefunden');
+  const summary = verdict.verdict || (approved ? 'Code correct' : 'Issues found');
 
   const box = document.createElement('div');
   box.className = 'msg duo-verdict' + (approved ? ' approved' : '');
@@ -4710,7 +4710,8 @@ function _sanitizeRuntimeToken(t) {
 // the result lands in a <div> — block elements inside a <span> get broken by
 // the browser during innerHTML parsing (adoption agency) and the formatting breaks.
 function _escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function _mdInline(s) {
@@ -4718,8 +4719,15 @@ function _mdInline(s) {
   s = s.replace(/`([^`\n]+)`/g, '<code class="coder-inline-code">$1</code>');
   s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
   s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
-  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function(_m, label, url) {
+    // XSS (audit 2026-11-03): the URL sits inside a double-quoted href. The
+    // text was escaped before this pass, but encode quote/angle chars anyway
+    // so a crafted URL cannot break out of the attribute.
+    var safe = String(url).replace(/["'<>`\\]/g, function(ch) {
+      return encodeURIComponent(ch);
+    });
+    return '<a href="' + safe + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+  });
   return s;
 }
 
@@ -5226,8 +5234,8 @@ function _tgPanelStream(st) {
   if (txt == null && st.tool === 'edit_file' && _otInfo && _otInfo.value != null) {
     var _otTail = _otInfo.value;
     if (_otTail.length > 600) _otTail = '\u2026' + _otTail.slice(-600);
-    txt = '\u23F3 edit_file: old_text gefunden (' + _otInfo.value.length
-        + ' Zeichen) \u2014 neuer Text folgt\u2026\n\n' + _otTail;
+    txt = '\u23F3 edit_file: old_text found (' + _otInfo.value.length
+        + ' chars) \u2014 new text follows\u2026\n\n' + _otTail;
   }
   if (txt == null) return;
   var op = (st.tool === 'edit_file') ? 'edit' : (st.tool === 'write_file_append' ? 'append' : 'write');
@@ -6249,12 +6257,18 @@ function esc(s) { return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt
 // inserted into the DOM on load — strip active script/embed content and event handlers.
 function _sanitizeChatHtml(html) {
   return String(html || '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
-    .replace(/<object[\s\S]*?<\/object>/gi, '')
+    .replace(/<script[\s\S]*?(?:<\/script>|$)/gi, '')
+    .replace(/<iframe[\s\S]*?(?:<\/iframe>|$)/gi, '')
+    .replace(/<object[\s\S]*?(?:<\/object>|$)/gi, '')
     .replace(/<embed[\s\S]*?>/gi, '')
-    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    .replace(/href\s*=\s*["']?\s*javascript:[^"'\s>]*["']?/gi, 'href="#"');
+    .replace(/<set\b[\s\S]*?>/gi, '')
+    // XSS (audit 2026-11-03): match handlers without a leading space
+    // (<img src=x/onerror=...>), entity-encoded javascript: schemes, and
+    // quoted URLs that hide the scheme behind HTML entities.
+    .replace(/\/?on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/(?:href|src|xlink:href)\s*=\s*["']?\s*(?:javascript|vbscript|data)\s*:[^"'\s>]*["']?/gi, 'href="#"')
+    .replace(/&#(?:x0*6a|0*106);?/gi, '')
+    .replace(/(?:javascript|vbscript)\s*:/gi, '');
 }
 
 function _workerBaseModelName(model) {
@@ -6740,7 +6754,7 @@ async function sendMsg() {
   if (S.forcedComplexity !== 'auto' || skippedKeys.length || S.judgeBias !== 50) {
     const parts = [];
     if (S.forcedComplexity !== 'auto') parts.push('MODE FORCE: ' + S.forcedComplexity.toUpperCase());
-    if (S.judgeBias !== 50) parts.push('JUDGE-BIAS: ' + S.judgeBias + (S.judgeBias > 50 ? ' (complex-bevorzugend)' : ' (simple-bevorzugend)'));
+    if (S.judgeBias !== 50) parts.push('JUDGE-BIAS: ' + S.judgeBias + (S.judgeBias > 50 ? ' (prefers complex)' : ' (prefers simple)'));
     if (skippedKeys.length) parts.push('SKIP: ' + skippedKeys.join(', '));
     const info = document.createElement('div');
     info.className = 'msg divider';
@@ -6900,10 +6914,10 @@ async function sendMsg() {
     const _hadBody = S.curAgent && S.curAgent.body && String(S.curAgent.body.textContent || '').trim();
     if (S.curAgent) {
       if (!_hadBody && _isAbort) {
-        S.curAgent.body.textContent = '[Run abgebrochen]';
+        S.curAgent.body.textContent = '[Run aborted]';
         S.curAgent.body.style.color = '#7a8fa8';
       } else if (!_hadBody && _isConnDrop) {
-        S.curAgent.body.textContent = '[Verbindung unterbrochen - Run evtl. geparkt]';
+        S.curAgent.body.textContent = '[Connection lost - run may be parked]';
         S.curAgent.body.style.color = '#7a8fa8';
       } else if (!_hadBody && !_isAbort) {
         S.curAgent.body.textContent = '[Error: ' + _errMsg + ']';
@@ -6937,7 +6951,7 @@ async function sendMsg() {
       }
       b.classList.remove('live');
     });
-    showStatus(_isAbort ? 'Run gestoppt.' : (_isConnDrop ? 'Verbindung unterbrochen - Status im Log pruefen.' : '\u26A0 Stream error: ' + e.message));
+    showStatus(_isAbort ? 'Run stopped.' : (_isConnDrop ? 'Connection lost - check the log for status.' : '\u26A0 Stream error: ' + e.message));
   } // end inner try/catch (fetch)
 
   } finally { // end outer try — covers automap + intent + fetch
@@ -6948,7 +6962,7 @@ async function sendMsg() {
       var _bodies = document.querySelectorAll('#chat .abody');
       var _lastBody = _bodies.length ? _bodies[_bodies.length - 1] : null;
       var _answerTxt = _lastBody ? _answerTextOnly(_lastBody) : '';
-      if (_answerTxt && _answerTxt.indexOf('[Run abgebrochen]') !== 0) {
+      if (_answerTxt && _answerTxt.indexOf('[Run aborted]') !== 0) {
         var _isDuo = S._routeMultiAgent === true
           || S._runIsDuo === true
           || ['code_duo', 'duo', 'autoagent'].indexOf(String(S.mode || '')) >= 0;
@@ -7051,7 +7065,13 @@ function _journalNote(txt) {
   } catch (e) {}
 }
 
-function _journalStopTail() { S._journalTailing = null; }
+function _journalStopTail() {
+  // STREAMING-RELEASE (audit 2026-11-03): attaching to a live run set
+  // S.streaming=true; nothing cleared it on done/abort, so the composer
+  // queued forever. Only clear it when this tail owned the state.
+  if (S._journalTailing) S.streaming = false;
+  S._journalTailing = null;
+}
 
 function _journalStartTail(runId) {
   if (!runId || S._journalTailing) return;
@@ -7067,7 +7087,7 @@ function _journalStartTail(runId) {
         }
         if (S._sawDoneEvent || j.done || j.aborted) {
           _journalStopTail();
-          if (j.aborted && !S._sawDoneEvent) _journalNote('Run wurde unterbrochen (Verbindung/Tab). Sende eine Nachricht zum Fortsetzen.');
+          if (j.aborted && !S._sawDoneEvent) _journalNote('Run was interrupted (connection/tab). Send a message to resume.');
         }
       })
       .catch(function() {});
@@ -7081,6 +7101,10 @@ function _journalInitAttach() {
     .then(function(j) {
       if (!j || !j.active || !j.frames || !j.frames.length) return;
       if (j.done && ((Date.now() / 1000) - (j.ts || 0)) > 300) return;
+      // JOURNAL-CHAT-SCOPE (audit 2026-11-03): only reattach a run that
+      // belongs to the chat currently open. Without this, the newest run's
+      // frames were replayed into whatever chat happened to be on screen.
+      if (j.chat_id && (!S.currentChatId || String(j.chat_id) !== String(S.currentChatId))) return;
       // skip if we already rendered this run (page reload replays it via
       // the chat transcript; only LIVE runs and fresh history attach)
       if (S._attachedRunId === j.run_id) return;
@@ -7092,6 +7116,9 @@ function _journalInitAttach() {
       // keep their notes.
       if (j.done) return;
       S._sseFrameSeq = 0; S._sseBuf = ''; S._sawDoneEvent = false;
+      // A mirrored live run counts as streaming: the composer must not start
+      // a second concurrent run on the same chat.
+      S.streaming = true;
       _journalNote('Attached to the running job (live).');
       for (var i = 0; i < j.frames.length; i++) _sseFeedLines(j.frames[i]);
       // TG-AUDIT (2026-10-07): `n` is the LOGICAL frame count while the
@@ -7100,7 +7127,7 @@ function _journalInitAttach() {
       S._sseFrameSeq = (typeof j.n === 'number' && j.frames.length)
         ? j.n : (S._sseFrameSeq || 0);
       if (!S._sawDoneEvent && !j.done && !j.aborted) _journalStartTail(j.run_id);
-      else if (j.aborted) _journalNote('Run was interrupted (connection/tab). Send a message to resume.');
+      else if (j.aborted) { S.streaming = false; _journalNote('Run was interrupted (connection/tab). Send a message to resume.'); }
     })
     .catch(function() {});
 }
@@ -9843,7 +9870,7 @@ async function loadSoulStatus() {
       badge.textContent = '\u25CF LEARNED SOUL ACTIVE (Learning Mode)';
       badge.className   = 'soul-source-badge learned';
     } else {
-      badge.textContent = '\u25CF ORIGINAL SOUL ACTIVE (Standard)';
+      badge.textContent = '\u25CF ORIGINAL SOUL ACTIVE (default)';
       badge.className   = 'soul-source-badge original';
     }
 
@@ -10022,6 +10049,60 @@ function updateLspHint() {
   var enabled = S.lspEnabled !== false;
   if (on) on.style.display = enabled ? '' : 'none';
   if (off) off.style.display = enabled ? 'none' : '';
+  if (enabled) loadLspStatus();
+}
+
+function loadLspStatus() {
+  // LSP-STATUS (2026-11-03): show which servers this machine actually has.
+  var box = document.getElementById('lsp-status-list');
+  if (!box || box.dataset.loading === '1') return;
+  box.dataset.loading = '1';
+  fetch('/lsp/status')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      box.textContent = '';
+      box.dataset.loading = '0';
+      if (!d || !d.ok) {
+        box.textContent = 'Status unavailable - engine not reachable.';
+        box.style.color = '#c08040';
+        return;
+      }
+      box.style.color = '';
+      var rows = d.rows || [];
+      var found = rows.filter(function(r) { return r.found; }).length;
+      var sum = document.getElementById('lsp-status-summary');
+      if (sum) sum.textContent = 'Language servers on PATH — ' + found + '/' +
+        rows.length + ' installed (click to expand)';
+      var head = document.createElement('div');
+      head.style.cssText = 'color:#9aa7b8;margin-bottom:3px';
+      head.textContent = found + '/' + rows.length + ' servers installed on PATH';
+      box.appendChild(head);
+      rows.forEach(function(r) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:1px 0';
+        var dot = document.createElement('span');
+        dot.textContent = '\u25CF';
+        dot.style.color = r.found ? '#60c080' : '#c08040';
+        var lang = document.createElement('span');
+        lang.textContent = r.language;
+        lang.style.cssText = 'min-width:118px;color:#c8d4e4';
+        var cmd = document.createElement('code');
+        cmd.textContent = r.command;
+        cmd.style.cssText = 'font-size:10px;color:#8fa0b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:250px';
+        var badge = document.createElement('span');
+        badge.textContent = r.found ? 'installed' : 'missing';
+        badge.style.cssText = 'margin-left:auto;font-size:9px;color:' +
+          (r.found ? '#60c080' : '#c08040');
+        row.appendChild(dot); row.appendChild(lang);
+        row.appendChild(cmd); row.appendChild(badge);
+        box.appendChild(row);
+      });
+    })
+    .catch(function() {
+      box.dataset.loading = '0';
+      box.textContent = 'Status unavailable - engine not reachable.';
+      box.style.color = '#c08040';
+    });
 }
 
 function updateMlockHint() {
@@ -10850,6 +10931,10 @@ async function handlePauseClick() {
         if (resp2.status === 409) { showInfo('\u26A0 [Error] Run no longer active'); S.streaming = false; S.currentRunId = null; document.getElementById('send').disabled = false; setPauseBtnState('idle'); return; }
         if (!resp2.ok) { showInfo('\u26A0 Resume failed'); return; }
         setPauseBtnState('running');
+        // RESUME-REATTACH (audit 2026-11-03): /resume returns JSON, no
+        // stream. Without a journal tail the resumed run rendered nothing
+        // and S.streaming stayed true forever.
+        if (S.currentRunId) _journalStartTail(S.currentRunId);
         showInfo('\u25B6 Run resumed');
       } catch(e) { showInfo('\u26A0 Network error: ' + e.message); }
       break;
@@ -13539,6 +13624,11 @@ function updateApprovalUI() {
 function updateGitIntegrationUI() {
   var branchOpts = document.getElementById('git-branch-options');
   var autocommitToggle = document.getElementById('duo-git-autocommit-toggle');
+  var cfgToggle = document.getElementById('git-autocommit-cfg-toggle');
+  // UI-SYNC (2026-11-04): the same setting has a toggle in EXECUTION and in
+  // the Git card; flipping one left the other stale until a settings reload.
+  if (cfgToggle) cfgToggle.checked = !!S.duoGitAutocommit;
+  if (autocommitToggle) autocommitToggle.checked = !!S.duoGitAutocommit;
   if (branchOpts) {
     branchOpts.style.display = (S.duoGitAutocommit || (autocommitToggle && autocommitToggle.checked)) ? 'block' : 'none';
   }

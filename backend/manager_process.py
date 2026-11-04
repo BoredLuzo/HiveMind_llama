@@ -89,12 +89,17 @@ class LlamaProcessMixin:
             if slot.is_running:
                 if slot._orphan_port is None:
                     return slot
-                # Orphan-Slot: re-verify via TCP+API
-                self._lock.release()
+                # Orphan-Slot: re-verify via TCP+API. LOCK-GUARD (audit
+                # 2026-11-03): unlocked callers crashed on release() of an
+                # unheld lock when the matched slot carried an orphan marker.
+                _held = self._lock.locked()
+                if _held:
+                    self._lock.release()
                 try:
                     api_ok = await self._verify_port_api(slot.port)
                 finally:
-                    await self._lock.acquire()
+                    if _held:
+                        await self._lock.acquire()
                 if _nm(slot.model) != _nm(model):
                     for s2 in self._slots:
                         if _nm(s2.model) == _nm(model) and (s2.is_running or s2._loading):
@@ -113,11 +118,15 @@ class LlamaProcessMixin:
                 slot._ready_event.clear()
         for slot in self._slots:
             if _nm(slot.model) == _nm(model) and not slot.is_running and not slot._loading:
-                self._lock.release()
+                # LOCK-GUARD (audit 2026-11-03): see the orphan branch above.
+                _held = self._lock.locked()
+                if _held:
+                    self._lock.release()
                 try:
                     api_ok = await self._verify_port_api(slot.port)
                 finally:
-                    await self._lock.acquire()
+                    if _held:
+                        await self._lock.acquire()
                 if _nm(slot.model) != _nm(model):
                     for s2 in self._slots:
                         if _nm(s2.model) == _nm(model) and (s2.is_running or s2._loading):

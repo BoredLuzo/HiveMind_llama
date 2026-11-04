@@ -152,7 +152,11 @@ class AgenticToolLoop(ToolLoop):
             })
             payload = {**payload, "messages": dtool_msgs}
         else:
+            # RESET-ON-STATE (audit 2026-11-03): the counter lives on the
+            # run-shared state; resetting only the per-instance mirror made
+            # 4 non-consecutive text rounds stop a long run.
             self._tail_guard_fires = 0
+            self.round_state.tail_guard_fires = 0
 
         # IMAGES-IN-REQUEST (2026-10-04): the duo tool loop is the
         # coder's real per-round caller and bypassed the pipeline trace
@@ -525,7 +529,6 @@ class AgenticToolLoop(ToolLoop):
                                             if _hist is None:
                                                 _hist = []
                                                 self.round_state.decode_hist = _hist
-                                            self._decode_hist = _hist
                                             _prev = _hist[-8:]
                                             _hist.append(_dt)
                                             if len(_prev) >= 5:

@@ -36,6 +36,12 @@ echo.
 REM -- Config ----------------------------------------------------------------
 set "REPO=BoredLuzo/HiveMind_llama"
 set "TMPDIR=%~dp0_update_tmp"
+REM PS-QUOTE (audit 2026-11-04): an install path with an apostrophe (O'Brien)
+REM ends a single-quoted PowerShell argument early, and [ ] in the path act
+REM as wildcards for -Path. %TMQ%/%EXQ% double the apostrophe ('' inside
+REM '...' = one literal ') and every inline PS path below uses -LiteralPath.
+set "TMQ=%TMPDIR:'=''%"
+if not defined TMQ set "TMQ=%TMPDIR%"
 
 REM -- 0a. --zip option (apply a local release zip, skip GitHub) -------------
 REM LOCAL-ZIP (2026-10-15): update.bat --zip <path> installs a locally built
@@ -112,17 +118,31 @@ if errorlevel 1 (
 )
 REM Layout check BEFORE anything in this folder is touched: extraction
 REM lands in _update_tmp\extracted only - a failure here changes nothing.
-powershell -NoProfile -Command "Expand-Archive -Path '%TMPDIR%\release.zip' -DestinationPath '%TMPDIR%\extracted' -Force"
+powershell -NoProfile -Command "Expand-Archive -LiteralPath '%TMQ%\release.zip' -DestinationPath '%TMQ%\extracted' -Force"
 if errorlevel 1 (
     echo  [ERROR] Could not extract the zip. Nothing was changed.
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 set "EXROOT="
-for /d %%D in ("%TMPDIR%\extracted\*") do set "EXROOT=%%D"
+set /a NROOTS=0
+for /d %%D in ("%TMPDIR%\extracted\*") do (
+    set "EXROOT=%%D"
+    set /a NROOTS+=1
+)
 if not defined EXROOT (
     echo  [ERROR] Zip contained no version folder. Nothing was changed.
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
+REM MULTI-ROOT (audit 2026-11-04): the old loop silently kept the LAST root
+REM folder - a zip with two build folders (or __MACOSX junk) applied an
+REM arbitrary one of them. Exactly one root folder is a release zip.
+if not "%NROOTS%"=="1" (
+    echo  [ERROR] Zip layout wrong: %NROOTS% root folders in the zip, expected
+    echo          exactly one HiveMind version folder. Nothing was changed.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+set "EXQ=%EXROOT:'=''%"
+if not defined EXQ set "EXQ=%EXROOT%"
 if not exist "%EXROOT%\core" (
     echo  [ERROR] Zip layout wrong: no core\ folder in the zip. This does not
     echo          look like a HiveMind release zip. Nothing was changed.
@@ -133,7 +153,7 @@ if not exist "%EXROOT%\utils" (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 set "TAGNUM="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path '%EXROOT%\server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "TAGNUM=%%V"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -LiteralPath '%EXQ%\server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "TAGNUM=%%V"
 if not defined TAGNUM (
     echo  [ERROR] Zip carries no server.py HIVEMIND_VERSION. Nothing was changed.
     echo  Press any key to continue... & pause >nul & exit /b 1
@@ -155,7 +175,8 @@ if errorlevel 1 (
 
 set "TAG="
 set "ASSET_URL="
-for /f "usebackq delims=" %%L in (`powershell -NoProfile -Command "$r = Get-Content '%TMPDIR%\release.json' -Raw | ConvertFrom-Json; $a = $r.assets | Where-Object { $_.name -like '*.zip' } | Select-Object -First 1; Write-Output ($r.tag_name + '|' + $a.browser_download_url + '|' + $a.digest)"`) do set "LINE=%%L"
+set "ASSET_DIGEST="
+for /f "usebackq delims=" %%L in (`powershell -NoProfile -Command "$r = Get-Content -LiteralPath '%TMQ%\release.json' -Raw | ConvertFrom-Json; $a = $r.assets | Where-Object { $_.name -like '*.zip' } | Select-Object -First 1; Write-Output ($r.tag_name + '|' + $a.browser_download_url + '|' + $a.digest)"`) do set "LINE=%%L"
 for /f "tokens=1,2,3 delims=|" %%T in ("%LINE%") do (
     set "TAG=%%T"
     set "ASSET_URL=%%U"
@@ -183,6 +204,14 @@ REM Numeric triple compare: string equality would apply a DOWNGRADE when the
 REM installed version is newer (dev checkouts, hotfix builds).
 set "VCMP="
 for /f "usebackq delims=" %%C in (`powershell -NoProfile -Command "function V([string]$v) { @(($v -split '-')[0] -split '\.') + 0,0,0 | Select-Object -First 3 | ForEach-Object { [int]$_ } }; function P([string]$v) { if ($v -match '(?:preview|alpha|beta|rc|dev)(?:\.(\d+))?$') { [int]('0' + $Matches[1]) + 1 } else { 999 } }; $a = V '%CURRENT%'; $b = V '%TAGNUM%'; $ap = P '%CURRENT%'; $bp = P '%TAGNUM%'; if ($b[0] -gt $a[0] -or ($b[0] -eq $a[0] -and $b[1] -gt $a[1]) -or ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -gt $a[2])) { 'newer' } elseif ($b[0] -eq $a[0] -and $b[1] -eq $a[1] -and $b[2] -eq $a[2]) { if ($bp -gt $ap) { 'newer' } elseif ($bp -lt $ap) { 'older' } else { 'same' } } else { 'older' }"`) do set "VCMP=%%C"
+REM VCMP-GUARD (audit 2026-11-04): a version the comparer cannot parse (e.g.
+REM "1.5.0x" - [int]"0x" throws) left VCMP empty and the code FELL THROUGH
+REM both gates below, silently performing a same-version or downgrade apply.
+if not defined VCMP (
+    echo  [ERROR] Could not compare versions "%CURRENT%" vs "%TAGNUM%" - aborting.
+    if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
 if "%VCMP%"=="same" (
     echo.
     echo  [OK] Already up to date: %CURRENT%
@@ -214,7 +243,7 @@ REM -- 4b. Warnings from the release notes -----------------------------------
 REM Anything the release author flags (warning / breaking / known issue /
 REM migration / attention / caution) is shown BEFORE anything is changed.
 del "%TMPDIR%\warnings.txt" 2>nul
-powershell -NoProfile -Command "$r = Get-Content '%TMPDIR%\release.json' -Raw -Encoding UTF8 | ConvertFrom-Json; $w = $r.body -split ([char]10) | ForEach-Object { $_.TrimEnd() } | Where-Object { $_ -match '(?i)\b(warning|breaking|known issues?|migrat\w*|attention|caution|deprecat\w*)\b' -and $_ -notmatch '(?i)\bno\b[^.]*\bbreaking\b' } | Select-Object -First 5; if ($w) { $w | Set-Content '%TMPDIR%\warnings.txt' -Encoding UTF8 }"
+powershell -NoProfile -Command "$r = Get-Content -LiteralPath '%TMQ%\release.json' -Raw -Encoding UTF8 | ConvertFrom-Json; $w = $r.body -split ([char]10) | ForEach-Object { $_.TrimEnd() } | Where-Object { $_ -match '(?i)\b(warning|breaking|known issues?|migrat\w*|attention|caution|deprecat\w*)\b' -and $_ -notmatch '(?i)\bno\b[^.]*\bbreaking\b' } | Select-Object -First 5; if ($w) { $w | Set-Content -LiteralPath '%TMQ%\warnings.txt' -Encoding UTF8 }"
 if exist "%TMPDIR%\warnings.txt" (
     echo.
     echo  +-------------------------------------------------------------+
@@ -242,8 +271,12 @@ echo  Backing up code   : %BK%\
 REM /R:1 /W:1: a single locked file must not hang the update for hours
 REM (robocopy defaults: 1,000,000 retries x 30s). models excluded: GGUFs
 REM can live here in some setups - gigabytes nobody wants in a backup.
+REM XD-ANCHOR (audit 2026-11-04): a bare name in /XD matches that directory
+REM name at EVERY depth - bare "models" also excluded model_configs\models,
+REM so the tracked model-config JSONs were never backed up and never
+REM applied. "%BASE%\models" anchors the exclude to the top-level dir only.
 REM old update_backup_* excluded: backups must not nest.
-robocopy "%BASE%" "%BASE%\%BK%" /E /R:1 /W:1 /NFL /NDL /NJH /NP /NJS /XD .venv llama logs models sessions learning_logs __pycache__ _update_tmp update_backup_*
+robocopy "%BASE%" "%BASE%\%BK%" /E /R:1 /W:1 /NFL /NDL /NJH /NP /NJS /XD .venv llama logs "%BASE%\models" sessions learning_logs __pycache__ _update_tmp update_backup_*
 if errorlevel 8 (
     echo  [ERROR] Backup failed - nothing was changed.
     echo  Press any key to continue... & pause >nul & exit /b 1
@@ -266,8 +299,10 @@ if not exist "%TMPDIR%\release.zip" (
 
 REM I1 (audit r2): verify the downloaded asset against the release API
 REM sha256 digest - curl exit 0 proves nothing about content identity,
-REM and the extract below installs executable code.
-powershell -NoProfile -Command "if ('%ASSET_DIGEST%' -like 'sha256:*') { $d = '%ASSET_DIGEST%'.Substring(7); $h = (Get-FileHash -Algorithm SHA256 '%TMPDIR%\release.zip').Hash.ToLower(); if ($h -ne $d) { Write-Output ('[ERROR] digest mismatch: got ' + $h + ' want ' + $d); exit 1 } } else { Write-Output '  (no digest in release metadata - skipping hash check)' }"
+REM and the extract below installs executable code. DIGEST-CASE (audit
+REM 2026-11-04): the API digest is lowercased too - an uppercase hex would
+REM have failed the compare against .Hash.ToLower() as a false tamper alarm.
+powershell -NoProfile -Command "if ('%ASSET_DIGEST%' -like 'sha256:*') { $d = '%ASSET_DIGEST%'.Substring(7).ToLower(); $h = (Get-FileHash -Algorithm SHA256 -LiteralPath '%TMQ%\release.zip').Hash.ToLower(); if ($h -ne $d) { Write-Output ('[ERROR] digest mismatch: got ' + $h + ' want ' + $d); exit 1 } } else { Write-Output '  (no digest in release metadata - skipping hash check)' }"
 if errorlevel 1 (
     echo  [ERROR] Release zip FAILED the sha256 digest check. Nothing was changed.
     echo         The download was tampered with or corrupted. Backup is in %BK%
@@ -276,16 +311,58 @@ if errorlevel 1 (
 :zip_staged
 
 REM -- 7. Extract (zip carries a version root folder) ------------------------
-powershell -NoProfile -Command "Expand-Archive -Path '%TMPDIR%\release.zip' -DestinationPath '%TMPDIR%\extracted' -Force"
+powershell -NoProfile -Command "Expand-Archive -LiteralPath '%TMQ%\release.zip' -DestinationPath '%TMQ%\extracted' -Force"
 if errorlevel 1 (
     echo  [ERROR] Could not extract the zip. Nothing was changed
     echo         backup is in %BK%
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 set "EXROOT="
-for /d %%D in ("%TMPDIR%\extracted\*") do set "EXROOT=%%D"
+set /a NROOTS=0
+for /d %%D in ("%TMPDIR%\extracted\*") do (
+    set "EXROOT=%%D"
+    set /a NROOTS+=1
+)
 if not defined EXROOT (
     echo  [ERROR] Zip contained no folder. Nothing was changed.
+    echo         backup is in %BK%
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+if not "%NROOTS%"=="1" (
+    echo  [ERROR] Zip layout wrong: %NROOTS% root folders in the zip, expected
+    echo          exactly one HiveMind version folder. Nothing was applied.
+    echo         backup is in %BK%
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+set "EXQ=%EXROOT:'=''%"
+if not defined EXQ set "EXQ=%EXROOT%"
+REM PRE-APPLY LAYOUT PROBE (audit 2026-11-04): the GitHub flow used to apply
+REM whatever the zip carried and only NOTICE a wrong/empty layout in the
+REM post-apply verify - by then half the install was overwritten and only a
+REM MANUAL rollback helped. The local --zip flow always had these probes;
+REM they are cheap and idempotent, so the common path enforces them too.
+if not exist "%EXROOT%\core" (
+    echo  [ERROR] Zip layout wrong: no core\ folder in the zip. This does not
+    echo          look like a HiveMind release zip. Nothing was applied.
+    echo         backup is in %BK%
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+if not exist "%EXROOT%\utils" (
+    echo  [ERROR] Zip layout wrong: no utils\ folder in the zip. Nothing was applied.
+    echo         backup is in %BK%
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+set "ZIPVER="
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -LiteralPath '%EXQ%\server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "ZIPVER=%%V"
+if not defined ZIPVER (
+    echo  [ERROR] Zip carries no server.py HIVEMIND_VERSION. Nothing was applied.
+    echo         backup is in %BK%
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+if /I not "%ZIPVER%"=="%TAGNUM%" (
+    echo  [ERROR] Zip carries version %ZIPVER% but the release tag is %TAGNUM% -
+    echo         the asset does not match the release. Nothing was applied.
+    echo         backup is in %BK%
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 REM SELF-UPDATE STAGING (2026-10-03 review): stage the incoming update.bat
@@ -304,10 +381,39 @@ REM Gateway files (2026-10-05, WP1): a wrongly built zip must never
 REM overwrite gateway.toml; state/audit/kill-switch live in
 REM %LOCALAPPDATA%\HiveMindGateway and are listed anyway.
 echo  Applying update   : over this folder
-robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /XF update.bat settings.json presets.json models.json vision_model.json routing_weights.json memory.json gateway.toml gateway_state.json gateway_state.json.corrupt gateway.disabled gateway.lock gateway_audit.jsonl gateway_audit.jsonl.* gateway_state.tmp /XD sessions .hive_uploads learning_logs logs .venv llama models /NFL /NDL /NJH /NP /NJS
+REM WATCHDOG-PAUSE (audit 2026-11-03): the watchdog restarted the engine
+REM within its 20 s pass while the apply was running, so robocopy wrote into
+REM a live Python process. Stop it for the apply and re-arm after every
+REM post-apply step (moved there 2026-11-04 - see the re-arm comment).
+set "WD_WAS=0"
+if exist "%LOCALAPPDATA%\HiveMindGateway\watchdog.marker" set "WD_WAS=1"
+if exist "%BASE%\watchdog_engine.bat" call "%BASE%\watchdog_engine.bat" stop
+REM DYING-GASP (audit 2026-11-04): a watchdog pass that was mid-restart when
+REM stop landed still boots the engine once, inside its 20 s pass window.
+REM Give it that window, then re-check the port BEFORE anything is applied.
+REM Without this, the fetch/backup minutes above could have seen the
+REM watchdog revive a dead engine and the apply would write into it.
+REM ping, not timeout: timeout /nobreak hard-fails when stdin is redirected
+REM (scheduled task, pipe) - ping waits everywhere.
+if "%WD_WAS%"=="1" ping -n 26 127.0.0.1 >nul
+powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort %HM_PORT% -State Listen -ErrorAction SilentlyContinue) { exit 1 } else { exit 0 }"
+if errorlevel 1 (
+    echo  [ERROR] An engine is listening on port %HM_PORT% - the watchdog
+    echo         restarted it while the update was preparing. Nothing was
+    echo         applied. Close the HiveMind console window, then run this
+    echo         update again. The backup folder %BK% can be deleted.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+REM XD-ANCHOR (audit 2026-11-04): bare "models" matched model_configs\models
+REM too, so the tracked model-config JSONs a release ships were silently
+REM skipped on every update. /XD matches against the SOURCE tree, so the
+REM apply anchors to "%EXROOT%\models" (the zip's top-level models dir).
+robocopy "%EXROOT%" "%BASE%" /E /R:1 /W:1 /XF update.bat settings.json presets.json models.json vision_model.json routing_weights.json memory.json gateway.toml gateway_state.json gateway_state.json.corrupt gateway.disabled gateway.lock gateway_audit.jsonl gateway_audit.jsonl.* gateway_state.tmp /XD sessions .hive_uploads learning_logs logs .venv llama "%EXROOT%\models" /NFL /NDL /NJH /NP /NJS
 if errorlevel 8 (
     echo  [ERROR] Applying the update failed. Restore by copying the
     echo         contents of %BK%\ back over this folder.
+    echo         The engine watchdog is STOPPED - after restoring, run
+    echo         watchdog_engine.bat once to re-arm it.
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
@@ -351,7 +457,12 @@ REM %  cmd quoting (parse error on the live box - prune AND manifest rewrite
 REM %  silently skipped). The logic ships as deploy\update_prune.ps1 and is
 REM %  testable against a fake tree; it prints the pruned count for the batch.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\update_prune.ps1" -Base "%BASE%" -Ex "%EXROOT%" -Trash "%BASE%\update_removed_%TAGNUM%" -Manifest "%BASE%\update_manifest_installed.txt" > "%TMPDIR%\prune_count.txt" 2>&1
-for /f "usebackq delims=" %%P in (`type "%TMPDIR%\prune_count.txt" 2^>nul`) do set "PRUNED=%%P"
+REM PRUNE-COUNT GUARD (audit 2026-11-04): the old loop swallowed the LAST
+REM output line - when the prune script errored, that was PowerShell error
+REM TEXT, and expanding it inside the if-line below exploded with a cmd
+REM syntax error that killed the update mid-flow (no banner, no self-swap).
+REM Only a pure number may become PRUNED; everything else keeps PRUNED=0.
+for /f "usebackq delims=" %%P in (`type "%TMPDIR%\prune_count.txt" 2^>nul ^| findstr /r /c:"^[0-9][0-9]*$"`) do set "PRUNED=%%P"
 if "%HAD_MANIFEST%"=="1" if not "%PRUNED%"=="0" (
     echo  Pruned          : %PRUNED% removed release file^(s^) moved to update_removed_%TAGNUM%\
 )
@@ -404,6 +515,14 @@ REM A release can add optional pieces (voice, decider, browser tool). After
 REM every update, ask once for those that are NOT on this machine - an
 REM install that already has them all gets a single informational line.
 if exist "%~dp0deploy\check_optionals.bat" call "%~dp0deploy\check_optionals.bat"
+
+REM WATCHDOG RE-ARM (moved 2026-11-04, audit): the watchdog used to restart
+REM directly after the apply - the engine then booted while the verify, the
+REM prune, the dependency refresh and the optional components were still
+REM running, and uv swapped .venv packages under a live interpreter. Re-arm
+REM only after every post-apply step is done. A FAILED verify leaves the
+REM watchdog off on purpose: do not auto-restart a possibly mixed tree.
+if "%WD_WAS%"=="1" if exist "%BASE%\watchdog_engine.bat" start "" /b /d "%BASE%" watchdog_engine.bat
 
 echo.
 echo  +=============================================================+

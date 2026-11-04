@@ -387,6 +387,13 @@ async def _inline_tool_write_file_append(args: dict, workspace: Path, workspace_
     _boundary = {"note": ""}
     try:
         def _append_and_size() -> int:
+            # T6-APPEND (audit 2026-11-03): append bypassed the containment
+            # re-check the atomic writers perform; a junction swapped in after
+            # the entry check redirected the write.
+            _chk = _recheck_workspace_before_replace(
+                p, workspace_lock, "write_file_append")
+            if _chk:
+                raise PermissionError("workspace containment re-check failed")
             p.parent.mkdir(parents=True, exist_ok=True)
             _head = p.read_text(encoding="utf-8", errors="replace", newline="") if p.stat().st_size else ""
             _body = content

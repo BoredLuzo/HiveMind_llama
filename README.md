@@ -256,7 +256,8 @@ no per-language flags, and `lsp_servers` overrides a command.
 | `lsp_format` | Formats a file through its language server and rewrites it atomically; approval-gated. |
 
 Read-only modes get the eight read tools plus `lsp_code_actions`;
-`lsp_rename` is full-mode only. A missing server answers `LSP_UNAVAILABLE`
+`lsp_rename` and `lsp_format` are full-mode only. A missing server answers
+`LSP_UNAVAILABLE`
 with an install hint. With a server already running, a successful write/edit
 gets a compact `[LSP auto-diagnostics …]` block (8-line cap); a write never
 starts a cold server, and `lsp_auto_diagnostics` (default true) turns the
@@ -301,7 +302,7 @@ HiveMind speaks MCP in **both directions**. Both are opt-in and loopback-only.
 | | |
 |---|---|
 | Protocols | 2024-11-05, 2025-03-26 / 2025-06-18 (sessions, `GET /mcp` SSE with `Last-Event-ID` replay) and 2026-07-28 (`server/discover`, `_meta` version check, stateless) |
-| Tools | the 23 the agent uses — read/write/edit/run/test/git plus `model_status`; every tool carries annotations (`readOnlyHint`, `destructiveHint`, …) |
+| Tools | the MCP server's own tool set (23 names, see `docs/mcp.md`) — read/write/edit/run/test/git plus `model_status`; every tool carries annotations (`readOnlyHint`, `destructiveHint`, …) |
 | Resources | `resources/list`, `resources/read`, `resources/templates/list` — workspace-contained, text-only, 256 KB cap, secret denylist (`settings.json`, `gateway.toml`, `.env*`, keys) |
 | Prompts | `review_diff`, `explain_file`, `fix_tests` |
 | Tiers | read / write / exec; exec **and** every mutating tool require `HIVEMIND_INTERNAL_TOKEN`, read-only tools stay free |
@@ -697,7 +698,7 @@ needs your own bot token from [@BotFather](https://t.me/BotFather) — setup:
 | Voice in | a voice note is transcribed on the CPU and runs like typed text — **a spoken note keeps the selected conversational mode** (chat/simple/direct) instead of being rerouted |
 | Voice out | answers can come back as a voice note (`/tts` behaviour follows the Voice card: text, voice or both) |
 | **Images** | a photo (or an image sent as a file) becomes a run with the **caption as the prompt**; the engine loads the model's vision projector on demand. Largest Telegram size, JPEG/PNG/WebP, 10 MB cap |
-| **PDFs / text files** | a PDF, `.txt`, `.md`, `.log` or `.csv` is extracted on the engine (`/documents/extract`, pypdf) and run as text with the caption as the question. 40 pages / 120k characters per document (the answer says when it was cut), 25 MB upload; a scanned PDF without a text layer answers "send the pages as photos" |
+| **PDFs / text files** | a PDF, `.txt`, `.md`, `.log` or `.csv` is extracted on the engine (`/documents/extract`, pypdf) and run as text with the caption as the question. 40 pages / 120k characters per document (the answer says when it was cut), 20 MB upload (Telegram's bot download limit); a scanned PDF without a text layer answers "send the pages as photos" |
 | Safety | owner-only, private-chat-only, rate-limited, `telegram_phone_restricted` limits phone runs to read tools; approvals can be answered on the phone |
 
 Switches live in the **Telegram** card (mirror, voice in/out, **images in**,
@@ -710,8 +711,9 @@ restart needed.
   injects learned traits into system prompts.
 - Skill distiller: semantic insight compaction (decay/merge/evict), top
   insights exported to `learning_logs/skills/`.
-- Persistent memory: lightweight hash-based keyword vectors (no model
-  download, lexical not semantic), path-based relevance boosting,
+- Persistent memory: SQLite FTS5 (bm25 + porter stemming + prefix match) with
+  a hash-cosine fallback when the sqlite build lacks FTS5 (no model
+  download), path-based relevance boosting,
   deduplicated debounced persistence.
 - Post-run insight extraction and per-run/per-phase token stats.
 
@@ -945,8 +947,9 @@ cuda). If a model fails to start on the GPU, HiveMind retries it once with
 llama.cpp download slow/fails: grab the release manually from
 https://github.com/ggml-org/llama.cpp/releases.
 
-Web search empty: is SearXNG up? `docker compose -f
-searxng-config/docker-compose.yml up -d`, then `curl -m 10
+Web search empty: is SearXNG up? Run `searxng.bat install` once (it seeds
+`searxng-config/docker-compose.yml` from the example), then
+`docker compose -f searxng-config/docker-compose.yml up -d`, then `curl -m 10
 http://localhost:8888/healthz`. `searxng_language` takes one language
 (`all` = unrestricted).
 
@@ -1016,7 +1019,7 @@ fully local alternative to cloud coding tools.
 - No container sandbox; `run_bash` runs with filesystem trust (mitigated by the
   Job-Object sandbox and the optional approval gate).
 - Retrieval is a static repo-map plus optional LLM pre-explore; there is no
-  vector DB (memory uses small hash embeddings).
+  vector DB (memory uses SQLite FTS5 with a hash-cosine fallback).
 
 ## License
 

@@ -34,6 +34,15 @@ if not exist "%MODELS_DIR%" (
     echo  Folder does not exist - it will be created.
     mkdir "%MODELS_DIR%" 2>nul
 )
+REM MKDIR-GUARD (2026-11-04): a failed mkdir (typo path, blocked name) used to
+REM vanish behind 2>nul - the script then "registered" a folder that was never
+REM created and fetch_models crashed on it. Fail loudly instead.
+if not exist "%MODELS_DIR%" (
+    echo  [ERROR] Could not create the models folder.
+    echo  Check the path - a typo would create a folder somewhere else.
+    echo.
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
 echo.
 
 REM ---- Find Python (venv preferred, then system) ----
@@ -141,6 +150,13 @@ REM Wire the agent roles to what is on disk. Only empty or uninstalled slots
 REM are touched; a model the user picked stays. Runs before the first start so
 REM a default install is configured the moment the models land.
 "%PY%" deploy\apply_model_defaults.py
+REM ERROR-SURFACE (2026-11-04): a failure here used to be followed by an
+REM unconditional "Done" - the roles were simply not configured. Say so.
+if errorlevel 1 (
+    echo   [WARN] apply_model_defaults.py failed - agent roles were not
+    echo          auto-configured. Models are still usable; pick them in
+    echo          Settings -^> Models or run setup_models.bat again.
+)
 echo.
 echo  Done. models.json was populated from the models folder.
 echo  Then start HiveMind with start_hivemind.bat

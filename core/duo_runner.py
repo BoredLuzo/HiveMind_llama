@@ -164,6 +164,7 @@ from core.duo_helpers import (
     _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
     _calculate_thinking_tokens, _build_duo_coder_sys,
     should_compress_after_truncated_drop as _should_compress_after_truncated_drop,
+    inloop_plan_should_run as _inloop_plan_should_run,
     _run_parallel_pre_explore, _build_symbol_reference_hints,
     _compress_fail_streak_update, _explore_size_tolerance, _collect_new_explore_paths,
     read_loop_key,
@@ -316,6 +317,20 @@ from core.duo.preflight import (  # noqa: F401
     _strip_stale_ctx_notices,
     coder_briefing_text,
 )
+
+
+async def _auto_push_after_commit(ws_str: str) -> str:
+    """AUTO-PUSH after a successful hivemind commit (2026-11-03: was two
+    identical inline try/import/await blocks in the run finalization - the
+    final auto-commit branch and the checkpoint-consolidation branch).
+    Delegates to git_tools.push_after_commit (panel toggle + credential gate
+    live there); a failure only debug-logs, never raises into the run."""
+    try:
+        from hive_functions.git_tools import push_after_commit as _pap
+        return await _pap(ws_str)
+    except Exception as _push_err:
+        logger.debug("[AUTO-PUSH] skipped: %s", _push_err)
+        return ""
 
 
 @dataclasses.dataclass
@@ -2499,6 +2514,12 @@ async def run_code_duo(ctx):
         _plan_thinking = ""
         _plan_content_txt = ""
         _plan_result: "PlannerResult | None" = None
+        # INLOOP-PLAN-INIT (audit 2026-11-03): the end-of-run context save
+        # reads these; they were bound only inside the planner-off path, so a
+        # skipped planner (follow-up/resume/toggle) raised UnboundLocalError
+        # and the whole sidecar save (last_run/task_sig/session) was skipped.
+        _inloop_plan_text = ""
+        _inloop_plan_thinking = ""
         _planner_used_fallback = False
         _planner_fallback_reason = ""
         _planner_parse_mode = "none"
@@ -4318,10 +4339,21 @@ async def run_code_duo(ctx):
                 # ctx.duo_config.thinking_per_chunk=True: Thinking in EVERY chunk.
                 # New:
                 #   - ctx.duo_config.thinking_per_chunk=True → thinking before EVERY chunk (chunking active)
-                _run_thinking_now = (
-                    (ctx.duo_config.agentic_thinking or ctx.duo_config.thinking_per_chunk)
-                    and not ctx.aborted()
-                    and not ctx.duo_config.planner
+                # PLAN-DUP-GUARD (2026-11-03): the gate now also requires that
+                # this run has NO planner plan yet (_has_plan: subtasks /
+                # briefing / plan_content from the planner phase or a resume).
+                # The old gate only checked the planner TOGGLE, so
+                # chunking=True + planner=False + UI-forced agentic_thinking
+                # ran the planner phase AND then asked the coder model to
+                # produce a SECOND plan in the planner's markdown format
+                # ("## Plan: / ### Open Tasks") via run_inloop_planner —
+                # streamed as visible answer text, not reasoning.
+                _run_thinking_now = _inloop_plan_should_run(
+                    ctx.duo_config.agentic_thinking,
+                    ctx.duo_config.thinking_per_chunk,
+                    ctx.aborted(),
+                    ctx.duo_config.planner,
+                    _has_plan,
                 )
                 if _run_thinking_now:
                     ctx.exec_ctrl.transition(AgentState.PLANNING)
@@ -5359,6 +5391,12 @@ async def run_code_duo(ctx):
                                 )
                                 if _delta_sys:
                                     _sys_for_compress = str(_delta_sys)
+                            # KWARGS-CARRY-THE-SYSTEM (audit 2026-11-03):
+                            # _comp_kwargs was built before the delta append;
+                            # compression reads system_prompt from the kwargs,
+                            # so updating only the local variable still threw
+                            # the delta away.
+                            _comp_kwargs["system_prompt"] = _sys_for_compress
                             _dtool_msgs, _condensed_files, _compress_usage = await _compress_tool_context(messages=_dtool_msgs, **_comp_kwargs)
                             # MINI-SHRINK-RETRY (2026-09-07): if the full compression
                             # barely shrank (<15% of the before value), an early
@@ -7623,7 +7661,11 @@ async def run_code_duo(ctx):
     ctx.memory.add_to_session("user", ctx.user_input)
     # Persist files_read + touched_paths from this run into .context.json
     # so follow-up runs within the same session retain read-guard state.
-    if ctx.chat_id and not ctx.is_aborted_chat(ctx.chat_id):
+    # ABORTED-SAVE (audit 2026-11-03): an aborted/disconnected run used to
+    # skip this block entirely (making _eff_stop="aborted" dead), so a
+    # reopened chat had no last_run and the follow-up answered blind. Save
+    # the task/plan even then; the status says "aborted".
+    if ctx.chat_id:
         try:
             from tools.runner import _files_read_in_run
             _read_final = _files_read_in_run.get(None)
@@ -7636,23 +7678,30 @@ async def run_code_duo(ctx):
                 _eff_stop = "aborted"
             else:
                 _eff_stop = "completed"
-            _save_chat_context(ctx.chat_id, {
-                **(_load_chat_context(ctx.chat_id) or {}),
-                "files_read_in_run": list(_read_final) if _read_final else [],
-                "touched_paths": list(_touched_paths) if _touched_paths else [],
-                "task_sig": hashlib.md5(ctx.user_input[:60].encode()).hexdigest()[:8],
-                # P1-2 (2026-08-12): Session pro Chat persistieren (Restart-sicher).
-                # Injektion via compute_char_caps/budget_session_msgs.
-                "session": ctx.memory.get_session_messages(limit=6, user_cap=8000, assistant_cap=8000),
-                "last_run": {
+            # ATOMIC-CONTEXT (audit 2026-11-03): load-modify-save raced with
+            # the resume-block writer (which used _mutate_chat_context) and
+            # could drop its fields. Mutate under the per-chat lock.
+            from context.chat import _mutate_chat_context as _mut_ctx
+
+            def _apply_run_ctx(_c):
+                _c["files_read_in_run"] = list(_read_final) if _read_final else []
+                _c["touched_paths"] = list(_touched_paths) if _touched_paths else []
+                _c["task_sig"] = hashlib.md5(
+                    ctx.user_input[:60].encode()).hexdigest()[:8]
+                # Persist the session per chat (restart-safe); injection uses
+                # compute_char_caps/budget_session_msgs.
+                _c["session"] = ctx.memory.get_session_messages(
+                    limit=6, user_cap=8000, assistant_cap=8000)
+                _c["last_run"] = {
                     "task": ctx.user_input[:8000],
                     "stop_reason": _eff_stop,
                     "written_files": sorted(set(_written_files or []))[:50],
                     "plan": _last_plan,
                     "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "success": bool(_eff_stop == "completed"),
-                },
-            })
+                }
+
+            _mut_ctx(ctx.chat_id, _apply_run_ctx)
         except Exception as _ctx_err:
             logger.debug("[CTX] Chat context save failed: %s", _ctx_err)
 
@@ -7756,6 +7805,19 @@ async def run_code_duo(ctx):
             )
 
     ctx.memory.add_to_session("assistant", _duo_session_out)  # single write point
+    # SIDECAR-SESSION-AFTER-ASSISTANT (audit 2026-11-03): the sidecar save
+    # above ran before this line, so its "session" was permanently the
+    # current user turn; the next run cleared memory and dropped it as a
+    # trailing user -> json-less (API) chats never accumulated history.
+    if ctx.chat_id:
+        try:
+            from context.chat import _mutate_chat_context
+            _sess_now = ctx.memory.get_session_messages(
+                limit=6, user_cap=8000, assistant_cap=8000)
+            _mutate_chat_context(
+                ctx.chat_id, lambda _c: _c.__setitem__("session", _sess_now))
+        except (ImportError, OSError, ValueError, TypeError) as _se:
+            logger.debug("[CTX] session sidecar update failed: %s", _se)
     if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
         ctx.duo_stop_reason = "aborted"
     elif _graceful_stopped:
@@ -7793,37 +7855,27 @@ async def run_code_duo(ctx):
         if _ac_final:
             yield await ctx.emit({"type": "status", "content": _ac_final})
         if _ac_final and _ac_final.startswith("✅"):
-            try:
-                from hive_functions.git_tools import push_after_commit as _pap
-                _push_out = await _pap(_ws_str)
-                if _push_out:
-                    yield await ctx.emit({"type": "status", "content": _push_out})
-            except Exception as _push_err:
-                logger.debug("[AUTO-PUSH] skipped: %s", _push_err)
+            _push_out = await _auto_push_after_commit(_ws_str)
+            if _push_out:
+                yield await ctx.emit({"type": "status", "content": _push_out})
     elif (_git_checkpoints_enabled(ctx)
           and not ctx.duo_config.git_autocommit
           and ctx.duo_stop_reason in ("completed", "graceful_stop")
           and _ws_str):
         try:
             from hive_functions.git_tools import exec_git_squash_checkpoints as _sq
-            try:
-                from settings import load_settings as _ls
-                _pfx = (str((_ls() or {}).get("git_commit_prefix", "") or "").strip()
-                        or "hivemind:")
-            except Exception:
-                _pfx = "hivemind:"
-            _sq_out = await _sq(f"{_pfx} checkpoint: session consolidated",
+            # NO prefix read here anymore (2026-11-03): consolidate_only
+            # builds its own "<prefix> checkpoint: session consolidated (N
+            # checkpoints)" marker message; the `message` argument is only
+            # used by the run-file fold path.
+            _sq_out = await _sq("checkpoint consolidation",
                                 _ws_str, consolidate_only=True)
             if _sq_out:
                 yield await ctx.emit({"type": "status", "content": _sq_out})
             if _sq_out and _sq_out.startswith("✅"):
-                try:
-                    from hive_functions.git_tools import push_after_commit as _pap
-                    _push_out = await _pap(_ws_str)
-                    if _push_out:
-                        yield await ctx.emit({"type": "status", "content": _push_out})
-                except Exception as _push_err:
-                    logger.debug("[AUTO-PUSH] skipped: %s", _push_err)
+                _push_out = await _auto_push_after_commit(_ws_str)
+                if _push_out:
+                    yield await ctx.emit({"type": "status", "content": _push_out})
         except Exception as _sq_err:
             logger.debug("[GIT-CONSOLIDATE] skipped: %s", _sq_err)
     # AUDIT-FIX D2: resume safety net — on every non-complete stop

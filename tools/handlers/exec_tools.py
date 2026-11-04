@@ -195,7 +195,8 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
         # raises UnicodeEncodeError inside the snippet — the code crashed on
         # a cosmetic character, not on its logic.
         import os as _os
-        _env = {**_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        from infra.child_env import scrubbed_env as _scrubbed_env
+        _env = {**_scrubbed_env(), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree as _kill_tree
         r = await asyncio.create_subprocess_exec(
             _py_cmd,
@@ -517,8 +518,9 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     if sys.platform == "win32"
                     else [_BASH_BIN, "-c", cmd]  # X6: not every distro ships /bin/bash
                 )
+            from infra.child_env import scrubbed_env as _scrubbed_env
             stdout_raw, stderr_raw, returncode, timed_out = await _stream_proc(
-                _stream_cmd, _bash_timeout, str(workspace), os.environ,
+                _stream_cmd, _bash_timeout, str(workspace), _scrubbed_env(),
             )
         finally:
             if _ka_task:

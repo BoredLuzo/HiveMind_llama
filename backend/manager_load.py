@@ -37,6 +37,7 @@ from .llama_manager_utils import (
     _prefetch_key, _tcp_alive, _kill_port_sync, _nm,
 )
 from .llama_slots import ModelSlot
+from .manager_process import _slot_in_flight
 from typing import Optional
 from pathlib import Path
 from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, moe_cfg_for, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
@@ -50,7 +51,7 @@ logger = logging.getLogger("llama_manager")
 
 # ── Load-path family sets (module level so tests can pin them) ─────────────
 # --jinja fallback when the registry JSON sets no explicit "jinja" key.
-_JINJA_BASES = {"qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "lfm2.5", "lfm3", "minicpm-v", "minicpm-v-4.7"}
+_JINJA_BASES = {"qwen3.5", "qwen3-vl", "qwen3", "qwen3.6", "qwen3.8", "omnicoder", "hermes3.6", "lfm2.5", "lfm3", "lfm3-omni", "minicpm-v", "minicpm-v-4.7"}
 # Server <think>-Inhalte in reasoning_content → split_thinking +
 # thinking_budget greifen. Fallback when the registry sets no "reasoning".
 # NOTE: "lfm2.5" stays OUT on purpose — the small LFM models are
@@ -770,6 +771,12 @@ class LlamaLoadMixin:
                 # the cure. slot._moe_cache_used is set in the same
                 # _start_process call that built the argv.
                 _cache_wanted = bool(getattr(slot, "_moe_cache_used", False))
+                # CACHE-RETRY-BOOKKEEPING (audit 2026-11-03): do NOT return
+                # early on a successful retry - that bypassed touch(), the
+                # dead-slot guard and the parked vision upgrade. Fall through
+                # to the shared post-start path; the flag keeps the AMD/CPU
+                # branches from firing on the stale original error.
+                _cache_retried_ok = False
                 if _cache_live > 0 and _cache_wanted:
                     logger.warning(
                         "Load failed with --moe-cache-mib=%d - retrying once "
@@ -782,7 +789,6 @@ class LlamaLoadMixin:
                             slot, model, num_ctx or CONTEXT_SIZE_DEFAULT,
                             vision=vision, n_parallel=n_parallel,
                             ctx_graceful=ctx_graceful, moe_cache=False)
-                        return slot.port
                     except Exception as _cache_exc:
                         # Fall through to the normal error handling with the
                         # ORIGINAL exception instead of swallowing the AMD /
@@ -790,11 +796,13 @@ class LlamaLoadMixin:
                         logger.warning(
                             "Retry without --moe-cache-mib failed too: %s",
                             _cache_exc)
+                    else:
+                        _cache_retried_ok = True
                 # AMD-VULKAN-KOLLISIONS-RETRY:
                 _has_running_peers = any(
                     s.is_running for s in self._slots if s.slot_id != slot.slot_id
                 )
-                if "exit=-1" in str(_start_exc) and _has_running_peers:
+                if not _cache_retried_ok and "exit=-1" in str(_start_exc) and _has_running_peers:
                     logger.warning(
                         f"AMD Vulkan collision for '{model}' (exit=-1) — "
                         f"waiting 5s and retrying once ..."
@@ -810,7 +818,7 @@ class LlamaLoadMixin:
                     except Exception:
                         await _kill_slot_async(slot)
                         raise
-                elif "exit=-1" in str(_start_exc) and GPU_LAYERS > 0:
+                elif not _cache_retried_ok and "exit=-1" in str(_start_exc) and GPU_LAYERS > 0:
                     _model_vram = _vram_of(_strip_alias(model))
                     # 3.0 GB (2026-09-08): the coder sits at ~4.9 GB — under the
                     # old 5.0 threshold a post-eviction Vulkan-timing failure
@@ -847,7 +855,7 @@ class LlamaLoadMixin:
                     except Exception:
                         await _kill_slot_async(slot)
                         raise
-                else:
+                elif not _cache_retried_ok:
                     await _kill_slot_async(slot)
                     raise
             except Exception:
@@ -995,6 +1003,10 @@ class LlamaLoadMixin:
                              moe_cache: bool = True):
         """Starts llama-server. Sets _ready_event when /health is OK."""
         _evicted_here = False
+        # STALE-CACHE-FLAG (audit 2026-11-03): a start that fails before the
+        # MoE section must not leave a previous load's True behind - the
+        # retry would drop a flag the failed command never carried.
+        slot._moe_cache_used = False
         if slot.is_running:
             await _kill_slot_async(slot)
             _evicted_here = True
@@ -1054,7 +1066,12 @@ class LlamaLoadMixin:
                 #   2. Worker-2 _start_process → VRAM-Check → _unpinned=[] →
                 #      to_kill = [Worker-1-Slot] → Worker-1 gekillt
                 #   4. Worker-1 reload → VRAM-Check → killt Worker-2 → Whack-a-Mole
-                _unpinned = [s for s in running_slots if not s.pinned]
+                # IN-FLIGHT-GUARD (audit 2026-11-03): this heuristic fired
+                # even after the committed-VRAM guard passed, killing a peer
+                # with an active round. Same rule as _evict_lru: never kill
+                # a slot whose round is running (age-aware).
+                _unpinned = [s for s in running_slots
+                             if not s.pinned and not _slot_in_flight(s)]
                 if not _unpinned:
                     logger.warning(
                         f"_start_process [{model}]: all running peers "
@@ -1119,7 +1136,8 @@ class LlamaLoadMixin:
                     )
 
                 if _should_evict:
-                    _to_kill = [s for s in running_slots if not s.pinned]
+                    _to_kill = [s for s in running_slots
+                                if not s.pinned and not _slot_in_flight(s)]
                     if _to_kill:
                         _evicted_here = True
                     for rs in _to_kill:
@@ -1890,9 +1908,12 @@ class LlamaLoadMixin:
                 # binary's --help, otherwise the server starts undrafted.
                 _help_txt = ""
                 try:
-                    _help_txt = subprocess.run(
-                        [cmd[0], "--help"], capture_output=True, text=True,
-                        timeout=20, encoding="utf-8", errors="replace").stdout
+                    # HELP-OFF-LOOP (audit 2026-11-03): this probe blocked
+                    # the event loop up to 20 s on every MTP load.
+                    _help_txt = (await asyncio.to_thread(
+                        subprocess.run, [cmd[0], "--help"],
+                        capture_output=True, text=True, timeout=20,
+                        encoding="utf-8", errors="replace")).stdout
                 except Exception:
                     _help_txt = ""
                 if "--spec-draft-n-max" in _help_txt:

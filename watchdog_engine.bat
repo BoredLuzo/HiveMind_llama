@@ -16,7 +16,11 @@ REM Linear flow, no parenthesized blocks: the powershell expressions carry
 REM parentheses that terminate a batch if-block (live parse error).
 setlocal EnableExtensions
 cd /d "%~dp0"
+REM PORT-FROM-SETTINGS (audit 2026-11-03): the watchdog watched a hardcoded
+REM 8001 while the installer supports a custom server_port; a healthy engine
+REM on another port looked dead and was restarted every 20 s.
 set "PORT=8001"
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "try { $s = Get-Content 'settings.json' -Raw | ConvertFrom-Json; if ($s.server_port) { [int]$s.server_port } } catch {}"`) do set "PORT=%%P"
 set "WDLOG=%LOCALAPPDATA%\HiveMindGateway\watchdog.log"
 set "WDMARK=%LOCALAPPDATA%\HiveMindGateway\watchdog.marker"
 

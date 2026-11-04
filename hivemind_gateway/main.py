@@ -603,7 +603,7 @@ class Gateway:
                              ("🔒 Phone runs restricted: web + reading + chat "
                               "only (no shell/writes/git)." if _ron else
                               "🔓 Phone runs unrestricted: full tools — gated "
-                              "calls still ask for approval."),
+                              "calls follow your /gate policy (ask or auto-deny)."),
                              reply_to_message_id=p.message_id)
         elif name == "cron":
             # R7 (owner, 1.3.2): scheduled agent runs. Every error is
@@ -985,12 +985,31 @@ class Gateway:
         q = p.text.strip()
         if not q:
             return
+        # Narrow once: ParsedUpdate.chat_id is str | None.
+        _chat_id = p.chat_id if p.chat_id is not None else ""
+        # PENDING-ARG (2026-11-04): plain text reaches this method directly
+        # from process_update, NOT through handle_owner_update. The numeric
+        # answer to "/setModel" (ask-back) therefore used to start a run
+        # instead of being consumed as the model number.
+        if await self._run_pending_as_arg(p):
+            return
+        # SLASH-GUARD (2026-11-04): known commands are dispatched before this
+        # method; a prompt that still starts with "/" came from a voice
+        # transcript, an image/document caption or a forgotten command. It
+        # must never start a run (and never be sent to the model as a prompt).
+        if q.startswith("/"):
+            await self.reply(
+                _chat_id,
+                "Unknown command. /help lists the available commands - "
+                "a run never starts with '/'.",
+                reply_to_message_id=p.message_id)
+            return
         # P10 takeover: while a mirrored engine run is active, phone
         # texts belong to that run (approval answers / steering), they
         # never start a second run.
         if self.bridge.mirror_intercept(q):
             note = await self.bridge.mirror_send(q)
-            await self.reply(p.chat_id, note,
+            await self.reply(_chat_id, note,
                              reply_to_message_id=p.message_id)
             return
         # ask mode: an OWN phone-run approval is waiting — 1/2/3 answers
@@ -998,11 +1017,11 @@ class Gateway:
         # second run would only get the busy note anyway).
         if self.bridge.own_approval_pending():
             note = await self.bridge.own_answer(q)
-            await self.reply(p.chat_id, note,
+            await self.reply(_chat_id, note,
                              reply_to_message_id=p.message_id)
             return
         if len(q) > self.cfg.max_text_chars:
-            await self.reply(p.chat_id,
+            await self.reply(_chat_id,
                              f"❌ Text zu lang ({len(q)} > "
                              f"{self.cfg.max_text_chars} Zeichen).",
                              reply_to_message_id=p.message_id)
@@ -1017,7 +1036,7 @@ class Gateway:
                 q, from_voice=bool(getattr(p, "from_voice", False)),
                 images=list(getattr(p, "images", ()) or ()) or None)
             if note and note.startswith(("⏳", "🔌", "❌")):
-                await self.reply(p.chat_id, note,
+                await self.reply(_chat_id, note,
                                  reply_to_message_id=p.message_id)
         _t = asyncio.create_task(_own_run_task())
         _t.add_done_callback(lambda t: t.exception() and log.warning(
@@ -1082,9 +1101,9 @@ async def recover_orphan_run(gw: Gateway) -> None:
     run_active against the server, deny persisted open approvals, and ask
     the owner about aborting. Never restart the run automatically."""
     run = gw.state.data.get("active_run")
-    if not run:
-        return
-    rid = run.get("run_id")
+    # DENY-BEFORE-LATCH (audit 2026-11-03): open approvals must be denied even
+    # when the latch was already cleared (adopted mirror), otherwise a second
+    # restart leaves them answerable forever.
     if gw.state.data.get("open_approvals"):
         # restart-deny contract (ask mode): a waiting approval must not
         # silently survive the gateway restart — deny it on the engine.
@@ -1100,6 +1119,9 @@ async def recover_orphan_run(gw: Gateway) -> None:
                 log.warning("[RECOVER] deny failed for %s: %s", _rid, exc)
         gw.state.data["open_approvals"] = {}
         gw.state.save()
+    if not run:
+        return
+    rid = run.get("run_id")
     try:
         j = await gw.hive.journal()
         still_active = (isinstance(j, dict) and bool(j.get("active"))
@@ -1114,12 +1136,19 @@ async def recover_orphan_run(gw: Gateway) -> None:
                  rid)
         return
     log.warning("[RECOVER] orphan run %s still active", rid)
+    # ADOPT-AS-MIRROR (audit 2026-11-03): keeping the latch made every phone
+    # text answer "busy" forever and the mirror skipped the run as our own,
+    # so its result was never relayed. Clear the latch; the mirror task
+    # watches the journal and relays the orphan, /stop falls back to the
+    # journal run id.
+    gw.state.set_active_run(None)
+    gw.state.save()
     if gw.owner_id is not None:
         try:
             await gw.reply(
                 gw.owner_id,
                 f"⚠️ Run {rid} was still active when the gateway "
-                "restarted. /stop aborts it — otherwise it keeps running detached and holds VRAM.")
+                "restarted. It keeps running and is mirrored here — /stop aborts it.")
         except TelegramApiError as exc:
             log.error("[RECOVER] notice failed: %s", exc)
 
@@ -1342,7 +1371,11 @@ async def run() -> int:
     # degraded phone runs to DENY (the floor re-pinned the gate) while the
     # chat claimed approvals were off - the reported "weird" case.
     if "gate_force" in state.data:
-        cfg.force_approval_gate = bool(state.data.get("gate_force"))
+        # FROZEN-DATACLASS (audit 2026-11-03): GatewayConfig is frozen; the
+        # old direct assignment raised FrozenInstanceError once the state
+        # file actually kept gate_force (state restore now preserves it).
+        from dataclasses import replace as _dc_replace
+        cfg = _dc_replace(cfg, force_approval_gate=bool(state.data.get("gate_force")))
         log.info("gate force overridden by chat state: %s",
                  cfg.force_approval_gate)
     api = TelegramApi(token)

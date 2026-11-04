@@ -52,6 +52,7 @@ _VISION_CAPABLE_BASES: set[str] = {
     "minicpm-v-4-7",
     "minicpm-v-4.7",
     "gemma-4",  # gemma-3 arch: embedded vision tower, served with mmproj (2026-10-01)
+    "lfm3-omni",  # text+vision projector (mmproj-LFM3-Omni-2B); audio needs the MTMD path
 }
 
 
@@ -483,7 +484,6 @@ def _kill_port_sync(port: int):
             _kill_port_via_proc(port)
         except Exception as _pe:
             logger.warning("Port-Cleanup: proc scan failed: %s", _pe)
-        return
         # PKILL-DROPPED (2026-09-19): the old last resort 'pkill -9 -f
         # llama-server' was name-based and killed EVERY llama-server on the
         # host — other slots and foreign processes included. The /proc scan

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -190,11 +191,104 @@ def download(url: str, dest: Path, max_attempts: int = 6) -> None:
             time.sleep(backoff)
 
 
+def _sha256_file(path: Path) -> str:
+    """SHA-256 of a file, read in 1 MB chunks.
+
+    The digest check used to slurp the WHOLE archive into RAM in one go
+    (the CUDA tarballs are ~1.5 GB) - on a small install box that is an
+    avoidable MemoryError.
+    """
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _safe_tar_extractall(tf: tarfile.TarFile, dest: Path) -> None:
+    """extractall hardened against path traversal (audit r4).
+
+    An archive member like `../../x` or an absolute path would write OUTSIDE
+    the install dir. Python 3.12+ (and the security backports) supports
+    filter="data", which rejects those, device nodes and links pointing out
+    of the destination. Older interpreters get an explicit per-member check
+    instead of an unsafe fallback.
+    """
+    try:
+        tf.extractall(dest, filter="data")
+        return
+    except TypeError:
+        pass  # Python without filter= support: validate members ourselves
+    dest_r = os.path.realpath(dest)
+    for m in tf.getmembers():
+        name = m.name.replace("\\", "/")
+        if name.startswith("/") or name.startswith("../"):
+            raise tarfile.ExtractError(f"unsafe archive member: {m.name!r}")
+        final = os.path.normpath(os.path.join(dest_r, name))
+        if final != dest_r and not final.startswith(dest_r + os.sep):
+            raise tarfile.ExtractError(f"unsafe archive member: {m.name!r}")
+        if not (m.isreg() or m.isdir() or m.issym() or m.islnk()):
+            raise tarfile.ExtractError(f"unsafe member type: {m.name!r}")
+        tf.extract(m, dest, set_attrs=False)
+
+
+def _extract_and_swap(tmp_zip: Path, target: Path, digest: str | None) -> None:
+    """Verify + extract the archive, then atomically replace `target`.
+
+    The previous build is only removed AFTER the new archive passed the
+    digest check and the CRC/extraction: the old code deleted the existing
+    build first, so one corrupt/interrupted download destroyed the working
+    install. The `.staging` dir is skipped by existing_build(), so an
+    interrupted run cannot make a half-extracted folder look "installed".
+    """
+    staging = target.with_name(target.name + ".staging")
+    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        if isinstance(digest, str) and digest.startswith("sha256:"):
+            _h = _sha256_file(tmp_zip)
+            if _h != digest.split(":", 1)[1].strip().lower():
+                raise RuntimeError(
+                    f"llama.cpp asset digest mismatch ({_h[:16]}...) - "
+                    "refusing to install a tampered/incomplete binary")
+        _is_targz = tmp_zip.name.lower().endswith(".tar.gz")
+        if _is_targz:
+            with tarfile.open(tmp_zip) as tf:
+                _safe_tar_extractall(tf, staging)
+        else:
+            with zipfile.ZipFile(tmp_zip) as zf:
+                # CRC-check every member before extracting: a ZIP whose download
+                # was interrupted mid-body would otherwise unpack into broken
+                # binaries that "find no devices" or crash at startup.
+                bad = zf.testzip()
+                if bad is not None:
+                    raise zipfile.BadZipFile(f"corrupt member: {bad}")
+                zf.extractall(staging)
+    except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError, RuntimeError):
+        # any failure leaves the OLD build in place (staging goes, target stays)
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if target.exists():
+        print(f"    Removing old version: {target.name}")
+        shutil.rmtree(target, ignore_errors=True)
+    try:
+        staging.rename(target)
+    except OSError:
+        # a scanner may still hold a file inside the old dir: one more sweep
+        shutil.rmtree(target, ignore_errors=True)
+        staging.rename(target)
+
+
 def existing_build() -> tuple[int, Path] | None:
     """Find the highest already installed build."""
     best: tuple[int, Path] | None = None
     if LLAMA_DIR.is_dir():
         for exe in LLAMA_DIR.glob(f"*/{SERVER_NAME}"):
+            # STAGING (audit r4): an interrupted --force run leaves a
+            # half-extracted `.staging` dir - it contains llama-server, but
+            # it is NOT an install and must not satisfy "already installed".
+            if ".staging" in exe.parent.name:
+                continue
             m = re.search(r"b(\d{4,})", exe.parent.name)
             b = int(m.group(1)) if m else 0
             if best is None or b > best[0]:
@@ -318,7 +412,12 @@ def main() -> int:
     print(f"       Install target: {LLAMA_DIR}")
     LLAMA_DIR.mkdir(parents=True, exist_ok=True)
 
-    tmp_zip = Path(tempfile.gettempdir()) / asset["name"]
+    # TEMP-COLLISION (audit r4): the archive used to go to a PREDICTABLE name
+    # in the shared temp dir - two parallel installs corrupted each other's
+    # download and a planted symlink made us overwrite a foreign file. A
+    # per-process mkdtemp is unique; in-run resume still works (same file).
+    tmp_dir = Path(tempfile.mkdtemp(prefix="hivemind-llamacpp-"))
+    tmp_zip = tmp_dir / asset["name"]
     url = asset.get("browser_download_url")
     if not url:
         print("[ERROR] Asset without download URL.")
@@ -327,46 +426,29 @@ def main() -> int:
 
     _base_name = re.sub(r"\.(zip|tar\.gz)$", "", asset["name"], flags=re.IGNORECASE)
     target = LLAMA_DIR / _base_name
-    if target.exists():
-        print(f"    Removing old version: {target.name}")
-        shutil.rmtree(target, ignore_errors=True)
-    print(f"[3/3] Extracting to {target}...")
     _is_targz = tmp_zip.name.lower().endswith(".tar.gz")
+    print(f"[3/3] Extracting to {target}...")
     try:
         # I2 (audit r2): verify the asset digest from the GitHub API when
         # present - CRC32 (testzip) catches transport corruption but
         # proves nothing about authenticity of the binary we execute.
+        # VERIFY-BEFORE-DELETE (audit r4): the old build is only replaced
+        # once the new archive passed digest + CRC + extraction (see
+        # _extract_and_swap) - a bad download no longer destroys it.
         _digest = asset.get("digest") if isinstance(asset, dict) else None
-        if isinstance(_digest, str) and _digest.startswith("sha256:"):
-            import hashlib as _hl
-            _h = _hl.sha256(tmp_zip.read_bytes()).hexdigest()
-            if _h != _digest.split(":", 1)[1]:
-                shutil.rmtree(target, ignore_errors=True)
-                tmp_zip.unlink(missing_ok=True)
-                raise RuntimeError(
-                    f"llama.cpp asset digest mismatch ({_h[:16]}...) - "
-                    "refusing to install a tampered/incomplete binary")
-        if _is_targz:
-            with tarfile.open(tmp_zip) as tf:
-                tf.extractall(target)
-        else:
-            with zipfile.ZipFile(tmp_zip) as zf:
-                # CRC-check every member before extracting: a ZIP whose download
-                # was interrupted mid-body would otherwise unpack into broken
-                # binaries that "find no devices" or crash at startup.
-                bad = zf.testzip()
-                if bad is not None:
-                    raise zipfile.BadZipFile(f"corrupt member: {bad}")
-                zf.extractall(target)
+        _extract_and_swap(tmp_zip, target, _digest)
     except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError) as e:
-        shutil.rmtree(target, ignore_errors=True)
-        tmp_zip.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         print()
         print(f"[ERROR] The downloaded archive is corrupt or incomplete ({e}).")
         print("        Delete the temp ZIP and run again - it will download")
         print("        from scratch. If it keeps failing, download the asset")
         print("        manually from: https://github.com/ggml-org/llama.cpp/releases")
         return 1
+    except RuntimeError:
+        # digest mismatch (verify-before-delete: the old build stays intact)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
 
     exe = target / SERVER_NAME
     if not exe.exists():
@@ -395,19 +477,20 @@ def main() -> int:
                 _cudart = _a
                 break
         if _cudart and _cudart.get("browser_download_url"):
-            _cu_zip = Path(tempfile.gettempdir()) / str(_cudart["name"])
+            _cu_zip = tmp_dir / str(_cudart["name"])
             print(f"       CUDA runtime split detected - downloading {_cudart['name']} ...")
             try:
                 download(str(_cudart["browser_download_url"]), _cu_zip)
                 # I2 completion (audit r3): the cudart zip carries executable
                 # DLLs - verify its digest like the main asset, and fail hard
                 # instead of the catch-all warning below (which would install
-                # an unverified runtime).
+                # an unverified runtime). The mismatch used to be raised into
+                # the broad handler below and downgraded to a WARNING - the
+                # exact thing the comment promised not to do.
                 _cu_digest = str(_cudart.get("digest") or "")
                 if _cu_digest.startswith("sha256:"):
-                    import hashlib as _hl2
-                    _cu_h = _hl2.sha256(_cu_zip.read_bytes()).hexdigest()
-                    if _cu_h != _cu_digest.split(":", 1)[1]:
+                    _cu_h = _sha256_file(_cu_zip)
+                    if _cu_h != _cu_digest.split(":", 1)[1].strip().lower():
                         _cu_zip.unlink(missing_ok=True)
                         raise RuntimeError(
                             f"cudart asset digest mismatch ({_cu_h[:16]}...) - "
@@ -419,6 +502,11 @@ def main() -> int:
                         raise zipfile.BadZipFile(f"corrupt member: {_bad}")
                     _zf.extractall(exe.parent)
                 print("       CUDA runtime DLLs installed next to llama-server.exe")
+            except RuntimeError as _cud_dig:
+                # DIGEST (audit r4): fail hard, do not install unverified code
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                print(f"       [ERROR] {_cud_dig}")
+                return 1
             except Exception as _cud_err:
                 print(f"       [WARNING] CUDA runtime DLL download/extract failed: {_cud_err}")
             finally:
@@ -450,7 +538,7 @@ def main() -> int:
                   flush=True)
             time.sleep(10.0)
     if not _missing:
-        tmp_zip.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         print()
         print(f"[OK] llama.cpp b{build_num} installed.")
         print(f"     llama-server: {exe}")
@@ -502,7 +590,7 @@ def main() -> int:
         print(f"  the {args.backend} asset manually from:")
         print("  https://github.com/ggml-org/llama.cpp/releases")
         shutil.rmtree(target, ignore_errors=True)
-        tmp_zip.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     return 1
 
     print()

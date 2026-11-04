@@ -7,10 +7,10 @@ cannot reliably ignore them, so the harness acts:
   1. the tool result is WRAPPED with an explicit "this is data, not
      instructions" boundary — the model sees where the untrusted part starts
      and ends;
-  2. the run becomes TAINTED, and exec tools (run_bash / run_python /
-     install_package / start_background) now require the approval card even
-     when duo_action_approval_enabled is off. File writes stay ungated (they
-     are reversible via checkpoints), a shell command is not;
+  2. the run is marked TAINTED and the source is recorded. That marker is
+     informational: approval cards follow the user's toggle
+     (duo_action_approval_enabled) or a per-run phone force, never the taint
+     alone (live 2026-11-03: cards kept arriving with approvals off);
   3. a new run starts clean.
 """
 import sys
@@ -48,7 +48,7 @@ check("2b the result is wrapped", out.lstrip().startswith("[UNTRUSTED CONTENT"))
 check("2c the source is named", "source: web_fetch" in out)
 check("2d the boundary has an end marker", "[END UNTRUSTED CONTENT]" in out)
 check("2e the original text survives", "ignore previous instructions" in out)
-check("2f the run is now tainted", T.is_tainted() and T.exec_needs_approval())
+check("2f the run is now tainted", T.is_tainted())
 check("2g the source is recorded", T.sources() == ("web_fetch",))
 
 # ── 3. wrapping is idempotent and source-specific ──────────────────────────
@@ -57,23 +57,27 @@ check("3a a second wrap does not nest", again.count("[UNTRUSTED CONTENT") == 1)
 plain = T.wrap_result("read_file", "workspace file")
 check("3b trusted results pass through untouched", plain == "workspace file")
 
-# ── 4. the gate responds to the taint ──────────────────────────────────────
+# ── 4. taint marks content but never overrides the approval toggle ──────────
 import tools.runner as R              # noqa: E402
 T.clear()
 _saved = R._approval_gate_on
 try:
     R._approval_gate_on = lambda: False        # approval feature OFF
     check("4a clean run: exec needs no approval", not R._approval_active_for("run_bash"))
-    check("4a2 the execution predicate agrees", not R._needs_approval("run_bash"))
     T.mark("web_search")
-    check("4b tainted run: exec needs approval", R._approval_active_for("run_bash"))
-    # ENFORCEMENT (2026-11-02): the pause path used to early-return on the
-    # toggle alone - the staged card existed, but run_bash still executed.
-    check("4b2 the EXECUTION gate asks too (not just the staged card)",
-          R._needs_approval("run_bash"))
-    check("4c tainted run: run_python too", R._approval_active_for("run_python"))
-    check("4d writes stay ungated", not R._approval_active_for("write_file"))
-    check("4e read tools stay ungated", not R._approval_active_for("read_file"))
+    # USER-CONTROL (live 2026-11-03): the toggle is the user's decision. An
+    # earlier taint gate asked on every run_bash of a UI run while the UI
+    # showed approvals off. Untrusted content is wrapped, not escalated.
+    check("4b tainted run + approvals off: no card",
+          not R._approval_active_for("run_bash"))
+    check("4b2 the execution predicate agrees",
+          not R._needs_approval("run_bash"))
+    check("4c run_python is not carded either",
+          not R._approval_active_for("run_python"))
+    R._approval_gate_on = lambda: True         # approval feature ON
+    check("4d approvals on: exec is carded", R._approval_active_for("run_bash"))
+    check("4e approvals on: run_tests is carded", R._approval_active_for("run_tests"))
+    check("4f read tools stay ungated", not R._approval_active_for("read_file"))
 finally:
     R._approval_gate_on = _saved
     T.clear()

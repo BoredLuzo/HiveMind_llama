@@ -771,8 +771,8 @@ async def _safe_web_search(query: str, max_results: int, *, phase: str, profile:
             timeout=_timeout_s,
         )
         # TAINT-PIPELINE (2026-11-03): text from the pipeline search enters the
-        # run prompt without a tool result - mark the run so a later shell
-        # command still requires the card.
+        # run prompt without a tool result - mark the source for provenance.
+        # This does not force approval cards; the user's toggle governs them.
         try:
             from tools import taint as _taint_ws
             _taint_ws.mark(f"web_search:{phase}")

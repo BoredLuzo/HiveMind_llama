@@ -390,7 +390,10 @@ class ServerConn:
         if self._proc is not None and self._proc.returncode is None:
             return
         argv = self.spec.argv()
-        env = dict(os.environ)
+        # TOOL-ENV (audit 2026-11-03): external MCP servers do not need the
+        # engine's tokens; scrub before applying the per-server env.
+        from infra.child_env import scrubbed_env as _scrubbed_env
+        env = _scrubbed_env()
         env.update(self.spec.env)
         env.setdefault("PYTHONUNBUFFERED", "1")
         try:

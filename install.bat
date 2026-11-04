@@ -315,7 +315,11 @@ REM Values are passed via environment variables instead of being embedded in
 REM the Python code: otherwise cmd's %-signs clash with Python's %-operator.
 set "HM_BACKEND=%BACKEND%"
 set "HM_VRAM=%VRAM%"
-"%PY%" -c "import os, re; from settings import load_settings, save_settings; s = load_settings(); vram_raw = os.environ.get('HM_VRAM', '8.0').replace(',', '.'); _m = re.match(r'\d+(\.\d+)?', vram_raw); s['gpu_backend'] = os.environ.get('HM_BACKEND', 'vulkan'); s['vram_budget_gb'] = float(_m.group(0)) if _m else 8.0; _p = os.environ.get('HM_PORT', '8001').strip(); s['server_port'] = int(_p) if _p.isdigit() else 8001; s.setdefault('workspace', ''); save_settings(s); print('   settings.json written (gpu_backend={}, vram_budget_gb={}, server_port={})'.format(s['gpu_backend'], s['vram_budget_gb'], s['server_port']))"
+REM INPUT-HARDENING (2026-11-04): a typo at the VRAM/port prompt used to
+REM OVERWRITE the stored value with the default (port 0/99999 also passed the
+REM old isdigit gate and broke the first server start). Garbage now keeps the
+REM previous value; the port must be 1-65535.
+"%PY%" -c "import os, re; from settings import load_settings, save_settings; s = load_settings(); vram_raw = os.environ.get('HM_VRAM', '8.0').strip().replace(',', '.'); _m = re.match(r'\d+(\.\d+)?', vram_raw); s['gpu_backend'] = os.environ.get('HM_BACKEND', 'vulkan'); _kv = s.get('vram_budget_gb', 8.0); s['vram_budget_gb'] = float(_m.group(0)) if _m else (_kv if isinstance(_kv, (int, float)) and _kv > 0 else 8.0); _p = os.environ.get('HM_PORT', '8001').strip(); _kp = s.get('server_port', 8001); s['server_port'] = int(_p) if _p.isdigit() and 1 <= int(_p) <= 65535 else (_kp if isinstance(_kp, int) and 1 <= _kp <= 65535 else 8001); s.setdefault('workspace', ''); save_settings(s); print('   settings.json written (gpu_backend={}, vram_budget_gb={}, server_port={})'.format(s['gpu_backend'], s['vram_budget_gb'], s['server_port']))"
 if errorlevel 1 (
     echo.
     echo   [ERROR] Could not write settings.json.
@@ -508,7 +512,7 @@ choice /c YN /n /t 30 /d N /m "Pre-install the decider environment + model? [y/N
 if errorlevel 2 (
     echo   Skipped - the default. Enable later: Settings -^> Routing -^> Decider.
     echo   The engine downloads the encoder on first use if it is missing.
-    goto searxng_step
+    goto lsp_step
 )
 REM DECIDER-ENV (2026-10-21, audit): the model weights alone are useless
 REM without the gliner2 package and CPU torch - the first version of this
@@ -555,8 +559,9 @@ if errorlevel 1 (
 ) else (
     echo   Decider environment + model ready - enabling it later is instant.
 )
-goto searxng_step
+goto lsp_step
 
+:lsp_step
 REM [6c] Language servers (optional) -----------------------------------------
 REM Verified packs only; the installer script lists what is not offered (Go,
 REM Lua) and why. Skipped silently when the user says no.
@@ -570,7 +575,8 @@ if errorlevel 2 (
     goto searxng_step
 )
 echo.
-deploy\install_lsp_packs.bat --list
+REM no `call` here would end this installer when the list script returns.
+call deploy\install_lsp_packs.bat --list
 echo.
 set /p "LSP_PICK=Pack numbers (e.g. 1,2,3 - Enter = skip): "
 if not defined LSP_PICK goto searxng_step
@@ -627,6 +633,10 @@ echo.
 set "VOICE_PICK="
 set /p VOICE_PICK=Choose [1-4, default 4]: 
 if not defined VOICE_PICK set "VOICE_PICK=4"
+REM INPUT-HARDENING (2026-11-04): anything that is not 1-4 used to fall
+REM through SILENTLY (no message, no setup). Normalize it to the skip choice
+REM so the user at least sees the "Skipped" hint.
+if not "%VOICE_PICK%"=="1" if not "%VOICE_PICK%"=="2" if not "%VOICE_PICK%"=="3" if not "%VOICE_PICK%"=="4" set "VOICE_PICK=4"
 REM The voice script pauses for a key on its own; inside the installer that
 REM looks like a freeze right before step [9/9]. It honours this flag.
 set "HIVEMIND_NO_PAUSE=1"
@@ -654,7 +664,7 @@ call start_gateway.bat setup
 echo.
 
 echo  ==============================================================
-echo   Installation finished!
+echo   Installation finished^^!
 echo.
 echo   Start:        start_hivemind.bat
 echo   UI:           http://localhost:%HM_PORT%
@@ -711,7 +721,7 @@ if not defined HM_PORT set "HM_PORT=8001"
 if exist "%~dp0.venv\Scripts\python.exe" goto opt_have_venv
 echo   [NOTE] No Python environment in this folder. SearXNG works on its own,
 echo          but Voice and the Telegram gateway need the full install first
-echo          (step 1/8). Everything below will tell you if it is missing.
+echo          (step 1/9). Everything below will tell you if it is missing.
 echo.
 :opt_have_venv
 

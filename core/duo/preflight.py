@@ -489,6 +489,11 @@ async def _auto_commit_chunk(user_input: str, subtask: str, workspace: str,
 
     if not git_enabled or not workspace:
         return ""
+    # EMPTY-FILELIST (2026-11-04): a chunk with no writes has nothing to
+    # commit; the scoped commit funnel refuses a call without a file list,
+    # so do not turn that into a user-visible "no file list" note.
+    if files is not None and not files:
+        return ""
     # COMMIT-GATE (2026-10-14, security fix): a run without an explicit
     # workspace (and without a chat session carrying one) must never commit
     # anywhere - the gravSandbox incident: a stray API run landed in
@@ -508,24 +513,21 @@ async def _auto_commit_chunk(user_input: str, subtask: str, workspace: str,
         return f"ℹ️ auto-commit skipped: {_block}"
     try:
         from hive_functions.git_tools import (
-            exec_git_commit, exec_git_squash_checkpoints,
+            exec_git_commit, exec_git_squash_checkpoints, _git_prefix,
         )
-        try:
-            from settings import load_settings as _ls
-            _prefix = (str((_ls() or {}).get("git_commit_prefix", "") or "").strip()
-                       or "hivemind:")
-        except Exception:
-            _prefix = "hivemind:"
+        # PREFIX (unified 2026-11-03): the same read-fallback lived here AND
+        # in duo_runner; git_tools._git_prefix is the one implementation
+        # (live settings read, "hivemind:" fallback on any failure).
         _label = (subtask or user_input or "workspace")[:60]
-        _message = f"{_prefix} {_label}"
+        _message = f"{_git_prefix()} {_label}"
 
         _fold_out = await exec_git_squash_checkpoints(_message, workspace,
                                                       files=files or None)
         if _fold_out.startswith(("✅", "❌")):
-            return "" if _fold_out.startswith("ℹ️") else _fold_out
+            return _fold_out
 
         _out = await exec_git_commit(message=_message, workspace=workspace,
-                                     files=files or None, allow_add_all=False)
+                                     files=files or None)
         if _out.startswith(("ℹ️", "⚠️")):
             return ""
         return _out

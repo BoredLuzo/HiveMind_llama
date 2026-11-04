@@ -55,7 +55,9 @@ call). A write never starts a cold server. `lsp_auto_diagnostics` (default
 
 ## Workspace settings
 
-`<workspace>/.vscode/settings.json` is honored: the file is read (cached by
+`<workspace>/.vscode/settings.json` is **not** forwarded by default (security:
+a repo must not configure the language server that executes its toolchain).
+With `lsp_forward_workspace_settings` enabled, the file is read (cached by
 mtime) and answered to `workspace/configuration` pulls section by section,
 plus one `workspace/didChangeConfiguration` push after the handshake. A
 `{"rust-analyzer": {"checkOnSave": {"enable": true}}}` in the workspace

@@ -29,3 +29,10 @@ def test_core_file_present_and_pure():
     assert "expandTerms" in text and "dedupe" in text
     # purity: no DOM/window access at module scope beyond the export guard
     assert "querySelector" not in text and "getElementById" not in text
+
+
+if __name__ == "__main__":
+    # RUNNER (audit 2026-11-03): pytest-style file; the gate used to run it
+    # as a no-op, so the JS check never executed.
+    import pytest
+    raise SystemExit(pytest.main([__file__, "-q"]))

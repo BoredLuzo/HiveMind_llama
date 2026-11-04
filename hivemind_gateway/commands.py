@@ -77,7 +77,7 @@ COMMAND_SPEC: dict[str, dict] = {
     "gate":     {"usage": "/gate <on|off|ask|deny>", "group": "env",
                  "desc": "approvals (bare = show the current policy)",
                  "extra": ("/gate on|off - approvals ON/OFF (live, mid-run;",
-                           "phone-started runs stay gated)",
+                           "off lifts the phone-run force too)",
                            "/gate ask|deny - phone-run policy nuance")},
     "cron":     {"usage": "/cron <add|list|del|run> ...", "group": "sched",
                  "desc": "scheduled agent runs"},

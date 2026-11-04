@@ -28,9 +28,10 @@ class GatewayConfig:
     telegram_enabled: bool = False
     hive_base_url: str = "http://127.0.0.1:8001"
     # G1 force: send duo_action_approval_enabled=true with every phone run
-    # so gated tools (shell/write/git) are auto-denied from the phone.
-    # false = assistant-style use (phone runs may write files); the
-    # engine-global duo_action_approval_enabled toggle alone governs then.
+    # so gated tools (shell/write/git) go through the phone approval policy
+    # (ask: tappable card; deny: auto-denied). false = assistant-style use
+    # (phone runs may write files); the engine-global
+    # duo_action_approval_enabled toggle alone governs then.
     force_approval_gate: bool = True
     max_text_chars: int = 4000          # longest Telegram input we accept
     rate_limit_per_min: int = 20        # per user, in-memory sliding window
@@ -54,7 +55,9 @@ class GatewayConfig:
     image_max_per_run: int = 4
     # DOCUMENTS (2026-11-01): PDFs/plain text go through the engine's
     # /documents/extract; the engine owns the page/char caps.
-    document_max_bytes: int = 25 * 1024 * 1024
+    # TELEGRAM-LIMIT (audit 2026-11-03): bots cannot download files > 20 MB,
+    # so a 25 MB cap accepted uploads the gateway could never fetch.
+    document_max_bytes: int = 20 * 1024 * 1024
 
     def validate(self) -> None:
         base = self.hive_base_url.rstrip("/").lower()

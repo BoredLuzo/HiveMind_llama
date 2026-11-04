@@ -8,17 +8,18 @@ trusted to ignore it, so the harness has to act:
 
 - A tool result from an untrusted source is WRAPPED with a marker, so the model
   sees the boundary ("this is data, not instructions").
-- The run becomes *tainted*: exec tools (run_bash, run_python, install_package,
-  start_background) now require the approval card even when
-  `duo_action_approval_enabled` is off. File writes stay free - they are
-  reversible through checkpoints/undo, a shell command is not.
+- The run becomes *tainted*: the source is recorded so logs and downstream
+  policy can see it. The taint does NOT force approval cards - the user's
+  `duo_action_approval_enabled` toggle (or an explicit per-run phone force)
+  alone decides whether a card appears (live 2026-11-03: forced cards kept
+  arriving with approvals off).
 - The taint lasts for the run; a new run starts clean.
 
 Implemented with a ContextVar holding a MUTABLE set: the tool loop of one run
 lives in one task, and prefetched tools run in child tasks (asyncio.gather).
 A ContextVar write inside a child never reaches the parent, but mutating the
-shared set does - so a taint from a prefetched web_fetch still gates the next
-shell command. `clear()` at run start installs a fresh set per run.
+shared set does - so a taint from a prefetched web_fetch is still visible to
+the parent. `clear()` at run start installs a fresh set per run.
 """
 from __future__ import annotations
 
@@ -28,7 +29,6 @@ UNTRUSTED_TOOL_PREFIXES = ("web_", "mcp_", "browser")
 
 _TAINT: ContextVar[set | None] = ContextVar("hivemind_untrusted_sources",
                                            default=None)
-_MARKED: ContextVar[bool] = ContextVar("hivemind_taint_marked", default=False)
 
 
 def _state() -> set:
@@ -68,7 +68,6 @@ def is_tainted() -> bool:
 def clear() -> None:
     """Called at run start: a new run must not inherit an old taint."""
     _TAINT.set(set())
-    _MARKED.set(False)
 
 
 def wrap_result(name: str, text: str) -> str:
@@ -79,8 +78,3 @@ def wrap_result(name: str, text: str) -> str:
         return text
     mark(name)
     return MARKER_OPEN.format(src=name) + text + MARKER_CLOSE
-
-
-def exec_needs_approval() -> bool:
-    """True when a tainted run must ask before running a command."""
-    return is_tainted()

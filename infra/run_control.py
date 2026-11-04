@@ -303,6 +303,18 @@ def signal_abort_during_pause(run_id: str) -> bool:
     return True
 
 
+def pause_abort_signal_pending(run_id: str) -> bool:
+    """True only when a manual pause registered an UNSET abort signal.
+
+    A signal left over from an earlier manual pause stays in the dict for the
+    run; signal_abort_during_pause() would then return True without waking an
+    approval waiter. /abort must fall through to the run abort event in that
+    case (audit 2026-11-03).
+    """
+    sig = _ABORT_DURING_PAUSE_SIGNALS.get(run_id)
+    return sig is not None and not sig.is_set()
+
+
 def cleanup_pause_state(run_id: str) -> None:
     _PAUSE_AFTER_CHUNK_FLAGS.pop(run_id, None)
     _RESUME_SIGNALS.pop(run_id, None)

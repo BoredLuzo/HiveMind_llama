@@ -74,7 +74,7 @@ LSP is on by default (`lsp_enabled`); no per-language switches.
 ## Installer and updates
 
 - **Release notes render properly**, with UTF-8, wrapping and a box that fits.
-- The routing-decider question appears (it never did), the step no longer
+- The routing-decider question appears, the step no longer
   closes the window, and it logs to `logs\decider_install.log`.
 - **Essential set** is the four models of the default route (gemma-4 E4B QAT,
   qwen3.5 4B MTP, Sharp-MiniCPM5 2B Q6, LFM3 1.7B). The menu prints it, and
@@ -90,7 +90,7 @@ LSP is on by default (`lsp_enabled`); no per-language switches.
 
 ## Models
 
-- Groot stays experimental and is not advertised in the README.
+- Groot stays experimental.
 - LFM3 is a tool-calling model; it needs llama.cpp b12001 or newer.
 - The installer wires the agent roles to whatever `models.json` contains after
   a download — empty or uninstalled slots only, a model you picked stays.

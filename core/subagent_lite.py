@@ -86,33 +86,33 @@ async def run_research(task: str, workspace_lock: str | None) -> str:
 
     if not bool(_s("subagent_lite_enabled", True)):
         return "Subagent disabled — researching inline."
-    global _active
-    global _active
     if _active:
         return "Subagent already busy — researching inline."
     _active = True  # H-audit: claim BEFORE the first await (TOCTOU)
-    _active = True  # H-audit: claim BEFORE the first await (TOCTOU)
-    now = time.time()
-    if now - _last_block_ts < float(_s("subagent_lite_cooldown_s", 60)):
-        return "Subagent in cooldown (recently blocked) — researching inline."
-
+    # LEAK-FIX (audit 2026-11-03): the cooldown and GateBlocked early returns
+    # left _active True forever (the finally only covered the later try), so
+    # the first blocked attempt disabled the subagent until process restart.
     try:
-        model, ctx = await pick_delegate_model()
-    except GateBlocked as gb:
-        _last_block_ts = time.time()
-        return (f"Subagent not available ({gb.reason}) — researching inline.")
+        now = time.time()
+        if now - _last_block_ts < float(_s("subagent_lite_cooldown_s", 60)):
+            return "Subagent in cooldown (recently blocked) — researching inline."
 
-    _active = True
-    try:
-        return await asyncio.wait_for(
-            _run_sub_loop(task, workspace_lock, model, ctx),
-            timeout=float(_s("subagent_lite_timeout_s", 120)),
-        )
-    except asyncio.TimeoutError:
-        return ("Subagent exceeded the time limit — partial results "
-                "discarded. Research inline.")
-    except Exception as e:
-        return f"Subagent error ({type(e).__name__}) — research inline."
+        try:
+            model, ctx = await pick_delegate_model()
+        except GateBlocked as gb:
+            _last_block_ts = time.time()
+            return (f"Subagent not available ({gb.reason}) — researching inline.")
+
+        try:
+            return await asyncio.wait_for(
+                _run_sub_loop(task, workspace_lock, model, ctx),
+                timeout=float(_s("subagent_lite_timeout_s", 120)),
+            )
+        except asyncio.TimeoutError:
+            return ("Subagent exceeded the time limit — partial results "
+                    "discarded. Research inline.")
+        except Exception as e:
+            return f"Subagent error ({type(e).__name__}) — research inline."
     finally:
         _active = False
 

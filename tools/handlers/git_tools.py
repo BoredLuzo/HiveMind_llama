@@ -53,9 +53,10 @@ async def _inline_tool_git_commit(args: dict, workspace: Path, _workspace_lock: 
     if err := _inline_check_workspace(Path(ws), _workspace_lock, "git_commit"):
         return err
     # GIT-AUDIT P1-3 (2026-11-01): the model-callable tool did
-    # `git add -A` + a bare commit (allow_add_all=True internally swept the
-    # whole index — exactly what the 2026-10-14 policy bans). Paths are now
-    # required and the commit is scoped to them.
+    # `git add -A` + a bare commit (which swept the whole index — exactly
+    # what the 2026-10-14 policy bans). Paths are required and the commit is
+    # scoped to them; the add -A branch is gone from exec_git_commit entirely
+    # (2026-11-03).
     _paths = args.get("paths")
     if not isinstance(_paths, list) or not [str(x) for x in _paths if str(x).strip()]:
         return _tool_error_response(
@@ -76,9 +77,11 @@ async def _inline_tool_git_commit(args: dict, workspace: Path, _workspace_lock: 
             tool="git_commit")
     _paths = list(dict.fromkeys(_paths))
     try:
+        # exec_git_commit is the single funnel; scoping to `_paths` is its
+        # only staging strategy (the add -A escape hatch was removed with the
+        # 2026-11-03 audit - a commit without a file list refuses).
         result = await _shared.exec_git_commit(message=message, workspace=ws,
-                                               files=_paths,
-                                               allow_add_all=False)
+                                               files=_paths)
         return result
     except Exception as e:
         return _tool_error_response(

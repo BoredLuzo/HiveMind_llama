@@ -22,9 +22,14 @@ $protFiles = 'settings.json','models.json','vision_model.json','presets.json',
 $protDirs  = 'sessions','context','logs','custom_prompts','.hive_uploads',
              'learning','learning_logs','.venv','llama','models'
 
+# NEVER-PRUNE update.bat (audit 2026-11-04): this script runs while
+# update.bat is still executing. If a future release ever dropped
+# update.bat from the zip, moving the file would kill the RUNNING script
+# at its next line read (mid-prune, before the manifest rewrite and the
+# final self-swap). The updater must never move itself.
 $old = Get-Content -LiteralPath $Manifest -ErrorAction SilentlyContinue |
   Where-Object {
-    $_ -and ($protFiles -notcontains $_) -and
+    $_ -and ($_ -ne 'update.bat') -and ($protFiles -notcontains $_) -and
     -not ($_.StartsWith('gateway_audit.jsonl.')) -and
     ($protDirs -notcontains $_.Split('\')[0]) -and
     ((Get-Item -LiteralPath (Join-Path $Base $_) -ErrorAction SilentlyContinue) -is [System.IO.FileInfo])

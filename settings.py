@@ -146,28 +146,29 @@ DEFAULT_SETTINGS = {
     # DEFAULT-SUBMODE: the agentic coder (one model, solo in VRAM) is the
     # default; the Critic-Duo is one click away and costs a second model.
     "duo_agentic_mode":        True,
-    # ── ROUTING (2026-10-20): zwei unabhaengige Entscheider, beide schaltbar ──
-    # Der LLM-Judge kostet einen Modell-Load in den VRAM (60 s + Verdraengung)
-    # und liefert Text, der geparst werden muss. Der Decider ist ein Encoder
-    # (GLiNER2.5, CPU, ~0.5-1.2 s, kein VRAM) und optional installiert
-    # (pip install hivemind[decider]). Jeder der beiden laesst sich einzeln
-    # abschalten; "shadow" rechnet mit und loggt, entscheidet aber nicht.
+    # ── ROUTING (2026-10-20): two independent deciders, each switchable ──
+    # The LLM judge costs a model load into VRAM (60 s + eviction) and
+    # returns text that has to be parsed. The decider is an encoder
+    # (GLiNER2.5, CPU, ~0.5-1.2 s, no VRAM) and is optional
+    # (pip install hivemind[decider]). Each can be turned off on its own;
+    # "shadow" computes and logs but does not decide.
     #   off | shadow | on
     "routing_decider":          "off",
     "routing_judge":            "on",
-    # Wer entscheidet, ob ein Planner gebraucht wird?
-    #   auto    = Decider, wenn er laeuft, sonst Judge (spart den GPU-Hit)
-    #   decider | judge = fest
-    #   always | never  = Planner immer / nie
+    # Who decides whether a planner is needed?
+    #   auto    = decider when running, otherwise judge (avoids the GPU hit)
+    #   decider | judge = fixed
+    #   always | never  = planner always / never
     "routing_planner":          "auto",
     "routing_decider_model":    "fastino/GLiNER2.5-Decide",
-    # Unter dieser Konfidenz wird die Entscheidung als unsicher markiert (und geht
-    # an den Judge, falls aktiv). Kalibriert auf die Multi-Label-Aktions-Labels:
-    # Treffer lagen bei 0,49-0,92 (Median 0,72) - 0,85 haette fast alles eskaliert.
+    # Below this confidence the decision is marked uncertain (and goes to
+    # the judge when active). Calibrated on the multi-label action labels:
+    # hits were 0.49-0.92 (median 0.72) - 0.85 would have escalated almost
+    # everything.
     "routing_decider_threshold": 0.55,
     "duo_agentic_thinking":    False,
     "_thinking_before_chunking": None,  # persisted user-preference before chunking forced thinking ON
-    # Explizit in DEFAULT_SETTINGS aufgedeckte Automatik-/Override-Keys
+    # Automatic/override keys that DEFAULT_SETTINGS now exposes explicitly
     # (previously only implicit read fallbacks in the consumers).
     "duo_coder_model":          "",
     "duo_critic_model":         "",
@@ -195,17 +196,17 @@ DEFAULT_SETTINGS = {
     "duo_tool_output_ttl":     3,
     "duo_compress_threshold":  0,
     # CACHE-FRIENDLY (2026-09-04): protect the llama.cpp prefix cache.
-    # LEGACY-REMOVAL (2026-09-09): duo_cache_friendly_ctx entfernt —
-    # Compression-first is the only regime.
-    # - duo_partial_compression: condense only the old part, keep the raw tail
-    #   byte-identisch am Ende behalten (KV-Shift-Reuse). Recommended ON:
+    # LEGACY-REMOVAL (2026-09-09): duo_cache_friendly_ctx was removed —
+    # compression-first is the only regime.
+    # - duo_partial_compression: condense only the old part and keep the raw
+    #   tail byte-identical at the end (KV shift reuse). Recommended ON:
     #   preserves the llama.cpp prefix cache and the raw tail stays readable
     #   for the coder; telemetry phase is done (2026-09-09).
-    # - duo_compress_threshold > 0 = exaktes Override in absoluten Tokens
-    #   (settings.json / Power-User, kein UI-Feld);
-    #   0 = auto: Schwelle = duo_compress_auto_floor*ctx (dynamische
-    #   output reserve clamps every tool round so prompt+output <= ctx holds,
-    #   daher kein statischer max_tokens-Abzug noetig).
+    # - duo_compress_threshold > 0 = exact override in absolute tokens
+    #   (settings.json / power user, no UI field);
+    #   0 = auto: threshold = duo_compress_auto_floor*ctx (the dynamic output
+    #   reserve clamps every tool round so prompt+output <= ctx holds, so no
+    #   static max_tokens deduction is needed).
     # - duo_compress_model: light model for the compression summary
     #   (if VRAM suffices without evicting the coder, else falls back to the coder model).
     # - duo_compress_llm_timeout_s: read timeout of the compression LLM (120s was
@@ -250,10 +251,10 @@ DEFAULT_SETTINGS = {
     "duo_tree_scout_enabled":  True,
     "duo_tree_scout_max_depth": 4,
     "duo_tree_scout_max_files": 200,
-    "duo_static_map_chars":    0,   # 0 = Tier-abgeleitet (rich: 8000); >0 = explizites Static-Repo-Map-Char-Budget
+    "duo_static_map_chars":    0,   # 0 = tier-derived (rich: 8000); >0 = explicit static repo-map char budget
     # REPO-MAP-PIN (2026-09-06): put "## Static Repo-Map" into the system message
-    # (byte-stabil = cache-stabil ueber Kompressionen). Deltas/TODO-Konsolidierung
-    # siehe core/repomap_pin.py. Baseline (Live 2026-09-06, PacMan/8 Dateien):
+    # (byte-stable = cache-stable across compressions). Deltas/TODO consolidation
+    # see core/repomap_pin.py. Baseline (live 2026-09-06, PacMan/8 files):
     # post-compress cached was ~6905/7137 (system+tools) and rose to ~8003 with
     # pinning - reference value in case a change breaks prefix stability.
     "duo_pin_static_map":      True,
@@ -285,7 +286,7 @@ DEFAULT_SETTINGS = {
     "duo_planner_max_steps":   0,
     "duo_thinking_per_chunk":  False,
     "disable_thinking_in_planner": False,
-    # PLANNER-OUTPUT-BUDGET (0.99.2, User-Entscheidung): sichtbares Aufgabenbudget
+    # PLANNER-OUTPUT-BUDGET (0.99.2, user decision): visible task budget
     "duo_planner_max_tokens":  8000,
     # Planner on/off for the request path (server.py reads this key).
     # DEFAULT-PLANNER: plan first. The planner shares the coder context
@@ -326,9 +327,9 @@ DEFAULT_SETTINGS = {
     "duo_coder_ctx_normal":    None,
     "duo_coder_tool_thinking": False,
     "duo_coder_tool_thinking_auto_mode": "off",
-    # truncated at the output-token limit (finish_reason=length → DROPPED → loop),
-    # Token-Budget gekoppelt: max_chars ≈ budget_tokens * Faktor - Overhead.
-    # Sprung; Deckel 3.3 (dokumentierter Realwert).
+    # truncated at the output-token limit (finish_reason=length -> DROPPED -> loop),
+    # coupled to the token budget: max_chars ~ budget_tokens * factor - overhead.
+    # Step; cap 3.3 (documented measured value).
     "duo_write_chars_per_token": 2.5,
     "duo_coder_fallback_model": "",
     "duo_critic_ctx":          None,
@@ -345,7 +346,7 @@ DEFAULT_SETTINGS = {
     # toggle, so most agentic runs finished without any test feedback.
     # Both this and duo_test_feedback_final must be ON for the full loop.
     "duo_test_feedback_chunk": True,
-    # TESTING-DEFAULT (2026-08-12): finaler Auto-Test standardmaessig aktiv —
+    # TESTING-DEFAULT (2026-08-12): the final auto-test is on by default —
     "duo_test_feedback_final": True,
     # ERROR ROLLUP (2026-09-06): deterministic dedup of repeating test/compile
     # failures in the fix-loop (core/error_rollup.py). First failure full,
@@ -589,12 +590,14 @@ DEFAULT_SETTINGS = {
     # ════════════════════════════════════════════════════════════════════════
     # When on, the run pauses before everything that changes the project —
     # code/cmd execution (run_bash, run_python, install_package,
-    # start_background), file writes (write_file, edit_file,
-    # write_file_append) and git_commit. "Approve" buttons: once, or
-    # remember EXACTLY this call for the CURRENT CHAT (writes per file,
-    # commands 1:1 per exact arguments — anything new or a new chat asks
-    # again). The toggle applies mid-run.
-    # RISK-NOTE (2026-10-21, audit): False = write/exec tools run WITHOUT
+    # start_background, run_tests), file writes (write_file, edit_file,
+    # write_file_append), git_commit and dynamic MCP tools. "Approve" buttons:
+    # once, or remember EXACTLY this call for the CURRENT CHAT (writes per
+    # file, commands 1:1 per exact arguments — anything new or a new chat asks
+    # again). The toggle applies mid-run and is the only approval control:
+    # with it off no card is forced, even after untrusted web/MCP content
+    # (those results are still marked in the transcript). RISK-NOTE
+    # (2026-10-21, audit): False = write/exec tools run WITHOUT
     # approval out of the box. Mitigations ship (destructive gate,
     # workspace confinement, loopback-only bind + external-bind token
     # guard) - keep this False only on machines where that layer is
@@ -626,7 +629,7 @@ DEFAULT_SETTINGS = {
     "duo_image_mode": None,
     "duo_image_to_planner": False,
     "duo_image_to_coder": False,
-    # Owner toggle (2026-10-07): hard "the coder takes NO images" — plan
+    # Explicit toggle (2026-10-07): hard "the coder takes NO images" — plan
     # says none for the coder, the coder slot never loads the projector,
     # and image-carrying steers to the coder are dropped. Saves the mmproj
     # VRAM even when an image arrives in the run.

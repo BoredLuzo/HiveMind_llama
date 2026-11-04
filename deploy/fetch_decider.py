@@ -77,7 +77,14 @@ def main(argv: list[str] | None = None) -> int:
 
     print()
     print("Done. Set these in the settings:")
-    print(f"  routing_decider_model = \"{target.relative_to(ROOT).as_posix()}\"")
+    # CRASH-FIX (audit r4): target.relative_to(ROOT) raised ValueError for a
+    # --dir outside the install root - AFTER the download had succeeded.
+    # Fall back to the absolute path instead of crashing on the success path.
+    try:
+        _rel = target.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        _rel = str(target)
+    print(f"  routing_decider_model = \"{_rel}\"")
     print("  routing_decider       = \"shadow\"    # erst vergleichen, dann \"on\"")
     print("Note: the encoder runs on the CPU (~0.5-1.2 s per decision) and uses")
     print("no VRAM. Without it the LLM judge decides as before.")

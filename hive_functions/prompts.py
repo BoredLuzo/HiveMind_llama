@@ -553,7 +553,6 @@ CRITICAL RULES:
 - touched_by_task = "unlikely": include in context for reference, but do not add steps that modify these partitions unless a dependency chain strictly requires it.
 - VARIABLE/IMPORT MAP: Before listing steps, identify shared variables, types, and imports that cross file boundaries. Map which symbols are defined where and consumed where — this prevents redundant creation across steps.
 - When steps share types/imports: note the shared symbol and its origin file to prevent duplication.
-- WEB SEARCH: If you are unsure about an external API, library, or framework, mark that step with 'search:' so the Coder can look it up. Prefer marking uncertain steps for search over guessing and getting it wrong.
 
 OUTPUT FORMAT — one block per step, no other text:
 

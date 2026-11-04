@@ -124,7 +124,16 @@ def main():
         else:
             fail("gate with identity", repr(r))
 
+        # 5a. no file list -> refuse (the `git add -A` escape hatch is gone,
+        #     2026-11-03; scoping to the run's files is the only strategy)
         out = asyncio.run(gt.exec_git_commit("hivemind: gate test", str(ws)))
+        if out.startswith("ℹ️") and "no file list" in out:
+            ok("exec_git_commit refuses without a file list (no add -A)")
+        else:
+            fail("no-file-list refusal", out[:120])
+
+        out = asyncio.run(gt.exec_git_commit("hivemind: gate test", str(ws),
+                                             files=["changed.txt"]))
         if out.startswith("✅"):
             ok("exec_git_commit succeeds with panel identity")
         else:

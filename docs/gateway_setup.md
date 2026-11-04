@@ -216,8 +216,10 @@ asks instead of continuing by itself.
 - The pairing lock counts globally: someone who deliberately sends five
   wrong codes can close the window. Annoying, not dangerous — a restart
   fixes it.
-- There is no "always allow" button, and there won't be. The gateway
-  never loosens a safety rule.
+- Approval memory is deliberately narrow: "Once" approves that single call,
+  and "Always (chat)" remembers the exact call for the current chat only —
+  a new command or a new chat asks again. There is no blanket
+  "always allow everything" switch.
 
 ## Voice notes (opt-in, 1.4)
 

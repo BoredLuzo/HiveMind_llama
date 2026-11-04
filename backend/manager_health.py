@@ -199,12 +199,14 @@ class LlamaHealthMixin:
         for _pid in _own_pids:
             try:
                 if platform.system() == "Windows":
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(_pid)],
-                                   capture_output=True, text=True, timeout=10,
-                                   encoding="utf-8", errors="replace")
+                    await asyncio.to_thread(
+                        subprocess.run, ["taskkill", "/F", "/T", "/PID", str(_pid)],
+                        capture_output=True, text=True, timeout=10,
+                        encoding="utf-8", errors="replace")
                 else:
-                    subprocess.run(["kill", "-9", str(_pid)],
-                                   capture_output=True, timeout=5)
+                    await asyncio.to_thread(
+                        subprocess.run, ["kill", "-9", str(_pid)],
+                        capture_output=True, timeout=5)
                 killed.append(f"pid:{_pid}")
             except Exception as _e:      # already gone / no permission
                 logger.debug("force_kill_all: pid %s not killed (%s)", _pid, _e)
@@ -212,7 +214,8 @@ class LlamaHealthMixin:
         if include_foreign:
             if platform.system() == "Windows":
                 try:
-                    r = subprocess.run(
+                    r = await asyncio.to_thread(
+                        subprocess.run,
                         ["taskkill", "/F", "/IM", "llama-server.exe", "/T"],
                         capture_output=True, text=True, timeout=10,
                         encoding="utf-8", errors="replace",
@@ -224,7 +227,9 @@ class LlamaHealthMixin:
                     logger.warning(f"force_kill_all: taskkill failed: {e}")
             else:
                 try:
-                    subprocess.run(["pkill", "-9", "-f", "llama-server"], timeout=5)
+                    await asyncio.to_thread(
+                        subprocess.run, ["pkill", "-9", "-f", "llama-server"],
+                        timeout=5)
                     killed.append("pkill:llama-server")
                 except Exception:    # pkill missing/denied: the HTTP path still runs
                     logger.debug("force_kill_all: pkill unavailable")

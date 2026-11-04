@@ -46,7 +46,7 @@ check("1c the name sweep only runs behind the flag",
       "if include_foreign:" in _BODY and
       _BODY.index("if include_foreign:") < _i_sweep)
 check("1d POSIX kills by PID, not by pkill",
-      'subprocess.run(["kill", "-9", str(_pid)]' in HEALTH)
+      '["kill", "-9", str(_pid)]' in HEALTH)
 check("1e the compat layer forwards the flag",
       "force_kill_all(include_foreign=include_foreign)" in COMPAT)
 check("1f the route exposes ?all=true",

@@ -36,17 +36,17 @@ FM = (ROOT / "deploy" / "fetch_models.py").read_text(encoding="utf-8")
 SM = (ROOT / "setup_models.bat").read_text(encoding="utf-8", errors="replace")
 
 # ── 1. declining the main file skips the model ──────────────────────────────
-check("1a main download result is checked",
-      "if not download_file(repo, main_file, mdir, args.yes):" in FM)
-_i = FM.index("if not download_file(repo, main_file, mdir, args.yes):")
+_needle = "_main_ok = download_file(repo, main_file, mdir, args.yes)"
+check("1a main download result is checked", _needle in FM)
+_i = FM.index(_needle)
 _j = FM.index("local_files[main_file[\"path\"].lower()]", _i)
 check("1b the skip happens before registration",
       "continue" in FM[_i:_j], "(continue before local_files)")
 check("1c the skip is announced",
-      "projector/drafter/registration skipped" in FM[_i:_i + 600])
+      "projector/drafter/registration skipped" in FM[_i:_i + 700])
 # the mmproj block must stay behind that continue
 check("1d mmproj download is guarded by the main-file decision",
-      FM.index("if not download_file(repo, main_file") < FM.index("spec[\"mmproj_regex\"]"))
+      FM.index(_needle) < FM.index("spec[\"mmproj_regex\"]"))
 
 # ── 2. essential set is a small whitelist, not everything-but-one ───────────
 from deploy.fetch_models import ESSENTIAL_KEYS, SPECS  # noqa: E402

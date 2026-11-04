@@ -356,11 +356,14 @@ def _parse_approval_answer(text: str) -> str:
         return "repo"
     if t.startswith(("3", "deny", "denied", "no", "nein", "block", "stop")):
         return "deny"
-    if "repo" in t or "always" in t or "immer" in t:
+    # EXACT-TOKENS (audit 2026-11-03): substring matching approved on any text
+    # containing "ok"/"yes"/"once" ("output was broken" -> once). Only a
+    # standalone token approves; anything else stays fail-safe deny.
+    if t in ("repo", "always", "immer", "approve repo"):
         return "repo"
-    if "deny" in t or "block" in t or "stop" in t:
+    if t in ("deny", "denied", "no", "nein", "block", "stop"):
         return "deny"
-    if "once" in t or "approve" in t or "yes" in t or "ok" in t:
+    if t in ("once", "approve", "yes", "ok", "einmal"):
         return "once"
     return "deny"
 
@@ -528,9 +531,9 @@ def _approval_gate_on() -> bool:
         return False
 
 
-# TAINT-EXEC (audit 2026-11-03): run_tests executes arbitrary project code
-# (a tainted run may have written a conftest.py first), so it belongs in the
-# taint gate even when the action-approval toggle is off.
+# Tools that run code and therefore need a real run id for the fail-closed
+# no-run-id path (see _check_action_approval). This set does NOT add approval
+# cards on its own - the user's toggle governs those.
 _EXEC_TOOLS = frozenset({"run_bash", "run_python", "install_package",
                          "start_background", "run_tests"})
 
@@ -538,24 +541,15 @@ _EXEC_TOOLS = frozenset({"run_bash", "run_python", "install_package",
 def _needs_approval(name: str, gated: bool = False) -> bool:
     """One predicate for both the staged card and the execution-time pause.
 
-    TAINT-GATE (2026-11-02): once this run has read web/MCP/browser content,
-    a shell command is exactly the step an injected instruction wants. Ask,
-    even with duo_action_approval_enabled off - a command is not reversible
-    like a file edit. Keeping this in one place matters: the pause path used
-    to early-return on `not _approval_gate_on()` before it ever looked at the
-    taint, so the card was staged but the command ran ungated.
-
-    MCP-TAINT (audit 2026-11-03): dynamic MCP tools are potentially mutating
-    (H7) but were only gated when the toggle was on. A tainted run must ask
-    for them too, independent of the toggle.
+    USER-CONTROL (live finding 2026-11-03): approval cards follow the user's
+    toggle. An earlier revision also forced a card for exec tools once the
+    run had seen web/MCP content ("taint") even with
+    duo_action_approval_enabled off; in live that produced approval requests
+    on every run_bash of a normal UI run while the toggle was visibly off.
+    Untrusted content is still marked/wrapped (tools/taint.py), but it must
+    not override the explicit setting. The per-run force (Telegram gateway)
+    still wins through _approval_gate_on().
     """
-    if name in _EXEC_TOOLS or name.startswith("mcp_"):
-        try:
-            from tools import taint as _taint
-            if _taint.exec_needs_approval():
-                return True
-        except ImportError:
-            pass
     return _approval_gate_on() and (gated or name in _APPROVAL_TOOLS)
 
 
@@ -581,7 +575,8 @@ async def stage_approval_card(run_id, name: str, emit) -> None:
     scope = str(run_id or "")
     if not scope or _card_staged.get(scope):
         return
-    if _approval_free_pass.get(scope) == "write" and             name in ("write_file", "edit_file", "write_file_append"):
+    if (_approval_free_pass.get(scope) == "write"
+            and name in ("write_file", "edit_file", "write_file_append")):
         return
     if _approval_pre_decisions.get(scope):
         return  # already decided while generating
@@ -1144,7 +1139,7 @@ _INLINE_TOOL_HANDLER_MAP = {
     "task_complete": _inline_tool_task_complete,
     "browser": _browser_tool,
     # LSP-TOOLS (2026-10-31): language-server features (infra/lsp_client).
-    # All read-only except lsp_rename (approval-gated, see _APPROVAL_TOOLS).
+    # All read-only except lsp_rename/lsp_format (approval-gated).
     "lsp_status": _inline_tool_lsp_status,
     "lsp_diagnostics": _inline_tool_lsp_diagnostics,
     "lsp_definition": _inline_tool_lsp_definition,
@@ -1680,9 +1675,8 @@ async def _run_inline_tool(
                 tool=name,
                 mode=str(tool_mode or "") )
         _mcp_note = ""
-        # MCP-TAINT (audit 2026-11-03): _approval_active_for also returns True
-        # for mcp_* under taint with the toggle off, so a poisoned context
-        # cannot drive a mutating external tool without a card.
+        # MCP-APPROVAL (audit 2026-11-03): dynamic MCP tools are gated when
+        # the user's approval toggle is on (H7). Taint no longer escalates.
         if _approval_active_for(name):
             _mcp_appr = await _check_action_approval(name, args or {}, workspace,
                                                      gated=True)
@@ -1779,7 +1773,8 @@ async def _run_inline_tool(
             _dispatch_active_cv.reset(_tok)
 
         # TAINT-WRAP (2026-11-02): web/MCP/browser results are marked as data
-        # and put this run behind the exec-approval gate (see tools/taint.py).
+        # and the source is recorded (see tools/taint.py). Approval cards are
+        # controlled solely by the user's toggle / per-run force.
         try:
             from tools import taint as _taint
             _result = _taint.wrap_result(name, _result)

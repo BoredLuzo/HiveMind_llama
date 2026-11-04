@@ -21,6 +21,19 @@ _PROTECTED_PATHS: frozenset = frozenset({
     _HIVEMIND_ROOT / "memories_db.json",
 })
 
+# UI-POISON / ENGINE-TAMPER (audit 2026-11-03): when the workspace falls back
+# to the install dir, an agent write to the served UI or transcripts becomes a
+# persistent same-origin XSS / engine compromise. These stay read-only for
+# file tools no matter the workspace.
+_PROTECTED_DIRS = frozenset({"static", "sessions", "llama", ".git", ".venv",
+                             "deploy", "hivemind_gateway", "backend", "core",
+                             "tools", "infra", "routers", "model_configs"})
+_PROTECTED_ROOT_FILES = frozenset({
+    "index.html", "gateway.toml", "gateway.toml.example", "build_info.txt",
+    "update.bat", "install.bat", "start_hivemind.bat", "run.py", "server.py",
+})
+_PROTECTED_SUFFIXES = (".py", ".pyc", ".bat", ".sh", ".ps1", ".service")
+
 
 def _is_protected_path(p: Path) -> bool:
     """Check if a path targets a HiveMind internal file that must not be modified."""
@@ -38,8 +51,12 @@ def _is_protected_path(p: Path) -> bool:
     if _resolved.name.rstrip(". ").lower().endswith(".context.json"):
         return True
     try:
-        _resolved.relative_to(_HIVEMIND_ROOT)
-        if _resolved.suffix in (".py", ".pyc"):
+        _rel = _resolved.relative_to(_HIVEMIND_ROOT)
+        if _rel.parts and _rel.parts[0].lower() in _PROTECTED_DIRS:
+            return True
+        if len(_rel.parts) == 1 and _rel.parts[0].lower() in _PROTECTED_ROOT_FILES:
+            return True
+        if _resolved.suffix.lower() in _PROTECTED_SUFFIXES:
             return True
     except ValueError:
         pass

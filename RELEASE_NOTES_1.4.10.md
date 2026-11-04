@@ -12,7 +12,7 @@
 - The "Chunking is off" notice reads the run's own flag now. It used to read
   the saved setting, so a run started with chunking on announced that its plan
   was skipped while the chunks ran.
-- A chunk is marked done after its test verdict, not before: a failing test
+- A chunk is marked done after its test result, not before: a failing test
   re-processes the chunk instead of recording it as complete.
 - The last chunk needs the critic's approval like every other chunk. It used to
   pass unreviewed, and it is the one carrying the integration work.
@@ -49,8 +49,7 @@
 
 - The hermes 35B coder runs with draft-mtp again. Measured on b11889 with
   256-token answers: decode 20.0 -> 31.05 t/s (+55 %), prefill 122.1 -> 120.15
-  (-1.6 %), acceptance 0.823. The 2026-10-24 decision was based on 220-token
-  answers and a prefill penalty that does not reproduce.
+  (-1.6 %), acceptance 0.823.
 - Reference measurement for `qwen3.5:4b-mtp`: decode 55.5 -> 85.35 t/s
   (+53.8 %), prefill 610 -> 568 (-6.9 %), acceptance 0.911.
 - The trade is named: with speculative decoding the greedy output is not
@@ -73,7 +72,7 @@
 
 - `POST /vram/load` accepts `num_ctx` (or `ctx`) and reports the value it used
   plus where it came from: request, profile or the server default.
-- The context card states the honest speed picture where you set it.
+- The context card states the measured speed picture where you set it.
 
 ## Diagnostics
 
@@ -83,14 +82,7 @@
 
 ## Repository
 
-- `main` tracks the released state again and `deploy/promote_main.bat` keeps it
-  there: fast-forward only, never a merge.
-- `deploy/prepush_check.ps1` brings the 13 pre-push checks back into the repo.
+- `deploy/promote_main.bat` moves `main` to the released state:
+  fast-forward only, never a merge.
+- `deploy/prepush_check.ps1` runs the 13 pre-push checks from the repo.
 - README no longer pins a release number or a zip name.
-
-## Under the hood
-
-- `duo_runner.py` is split: the planner phase, the critic review, the tool-round
-  execution, the wedge handoff, the context-pressure check and the port/ctx
-  resolution live in named functions instead of one generator. Behaviour is
-  unchanged; the split is covered by the e2e smoke suite and a real run.

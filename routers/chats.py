@@ -189,7 +189,7 @@ def _sweep_orphan_blob_dirs() -> None:
     except OSError as _sweep_err:
         logger.debug("[CHATS] blob dir sweep failed: %s", _sweep_err)
 
-_RE_CHAT_ID_PATTERN = re.compile(r"_([a-f0-9\-]{4,36})\.json$")
+_RE_CHAT_ID_PATTERN = re.compile(r"_([a-f0-9\-]{4,64})\.json$")
 _CHAT_JSON_LIMIT = 200 * 1024 * 1024  # 200 MB emergency brake per save
 _chat_save_locks: dict = {}
 _chat_save_locks_guard = threading.Lock()
@@ -420,7 +420,7 @@ def import_dom_messages(chat_id: str, messages: list,
 
 @router.get("")
 async def list_chats():
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     result = []
     def _get_items():
         with _cache_lock:
@@ -481,7 +481,7 @@ async def list_chats():
 
 @router.post("")
 async def create_chat(req: Request):
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     data = await req.json()
     cid = str(uuid.uuid4())[:8]
     now = datetime.now().isoformat(timespec="seconds")
@@ -570,6 +570,11 @@ async def persist_chat(req: Request):
                 return JSONResponse({"error": "stale_rev",
                                      "rev": _saved.get("rev")},
                                     status_code=409)
+            if _saved and _saved.get("oversize"):
+                # OVERSIZE-TRUTH (audit 2026-11-03): the beacon/autosave used
+                # to see ok:true while nothing was written.
+                return JSONResponse({"ok": False, "error": "chat_too_large"},
+                                    status_code=413)
             return {"ok": True, "id": cid, "rev": (_saved or {}).get("rev"),
                     "created": False, "updated": True}
 
@@ -597,6 +602,9 @@ async def persist_chat(req: Request):
     chat["_tokens"] = _chat_tokens(msgs)
     chat["_preview"] = _last[:80] if isinstance(_last, str) else ""
     _saved = await asyncio.to_thread(_save_chat, cid, chat)
+    if _saved and _saved.get("oversize"):
+        return JSONResponse({"ok": False, "error": "chat_too_large"},
+                            status_code=413)
     return {"ok": True, "id": cid, "rev": (_saved or {}).get("rev"),
             "created": True, "updated": False}
 
@@ -612,7 +620,7 @@ async def search_chats(q: str = "", limit: int = 20):
     if len(_q) < 2:
         return {"ok": True, "query": q, "results": []}
     _limit = max(1, min(int(limit or 20), 50))
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
 
     def _scan():
         hits = []
@@ -662,7 +670,7 @@ async def search_chats(q: str = "", limit: int = 20):
 
 @router.get("/{chat_id}")
 async def get_chat(chat_id: str):
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     chat = await asyncio.to_thread(_load_chat_full, chat_id)
     if chat is None:
         return JSONResponse({"error": "Not found"}, status_code=404)
@@ -684,7 +692,7 @@ async def get_chat(chat_id: str):
 
 @router.put("/{chat_id}")
 async def update_chat(chat_id: str, req: Request):
-    _ensure_cache()
+    await asyncio.to_thread(_ensure_cache)
     data = await req.json()
     # WORKSPACE-GUARD (2026-10-15, audit N9): PUT /chats/{id} applied any
     # string as workspace unvalidated - in contrast to POST /settings
@@ -737,6 +745,9 @@ async def update_chat(chat_id: str, req: Request):
     _saved = await asyncio.to_thread(_locked_update)
     if _saved is None:
         return JSONResponse({"error": "Not found"}, status_code=404)
+    if _saved and _saved.get("oversize"):
+        return JSONResponse({"ok": False, "error": "chat_too_large"},
+                            status_code=413)
     if _saved and _saved.get("conflict"):
         _server = await asyncio.to_thread(_load_chat_full, chat_id)
         _server_msgs = copy.deepcopy((_server or {}).get("messages", []))
@@ -750,21 +761,29 @@ async def update_chat(chat_id: str, req: Request):
 
 @router.delete("/{chat_id}")
 async def delete_chat(chat_id: str):
-    _ensure_cache()
+    # SHAPE-GUARD (audit 2026-11-03): every other chat endpoint validates the
+    # id; delete fed it straight into the blob dir + rmtree.
+    if not re.fullmatch(r"[a-f0-9-]{4,64}", chat_id or ""):
+        return JSONResponse({"ok": False, "error": "invalid chat_id"},
+                            status_code=400)
+    await asyncio.to_thread(_ensure_cache)
     def _pop_chat():
         with _cache_lock:
             return _chats_cache.pop(chat_id, None)
     chat = await asyncio.to_thread(_pop_chat)
     if chat:
-        try:
-            p = Path(chat.get("_file", "")) if chat.get("_file") else None
-            if p and p.exists():
-                p.unlink()
-            if p:
-                ctx_p = p.with_suffix(".context.json")
-                if ctx_p.exists():
-                    ctx_p.unlink()
-            shutil.rmtree(_blob_dir(chat_id), ignore_errors=True)
-        except Exception:
-            pass
+        def _delete_files():
+            try:
+                p = Path(chat.get("_file", "")) if chat.get("_file") else None
+                if p and p.exists():
+                    p.unlink()
+                if p:
+                    ctx_p = p.with_suffix(".context.json")
+                    if ctx_p.exists():
+                        ctx_p.unlink()
+                shutil.rmtree(_blob_dir(chat_id), ignore_errors=True)
+            except OSError:
+                pass
+
+        await asyncio.to_thread(_delete_files)
     return {"ok": True}

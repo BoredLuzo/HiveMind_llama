@@ -43,20 +43,29 @@ echo "[2/8] Installing system dependencies..."
 # UV-CONSISTENCY (2026-09-09): uv provisions the interpreter and the venv,
 # so the host only needs curl. python3/pip stay installed where the distro
 # pulls them in anyway - they are the legacy fallback in step [4/8].
+# OFFLINE (audit r4): a package-manager failure must not abort the whole
+# install - with curl already present (or the python3+pip fallback in
+# step [4/8]) an air-gapped re-run still completes. Warn loudly instead.
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get update -qq
-  apt-get install -y -qq curl ca-certificates
+  apt-get update -qq || echo "  [WARN] apt-get update failed (offline?) - continuing" >&2
+  apt-get install -y -qq curl ca-certificates \
+    || echo "  [WARN] apt-get install curl failed (offline?) - continuing" >&2
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y curl
+  dnf install -y curl || echo "  [WARN] dnf install curl failed (offline?) - continuing" >&2
 elif command -v pacman >/dev/null 2>&1; then
-  pacman -Sy --noconfirm curl
+  pacman -Sy --noconfirm curl || echo "  [WARN] pacman install curl failed (offline?) - continuing" >&2
 else
   echo "  (unknown package manager — install curl manually)"
 fi
 
 command -v uv >/dev/null 2>&1 || {
   echo "  Installing uv (astral.sh)..."
-  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_PATH="/usr/local/bin" sh
+  # OFFLINE (audit r4): a failed curl|sh used to abort the whole installer
+  # (pipefail + set -e). Fall through instead - step [4/8] has a
+  # python3+pip fallback.
+  if ! curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_PATH="/usr/local/bin" sh; then
+    echo "  [WARN] uv could not be installed (offline?) - step [4/8] falls back to python3+pip." >&2
+  fi
 }
 # UV-PATH (2026-10-17): uv is installed to /usr/local/bin, which a normal
 # login shell has on PATH - but a sudo session with a hardened secure_path, a
@@ -77,39 +86,74 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ]; then
   # checkout copied settings.json (the local workspace path!), sessions/ and
   # logs/ into /opt/hivemind - the install then looked like someone else's
   # machine. rsync keeps the tree but skips user state and heavy build dirs.
+  # RE-RUN-DATA (2026-11-04): with --delete every not-excluded destination
+  # file missing from the source is deleted. The exclude list therefore
+  # covers all runtime/user data (models, llama builds, caches, chats, state).
+  # model_configs/ is SOURCE code and must stay installed; only the runtime
+  # tag map is protected.
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete \
       --exclude '.git' --exclude '.venv' --exclude '__pycache__' \
-      --exclude 'sessions' --exclude 'logs' --exclude 'stt' \
+      --exclude '/sessions' --exclude '/logs' --exclude '/stt' \
+      --exclude '/models' --exclude '/llama' --exclude '/.cache' \
       --exclude 'node_modules' --exclude 'settings.json' --exclude 'presets.json' \
-      --exclude 'gateway.toml' --exclude 'model_configs' \
+      --exclude 'gateway.toml' --exclude '/model_configs/gguf_filename_tags.json' \
+      --exclude '/models.json' --exclude '/memory.json' --exclude '/vision_model.json' \
+      --exclude '/routing_weights.json' --exclude '/gateway_state.json' \
+      --exclude '/gateway_audit.jsonl' --exclude '/gateway.disabled' \
+      --exclude '/custom_prompts' --exclude '/.hive_uploads' --exclude '/learning_logs' \
+      --exclude 'BUILD_INFO.txt' \
       "$SCRIPT_DIR"/ "$INSTALL_DIR"/
   else
     tar -C "$SCRIPT_DIR" \
       --exclude='./.git' --exclude='./.venv' --exclude='./__pycache__' \
       --exclude='./sessions' --exclude='./logs' --exclude='./stt' \
+      --exclude='./models' --exclude='./llama' --exclude='./.cache' \
       --exclude='./node_modules' --exclude='./settings.json' \
       --exclude='./presets.json' --exclude='./gateway.toml' \
-      --exclude='./model_configs' -cf - . | tar -C "$INSTALL_DIR" -xf -
+      --exclude='./model_configs/gguf_filename_tags.json' \
+      --exclude='./models.json' --exclude='./memory.json' --exclude='./vision_model.json' \
+      --exclude='./routing_weights.json' --exclude='./gateway_state.json' \
+      --exclude='./gateway_audit.jsonl' --exclude='./gateway.disabled' \
+      --exclude='./custom_prompts' --exclude='./.hive_uploads' --exclude='./learning_logs' \
+      --exclude='./BUILD_INFO.txt' \
+      -cf - . | tar -C "$INSTALL_DIR" -xf -
   fi
   rm -f "$INSTALL_DIR/deploy/install_linux.sh"
 fi
 
 echo "[4/8] Creating venv + installing Python dependencies..."
 cd "$INSTALL_DIR"
+_uv_sync_ok=0
 if command -v uv >/dev/null 2>&1 && [ -f pyproject.toml ]; then
   # Primary path: managed Python 3.14 + locked dependency sync (same flow as
   # the Windows installer).
-  uv python install 3.14
-  uv sync --all-extras --frozen
-elif [ -f requirements.txt ]; then
-  # Legacy fallback: system python3 + pip + requirements.txt.
-  python3 -m venv "$INSTALL_DIR/.venv"
-  "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip -q
-  "$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q
-else
-  echo "Error: neither pyproject.toml nor requirements.txt found in $INSTALL_DIR"
-  exit 1
+  # UV-OWNERSHIP (audit r4): uv venvs symlink the interpreter into uv's
+  # managed runtime dir - which defaults to the invoking user's home. Run as
+  # root, that is /root (mode 0700), and the hivemind service user could not
+  # execute .venv/bin/python at all. Provision under $INSTALL_DIR (chowned to
+  # hivemind in step [6/8], protected from rsync --delete via /.cache).
+  if UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv python install 3.14 \
+     && UV_PYTHON_INSTALL_DIR="$INSTALL_DIR/.cache/uv/python" uv sync --all-extras --frozen; then
+    _uv_sync_ok=1
+  else
+    # OFFLINE (audit r4): a uv failure (no network, lock mismatch) used to
+    # abort the whole install via set -e even though the pip fallback works.
+    echo "  [WARN] uv sync failed (offline? lock mismatch?) - falling back to python3+pip." >&2
+  fi
+fi
+if [ "$_uv_sync_ok" != "1" ]; then
+  if [ -f requirements.txt ]; then
+    # Legacy fallback: system python3 + pip + requirements.txt.
+    python3 -m venv "$INSTALL_DIR/.venv"
+    "$INSTALL_DIR/.venv/bin/pip" install --upgrade pip -q
+    "$INSTALL_DIR/.venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q
+  elif [ -x "$INSTALL_DIR/.venv/bin/python" ]; then
+    echo "  [WARN] keeping the existing .venv (uv failed and there is no requirements.txt)."
+  else
+    echo "Error: neither pyproject.toml nor requirements.txt found in $INSTALL_DIR"
+    exit 1
+  fi
 fi
 
 echo "[5/8] Fetching llama.cpp (backend: $LLAMA_BACKEND)..."
@@ -131,7 +175,14 @@ if [ "${VOICE}" = "1" ]; then
         _VOICE_PY="$INSTALL_DIR/.venv/bin/python"
     else
         echo "[voice] audio packages missing - installing requirements-voice.txt..."
-        "$INSTALL_DIR/.venv/bin/pip" install -q -r "$INSTALL_DIR/requirements-voice.txt" || true
+        # ERROR-PROPAGATION (audit r4): this was `... || true`, which hid the
+        # pip failure. The download below still runs (fetch_whisper.py is
+        # stdlib-only), but the user must SEE that audio decoding will be
+        # broken until this succeeds.
+        if ! "$INSTALL_DIR/.venv/bin/pip" install -q -r "$INSTALL_DIR/requirements-voice.txt"; then
+            echo "[voice] [WARN] requirements-voice.txt could not be installed -" >&2
+            echo "        speech INPUT will fail until it succeeds (the Voice card retries)." >&2
+        fi
         _VOICE_PY="$INSTALL_DIR/.venv/bin/python"
     fi
     if ! "$_VOICE_PY" deploy/fetch_whisper.py --model parakeet-q4k; then
@@ -152,11 +203,16 @@ if [ "${TTS}" = "1" ]; then
         echo "[tts] environment prep failed - the UI can retry on first use" >&2
     else
         echo "[tts] fetching the model (needs a Hugging Face token)..."
+        # TEMP-COLLISION (audit r4): a fixed /tmp path is predictable - two
+        # parallel installs clobber each other and a symlink planted there
+        # makes root overwrite a foreign file. mktemp is unique per run.
+        _TTS_WAV="$(mktemp "${TMPDIR:-/tmp}/hivemind_tts_check.XXXXXXXX.wav")"
         if "${_TTS_ENV[@]}" uvx --python 3.12 --index https://download.pytorch.org/whl/cpu \
                 pocket-tts generate --text "Voice setup complete." \
-                --output-path /tmp/hivemind_tts_check.wav; then
-            rm -f /tmp/hivemind_tts_check.wav
+                --output-path "$_TTS_WAV"; then
+            rm -f "$_TTS_WAV"
         else
+            rm -f "$_TTS_WAV"
             echo "[tts] model fetch failed. The model is gated:"
             echo "      add Environment=HF_TOKEN=hf_... to /etc/systemd/system/hivemind.service"
             echo "      after accepting https://huggingface.co/kyutai/pocket-tts" >&2
@@ -172,10 +228,19 @@ chown -R hivemind:hivemind "$INSTALL_DIR" "$LOG_DIR"
 
 echo "[7/8] Installing systemd service..."
 cp "$INSTALL_DIR/deploy/hivemind.service" "$SERVICE_FILE"
-systemctl daemon-reload
+# NON-SYSTEMD (audit r4): in a container/WSL1 without a running systemd,
+# `systemctl` used to fail here via set -e AFTER everything else succeeded -
+# a complete install that reported itself broken. Detect instead of crash.
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+  systemctl daemon-reload
 
-echo "[8/8] Enabling service..."
-systemctl enable hivemind.service
+  echo "[8/8] Enabling service..."
+  systemctl enable hivemind.service
+else
+  echo "[8/8] [WARN] systemd is not running (container?) - the unit is installed"
+  echo "      at $SERVICE_FILE but was NOT enabled. Start manually with:"
+  echo "      cd $INSTALL_DIR && sudo -u hivemind ./.venv/bin/python run.py"
+fi
 
 echo ""
 echo "=== Installation complete ==="

@@ -953,7 +953,7 @@ async def tool_search_code(pattern: str, path: str = ".", file_glob: str = "*") 
     try:
         proc = await asyncio.create_subprocess_exec(
             rg_bin, "--line-number", "--no-heading", "--color=never",
-            f"--glob={file_glob}", pattern, str(p),
+            f"--glob={file_glob}", "--", pattern, str(p),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -1188,6 +1188,8 @@ async def tool_memory_set(key: str, value: str) -> str:
 
 _GIT_SAFE_RE = re.compile(r"^git\s+(status|diff|log|show|blame)\b", re.IGNORECASE)
 _GIT_META_CHARS = set(";|&<>\n\r`")
+_GIT_FORBIDDEN = ("--output", "--ext-diff", "--textconv", "--exec",
+                  "--upload-pack", "--config", "--open-files-in-pager")
 
 
 def _is_safe_git(cmd: str) -> bool:
@@ -1197,6 +1199,12 @@ def _is_safe_git(cmd: str) -> bool:
     if not _GIT_SAFE_RE.match(c):
         return False
     if any(ch in _GIT_META_CHARS for ch in c):
+        return False
+    # READ-TIER-WRITE (audit 2026-11-03): git diff --output=<path> writes an
+    # arbitrary file; external diff drivers/textconv execute programs from an
+    # untrusted repo. Read tier must not reach either.
+    _low = c.lower()
+    if any(tok in _low for tok in _GIT_FORBIDDEN):
         return False
     if "$(" in c or "%" in c:  # Subshell / cmd-Variablenexpansion
         return False
@@ -1221,12 +1229,15 @@ async def tool_run_python(code: str, timeout: int = 15) -> str:
     with tempfile.NamedTemporaryFile(suffix=".py", mode="w", encoding="utf-8", delete=False) as f:
         f.write(code)
         tmp = f.name
+    proc = None
     try:
+        from infra.child_env import scrubbed_env as _scrubbed_env
         proc = await asyncio.create_subprocess_exec(
             sys.executable, tmp,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(WORKSPACE),
+            env=_scrubbed_env(),
         )
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         result = _decode(out)
@@ -1234,6 +1245,14 @@ async def tool_run_python(code: str, timeout: int = 15) -> str:
             result += f"\n[stderr]:\n{_decode(err)}"
         return result.strip() or "(no output)"
     except asyncio.TimeoutError:
+        # TIMEOUT-KILL (audit 2026-11-03): the child used to keep running
+        # after the tool reported a timeout.
+        try:
+            if proc is not None:
+                proc.kill()
+                await proc.wait()
+        except (ProcessLookupError, OSError):
+            pass
         return _tool_error_response(
             "RUN_PYTHON_TIMEOUT",
             f"Python snippet timed out after {timeout}s.",

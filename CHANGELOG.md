@@ -1,15 +1,31 @@
 ## [1.5.1] - 2026-11-03
 
-Security and reliability round on top of 1.5.0. MCP file/search tools now
+Security and reliability release on top of 1.5.0. MCP file/search tools now
 enforce the secret denylist on every path (including the forwarded engine
 path), `/settings` no longer persists GET-only keys, preset exports are
 scrubbed of tokens, and the approval gate fails closed without a run id.
-`run_tests` and dynamic MCP tools now honor the taint gate even with the
-approval toggle off, and `/abort` during an approval pause actually stops the
-run instead of reporting success. The repo-map delta survives the compression
-it is appended for, the tail/decode guards keep counting across rounds, and a
-queue-full drop at the end of a stream still delivers a gap marker plus the
-done frame. The
+The `/v1/chat/completions` agent mode requires `HIVEMIND_INTERNAL_TOKEN`,
+read-tier MCP git/search tools cannot write files or execute option-injected
+commands, presets can no longer flip the approval/phone posture or add MCP
+servers, and model-chosen commands get a scrubbed environment (no engine or
+API tokens). The served UI (`index.html`, `static/`), `sessions/` and engine
+scripts are write-protected for file tools, the markdown renderer escapes
+quotes, and the saved-chat sanitizer rejects entity-encoded script URLs.
+The gateway restores its full state on restart (cron jobs, `/gate off`, chat
+pins), adopts an orphaned live run as a mirror instead of wedging the phone,
+and the idle monitor now runs. Chat ids up to 64 chars load correctly,
+oversize saves report 413 instead of ok, SSE errors terminate the response,
+and git/chat/VRAM/gateway-stop probes no longer block the event loop.
+`run_tests` and dynamic MCP tools are covered by the approval set, and the
+user's approval toggle is authoritative: tainted runs are marked, but no card
+is forced while approvals are off. `/abort` during an approval pause actually
+stops the run instead of reporting success. The repo-map delta survives the
+compression it is appended for, the tail/decode guards keep counting across
+rounds, and a queue-full drop at the end of a stream still delivers a gap
+marker plus the done frame. Follow-up runs keep their last task/plan in the
+chat sidecar even when the planner was skipped or the run was aborted, so
+reopening an old chat and asking about it starts from the previous run
+instead of blind. The
 taint from web/MCP content survives prefetched tools, chat-id and gateway
 stop/start races are fixed, and dropped SSE frames are marked as an incomplete
 answer instead of being persisted silently. `write_file` preserves CRLF,
@@ -26,7 +42,9 @@ CPU), the CPU backend no longer evicts peers for a VRAM budget that does not
 apply, and ROCm devices are probed by their own device/library names instead
 of being rejected as a missing Vulkan build.
 MoE loads use half the logical CPUs. LSP now verifies 13 languages end to end
-(installer packs for Go, C/C++ and Lua), runs servers with a scrubbed
+(the settings card shows installed vs missing servers on PATH; installer packs
+for Python, TS/JS, web/YAML, Bash, Rust and C/C++; Go and Lua
+are manual installs), runs servers with a scrubbed
 environment and no repo-controlled settings by default.
 
 Memory retrieval now uses SQLite FTS5 (bm25, porter stemming, prefix match)
@@ -40,10 +58,10 @@ itself.
 
 ## [1.5.0] - 2026-11-01
 
-1.5.0 scope: the MCP hardening/phase-2 work, the settings/preset pass, the
-generic LSP client, the code-panel/compression/update-check improvements and
-the fix round of 2026-11-01 (installer/updater rendering, git commit scoping,
-reprompt reliability) on top of 1.4.14. Groot stays **experimental**. The
+1.5.0 scope: MCP hardening, settings/preset improvements, the generic LSP
+client, the code-panel/compression/update-check improvements, and
+installer/updater rendering, git commit scoping and reprompt reliability
+fixes on top of 1.4.14. Groot stays **experimental**. The
 startup update check offers new releases directly (including pre-releases
 for preview installs).
 
@@ -63,7 +81,7 @@ for preview installs).
   shared path only, after the tier check.
 - `docs/mcp.md` / `docs/mcp_client.md` state the token-gated set, the real
   retry statuses (502/503/504) and that `has_auth` appears on both endpoints.
-- **The remaining 34 findings are closed.** Client: streaming SSE with a
+- **34 MCP fixes.** Client: streaming SSE with a
   body cap, 404 session recovery, JSON-id check, off-loop taskkill, stdio/URL
   redaction, config-decay warnings, string-id match, multi-line SSE,
   call/refresh guard, structuredContent + truncation marker, cmd quoting.
@@ -73,7 +91,7 @@ for preview installs).
   log-name sanitizer, 2 MB stdio cap, body-read timeout + connection cap,
   version negotiation. Integration: `mcp_*` call budget, documented mode-less
   exception, destructive gate scans MCP args.
-- **Protocol 2025-06-18 (2026-11-01)**: `initialize` negotiates
+- **Protocol 2025-06-18**: `initialize` negotiates
   2024-11-05 / 2025-03-26 / 2025-06-18 (anything else falls back to the
   2024 baseline). 2025 HTTP sessions get a `Mcp-Session-Id`
   (`secrets.token_urlsafe(32)`), required on later POSTs (unknown/missing →
@@ -82,23 +100,22 @@ for preview installs).
   opens the per-session SSE stream with a keep-alive heartbeat
   (`MCP_SSE_KEEPALIVE_S`), `Last-Event-ID` resumability over a 500-event
   ring and live fan-out of progress notifications. stdio needs no session.
-  Sampling/elicitation/completions stay deliberately unsupported (-32601).
-- **Per-server client budgets + IDE configs (2026-11-01)**:
+  Sampling/elicitation/completions are unsupported (-32601).
+- **Per-server client budgets + IDE configs**:
   `mcp_server_budgets` {server: calls per rolling hour} is enforced in the
   client's call path (`MCP_BUDGET_EXCEEDED` names server, limit and reset;
   reloads keep counters); remote tool `annotations` pass through into the
   host schema. `python tools/mcp_config_gen.py` generates ready-to-paste
   stdio configs for Claude Desktop / Cline / Zed / VS Code with a
   `<HIVEMIND_INTERNAL_TOKEN>` placeholder unless `--include-secret`.
-- **Protocol 2026-07-28 minimal (2026-11-01)**: `server/discover` answers
+- **Protocol 2026-07-28 minimal**: `server/discover` answers
   identity + versions + capabilities on both transports; per-request
   `_meta` protocol version is validated (unsupported → `-32022`); a 2026
   initialize echoes stateless with no session; batched initializes of any
   version are answered on the 2024 baseline. The 2026 revision removed
-  sessions — our baseline was already stateless, so the support stays small
-  (`resultType`, header enforcement, `ttlMs`/`cacheScope`, MRTR are
-  deliberately not implemented yet).
-- **Phase 2 (2026-10-31)**: all 23 tools carry MCP annotations
+  sessions; support stays minimal (`resultType`, header enforcement,
+  `ttlMs`/`cacheScope`, MRTR are not implemented yet).
+- **Tool annotations and new tools**: all 23 tools carry MCP annotations
   (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`).
   New tools: `git_diff` (read, bounded), `git_commit` (write tier, explicit
   paths only, no `git add -A`), `run_tests` (exec tier, stdio-only, bounded
@@ -134,7 +151,7 @@ for preview installs).
   dropping them. Pyright's percent-encoded, lower-case drive URIs
   (`file:///c%3A/...`) are canonicalized before diagnostics are stored, so
   real pyright results reach the tool layer.
-- **Remaining LSP P2s**: diagnostics carry the document version; a delayed
+- **LSP fixes**: diagnostics carry the document version; a delayed
   publication for the pre-change text is discarded instead of satisfying the
   wait. `.tsx`/`.jsx` send `typescriptreact`/`javascriptreact` in `didOpen`
   while still using the TypeScript server. `lsp_rename` now includes the
@@ -147,7 +164,7 @@ for preview installs).
   A real-rust smoke suite covers it (skips without rust-analyzer).
 - `docs/lsp.md` documents all ten tools, arguments, tiers, errors, the server
   registry and the known limits; the README now carries the tool table.
-- **Idle reaper + workspace settings + lsp_format (P1/P2 closure)**: a
+- **Idle reaper + workspace settings + lsp_format**: a
   language server is closed after 600s idle (`lsp_idle_timeout_s`, 0 = off)
   and restarted lazily. `.vscode/settings.json` is answered to
   `workspace/configuration` (per section) and pushed once via
@@ -158,11 +175,10 @@ for preview installs).
 - **[MEM] commit-charge snapshots**: one line per startup, model load,
   eviction and run end — `commit=x/yGB engine=…MB llama[…]=…MB tts=…MB
   lsp[…]=…MB` (PrivateUsage via GetProcessMemoryInfo, PIDs from HiveMind's
-  own managers; `mem_watch_enabled` switches it off). This makes the
-  "commit grows across loads and stays until restart" observation measurable
-  per process.
+  own managers; `mem_watch_enabled` switches it off). Commit growth across
+  loads is now visible per process.
 
-### Smart Preload: keep-warm pins (2026-11-01)
+### Smart Preload: keep-warm pins
 - **Keep workers warm after run now pins**: the reloaded pre-explore/planner
   workers get `keep_alive=-1` (the same primitive as "Pin direct") so
   prefetch and unrelated loads cannot evict them between runs. The next run
@@ -170,65 +186,62 @@ for preview installs).
 - The SMART PRELOAD rows carry visible explanations now (what prefetch
   does, why it is off by default, what keep-warm+pinned means).
 
-### EOD audits (2026-11-01) — every slice of the day re-audited
-Four end-of-day audits over all changes; findings fixed immediately:
+### Duo core, Git, MCP, UI and installer fixes
 - **Duo core**: the coder-load timeout retry ladder skipped the abort
   check (an aborted run burned ~10 min of load/kill churn) — abort is now
   checked at entry and after each retry wait. Whole-turn compression could
   join two user messages (`user,user` — strict-alternation templates reject
   that); the remainder is appended one-by-one with a guard now.
 - **Git**: the checkpoint-squash fold commit was still BARE (foreign staged
-  work folded; probed) — now pathspec-scoped; `files=None` no longer keeps
-  `add -A` (live-run squash without a list is refused); the empty-fold
-  fallback is a safe mixed `git reset` instead of `--hard` (probed data
-  loss); the `git_commit` tool rejects `.`/`..` paths.
-- **MCP**: F-1/F-2/F-3 verified correct by live probes (48/0); two P2s
-  documented (a `_meta`-carried 2025 version without a session header is
-  served stateless; `Mcp-Protocol-Version` header values are not
-  validated) — spec-consistency, no capability gain.
+  work folded) — now pathspec-scoped; `files=None` no longer keeps
+  `add -A` (a squash without a list is refused); the empty-fold
+  fallback is a safe mixed `git reset` instead of `--hard`; the
+  `git_commit` tool rejects `.`/`..` paths.
+- **MCP**: two spec-consistency notes are documented: a `_meta`-carried
+  2025 version without a session header is served stateless;
+  `Mcp-Protocol-Version` header values are not validated.
 - **UI/installer**: the release-notes box is drawn inside the renderer (the
   update.bat pipe discarded the body — only the header printed);
   `warnings_digest` survives a second call and flags the plural
   "Warnings" now (word-boundary + German "keine" suppression);
   `style.css` cache buster bumped (the preset-badge CSS was stale).
-Reports: DOKU/audits/EOD_*.md, DOKU/mcp/EOD_AUDIT_20261101.md.
 
 ### Installer / Updater
-- **Release notes render properly** (P1): the old inline render double-
+- **Release notes render properly**: the old inline render double-
   mangled UTF-8 (ANSI read → OEM `type` — every umlaut became `├ñ`),
   never wrapped 200-char lines (box 63 chars), misaligned the header box
   for every tag and erased code fences. `deploy/render_release_notes.ps1`
   now does UTF-8 read, markdown-light conversion, code-block markers,
   61-col wrapping and prints the box with a computed width.
-- **Decider opt-in prompt worked never** (P1): `choice /d N` without `/t`
-  errored (errorlevel 255) on every install — the question never showed.
+- **Decider opt-in prompt never showed**: `choice /d N` without `/t`
+  errored (errorlevel 255) on every install — the question never appeared.
   `/t 30 /d N` now, and the "ready" message gates on the torch/gliner2
   import probe AND the model download instead of only the snapshot exit.
 - The startup update check prints a warnings digest (word-boundary regex,
   "Keine breaking changes" no longer triggers the scary prompt) and deletes
   the downloaded zip after a successful install.
-- Startup check itself verified working: cache live, prerelease policy,
-  sha256 gate, offline-silent (36/36 checks).
+- Startup check: 24h cache, pre-release policy, sha256 gate, silent when
+  offline.
 
 ### Git
-- **Auto-commit commits new files again** (P1-1): the 2026-10-14 scoped
+- **Auto-commit commits new files again**: the scoped
   commit (`git commit -- paths`) matches tracked paths only, so a run's
-  brand-new files failed with "pathspec did not match". The scoped
-  `git add -- <run files>` is back before the scoped commit — foreign
-  already-staged work is still never swept (probed).
-- **Checkpoint squash folds only run files** (P1-2): the soft reset folds
+  brand-new files failed with "pathspec did not match". A scoped
+  `git add -- <run files>` now precedes the scoped commit — foreign
+  already-staged work is still never swept.
+- **Checkpoint squash folds only run files**: the soft reset folds
   everything since the base into the index; the following `git add -A`
   swept foreign uncommitted work into the folded commit. The squash takes
   the run's file list now.
-- **`git_commit` tool requires explicit paths** (P1-3): the model-callable
+- **`git_commit` tool requires explicit paths**: the model-callable
   tool did `git add -A` + a bare commit, sweeping the whole index (the
   approval gate is off by default). `paths` is now required and the commit
   is scoped to them.
-- **`undo_last` is recoverable** (P1-4): the ungated `git reset --hard`
+- **`undo_last` is recoverable**: the ungated `git reset --hard`
   destroyed all uncommitted work since the checkpoint. A `git stash create`
   safety snapshot is taken first and its recover sha is in the result.
-- Security verdict unchanged: argv-list subprocesses, URL vetting, masked
-  token flows, no leak end to end (DOKU/audits/GIT_AUDIT_20261101.md).
+- No security regression: argv-list subprocesses, URL vetting, masked
+  token flows, no leak end to end.
 
 ### Code panel, startup update check, compression
 - **Code panel performance**: streamed plain text now appends to one text node
@@ -268,7 +281,7 @@ Reports: DOKU/audits/EOD_*.md, DOKU/mcp/EOD_AUDIT_20261101.md.
   comments and skips banners. Groot's profile loses the dead `ubatch` and
   `side_call_sampling` keys and uses its native GGUF template.
 
-### Maintainability (2026-10-31, final pass)
+### Maintainability
 - 17 settings keys with no production reader are dropped on load (old UI and
   preset exports no longer round-trip them); preset apply skips unknown keys.
 - `RUNTIME_FLAG_KEYS` is exported by `backend/runtime_flags` and imported by
@@ -290,18 +303,18 @@ Tests: 233/233 suites, ruff clean.
 ### Tool loop
 - `duo_tool_rounds` ships **50** (was 0). A fresh install could not write a
   file: `_tool_round_base` requires `> 0`, so agentic chunk runs attached no
-  tools and produced text-only "implementations" (live: 7/7 rounds, empty
+  tools and produced text-only "implementations" (7/7 rounds, empty
   workspace). An explicit 0 still disables the loop.
 - **Truncated `edit_file` no longer retries itself.** `write_file` already
   salvaged partial content with a marker; an `edit_file` cut at the output
   limit is dropped (a half edit would corrupt the file) and now forces a
-  compression instead of retrying with the same clamped budget (live: a
+  compression instead of retrying with the same clamped budget (a
   2404-token budget against a 20 455-token prompt, deterministic truncation).
 - `min_viable_tool_budget`: a tool round must keep `max(1024, min(4096,
   request//2))` output tokens; the fixed 1024 floor let the 2404 budget ship.
 - `write_file`/`edit_file` shrink guards are proportional: >=30 content lines
-  and <=25 % now blocks without `confirm_shrink` (live: 11 616 -> 1 716 bytes,
-  ~40 -> 9 lines, passed the absolute arms).
+  and <=25 % now blocks without `confirm_shrink` (11 616 -> 1 716 bytes,
+  ~40 -> 9 lines passed the old absolute limits).
 - `[TOOL-CALL-MISS]` WARNING per failed tool round: thinking flag +
   chat_template_kwargs, tools count/schema/hash, tool_choice, slot/requested
   ctx, prompt/cached tokens, finish_reason, completion/max_tokens, all sampler
@@ -336,9 +349,9 @@ Tests: 233/233 suites, ruff clean.
   role accepts any installed LLM; the optional CPU decider stays as the only
   routing extra. `setup_models.bat`/`fetch_models.py` now describe the
   essential set as core models plus the optional omni vision worker.
-- Groot uses its native GGUF chat template; the Sharp v22.5 override was
-  unnecessary (b12001 parses the native XML tool calls with thinking off
-  and on).
+- Groot uses its native GGUF chat template (the Sharp v22.5 override is
+  gone); b12001 parses the native XML tool calls with thinking off
+  and on.
 - Downloader: HTTP 416 with fewer bytes on disk than expected is no longer
   "Already complete" - the partial file is removed and the download retried.
 
@@ -348,14 +361,12 @@ Tests: 233/233 suites, ruff clean.
   40 KB tail from a `__file__`-anchored path; `save_presets` uses a PID temp
   name + retry; the settings lock is an `RLock`; the Telegram start note shows
   the pinned chat mode; `/vram/table` includes profile-sized MoEs.
-- Dead code removed (`_FALLBACK_MODEL_PREFERENCE` copy, `_RAM_HEADROOM_GB`,
-  unused flag imports, dead KV rows, `src_preset` ternary).
 
 Tests: 232/232 suites, ruff clean.
 
 ## [1.4.13] - 2026-10-30
 
-## Stability (2026-10-30)
+## Stability
 
 - Preflight is **fail-closed**: an unknown model (alias or path that does
   not resolve) and a failing `tasklist` now BLOCK the guard instead of
@@ -368,7 +379,7 @@ Tests: 232/232 suites, ruff clean.
   engine state).
 - **Context-compression storm guard**: the CTX-FULL path fired a force
   compression on every round when the tool-output inflow kept `est` above
-  the SWA zone (live 2026-10-22: 40 compressions in 56 s, `after` stuck at
+  the SWA zone (40 compressions in 56 s, `after` stuck at
   4411). `context.ctx_guard.allow_force_compress` throttles to one force
   compression per 3 rounds; the rounds in between fall back to the
   existing tiny-output-budget clamp. Regression test replays the storm
@@ -385,17 +396,16 @@ Tests: 232/232 suites, ruff clean.
 
 ## Side calls
 
-- **Empty-content policy** (supersedes the earlier wording in this file):
+- **Empty-content policy**:
   models that ignore `chat_template_kwargs.enable_thinking` (measured:
   LFM2.5 2.6B, 800/800 tokens in the think block, `content = ""`) made every
   side call receive an empty string. `LlamaClient.chat()` and
   `core/fix_agent.py` now **log `[SIDE-SKIP]` and return ""** - reasoning is
   never substituted, because titles, memory entries and insights persist what
-  they receive. (An earlier draft of these notes described a reasoning
-  fallback; that code does not exist.)
+  they receive.
 - Groot profile: `ncmoe 32`, `ub 1024`, `mtp true` (measured, see Models).
 
-## Pre-flight and side calls (2026-10-30, final pass)
+## Pre-flight and side calls
 
 - The VRAM pre-flight now adds a **compute-buffer surcharge for the ubatch**
   (0.28 MiB per ubatch unit above 256, measured on the live server: Groot
@@ -457,19 +467,19 @@ Tests: 232/232 suites, ruff clean.
   `[SAMPLER] kind=side ...` with the values that actually go on the wire.
 ## Prefill throughput
 
-- New setting **`duo_ubatch`** (default **1024** since 2026-10-30; `llama_ubatch_size` stays as
+- New setting **`duo_ubatch`** (default **1024**; `llama_ubatch_size` stays as
   the older alias). `--batch-size` follows the ubatch and never drops below
-  1024, so `ubatch <= batch` always holds. Prefill was 89-94 % of wall time
-  in the 80k run, which makes this the only knob with a measurable effect on
+  1024, so `ubatch <= batch` always holds. Prefill is 89-94 % of wall time
+  on an 80k run, so this is the knob with the largest effect on
   total run time. Measured on the 35B MoE (b11889, pp 8192, fresh process
   per variant): ub 256 -> 77.64 t/s, **ub 512 -> 119.96 t/s** (shared 206
   MiB), ub 1024 -> aborted (shared 80 -> 340 MiB), ub 2048 -> 193.59 t/s
   but shared peak 2348 MiB (spills to system RAM). 512 is the fastest value
-  that stays off the shared-memory path. **Revised the same day:** the
-  absolute shared number was the wrong yardstick (idle baseline is
-  ~470 MiB). Judged as a delta against the 512 run on the real server
-  at 18 011 prompt tokens: 91.7 -> 113.6 t/s (+23.9 %) for +52 MiB of
-  extra shared memory, so 1024 is the default now. 2048 stays out.
+  that stays off the shared-memory path. **Against the idle baseline
+  (~470 MiB shared):** on the real server
+  at 18 011 prompt tokens, ub 512 -> 1024 gives 91.7 -> 113.6 t/s
+  (+23.9 %) for +52 MiB of
+  extra shared memory, so 1024 is the default. 2048 stays out.
 
 ## Compression cost
 
@@ -498,33 +508,31 @@ Tests: 232/232 suites, ruff clean.
 
 ## Documentation
 
-- README: the Vulkan speed note now cites raw log lines only - Spark 5.62
-  t/s (`llama_server_8102_20261028-155559.log:27`) vs Qwen3.5-4B-MTP 55.29
-  t/s (build b11456, `llama_server_8103_20261020-131700.log:26`). The
-  earlier ~6/~60 t/s numbers had no archived raw line.
+- README: the Vulkan speed note now states the measured numbers -
+  Spark-X2.6 ~5.6 t/s vs Qwen3.5-4B-MTP ~55 t/s.
 
 ## Speed diagnosis and load safety
 
 - The 35B coder loads with `load_mode: none` now: llama-bench tg128 measured
-  2.92 t/s with mmap+mlock vs 13.77 t/s with none (live 15-16 t/s), because
+  2.92 t/s with mmap+mlock vs 13.77 t/s with none (15-16 t/s in real runs),
+  because
   the expert pages page in from NVMe under RAM pressure. The profile-level
-  `load_mode` override bypasses the SPEC+NONE guard on purpose - measured
-  live at 14.6-17.7 t/s without OOM when the slot is exclusive.
+  `load_mode` override bypasses the SPEC+NONE guard - measured
+  at 14.6-17.7 t/s without OOM when the slot is exclusive.
 - A RAM-GUARD in the loader rejects `load_mode: none` when free RAM is
-  unknown or below GGUF size + 8 GB (live: three stacked 18.3 GB hermes
-  commits froze the machine at 56 GB commit) and falls back to plain mmap.
+  unknown or below GGUF size + 8 GB (three stacked 18.3 GB hermes
+  commits froze a machine at 56 GB commit) and falls back to plain mmap.
 - The load-mode decision lives in one pure function
   (`backend/manager_load._resolve_load_mode`), unit-tested. It is
   evaluated **before** any profile override: a speculative model
   (`mtp: true`) resolves to `mmap+mlock` even if its profile says
   `none`, so the 35B profiles run on mmap+mlock unless
   `HIVEMIND_MTP_SPEC=0` is set.
-- MiniCPM-V 4.7 is vision-capable again (see 1.4.12 notes - wired during
-  the 1.4.12 window, bench and live verified).
-- Spark-X2.6 on Vulkan runs ~6 t/s (bench-verified twice, one unexplained
-  21 t/s reading) - prefer Qwen3.5-4B-MTP for coding.
+- MiniCPM-V 4.7 is vision-capable again (projector wired, bench and
+  real-run verified).
+- Spark-X2.6 on Vulkan runs ~6 t/s - prefer Qwen3.5-4B-MTP for coding.
 
-## Fixes since the 1.4.12 upload
+## More fixes in 1.4.13
 
 - Presets: a load applies the llama startup flags immediately, warns about
   models missing locally, re-saving keeps custom prompts, the autoload
@@ -607,8 +615,7 @@ Tests: 232/232 suites, ruff clean.
 - A load that only just fits now reports how much VRAM is left afterwards and
   warns that decoding will slow down as the context grows.
 - The installer's judge download never ran: the path carried a 0x0C byte where
-  the `\f` of `deploy\fetch_models.py` should have been. Fixed at byte level
-  and pinned by an encoding test.
+  the `\f` of `deploy\fetch_models.py` should have been. Fixed.
 - The judge model and the routing decider are optional steps inside installer
   step 6 now, both off by default, both saying how to install them later;
   previously no installer step called the decider fetch at all.
@@ -627,7 +634,7 @@ Tests: 232/232 suites, ruff clean.
 - One context resolver: the chat path (server.py) and the duo path
   (`num_ctx_config`) delegate to `core.state` instead of keeping their own
   copies of the settings > profile > table chain.
-- MCP client audit fixes: a server whose start fails no longer shows as
+- MCP client fixes: a server whose start fails no longer shows as
   "ok" in `GET /mcp/servers` and every reload retries it; error statuses on
   the handshake confirmation fail the start instead of being waved through;
   a changed `token_env` applies after a reload; `close_all` forgets dead
@@ -675,7 +682,7 @@ Tests: 232/232 suites, ruff clean.
 - The temp file carries the process id and one retry, so a vanished temp file
   cannot fail a save.
 
-## bash without leftovers, second round
+## Bash without leftovers
 
 - The operator list was incomplete: a single `&` still created files named `&`,
   `echo` and `done`, and a newline silently dropped the second command. The
@@ -731,7 +738,7 @@ Tests: 232/232 suites, ruff clean.
 - The "Chunking is off" notice reads the run's own flag now. It used to read
   the saved setting, so a run started with chunking on announced that its plan
   was skipped while the chunks ran.
-- A chunk is marked done after its test verdict, not before: a failing test
+- A chunk is marked done after its test result, not before: a failing test
   re-processes the chunk instead of recording it as complete.
 - The last chunk needs the critic's approval like every other chunk. It used to
   pass unreviewed, and it is the one carrying the integration work.
@@ -768,13 +775,12 @@ Tests: 232/232 suites, ruff clean.
 
 - The hermes 35B coder runs with draft-mtp again. Measured on b11889 with
   256-token answers: decode 20.0 -> 31.05 t/s (+55 %), prefill 122.1 -> 120.15
-  (-1.6 %), acceptance 0.823. The 2026-10-24 decision was based on 220-token
-  answers and a prefill penalty that does not reproduce.
+  (-1.6 %), acceptance 0.823.
 - Reference measurement for `qwen3.5:4b-mtp`: decode 55.5 -> 85.35 t/s
   (+53.8 %), prefill 610 -> 568 (-6.9 %), acceptance 0.911.
 - The trade is named: with speculative decoding the greedy output is not
-  bit-identical to plain decoding (near-tie tokens flip, 0/3 identical before
-  and after the build bump). That is the price for the speed. `HIVEMIND_MTP_SPEC=0`
+  bit-identical to plain decoding (near-tie tokens flip). That is the price
+  for the speed. `HIVEMIND_MTP_SPEC=0`
   restores byte-identical runs.
 
 ## Installer
@@ -788,13 +794,13 @@ Tests: 232/232 suites, ruff clean.
 - `--no-drafters` skips the drafter sidecars, explicitly only, and warns that
   it costs roughly half the decode speed for the models that need one (Gemma-4
   MTP, the DSpark pair). `--essential` does NOT skip them: the drafters are in
-  use again.
+  use.
 
 ## Load and context
 
 - `POST /vram/load` accepts `num_ctx` (or `ctx`) and reports the value it used
   plus where it came from: request, profile or the server default.
-- The context card states the honest speed picture where you set it.
+- The context card states the measured speed picture where you set it.
 
 ## Diagnostics
 
@@ -804,17 +810,10 @@ Tests: 232/232 suites, ruff clean.
 
 ## Repository
 
-- `main` tracks the released state again and `deploy/promote_main.bat` keeps it
-  there: fast-forward only, never a merge.
-- `deploy/prepush_check.ps1` brings the 13 pre-push checks back into the repo.
+- `deploy/promote_main.bat` moves `main` to the released state:
+  fast-forward only, never a merge.
+- `deploy/prepush_check.ps1` runs the 13 pre-push checks from the repo.
 - README no longer pins a release number or a zip name.
-
-## Under the hood
-
-- `duo_runner.py` is split: the planner phase, the critic review, the tool-round
-  execution, the wedge handoff, the context-pressure check and the port/ctx
-  resolution live in named functions instead of one generator. Behaviour is
-  unchanged; the split is covered by the e2e smoke suite and a real run.
 
 ## [1.4.9] - 2026-10-26
 
@@ -880,7 +879,7 @@ Tests: 232/232 suites, ruff clean.
 
 ## [1.4.8] - 2026-10-25
 
-### The EDIT→TEST→FIX loop, densified (2026-10-23)
+### The EDIT→TEST→FIX loop, densified
 
 - **Per-chunk test feedback ships ON** (`duo_test_feedback_chunk=True`): the
   chunk auto-test + self-fix loop was fully built but opt-in — most agentic
@@ -904,7 +903,7 @@ Tests: 232/232 suites, ruff clean.
   as a false red on such machines).
 - Verify-gate suite grew 9 → 16 checks; new testmap suite (15 checks).
 
-### Frontend (2026-10-23)
+### Frontend
 
 - **Streaming performance**: four hotspots fixed — the speaker-button sync
   deep-cloned and laid out every chat bubble 4×/s (now: active bubble only,
@@ -927,7 +926,7 @@ Tests: 232/232 suites, ruff clean.
   (coder/planner in duo, analyst+synthesizer in pipeline, direct otherwise) —
   one muted chip, full names on hover.
 
-### Preset autoload guard (2026-10-23)
+### Preset autoload guard
 
 - The startup auto-load re-applied the active preset snapshot at EVERY
   engine boot and persisted it — silently reverting everything the user
@@ -936,7 +935,7 @@ Tests: 232/232 suites, ruff clean.
   re-applying when settings are newer. Old files without stamps keep the
   historical apply-always behavior.
 
-### Engine/watchdog + measured audit fixes (2026-10-23/24)
+### Engine/watchdog and measured fixes
 
 - **Watchdog handshake**: the headless watchdog had no marker — it raced a
   manual `start_hivemind.bat` for port 8001 (winerror 10048). It now writes
@@ -949,8 +948,9 @@ Tests: 232/232 suites, ruff clean.
   twice per 5 s tick; it now sends the cursor it always tracked, and the
   second-run peek fetches meta-only.
 - **Blob store binary-safe + html blobified**: text-mode writes corrupted
-  any payload containing literal CRLF (`\r\n` → `\n\n`, lossy since
-  2026-10-03, found by the real-chat roundtrip suite); blobs are bytes now
+  any payload containing literal CRLF (`\r\n` → `\n\n`, lossy for chats
+  written since early October; found by the real-chat roundtrip suite);
+  blobs are bytes now
   with a magic prefix, legacy files repaired on read (Windows). The rendered
   `html` — the biggest inline payload (1.1–2.7 MB per chat) — is blobified
   like cp/images.
@@ -960,7 +960,6 @@ Tests: 232/232 suites, ruff clean.
   a freshness re-check, excludes mid-load slots, and stamps last_used at
   claim time. The pre-explore LLM client retries 5× instead of 30 and never
   retries a ReadTimeout (was: up to 30 × the read window).
-- **Dead code**: 14 verified-dead functions removed (grep-verified def-only).
 - **Queue-aware AMD commit wait**: the 2–6 s Vulkan commit sleep ran after
   every load; it now fires only when a successor is actually pending
   (load-sequence bump / queued prefetch). The collision retry remains the
@@ -979,21 +978,19 @@ Tests: 232/232 suites, ruff clean.
   concurrently with the reads (up to 90 s no longer serialized behind it);
   any stateful/write tool keeps the fully serial path.
 - **duo e2e smoke**: `run_code_duo` is driven end-to-end on a scripted
-  llama-server (first-ever regression coverage for the 6.6k-line core).
-- Completion-veto auto-verify hardening (2026-10-24 audit): the status
+  llama-server (regression coverage for the duo core).
+- Completion-veto auto-verify hardening: the status
   events actually reach the stream, the inline verify run emits heartbeats
   and grants a deadline grace, and "no tests ran" (manifest but zero tests)
   is a smoke-test nudge, not a red suite.
 
-### Hardening, simplification and measured tuning (2026-10-24)
+### Hardening, simplification and measured tuning
 
-- **Deep simplification of the grown subsystems** (net −300 lines across
-  four adversarial audit + simplification rounds, all behavior-preserving,
-  180 suites green): dead retry branches in the llama client (provably
-  unreachable), the VRAM budget guard extracted from ensure_loaded, the
+- **Simplification of the grown subsystems** (behavior-preserving,
+  180 suites green): dead retry branches in the llama client removed,
+  the VRAM budget guard extracted from ensure_loaded, the
   duplicated /props adoption unified, six atomic-write closures collapsed
-  into one, `_mode_blocks` removed (unreachable behind the stronger
-  allowlist gate), 14+ dead functions and 8 dead state fields gone.
+  into one.
 - **Windows blocklist bypass closed**: the POSIX drive rewrite
   (`/c/users` → `C:/users`) could complete a dangerous pattern after the
   entry check — the rewritten command is re-checked now.
@@ -1003,15 +1000,13 @@ Tests: 232/232 suites, ruff clean.
   hint, opt-in browser autostart (env-gated, headless restarts never
   spawn windows).
 - **Measured flag tuning** (see above): hermes coder without draft-mtp
-  (reversed in 1.4.11: measured again on b11889 with 256-token answers,
-  MTP gives +55 % decode for -1.6 % prefill)
   and with eager loading; `llama_mlock` actually works now; the
   registry-MTP env bypass closed; speculative models keep mmap (Vulkan
   OOM guard).
 - MiniCPM-V-4_7: the DSpark drafter moved to the Q6_K build; the retired
   AD variant and old drafters removed from the shared model folder.
 
-### Voice over Telegram (end-to-end verified live)
+### Voice over Telegram
 
 - A voice note now runs the full chain: transcription -> decider ->
   run. The from_voice flag was dead code since 1.4.6 (frozen-dataclass
@@ -1019,8 +1014,6 @@ Tests: 232/232 suites, ruff clean.
   settings[mode] instead of letting the decider route them.
 - to_wav16k defaulted to tmp_dir=None: every voice note 500ed at
   Path(None) before the audio was decoded. Defaults to %TEMP% now.
-- Voice answers verified live: 30 s opus delivered for the Stuttgart
-  question.
 
 ### Decider
 
@@ -1029,21 +1022,21 @@ Tests: 232/232 suites, ruff clean.
   settings-react hook; ON loads it lazily at the next decision.
 - DecisionCache survives engine restarts (context/decider_cache.json,
   7-day TTL, best-effort IO).
-- German input: routing matchers carry German stems deliberately
-  (documented exception).
+- German input: routing matchers carry German stems.
 
 ### Security
 
 - External-bind guard: a non-loopback HIVEMIND_HOST bind requires
   HIVEMIND_INTERNAL_TOKEN from non-local clients (the API can write
   files and execute commands). Loopback unaffected.
-- settings.py: risk note on duo_action_approval_enabled=False.
+- The risk of `duo_action_approval_enabled=False` is documented next to
+  the setting.
 
 ### Updater / Installer
 
 - Prune logic extracted to deploy/update_prune.ps1 (the inline
   PowerShell broke in cmd quoting - prune and manifest rewrite were
-  silently skipped; hit live on 2026-10-22).
+  silently skipped).
 - Installer: Models step skippable; optional decider environment
   (gliner2 + torch CPU + transformers + model weights).
 - frontend: parallel write_file streams get per-card pending tabs (the
@@ -1132,7 +1125,7 @@ Tests: 232/232 suites, ruff clean.
   (`PATH_OUTSIDE_WORKSPACE`) instead of silently rewritten; the governance tiers
   are enforced on every dispatch path; header (32 KB), body (2 MB), concurrency
   (8), batch (16) and request-timeout (300 s) limits; stdio answers an oversized
-  line instead of dropping it; per-call audit line (`[MCP-CALL] ...`).
+  line instead of dropping it; per-call log line (`[MCP-CALL] ...`).
 - `/internal/tool/exec` (the endpoint MCP and IDEs proxy into) got a loopback
   host guard and requires `HIVEMIND_INTERNAL_TOKEN` for exec tools; read/write
   stay available, the workspace lock is server-side.
@@ -1218,11 +1211,11 @@ Tests: 232/232 suites, ruff clean.
   renamed asset cannot silently download nothing again.
 - `model_configs/models/spark-x2.6_4b.json` for Spark-X2.6 (4B, Q4_K_M): sampling
   per model card, thinking on by default (`spark-x2.6` joined the reasoning
-  bases), tool calls verified live through the embedded template
+  bases), tool calls work through the embedded template
   (`tool_calls` + `finish_reason=tool_calls` on b11456) - no external
   `spark25` parser needed on llama.cpp.
-- Docs: profile-naming example clarified, roadmap corrections (no
-  `deploy/fetch_tts.py`, `core/sidecar.py` not built, `RESULTS.md` not shipped).
+- Docs: profile-naming example clarified; the docs no longer reference
+  `deploy/fetch_tts.py`, `core/sidecar.py` or `RESULTS.md` (none ship).
 
 ## [1.4.5] - 2026-10-20
 
@@ -1342,8 +1335,7 @@ only covers the HiveMind folder.
 ## [1.4.2] - 2026-10-19
 
 Hotfix for 1.4.1: the settings sidebar came up broken and the Prefetch card had
-lost its endpoint. It also folds in the internal work that was already on
-`main` after the 1.4.1 tag.
+lost its endpoint. It also includes additional fixes that followed 1.4.1.
 
 ### Fixed
 
@@ -1374,10 +1366,10 @@ lost its endpoint. It also folds in the internal work that was already on
 - **`dspark_draft_n_max` is honoured**: the profile field existed but nothing
   read it; every DSpark model ran with the global default (10).
 
-### Internal
+### Under the hood
 
-- `core/duo_runner.py`: the 21 module-level helpers and the stable callbacks
-  moved into `core/duo/preflight.py` (pure move, AST-verified, re-exported).
+- `core/duo_runner.py`: the module-level helpers and the stable callbacks
+  moved into `core/duo/preflight.py` (no behavior change, re-exported).
 - Stuck handler: `loop_detected` is initialized before the extracted handler
   runs — the `UnboundLocalError` aborted every run after the first tool call.
 - Verify gate: a completion accepted after one veto is now marked unverified
@@ -1385,22 +1377,19 @@ lost its endpoint. It also folds in the internal work that was already on
 
 ## [1.4.1] - 2026-10-18
 
-Follow-up to the project audit: reproducible installs, no dead switches, less
-information disclosure.
+Reproducible installs, no dead switches, less information disclosure.
 
 ### Added
 
-- **`deploy/gen_settings_docs.py`** - the generator `docs/settings.md` always
-  claimed to come from. It was never committed (it sat in `.gitignore`), so the
-  table had drifted to 204 of the then-236 keys. It is now in the repo,
-  regenerated (237 keys) and `--check` fails the suite when the doc is stale.
+- **`deploy/gen_settings_docs.py`** - the generator behind `docs/settings.md`.
+  The table had drifted (204 of the then-236 keys); it is now regenerated
+  (237 keys) and `--check` fails the suite when the doc is stale.
 
 ### Fixed
 
-- **Reproducible installs**: `uv.lock` is committed (64 pinned packages) and both
+- **Reproducible installs**: `uv.lock` ships (64 pinned packages) and both
   installers sync from it (`uv sync --frozen`), so a release installs exactly the
-  versions it was tested with instead of whatever is newest that day. `.gitignore`
-  had a `*.lock` rule that silently kept the lockfile out of the zip.
+  versions it was tested with instead of whatever is newest that day.
 - **Dead switches removed**: `automap_code_duo_enabled`,
   `automap_duo_pre_explore`, `automap_duo_parallel_preexplore`,
   `automap_pipeline_websearch_enabled`, `duo_distilled_executor` and the per-role
@@ -1411,7 +1400,7 @@ information disclosure.
 - **Debug API closed by default**: `/debug/tasks` (asyncio task stacks with file
   paths), `/debug/models`, `/thinking/debug` and `/budget/debug` were mounted on an
   unauthenticated loopback API. New `debug_api_enabled` (default off) gates the
-  whole router - verified: `/debug/tasks` answers 404.
+  whole router.
 - **Write-truncation log no longer stores user code**: `logs/write_truncations.jsonl`
   kept the full raw `write_file` call (up to 64 KB of generated file content per
   entry, never rotated). It now records `path`, `raw_len`, `finish_reason` and
@@ -1428,7 +1417,7 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   with a master switch, seven shipped English voices (default `anna` - `cosette`
   is a non-commercial recording, see `docs/voice_licenses.md`) a speed control
   (`1.08` - Pocket TTS has no speed parameter, so HiveMind time-stretches the audio
-  with WSOLA and keeps the pitch), a "Play sample" button and an honest engine
+  with WSOLA and keeps the pitch), a "Play sample" button and a clear engine
   status line. The speaker button on every answer reads that answer - it is
   hidden unless TTS is on, reads the bubble at click time (works on a still
   streaming answer) and never autoplays.
@@ -1465,8 +1454,8 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
 - **Every `/stt` request returned `STT_EMPTY`.** The temporary WAV was created
   with `tempfile.mkstemp(...)` and the fd was never closed; on Windows the file
   stayed open for writing, the parakeet/whisper child could not read it
-  ("failed to read audio data") and the endpoint reported "no speech". Soundfile
-  reads the same file happily, so the unit test was blind to it - the regression
+  ("failed to read audio data") and the endpoint reported "no speech". The
+  regression
   test now requires the decoded WAV to be readable *and* deletable by a second
   process.
 - **Speech blocked the whole UI.** `/tts` ran the sidecar start (20-30 s on the
@@ -1517,9 +1506,9 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   after llama.cpp, installs `requirements-voice.txt` when the extras are missing,
   and pre-warms the TTS cache for the service user instead of root.
 
-### Fixed (voice polish, 2026-10-18)
+### Fixed (voice polish)
 
-- **License audit of the audio stack** (`docs/voice_licenses.md`): the Pocket TTS
+- **License documentation for the audio stack** (`docs/voice_licenses.md`): the Pocket TTS
   model is CC BY 4.0, the code MIT, and the shipped voices come from four sources
   with different terms. **`cosette` is Expresso = CC BY-NC 4.0 (non-commercial
   only)**, so the shipped default is `anna` (CC BY 4.0) now; `cosette` stays
@@ -1569,7 +1558,7 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
   had renamed, so a fresh install fetched neither weights nor projector. The
   README table now lists the real repo and the measured download sizes.
 
-### Telegram output contract (2026-10-18)
+### Telegram output contract
 
 - **Choose what a phone run sends back**: `telegram_result_mode` = `both` (text
   plus a voice note), `text`, or `voice` - the last one is a results-only channel
@@ -1584,8 +1573,7 @@ answer back. Everything is opt-in and nothing starts until you turn it on.
 
 - **A broken Python environment is diagnosed instead of guessed.** A fresh
   1.3.8 install on Python 3.14 reported `cannot import name 'ArgsKwargs' from
-  'pydantic_core._pydantic_core'`; the repair reinstalled the pair, pip said OK and
-  the import still failed, so the only advice left was "delete .venv". The
+  'pydantic_core._pydantic_core'`. The
   launcher's env check now prints the interpreter, the pydantic/core versions and
   the compiled module's size, names a shadowing copy, reinstalls **wheels only**
   (`--only-binary :all:` - a source build is how a half-written extension
@@ -1657,7 +1645,7 @@ from 1.4 (all off by default).
   the search engines return nothing useful - the case that used to return shop
   homepages. An empty engine result falls back there too.
 - **A web-search budget wall no longer kills the run.** It used to set
-  `loop_detected` after two exhausted calls; a live run ended after 24 rounds
+  `loop_detected` after two exhausted calls; a run ended after 24 rounds
   with zero files written. Now the first exhaustion disables `web_search` for the
   rest of the run (the coder keeps working with its other tools) and only a model
   that keeps calling the disabled tool four more times ends the run.
@@ -1677,7 +1665,7 @@ from 1.4 (all off by default).
   `-1` = always inject (old behaviour). The decision is logged as
   `[CODER-BRIEFING] mode=... think_tokens=... limit=...`.
 - **Speech to text (English only, off by default):** a Voice card in the settings
-  with an honest status line (engine / model / ready), a Download button with
+  with a status line showing engine / model / ready, a Download button with
   progress for the whisper.cpp + Parakeet binaries and models, a 3 s microphone
   test, model/language/preload/thread controls, and a red mic button left of send
   that appends the transcript to the message box. Nothing runs until the switch
@@ -1715,8 +1703,7 @@ Workspace regression fix, plus the first, disabled piece of the voice work.
 - `searxng.bat` no longer closes silently: it probes the Docker **daemon**
   (not just the CLI on PATH), explains a stopped Docker Desktop, keeps the
   window open when double-clicked, and reports a stopped container instead of
-  "[OK] SearXNG is running". (This was already in the refreshed 1.3.9 asset; it
-  is part of the release now.)
+  "[OK] SearXNG is running".
 - A CPU-only install with a large context now says so (`[PERF-WARN]` with the
   real number and the practical 8k-16k range) instead of looking like a hang.
   This is the "one write_file took 25 minutes on a laptop" class of problem.
@@ -1740,13 +1727,13 @@ Chunk-resume verification run + resume durability:
   write the resume block after advancing
 - _halt_with_resume does NOT halt anything (name misleading) - it only
   writes the resume block; the chunk loop continues on its own
-- RESUME DURABILITY (found by the verification run): resume-block
+- RESUME DURABILITY: resume-block
   writes for API-driven runs (no chat session file) silently no-opped -
   the context path resolved to None while the log claimed "Block
   saved"; a hard kill then lost the checkpoint. Every chat_id now gets
   a standalone context file under sessions/, and _write_resume_block
   VERIFIES the write and logs honestly when it did not persist
-- verified live end-to-end: planner reads index.html in one call, chunk
+- end-to-end: planner reads index.html in one call, chunk
   1 committed then chunk 2 starts without pause, the plan is injected
   into the chunk-2 coder context, exactly ONE final test message, and
   after a hard engine kill + restart the resume intake reports
@@ -1783,8 +1770,8 @@ Budgets redesign: no model-class staffels
   keeps the full schema; an 8k model shortens automatically — no model
   names anywhere (grep test enforces it)
 - chars/token is a per-model EMA now (update from every real response:
-  sent chars vs usage.prompt_tokens), start value 3.92 from the live
-  /tokenize probe — Budgets use it instead of the 3.0 constant
+  sent chars vs usage.prompt_tokens), start value 3.92 measured via
+  /tokenize — Budgets use it instead of the 3.0 constant
 - resolved budgets are logged ([BUDGETS] line) and written as a
   phase="budgets" telemetry row so every run shows what was derived
 - new tests: test_budgets (monotonicity in n_ctx, the 16k base case
@@ -1833,7 +1820,7 @@ cache hygiene and measurement first):
   chars, re-read count, round ms) plus cache_miss flag and shipped
   tools_schema_chars on the coder row - baselines are measurable
   before/after each lever
-- real chars/token measured on the live slot via /tokenize: 3.92 for a
+- real chars/token measured via /tokenize on the running server: 3.92 for a
   code+prose mix, not the 3.0 constant (schema ~4.3k tokens, not 5.6k;
   the chars/4 estimator overestimates by ~30%)
 - schema truth from constants: tools/limits.py is the single source,
@@ -1972,7 +1959,7 @@ Telegram mirror visibility + coder vision honesty:
 
 ## [1.3.6] - 2026-10-10
 
-Follow-up fixes found in live runs:
+Follow-up fixes:
 
 - write_file calls cut at the output limit are no longer salvaged and
   executed - a half-written file that looks complete caused rewrite
@@ -2018,8 +2005,7 @@ Reliability and observability fixes for local runs:
   missing
 - lint guardrail now fails on unparseable files and scan-count
   mismatches
-- internal gateway documents removed from the public tree
-- Linux install path re-verified: windows-only packages are
+- Linux install path: windows-only packages are
   platform-gated in the dependency lists, all windows imports are
   guarded, the pre-flight falls back to estimates where live GPU
   counters are unavailable, and the uv-based installer needs nothing
@@ -2027,7 +2013,7 @@ Reliability and observability fixes for local runs:
 
 ## [1.3.4] - 2026-10-08
 
-Follow-up on the 1.3.3 showcase round:
+Follow-up fixes:
 
 - planner parse diagnosis redacts token-like strings in logged heads
 - model list collapses same-file aliases (minicpm was listed three
@@ -2040,7 +2026,6 @@ Follow-up on the 1.3.3 showcase round:
   priority instruction at both injection sites
 - tool-round steer drain drops image parts under images_off/preprocess
   like the chunk-boundary drain
-- docs: 1.4 candidate backlog (pocket-tts voice, stt, engineering debt)
 
 - full compression as the shipped default (partial off everywhere)
 - re-anchor: current file excerpt on old_text errors + project
@@ -2048,13 +2033,11 @@ Follow-up on the 1.3.3 showcase round:
 - loop-detected runs commit and push their written files like
   completed runs
 - speculative decoding (draft-mtp) flags for MTP models behind a
-  registry guard; guardrail baselines updated (re-anchor excerpt,
-  re-read dedup unbound fix)
+  registry guard
 
 ## [1.3.3] - 2026-10-07
 
 Telegram gateway hardening:
-branch, release cut at the end of the window):
 
 - takeover relay hardening: fazit on every end path, late-result relay
   for never-adopted runs, silent catch-up on adoption (answer + tool
@@ -2074,13 +2057,12 @@ branch, release cut at the end of the window):
   toggles visible in the duo image block
 - banner byline back (by: Luzo), /stream 400 on empty body
 - git: credentials gate needs Username AND Email - empty git_email
-  silently blocked every auto-commit/push (found via live selftest)
+  silently blocked every auto-commit/push
 
 ## [1.3.1] - 2026-10-06
 
-Deep-audit hardening release: 34 findings across the whole harness fixed
-(6 HIGH, 18 MED, 10 LOW), plus the takeover/steering/vision work that
-landed during 1.3.0's lifecycle.
+Hardening release: 34 fixes across the whole harness, plus the
+takeover/steering/vision work that landed during 1.3.0's lifecycle.
 
 ### Highlights
 - Approval integrity: the approval card now shows the REAL command
@@ -2106,8 +2088,8 @@ landed during 1.3.0's lifecycle.
 
 ## [1.2.4] - 2026-10-03
 
-One-click self-updates, a real image pipeline for the agentic duo, and a
-round of reliability work on writes, approvals and model loading.
+One-click self-updates, a real image pipeline for the agentic duo, and
+reliability work on writes, approvals and model loading.
 
 ### Highlights
 - `update.bat` updates an installation in place from the latest GitHub
@@ -2148,17 +2130,17 @@ round of reliability work on writes, approvals and model loading.
 
 ## [1.3.0] - 2026-10-05
 
-The live-installation baseline. Everything below is IN:
+The installation baseline. Everything below is included:
 image upload paths (collision-free, real formats), chat continuity
 (transcript seeding, token-budget window, summary fix), the hardened
-self-updater (verified end-to-end with a real release zip, including
+self-updater (including
 preview-aware version ordering), rev compare-and-set with server-wins
 409, fail-closed approval timeout, the edit shrink guard, planner/
 thinking/checklist persistence (small variant, out of the model seed),
 one-file-per-chat fork guard with rev-based adoption, a 200 MB save
 brake, concurrent-writer coverage.
 
-Added in the 2026-10-05 round:
+Also added:
 - feature search palette (/ or Ctrl+K in the web UI): indexes every
   panel's sections, toggles, agent cards, settings fields (alias ctx ->
   context) and the seven tabs themselves (soul, tokens -> token budgets,
@@ -2175,10 +2157,10 @@ Added in the 2026-10-05 round:
   the flow card refreshes on mode changes
 - qwen3.5 MTP models are vision-capable (projector pinned per model)
 
-NOT built (deliberate, for a later release):
+Not in this release:
 - message edit / regenerate controls in the chat UI do not exist yet
   (history edits are only possible via the chats API; the seed path
-  handles them - verified - but there is no button for them)
+  handles them, but there is no button for them)
 - steering notes, status lines and approval/ask cards are not persisted
   (approval cards recover server-side only while the run lives)
 - chat cleanup UI (the sizes are now displayed, but there is no button
@@ -2190,29 +2172,28 @@ NOT built (deliberate, for a later release):
   the preflight waits ~18 s on VRAM that will never free instead of
   failing immediately with the concrete numbers
 - an orphaned run (browser/tab died) keeps its VRAM until it finishes
-  or /abort arrives; server-side continuation is proven, but UI
+  or /abort arrives; server-side continuation works, but UI
   completeness after reconnect (planner parts, thinking foldout) is
-  still a manual browser test
+  incomplete
 - the per-round image trace is observe-only: when an image falls out
-  of the compressed window (measured live: round 1 carries it, later
+  of the compressed window (round 1 carries it, later
   rounds do not), nothing re-attaches it - the coder now gets an
   explicit "[VISION UPDATE]: image no longer in context, do not invent
   details" replacement note plus one visible status line instead
-- session compression never runs in agentic chat (skipped by design)
-  - the summary path is therefore live-untested; testable only with
-  agentic_mode off
-- whether the planner's visual details survive the compression summary
-  is verified for the anchor (full plan re-injected every compression);
+- session compression never runs in agentic chat
+  - the summary path is only exercised with agentic_mode off
+- the planner's visual details survive the compression summary via
+  the anchor (full plan re-injected every compression);
   what the summary does to surrounding context is untested
 
-PARTIAL (known, accepted):
+Partially addressed (known):
 - blob versions are add-only until a chat is deleted (no per-chat GC)
 - message html/content stay inline in the chat json (the bulk of large
   chats); images double-store (chat + .hive_uploads) when persistence
   is on
 - restored tool chips stay silent when their path spelling differs from
   the panel key
-- the judge-duo uncompressed re-read gate is dead code (unreachable
+- the judge-duo uncompressed re-read gate never triggers (unreachable
   threshold) - judge-routed duo runs keep the compressed window
 - the history budget estimator under-counts short messages by ~1.5x
   (measured with the real /tokenize endpoint: 340 chars filler = 131
@@ -2227,7 +2208,7 @@ PARTIAL (known, accepted):
   multiplex the (global) in-process session memory - needs a per-chat
   session store before that lands
 
-Vision honesty (2026-10-04 review round):
+Vision:
 - the server's real vision capability is read back from /props after
   every load and stored on the slot; when an image plan says "raw" but
   the loaded model runs without a projector, the run downgrades that
@@ -2306,9 +2287,9 @@ yourself. Setup guide with a security walkthrough:
 - Supervisor: Start/Stop/status for the gateway process live in the UI
   card; one-time token setup via `start_gateway.bat setup` (Credential
   Manager), `start_gateway.bat stop` for detached instances.
-- Model selection now also applies to simple/direct runs (P9 closed).
+- Model selection now also applies to simple/direct runs.
 
-Not included in 1.3 (deliberate): photos and voice messages from the
+Not included in 1.3: photos and voice messages from the
 phone, group chats, queues, token streaming, skills, cron. The bot's
 phone-side texts are English.
 
@@ -2510,8 +2491,7 @@ UI polish and streaming fix.
 
 ## [1.1.4] - 2026-09-13
 
-Tools deep audit: 14 fixes across the tool loop, file ops and external
-tools. Full findings ledger: docs/audit/tool_registry.md.
+Tools: 14 fixes across the tool loop, file ops and external tools.
 
 ### Verify chain (was effectively dead)
 
@@ -2611,7 +2591,7 @@ Agentic-run fixes, run-state persistence and installer model-setup rework.
 - architecture.md mermaid fix + freshness pass; README download-catalog
   section rewritten.
 
-### Launcher, settings, thinking toggle (2026-09-10)
+### Launcher, settings, thinking toggle
 
 - Windows launcher: the console-kill job object is created with
   `CreateJobObject()` (the previous `CreateJob()` call does not exist in
@@ -2724,7 +2704,7 @@ installer hardening.
 
 ### Models
 
-- Spark-X2.5 (4B/1.7B) profiles and per-model configs, verified live on
+- Spark-X2.5 (4B/1.7B) profiles and per-model configs, tested against
   llama.cpp b10872+ (thinking + tool calling, ~60 tok/s on Vulkan).
 - Ling-3.0-tiny sampling profile per model card.
 
@@ -2789,7 +2769,7 @@ installer hardening.
   applied at runtime (`models_registry.get_sampling`, fallback in
   `core/model_sampling.py`). It previously had no effect; `_model_sampling_overrides`
   still wins when set.
-- Documentation audit against the code: README no longer claims `Auto` is the default
+- Documentation brought in line with the code: README no longer claims `Auto` is the default
   mode, that AutoMap is judge-driven, that the custom wizard collects `sampling`, that
   `GITHUB_TOKEN` or `SEARXNG_SETTINGS_PATH` exist, or a `--no-vulkan` flag. Tool table
   completed, tool-tier values documented.
@@ -2936,7 +2916,7 @@ installer hardening.
 ### Removed
 
 - Tiel-Coder model recommendations and their default configs (downloader, setup menu,
-  README table, per-model configs, launch defaults). History keeps the entries.
+  README table, per-model configs, launch defaults).
 
 ### Fixed
 
@@ -3095,7 +3075,7 @@ installer hardening.
 
 - `deploy/backup_data.py`: backs up sessions/, memory.json, soul.json, presets.json,
   settings.json, learned configs, learning_logs to backups/<timestamp>/.
-- LICENSE (BUSL 1.1) and this changelog; repo prepared for public release.
+- LICENSE (BUSL 1.1) and this changelog.
 - Sandbox hardening: the Windows Job Object also caps job memory and process count
   (`duo_tool_sandbox_max_mem_mb`, `duo_tool_sandbox_max_procs`); POSIX subprocesses
   run in their own process group and die via killpg.

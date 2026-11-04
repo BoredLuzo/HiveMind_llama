@@ -24,6 +24,7 @@ from backend import manager_load as ML                # noqa: E402
 
 ML_SRC = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
 MH_SRC = (ROOT / "backend" / "manager_health.py").read_text(encoding="utf-8")
+SRV = (ROOT / "server.py").read_text(encoding="utf-8")
 UPDATE = (ROOT / "update.bat").read_text(encoding="utf-8")
 
 passed = failed = 0
@@ -178,7 +179,21 @@ finally:
 # ── 7. Updates never touch the user's GGUF directory ─────────────────────────
 _apply = [ln for ln in UPDATE.splitlines() if ln.startswith('robocopy "%EXROOT%"')]
 check("18 the update apply step excludes models/",
-      bool(_apply) and " models " in _apply[0], _apply[0][:90] if _apply else "no line")
+      bool(_apply) and "%EXROOT%\\models" in _apply[0],
+      _apply[0][:110] if _apply else "no line")
+
+# ── 8. cache retry keeps the shared post-start path; stale flag is reset ────
+_retry = ML_SRC.split("moe_cache=False", 1)[-1].split("except Exception", 1)[0]
+check("19 a successful cache retry does not return early",
+      "_cache_retried_ok = True" in ML_SRC and "return slot.port" not in _retry)
+check("20 the AMD/CPU fallbacks are gated on the retry flag",
+      'if not _cache_retried_ok and "exit=-1"' in ML_SRC
+      and "elif not _cache_retried_ok:" in ML_SRC)
+_start = ML_SRC.split("async def _start_process", 1)[-1][:1000]
+check("21 every load clears the per-slot cache flag first",
+      "slot._moe_cache_used = False" in _start)
+check("22 the startup sync accepts the rocm backend",
+      'if _gb in ("vulkan", "cuda", "rocm", "cpu"):' in SRV)
 
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

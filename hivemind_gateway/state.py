@@ -128,7 +128,13 @@ class GatewayState:
             self._load_note = f"state file unreadable, started fresh ({exc})"
             return
         merged = self._empty()
-        merged.update({k: v for k, v in data.items() if k in merged})
+        # FULL-RESTORE (audit 2026-11-03): the old whitelist merged only base
+        # schema keys + six hardcoded extras, so restart silently wiped cron
+        # jobs, the persisted /gate off force, follow_ui, chat pins and the
+        # mode baseline. The file is the gateway's own state - keep every
+        # persisted key and only fill missing defaults.
+        if isinstance(data, dict):
+            merged.update(data)
         # 2026-10-05 (live finding): the bridge persists runtime settings
         # beyond the base schema (tg_chat, mode, tools, verbose,
         # run_overrides, pending_setup). Filtering to schema keys here

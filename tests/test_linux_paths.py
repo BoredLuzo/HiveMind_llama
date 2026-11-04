@@ -110,7 +110,7 @@ def test_source_guards():
         ("hive_functions/language_config.py", "head -30"),
         ("backend/llama_manager_utils.py", "_kill_port_via_proc"),
         ("backend/llama_config.py", '"llama-server"'),
-        ("server.py", '"vulkan", "cuda", "cpu"'),
+        ("server.py", '"vulkan", "cuda", "rocm", "cpu"'),
     ]
     bad = []
     for rel, needle in guards:

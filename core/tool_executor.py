@@ -815,9 +815,7 @@ async def execute_tool_round(
                         if _gate == "allow":
                             _logger.info("[TASK-COMPLETE] accepted without any "
                                          "verification (nudge escalated, tool=%s)", _dname)
-                        else:
-                            result.task_complete_called = True
-                            break
+                        # "block": feedback was injected; keep the round going.
 
                 elif _last_bash_idx <= _last_edit_idx:
                     _gate = _task_complete_ladder(

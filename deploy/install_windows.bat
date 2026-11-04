@@ -47,15 +47,24 @@ if %errorlevel% neq 0 (
     )
 )
 
-:: Check Python
+:: Check Python - the install venv FIRST (uv-managed installs have no python
+:: on PATH, and hivemind_windows.py registers sys.executable for the service),
+:: then whatever python is on PATH.
+set "HMPY="
+if exist "%~dp0..\.venv\Scripts\python.exe" set "HMPY=%~dp0..\.venv\Scripts\python.exe"
+if defined HMPY goto python_ok
 where python >nul 2>&1
 if %errorlevel% neq 0 (
-    echo  [ERROR] python not found in PATH.
+    echo  [ERROR] python not found - run install.bat first ^(it builds .venv^)
+    echo  or put a Python on PATH.
     echo.
     echo  Press any key to continue...
     pause >nul
     exit /b 1
 )
+set "HMPY=python"
+:python_ok
+echo  [OK] Python: %HMPY%
 echo  [OK] All prerequisites found.
 echo.
 echo  Service script:  %~dp0hivemind_windows.py
@@ -72,7 +81,7 @@ if errorlevel 2 (
 echo.
 
 echo  [..] Installing HiveMind service...
-python "%~dp0hivemind_windows.py" install
+"%HMPY%" "%~dp0hivemind_windows.py" install
 
 if %errorlevel% equ 0 (
     echo.

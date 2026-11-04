@@ -19,7 +19,11 @@ echo    H I V E M I N D
 REM Version lives in server.py - single source of truth (R5: plain title,
 REM no build clutter; the byline is back).
 set "HM_VER="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path '%~dp0server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "HM_VER=%%V"
+REM PATH-VIA-ENV (2026-11-04): '%~dp0server.py' inline broke on install paths
+REM with an apostrophe (O'Brien) - the PowerShell single-quoted string ended
+REM early and the version fell back to "dev". The env var carries any path.
+set "HM_SERVER_PY=%~dp0server.py"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path $env:HM_SERVER_PY -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "HM_VER=%%V"
 if not defined HM_VER set "HM_VER=dev"
 echo    by: Luzo ^| v%HM_VER%
 echo    TIP: press Ctrl+K in the web UI to search every feature/setting
@@ -57,6 +61,14 @@ echo  [..] Killing PID %HM_PORT_PID% ...
 REM WATCHDOG HANDSHAKE (audit M3): stop AFTER the "Y" decision - keeping the
 REM instance must keep its watchdog. Re-arm headless with watchdog_engine.bat.
 call watchdog_engine.bat stop
+REM IDENTITY-GUARD (audit 2026-11-03): the port owner may be an unrelated
+REM app. Only kill it when the command line identifies a HiveMind engine.
+powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=%HM_PORT_PID%' -ErrorAction SilentlyContinue; if (-not $p) { exit 0 }; if ($p.CommandLine -match 'server\.py|run\.py|hivemind') { exit 0 } else { exit 1 }"
+if errorlevel 1 (
+    echo  [WARN] The process on port %HM_PORT% is not a HiveMind engine. Not killing it.
+    pause >nul
+    exit /b 1
+)
 taskkill /F /T /PID %HM_PORT_PID%
 powershell -NoProfile -Command "Stop-Process -Id %HM_PORT_PID% -Force -ErrorAction SilentlyContinue"
 
@@ -81,17 +93,21 @@ exit /b 1
 
 REM Find Python: venv first, then py -3.14 (resolved to a real path),
 REM then known install locations. "%PY%" is always quote-safe this way.
+REM PARSE-TIME-FIX (2026-11-04): this chain used to sit in one if/else block
+REM where `if "%PY%"=="python"` read the PARSE-TIME value - the py -3.14
+REM result was then overwritten by the Program Files fallbacks. Flattened to
+REM top-level labels so every %PY% read sees the runtime value.
 set "PY=python"
-if exist "%~dp0.venv\Scripts\python.exe" (
-    set "PY=%~dp0.venv\Scripts\python.exe"
-) else (
-    py -3.14 --version >nul 2>&1
-    if not errorlevel 1 (
-        for /f "delims=" %%X in ('py -3.14 -c "import sys; print(sys.executable)" 2^>nul') do set "PY=%%X"
-    )
-    if "%PY%"=="python" if exist "C:\Program Files\Python314\python.exe" set "PY=C:\Program Files\Python314\python.exe"
-    if "%PY%"=="python" if exist "%LocalAppData%\Programs\Python\Python314\python.exe" set "PY=%LocalAppData%\Programs\Python\Python314\python.exe"
-)
+if exist "%~dp0.venv\Scripts\python.exe" set "PY=%~dp0.venv\Scripts\python.exe"
+if not "%PY%"=="python" goto py_found
+py -3.14 --version >nul 2>&1
+if errorlevel 1 goto py_known_paths
+for /f "delims=" %%X in ('py -3.14 -c "import sys; print(sys.executable)" 2^>nul') do set "PY=%%X"
+:py_known_paths
+if not "%PY%"=="python" goto py_found
+if exist "C:\Program Files\Python314\python.exe" set "PY=C:\Program Files\Python314\python.exe"
+if "%PY%"=="python" if exist "%LocalAppData%\Programs\Python\Python314\python.exe" set "PY=%LocalAppData%\Programs\Python\Python314\python.exe"
+:py_found
 
 "%PY%" --version >nul 2>&1
 if errorlevel 1 (

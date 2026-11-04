@@ -197,3 +197,10 @@ def test_history_seed_compat_matches_provenance(monkeypatch):
         seed, source = history_seed_provenance("16420a06")
         assert source == "json"
         assert history_seed("16420a06") == seed
+
+
+if __name__ == "__main__":
+    # RUNNER (audit 2026-11-03): pytest-style file; the gate used to execute
+    # it as a no-op, so none of these assertions ever ran.
+    import pytest
+    raise SystemExit(pytest.main([__file__, "-q"]))

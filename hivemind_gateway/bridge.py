@@ -1090,6 +1090,22 @@ class RunBridge:
                 self._stop_requested = True
                 return ("⏹ Stop requested - the run will be aborted as soon "
                         "as the engine confirms it.")
+            # ORPHAN-STOP (audit 2026-11-03): after a restart the latch may
+            # be cleared while the engine still runs (adopted as mirror).
+            # /stop must still be able to abort it via the journal.
+            try:
+                _j = await self.hive.journal() if hasattr(self.hive, "journal") else None
+            except (HiveUnreachable, OSError):
+                _j = None
+            _jid = ""
+            if isinstance(_j, dict) and _j.get("active") and not _j.get("done"):
+                _jid = str(_j.get("run_id") or "")
+            if _jid:
+                try:
+                    await self.hive.abort_run(_jid)
+                    return f"⏹ Abort sent for {_jid}."
+                except (HiveUnreachable, OSError, HTTPError) as exc:
+                    return f"❌ /stop failed ({exc}) - the run may still be running."
             return "No run active."
         try:
             resp = await self.hive.abort_run(rid)

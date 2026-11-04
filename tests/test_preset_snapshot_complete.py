@@ -33,6 +33,16 @@ _GET_ONLY = {"settings_rev", "git_token_saved", "moe_pins", "moe_autodetect",
              "moe_expert_defaults", "ctx_defaults"}
 _EXPECTED_EXCLUDED = {"git_token", "_registry", "models_dir",
                       "image_processing_mode", "vision_agent_mode",
+                      # SECURITY-POSTURE (audit 2026-11-03): a shared preset
+                      # must not flip approvals/phone restrictions or add an
+                      # MCP server.
+                      "duo_action_approval_enabled",
+                      "duo_action_approval_timeout_s",
+                      "telegram_phone_restricted",
+                      "telegram_approval_mode",
+                      "telegram_gateway_enabled",
+                      "mcp_client_enabled", "mcp_servers",
+                      "lsp_forward_workspace_settings", "workspace",
                       # BOOKKEEPING (2026-10-28): written by the apply path
                       # itself, never stored in a snapshot
                       "active_preset", "settings_saved_at", "preset_applied_at"}
@@ -52,8 +62,8 @@ try:
     check("no GET-only decoration leaks in",
           not (_GET_ONLY & set(snap)), f"({sorted(_GET_ONLY & set(snap))})")
 
-    # nested structures survive as-is
-    for k in ("agents", "mcp_servers", "automap_excluded", "ctx_overrides"):
+    # nested structures survive as-is (security-posture keys excluded above)
+    for k in ("agents", "automap_excluded", "ctx_overrides"):
         if k in DEFAULT_SETTINGS:
             a = DEFAULT_SETTINGS[k]
             b = snap.get(k)

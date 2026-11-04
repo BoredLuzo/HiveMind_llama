@@ -38,6 +38,27 @@ if errorlevel 1 (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
+REM ZIP-VERSION CROSS-CHECK (audit 2026-11-04): the file NAME above comes
+REM from the working-tree server.py, but git archive packs HEAD. An
+REM uncommitted version bump produced HiveMind_v1.5.2_release.zip that
+REM actually CONTAINED the 1.5.1 build - update.bat then backed up and
+REM verified against the wrong version. The packaged server.py must match.
+set "ZIPVER="
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $e = $z.Entries | Where-Object { $_.FullName -eq ($env:ROOTNAME + '/server.py') } | Select-Object -First 1; if ($e) { $s = New-Object System.IO.StreamReader($e.Open()); $t = $s.ReadToEnd(); $s.Dispose(); $m = [regex]::Match($t, 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)'); if ($m.Success) { $m.Groups[1].Value } }; $z.Dispose()"`) do set "ZIPVER=%%V"
+if not defined ZIPVER (
+    echo  [ERROR] The packaged server.py carries no HIVEMIND_VERSION.
+    del "..\%OUT%"
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+if not "%ZIPVER%"=="%VER%" (
+    echo  [ERROR] Zip name says %VER% but the packaged server.py is %ZIPVER% -
+    echo         the version bump is not committed. Commit it and rebuild;
+    echo         the zip was deleted, nothing was published.
+    del "..\%OUT%"
+    echo  Press any key to continue... & pause >nul & exit /b 1
+)
+echo  [OK] zip version matches the name: %ZIPVER%
+
 REM SAFETY CHECK: the zip must not contain any user-state file.
 REM Gateway entries (2026-10-05, WP1): gateway.toml (owner config) and the
 REM state/audit/kill-switch files. The tracked gateway.toml.example does

@@ -12,6 +12,10 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 from hivemind_gateway.bridge import RunBridge
 from hivemind_gateway.config import GatewayConfig
@@ -99,6 +103,9 @@ class FakeHive:
     async def abort_run(self, run_id):
         self.aborts.append(run_id)
         return FakeResponse(200, {"ok": True})
+
+    async def get_models(self):
+        return {"models": ["m-one", "m-two", "m-three"], "profiles": []}
 
 
 class FakeBridge(RunBridge):
@@ -218,7 +225,8 @@ async def t_recover():
     gw.hive.journal_body = {"active": True, "run_id": "orph-1",
                             "done": False, "aborted": False, "ts": 1.0}
     await recover_orphan_run(gw)
-    check("still-active orphan kept", st.data["active_run"]["run_id"] == "orph-1")
+    check("still-active orphan adopted as mirror (latch cleared)",
+          st.data.get("active_run") is None)
     check("owner warned about orphan",
           any("orph-1" in t and "stop" in t.lower() for _, t in api.sent))
 
@@ -538,6 +546,31 @@ async def t_recover_deny():
           st.data.get("open_approvals") == {})
 
 
+async def t_slash_and_pending():
+    """2026-11-04: a slash prompt never runs; /setModel + separate number is
+    consumed as the argument instead of starting a run."""
+    gw, st, api = _gw("gwcmd_slash_")
+    await gw.start_owner_run(_p("/definitely-not-a-command"))
+    check("unknown slash starts no run", gw.bridge.runs == [])
+    check("unknown slash is rejected",
+          any("Unknown command" in t for _, t in api.sent))
+
+    api.sent.clear()
+    await gw.handle_owner_update(_p("/setModel", 2))
+    check("setModel without a number asks for it",
+          (gw._pending_cmd or {}).get("name") == "setmodel")
+    check("ask-back starts no run", gw.bridge.runs == [])
+
+    api.sent.clear()
+    await gw.start_owner_run(_p("2", 3))
+    check("the numeric answer is consumed, not run",
+          gw._pending_cmd is None and gw.bridge.runs == [],
+          f"(pending={gw._pending_cmd}, runs={gw.bridge.runs})")
+    check("the numeric answer applied the model",
+          any("Model set: m-two" in t for _, t in api.sent),
+          f"({[t[:40] for _, t in api.sent]})")
+
+
 async def _main():
     await t_new()
     await t_status_verbose()
@@ -552,6 +585,7 @@ async def _main():
     await t_f4_callback()
     t_stop_verb()
     await t_recover_deny()
+    await t_slash_and_pending()
     await t_help()
     await t_setup_token()
 

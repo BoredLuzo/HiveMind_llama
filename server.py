@@ -25,6 +25,7 @@ import logging
 import traceback
 import sys
 import os
+import hmac
 import time
 import re
 import uuid
@@ -285,10 +286,6 @@ from hive_functions.soul_engine import (
 try:
     from hive_functions.git_tools import (
         exec_git_commit,
-        get_git_diff_ctx,
-        get_git_diff_ctx_async,
-        get_git_log_oneline,
-        get_git_log_oneline_async,
         exec_git_reset,
         exec_git_checkout,
         exec_git_stash,
@@ -298,10 +295,6 @@ try:
 except ImportError:
     _GIT_TOOLS_AVAILABLE = False
     exec_git_commit = None           # type: ignore[assignment,misc]
-    get_git_diff_ctx = None          # type: ignore[assignment,misc]
-    get_git_diff_ctx_async = None    # type: ignore[assignment,misc]
-    get_git_log_oneline = None       # type: ignore[assignment,misc]
-    get_git_log_oneline_async = None # type: ignore[assignment,misc]
     exec_git_reset = None
     exec_git_checkout = None
     exec_git_stash = None
@@ -393,7 +386,7 @@ def _sync_backend_runtime_config() -> None:
                     _gb,
                 )
             _gb = ""
-        if _gb in ("vulkan", "cuda", "cpu"):
+        if _gb in ("vulkan", "cuda", "rocm", "cpu"):
             _lc_init.GPU_BACKEND = _gb
             _lsm_init.GPU_BACKEND = _gb
             # GPU-BACKEND-IMPORT-COPY-FIX (2026-09-08): manager_load reads the
@@ -910,6 +903,9 @@ async def _startup():
     try:
         from backend.llama_server_manager import manager as _lsm_startup
         await _lsm_startup.startup_cleanup()
+        # IDLE-MONITOR (audit 2026-11-03): start_idle_monitor had no caller,
+        # so idle eviction and the pending-prefetch drain never ran.
+        _lsm_startup.start_idle_monitor()
     except Exception as _sc_err:
         logger.warning("startup_cleanup failed: %s", _sc_err)
 
@@ -1314,16 +1310,24 @@ _RUN_JOURNAL: dict = {}
 _RUN_JOURNAL_KEEP_S = 1800
 _RUN_JOURNAL_MAX_RUNS = 6
 _RUN_JOURNAL_MAX_FRAMES = 20000
+_RUN_JOURNAL_MAX_BYTES = 8 * 1024 * 1024   # per run, frames are raw SSE strings
+_RUN_JOURNAL_MAX_PENDING = 2000            # frames before run_id is known
 
 
 def _run_journal_touch(run_id: str) -> dict:
     reg = _RUN_JOURNAL.get(run_id)
     if reg is None:
-        reg = {"frames": [], "done": False, "aborted": False, "ts": time.time()}
+        reg = {"frames": [], "done": False, "aborted": False, "ts": time.time(),
+               "bytes": 0}
         _RUN_JOURNAL[run_id] = reg
         try:
             while len(_RUN_JOURNAL) > _RUN_JOURNAL_MAX_RUNS:
-                _oldest = min(_RUN_JOURNAL, key=lambda k: _RUN_JOURNAL[k]["ts"])
+                # Prefer finished runs; never evict a live one while a
+                # finished journal is available (audit 2026-11-03).
+                _finished = [k for k, r in _RUN_JOURNAL.items()
+                             if r.get("done") or r.get("aborted")]
+                _pool = _finished or list(_RUN_JOURNAL)
+                _oldest = min(_pool, key=lambda k: _RUN_JOURNAL[k]["ts"])
                 _RUN_JOURNAL.pop(_oldest, None)
         except Exception:
             pass
@@ -1348,6 +1352,9 @@ async def vram_kill_all_ep(all: bool = False):
     try:
         from backend.llama_server_manager import manager as _sm
         await _sm.shutdown()
+        # shutdown() cancels the idle task; a purge should not disable idle
+        # eviction for the rest of the process lifetime.
+        _sm.start_idle_monitor()
     except Exception as _se:
         logger.debug("[VRAM-PURGE] manager shutdown: %s", _se)
     logger.info("[VRAM-PURGE] killed: %s", (_res or {}).get("killed", []))
@@ -1375,6 +1382,10 @@ async def stream(req: Request):
         raise HTTPException(status_code=400, detail="JSON body must be an object")
     q = body.get("q", "")
     images = body.get("images", [])
+    # JOURNAL-CHAT-ID (audit 2026-11-03): the UI needs to know which chat a
+    # detached run belongs to - attaching the newest journal regardless of
+    # the open chat folded foreign frames into the wrong transcript.
+    _journal_chat_id = str(body.get("chat_id") or "")
     # IMAGE INTAKE CAP (2026-10-06 audit): /stream used to take ANY image
     # list unbounded — a huge body flowed straight into the run and every
     # downstream model POST. Same per-image ceiling as the steer route
@@ -1645,22 +1656,32 @@ async def stream(req: Request):
                                 _state["jr_id"] = str(_jd.get("run_id") or "")
                                 if _state["jr_id"]:
                                     _state["jr_reg"] = _run_journal_touch(_state["jr_id"])
+                                    _state["jr_reg"]["chat_id"] = _journal_chat_id
                                     _state["jr_reg"]["frames"].extend(_state["jr_pending"])
                                     _state["jr_pending"] = []
                         except Exception:
                             pass
                     if _state["jr_reg"] is not None:
                         _state["jr_reg"]["frames"].append(_chunk)
+                        _state["jr_reg"]["bytes"] = int(
+                            _state["jr_reg"].get("bytes") or 0) + len(_chunk)
                         # TG-AUDIT (2026-10-07): logical frame count - the
                         # window slice below keeps len(frames) pinned at the
                         # cap, clients need the true count to stay in sync.
                         _state["jr_reg"]["n_total"] = int(
                             _state["jr_reg"].get("n_total") or 0) + 1
                         _state["jr_reg"]["ts"] = time.time()
-                        if len(_state["jr_reg"]["frames"]) > _RUN_JOURNAL_MAX_FRAMES:
-                            _state["jr_reg"]["frames"] = _state["jr_reg"]["frames"][-_RUN_JOURNAL_MAX_FRAMES:]
+                        _fr = _state["jr_reg"]["frames"]
+                        while _fr and (len(_fr) > _RUN_JOURNAL_MAX_FRAMES
+                                       or int(_state["jr_reg"].get("bytes") or 0)
+                                       > _RUN_JOURNAL_MAX_BYTES):
+                            _dropped = _fr.pop(0)
+                            _state["jr_reg"]["bytes"] = int(
+                                _state["jr_reg"].get("bytes") or 0) - len(_dropped)
                     elif not _state["jr_id"]:
                         _state["jr_pending"].append(_chunk)
+                        if len(_state["jr_pending"]) > _RUN_JOURNAL_MAX_PENDING:
+                            _state["jr_pending"] = _state["jr_pending"][-_RUN_JOURNAL_MAX_PENDING:]
             except Exception:
                 pass
 
@@ -1766,6 +1787,10 @@ async def stream(req: Request):
                     yield f"data: {json.dumps({'type': 'status', 'content': '⚠️ Internal stream error — fallback answer sent.'}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'error', 'content': _err}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'done', 'elapsed': 0, 'stop_reason': 'error'}, ensure_ascii=False)}\n\n"
+                    # TERMINAL (audit 2026-11-03): without this break the
+                    # consumer waited on an empty queue forever, so the SSE
+                    # response never closed after a producer error.
+                    break
                 else:  # done
                     break
         finally:
@@ -1843,6 +1868,7 @@ async def run_journal(run_id: str = "", after: int = 0):
             "done": bool(reg["done"]),
             "aborted": bool(reg["aborted"]),
             "ts": float(reg["ts"]),
+            "chat_id": str(reg.get("chat_id") or ""),
             "frames": list(_frames[max(0, int(after) - _base):]),
         }
     except Exception as e:
@@ -2091,11 +2117,46 @@ async def v1_chat_completions(req: Request):
     use_agent    = raw_model == "agent" or raw_model.startswith("agent:")
 
     if use_agent:
+        # V1-AGENT-TOKEN (audit 2026-11-03): agent mode hands the local model
+        # run_bash/run_python/MCP tools. Without a token every local process
+        # could drive them (and _external_dispatch skips the approval gate).
+        # Same policy as /internal/tool/exec: disabled unless configured.
+        _v1_tok = os.environ.get("HIVEMIND_INTERNAL_TOKEN", "").strip()
+        if not _v1_tok:
+            return JSONResponse(
+                {"error": "agent mode is disabled without HIVEMIND_INTERNAL_TOKEN "
+                          "(read-only /v1 chat stays available)"},
+                status_code=403)
+        _v1_given = req.headers.get("x-hivemind-internal-token", "").strip()
+        if not hmac.compare_digest(_v1_given, _v1_tok):
+            return JSONResponse(
+                {"error": "invalid X-Hivemind-Internal-Token"}, status_code=403)
         return await _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_stream)
     elif use_pipeline:
         return JSONResponse({"error": "pipeline mode not yet implemented"}, status_code=501)
     else:
         return await _v1_direct_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_stream)
+
+
+@app.get("/lsp/status", include_in_schema=False)
+async def lsp_status_ep():
+    """Installed/missing language servers for the settings card.
+
+    LSP-STATUS (2026-11-03): the card listed install commands but never told
+    the user which servers their machine actually has. Read-only: available()
+    is which()-only and never starts a process.
+    """
+    try:
+        from infra import lsp_registry as _lreg
+        from core.state import settings as _st
+        _rows = _lreg.available(dict(_st.get("lsp_servers") or {}))
+        return {"ok": True,
+                "enabled": bool(_st.get("lsp_enabled", True)),
+                "rows": _rows}
+    except (ImportError, OSError, TypeError, ValueError) as _lsp_exc:
+        logger.warning("[LSP-STATUS] failed: %s", _lsp_exc)
+        return JSONResponse({"ok": False, "error": str(_lsp_exc)[:200]},
+                            status_code=500)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -2544,8 +2605,14 @@ async def gateway_stop():
         "    { 'recycled' } else { 'py' }"
         " }"
     )
-    _chk = subprocess.run(["powershell", "-NoProfile", "-Command", _ps],
-                          capture_output=True, text=True, timeout=20)
+    try:
+        _chk = await asyncio.to_thread(
+            subprocess.run, ["powershell", "-NoProfile", "-Command", _ps],
+            capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        return JSONResponse(
+            {"ok": False, "error": "gateway liveness probe timed out"},
+            status_code=504)
     _verdict = _chk.stdout.strip()
     if _verdict not in ("py", "recycled", "no"):
         _verdict = "ps-error: " + (_chk.stderr.strip()[:120]
@@ -2567,8 +2634,14 @@ async def gateway_stop():
         return JSONResponse(
             {"ok": False, "error": "gateway process not found - status reset"},
             status_code=409)
-    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                   capture_output=True, timeout=20)
+    try:
+        await asyncio.to_thread(subprocess.run,
+                                 ["taskkill", "/F", "/T", "/PID", str(pid)],
+                                 capture_output=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        return JSONResponse(
+            {"ok": False, "error": "gateway kill timed out"},
+            status_code=504)
     _sup.clear()
     return {"ok": True}
 

@@ -32,7 +32,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `disable_thinking_in_planner` | bool | `False` | - |  |
 | `document_max_chars` | int | `120000` | - | PDF/text extraction limits (engine /documents/extract). The gateway sends bytes, the engine answers text or a DOC_* code. |
 | `document_max_pages` | int | `40` | - |  |
-| `duo_action_approval_enabled` | bool | `False` | yes | When on, the run pauses before everything that changes the project — code/cmd execution (run_bash, run_python, install_package, start_background), file writes (write_file, edit_file, write_file_append) and git_commit. "Approve" buttons: once, or remember EXACTLY this call for… |
+| `duo_action_approval_enabled` | bool | `False` | yes | When on, the run pauses before everything that changes the project — code/cmd execution (run_bash, run_python, install_package, start_background, run_tests), file writes (write_file, edit_file, write_file_append), git_commit and dynamic MCP tools. "Approve" buttons: once, or… |
 | `duo_action_approval_timeout_s` | int | `0` | yes | Auto-DENY an unanswered approval card after N seconds (0 = off, attended runs wait as before). With N > 0 and nobody at the desk the gated call is DENIED once (fail closed, review: the old auto-approve-once behavior approved unseen actions) - the gate wait ends… |
 | `duo_agentic_mode` | bool | `True` | yes | DEFAULT-SUBMODE: the agentic coder (one model, solo in VRAM) is the default; the Critic-Duo is one click away and costs a second model. |
 | `duo_agentic_thinking` | bool | `False` | yes |  |
@@ -46,8 +46,8 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_coder_ctx_normal` | null | `None` | yes |  |
 | `duo_coder_explore_chars` | int | `0` | yes |  |
 | `duo_coder_fallback_model` | str | `` | - |  |
-| `duo_coder_images_off` | bool | `False` | yes | Owner toggle : hard "the coder takes NO images" — plan says none for the coder, the coder slot never loads the projector, and image-carrying steers to the coder are dropped. Saves the mmproj VRAM even when an image arrives in the run. |
-| `duo_coder_model` | str | `` | yes | Explizit in DEFAULT_SETTINGS aufgedeckte Automatik-/Override-Keys (previously only implicit read fallbacks in the consumers). |
+| `duo_coder_images_off` | bool | `False` | yes | Explicit toggle : hard "the coder takes NO images" — plan says none for the coder, the coder slot never loads the projector, and image-carrying steers to the coder are dropped. Saves the mmproj VRAM even when an image arrives in the run. |
+| `duo_coder_model` | str | `` | yes | Automatic/override keys that DEFAULT_SETTINGS now exposes explicitly (previously only implicit read fallbacks in the consumers). |
 | `duo_coder_tool_thinking` | bool | `False` | yes |  |
 | `duo_coder_tool_thinking_auto_mode` | str | `off` | yes |  |
 | `duo_coder_ttl_seconds` | int | `0` | yes | 0 = auto (420s), >0 = Override |
@@ -80,18 +80,18 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_noop_hint_enabled` | bool | `True` | yes | NO-OP hint : injects a read_file nudge after 2x ineffective edits on the same path (Python run-state, compression-proof). |
 | `duo_pair` | str | `focused` | yes | UI state only: remembers the Duo "pair" selector position. The same request also sets agents.duo_coder.model, which IS what the engine reads. |
 | `duo_parallel_preexplore` | bool | `False` | yes |  |
-| `duo_partial_compression` | bool | `False` | yes | CACHE-FRIENDLY : protect the llama.cpp prefix cache. LEGACY-REMOVAL : duo_cache_friendly_ctx entfernt — Compression-first is the only regime. - duo_partial_compression: condense only the old part, keep the raw tail byte-identisch am Ende behalten… |
+| `duo_partial_compression` | bool | `False` | yes | CACHE-FRIENDLY : protect the llama.cpp prefix cache. LEGACY-REMOVAL : duo_cache_friendly_ctx was removed — compression-first is the only regime. - duo_partial_compression: condense only the old part and keep the raw tail byte-identical at the end (KV… |
 | `duo_partition_max_files` | int | `30` | yes |  |
 | `duo_pass_explore_files` | str | `touched` | yes |  |
 | `duo_peer_ratings_agentic` | bool | `False` | yes |  |
-| `duo_pin_static_map` | bool | `True` | yes | REPO-MAP-PIN : put "## Static Repo-Map" into the system message (byte-stabil = cache-stabil ueber Kompressionen). Deltas/TODO-Konsolidierung siehe core/repomap_pin.py. Baseline : post-compress cached was ~6905/7137 (system+tools)… |
+| `duo_pin_static_map` | bool | `True` | yes | REPO-MAP-PIN : put "## Static Repo-Map" into the system message (byte-stable = cache-stable across compressions). Deltas/TODO consolidation see core/repomap_pin.py. Baseline : post-compress cached was ~6905/7137 (system+tools) and… |
 | `duo_planner_ctx_cap` | null | `None` | - |  |
 | `duo_planner_ctx_target` | null | `None` | yes |  |
 | `duo_planner_default_thinking` | bool | `True` | - |  |
 | `duo_planner_enabled` | bool | `True` | yes | Planner on/off for the request path (server.py reads this key). DEFAULT-PLANNER: plan first. The planner shares the coder context (duo_planner_use_coder_ctx), so this costs no second model load. |
 | `duo_planner_ensure_load_timeout_s` | int | `300` | - |  |
 | `duo_planner_max_steps` | int | `0` | yes |  |
-| `duo_planner_max_tokens` | int | `8000` | yes | PLANNER-OUTPUT-BUDGET (0.99.2, User-Entscheidung): sichtbares Aufgabenbudget |
+| `duo_planner_max_tokens` | int | `8000` | yes | PLANNER-OUTPUT-BUDGET (0.99.2, user decision): visible task budget |
 | `duo_planner_model` | null | `None` | yes |  |
 | `duo_planner_thinking_budget` | int | `8000` | - | Thinking → hermes-MoE thought until the 600s wall timeout and delivered empty output. 4k was too tight for complex plans → 8k default . |
 | `duo_planner_thinking_timeout_s` | int | `600` | - |  |
@@ -120,13 +120,13 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_run_timeout_seconds` | int | `420` | yes |  |
 | `duo_runtime_profile` | str | `balanced` | - |  |
 | `duo_soft_planner_wall_timeout_s` | int | `300` | - |  |
-| `duo_static_map_chars` | int | `0` | yes | 0 = Tier-abgeleitet (rich: 8000); >0 = explizites Static-Repo-Map-Char-Budget |
+| `duo_static_map_chars` | int | `0` | yes | 0 = tier-derived (rich: 8000); >0 = explicit static repo-map char budget |
 | `duo_symbol_ref_enabled` | bool | `True` | - |  |
 | `duo_symbol_ref_max_items` | int | `120` | - |  |
 | `duo_symbol_ref_top_k` | int | `2` | - |  |
 | `duo_test_feedback` | bool | `False` | yes |  |
 | `duo_test_feedback_chunk` | bool | `True` | yes | LOOP-DEFAULT : per-chunk auto-test + self-fix now ships ON. The EDIT→TEST→FIX loop is this harness's core idea — the per-chunk verify (and the edit→test mapping) only ran for users who found this toggle, so most agentic runs finished without any test feedback. Both… |
-| `duo_test_feedback_final` | bool | `True` | yes | TESTING-DEFAULT : finaler Auto-Test standardmaessig aktiv — |
+| `duo_test_feedback_final` | bool | `True` | yes | TESTING-DEFAULT : the final auto-test is on by default — |
 | `duo_thinking_per_chunk` | bool | `False` | yes |  |
 | `duo_tool_autopromote_max_rounds` | int | `4` | - |  |
 | `duo_tool_output_ttl` | int | `3` | - |  |
@@ -155,7 +155,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `duo_wedge_handoff_streak_threshold` | int | `4` | - |  |
 | `duo_wedge_handoff_timeout_s` | int | `900` | - |  |
 | `duo_worker_slots` | int | `2` | - |  |
-| `duo_write_chars_per_token` | float | `2.5` | - | truncated at the output-token limit (finish_reason=length → DROPPED → loop), Token-Budget gekoppelt: max_chars ≈ budget_tokens * Faktor - Overhead. Sprung; Deckel 3.3 (dokumentierter Realwert). |
+| `duo_write_chars_per_token` | float | `2.5` | - | truncated at the output-token limit (finish_reason=length -> DROPPED -> loop), coupled to the token budget: max_chars ~ budget_tokens * factor - overhead. Step; cap 3.3 (documented measured value). |
 | `duo_write_guard_enabled` | bool | `True` | yes | WRITE-GUARD duo_full : blocks write_file on existing files never seen in this run (rollback lever like duo_error_rollup / duo_pin_static_map). False = old behavior (blind write_file allowed). |
 | `exploration_agent` | object | `{...}` | yes |  |
 | `git_auto_push` | bool | `False` | yes |  |
@@ -215,11 +215,11 @@ its comment) in `settings.py`, then re-run the generator.
 | `prefetch_lead_seconds` | float | `8.0` | yes |  |
 | `preload_workers_after_run` | bool | `False` | yes |  |
 | `read_guard_enabled` | bool | `True` | - |  |
-| `routing_decider` | str | `off` | yes | ── ROUTING : zwei unabhaengige Entscheider, beide schaltbar ── Der LLM-Judge kostet einen Modell-Load in den VRAM (60 s + Verdraengung) und liefert Text, der geparst werden muss. Der Decider ist ein Encoder (GLiNER2.5, CPU, ~0.5-1.2 s, kein VRAM) und optional… |
+| `routing_decider` | str | `off` | yes | ── ROUTING : two independent deciders, each switchable ── The LLM judge costs a model load into VRAM (60 s + eviction) and returns text that has to be parsed. The decider is an encoder (GLiNER2.5, CPU, ~0.5-1.2 s, no VRAM) and is optional (pip install… |
 | `routing_decider_model` | str | `fastino/GLiNER2.5-Decide` | - |  |
-| `routing_decider_threshold` | float | `0.55` | yes | Unter dieser Konfidenz wird die Entscheidung als unsicher markiert (und geht an den Judge, falls aktiv). Kalibriert auf die Multi-Label-Aktions-Labels: Treffer lagen bei 0,49-0,92 (Median 0,72) - 0,85 haette fast alles eskaliert. |
+| `routing_decider_threshold` | float | `0.55` | yes | Below this confidence the decision is marked uncertain (and goes to the judge when active). Calibrated on the multi-label action labels: hits were 0.49-0.92 (median 0.72) - 0.85 would have escalated almost everything. |
 | `routing_judge` | str | `on` | yes |  |
-| `routing_planner` | str | `auto` | yes | Wer entscheidet, ob ein Planner gebraucht wird? auto = Decider, wenn er laeuft, sonst Judge (spart den GPU-Hit) decider \| judge = fest always \| never = Planner immer / nie |
+| `routing_planner` | str | `auto` | yes | Who decides whether a planner is needed? auto = decider when running, otherwise judge (avoids the GPU hit) decider \| judge = fixed always \| never = planner always / never |
 | `run_bash_shell` | str | `auto` | - | run_bash shell on Windows: "auto" = Git Bash when present (small models emit POSIX bash; powershell chokes on every line), else powershell. "bash"/"powershell" force one. |
 | `safe_profile_matrix_file` | str | `model_configs/safe_profile_matrix.json` | - |  |
 | `safe_profile_policy` | str | `default_8gb_v1` | - |  |

@@ -77,6 +77,18 @@ _UI_REV_PROTECTED_KEYS = {
 # preset never carries it.
 _PRESET_NEVER_KEYS = {"git_token", "_registry", "models_dir",
                       "image_processing_mode", "vision_agent_mode",
+                      # SECURITY-POSTURE (audit 2026-11-03): a shared preset
+                      # must not be able to disable approvals / phone
+                      # restrictions or add an MCP server (spawn = RCE) on
+                      # the next apply. These keys stay local to the install.
+                      "duo_action_approval_enabled",
+                      "duo_action_approval_timeout_s",
+                      "telegram_phone_restricted",
+                      "telegram_approval_mode",
+                      "telegram_gateway_enabled",
+                      "mcp_client_enabled", "mcp_servers",
+                      "lsp_forward_workspace_settings",
+                      "workspace",
                       # BOOKKEEPING (2026-10-28, preset audit): these three are
                       # written by the apply path itself (active_preset, both
                       # stamps). In the snapshot they froze the saving moment
@@ -354,9 +366,50 @@ def preset_autoload_stale(applied_at, saved_at) -> bool:
         return str(saved_at) > str(applied_at)
 
 
+def _redact_mcp_servers(servers) -> list:
+    """Mask MCP auth headers/env values for GET /settings (audit 2026-11-03).
+
+    GET /mcp/servers already redacted these; /settings echoed them verbatim
+    into the browser (and preset exports carried the whole list). Presets no
+    longer carry mcp_servers; this is the read-path mask.
+    """
+    out = []
+    if not isinstance(servers, list):
+        return out
+    for _sv in servers:
+        if not isinstance(_sv, dict):
+            out.append(_sv)
+            continue
+        _c = copy.deepcopy(_sv)
+        for _k in ("headers", "env"):
+            if isinstance(_c.get(_k), dict):
+                _c[_k] = {_ik: "***" for _ik in _c[_k]}
+        _args = _c.get("args")
+        if isinstance(_args, list):
+            _mask_next = False
+            _new_args = []
+            for _a in _args:
+                _s = str(_a)
+                if _mask_next:
+                    _new_args.append("***")
+                    _mask_next = False
+                    continue
+                if _s.lower() in ("--api-key", "--token", "--password", "--secret"):
+                    _mask_next = True
+                elif any(_s.lower().startswith(p) for p in (
+                        "--api-key=", "--token=", "--password=", "--secret=")):
+                    _s = _s.split("=", 1)[0] + "=***"
+                _new_args.append(_s)
+            _c["args"] = _new_args
+        out.append(_c)
+    return out
+
+
 @router.get("/settings")
 async def get_settings():
     s = dict(settings)
+    if "mcp_servers" in s:
+        s["mcp_servers"] = _redact_mcp_servers(s.get("mcp_servers"))
     # SECURITY (UX-FIX 2026-10-07, user feedback: git fields must not reset on save): the masked '****' read as a broken tiny credential. The
     # field now arrives EMPTY with an explicit saved flag; the panel
     # shows the state as a placeholder instead of a fake value.

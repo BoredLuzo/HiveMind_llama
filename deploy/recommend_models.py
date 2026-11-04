@@ -108,7 +108,7 @@ def collect(vram_gb: float, ram_gb: float) -> list[dict]:
             verdict = "Experten/Teile im RAM (langsamer, aber machbar)"
             score = 2 if moe else 2
         else:
-            verdict = "zu gross fuer diese Maschine"
+            verdict = "too large for this machine"
             score = 1
         if tps >= 20:
             score += 1

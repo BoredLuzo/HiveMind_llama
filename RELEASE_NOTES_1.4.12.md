@@ -10,7 +10,7 @@ diagnosable, presets became safe to re-save, and several silent bugs are gone.
 ## If you come from 1.4.9: what 1.4.10 and 1.4.11 already brought
 
 - **Chunking** (opt-in, `duo_chunking`) plans only what the request names, a
-  chunk is done after its test verdict, the last chunk needs the critic's
+  chunk is done after its test result, the last chunk needs the critic's
   approval like every other, and both chunking and pre-explore ship off.
 - **MCP client** (beta, off by default): use external MCP servers as tools
   over stdio or Streamable HTTP, with a config card in the UI, paginated tool
@@ -91,8 +91,7 @@ diagnosable, presets became safe to re-save, and several silent bugs are gone.
   added. A slot could therefore be evicted in the middle of a round.
 - A load that only just fits now reports how much VRAM is left afterwards and
   warns that decoding will slow down as the context grows.
-- The installer's judge download never ran (a 0x0C byte in the path). Fixed
-  and pinned by an encoding test.
+- The installer's judge download never ran (a 0x0C byte in the path). Fixed.
 - The judge model and the routing decider are optional installer steps now,
   off by default, both saying how to install them later.
 - The release zip no longer ships a personal path inside
@@ -126,21 +125,15 @@ diagnosable, presets became safe to re-save, and several silent bugs are gone.
   `all`) and documents the Telegram gateway, the routing decider, the
   watchdog and presets.
 
-## Added while 1.4.12 was up (second replace)
+## More in this release
 
 - **Hermes 35B decodes 4.7x faster**: a model profile can now pin
   `load_mode`. The apex/compact coders ship `none` — expert pages no
   longer page in from NVMe (llama-bench tg128: 2.92 t/s with mmap+mlock
-  vs 13.77 t/s with none; live 15-16 t/s).
+  vs 13.77 t/s with none; 15-16 t/s in real runs).
 - **Gateway**: `/mode auto` on the phone hands every message to the
   engine decider (it used to lose against the persisted agentic flag), and
   an answering phone chat keeps the parameters it started with.
-- **MCP client audit fixes**: servers that never started no longer show
-  as running, handshake error statuses fail loudly, `GET /mcp/servers`
-  no longer ships env/header values to the browser, `close_all` forgets
-  dead servers.
-- **Presets**: applying applies the llama startup flags immediately,
-  warns about models missing locally, re-saving keeps custom prompts,
-  and the autoload guard survives daylight-saving stamp compares.
-- Spark-X2.6 note: on RX 6600/Vulkan it runs ~6 t/s (bench-verified),
-  not the ~21 seen once — prefer Qwen3.5-4B-MTP (60 t/s) for coding.
+- **MCP client fixes**: `close_all` forgets dead servers.
+- Spark-X2.6 note: on RX 6600/Vulkan it runs ~6 t/s — prefer
+  Qwen3.5-4B-MTP (60 t/s) for coding.

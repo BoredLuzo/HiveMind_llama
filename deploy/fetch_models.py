@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -118,6 +119,31 @@ def _hf_lfs_sha256(repo: str, path: str) -> str:
     oid = tree.get(path, "")
     _LFS_OID_CACHE[key] = oid
     return oid
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write via a unique temp file + os.replace.
+
+    models.json IS the model registry: a crash (or a second fetch run)
+    mid-write used to leave a truncated file behind and the backend silently
+    resolved nothing until the next scan.
+    """
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
+def _sha256_of_file(path: Path) -> str:
+    """SHA-256 in 1 MB chunks (GGUFs are multi-GB; read_bytes() would OOM)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _persist_models_dir(mdir: Path) -> None:
@@ -564,7 +590,13 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
     size_gb = int(f.get("size") or 0) / (1024 ** 3)
     dest = dest_dir / Path(f["path"]).name
     if size_gb > 8.0 and not auto_yes:
-        ans = input(f"    {Path(f['path']).name} is {size_gb:.1f} GB large. Download? [Y/n] ").strip().lower()
+        # EOF (audit r4): a non-interactive run (systemd, piped stdin) used to
+        # die with an EOFError traceback here instead of skipping cleanly.
+        try:
+            ans = input(f"    {Path(f['path']).name} is {size_gb:.1f} GB large. Download? [Y/n] ").strip().lower()
+        except EOFError:
+            print("    [WARNING] no interactive stdin - skipping the large file (use --yes)")
+            return False
         if ans in ("n", "no"):
             return False
     # DISK-SPACE-CHECK (2026-08-26): check free space before every download
@@ -672,7 +704,7 @@ def download_file(repo: str, f: dict, dest_dir: Path, auto_yes: bool,
         _etag_raw = re.sub(r'^W/', "", _etag_raw).strip('"')
     sys.stdout.write("\n")
     _final = dest.stat().st_size if dest.exists() else 0
-    if _expected and _final and _final != _expected:
+    if _expected and _final != _expected:
         print(f"    [WARNING] size mismatch: {_final} bytes on disk, {_expected} expected "
               f"- re-run to resume")
         return False
@@ -711,6 +743,32 @@ def _spec_matches_file(spec: dict, gguf: Path) -> bool:
     )
 
 
+def _download_extra_file(repo: str, ef: dict) -> bool:
+    """Fetch a non-GGUF companion (chat template) to its repo-relative dest.
+
+    ATOMIC-DEST (audit r4): the file used to be written straight to the
+    destination - a failed download left a PARTIAL file there, and every
+    later run then said "Extra file present - skipping": the model was
+    permanently stuck with a broken template. Download to `.part`, then
+    os.replace on success; a failure cleans up after itself.
+    """
+    dest = ROOT / ef["dest"]
+    part = dest.with_name(dest.name + ".part")
+    try:
+        url = HF_RESOLVE.format(repo=repo, path=ef["path"])
+        print(f"    Downloading extra file: {ef['path']} -> {ef['dest']}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=120) as r, open(part, "wb") as fh:
+            fh.write(r.read())
+        part.replace(dest)
+        print(f"    [OK] extra file -> {ef['dest']}")
+        return True
+    except (OSError, http.client.HTTPException) as e:
+        part.unlink(missing_ok=True)
+        print(f"    [WARNING] Extra file download failed ({e})")
+        return False
+
+
 def _record_known_filename(gguf_name: str, tag: str) -> None:
     """Append filename→tag to the shipped manifest so the backend registers
     the file under the catalog tag even without models.json (manual
@@ -725,7 +783,10 @@ def _record_known_filename(gguf_name: str, tag: str) -> None:
         return
     data[gguf_name.lower()] = tag
     try:
-        map_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        # ATOMIC (audit r4): same reasoning as models.json - a torn write of
+        # the manifest would make every later load fall back to {} (OSError
+        # / JSONDecodeError), silently losing every recorded tag.
+        _atomic_write_text(map_file, json.dumps(data, indent=2, ensure_ascii=False))
         print(f"    known-filename recorded: {gguf_name} -> {tag}")
     except OSError as e:
         print(f"    [WARNING] could not update gguf_filename_tags.json: {e}")
@@ -795,9 +856,12 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
     # (untracked pin/temp entries landed between runs). Sorted keys keep
     # diffs comparable across updates, and a full rewrite here is also the
     # normalizer that clears stale pin/temp entries left by older versions.
-    out.write_text(
+    # ATOMIC (audit r4): written via temp file + os.replace - models.json is
+    # the registry the backend resolves every model through; a torn write
+    # made it silently resolve nothing (json.loads failure -> {}).
+    _atomic_write_text(
+        out,
         json.dumps(mapping, indent=2, ensure_ascii=False, sort_keys=True),
-        encoding="utf-8",
     )
     return len(mapping)
 
@@ -954,15 +1018,7 @@ def main() -> int:
             if args.list_only:
                 print(f"    Would download (extra): {_ef['path']} -> {_ef['dest']}")
                 continue
-            try:
-                _url = HF_RESOLVE.format(repo=spec["repo"], path=_ef["path"])
-                print(f"    Downloading extra file: {_ef['path']} -> {_ef['dest']}")
-                _ef_dest.parent.mkdir(parents=True, exist_ok=True)
-                with urllib.request.urlopen(_url, timeout=120) as _r, open(_ef_dest, "wb") as _fh:
-                    _fh.write(_r.read())
-                print(f"    [OK] extra file -> {_ef['dest']}")
-            except Exception as e:
-                print(f"    [WARNING] Extra file download failed ({e})")
+            _download_extra_file(spec["repo"], _ef)
 
         # SIDECARS before the "already present" skip (2026-10-19): a re-run with
         # --only-missing used to skip the whole spec as soon as the main GGUF
@@ -1040,7 +1096,15 @@ def main() -> int:
             # and the models.json entry belong to a model that is not on disk.
             # The old path downloaded the projector anyway and registered it.
             # main file now skips the whole spec.
-            if not download_file(repo, main_file, mdir, args.yes):
+            # NET-ERROR (2026-11-04): a mid-body reset raised out of
+            # download_file and killed the whole batch before models.json was
+            # written. Treat it as a failed download and continue.
+            try:
+                _main_ok = download_file(repo, main_file, mdir, args.yes)
+            except (OSError, http.client.HTTPException) as _dl_err:
+                print(f"    [ERROR] download failed: {_dl_err}")
+                _main_ok = False
+            if not _main_ok:
                 print("    Skipped - model not downloaded "
                       "(projector/drafter/registration skipped too)")
                 continue
@@ -1092,15 +1156,26 @@ def main() -> int:
                 if args.list_only:
                     print(f"    Would download (Vision): {mm['path']} -> {_mm_dest}")
                 else:
-                    download_file(repo, mm, mdir, args.yes)
+                    # INTEGRITY (audit r4): the download result used to be
+                    # ignored - a PARTIAL projector was renamed onto the good
+                    # destination name and registered. Only a verified
+                    # download may be renamed/registered.
+                    _mm_ok = False
+                    try:
+                        _mm_ok = download_file(repo, mm, mdir, args.yes)
+                    except (OSError, http.client.HTTPException) as _mm_err:
+                        print(f"    [ERROR] projector download failed: {_mm_err}")
                     _src = mdir / Path(mm["path"]).name
                     _dstp = mdir / _mm_dest
-                    if _mm_dest != Path(mm["path"]).name and _src.exists():
-                        if _dstp.exists():
-                            _src.unlink()
-                        else:
-                            _src.rename(_dstp)
-                    local_files[_mm_dest.lower()] = _dstp
+                    if _mm_ok:
+                        if _mm_dest != Path(mm["path"]).name and _src.exists():
+                            if _dstp.exists():
+                                _src.unlink()
+                            else:
+                                _src.rename(_dstp)
+                        local_files[_mm_dest.lower()] = _dstp
+                    else:
+                        print(f"    [WARNING] projector not downloaded - keeping the destination untouched")
 
     if args.list_only:
         return 0

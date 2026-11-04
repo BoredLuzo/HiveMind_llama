@@ -44,13 +44,10 @@ def _validate_git_repo(ws_override: str | None = None) -> tuple[bool, str, list[
     # WORKSPACE-PARAM (2026-09-22): the panel validates the PROJECT the user
     # selected, not the server env (HIVEMIND_WORKSPACE is run-scoped and
     # usually unset outside runs — the test button then checked the wrong
-    # directory).
-    if ws_override:
-        ws = str(Path(ws_override).resolve())
-    else:
-        ws = str(Path(_ws_default()).resolve())
-    if not ws:
-        return False, "", []
+    # directory). Resolution goes through _resolve_ws (same override-or-
+    # default order as every other endpoint; the duplicated inline
+    # resolution lived here until the 2026-11-03 audit).
+    ws = _resolve_ws(ws_override)
     try:
         check = subprocess.run(
             ["git", "rev-parse", "--git-dir"],
@@ -213,6 +210,12 @@ def _safe_git_url(url: str) -> bool:
     if not u or u.startswith("-") or "::" in u:
         return False
     return True
+
+
+async def _run_git_async(ws: str, args: list, timeout: int = 5):
+    """Run the blocking git probe off the event loop (audit 2026-11-03)."""
+    import asyncio as _aio
+    return await _aio.to_thread(_run_git, ws, args, timeout)
 
 
 def _run_git(ws: str, args: list, timeout: int = 5):
@@ -405,7 +408,7 @@ async def git_init_ep(request: Request):
     if not ws:
         return {"ok": False, "error": "No workspace configured"}
 
-    check = _run_git(ws, ["rev-parse", "--git-dir"])
+    check = await _run_git_async(ws, ["rev-parse", "--git-dir"])
     if check is None:
         return {"ok": False, "error": "git is not available on this machine (or timed out)"}
     if check.returncode == 0:
@@ -425,9 +428,9 @@ async def git_init_ep(request: Request):
             # HEAL-TRANSPARENCY (2026-10-25 audit): URL but no token used to
             # skip silently and still answer "already existed".
             _gh_msg = "no token saved - the remote check/Create was skipped"
-        _origin = _run_git(ws, ["remote", "get-url", "origin"])
+        _origin = await _run_git_async(ws, ["remote", "get-url", "origin"])
         if _origin is not None and _origin.returncode != 0:
-            _attached = _run_git(ws, ["remote", "add", "origin", _eh_url])
+            _attached = await _run_git_async(ws, ["remote", "add", "origin", _eh_url])
             if _attached is None or _attached.returncode != 0:
                 _gh_msg = (_gh_msg + " | " if _gh_msg else "") + "remote add origin failed"
         valid, branch, branches = await asyncio.to_thread(_validate_git_repo, ws)
@@ -463,13 +466,13 @@ async def git_init_ep(request: Request):
         if _token:
             _gh_created, _gh_msg = await _github_ensure_repo(remote_url, _token)
         if _gh_created:
-            _init = _run_git(ws, ["init", "-b", default_branch], timeout=10)
+            _init = await _run_git_async(ws, ["init", "-b", default_branch], timeout=10)
             if _init is None or _init.returncode != 0:
                 return {"ok": False,
                         "error": f"git init failed: {((_init and _init.stderr) or 'git failed').strip()[:200]}"}
         else:
             # empty workspace + remote -> clone INTO the workspace
-            _clone = _run_git(ws, ["clone", remote_url, "."], timeout=120)
+            _clone = await _run_git_async(ws, ["clone", remote_url, "."], timeout=120)
             if _clone is None or _clone.returncode != 0:
                 # PARTIAL-CLONE CLEANUP (audit follow-up 2026-10-26): a failed
                 # clone leaves a half-written .git behind; the next attempt
@@ -489,7 +492,7 @@ async def git_init_ep(request: Request):
                         "error": f"Clone failed: {((_clone and _clone.stderr) or 'git failed').strip()[:200]}{_extra}"}
             _cloned = True
     else:
-        _init = _run_git(ws, ["init", "-b", default_branch], timeout=10)
+        _init = await _run_git_async(ws, ["init", "-b", default_branch], timeout=10)
         if _init is None or _init.returncode != 0:
             return {"ok": False,
                     "error": f"git init failed: {((_init and _init.stderr) or 'git failed').strip()[:200]}"}
@@ -502,12 +505,12 @@ async def git_init_ep(request: Request):
                 remote_url, str(settings.get("git_token", "") or ""))
 
     if username:
-        _run_git(ws, ["config", "user.name", username])
+        await _run_git_async(ws, ["config", "user.name", username])
     if email:
-        _run_git(ws, ["config", "user.email", email])
+        await _run_git_async(ws, ["config", "user.email", email])
     if remote_url:
-        _run_git(ws, ["remote", "remove", "origin"])
-        _attached = _run_git(ws, ["remote", "add", "origin", remote_url])
+        await _run_git_async(ws, ["remote", "remove", "origin"])
+        _attached = await _run_git_async(ws, ["remote", "add", "origin", remote_url])
         if _attached is None or _attached.returncode != 0:
             _gh_msg = (_gh_msg + " | " if _gh_msg else "") + "remote add origin failed"
 

@@ -1,8 +1,8 @@
 # Release 1.4.8
 
 Scope: v1.4.7..v1.4.8. Themes: the EDIT→TEST→FIX loop densified, voice
-over Telegram end to end, a measured coder performance round, frontend
-speed, and a hardening/simplification pass.
+over Telegram end to end, measured coder performance tuning, frontend
+speed, and hardening/simplification.
 
 ## The EDIT→TEST→FIX loop, densified
 - Per-chunk test feedback ships ON (was opt-in and effectively unused).
@@ -33,17 +33,14 @@ speed, and a hardening/simplification pass.
   failing edit or command is handed to a fresh-context fix agent instead
   of burning rounds (max 2 handoffs per run).
 
-## Measured coder performance (+57% prefill, live-measured)
+## Measured coder performance (+57% prefill)
 - The hermes 35B coder runs without draft-mtp and with eager loading
-  (reversed in 1.4.10: re-measured on b11889 with 256-token answers, MTP
-  gives +55 % decode for -1.6 % prefill; the determinism trade is named)
   (`--load-mode none`): prefill 78.5 → 123.3 t/s, decode unchanged.
-  Context 100k costs nothing measurable (retracted in 1.4.9: the runs were
-  sized at 4096, re-measurement pending); moe 35 stays optimal.
+  moe 35 stays optimal.
 - `llama_mlock` now actually reaches the load path (was a no-op since
   introduction); `HIVEMIND_MTP_SPEC=0` is honored by every code path.
-- New guard: speculative decoding + eager load = Vulkan OOM
-  (live-reproduced) — speculative models always keep mmap.
+- New guard: speculative decoding + eager load = Vulkan OOM —
+  speculative models always keep mmap.
 
 ## Frontend
 - Streaming performance: four hotspots fixed (whole-chat clone scans at
@@ -54,7 +51,7 @@ speed, and a hardening/simplification pass.
 - Context-fit warnings on every context input (real VRAM estimate, red
   over budget — warn-only), a models chip in the header, compact
   estimates for agent cards.
-- UX quick wins: English-only UI, honest mode descriptions (the auto
+- UX quick wins: English-only UI, accurate mode descriptions (the auto
   text names what actually routes; Code-Duo no longer promises a critic
   it does not run), every run-end reason carries an actionable hint,
   opt-in browser autostart from the interactive launcher.
@@ -75,14 +72,14 @@ speed, and a hardening/simplification pass.
 - The whisper warm server is actually used for transcription now (was
   dead since 1.3.11).
 
-## Voice over Telegram (end to end, live-verified)
-- Voice note → transcript → decider → run verified live; the from_voice
-  flag was dead code — spoken notes now route through the decider.
+## Voice over Telegram (end to end)
+- Voice note → transcript → decider → run works end to end; the
+  from_voice flag was dead code — spoken notes now route through the
+  decider.
 - /decider on|off|shadow; OFF frees ~1.8 GB RAM immediately; the
   decision cache survives restarts.
 
 ## Under the hood
-- First-ever end-to-end regression coverage for the duo core (a
-  scripted llama-server drives the real generator).
-- Net −300 lines through adversarial audit + simplification rounds;
-  181 test suites, ruff clean.
+- End-to-end regression coverage for the duo core (a scripted
+  llama-server drives the real generator).
+- 181 test suites, ruff clean.

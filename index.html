@@ -1468,6 +1468,10 @@
         Offers <code>lsp_*</code> tools (diagnostics, definition, references, symbol search,
         rename plan, format) in the coding modes. Nothing is bundled: a language is active as
         soon as ITS server is on PATH &mdash; the tools follow the file type.
+        <details id="lsp-status-details" style="margin:8px 0;line-height:1.6">
+          <summary id="lsp-status-summary" style="cursor:pointer;color:#9aa7b8">Language servers on PATH</summary>
+          <div id="lsp-status-list" style="margin-top:4px"></div>
+        </details>
         <div style="margin-top:6px;line-height:1.7">
           Install the server for each language you actually write:<br>
           <code>Python</code> &nbsp;npm i -g pyright<br>
@@ -1500,9 +1504,9 @@
         <select id="autolint-engine-sel"
           style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;max-width:230px"
           onchange="S.autolintEngine=this.value;postSettings({duo_autolint_python_engine:S.autolintEngine})">
-          <option value="auto">Python: auto (pyright if installed)</option>
-          <option value="pyright">Python: pyright only</option>
-          <option value="basic">Python: syntax only (py_compile)</option>
+          <option value="auto">Python lint: auto (pyright if installed)</option>
+          <option value="pyright">Python lint: pyright only</option>
+          <option value="basic">Python lint: syntax only (py_compile)</option>
         </select>
       </div>
       <div class="fld-hint">Runs after every write, in the language of the file:
@@ -2165,7 +2169,7 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <option value="off">Off (no gate force)</option>
       </select>
     </div>
-    <div class="fld-hint">What happens when a phone run wants to run shell/write/git (only relevant with Restrict OFF): Auto-deny = refused automatically (safe default). Ask = the run PAUSES and a card arrives on your phone: Once / Always-this-chat / Deny - unanswered cards are DENIED after the timeout (fail-closed). Off = no gate; the engine-wide toggle decides. Also settable from the phone with /gate.</div>
+    <div class="fld-hint">What happens when a phone run wants to run shell/write/git (only relevant with Restrict OFF): Auto-deny = refused automatically (safe default). Ask = the run PAUSES and a card arrives on your phone: Once / Always-this-chat / Deny - unanswered cards are DENIED after the timeout (fail-closed). Off = the engine-wide toggle decides; while the gateway safety floor is active (force_approval_gate), Off behaves like Auto-deny until you lift it with /gate off. Also settable from the phone with /gate.</div>
     <div class="tgl-row" style="margin-top:8px;align-items:center">
       <span class="tgl-text">Process</span>
       <span id="tg-sup-status" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--tx2)">unknown</span>

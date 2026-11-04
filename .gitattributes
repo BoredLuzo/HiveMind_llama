@@ -7,8 +7,13 @@
 
 # Developer-only content stays out of the release zip (git archive).
 # Verified: no runtime code, installer or updater reads these paths.
+# (update.bat reads deploy\render_release_notes.ps1 and
+# deploy\update_prune.ps1 - those must keep shipping; 2026-11-04 audit
+# added the two dev-gate scripts that slipped through unexcluded.)
 /tests/ export-ignore
 /deploy/release_checks.bat export-ignore
+/deploy/prepush_check.ps1 export-ignore
+/deploy/promote_main.bat export-ignore
 /docs/roadmap_1.4.md export-ignore
 /docs/plan_1.4_voice.md export-ignore
 

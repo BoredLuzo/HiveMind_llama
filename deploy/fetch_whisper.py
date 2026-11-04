@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import re
 import shutil
@@ -109,11 +110,44 @@ def _http_json(url: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _safe_extract(arc: Path, dest: Path) -> None:
+    """Extract a release archive without path traversal (audit r4).
+
+    A tar member like ``../../x`` or an absolute path would write outside
+    ``stt/``. Python 3.12+ delegates to tarfile's filter="data" (rejects
+    traversal, device nodes and links leaving the destination); older
+    interpreters get an explicit per-member check instead of an unsafe
+    fallback. ZIP members are sanitized by the stdlib itself.
+    """
+    if arc.suffix.lower() == ".zip":
+        with zipfile.ZipFile(arc) as zf:
+            zf.extractall(dest)
+        return
+    with tarfile.open(arc) as tf:  # noqa: S202 - members validated below
+        try:
+            tf.extractall(dest, filter="data")
+            return
+        except TypeError:
+            pass  # Python without filter= support: validate members ourselves
+        dest_r = os.path.realpath(dest)
+        for m in tf.getmembers():
+            name = m.name.replace("\\", "/")
+            if name.startswith("/") or name.startswith("../"):
+                raise tarfile.ExtractError(f"unsafe archive member: {m.name!r}")
+            final = os.path.normpath(os.path.join(dest_r, name))
+            if final != dest_r and not final.startswith(dest_r + os.sep):
+                raise tarfile.ExtractError(f"unsafe archive member: {m.name!r}")
+            if not (m.isreg() or m.isdir() or m.issym() or m.islnk()):
+                raise tarfile.ExtractError(f"unsafe member type: {m.name!r}")
+            tf.extract(m, dest, set_attrs=False)
+
+
 def _download(url: str, dest: Path, min_bytes: int = 0) -> bool:
     """Stream a URL to ``dest``. Returns True when the file arrived complete."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".part")
     got = 0
+    total = 0
     try:
         req = urllib.request.Request(url, headers=UA)
         with urllib.request.urlopen(req, timeout=120) as resp, open(tmp, "wb") as out:
@@ -134,6 +168,15 @@ def _download(url: str, dest: Path, min_bytes: int = 0) -> bool:
         print()
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
         print(f"\n  [ERROR] download failed: {exc}")
+        tmp.unlink(missing_ok=True)
+        return False
+    # TRUNCATION (audit r4): a body that just ENDED early passed the
+    # min_bytes floor (60 MB of a 396 MB model) and was then renamed onto
+    # the good name - the corrupt model counted as "already present"
+    # forever after. The byte count must match Content-Length.
+    if total and got < total:
+        print(f"\n  [ERROR] {dest.name}: truncated download "
+              f"({got} / {total} bytes) - re-run to retry")
         tmp.unlink(missing_ok=True)
         return False
     if got < min_bytes:
@@ -171,12 +214,11 @@ def install_binaries(backend: str, force: bool = False) -> bool:
         if not _download(asset["browser_download_url"], arc, MIN_BINARY_BYTES):
             return False
         dest.mkdir(parents=True, exist_ok=True)
-        if arc.suffix == ".zip":
-            with zipfile.ZipFile(arc) as zf:
-                zf.extractall(tmp)
-        else:
-            with tarfile.open(arc) as tf:
-                tf.extractall(tmp)  # noqa: S202 - archive from the official release
+        try:
+            _safe_extract(arc, Path(tmp))
+        except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError) as exc:
+            print(f"[ERROR] the downloaded archive is corrupt or unsafe ({exc})")
+            return False
         # The zip nests everything under Release/ (win) or build/bin (linux).
         src = None
         for cand in Path(tmp).rglob("whisper-cli*"):
@@ -204,8 +246,14 @@ def install_models(keys: list[str], force: bool = False) -> bool:
             continue
         dest = stt_root() / "models" / m.filename
         if dest.is_file() and not force:
-            print(f"[OK] {key}: {m.filename} already present")
-            continue
+            # PARTIAL (audit r4): existence alone is not "installed" - a
+            # truncated model from an old crashed run would be kept forever
+            # and the Voice card would fail to load it with no hint why.
+            if dest.stat().st_size >= MIN_MODEL_BYTES:
+                print(f"[OK] {key}: {m.filename} already present")
+                continue
+            print(f"[..] {key}: {m.filename} exists but only "
+                  f"{dest.stat().st_size} bytes - re-downloading the partial file")
         url = HF_BASE.format(repo=m.repo, name=m.filename)
         print(f"[..] {key}: {m.filename} ({m.size_mb} MB)")
         if not _download(url, dest, MIN_MODEL_BYTES):

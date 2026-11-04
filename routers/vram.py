@@ -171,14 +171,16 @@ async def vram_status(req: Request):
     try:
         import subprocess as _sp
         if os.name == "nt":
-            _r = _sp.run(["tasklist", "/FI", "IMAGENAME eq llama-server.exe"],
-                         capture_output=True, text=True, timeout=8,
-                         encoding="utf-8", errors="replace")
+            _r = await asyncio.to_thread(
+                _sp.run, ["tasklist", "/FI", "IMAGENAME eq llama-server.exe"],
+                capture_output=True, text=True, timeout=8,
+                encoding="utf-8", errors="replace")
             _llama_procs = sum(1 for _l in _r.stdout.splitlines()
                                if "llama-server.exe" in _l)
         else:
-            _r = _sp.run(["pgrep", "-c", "-f", "llama-server"],
-                         capture_output=True, text=True, timeout=8)
+            _r = await asyncio.to_thread(
+                _sp.run, ["pgrep", "-c", "-f", "llama-server"],
+                capture_output=True, text=True, timeout=8)
             _llama_procs = int((_r.stdout or "0").strip() or 0)
     except Exception:
         _llama_procs = -1

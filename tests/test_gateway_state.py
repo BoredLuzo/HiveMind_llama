@@ -59,11 +59,11 @@ st3 = GatewayState(p)
 check("corrupt -> fresh", st3.owner_telegram_id is None and st3.offset == 0)
 check("corrupt file kept aside", (tmp / "gateway_state.corrupt").exists())
 
-# ── no-rev field preserved / unknown fields dropped ─────────────────────
+# ── no-rev field preserved / unknown fields preserved (full restore) ────
 p.write_text(json.dumps({"offset": 5, "hacker_field": "x"}), encoding="utf-8")
 st4 = GatewayState(p)
 check("known field adopted", st4.offset == 5)
-check("unknown field dropped", "hacker_field" not in st4.data)
+check("unknown field preserved", st4.data.get("hacker_field") == "x")
 
 # ── PermissionError retry, then LOUD failure ────────────────────────────
 real_replace = os.replace

@@ -29,7 +29,7 @@ Scope: v1.4.10..v1.4.11. Themes: the MCP client gets HTTP and a card, settings w
 - The temp file carries the process id and one retry, so a vanished temp file
   cannot fail a save.
 
-## bash without leftovers, second round
+## Bash without leftovers
 
 - The operator list was incomplete: a single `&` still created files named `&`,
   `echo` and `done`, and a newline silently dropped the second command. The

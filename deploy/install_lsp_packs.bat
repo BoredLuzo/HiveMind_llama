@@ -79,8 +79,20 @@ echo.
 echo  Installing language-server packs: %PICK%
 echo.
 
-for %%P in (%PICK%) do call :pack_%%P
+REM VALID-PACK-GATE (2026-11-04): `call :pack_%%P` on a token that is not 1-6
+REM hit a missing label - cmd then printed a localized "batch label not found"
+REM error per typo. Validate first, warn in plain text.
+for %%P in (%PICK%) do call :pack_check %%P
 goto verify_packs
+
+:pack_check
+for %%N in (1 2 3 4 5 6) do if "%~1"=="%%N" goto pack_run
+echo   [WARN] Unknown pack "%~1" - valid numbers are 1-6. Skipping.
+goto :eof
+
+:pack_run
+call :pack_%~1
+goto :eof
 
 :pack_1
 echo  --- [1] Python -----------------------------------------------

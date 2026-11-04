@@ -12,7 +12,8 @@ from infra.run_control import (
     set_user_answer, get_decision_id,
     request_graceful_stop, _run_abort_registry,
     request_pause_after_chunk, signal_resume, is_pause_requested,
-    signal_abort_during_pause, _RESUME_SIGNALS, is_pause_pending,
+    signal_abort_during_pause, pause_abort_signal_pending,
+    _RESUME_SIGNALS, is_pause_pending,
     is_pause_waiting, queue_steer, steer_queue_view,
 )
 from infra.ask_user_governor import (
@@ -159,13 +160,12 @@ async def abort_graceful(run_id: str):
 
 @router.post("/abort/{run_id}")
 async def abort_run(run_id: str):
-    # ABORT-DURING-APPROVAL (audit 2026-11-03): the manual-pause signal only
-    # exists during a manual pause. During an approval/ask_user pause the
-    # signal() returned False and the endpoint still reported success - the
-    # run kept waiting up to the approval timeout while the UI showed
-    # "stopped". Fall through to the run's abort event, which the approval
-    # wait watches.
-    if is_pause_pending(run_id) and signal_abort_during_pause(run_id):
+    # ABORT-DURING-APPROVAL (audit 2026-11-03): only a manual pause that has
+    # not already been aborted owns the signal. A stale signal from an
+    # earlier pause short-circuits the fallthrough to the run abort event,
+    # which the approval wait actually watches.
+    if is_pause_pending(run_id) and pause_abort_signal_pending(run_id):
+        signal_abort_during_pause(run_id)
         return {"ok": True, "run_id": run_id, "action": "abort_during_pause"}
     ev = _abort_event(run_id)
     if ev:

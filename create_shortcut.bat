@@ -20,8 +20,12 @@ echo.
 :skip_banner
 
 REM ---- Optional: shortcut name (without .lnk), default "HiveMind" ----
+REM QUIET-FLAG (audit 2026-11-03): update.bat passes --quiet; it used to
+REM become the shortcut NAME (stray "--quiet.lnk", no icon refresh).
 set "SC_NAME=HiveMind"
+if /i "%~1"=="--quiet" goto sc_name_done
 if not "%~1"=="" set "SC_NAME=%~1"
+:sc_name_done
 
 REM ---- Real Desktop folder (OneDrive-aware) ----
 set "HM_DESKTOP="

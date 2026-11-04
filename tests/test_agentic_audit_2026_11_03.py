@@ -37,20 +37,25 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name} {extra}")
 
 
-# ── 1. taint gate covers run_tests and dynamic MCP tools ────────────────────
+# ── 1. approval toggle is authoritative (taint does not escalate) ───────────
 _saved_gate = R._approval_gate_on
 try:
     R._approval_gate_on = lambda: False       # the default: approval feature off
     T.clear()
-    check("1a clean run: run_tests needs no card",
+    check("1a approvals off: run_tests needs no card",
           not R._needs_approval("run_tests"))
     T.mark("web_search")
-    check("1b tainted run: run_tests is gated",
-          R._needs_approval("run_tests") and R._approval_active_for("run_tests"))
-    check("1c tainted run: dynamic MCP tools are gated",
-          R._needs_approval("mcp_github")
+    check("1b tainted + approvals off: run_tests stays card-free",
+          not R._needs_approval("run_tests")
+          and not R._approval_active_for("run_tests"))
+    check("1c tainted + approvals off: MCP stays card-free",
+          not R._needs_approval("mcp_github")
+          and not R._approval_active_for("mcp_github"))
+    R._approval_gate_on = lambda: True        # the user switched approvals ON
+    check("1d approvals on: run_tests and MCP are gated",
+          R._approval_active_for("run_tests")
           and R._approval_active_for("mcp_github"))
-    check("1d trusted reads stay ungated",
+    check("1e trusted reads stay ungated",
           not R._approval_active_for("read_file"))
 finally:
     R._approval_gate_on = _saved_gate
@@ -67,30 +72,48 @@ class _Ev:
 
 
 _ev = _Ev()
-_saved = (C.is_pause_pending, C.signal_abort_during_pause, C._abort_event)
+_saved = (C.is_pause_pending, C.signal_abort_during_pause,
+          C.pause_abort_signal_pending, C._abort_event)
 try:
     C.is_pause_pending = lambda run_id: True
-    C.signal_abort_during_pause = lambda run_id: False   # approval pause: no manual signal
+    C.pause_abort_signal_pending = lambda run_id: False   # no manual-pause signal
+    C.signal_abort_during_pause = lambda run_id: False
     C._abort_event = lambda run_id: _ev
     _res = asyncio.run(C.abort_run("run-1"))
 finally:
-    C.is_pause_pending, C.signal_abort_during_pause, C._abort_event = _saved
+    (C.is_pause_pending, C.signal_abort_during_pause,
+     C.pause_abort_signal_pending, C._abort_event) = _saved
 check("2a abort during approval pause falls back to the abort event",
       _res.get("ok") is True and _res.get("action") == "abort" and _ev.set_called,
       str(_res))
 
 _ev2 = _Ev()
-_saved = (C.is_pause_pending, C.signal_abort_during_pause, C._abort_event)
+_saved = (C.is_pause_pending, C.signal_abort_during_pause,
+          C.pause_abort_signal_pending, C._abort_event)
 try:
     C.is_pause_pending = lambda run_id: True
-    C.signal_abort_during_pause = lambda run_id: True    # manual pause: signal exists
+    C.pause_abort_signal_pending = lambda run_id: True    # manual pause, unset signal
+    C.signal_abort_during_pause = lambda run_id: True
     C._abort_event = lambda run_id: _ev2
     _res2 = asyncio.run(C.abort_run("run-2"))
 finally:
-    C.is_pause_pending, C.signal_abort_during_pause, C._abort_event = _saved
+    (C.is_pause_pending, C.signal_abort_during_pause,
+     C.pause_abort_signal_pending, C._abort_event) = _saved
 check("2b manual pause still uses the pause signal",
       _res2.get("action") == "abort_during_pause" and not _ev2.set_called,
       str(_res2))
+
+# 2c: a signal left over from an EARLIER manual pause is already set; the
+# helper must report "no pending manual pause" so /abort falls through.
+from infra import run_control as RC       # noqa: E402
+_rc_ev = asyncio.Event()
+RC._ABORT_DURING_PAUSE_SIGNALS["stale-run"] = _rc_ev
+check("2c an unset manual-pause signal is pending",
+      RC.pause_abort_signal_pending("stale-run") is True)
+_rc_ev.set()
+check("2d a stale (already set) pause signal is not pending",
+      RC.pause_abort_signal_pending("stale-run") is False)
+RC._ABORT_DURING_PAUSE_SIGNALS.pop("stale-run", None)
 
 
 # ── 3. loop guards live on the run-shared state ─────────────────────────────
@@ -103,6 +126,8 @@ check("3c the loop writes the counter to round_state",
       "round_state.tail_guard_fires" in ATL or "round_state, \"tail_guard_fires\"" in ATL)
 check("3d the decode watch reads/writes round_state",
       'round_state, "decode_hist"' in ATL)
+check("3e a healthy round resets the SHARED counter",
+      "self.round_state.tail_guard_fires = 0" in ATL)
 
 
 # ── 4. repo-map delta survives the compression that follows it ──────────────
@@ -112,6 +137,19 @@ check("4a the delta is appended before compression",
       _i_append > 0 and "append_repo_map_delta" in DQ)
 check("4b the compression system prompt is re-captured after the append",
       _i_recap > _i_append and "_sys_for_compress = str(_delta_sys)" in DQ)
+check("4c the compression KWARGS carry the updated system prompt",
+      '_comp_kwargs["system_prompt"] = _sys_for_compress' in DQ)
+
+# ── 4d. skipped-planner runs still save the sidecar (UnboundLocal fix) ──────
+check("4d the in-loop plan text is initialized before the planner",
+      '_inloop_plan_text = ""' in DQ
+      and DQ.index('_inloop_plan_text = ""') < DQ.index("_inloop_plan_text or") )
+check("4e aborted runs still save last_run/task context",
+      "ctx.chat_id and not ctx.is_aborted_chat" not in DQ
+      and '_eff_stop = "aborted"' in DQ)
+check("4f the sidecar session is updated after the assistant turn",
+      "_mutate_chat_context(" in DQ
+      and DQ.index('add_to_session("assistant"') < DQ.index("_mutate_chat_context("))
 
 
 # ── 5. writes without any execution go through the verify ladder ────────────
@@ -121,12 +159,39 @@ check("5a the no-bash branch routes through the ladder",
 check("5b an unset deadline is not treated as expired",
       "if trs.duo_deadline_at and time.monotonic() >= trs.duo_deadline_at:" in TE)
 
+# 5c: ladder semantics — "block" must keep the loop going (first two tries),
+# the exhausted third try accepts. The no-bash branch must not convert a
+# "block" into an immediate acceptance.
+from core.tool_executor import _task_complete_ladder   # noqa: E402
+
+
+class _LadderTRS:
+    task_complete_blocked_count = [0]
+
+
+class _LadderResult:
+    task_complete_called = False
+
+
+_msgs: list = []
+_res_obj = _LadderResult()
+_g1 = _task_complete_ladder(_LadderTRS(), _msgs, _res_obj, False, "please verify")
+check("5c the first ladder hit blocks without accepting",
+      _g1 == "block" and not _res_obj.task_complete_called and len(_msgs) == 1)
+_g2 = _task_complete_ladder(_LadderTRS(), _msgs, _res_obj, False, "please verify")
+check("5d the second ladder hit still blocks", _g2 == "block")
+_g3 = _task_complete_ladder(_LadderTRS(), _msgs, _res_obj, False, "please verify")
+check("5e the third ladder hit accepts", _g3 == "allow" and _res_obj.task_complete_called)
+
 
 # ── 6. terminal stream frames + browser-side gap marker ─────────────────────
 check("6a the done frame bypasses the queue cap",
       "DONE-ALWAYS" in SRV and 'elif isinstance(_chunk, str) and \'"type": "done"\' in _chunk:' in SRV)
 check("6b the server emits a stream_gap frame", '"type": "stream_gap"' in SRV)
 check("6c the web UI handles stream_gap", "d.type === 'stream_gap'" in APPJS)
+check("6d the journal carries and filters the chat id",
+      '"chat_id": str(reg.get("chat_id")' in SRV
+      and "j.chat_id && (!S.currentChatId" in APPJS)
 
 print(f"\n=== Results: {passed} passed, {failed} failed ===")
 sys.exit(1 if failed else 0)

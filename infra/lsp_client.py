@@ -70,9 +70,11 @@ _LSP_ENV_ALLOW = {
 
 
 def _lsp_child_env() -> dict:
+    # ENV-NO-PREFIX (audit 2026-11-03): the old prefix rule forwarded every
+    # RUST*/CARGO*/GO* variable, including CARGO_REGISTRY_TOKEN and GOAUTH,
+    # to language servers that execute untrusted workspace code.
     return {k: v for k, v in os.environ.items()
-            if k.upper() in _LSP_ENV_ALLOW
-            or k.upper().startswith(("RUST", "CARGO", "GO"))}
+            if k.upper() in _LSP_ENV_ALLOW}
 
 
 def read_workspace_settings(workspace: Path) -> dict:
