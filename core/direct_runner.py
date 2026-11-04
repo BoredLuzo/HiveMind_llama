@@ -125,15 +125,14 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         # SEND-FILE: the same run-written-file registry the shared executor
         # uses, so direct mode can queue a file it just wrote.
         _written_files: set = set()
+        _written_token = None
         try:
             from tools.runner import _files_written_in_run as _fw_ctx
-            _existing_written = _fw_ctx.get(None)
-            if _existing_written is not None:
-                _written_files = _existing_written
-            else:
-                _fw_ctx.set(_written_files)
+            # A fresh set per direct run: reusing an outer context would let
+            # send_file accept a file from an earlier run.
+            _written_token = _fw_ctx.set(_written_files)
         except (ImportError, AttributeError, TypeError):
-            pass
+            _fw_ctx = None
         _send_paths: list[str] = []
 
         async def _capture_tool_result(name, args, result, state):
@@ -186,6 +185,8 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
                 await _loop._client.aclose()
             except Exception:
                 pass
+            if _written_token is not None and _fw_ctx is not None:
+                _fw_ctx.reset(_written_token)
         _state = getattr(_loop, "state", None)
         result.content = "".join(_state.content_parts).strip() if _state is not None else ""
         result.final_msgs = _final_msgs

@@ -2649,7 +2649,8 @@ class RunBridge:
         self.state.data["tools"] = tier != "off"
         self.state.save()
         return (f"Direct access (Telegram): {labels[tier]}. "
-                "Applies to the next phone run; the workspace lock stays on.")
+                "Applies to the next phone run; the workspace lock stays on. "
+                "For file/shell access also check /restrict off.")
 
     async def stop_mirror(self) -> str | None:
         """Abort the mirrored engine run, if any. Returns the note or

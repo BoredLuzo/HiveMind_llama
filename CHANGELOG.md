@@ -1,18 +1,3 @@
-## [1.5.3] - 2026-11-04
-
-Replacement for 1.5.2. Direct mode with full tools can now write a file and
-queue it with `send_file`; the file is delivered after the direct tool loop,
-and exactly one deliverable is sent automatically if the model forgot to queue
-it. The direct prompt no longer treats a generated HTML page as chat text when
-a file was requested. Telegram direct runs select the UI tiers with
-`/tools off`, `/tools websearch`, `/tools python` or `/tools full`, per phone
-run; file access stays workspace-locked on every tier.
-
-The optional-component installer now uses uv for `gliner2[local]`/PyTorch
-instead of assuming the venv has pip (uv-created venvs often do not), falls
-back to `ensurepip`, names the decider's real footprint (~2.5 GB) and prints
-the exact retry command on failure instead of a silent warning.
-
 ## [1.5.2] - 2026-11-04
 
 Telegram file delivery and agent polish on top of 1.5.1. `/send <path>`
@@ -20,8 +5,12 @@ delivers a workspace file immediately; agentic phone runs queue `send_file`
 and deliver only after final verification, with workspace confinement,
 secret-name blocking and the 50 MB Telegram limit. A completed run with one
 deliverable file sends it automatically even if the model forgot the tool.
-Phone runs now pass the chat workspace in the run body, so `/workspace`
-actually wins over the desktop workspace.
+Direct mode with full tools has the same file path: it writes, queues with
+`send_file`, and delivers after the direct tool loop. Direct phone runs select
+the UI tiers with `/tools off|websearch|python|full`, per phone run, without
+changing the desktop setting; `full` stays workspace-locked and still needs
+`/restrict off` for write/shell access. Phone runs now pass the chat workspace
+in the run body, so `/workspace` actually wins over the desktop workspace.
 
 The coder no longer receives planner markdown or planner reasoning, only a
 distilled numbered execution list; with the planner off it receives only the
@@ -29,6 +18,12 @@ user prompt. The planner prompt is less absolute. The LSP panel lists
 installed and missing language servers, Python has exactly one linter
 (pyright, with a `py_compile` environment fallback), and the near-duplicate
 web-search guard allows eight rephrased searches instead of three.
+
+The optional-component installer uses uv for `gliner2[local]`/PyTorch instead
+of assuming the venv has pip (uv-created venvs often do not), falls back to
+`ensurepip`, names the decider's real footprint (~2.5 GB) and prints the exact
+retry command on failure. A model-only decider install is detected as missing
+the Python package.
 
 The Linux `types` CI job no longer reports the optional Windows-only
 `keyring` import as missing.
