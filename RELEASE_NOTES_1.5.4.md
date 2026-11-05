@@ -93,6 +93,18 @@ next to the old install. Settings, models, sessions and the venv are kept.
   `needs_input` (orange dot) instead of failing silently, and a desktop
   notification points at the paused run.
 
+## Models: several quantizations of one model
+
+- Adding a second quantization of an already-registered model no longer
+  silently replaces it. The GGUF index now keeps the registered (models.json)
+  or manifest-known file on the canonical name, prefers the larger quant
+  otherwise, and lists every other quant under an explicit
+  `<name>-<quant>` alias — so all quants stay visible and selectable in the
+  picker instead of one vanishing.
+- llama.cpp slot ids (`llamacpp:<sha>…`) can no longer be saved into
+  models.json, which previously could surface a ghost hash entry in the
+  model picker.
+
 ## Verification
 
 - Full regression gate: 310 suites.
