@@ -35,8 +35,10 @@ det("shutil.rmtree", "shutil.rmtree('/tmp/x')", True)
 det("os.remove", "os.remove('f.txt')", True)
 det("os.unlink", "os.unlink('f.txt')", True)
 det("os.renames", "os.renames('a', 'b')", True)
-det("open absolute path", "open('/etc/passwd')", True)
-det("open drive path", "open('C:/Windows/x', 'w')", True)
+# READS (even absolute) are not destructive; the gate only blocks absolute
+# WRITES (see test_destructive_gate.py). run_python is not a filesystem jail.
+det("open absolute path (read)", "open('/etc/passwd')", False)
+det("open drive path (write)", "open('C:/Windows/x', 'w')", True)
 det("winreg.DeleteKey", "winreg.DeleteKey(k, 'x')", True)
 det("winreg.SetValue", "winreg.SetValue(k, 'x', 1, 'v')", True)
 

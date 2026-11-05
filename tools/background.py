@@ -93,7 +93,7 @@ def start_background(cmd: str) -> dict:
         # X6 (audit r3): bash-less distros - resolve once via exec_tools
         from tools.handlers.exec_tools import _BASH_BIN as _bg_bash
         _shell_kwargs = {"executable": _bg_bash} if _os_bg.name != "nt" else {}
-        from infra.child_env import scrubbed_env as _scrubbed_env
+        from infra.child_env import tool_env as _tool_env
         proc = subprocess.Popen(
             cmd,
             shell=True,
@@ -102,7 +102,7 @@ def start_background(cmd: str) -> dict:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=_scrubbed_env(),
+            env=_tool_env(),
             **_spawn_kwargs(),
             **_shell_kwargs,
         )

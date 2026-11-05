@@ -190,6 +190,7 @@ async def run_tests(
         # really kills the whole tree (pytest/npm children), not just the
         # /bin/sh wrapper. Windows keeps taskkill /T.
         from tools.sandbox import spawn_kwargs as _spawn_kwargs, kill_tree_and_reap as _kill_reap
+        from infra.child_env import tool_env as _tool_env
 
         async def _spawn_decode(run_cmd: str) -> tuple[str, int]:
             """Run *run_cmd*, return (output, exit code). Raises TimeoutError
@@ -199,6 +200,7 @@ async def run_tests(
                 cwd=workspace,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env=_tool_env(),
                 **_spawn_kwargs(),
             )
             try:
@@ -283,6 +285,7 @@ async def run_tests(
                         cwd=workspace,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.STDOUT,
+                        env=_tool_env(),
                         **_spawn_kwargs(),
                     )
                     try:

@@ -1306,9 +1306,28 @@ _DESTRUCTIVE_PYTHON_PATTERNS = [
     r"\bos\.unlink\s*\(",
     r"\bos\.rmdir\s*\(",
     r"\bos\.renames\s*\(",
-    r"\bopen\s*\(\s*['\"]\s*(?:/|[A-Za-z]:[/\\]|~|\.\.)",
     r"\bwinreg\.(CreateKey|DeleteKey|SetValue)\s*\(",
 ]
+
+# An absolute-path open is only destructive when it WRITES. The old blanket
+# pattern gated read-only snippets like open('C:/x/script.js', 'r') and made
+# the model ask for confirmation on harmless file inspection.
+_ABS_OPEN_CALL = re.compile(
+    r"\bopen\s*\(\s*(['\"])(?P<path>(?:/|[A-Za-z]:[/\\]|~|\.\.)[^'\"\n]*)"
+    r"\1(?P<args>.*?)\)", re.DOTALL)
+_OPEN_WRITE_MODE = re.compile(
+    r"(?:\bmode\s*=\s*)?(['\"])(?P<mode>[rbt]*[wax+][rbt+]*)\1", re.IGNORECASE)
+
+
+def _absolute_open_write(code: str) -> bool:
+    """True when code opens an absolute path in a write/append mode."""
+    for _m in _ABS_OPEN_CALL.finditer(str(code)):
+        _args = _m.group("args") or ""
+        for _mm in _OPEN_WRITE_MODE.finditer(_args):
+            _mode = (_mm.group("mode") or "").lower()
+            if any(_c in _mode for _c in ("w", "a", "x", "+")):
+                return True
+    return False
 
 
 def _is_destructive_python(code: str) -> str | None:
@@ -1318,6 +1337,8 @@ def _is_destructive_python(code: str) -> str | None:
     for _pat in _DESTRUCTIVE_PYTHON_PATTERNS:
         if _dre.search(_pat, _code):
             return _pat
+    if _absolute_open_write(_code):
+        return "absolute-path open in write/append mode"
     return None
 
 

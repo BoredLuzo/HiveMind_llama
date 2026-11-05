@@ -68,6 +68,13 @@ next to the old install. Settings, models, sessions and the venv are kept.
   the explicitly queued file is delivered instead of being dropped silently.
 - The Linux push gate now installs `pypdf` and runs the gateway, document,
   image, send-file, planner-briefing and resume suites.
+- Python tools use the engine (or workspace) interpreter instead of a bare
+  `python` from PATH. On uv-only installs `run_python` no longer reports a
+  missing Python, and `run_bash`/`run_tests`/background jobs get the venv
+  Python on PATH.
+- The destructive gate only treats absolute-path opens in write/append mode
+  as destructive. Read-only file inspection such as
+  `open('C:/path/file.js', 'r')` no longer opens a confirmation card.
 
 ## Installer and update
 
@@ -76,6 +83,8 @@ next to the old install. Settings, models, sessions and the venv are kept.
   update no longer pulls pytest/ruff into the user venv.
 - `pypdf` is part of the core dependency set in `pyproject.toml` and
   `uv.lock`; document upload works on a fresh install without a manual step.
+- The Windows installer and updater add uv's `.local\bin` directory to the
+  user PATH once, so `uv`/the managed Python are reachable from new terminals.
 - The Linux installer now resolves the repo root from `deploy/` (the
   documented `sudo deploy/install_linux.sh` path works), installs uv where it
   looks for it, uses `--inexact`, keeps the uv-managed `.local` runtime across

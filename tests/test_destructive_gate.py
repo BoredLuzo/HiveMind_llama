@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.runner import (
     _is_destructive_bash,
+    _is_destructive_python,
     _destructive_gate,
     _current_run_id,
     _pause_timeout_s,
@@ -159,6 +160,36 @@ check_detection("PowerShell Format-List", "Get-ChildItem | Format-List *", False
 check_detection("Python format()", "python -c \"print('{}'.format(42))\"", False)
 check_detection("format with drive (really destructive)", "format D:", True)
 check_detection("format /q drive", "format D: /q", True)
+
+
+# ── run_python: reading an absolute path is not destructive ──────────────
+def check_python(label, code, expected):
+    result = _is_destructive_python(code)
+    check(f"python {label}", (result is not None) == expected,
+          f" (matched: {result})" if result else "")
+
+
+check_python("absolute read",
+             "open('C:/Users/x/Desktop/tetris/script.js', 'r', encoding='utf-8').read()",
+             False)
+check_python("absolute read default mode",
+             "open('C:/tmp/a.txt').read()", False)
+check_python("relative write",
+             "open('out.txt', 'w').write('x')", False)
+check_python("absolute write",
+             "open('C:/tmp/out.txt', 'w').write('x')", True)
+check_python("absolute append",
+             "open('/tmp/out.txt', mode='a').write('x')", True)
+check_python("absolute r+",
+             "open('C:/tmp/a.txt', 'r+').read()", True)
+check_python("os.remove is still destructive",
+             "import os\nos.remove('C:/tmp/a.txt')", True)
+check_python("compile/read check is not destructive",
+             "compile(code, 'script.js', '')", False)
+_res_read = asyncio.run(_destructive_gate(
+    "run_python",
+    {"code": "open('C:/Users/x/tetris/script.js', 'r', encoding='utf-8').read()"}))
+check("read-only absolute open does not open the gate", _res_read is None)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

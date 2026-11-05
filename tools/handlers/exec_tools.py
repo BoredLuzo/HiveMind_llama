@@ -105,6 +105,12 @@ import tempfile
 
 from . import _shared
 
+
+def _tool_env_with_python() -> dict:
+    """Child env for tool runs with the engine venv first on PATH."""
+    from infra.child_env import tool_env as _tool_env
+    return _tool_env()
+
 _DANGEROUS_PATTERNS = [
     "rm -rf /", "rm -rf ~", "rm -rf .", "rm -rf /*", "rm -rf ~/*",
     "dd if=", "mkfs.", ":(){ :|:& };:", "chmod 777 /", "chmod -R 777 /",
@@ -189,14 +195,24 @@ async def _inline_tool_run_python(args: dict, workspace: Path, _workspace_lock: 
                 return f.name
 
         fname = await asyncio.to_thread(_write_temp_python)
-        _py_cmd = "python" if sys.platform == "win32" else "python3"
+        # Prefer a workspace venv (same one install_package uses), otherwise
+        # the engine venv. A bare "python" does not exist on uv-managed
+        # installs (only python3.14.exe on PATH).
+        _ws_py = None
+        for _cand in (Path(workspace) / ".venv" / "Scripts" / "python.exe",
+                      Path(workspace) / ".venv" / "bin" / "python",
+                      Path(workspace) / "venv" / "Scripts" / "python.exe",
+                      Path(workspace) / "venv" / "bin" / "python"):
+            if _cand.is_file():
+                _ws_py = _cand
+                break
+        _py_cmd = str(_ws_py) if _ws_py is not None else (
+            sys.executable or ("python" if sys.platform == "win32" else "python3"))
         # UTF-8 child IO (2026-09-18): without this, child Python on Windows
         # pipes stdout through cp1252 and ANY non-ASCII print (✓/✗, umlauts)
         # raises UnicodeEncodeError inside the snippet — the code crashed on
         # a cosmetic character, not on its logic.
-        import os as _os
-        from infra.child_env import scrubbed_env as _scrubbed_env
-        _env = {**_scrubbed_env(), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        _env = _tool_env_with_python()
         from tools.sandbox import ToolJob as _ToolJob, spawn_kwargs as _spawn_kwargs, kill_tree as _kill_tree
         r = await asyncio.create_subprocess_exec(
             _py_cmd,
@@ -518,9 +534,9 @@ async def _inline_tool_run_bash(args: dict, workspace: Path, _workspace_lock: st
                     if sys.platform == "win32"
                     else [_BASH_BIN, "-c", cmd]  # X6: not every distro ships /bin/bash
                 )
-            from infra.child_env import scrubbed_env as _scrubbed_env
             stdout_raw, stderr_raw, returncode, timed_out = await _stream_proc(
-                _stream_cmd, _bash_timeout, str(workspace), _scrubbed_env(),
+                _stream_cmd, _bash_timeout, str(workspace),
+                _tool_env_with_python(),
             )
         finally:
             if _ka_task:

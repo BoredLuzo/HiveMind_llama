@@ -127,6 +127,13 @@ REM another interpreter (3.15 has no wheel for tree-sitter -> MSVC build
 REM -> the install died here on a fresh machine, 2026-10-18).
 uv python find 3.14 >nul 2>&1
 if errorlevel 1 goto python_missing
+REM UV-PATH-PERSIST (2026-11-05): uv puts the python3.14 shim in
+REM %USERPROFILE%\.local\bin. If that directory is not in the user PATH yet,
+REM add it once (idempotent) so a normal terminal can use uv/Python too.
+if not exist "%USERPROFILE%\.local\bin" goto uv_path_done
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$d = Join-Path $env:USERPROFILE '.local\bin'; $p = [Environment]::GetEnvironmentVariable('Path','User'); if (($p -split ';') -contains $d) { 'present' } else { [Environment]::SetEnvironmentVariable('Path', (($p.TrimEnd(';')) + ';' + $d).TrimStart(';'), 'User'); 'added' }"`) do set "UV_PATH_STATE=%%P"
+if /i "%UV_PATH_STATE%"=="added" echo   [uv] added %USERPROFILE%\.local\bin to the user PATH ^(new terminals only^).
+:uv_path_done
 echo.
 
 REM ======================================================

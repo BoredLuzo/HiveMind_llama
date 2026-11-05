@@ -515,6 +515,15 @@ if defined UV_EXE (
     echo         If the new release needs new packages, run install.bat once.
 )
 
+REM -- 9b-2. Keep uv's python shim on the user PATH -------------------------
+REM uv installs python3.14.exe into %USERPROFILE%\.local\bin; if that folder
+REM is missing from the user PATH, add it once so new terminals can use it.
+if not exist "%USERPROFILE%\.local\bin" goto uv_path_update_done
+set "UV_PATH_STATE="
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "$d = Join-Path $env:USERPROFILE '.local\bin'; $p = [Environment]::GetEnvironmentVariable('Path','User'); if (($p -split ';') -contains $d) { 'present' } else { [Environment]::SetEnvironmentVariable('Path', (($p.TrimEnd(';')) + ';' + $d).TrimStart(';'), 'User'); 'added' }"`) do set "UV_PATH_STATE=%%P"
+if /i "%UV_PATH_STATE%"=="added" echo  [uv] added %USERPROFILE%\.local\bin to the user PATH ^(new terminals only^).
+:uv_path_update_done
+
 REM -- 9c. Optional components -------------------------------------------------
 REM A release can add optional pieces (voice, decider, browser tool). After
 REM every update, ask once for those that are NOT on this machine - an

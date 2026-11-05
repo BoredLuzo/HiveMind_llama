@@ -42,6 +42,14 @@ protects the uv-managed `.local` runtime from re-sync, and installs
 runs the gateway, document, image, send-file, planner-briefing and resume
 suites.
 
+Python tools now use the engine (or workspace) interpreter instead of a bare
+`python` from PATH: on uv-only installs `run_python` no longer reports a
+missing Python, and `run_bash`/`run_tests`/background jobs get the venv
+Python on PATH. The Windows installer and updater add uv's `.local\bin` to
+the user PATH once. The destructive gate only treats absolute-path opens in
+write/append mode as destructive, so read-only file inspection no longer asks
+for confirmation.
+
 ## [1.5.2] - 2026-11-04
 
 Telegram file delivery and agent polish on top of 1.5.1. `/send <path>`

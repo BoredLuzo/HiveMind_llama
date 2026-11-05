@@ -56,3 +56,25 @@ def scrubbed_env(extra: dict | None = None) -> dict:
     if extra:
         out.update({str(k): str(v) for k, v in extra.items()})
     return out
+
+
+def tool_env(extra: dict | None = None) -> dict:
+    """Scrubbed env for model-chosen tools, with the engine Python on PATH.
+
+    uv-managed installs often have no `python` on the system PATH (only
+    python3.14.exe). Prepending the running interpreter's directory makes
+    `python script.py` / `python -m pytest` work without touching the user's
+    PATH.
+    """
+    out = scrubbed_env(extra)
+    try:
+        import sys
+        from pathlib import Path
+        py = Path(sys.executable)
+        if py.is_file():
+            out["PATH"] = str(py.parent) + os.pathsep + out.get("PATH", "")
+    except (OSError, TypeError, ValueError):
+        pass
+    out["PYTHONIOENCODING"] = "utf-8"
+    out["PYTHONUTF8"] = "1"
+    return out
