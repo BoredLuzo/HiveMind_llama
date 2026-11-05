@@ -1,3 +1,30 @@
+## [1.5.4] - 2026-11-05
+
+Automations: scheduled agent runs are now owned by the engine, not the
+Telegram gateway. Each automation stores a prompt, a schedule (`every`, `once`
+or `daily`), mode, tools tier, workspace and an overlap policy. It fires as a
+normal engine run into its own `⏰ <name>` chat, so the transcript, run journal
+and UI behave like an interactive run. A single scheduler lane never starts a
+scheduled run while another run is live: `skip` is the default, `queue` holds
+at most one pending fire per job, and a queued fire runs when the lane frees.
+The UI has an Automations tab with create/edit/run-now/pause/delete and recent
+run history. Automap is removed from the mode selector (old `mode=automap`
+presets map to `auto`; engine support stays for compatibility).
+
+Chat auto-save is serialized, so two saves can no longer create two chats
+before the first one has an id. "Retry in new chat" is hidden after a
+first-turn failure, where it only produced duplicate one-message history
+entries. The Windows LSP install step refreshes the machine/user PATH before
+its self-test, so a freshly installed clangd is detected instead of reported
+as missing.
+
+This release also includes the re-published 1.5.3 fixes: Python tools use the
+engine or workspace interpreter instead of a bare `python` from PATH,
+`run_bash`/`run_tests`/background jobs get the venv Python on PATH, the
+destructive gate only treats absolute-path writes as destructive (read-only
+file inspection no longer asks), and the Windows installer/updater persist
+uv's `.local\bin` on the user PATH.
+
 ## [1.5.3] - 2026-11-04
 
 Hardening release on top of 1.5.2. Telegram documents are binary-safe again:

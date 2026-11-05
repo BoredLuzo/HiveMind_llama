@@ -71,6 +71,7 @@
     <button class="tab" data-p="soul" style="color:var(--purple)">Soul</button>
     <button class="tab" data-p="models" style="color:#3a9960">Models</button>
     <button class="tab" data-p="chats" style="color:var(--green)">Chats</button>
+    <button class="tab" data-p="automations" style="color:var(--blue)">Automations</button>
     <button id="sb-close-btn" onclick="toggleSidebar()" title="Collapse sidebar">&#171;</button>
   </div>
   <!-- AGENTS -->
@@ -80,7 +81,6 @@
       <div class="mbtn on" data-mode="auto" onclick="setMode('auto',this)" title="Auto: the decider picks direct or agentic; tool requests run in the Direct chat loop (when Chat Tools on)">Auto</div>
       <div class="mbtn" data-mode="simple" onclick="setMode('simple',this)" title="Chat (Direct) — fast single-model chat. Chat Tools (read/python/web) available when enabled">Chat</div>
       <div class="mbtn" data-mode="pipeline" onclick="setMode('pipeline',this)" title="Pipeline — Analyst → Refiner → Critic → Synthesizer (multi-agent)">Pipeline</div>
-      <div class="mbtn" data-mode="automap" onclick="setMode('automap',this)" style="color:var(--blue);border-color:rgba(72,120,192,.4)" title="AutoMap — judge picks a model per task type">AutoMap</div>
       <div class="mbtn" data-mode="code_duo" onclick="setMode('code_duo',this)" style="color:#20b0a0;border-color:rgba(32,176,160,.35)" title="Code-Duo — iterative coder+critic loop, 2 models in parallel in VRAM">&#8644; Code-Duo</div>
     </div>
     <div id="mode-desc" style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin:-4px 0 9px;line-height:1.5"></div>
@@ -2438,6 +2438,68 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       &#9660; Save current chat
     </button>
     <div id="chat-history-list"><div class="empty">No saved chats yet.</div></div>
+  </div>
+  <div class="panel" id="p-automations">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="sec" style="margin:0">Automations</div>
+      <button onclick="loadAutomations()" style="background:none;border:none;color:var(--tx2);cursor:pointer;font-size:16px">&#8635;</button>
+    </div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);margin-bottom:10px;line-height:1.5">
+      Scheduled agent runs. They run while HiveMind is open, in their own chat.
+    </div>
+    <button onclick="automationNew()" class="amber-btn" style="width:100%;margin-bottom:10px">
+      + New automation
+    </button>
+    <div id="automation-list"><div class="empty">No automations yet.</div></div>
+    <div id="automation-editor" style="display:none;margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <div class="sec" id="automation-editor-title">New automation</div>
+      <label class="fld-hint">Name</label>
+      <input id="auto-name" class="rt-input" style="width:100%;margin-bottom:8px" placeholder="Daily repo triage">
+      <label class="fld-hint">Prompt</label>
+      <textarea id="auto-prompt" class="rt-input" style="width:100%;min-height:90px;margin-bottom:8px" placeholder="What should the agent do?"></textarea>
+      <label class="fld-hint">Schedule</label>
+      <select id="auto-kind" class="rt-input" style="width:100%;margin-bottom:6px" onchange="automationScheduleChanged()">
+        <option value="every">Every N minutes</option>
+        <option value="once">Once, in N minutes</option>
+        <option value="daily">Daily at</option>
+      </select>
+      <div id="auto-interval-row" style="display:flex;gap:6px;margin-bottom:8px">
+        <input id="auto-interval" class="rt-input" type="number" min="1" value="60" style="flex:1">
+        <span class="fld-hint" style="align-self:center">minutes</span>
+      </div>
+      <div id="auto-time-row" style="display:none;margin-bottom:8px">
+        <input id="auto-time" class="rt-input" type="time" value="09:00" style="width:100%">
+      </div>
+      <label class="fld-hint">Mode</label>
+      <select id="auto-mode" class="rt-input" style="width:100%;margin-bottom:8px">
+        <option value="auto">Auto</option>
+        <option value="simple" selected>Chat</option>
+        <option value="pipeline">Pipeline</option>
+        <option value="code_duo">Code-Duo</option>
+      </select>
+      <label class="fld-hint">Tools</label>
+      <select id="auto-tier" class="rt-input" style="width:100%;margin-bottom:8px">
+        <option value="readonly">Read-only + web</option>
+        <option value="python">Python</option>
+        <option value="full">Full (write/shell)</option>
+        <option value="off">Off</option>
+      </select>
+      <label class="fld-hint">Workspace (empty = current)</label>
+      <input id="auto-workspace" class="rt-input" style="width:100%;margin-bottom:8px" placeholder="C:\\path\\to\\project">
+      <label class="fld-hint">When a run is active</label>
+      <select id="auto-policy" class="rt-input" style="width:100%;margin-bottom:8px">
+        <option value="skip">Skip this occurrence</option>
+        <option value="queue">Queue once, run when idle</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:8px">
+        <input id="auto-enabled" type="checkbox" checked> Enabled
+      </label>
+      <div style="display:flex;gap:8px">
+        <button onclick="automationSave()" class="amber-btn" style="flex:1">Save</button>
+        <button onclick="automationCancel()" class="rt-input" style="flex:0 0 auto;padding:6px 10px">Cancel</button>
+      </div>
+    </div>
+    <div id="automation-runs" style="margin-top:12px"></div>
   </div>
 </div>
 <button id="sb-toggle" onclick="toggleSidebar()" title="Expand sidebar">&#9776; Panel</button>

@@ -361,3 +361,14 @@ def steer_queue_view(run_id: str) -> list:
     return list(_steer_queue.get(str(run_id or ""), []))
 
 
+
+
+def live_run_ids() -> list[str]:
+    """Run ids that currently have a live abort event (user or automation)."""
+    import time as _time
+    now = _time.time()
+    out = []
+    for rid, ts in list(_run_abort_registry_ts.items()):
+        if now - float(ts) <= 7200 and rid in _run_abort_registry:
+            out.append(str(rid))
+    return out

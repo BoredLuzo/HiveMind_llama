@@ -89,6 +89,15 @@ _r = subprocess.run([sys.executable, str(ROOT / "deploy" / "gen_settings_docs.py
 check("docs/settings.md is generated and current", _r.returncode == 0,
       (_r.stdout or _r.stderr).strip()[:60])
 
+check("first-turn retry reuses the same chat",
+      "_hasAssistant" in appjs
+      and "if (!_hasAssistant) { _retryLastPrompt(); return; }" in appjs)
+check("new-chat retry is hidden for a first-turn failure",
+      "_hasAssistantTurn" in appjs)
+check("chat saves are serialized to avoid duplicate chats",
+      "_chatPersistPromise" in appjs
+      and "await S._chatPersistPromise" in appjs)
+
 print()
 print(f"SUMMARY audit_fixes_2026_10_18: {passed} passed, {failed} failed")
 sys.exit(0 if failed == 0 else 1)

@@ -925,7 +925,7 @@ async function loadSettings() {
     const s = await (await fetch('/settings')).json();
 
     S.iters          = s.max_iterations || 2;
-    S.mode           = s.mode || 'automap';
+    S.mode           = (s.mode === 'automap' ? 'auto' : (s.mode || 'auto'));
     S.activePreset   = s.active_preset || '';
     S.constraintMode = s.constraint_mode !== false;
     // OPT-IN (2026-10-18): prefetch is a VRAM gamble on a tight budget, so the
@@ -6663,6 +6663,12 @@ function _retryLastPrompt() {
 async function _retryLastPromptNewChat() {
   var _lp = S.lastPrompt;
   if (!_lp || S.streaming) return;
+  // A first-turn failure has no context to reset. Retrying in a new chat
+  // only created duplicate one-message history entries; reuse the chat.
+  var _hasAssistant = (S.currentChatMessages || []).some(function(m) {
+    return m && m.role === 'assistant' && String(m.content || '').trim();
+  });
+  if (!_hasAssistant) { _retryLastPrompt(); return; }
   await newChat();
   var _inp = document.getElementById('input');
   if (_inp) { _inp.value = _lp; }
@@ -8898,12 +8904,19 @@ function handleEvent(d) {
       _rtBtn.onclick = function() { _rtBtn.disabled = true; _rtBtn.textContent = '\u21BA Retrying\u2026'; _retryLastPrompt(); };
       _rtWrap.appendChild(_rtBtn);
       // RETRY-IN-NEW-CHAT (2026-09-01): second button — same prompt,
-      // but a fresh chat (session/DOM cleared via newChat()).
-      var _rtNCBtn = document.createElement('button');
-      _rtNCBtn.textContent = '\u21BA Retry in new chat';
-      _rtNCBtn.style.cssText = 'background:none;border:1px solid #c09050;border-radius:4px;color:#d0a060;font-family:\'IBM Plex Mono\',monospace;font-size:10px;font-weight:600;padding:4px 12px;cursor:pointer;letter-spacing:.05em';
-      _rtNCBtn.onclick = function() { _rtNCBtn.disabled = true; _rtNCBtn.textContent = '\u21BA Retrying\u2026'; _retryLastPromptNewChat(); };
-      _rtWrap.appendChild(_rtNCBtn);
+      // but a fresh chat. Only offer it when the chat already has an
+      // assistant turn; on a first-turn failure it only duplicated the
+      // one-message history entry.
+      var _hasAssistantTurn = (S.currentChatMessages || []).some(function(m) {
+        return m && m.role === 'assistant' && String(m.content || '').trim();
+      });
+      if (_hasAssistantTurn) {
+        var _rtNCBtn = document.createElement('button');
+        _rtNCBtn.textContent = '\u21BA Retry in new chat';
+        _rtNCBtn.style.cssText = 'background:none;border:1px solid #c09050;border-radius:4px;color:#d0a060;font-family:\'IBM Plex Mono\',monospace;font-size:10px;font-weight:600;padding:4px 12px;cursor:pointer;letter-spacing:.05em';
+        _rtNCBtn.onclick = function() { _rtNCBtn.disabled = true; _rtNCBtn.textContent = '\u21BA Retrying\u2026'; _retryLastPromptNewChat(); };
+        _rtWrap.appendChild(_rtNCBtn);
+      }
       _rtWrap.appendChild(document.createTextNode('Run ended with "' + d.stop_reason + '"'));
       document.getElementById('chat').appendChild(_rtWrap);
     }
@@ -9403,6 +9416,7 @@ document.querySelectorAll('.tab').forEach(function(btn) {
     if (btn.dataset.p === 'configs') initConfigsPanel();
     if (btn.dataset.p === 'soul')   loadSoulStatus();
     if (btn.dataset.p === 'chats')  loadChatHistory();
+    if (btn.dataset.p === 'automations') loadAutomations();
   });
 });
 
@@ -11925,6 +11939,23 @@ function imagePersistToggle(el) {
 }
 
 async function persistCurrentChat(silent) {
+  // SERIALIZE (2026-11-05): two saves that both ran before the first POST
+  // returned saw currentChatId=null and each created a chat - the history
+  // filled with identical one-message entries. Wait for the in-flight save,
+  // then update the chat it created.
+  if (S._chatPersistPromise) {
+    try { await S._chatPersistPromise; } catch (e) {}
+  }
+  const _p = _persistCurrentChatNow(silent);
+  S._chatPersistPromise = _p;
+  try {
+    return await _p;
+  } finally {
+    if (S._chatPersistPromise === _p) S._chatPersistPromise = null;
+  }
+}
+
+async function _persistCurrentChatNow(silent) {
   _autosaveChatMessage();
   if (!S.currentChatMessages.length) return false;
   // Generate title from first user message (only on creation; existing titles stay)
@@ -12044,6 +12075,218 @@ async function loadChatHistory() {
       c.appendChild(item);
     });
   } catch(e) {}
+}
+
+// -- Automations ------------------------------------------------
+var _autoJobs = [];
+var _autoEditingId = null;
+
+function _autoScheduleLabel(s) {
+  s = s || {};
+  if (s.kind === 'daily') return 'daily ' + (s.at_hm || '09:00');
+  if (s.kind === 'once') return 'once in ' + Math.round((s.interval_s || 0) / 60) + 'm';
+  return 'every ' + Math.round((s.interval_s || 0) / 60) + 'm';
+}
+
+function _autoNextLabel(ts) {
+  if (!ts) return 'never';
+  try { return new Date(Number(ts) * 1000).toLocaleString(); }
+  catch (e) { return '?'; }
+}
+
+async function loadAutomations() {
+  const list = document.getElementById('automation-list');
+  if (!list) return;
+  try {
+    const d = await (await fetch('/automations')).json();
+    _autoJobs = d.automations || [];
+    if (!_autoJobs.length) {
+      list.innerHTML = '<div class="empty">No automations yet.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    _autoJobs.forEach(function(job) {
+      const item = document.createElement('div');
+      item.className = 'chat-hist-item';
+      const dot = document.createElement('div');
+      dot.className = 'chat-hist-dot';
+      dot.style.background = job.enabled ? 'var(--green)' : 'var(--tx3)';
+      const info = document.createElement('div');
+      info.className = 'chat-hist-info';
+      const title = document.createElement('div');
+      title.className = 'chat-hist-title';
+      title.textContent = job.name || 'Automation';
+      const prev = document.createElement('div');
+      prev.className = 'chat-hist-preview';
+      prev.textContent = job.prompt || '';
+      const meta = document.createElement('div');
+      meta.className = 'chat-hist-meta';
+      meta.textContent = _autoScheduleLabel(job.schedule)
+        + ' · next ' + _autoNextLabel(job.next_ts)
+        + (job.last_status ? ' · last ' + job.last_status : '');
+      info.appendChild(title); info.appendChild(prev); info.appendChild(meta);
+      const actions = document.createElement('div');
+      actions.style.cssText = 'display:flex;gap:4px;margin-top:6px;flex-wrap:wrap';
+      function mk(label, fn) {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.style.cssText = 'background:none;border:1px solid var(--line);border-radius:4px;color:var(--tx2);font-family:inherit;font-size:9px;padding:3px 7px;cursor:pointer';
+        b.onclick = function(e) { e.stopPropagation(); fn(); };
+        actions.appendChild(b);
+      }
+      mk('▶ Run', function() { automationRun(job.id); });
+      mk('✎ Edit', function() { automationEdit(job.id); });
+      mk('Runs', function() { automationShowRuns(job.id); });
+      mk(job.enabled ? '⏸ Pause' : '▶ Enable', function() { automationToggle(job.id); });
+      mk('×', function() { automationDelete(job.id); });
+      info.appendChild(actions);
+      item.appendChild(dot); item.appendChild(info);
+      list.appendChild(item);
+    });
+  } catch (e) {
+    list.innerHTML = '<div class="empty">Could not load automations.</div>';
+  }
+}
+
+function automationScheduleChanged() {
+  const kind = (document.getElementById('auto-kind') || {}).value;
+  const ir = document.getElementById('auto-interval-row');
+  const tr = document.getElementById('auto-time-row');
+  if (ir) ir.style.display = kind === 'daily' ? 'none' : 'flex';
+  if (tr) tr.style.display = kind === 'daily' ? 'block' : 'none';
+}
+
+function _autoShowEditor(show) {
+  const el = document.getElementById('automation-editor');
+  if (el) el.style.display = show ? 'block' : 'none';
+}
+
+function automationNew() {
+  _autoEditingId = null;
+  const set = function(id, v) { const e = document.getElementById(id); if (e) e.value = v; };
+  set('auto-name', '');
+  set('auto-prompt', '');
+  set('auto-kind', 'every');
+  set('auto-interval', '60');
+  set('auto-time', '09:00');
+  set('auto-mode', 'simple');
+  set('auto-tier', 'readonly');
+  set('auto-workspace', '');
+  set('auto-policy', 'skip');
+  const en = document.getElementById('auto-enabled'); if (en) en.checked = true;
+  const title = document.getElementById('automation-editor-title');
+  if (title) title.textContent = 'New automation';
+  automationScheduleChanged();
+  _autoShowEditor(true);
+}
+
+function automationEdit(jobId) {
+  const job = _autoJobs.find(function(j) { return j.id === jobId; });
+  if (!job) return;
+  _autoEditingId = jobId;
+  const set = function(id, v) { const e = document.getElementById(id); if (e) e.value = v; };
+  const s = job.schedule || {};
+  set('auto-name', job.name || '');
+  set('auto-prompt', job.prompt || '');
+  set('auto-kind', s.kind === 'daily' ? 'daily' : (s.kind === 'once' ? 'once' : 'every'));
+  set('auto-interval', String(Math.max(1, Math.round((s.interval_s || 3600) / 60))));
+  set('auto-time', s.at_hm || '09:00');
+  set('auto-mode', job.mode || 'simple');
+  set('auto-tier', job.tools_tier || 'readonly');
+  set('auto-workspace', job.workspace || '');
+  set('auto-policy', job.policy || 'skip');
+  const en = document.getElementById('auto-enabled'); if (en) en.checked = !!job.enabled;
+  const title = document.getElementById('automation-editor-title');
+  if (title) title.textContent = 'Edit automation';
+  automationScheduleChanged();
+  _autoShowEditor(true);
+}
+
+function automationCancel() {
+  _autoEditingId = null;
+  _autoShowEditor(false);
+}
+
+async function automationSave() {
+  const get = function(id) { const e = document.getElementById(id); return e ? e.value : ''; };
+  const kind = get('auto-kind') || 'every';
+  let schedule;
+  if (kind === 'daily') {
+    schedule = {kind: 'daily', at_hm: get('auto-time') || '09:00'};
+  } else {
+    const minutes = Math.max(1, parseInt(get('auto-interval'), 10) || 60);
+    schedule = {kind: kind, interval_s: minutes * 60};
+  }
+  const payload = {
+    name: get('auto-name') || 'Automation',
+    prompt: get('auto-prompt'),
+    schedule: schedule,
+    mode: get('auto-mode') || 'auto',
+    tools_tier: get('auto-tier') || 'readonly',
+    workspace: get('auto-workspace') || '',
+    policy: get('auto-policy') || 'skip',
+    enabled: !!(document.getElementById('auto-enabled') || {}).checked,
+  };
+  try {
+    const url = _autoEditingId ? '/automations/' + _autoEditingId : '/automations';
+    const r = await fetch(url, {
+      method: _autoEditingId ? 'PUT' : 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json().catch(function() { return {}; });
+    if (!r.ok) { showStatus('⚠ ' + (d.error || ('HTTP ' + r.status))); return; }
+    _autoEditingId = null;
+    _autoShowEditor(false);
+    showStatus('Automation saved.');
+    loadAutomations();
+  } catch (e) {
+    showStatus('Saving automation failed: ' + e.message);
+  }
+}
+
+async function automationRun(jobId) {
+  try {
+    const r = await fetch('/automations/' + jobId + '/run', {method: 'POST'});
+    const d = await r.json().catch(function() { return {}; });
+    showStatus(d.ok ? '▶ Automation started.' : ('⚠ ' + (d.note || 'not started')));
+    loadAutomations();
+  } catch (e) { showStatus('Run failed: ' + e.message); }
+}
+
+async function automationToggle(jobId) {
+  try {
+    await fetch('/automations/' + jobId + '/toggle', {method: 'POST'});
+    loadAutomations();
+  } catch (e) {}
+}
+
+async function automationDelete(jobId) {
+  if (!confirm('Delete this automation? Its chat history stays.')) return;
+  try {
+    await fetch('/automations/' + jobId, {method: 'DELETE'});
+    loadAutomations();
+  } catch (e) {}
+}
+
+async function automationShowRuns(jobId) {
+  const box = document.getElementById('automation-runs');
+  if (!box) return;
+  try {
+    const d = await (await fetch('/automations/' + jobId + '/runs')).json();
+    const runs = d.runs || [];
+    if (!runs.length) { box.innerHTML = '<div class="empty">No runs yet.</div>'; return; }
+    box.innerHTML = '<div class="sec">Recent runs</div>';
+    runs.slice().reverse().forEach(function(run) {
+      const row = document.createElement('div');
+      row.className = 'chat-hist-meta';
+      row.style.marginBottom = '3px';
+      row.textContent = (run.status || '?') + ' · '
+        + (run.stop_reason || '') + ' · '
+        + new Date(Number(run.started || 0) * 1000).toLocaleString();
+      box.appendChild(row);
+    });
+  } catch (e) { box.innerHTML = '<div class="empty">Could not load runs.</div>'; }
 }
 
 async function loadChat(chatId) {

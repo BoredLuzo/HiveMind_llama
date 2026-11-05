@@ -146,6 +146,11 @@ echo  ------------------------------------------------------------
 echo   Checking which language servers actually answer
 echo  ------------------------------------------------------------
 echo.
+REM PATH-REFRESH (2026-11-05): winget/rustup update the machine/user PATH,
+REM but this cmd process still has the old one. Without this refresh a
+REM freshly installed clangd was reported MISS even though winget succeeded.
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"`) do set "PATH=%%P"
+set "PATH=%PATH%;%LOCALAPPDATA%\Microsoft\WinGet\Links;%ProgramFiles%\LLVM\bin"
 REM A server counts as usable only when it completes the LSP handshake and
 REM returns diagnostics - an existing executable is not enough.
 "%PY%" deploy\lsp_selftest.py

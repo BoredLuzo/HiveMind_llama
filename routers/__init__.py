@@ -11,6 +11,7 @@ from routers.vram import router as vram_router
 from routers.websearch import router as websearch_router
 from routers.skills import router as skills_router
 from routers.automap import router as automap_router
+from routers.automations import router as automations_router
 from routers.debug import router as debug_router
 from routers.models import router as models_router
 from routers.mcp import router as mcp_router

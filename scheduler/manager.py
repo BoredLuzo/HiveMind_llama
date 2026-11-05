@@ -1,0 +1,341 @@
+"""Engine-owned Automations scheduler.
+
+Jobs fire as normal engine runs through the loopback `/stream` endpoint so
+the run journal, chat transcript and UI behave exactly like an interactive
+run. One scheduler lane: a fire never starts while another run is live.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from scheduler import spec
+from scheduler.store import AutomationStore
+
+logger = logging.getLogger("hivemind.scheduler")
+
+TICK_S = 5.0
+MISSED_GRACE_S = 600.0
+MAX_PENDING_S = 1800.0
+DEFAULT_RUNTIME_S = 1800.0
+
+
+def _now() -> float:
+    return time.time()
+
+
+class SchedulerManager:
+    def __init__(self, store_path: str | Path, base_url: str):
+        self.store = AutomationStore(store_path)
+        self.base_url = base_url.rstrip("/")
+        self._client: httpx.AsyncClient | None = None
+        self._task: asyncio.Task | None = None
+        self._active_job_id = ""
+        self._active_run_id = ""
+        self._fire_lock = asyncio.Lock()
+
+    # -- lifecycle --------------------------------------------------------
+    async def start(self) -> None:
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self.run_loop(),
+                                             name="automations")
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            except (RuntimeError, ValueError, OSError, AttributeError,
+                    TypeError):
+                logger.debug("[AUTOMATION] scheduler task ended with error",
+                             exc_info=True)
+            self._task = None
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    def _http(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=httpx.Timeout(600.0, connect=10.0),
+            )
+        return self._client
+
+    async def run_loop(self) -> None:
+        while True:
+            try:
+                await self.tick()
+            except asyncio.CancelledError:
+                raise
+            except (RuntimeError, ValueError, OSError, AttributeError,
+                    TypeError, KeyError) as exc:
+                logger.warning("[AUTOMATION] tick failed: %s: %s",
+                               type(exc).__name__, exc)
+            await asyncio.sleep(TICK_S)
+
+    # -- lane -------------------------------------------------------------
+    @staticmethod
+    def _live_run_ids() -> list[str]:
+        try:
+            from infra.run_control import live_run_ids
+            return live_run_ids()
+        except (ImportError, AttributeError):
+            return []
+
+    def lane_busy(self) -> bool:
+        return bool(self._live_run_ids())
+
+    # -- tick -------------------------------------------------------------
+    async def tick(self, now: float | None = None) -> None:
+        now = _now() if now is None else float(now)
+        jobs = self.store.jobs()
+        # A queued fire waits for the lane; one slot per job.
+        pending = [j for j in jobs if j.get("pending_fire")]
+        if pending and not self.lane_busy():
+            job = min(pending, key=lambda j: float(
+                (j.get("pending_fire") or {}).get("due_ts") or 0))
+            p = job.get("pending_fire") or {}
+            if now - float(p.get("queued_ts") or now) > MAX_PENDING_S:
+                job["pending_fire"] = None
+                job["next_ts"] = spec.advance_fire_ts(
+                    job.get("schedule") or {}, float(job.get("next_ts") or now),
+                    now, job.get("timezone") or "")
+                job["last_status"] = "skipped_stale"
+                self.store.save()
+                self.store.append_history({
+                    "job_id": job.get("id"), "status": "skipped_stale",
+                    "queued_ts": p.get("queued_ts"), "ts": now})
+            else:
+                job["pending_fire"] = None
+                self.store.save()
+                await self._fire(job, now, reason="queued")
+            return
+
+        for job in jobs:
+            if not job.get("enabled", True):
+                continue
+            schedule = job.get("schedule") or {}
+            due = spec.classify_due(job.get("next_ts"), now, MISSED_GRACE_S)
+            if due == "not_due":
+                continue
+            if due == "missed":
+                job["next_ts"] = spec.advance_fire_ts(
+                    schedule, float(job.get("next_ts") or now), now,
+                    job.get("timezone") or "")
+                job["last_status"] = "missed"
+                self.store.save()
+                self.store.append_history({
+                    "job_id": job.get("id"), "status": "missed", "ts": now})
+                continue
+            if self.lane_busy():
+                policy = str(job.get("policy") or "skip")
+                if policy == "queue" and not job.get("pending_fire"):
+                    job["pending_fire"] = {"due_ts": job.get("next_ts"),
+                                           "queued_ts": now}
+                    job["last_status"] = "queued"
+                    self.store.save()
+                else:
+                    job["next_ts"] = spec.advance_fire_ts(
+                        schedule, float(job.get("next_ts") or now), now,
+                        job.get("timezone") or "")
+                    job["last_status"] = "skipped_busy"
+                    self.store.save()
+                    self.store.append_history({
+                        "job_id": job.get("id"), "status": "skipped_busy",
+                        "ts": now})
+                return
+            await self._fire(job, now, reason="due")
+            return
+
+    # -- run-now ----------------------------------------------------------
+    async def run_now(self, job_id: str) -> tuple[bool, str]:
+        job = self.store.get(job_id)
+        if job is None:
+            return False, "not found"
+        if self.lane_busy():
+            return False, "busy: another run is active"
+        # Fire in the background: a run can take minutes and the HTTP caller
+        # (UI button) must not block on it.
+        _t = asyncio.create_task(self._fire(job, _now(), reason="manual"),
+                                 name=f"automation-{job_id}")
+        _t.add_done_callback(lambda t: t.exception() and logger.warning(
+            "[AUTOMATION] manual run failed: %s", t.exception()))
+        return True, "started"
+
+    # -- firing -----------------------------------------------------------
+    async def _fire(self, job: dict, now: float, reason: str) -> None:
+        async with self._fire_lock:
+            if self.lane_busy():
+                return
+            job_id = str(job.get("id") or "")
+            schedule = job.get("schedule") or {}
+            started = _now()
+            chat_id = await self._ensure_chat(job)
+            if not chat_id:
+                job["last_status"] = "failed_chat"
+                self.store.save()
+                self.store.append_history({
+                    "job_id": job_id, "status": "failed_chat",
+                    "ts": started})
+                return
+            prompt = str(job.get("prompt") or "")
+            await self._append_turn(chat_id, "user", prompt, job)
+            # Persist the slot before the run: a crash must not refire it.
+            job["fires"] = int(job.get("fires") or 0) + 1
+            job["last_fired_ts"] = started
+            nxt = spec.advance_fire_ts(schedule, float(job.get("next_ts") or now),
+                                       now, job.get("timezone") or "")
+            job["next_ts"] = nxt
+            self.store.save()
+            self._active_job_id = job_id
+            body: dict[str, Any] = {
+                "q": prompt,
+                "chat_id": chat_id,
+                "mode": str(job.get("mode") or "auto"),
+                "source": "automation",
+                "automation_id": job_id,
+                "direct_tools_enabled": str(job.get("tools_tier") or "readonly") != "off",
+                "direct_tools_tier": str(job.get("tools_tier") or "readonly"),
+                "duo_action_approval_enabled": False,
+            }
+            ws = str(job.get("workspace") or "")
+            if ws:
+                body["workspace"] = ws
+            answer, stop_reason, run_id = await self._run_stream(
+                body, int(float(job.get("max_runtime_s") or DEFAULT_RUNTIME_S)))
+            self._active_job_id = ""
+            self._active_run_id = ""
+            if answer:
+                await self._append_turn(chat_id, "assistant", answer, job)
+            else:
+                await self._append_turn(
+                    chat_id, "assistant",
+                    f"✅ Automation finished ({stop_reason}).", job)
+            status = "ok" if stop_reason == "completed" else (
+                "partial" if stop_reason in ("loop_detected", "max_tool_rounds")
+                else "failed")
+            job["last_status"] = status
+            self.store.save()
+            self.store.append_history({
+                "job_id": job_id, "run_id": run_id, "chat_id": chat_id,
+                "status": status, "stop_reason": stop_reason,
+                "started": started, "finished": _now(),
+                "reason": reason})
+            if str(schedule.get("kind") or "") == "once" and job_id:
+                self.store.delete(job_id)
+
+    async def _run_stream(self, body: dict, max_runtime_s: int
+                          ) -> tuple[str, str, str]:
+        answer_parts: list[str] = []
+        run_id = ""
+        stop_reason = ""
+        client = self._http()
+
+        async def _consume() -> None:
+            nonlocal run_id, stop_reason
+            async with client.stream("POST", "/stream", json=body,
+                                     timeout=httpx.Timeout(
+                                         float(max_runtime_s) + 60,
+                                         connect=10.0)) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        ev = json.loads(line[6:])
+                    except ValueError:
+                        continue
+                    etype = ev.get("type")
+                    if etype == "run_id" and ev.get("run_id"):
+                        run_id = str(ev["run_id"])
+                    elif etype == "token":
+                        answer_parts.append(str(ev.get("content") or ""))
+                    elif etype == "done":
+                        stop_reason = str(ev.get("stop_reason") or "completed")
+                        return
+
+        try:
+            async with asyncio.timeout(max(30, int(max_runtime_s))):
+                await _consume()
+        except asyncio.TimeoutError:
+            stop_reason = "timeout"
+            if run_id:
+                try:
+                    await client.post(f"/abort/{run_id}", json={})
+                except (httpx.HTTPError, OSError):
+                    pass
+        except (httpx.HTTPError, OSError) as exc:
+            logger.warning("[AUTOMATION] stream failed: %s", exc)
+            stop_reason = "engine_error"
+        return "".join(answer_parts).strip(), stop_reason or "engine_error", run_id
+
+    # -- chat persistence -------------------------------------------------
+    async def _ensure_chat(self, job: dict) -> str:
+        existing = str(job.get("chat_id") or "")
+        if existing:
+            return existing
+        name = str(job.get("name") or "Automation")
+        ws = str(job.get("workspace") or "")
+        try:
+            r = await self._http().post("/chats", json={
+                "title": f"⏰ {name}", "messages": [], "workspace": ws})
+            r.raise_for_status()
+            data = r.json()
+            cid = str(data.get("id") or (data.get("chat") or {}).get("id") or "")
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            logger.warning("[AUTOMATION] chat create failed: %s", exc)
+            return ""
+        if cid:
+            job["chat_id"] = cid
+            self.store.save()
+        return cid
+
+    async def _get_chat(self, chat_id: str) -> tuple[list, int]:
+        r = await self._http().get(f"/chats/{chat_id}")
+        r.raise_for_status()
+        data = r.json()
+        msgs = data.get("messages") or []
+        rev = int(data.get("rev") or 0)
+        return msgs, rev
+
+    async def _append_turn(self, chat_id: str, role: str, content: str,
+                           job: dict) -> None:
+        if not content:
+            return
+        for _ in range(2):
+            try:
+                msgs, rev = await self._get_chat(chat_id)
+                msgs = list(msgs) + [{"role": role, "content": content,
+                                      "ts": int(time.time() * 1000)}]
+                ws = str(job.get("workspace") or "")
+                r = await self._http().put(f"/chats/{chat_id}", json={
+                    "messages": msgs, "workspace": ws, "base_rev": rev})
+                if r.status_code == 409:
+                    continue
+                r.raise_for_status()
+                return
+            except (httpx.HTTPError, OSError, ValueError) as exc:
+                logger.debug("[AUTOMATION] chat append failed: %s", exc)
+                return
+
+
+_manager: SchedulerManager | None = None
+
+
+def init_manager(store_path: str | Path, base_url: str) -> SchedulerManager:
+    global _manager
+    _manager = SchedulerManager(store_path, base_url)
+    return _manager
+
+
+def get_manager() -> SchedulerManager | None:
+    return _manager

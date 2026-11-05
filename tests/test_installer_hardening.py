@@ -68,6 +68,13 @@ if _bash:
 else:
     check("bash -n install_linux.sh (bash unavailable - skipped)", True, "(no bash on PATH)")
 
+LSP = (ROOT / "deploy" / "install_lsp_packs.bat").read_text(
+    encoding="utf-8", errors="replace")
+check("LSP check refreshes the PATH after winget/rustup installs",
+      "PATH-REFRESH" in LSP
+      and "GetEnvironmentVariable('Path','Machine')" in LSP
+      and r"%ProgramFiles%\LLVM\bin" in LSP)
+
 # ── 2. rsync --delete protection set (+ tar fallback parity) ───────────────
 _rsync_block = SH[SH.index("rsync -a --delete"):SH.index('"$SCRIPT_DIR"/ "$INSTALL_DIR"/')]
 _tar_block = SH[SH.index("tar -C \"$SCRIPT_DIR\""):SH.index('-cf - . | tar')]

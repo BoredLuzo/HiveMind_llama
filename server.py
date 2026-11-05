@@ -103,7 +103,7 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.5.3"
+HIVEMIND_VERSION = "1.5.4"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -196,6 +196,7 @@ from fastapi.staticfiles import StaticFiles
 
 # ─── API-Router (endpoint organisation) ───
 from routers import automap_router
+from routers import automations_router
 from routers import chats_router
 from routers import config_router
 from routers import context_router
@@ -648,6 +649,15 @@ async def _shutdown():
     """Clean shutdown: terminate all llama-server processes."""
     _logger.info("[Hivemind] Shutdown ─ terminating all llama-server processes…")
     try:
+        from scheduler.manager import get_manager as _get_auto_mgr
+        _am = _get_auto_mgr()
+        if _am is not None:
+            await _am.stop()
+            _logger.info("[AUTOMATION] scheduler stopped")
+    except (ImportError, RuntimeError, OSError, ValueError, AttributeError,
+            TypeError) as _auto_stop_exc:
+        _logger.debug("[AUTOMATION] scheduler stop failed: %s", _auto_stop_exc)
+    try:
         from backend.llama_server_manager import manager as _sm
         await _sm.shutdown()
     except Exception as _se:
@@ -750,6 +760,21 @@ async def _startup():
         _mem_snap("startup")
     except Exception:
         pass
+
+    # AUTOMATIONS (2026-11-05): engine-owned scheduler. Jobs live outside
+    # settings/presets and fire as normal /stream runs into their own chat.
+    try:
+        from scheduler.manager import init_manager as _init_automations
+        _auto_port = int(settings.get("server_port") or 8001)
+        _auto_mgr = _init_automations(
+            Path(__file__).resolve().parent / "automations.json",
+            f"http://127.0.0.1:{_auto_port}")
+        spawn(_auto_mgr.start())
+        _logger.info("[AUTOMATION] scheduler started (%d job(s))",
+                     len(_auto_mgr.store.jobs()))
+    except (ImportError, RuntimeError, OSError, ValueError, AttributeError,
+            TypeError) as _auto_exc:
+        _logger.warning("[AUTOMATION] scheduler not started: %s", _auto_exc)
 
     # MCP client: start the configured servers in the background (best
     # effort, a slow server must not delay boot).
@@ -2672,6 +2697,7 @@ async def gateway_stop():
 
 # -- Router Registration --
 app.include_router(automap_router)
+app.include_router(automations_router)
 app.include_router(mcp_router)
 app.include_router(chats_router)
 app.include_router(config_router)

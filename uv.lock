@@ -326,7 +326,7 @@ wheels = [
 
 [[package]]
 name = "hivemind-llama"
-version = "1.5.3"
+version = "1.5.4"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
