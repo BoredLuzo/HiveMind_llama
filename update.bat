@@ -163,6 +163,7 @@ echo  Zip version       : %TAGNUM%
 goto after_fetch
 
 :fetch_release
+echo  [OK] 1-2 done: port check + local version read.
 REM -- 3. Latest release from GitHub -----------------------------------------
 if exist "%TMPDIR%" rmdir /s /q "%TMPDIR%"
 mkdir "%TMPDIR%" 2>nul
@@ -264,6 +265,7 @@ if /I "%CONT%"=="n" (
     echo  Press any key to continue... & pause >nul & exit /b 0
 )
 
+echo  [OK] 3-4 done: latest release fetched + version compared.
 REM -- 5. Backup the current code (user data is excluded) --------------------
 :after_fetch
 set "BK=update_backup_%TAGNUM%"
@@ -282,6 +284,7 @@ if errorlevel 8 (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
+echo  [OK] 5 done: backup created.
 REM -- 6. Download the release zip -------------------------------------------
 if defined LOCAL_ZIP goto zip_staged
 echo  Downloading       : %ASSET_URL%
@@ -310,6 +313,7 @@ if errorlevel 1 (
 )
 :zip_staged
 
+echo  [OK] 6 done: release zip downloaded + verified.
 REM -- 7. Extract (zip carries a version root folder) ------------------------
 powershell -NoProfile -Command "Expand-Archive -LiteralPath '%TMQ%\release.zip' -DestinationPath '%TMQ%\extracted' -Force"
 if errorlevel 1 (
@@ -371,6 +375,7 @@ REM The FINAL line of this script swaps it in atomically.
 set "UPDNEW=%BASE%\.update_new.bat"
 if exist "%EXROOT%\update.bat" copy /y "%EXROOT%\update.bat" "%UPDNEW%" >nul
 
+echo  [OK] 7 done: zip extracted.
 REM -- 8. Apply over this installation ---------------------------------------
 REM /XF update.bat: overwriting the RUNNING script mid-execution makes cmd
 REM resume at a stale byte offset (the staged copy swaps in at the end).
@@ -417,6 +422,7 @@ if errorlevel 8 (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
+echo  [OK] 8 done: files applied over this installation.
 REM -- 9. Verify -------------------------------------------------------------
 set "NEWVER="
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "NEWVER=%%V"
@@ -427,6 +433,7 @@ if /I not "%NEWVER%"=="%TAGNUM%" (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 
+echo  [OK] 9 done: verify passed.
 REM -- 9a-2. BUILD_INFO.txt fallback ------------------------------------------
 REM BUILD_INFO.txt is NOT in git - deploy\package_release.bat embeds it into
 REM the zip. Older release zips carry none, which is how an install could
@@ -528,8 +535,10 @@ REM -- 9c. Optional components -------------------------------------------------
 REM A release can add optional pieces (voice, decider, browser tool). After
 REM every update, ask once for those that are NOT on this machine - an
 REM install that already has them all gets a single informational line.
+echo  [OK] deps refreshed + BUILD_INFO written.
 if exist "%~dp0deploy\check_optionals.bat" call "%~dp0deploy\check_optionals.bat"
 
+echo  [OK] optional components checked.
 REM WATCHDOG RE-ARM (moved 2026-11-04, audit): the watchdog used to restart
 REM directly after the apply - the engine then booted while the verify, the
 REM prune, the dependency refresh and the optional components were still

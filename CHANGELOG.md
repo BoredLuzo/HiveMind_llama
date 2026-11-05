@@ -25,6 +25,21 @@ destructive gate only treats absolute-path writes as destructive (read-only
 file inspection no longer asks), and the Windows installer/updater persist
 uv's `.local\bin` on the user PATH.
 
+Update discovery and installer visibility: a cached "you are current" result
+now expires after 4 hours instead of 24, so a release published after a
+machine's daily check is offered on the same day (an "update available"
+verdict keeps its 24-hour no-re-nag window). An offline machine says so in
+one line — either "check skipped (offline)" or a stale-cache notice — instead
+of silently skipping. The installer and updater print an `[OK]` line after
+every step, so a stalled step is visible.
+
+Coder prompts pin the platform on Windows (paths look like
+`C:/Users/...`, `/Users/...` is macOS), point at the preinstalled browser
+tool instead of Playwright installs, and tell the model to validate JS with
+`node --check` rather than Python's `compile()`. `install_package` refuses
+Playwright installs with the same pointer instead of running a doomed
+download.
+
 ## [1.5.3] - 2026-11-04
 
 Hardening release on top of 1.5.2. Telegram documents are binary-safe again:

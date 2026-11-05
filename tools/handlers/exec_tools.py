@@ -82,6 +82,18 @@ def shell_os_hint(shell_mode: str, platform: str) -> str:
             "./script.sh; && and pipes work. PowerShell cmdlets "
             "(Get-ChildItem, Test-Path, Write-Host, Remove-Item, $env:) do "
             "NOT exist in this shell - translating them wastes a call.\n"
+            "THIS MACHINE IS WINDOWS. Absolute file paths look like "
+            "C:/Users/<name>/file.js. Paths like /Users/... are macOS and do "
+            "NOT exist here; /c/Users/... is just Git Bash's spelling of "
+            "C:/Users/.... Never 're-create' a file because a /Users/... "
+            "path failed - list_dir or find_files first.\n"
+            "To open or verify a local HTML page use the browser tool "
+            "(Playwright is pre-installed) - do NOT pip-install playwright "
+            "or run browser downloads.\n"
+            "Validate syntax with the RIGHT runtime: JS with "
+            "'node --check file.js', Python with "
+            "'python -m py_compile file.py'. Python's compile() on "
+            "JavaScript ALWAYS fails and does not mean the JS is broken.\n"
         )
     if platform == "win32" and shell_mode == "powershell":
         return (
@@ -94,11 +106,22 @@ def shell_os_hint(shell_mode: str, platform: str) -> str:
             "from files, not node/python -e one-liners with nested quotes; native "
             "tools can print progress to stderr and still succeed - check OUTPUT "
             "before retrying; add '-m 10' to curl health checks.\n"
+            "THIS MACHINE IS WINDOWS. Absolute file paths look like "
+            "C:\\Users\\<name>\\file.js. Paths like /Users/... are macOS and do "
+            "NOT exist here. Never 're-create' a file because a /Users/... "
+            "path failed - list_dir or find_files first.\n"
+            "To open or verify a local HTML page use the browser tool "
+            "(Playwright is pre-installed) - do NOT pip-install playwright "
+            "or run browser downloads.\n"
         )
     if platform.startswith("linux") or platform == "darwin":
         return (
             "\nRUNTIME SHELL: bash/sh on Unix. Use bash commands in run_bash "
             "(ls, cat, grep, ...) - not PowerShell.\n"
+            "Validate syntax with the RIGHT runtime: JS with "
+            "'node --check file.js', Python with "
+            "'python -m py_compile file.py'. Python's compile() on "
+            "JavaScript ALWAYS fails and does not mean the JS is broken.\n"
         )
     return ""
 import tempfile
@@ -797,6 +820,19 @@ async def _inline_tool_install_package(args: dict, workspace: Path, workspace_lo
     if not ok_pkgs:
         return _tool_error_response("INVALID_ARGUMENT", f"packages rejected: {pkgs_msg}", tool="install_package")
     packages = pkgs_msg
+    # PLAYWRIGHT-PREINSTALLED (2026-11-05, live): the engine's browser tool
+    # already ships Playwright + Chromium (installed by install.bat). Models
+    # kept burning whole rounds on "pip install playwright" / "playwright
+    # install chromium" (the latter also blows the run_bash timeout). Point
+    # at the browser tool instead of running a doomed install.
+    if "playwright" in packages.lower():
+        return _tool_error_response(
+            "INSTALL_PLAYWRIGHT_UNNECESSARY",
+            "Playwright is already installed for this engine - the browser "
+            "tool uses it directly (Chromium included). Do NOT install "
+            "playwright or run 'playwright install'. To open or verify a "
+            "local page, call the browser tool with action 'navigate'.",
+            tool="install_package")
     # PIP-VENV-GUARD (2026-09-13): "python -m pip" resolves via the inherited
     # PATH — without a workspace venv it installs into HIVEMIND'S OWN venv and
     # can break the running server. Require a workspace-local interpreter.

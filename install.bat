@@ -248,6 +248,8 @@ echo  Press any key to continue... & pause >nul & exit /b 1
 
 :py_ok
 
+echo   [OK] step 1/9 Python - done.
+echo.
 REM ======================================================
 REM [2/9] GPU backend (auto-detection)
 REM ======================================================
@@ -337,6 +339,8 @@ if errorlevel 1 (
 )
 echo.
 
+echo   [OK] step 2/9 GPU backend - done.
+echo.
 REM ======================================================
 REM [3/9] llama.cpp backend
 REM ======================================================
@@ -381,6 +385,8 @@ if defined HAVE_LLAMA (
 )
 echo.
 
+echo   [OK] step 3/9 llama.cpp backend - done.
+echo.
 REM ======================================================
 REM [4/9] Windows tools (optional: POSIX tools for the agent)
 REM Models are trained on GNU coreutils and write grep/sed/awk/find.
@@ -474,6 +480,8 @@ REM SHORTCUT-FIRST (2026-09-12): asked BEFORE the long network steps,
 REM so a fresh install always gets the icon even if the user aborts
 REM during model downloads.
 REM ======================================================
+echo   [OK] step 4/9 Windows tools - done.
+echo.
 echo  ==========================================================
 echo   [5/9] Desktop shortcut
 echo  ==========================================================
@@ -487,6 +495,8 @@ call create_shortcut.bat
 :shortcut_done
 echo.
 
+echo   [OK] step 5/9 Desktop shortcut - done.
+echo.
 REM ======================================================
 REM [6/9] Models
 REM ======================================================
@@ -587,6 +597,8 @@ REM the script takes space-separated numbers; commas are what people type
 set "LSP_PICK=%LSP_PICK:,= %"
 call "%~dp0deploy\install_lsp_packs.bat" %LSP_PICK%
 
+echo   [OK] step 6/9 Models - done.
+echo.
 :searxng_step
 REM [7/9] SearXNG (optional)
 REM ======================================================
@@ -607,6 +619,8 @@ if errorlevel 1 (
 
 echo.
 
+echo   [OK] step 7/9 SearXNG - done.
+echo.
 echo  ==========================================================
 echo   [8/9] Voice (optional: speech to text / text to speech)
 echo  ==========================================================
@@ -650,6 +664,8 @@ set "HIVEMIND_NO_PAUSE="
 if "%VOICE_PICK%"=="4" echo   Skipped - add it later with no reinstall: Settings -^> Voice, or deploy\setup_voice.bat.
 echo.
 
+echo   [OK] step 8/9 Voice - done.
+echo.
 echo  ==========================================================
 echo   [9/9] Telegram gateway (optional)
 echo  ==========================================================
@@ -666,6 +682,8 @@ call start_gateway.bat setup
 :tg_done
 echo.
 
+echo   [OK] step 9/9 Telegram gateway - done.
+echo.
 echo  ==============================================================
 echo   Installation finished^^!
 echo.

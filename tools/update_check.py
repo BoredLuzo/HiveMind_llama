@@ -34,7 +34,13 @@ from pathlib import Path
 REPO = "BoredLuzo/HiveMind_llama"
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page=20"
 ROOT = Path(__file__).resolve().parent.parent
+# 24h for an "update available"/dismissed result: the user decided, do not
+# re-nag. A cached "current" result expires much sooner (2026-11-05, live):
+# a release published right after a machine's daily check stayed invisible
+# for the rest of the 24h window - the updater reported "current" from cache
+# while a new release was already out.
 CACHE_TTL_S = 24 * 60 * 60
+CACHE_TTL_CURRENT_S = 4 * 60 * 60
 USER_AGENT = "HiveMind-UpdateCheck/1.0"
 _ALLOWED_DOWNLOAD_HOSTS = ("github.com", "githubusercontent.com")
 _MAX_ZIP_BYTES = 256 * 1024 * 1024
@@ -239,8 +245,11 @@ def check_for_update(root: Path = ROOT, *, timeout: float = 4.0,
     now = time.time() if now is None else now
     cache = _read_cache(cache_path)
     cached = cache.get("result") if isinstance(cache.get("result"), dict) else None
+    cached_status = str((cached or {}).get("status") or "")
+    ttl = (CACHE_TTL_S if cached_status in ("update", "dismissed")
+           else CACHE_TTL_CURRENT_S)
     if (cached and cache.get("current") == current
-            and (now - float(cache.get("checked_at") or 0)) < CACHE_TTL_S):
+            and (now - float(cache.get("checked_at") or 0)) < ttl):
         result = CheckResult.from_dict(cached)
         if result.status == "update":
             dismissed = str(cache.get("dismissed_version") or "")
@@ -433,6 +442,23 @@ def main(argv: list[str] | None = None) -> int:
                              cache_path=root / "logs" / "update_check.json")
     if args.check:
         print(json.dumps(result.as_dict(), ensure_ascii=True, indent=1))
+        return 0
+    if result.status == "error":
+        # OFFLINE-VISIBLE (2026-11-05, owner): a skipped check was silent,
+        # so "why was no update offered?" was unanswerable. One short line,
+        # startup still proceeds.
+        print(f"  [update] check skipped ({result.message or 'offline?'}).")
+        return 0
+    if result.message.startswith("using stale cache"):
+        print(f"  [update] offline - using the last check from "
+              f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(result.checked_at))}.")
+        return 0
+    if result.status == "current":
+        age_h = (time.time() - float(result.checked_at or 0)) / 3600.0
+        print(f"  [update] you are up to date ({result.current}; "
+              f"next automatic check in ~4 h).")
+        if age_h > 0:
+            pass  # age display stays in the debug JSON (--check)
         return 0
     if result.status != "update":
         return 0

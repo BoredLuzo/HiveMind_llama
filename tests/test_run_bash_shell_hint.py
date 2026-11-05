@@ -41,13 +41,37 @@ def main():
           "Get-ChildItem" in h_bash and "Test-Path" in h_bash)
     check("bash-hint (win): kein PS-ONLY-Kommando mehr",
           "Use PowerShell syntax ONLY" not in h_bash)
+    # PLATFORM-PIN (2026-11-05, live): a 4B model mixed macOS /Users/...
+    # paths into a Windows run and looped on rm/rewrite. The hint must pin
+    # the OS and the path format explicitly.
+    check("bash-hint (win): pinnt Windows + Pfadformat",
+          "THIS MACHINE IS WINDOWS" in h_bash and "/Users/..." in h_bash)
+    check("bash-hint (win): Browser-Tool statt playwright-Install",
+          "Playwright is pre-installed" in h_bash)
+    check("bash-hint (win): richtige Runtime fuer Syntax-Checks",
+          "node --check" in h_bash and "py_compile" in h_bash)
 
     h_ps = shell_os_hint("powershell", "win32")
     check("powershell-hint (win): PS-native guidance",
           "PowerShell-native" in h_ps and "Get-ChildItem" in h_ps)
+    check("powershell-hint (win): pinnt Windows + Pfadformat",
+          "THIS MACHINE IS WINDOWS" in h_ps and "Playwright is pre-installed" in h_ps)
 
     h_unix = shell_os_hint("bash", "linux")
     check("unix-hint: bash guidance", "bash/sh on Unix" in h_unix)
+    check("unix-hint: richtige Runtime fuer Syntax-Checks",
+          "node --check" in h_unix)
+
+    # install_package refuses doomed playwright installs with a pointer
+    # to the preinstalled browser tool.
+    from tools.handlers.exec_tools import _inline_tool_install_package
+    import tempfile as _tf
+    _ws = _tf.mkdtemp(prefix="hintpw_")
+    _pw = asyncio.run(_inline_tool_install_package(
+        {"manager": "pip", "packages": "playwright"}, Path(_ws), _ws))
+    check("install_package blockt playwright mit Browser-Tool-Hinweis",
+          "INSTALL_PLAYWRIGHT_UNNECESSARY" in _pw
+          and "browser" in _pw.lower())
 
     # SHELL-FALLBACK (2026-10-16): beide Zweige per Monkeypatch der
     # Erkennung - ohne Git Bash darf NIE "bash" herauskommen, auch nicht

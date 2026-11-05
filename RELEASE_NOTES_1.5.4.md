@@ -45,6 +45,24 @@ next to the old install. Settings, models, sessions and the venv are kept.
 - The Windows installer and updater add uv's `.local\bin` to the user PATH
   once.
 
+## Update discovery and installer
+
+- A cached "you are current" update-check result expires after 4 hours
+  instead of 24, so a release published after your machine's daily check is
+  offered the same day. An "update available" verdict keeps its 24-hour
+  no-re-nag window.
+- Offline is visible: the startup check prints one line ("check skipped
+  (offline)" or a stale-cache notice) instead of silently skipping. HiveMind
+  still starts normally without internet; `update.bat` also checks GitHub
+  directly without a cache.
+- The installer and updater print an `[OK]` line after every step, so you can
+  see exactly where a step finished (or stalled).
+- Coder prompts pin the platform on Windows (paths look like `C:/Users/...`;
+  `/Users/...` is macOS), point at the preinstalled browser tool instead of
+  Playwright installs, and tell the model to validate JS with `node --check`
+  rather than Python's `compile()`. `install_package` refuses Playwright
+  installs with the same pointer.
+
 ## Verification
 
 - Full regression gate: 310 suites.

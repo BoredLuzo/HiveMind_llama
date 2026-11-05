@@ -58,6 +58,47 @@ check("V6: preview does not beat stable", not is_newer("1.5.0-preview", "1.5.0")
 check("V7: newer core beats older stable", is_newer("1.6.0-preview", "1.5.0"))
 check("V8: preview.2 > preview", is_newer("1.5.0-preview.2", "1.5.0-preview"))
 check("V9: preview.10 > preview.2", is_newer("1.5.0-preview.10", "1.5.0-preview.2"))
+
+# ── CACHE-TTL-SPLIT (2026-11-05): a cached "current" expires after 4 h, ──
+# an "update"/dismissed result after 24 h. Otherwise a release published
+# right after a machine's daily check stayed invisible for the whole day.
+def _feed(tag):
+    def _f(url, timeout=4.0):
+        return [rel(tag)]
+    return _f
+
+with tempfile.TemporaryDirectory() as td:
+    troot = Path(td)
+    (troot / "server.py").write_text('HIVEMIND_VERSION = "1.5.3"\n',
+                                     encoding="utf-8")
+    cpath = troot / "logs" / "cache.json"
+    now = 1_000_000.0
+    r1 = check_for_update(troot, fetch_json=_feed("1.5.3"),
+                          cache_path=cpath, now=now)
+    check("TTL1: fresh check is current", r1.status == "current")
+    # 5 h later the cached "current" (4 h TTL) is expired -> re-fetch.
+    r2 = check_for_update(troot, fetch_json=_feed("v1.5.4"),
+                          cache_path=cpath, now=now + 5 * 3600)
+    check("TTL2: cached current expires -> re-fetch finds 1.5.4",
+          r2.status == "update" and r2.latest == "1.5.4")
+    # An "update" result keeps the 24 h TTL: 5 h later it is still cached.
+    r3 = check_for_update(troot, fetch_json=_feed("v1.5.5"),
+                          cache_path=cpath, now=now + 10 * 3600)
+    check("TTL3: cached update survives 5 h", r3.status == "update"
+          and r3.latest == "1.5.4")
+    # ...but expires after 24 h.
+    r4 = check_for_update(troot, fetch_json=_feed("v1.5.5"),
+                          cache_path=cpath, now=now + 30 * 3600)
+    check("TTL4: cached update expires after 24 h",
+          r4.status == "update" and r4.latest == "1.5.5")
+    # Offline with an expired cache (last write >24 h ago): the stale
+    # cache is served with a note instead of failing silently.
+    def _offline(url, timeout=4.0):
+        raise OSError("no network")
+    r5 = check_for_update(troot, fetch_json=_offline,
+                          cache_path=cpath, now=now + 55 * 3600)
+    check("TTL5: offline serves stale cache with a note",
+          "stale cache" in r5.message)
 check("V10: same version not newer", not is_newer("1.5.0", "1.5.0"))
 
 # ── release selection ────────────────────────────────────────────────────
