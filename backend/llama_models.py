@@ -22,10 +22,14 @@ _MODELS_JSON = _THIS_DIR / "models.json"
 _index_cache: dict[str, Path] = {}     # canonical_name → Path
 _index_ts: float = 0.0
 _INDEX_TTL: float = 30.0
+# NAMES_TTL must never exceed INDEX_TTL (2026-11-05 audit): the name
+# list is DERIVED from the index — a longer names TTL kept listing a
+# renamed/deleted model up to 30 s after the index had moved on.
+
 
 _names_cache: list[str] = []
 _names_cache_ts: float = 0.0
-_NAMES_TTL: float = 60.0
+_NAMES_TTL: float = min(60.0, _INDEX_TTL)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -122,6 +126,17 @@ def _parse_gguf_filename(filename: str) -> list[str]:
 # ── GGUF-Index ─────────────────────────────────────────────────────────────────
 
 _NON_MODEL_PATTERNS = {"mmproj", "projector", "vision_encoder", "vl-encoder", "dspark"}
+
+
+def is_non_model_gguf(filename: str) -> bool:
+    """Shared non-model rule (2026-11-05 audit): the backend scan and
+    fetch_models used to carry DIVERGENT copies of this check (the deploy
+    copy missed 'projector'/'vision_encoder'/'vl-encoder'), so a projector
+    could land in models.json depending on which writer ran last."""
+    low = str(filename).lower()
+    if any(pat in low for pat in _NON_MODEL_PATTERNS):
+        return True
+    return low.startswith("mtp-")
 
 # ── Known-GGUF filename → tag manifest (2026-09-12) ──────────────────────────
 # Filename parsing alone cannot always reconstruct the canonical tag: unsloth
@@ -322,9 +337,19 @@ def _resolve_index_collisions(index: dict[str, Path],
                 name, len(files), ", ".join(f.name for f in files),
                 winner.name, _why)
         index[name] = winner
-        for _loser in _losers:
-            _alt = f"{name}-{_quant_token(_loser.name)}".strip("-")
+        for _i, _loser in enumerate(_losers):
+            _q = _quant_token(_loser.name)
+            # NO-SILENT-LOSS (2026-11-05, P1 audit): mid-name quants have no
+            # trailing quant token, and two losers can share one token. A
+            # colliding/empty alias falls back to a numbered suffix instead
+            # of silently dropping the file from the registry.
+            _alt = f"{name}-{_q}".strip("-") if _q else ""
             if not _alt or _alt in index or _alt in cands:
+                _alt = f"{name}-alt{_i + 1}" if len(_losers) > 1                     else f"{name}-alt"
+            if _alt in index or _alt in cands:
+                _logger.warning(
+                    "[GGUF-INDEX] alias '%s' still collides — %s is only "
+                    "resolvable via models.json", _alt, _loser.name)
                 continue
             index[_alt] = _loser
             _logger.info("[GGUF-INDEX] '%s' → alternate quant alias for %s",
@@ -596,6 +621,13 @@ def resolve_mmproj_path(model_name: str) -> Path | None:
 def list_available_models(force_refresh: bool = False) -> list[str]:
     global _names_cache, _names_cache_ts
     now = _time_module.time()
+    if force_refresh:
+        # HALF-REFRESH (2026-11-05 audit): force_refresh used to rebuild
+        # only the names cache while the index behind it stayed TTL-gated —
+        # a renamed file kept listing under its old name.
+        global _index_cache, _index_ts
+        _index_cache = None
+        _index_ts = 0.0
     if not force_refresh and _names_cache and (now - _names_cache_ts) < _NAMES_TTL:
         return _names_cache
 
@@ -609,6 +641,17 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
         if "mmproj" in k.lower():
             continue
         if v.strip().upper().startswith("TODO:"):
+            continue
+        # GHOST-GUARD (2026-11-05, P1 audit): override keys whose file is
+        # GONE were still listed and only failed at load time. Entries
+        # claiming files outside MODELS_DIR (add_model by-path flow) are
+        # checked directly; keys inside MODELS_DIR are kept (the index
+        # scan may not have seen them yet).
+        try:
+            _vpath = Path(v.strip())
+            if _vpath.is_absolute() and not _vpath.is_file():
+                continue
+        except OSError:
             continue
         names.add(_strip_alias(k))
 
@@ -656,9 +699,29 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
         if key not in file_to_names:
             file_to_names[key] = []
         file_to_names[key].append(name)
+    # DEDUP PRIORITY (2026-11-05, P1 audit): the old length sort kept the
+    # LONGEST alias — for gemma-4-e4b-it-qat-ud-q4_k_xl.gguf that is the
+    # parsed '…-ud' alias, and the catalog/profile name
+    # 'gemma-4:e4b-it-qat' became unselectable (its per-model config was
+    # silently skipped). Priority now: known manifest tag >
+    # models.json override > shortest (closest to the profile key).
+    _manifest_tags = set(_known_filename_tags().values())
+    _override_keys = set(overrides.keys())
+
+    def _name_rank(n: str) -> tuple[int, int]:
+        # manifest/override names are canonical — the shorter spelling wins
+        # inside a rank; plain parsed aliases keep the LONGEST (the old
+        # behavior — a shorter parse like 'qwen3.6:35b' says less than
+        # 'qwen3.6:35b-a3b-ud').
+        if n in _manifest_tags:
+            return (0, len(n))
+        if n in _override_keys:
+            return (1, len(n))
+        return (2, -len(n))
+
     for path_key, name_list in file_to_names.items():
         if len(name_list) > 1:
-            name_list.sort(key=len, reverse=True)
+            name_list.sort(key=_name_rank)
             for dup in name_list[1:]:
                 # DEDUP FIX (2026-10-07, user feedback: minicpm listed twice under different names): an override name stays protected
                 # only when it points at a DIFFERENT file. Same-file aliases
@@ -694,4 +757,26 @@ def save_model_mapping(model_name: str, gguf_path: str):
     data = _load_overrides()
     data[model] = str(gguf_path)
     payload = {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
-    _MODELS_JSON.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    # ATOMIC (2026-11-05 audit): a crash mid-write truncated the registry
+    # to {} — models.json is resolution priority 1.
+    _tmp = _MODELS_JSON.with_name(f"{_MODELS_JSON.name}.tmp-{os.getpid()}")
+    _tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    _tmp.replace(_MODELS_JSON)
+    invalidate_caches()
+
+
+def invalidate_caches() -> None:
+    """Drop every model-registry cache (index, names, manifest).
+
+    The single invalidation entry point (2026-11-05 audit): rename/move
+    recovery used to rely on TTLs alone, and `force_refresh` on the names
+    list did not rebuild the index behind it. Callers: save_model_mapping,
+    add_model, and anything that touches files under MODELS_DIR.
+    """
+    global _index_cache, _index_ts, _names_cache, _names_cache_ts
+    global _filename_tag_map
+    _index_cache = None
+    _index_ts = 0.0
+    _names_cache = None
+    _names_cache_ts = 0.0
+    _filename_tag_map = None

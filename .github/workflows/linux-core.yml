@@ -43,6 +43,7 @@ jobs:
           python tests/test_scheduler_core.py
           python tests/test_cron_proxy.py
           python tests/test_multi_quant_models.py
+          python tests/test_model_registry_audit.py
 
   types:
     # pyright baseline: existing typing debt is frozen; NEW errors fail.

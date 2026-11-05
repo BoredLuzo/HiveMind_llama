@@ -135,6 +135,13 @@ def pick_gguf(mdir: Path) -> Path | None:
     if not raw:
         return None
     p = Path(raw).expanduser()
+    # ABS-PATH (2026-11-05 audit): a relative path was stored verbatim into
+    # models.json and resolved against the process CWD — the model worked
+    # only when HiveMind was started from the same folder. Resolve once,
+    # store absolute.
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    p = p.resolve()
     if not p.is_file():
         print(f"    [WARN] File not found: {p}")
         return None

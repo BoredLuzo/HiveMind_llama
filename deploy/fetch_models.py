@@ -137,14 +137,6 @@ def _atomic_write_text(path: Path, text: str) -> None:
             tmp.unlink(missing_ok=True)
 
 
-def _sha256_of_file(path: Path) -> str:
-    """SHA-256 in 1 MB chunks (GGUFs are multi-GB; read_bytes() would OOM)."""
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
 
 def _persist_models_dir(mdir: Path) -> None:
     """Write the custom folder to settings.json "models_dir" so the server
@@ -181,7 +173,6 @@ ESSENTIAL_KEYS = {
     "lfm3:1.7b-qad",
 }
 # kept for callers that only want to know the one optional extra
-ESSENTIAL_SKIP_KEYS = {"lfm3-omni:2b"}
 # DRAFTER-SKIP (2026-10-27, corrected): speculative decoding is ON again for
 # the profiles that ship an MTP head, so a drafter sidecar is NOT dead weight.
 # Gemma-4 uses its `mtp-*.gguf` and the DSpark models use their drafter; a load
@@ -801,16 +792,11 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
     families: set[str] = set()
 
     # Normal models first
+    from backend.llama_models import is_non_model_gguf  # noqa: E402
     for g in ggufs:
-        if "mmproj" in g.name.lower():
-            continue
-        if "dspark" in g.name.lower():
-            continue
-        # MTP-DRAFTER (2026-09-12): "mtp-<model>.gguf" sidecars (gemma-4 QAT)
-        # are spec-dec drafters, NOT standalone models (same rule as dspark).
-        # Only the file-name PREFIX counts — "…-V13-MTP-APEX-Compact.gguf"
-        # (Hermes, contains MTP mid-name) stays a normal model.
-        if g.name.lower().startswith("mtp-"):
+        # SHARED RULE (2026-11-05 audit): one non-model check for every
+        # writer — the private copy here missed 'projector'/'vision_encoder'.
+        if is_non_model_gguf(g.name):
             continue
         # TAG-PIN (2026-09-12): a spec tag is authoritative — the filename
         # parser over-normalizes (unsloth names their MTP quants WITHOUT
@@ -852,13 +838,33 @@ def write_models_json(models_dir: Path, out: Path | None = None) -> int:
                 mapping[f"{family}:{_size}_mmproj"] = str(g)
 
     out = out or (ROOT / "models.json")   # out= lets callers (tests, deploys) pick the target
-    # SORTED + STABLE (2026-10-03): scan order used to leak into the file
-    # (untracked pin/temp entries landed between runs). Sorted keys keep
-    # diffs comparable across updates, and a full rewrite here is also the
-    # normalizer that clears stale pin/temp entries left by older versions.
-    # ATOMIC (audit r4): written via temp file + os.replace - models.json is
-    # the registry the backend resolves every model through; a torn write
-    # made it silently resolve nothing (json.loads failure -> {}).
+    # MERGE (2026-11-05, P0 audit): this used to be a full rewrite — every
+    # run silently DELETED manual registrations (add_model.py's "single
+    # GGUF by path" flow), including under --scan-only. Merge instead:
+    # existing entries whose file still exists are preserved, scanned/
+    # spec entries win on key collision, and only entries whose file is
+    # GONE are dropped (the old stale-pin cleanup, now honest).
+    # SORTED + STABLE (2026-10-03): sorted keys keep diffs comparable.
+    # ATOMIC (audit r4): temp file + os.replace.
+    try:
+        existing = json.loads(out.read_text(encoding="utf-8"))
+        existing = existing if isinstance(existing, dict) else {}
+    except (OSError, ValueError):
+        existing = {}
+    for _k, _v in existing.items():
+        if not isinstance(_k, str) or not isinstance(_v, str):
+            continue
+        if _k.startswith("_"):
+            continue
+        if _k in mapping:
+            continue
+        try:
+            if Path(_v.strip()).is_file():
+                mapping[_k] = _v
+            else:
+                print(f"    dropped stale entry {_k} (file gone: {_v})")
+        except OSError:
+            mapping[_k] = _v
     _atomic_write_text(
         out,
         json.dumps(mapping, indent=2, ensure_ascii=False, sort_keys=True),
