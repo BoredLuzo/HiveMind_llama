@@ -63,6 +63,22 @@ next to the old install. Settings, models, sessions and the venv are kept.
   rather than Python's `compile()`. `install_package` refuses Playwright
   installs with the same pointer.
 
+## Automations audit pass
+
+- The editor now uses the same dark form controls as the rest of the UI
+  (previous version rendered unstyled white inputs), job action buttons use
+  the standard mini-button style, and the editor scrolls into view when
+  opened.
+- Scheduler hardening: the fire loop targets the actually bound port (an
+  `HIVEMIND_PORT` override or busy-port fallback no longer sends jobs to the
+  wrong instance), a job edited or deleted during a long run can no longer be
+  corrupted by the run's end, zombie one-shot jobs are swept, a queued fire
+  respects pause/disable, `PUT` validates like `POST` and cannot rewrite
+  bookkeeping fields, and shutdown aborts an in-flight automation run.
+- Dead knobs removed (unused approval/delivery fields, an unimplemented
+  `replace` policy, a dead helper); job ids are unique; jobs are capped at
+  50; `automations_enabled` is a settings kill switch.
+
 ## Verification
 
 - Full regression gate: 310 suites.

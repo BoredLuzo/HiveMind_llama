@@ -10,6 +10,11 @@ at most one pending fire per job, and a queued fire runs when the lane frees.
 The UI has an Automations tab with create/edit/run-now/pause/delete and recent
 run history. Automap is removed from the mode selector (old `mode=automap`
 presets map to `auto`; engine support stays for compatibility).
+An audit pass hardened the scheduler: fires target the actually bound
+port, a job edited during a long run is not corrupted, zombie one-shot
+jobs are swept, `PUT` validates like `POST`, shutdown aborts an
+in-flight automation run, and the editor uses the standard dark form
+controls.
 
 Chat auto-save is serialized, so two saves can no longer create two chats
 before the first one has an id. "Retry in new chat" is hidden after a
