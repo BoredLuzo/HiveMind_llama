@@ -69,6 +69,33 @@ def next_fire_ts(schedule: dict, now: float,
             return None
         if not (0 <= hh <= 23 and 0 <= mm <= 59):
             return None
+        days = (schedule or {}).get("days")
+        # WEEKDAYS (2026-11-05): days = list of 0-6 (Mon..Sun). Empty or
+        # missing = every day. The search walks up to 8 calendar days
+        # (covers any weekday gap) in one tz, so DST transitions are safe.
+        if isinstance(days, list) and days:
+            days_ok = set()
+            for d in days:
+                try:
+                    _d = int(d)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= _d <= 6:
+                    days_ok.add(_d)
+            if not days_ok:
+                return None
+            from datetime import timedelta
+            tz = _tz(tz_name)
+            base = datetime.fromtimestamp(float(now), tz)
+            target = base.replace(hour=hh, minute=mm, second=0,
+                                  microsecond=0)
+            if target.timestamp() <= float(now):
+                target += timedelta(days=1)
+            for _ in range(8):
+                if target.weekday() in days_ok:
+                    return target.timestamp()
+                target += timedelta(days=1)
+            return None
         tz = _tz(tz_name)
         base = datetime.fromtimestamp(float(now), tz)
         target = base.replace(hour=hh, minute=mm, second=0, microsecond=0)

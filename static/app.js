@@ -12110,7 +12110,10 @@ async function loadAutomations() {
       item.className = 'chat-hist-item';
       const dot = document.createElement('div');
       dot.className = 'chat-hist-dot';
-      dot.style.background = job.enabled ? 'var(--green)' : 'var(--tx3)';
+      dot.style.background = !job.enabled ? 'var(--tx3)'
+        : (job.last_status === 'ok' ? 'var(--green)'
+        : (job.last_status === 'needs_input' ? '#e0a030'
+        : (job.last_status === 'failed' ? '#c05050' : 'var(--tx2)')));
       const info = document.createElement('div');
       info.className = 'chat-hist-info';
       const title = document.createElement('div');
@@ -12152,12 +12155,64 @@ async function loadAutomations() {
   }
 }
 
+var _autoDays = [];
+
+function _buildDayChips() {
+  const row = document.getElementById('auto-days-row');
+  if (!row) return;
+  row.innerHTML = '';
+  ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].forEach(function(label, i) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.textContent = label;
+    chip.className = 'pload';
+    chip.style.marginRight = '0';
+    chip.style.color = _autoDays.indexOf(i) >= 0 ? 'var(--amber)' : '';
+    chip.onclick = function() {
+      const at = _autoDays.indexOf(i);
+      if (at >= 0) _autoDays.splice(at, 1); else _autoDays.push(i);
+      chip.style.color = _autoDays.indexOf(i) >= 0 ? 'var(--amber)' : '';
+      automationPreview();
+    };
+    row.appendChild(chip);
+  });
+}
+
 function automationScheduleChanged() {
   const kind = (document.getElementById('auto-kind') || {}).value;
   const ir = document.getElementById('auto-interval-row');
   const tr = document.getElementById('auto-time-row');
   if (ir) ir.style.display = kind === 'daily' ? 'none' : 'flex';
   if (tr) tr.style.display = kind === 'daily' ? 'block' : 'none';
+  if (kind === 'daily') { _buildDayChips(); }
+  automationPreview();
+}
+
+async function automationPreview() {
+  const box = document.getElementById('auto-preview');
+  if (!box) return;
+  const kind = _autoField('auto-kind') || 'every';
+  let schedule;
+  if (kind === 'daily') {
+    schedule = {kind: 'daily', at_hm: _autoField('auto-time') || '09:00',
+                days: _autoDays.slice()};
+  } else {
+    const minutes = Math.max(1, parseInt(_autoField('auto-interval'), 10) || 60);
+    schedule = {kind: kind, interval_s: minutes * 60};
+  }
+  try {
+    const r = await fetch('/automations/preview', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({schedule: schedule}),
+    });
+    if (!r.ok) { box.textContent = ''; return; }
+    const d = await r.json().catch(function() { return {}; });
+    const times = (d.next || []).map(function(ts) {
+      return new Date(Number(ts) * 1000).toLocaleString();
+    });
+    box.textContent = times.length
+      ? ('next: ' + times.join(' · ')) : '';
+  } catch (e) { box.textContent = ''; }
 }
 
 function _autoShowEditor(show) {
@@ -12182,6 +12237,7 @@ function automationNew() {
   _autoField('auto-kind', 'every');
   _autoField('auto-interval', '60');
   _autoField('auto-time', '09:00');
+  _autoDays = [];
   _autoField('auto-mode', 'simple');
   _autoField('auto-tier', 'readonly');
   _autoField('auto-workspace', '');
@@ -12203,6 +12259,7 @@ function automationEdit(jobId) {
   _autoField('auto-kind', s.kind === 'daily' ? 'daily' : (s.kind === 'once' ? 'once' : 'every'));
   _autoField('auto-interval', String(Math.max(1, Math.round((s.interval_s || 3600) / 60))));
   _autoField('auto-time', s.at_hm || '09:00');
+  _autoDays = Array.isArray(s.days) ? s.days.slice() : [];
   _autoField('auto-mode', job.mode || 'simple');
   _autoField('auto-tier', job.tools_tier || 'readonly');
   _autoField('auto-workspace', job.workspace || '');
@@ -12223,7 +12280,8 @@ async function automationSave() {
   const kind = _autoField('auto-kind') || 'every';
   let schedule;
   if (kind === 'daily') {
-    schedule = {kind: 'daily', at_hm: _autoField('auto-time') || '09:00'};
+    schedule = {kind: 'daily', at_hm: _autoField('auto-time') || '09:00',
+                days: _autoDays.slice()};
   } else {
     const minutes = Math.max(1, parseInt(_autoField('auto-interval'), 10) || 60);
     schedule = {kind: kind, interval_s: minutes * 60};

@@ -299,6 +299,47 @@ class HiveClient:
         that in its confirmation."""
         return await self._post_json(f"/presets/{name}/load", {})
 
+    # -- Automations (engine-owned scheduler, 2026-11-05) -----------------
+    # The gateway owns the /cron UX; the engine owns the schedule + firing.
+    # One scheduler: these methods proxy, they never evaluate next_ts.
+
+    async def automations(self) -> dict:
+        r = await self._get("/automations")
+        if r.status_code != 200:
+            raise HiveUnreachable(f"/automations HTTP {r.status_code}")
+        return r.json()
+
+    async def create_automation(self, job: dict) -> dict:
+        r = await self._post_json("/automations", job)
+        if r.status_code != 201:
+            try:
+                why = str((r.json() or {}).get("error") or "")
+            except (ValueError, TypeError):
+                why = ""
+            raise HiveUnreachable(
+                f"create rejected (HTTP {r.status_code}): {why}")
+        return r.json()
+
+    async def delete_automation(self, job_id: str) -> bool:
+        r = await self._client.delete(f"/automations/{job_id}")
+        return r.status_code == 200
+
+    async def run_automation(self, job_id: str) -> dict:
+        r = await self._post_json(f"/automations/{job_id}/run", {})
+        try:
+            body = r.json() or {}
+        except (ValueError, TypeError):
+            body = {}
+        return {"ok": r.status_code == 200, "note": str(body.get("note") or "")}
+
+    async def automation_runs(self, job_id: str, limit: int = 10) -> dict:
+        r = await self._get(f"/automations/{job_id}/runs",
+                            params={"limit": str(max(1, min(100, limit)))})
+        if r.status_code != 200:
+            raise HiveUnreachable(
+                f"/automations/{job_id}/runs HTTP {r.status_code}")
+        return r.json()
+
     async def steer(self, run_id: str, text: str) -> httpx.Response:
         """POST /api/run/{run_id}/steer — queue a mid-run message for an
         engine run (receipt = queued, injection at the next boundary)."""

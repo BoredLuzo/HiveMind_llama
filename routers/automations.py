@@ -39,7 +39,19 @@ def _schedule_from(body: dict) -> dict | None:
             hm = str(sched.get("at_hm") or "")
             if spec.parse_schedule(f"daily {hm}") is None:
                 return None
-            return {"kind": "daily", "at_hm": hm}
+            out = {"kind": "daily", "at_hm": hm}
+            days = sched.get("days")
+            if isinstance(days, list) and days:
+                try:
+                    clean = sorted({int(d) for d in days
+                                    if isinstance(d, (int, float))
+                                    and 0 <= int(d) <= 6})
+                except (TypeError, ValueError):
+                    return None
+                if not clean:
+                    return None
+                out["days"] = clean
+            return out
         if kind in ("every", "once"):
             try:
                 interval = int(sched.get("interval_s") or 0)
@@ -195,6 +207,37 @@ async def toggle_automation(job_id: str):
         "enabled": not job.get("enabled", True),
         "pending_fire": None})
     return updated
+
+
+@router.post("/preview")
+async def preview_schedule(req: Request):
+    """Next 3 fire times for a schedule draft - the editor's live preview."""
+    try:
+        body = await req.json()
+    except ValueError:
+        return _err("JSON body expected")
+    if not isinstance(body, dict):
+        return _err("JSON body must be an object")
+    schedule = _schedule_from(body)
+    if schedule is None:
+        return _err("unparseable schedule")
+    tz_name = str(body.get("timezone") or "")
+    now = time.time()
+    out: list[float] = []
+    cursor = float(now)
+    slot = schedule
+    for _ in range(3):
+        nxt = spec.next_fire_ts(slot, cursor, tz_name)
+        if nxt is None:
+            break
+        out.append(nxt)
+        if str(schedule.get("kind")) == "every":
+            cursor = nxt + max(60, int(schedule.get("interval_s") or 60))
+        elif str(schedule.get("kind")) == "daily":
+            cursor = nxt + 1
+        else:
+            break
+    return {"next": out[:3]}
 
 
 @router.get("/{job_id}/runs")

@@ -40,6 +40,29 @@ def main() -> int:
     check("bad times rejected", parse_schedule("at 25:99") is None)
     check("nonsense rejected", parse_schedule("whenever") is None)
 
+    # WEEKDAYS (2026-11-05): days = 0-6 (Mon..Sun)
+    tzname = "Europe/Berlin"
+    # 2026-11-05 is a Thursday
+    thu = datetime(2026, 11, 5, 12, 0, tzinfo=ZoneInfo(tzname)).timestamp()
+    mon_wed = next_fire_ts({"kind": "daily", "at_hm": "09:00", "days": [0, 2]},
+                           thu, tzname)
+    check("weekday daily: Thu 12:00 -> next Mon 09:00",
+          mon_wed == datetime(2026, 11, 9, 9, 0,
+                              tzinfo=ZoneInfo(tzname)).timestamp())
+    before_slot = datetime(2026, 11, 5, 8, 0,
+                           tzinfo=ZoneInfo(tzname)).timestamp()
+    same_day = next_fire_ts({"kind": "daily", "at_hm": "09:00", "days": [3]},
+                            before_slot, tzname)
+    check("weekday daily: Thu 08:00 -> same Thu 09:00",
+          same_day == datetime(2026, 11, 5, 9, 0,
+                               tzinfo=ZoneInfo(tzname)).timestamp())
+    check("weekday daily: empty days list = every day",
+          next_fire_ts({"kind": "daily", "at_hm": "09:00", "days": []},
+                       thu, tzname) is not None)
+    check("weekday daily: all-invalid days -> None",
+          next_fire_ts({"kind": "daily", "at_hm": "09:00", "days": [9, -1]},
+                       thu, tzname) is None)
+
     tz = ZoneInfo("Europe/Berlin")
     base = datetime(2026, 7, 1, 8, 0, tzinfo=tz).timestamp()
     nxt = next_fire_ts({"kind": "daily", "at_hm": "09:00"}, base,

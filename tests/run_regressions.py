@@ -299,6 +299,7 @@ SUITES = [
     ("tool_args_nonobject",     "tests/test_tool_args_nonobject.py",         20),
     ("tool_python_interpreter", "tests/test_tool_python_interpreter.py",     60),
     ("scheduler_core",          "tests/test_scheduler_core.py",              30),
+    ("cron_proxy",              "tests/test_cron_proxy.py",                  20),
     ("max_rounds_truth",        "tests/test_max_rounds_truth.py",            20),
     ("loop_detected_stream",    "tests/test_loop_detected_stream.py",        20),
     ("backend_slot_invariants", "tests/test_backend_slot_invariants.py",     20),

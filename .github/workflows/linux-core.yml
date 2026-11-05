@@ -41,6 +41,7 @@ jobs:
           python tests/test_send_file.py
           python tests/test_chunk_resume.py
           python tests/test_scheduler_core.py
+          python tests/test_cron_proxy.py
 
   types:
     # pyright baseline: existing typing debt is frozen; NEW errors fail.

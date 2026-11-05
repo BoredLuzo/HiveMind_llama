@@ -611,23 +611,19 @@ class Gateway:
                               "calls follow your /gate policy (ask or auto-deny)."),
                              reply_to_message_id=p.message_id)
         elif name == "cron":
-            # R7 (owner, 1.3.2): scheduled agent runs. Every error is
-            # contained - /cron must never take the gateway down.
-            import time as _cron_time
-            mgr = getattr(self, "cron_manager", None)
+            # R8 (2026-11-05): /cron is a PROXY to the engine's
+            # /automations API now. One scheduler lives in the engine; the
+            # gateway owns only the phone UX. Every error is contained -
+            # /cron must never take the gateway down.
             a_c = (arg or "").strip()
             try:
+                from hivemind_gateway.cron_proxy import (
+                    cron_help, job_line, spec_to_body)
                 if not a_c or a_c in ("help", "list"):
-                    from hivemind_gateway.cron import cron_help
+                    _jobs = (await self.hive.automations()).get(
+                        "automations") or []
                     _lines = [cron_help()]
-                    for _j in (mgr.jobs() if mgr else []):
-                        _nxt = _j.get("next_ts")
-                        _when = _cron_time.strftime(
-                            "%H:%M", _cron_time.localtime(_nxt)) if _nxt else "?"
-                        _lines.append(
-                            f"{_j.get('id')} [{_j.get('kind')}] next {_when} "
-                            f"({int(_j.get('fires') or 0)} fires): "
-                            f"{str(_j.get('prompt'))[:60]}")
+                    _lines.extend(job_line(_j) for _j in _jobs)
                     await self.reply(p.chat_id, "\n".join(_lines),
                                      reply_to_message_id=p.message_id)
                 elif a_c.startswith("add "):
@@ -640,27 +636,29 @@ class Gateway:
                             "in 30m <prompt> | at 09:00 <prompt>",
                             reply_to_message_id=p.message_id)
                         return
-                    _ok, _note = mgr.add(_spec)
-                    await self.reply(p.chat_id, _note,
-                                     reply_to_message_id=p.message_id)
+                    _created = await self.hive.create_automation(
+                        spec_to_body(_spec))
+                    await self.reply(
+                        p.chat_id,
+                        f"⏰ Automation {_created.get('id')} added — first "
+                        f"fire {str(_created.get('name') or '')}: "
+                        f"{str(_created.get('prompt'))[:80]}",
+                        reply_to_message_id=p.message_id)
                 elif a_c.startswith("del "):
-                    _ok, _note = mgr.delete(a_c[4:].strip())
-                    await self.reply(p.chat_id, _note,
-                                     reply_to_message_id=p.message_id)
+                    _ok = await self.hive.delete_automation(
+                        a_c[4:].strip())
+                    await self.reply(
+                        p.chat_id,
+                        "🗑 Deleted." if _ok else
+                        f"❌ No job {a_c[4:].strip()}.",
+                        reply_to_message_id=p.message_id)
                 elif a_c.startswith("run "):
-                    _job = mgr.get(a_c[4:].strip())
-                    if not _job:
-                        await self.reply(p.chat_id, "❌ No such job.",
-                                         reply_to_message_id=p.message_id)
-                        return
-                    _task = asyncio.create_task(self.bridge.start_text_run(
-                        str(_job.get("prompt") or "")))
-                    _task.add_done_callback(
-                        lambda t: t.exception() and log.warning(
-                            "[CRON] manual run failed: %s", t.exception()))
-                    await self.reply(p.chat_id,
-                                     f"⏱ Job {_job.get('id')} fired now.",
-                                     reply_to_message_id=p.message_id)
+                    _res = await self.hive.run_automation(a_c[4:].strip())
+                    await self.reply(
+                        p.chat_id,
+                        "⏱ Fired now." if _res.get("ok") else
+                        f"⚠ {_res.get('note') or 'not started'}",
+                        reply_to_message_id=p.message_id)
                 else:
                     await self.reply(p.chat_id,
                                      "❌ /cron add|list|del|run — see /cron.",
@@ -1360,26 +1358,39 @@ async def _ui_veto_active(gw: Gateway) -> bool:
     return "telegram_gateway_enabled" in s and not s["telegram_gateway_enabled"]
 
 
-async def _cron_tick(gw: Gateway) -> None:
-    """R7 (owner, 1.3.2): fire due cron jobs as normal phone runs. Busy
-    runs SKIP this fire; the next_ts recompute is kind-aware so daily
-    at-jobs keep their schedule. Every error is contained."""
-    import time as _time
-    from hivemind_gateway.cron import next_fire_ts as _next_fire
-    mgr = gw.cron_manager
-    now = _time.time()
-    for _job in mgr.due_jobs(now):
-        if gw.state.data.get("active_run"):
-            log.info("[CRON] %s skipped - a run is active", _job.get("id"))
-            _job["next_ts"] = _next_fire(_job, now + 120)
-            continue
-        log.warning("[CRON] firing job %s: %s", _job.get("id"),
-                    str(_job.get("prompt"))[:80])
-        _task = asyncio.create_task(
-            gw.bridge.start_text_run(str(_job.get("prompt") or "")))
-        _task.add_done_callback(lambda t: t.exception() and log.warning(
-            "[CRON] run task failed: %s", t.exception()))
-        mgr.mark_fired(_job, now)
+async def _migrate_cron_to_engine(gw: Gateway) -> None:
+    """R8 (2026-11-05): one-time import of legacy gateway cron_jobs into
+    the engine's /automations store. Skips silently when there is nothing
+    to migrate; keeps the legacy entries on engine-unreachable so a later
+    start retries. Never fatal - the phone must still start."""
+    jobs = gw.state.data.get("cron_jobs") or []
+    if not jobs:
+        return
+    from hivemind_gateway.cron_proxy import legacy_to_engine
+    migrated, skipped, failed = 0, 0, 0
+    try:
+        for _job in jobs:
+            _body = legacy_to_engine(_job)
+            if _body is None:
+                skipped += 1
+                continue
+            try:
+                await gw.hive.create_automation(_body)
+                migrated += 1
+            except (HiveUnreachable, HTTPError, OSError):
+                failed += 1
+    except (HiveUnreachable, OSError) as _mig_exc:
+        log.warning("[CRON-MIGRATE] engine unreachable: %s - legacy jobs "
+                    "kept, retry on next start", _mig_exc)
+        return
+    if failed:
+        log.warning("[CRON-MIGRATE] %d migrated, %d skipped, %d FAILED - "
+                    "legacy jobs kept", migrated, skipped, failed)
+        return
+    gw.state.data.pop("cron_jobs", None)
+    gw.state.save()
+    log.info("[CRON-MIGRATE] %d job(s) migrated to the engine, %d skipped",
+             migrated, skipped)
 
 
 async def _mirror_loop(gw: Gateway) -> None:
@@ -1410,14 +1421,6 @@ async def _mirror_loop(gw: Gateway) -> None:
         except (HiveUnreachable, OSError, ValueError, TypeError, KeyError,
                 IndexError, RuntimeError, AttributeError, TimeoutError) as _hb_exc:
             log.warning("[HEARTBEAT] tick failed: %s", _hb_exc)
-        # R7 (owner, 1.3.2): cron - fire due scheduled runs as normal phone
-        # runs. Every error is contained; the cron must never take the
-        # gateway down.
-        try:
-            await _cron_tick(gw)
-        except (HiveUnreachable, OSError, ValueError, TypeError,
-                KeyError) as _cron_exc:
-            log.warning("[CRON] tick failed: %s", _cron_exc)
         await asyncio.sleep(5.0)
 
 
@@ -1452,10 +1455,10 @@ async def run() -> int:
                  cfg.force_approval_gate)
     api = TelegramApi(token)
     gw = Gateway(api, cfg, state)
-    # R7 (owner, 1.3.2): cron - scheduled agent runs, persisted in the
-    # gateway state, fired by the poll loop as normal phone runs.
-    from hivemind_gateway.cron import CronManager, next_fire_ts as _cron_next_fire
-    gw.cron_manager = CronManager(state, gw.bridge)
+    # R8 (2026-11-05): the ENGINE owns scheduling now. Migrate legacy
+    # gateway cron_jobs into the engine's /automations store once, then
+    # drop them from the gateway state (the proxy reads only the engine).
+    await _migrate_cron_to_engine(gw)
     # 2026-10-05: the startup filter only carries the ENV token — a token
     # from the Credential Manager would never be in the literal scrub
     # list. Feed the RESOLVED token to the same filter (its docstring

@@ -38,6 +38,7 @@ class SchedulerManager:
         self._task: asyncio.Task | None = None
         self._fire_tasks: set[asyncio.Task] = set()
         self._active_run_id = ""
+        self._last_ask_preview = ""
         self._fire_lock = asyncio.Lock()
 
     # -- lifecycle --------------------------------------------------------
@@ -252,6 +253,10 @@ class SchedulerManager:
             status = "ok" if stop_reason == "completed" else (
                 "partial" if stop_reason in ("loop_detected", "max_tool_rounds")
                 else "failed")
+            if self._last_ask_preview and status != "ok":
+                # The run paused on a question/card at least once - the
+                # honest outcome is needs_input, not a bare failed.
+                status = "needs_input"
             # RE-FETCH (2026-11-05 audit): `job` may be a stale dict if the
             # user edited/deleted the job during a long run. Mutate through
             # the store, and decide once-deletion from the STORED schedule.
@@ -297,6 +302,24 @@ class SchedulerManager:
                         self._active_run_id = run_id
                     elif etype == "token":
                         answer_parts.append(str(ev.get("content") or ""))
+                    elif etype in ("agent_asking", "approval_request"):
+                        # NEEDS-INPUT (2026-11-05): an unattended run paused
+                        # on a question/card - surface it instead of letting
+                        # the run silently burn its runtime.
+                        _q = str(ev.get("question") or ev.get("preview")
+                                 or "")[:200]
+                        if _q and _q != self._last_ask_preview:
+                            self._last_ask_preview = _q
+                            logger.warning(
+                                "[AUTOMATION] %s needs input: %s",
+                                run_id or "?", _q)
+                            try:
+                                from infra.notify import (
+                                    notify_agent_needs_input as _nai)
+                                _nai(run_id or "automation",
+                                     "Automation paused: " + _q)
+                            except (ImportError, OSError, RuntimeError):
+                                pass
                     elif etype == "done":
                         stop_reason = str(ev.get("stop_reason") or "completed")
                         return
