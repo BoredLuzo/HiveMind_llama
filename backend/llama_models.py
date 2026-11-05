@@ -220,6 +220,13 @@ def _build_index() -> dict[str, Path]:
         _logger.info(f"No .gguf files in {MODELS_DIR}")
         return index
 
+    # MULTI-QUANT (2026-11-05, live): several quants of one model map to
+    # the SAME canonical names. Collisions are resolved once, after the
+    # scan (see _resolve_index_collisions) — the old inline rule silently
+    # kept the SMALLER file, which replaced an already-registered quant
+    # with a worse one the moment a second file appeared.
+    _name_cands: dict[str, list[Path]] = {}
+
     for gguf in gguf_files:
         fname_lower = gguf.name.lower()
         if any(pat in fname_lower for pat in _NON_MODEL_PATTERNS):
@@ -248,22 +255,80 @@ def _build_index() -> dict[str, Path]:
             canonical_names = [_known_tag] + [n for n in canonical_names if n != _known_tag]
 
         for name in canonical_names:
-            if name in index:
-                try:
-                    existing_size = index[name].stat().st_size
-                    new_size = gguf.stat().st_size
-                    if new_size < existing_size:
-                        index[name] = gguf
-                except Exception:
-                    pass
-            else:
-                index[name] = gguf
+            _name_cands.setdefault(name, []).append(gguf)
+
+    _resolve_index_collisions(index, _name_cands)
 
     _logger.info(f"GGUF index: {len(index)} entries from {len(gguf_files)} files in {MODELS_DIR} (build took {(_time_module.perf_counter() - _t0) * 1000:.0f}ms)")
     for name, path in sorted(index.items()):
         _logger.debug(f"  {name} → {path.name}")
 
     return index
+
+
+def _quant_token(filename: str) -> str:
+    """Trailing quant token of a GGUF filename, lowercase ('q4_k_m')."""
+    m = _QUANT_PRE.search(Path(filename).stem)
+    return m.group(0).lstrip("-._ ").lower() if m else ""
+
+
+def _resolve_index_collisions(index: dict[str, Path],
+                              cands: dict[str, list[Path]]) -> None:
+    """MULTI-QUANT (2026-11-05, live): one model in several quantizations.
+
+    Old rule: the SMALLER file silently replaced the registered one — a
+    user who added an IQ1_M alongside his Q4_K_M lost the Q4_K_M alias
+    without any notice. Resolution now:
+      1. a file the user explicitly registered (models.json override)
+         or that the known-filename manifest claims for this name wins;
+      2. otherwise the LARGER file wins (higher quant ≈ better quality);
+      3. every losing file stays reachable under an explicit
+         '<name>-<quant>' alias, so no quant ever disappears from the
+         picker — it just no longer owns the canonical name.
+    """
+    try:
+        overrides = _load_overrides()
+    except Exception:
+        overrides = {}
+    _claimed_paths: set[str] = set()
+    for _k, _v in overrides.items():
+        if _k.endswith("_mmproj") or not _v:
+            continue
+        try:
+            _claimed_paths.add(str(Path(_v.strip()).resolve()).lower())
+        except (OSError, ValueError):
+            continue
+
+    for name, files in cands.items():
+        if not files:
+            continue
+        winner = files[0]
+        _losers: list[Path] = []
+        if len(files) > 1:
+            def _score(f: Path) -> tuple[int, int]:
+                claimed = str(f.resolve()).lower() in _claimed_paths
+                try:
+                    size = f.stat().st_size
+                except OSError:
+                    size = 0
+                return (1 if claimed else 0, size)
+            winner = max(files, key=_score)
+            _losers = [f for f in files if f != winner]
+            _why = ("registered/known file"
+                    if str(winner.resolve()).lower() in _claimed_paths
+                    else "largest file")
+            _logger.warning(
+                "[GGUF-INDEX] '%s': %d quants (%s) — '%s' wins (%s)",
+                name, len(files), ", ".join(f.name for f in files),
+                winner.name, _why)
+        index[name] = winner
+        for _loser in _losers:
+            _alt = f"{name}-{_quant_token(_loser.name)}".strip("-")
+            if not _alt or _alt in index or _alt in cands:
+                continue
+            index[_alt] = _loser
+            _logger.info("[GGUF-INDEX] '%s' → alternate quant alias for %s",
+                        _alt, _loser.name)
 
 
 def _get_index() -> dict[str, Path]:
@@ -617,6 +682,14 @@ def list_available_models(force_refresh: bool = False) -> list[str]:
 def save_model_mapping(model_name: str, gguf_path: str):
     model = _strip_alias(model_name)
     if not model:
+        return
+    if model.lower().startswith("llamacpp:"):
+        # SLOT-ID (2026-11-05, live): llama.cpp ohne -a meldet geladene
+        # Modelle als 'llamacpp:<sha>'. So ein interner Slot-Name ist kein
+        # Registrierungsname — sonst steht er dauerhaft im Model-Picker.
+        _logger.warning(
+            "[MODELS-JSON] refusing to register slot id '%s' (load the "
+            "model under its registry name instead)", model)
         return
     data = _load_overrides()
     data[model] = str(gguf_path)
