@@ -6,13 +6,15 @@ is a standalone script with `sys.exit(0|1)`. If a suite file is missing, it
 counts as FAIL.
 
 Run:
-    python tests/run_regressions.py            # all suites
+    python tests/run_regressions.py            # all suites (6 workers)
     python tests/run_regressions.py --only stuck_bash   # name filter (substring)
+    python tests/run_regressions.py --jobs 1   # strict sequential
 """
 import os
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -296,6 +298,7 @@ SUITES = [
     ("git_consolidate_scope",   "tests/test_git_consolidate_scope.py",       60),
     ("git_commit_scope",        "tests/test_git_commit_scope.py",            40),
     ("settings_ui",             "tests/test_settings_ui.py",                 20),
+    ("settings_split",          "tests/test_settings_split.py",              10),
     ("tool_args_nonobject",     "tests/test_tool_args_nonobject.py",         20),
     ("tool_python_interpreter", "tests/test_tool_python_interpreter.py",     60),
     ("scheduler_core",          "tests/test_scheduler_core.py",              30),
@@ -349,34 +352,43 @@ def main() -> int:
     if "--only" in sys.argv:
         i = sys.argv.index("--only")
         only = sys.argv[i + 1].lower() if i + 1 < len(sys.argv) else ""
+    jobs = 6
+    if "--jobs" in sys.argv:
+        i = sys.argv.index("--jobs")
+        jobs = max(1, int(sys.argv[i + 1]) if i + 1 < len(sys.argv) else 6)
 
-    results = []
+    print("=" * 64)
+    print(f"REGRESSION RUN - HiveMind Feature-Checks ({jobs} worker(s))")
+    print("=" * 64)
+
+    # PARALLEL RUNNER (2026-11-05 maintainability audit): 313 sequential
+    # subprocess suites took ~18 min wall clock. Suites are independent
+    # scripts; a small worker pool cuts that ~4x. Output stays in SUITES
+    # order (results are printed as the in-order iterator reaches them),
+    # so diffs against sequential runs stay comparable.
+    # Missing-file check BEFORE submitting (SKIP-ONLY-BY-FLAG, 2026-10-27
+    # audit): a registered suite missing on a full checkout is a defect.
+    results: list[tuple[str, bool, float, object]] = []
+    pending: list[tuple[int, str, str, int]] = []
     failed_total = 0
-    print("=" * 64)
-    print("REGRESSION RUN - HiveMind Feature-Checks")
-    print("=" * 64)
     for name, rel, timeout in SUITES:
-        # --only must be applied BEFORE the missing-file check; on a partial
-        # checkout it otherwise failed every registered-but-absent suite.
         if only and only not in name.lower():
             continue
         if not (ROOT / rel).exists():
-            # SKIP-ONLY-BY-FLAG (2026-10-27, audit): this branch swallowed a
-            # DELETED or renamed suite - coverage shrank, the run stayed green.
-            # A registered suite missing on a full checkout is a defect.
             if "--allow-missing" in sys.argv:
                 print(f"[SKIP] {name:24s} (--allow-missing: file not present)")
                 continue
-            results.append((name, False, 0.0))
-            failed_total += 1
-            print(f"[FAIL] {name:<20} ({rel} missing - registered but not on disk;"
-                  f" --allow-missing to skip on partial checkouts)")
+            results.append((name, False, 0.0, None))
+            print(f"[FAIL] {name:<20} ({rel} missing - registered but not on"
+                  f" disk; --allow-missing to skip on partial checkouts)")
             continue
+        pending.append((len(results), name, rel, timeout))
+        results.append(None)  # type: ignore[list-item]
+
+    def _run_suite(pos: int, rel: str, timeout: int) -> tuple[bool, float, object]:
         target = ROOT / rel
         t0 = time.time()
-        # ENC-FIX (2026-10-15): suites print non-ASCII (❌/✅, umlauts) — a
-        # cp1252 console (PowerShell without PYTHONUTF8) killed them with
-        # UnicodeEncodeError. Force UTF-8 for every child, independent of
+        # ENC-FIX (2026-10-15): force UTF-8 for every child, independent of
         # the invoking console's locale.
         _suite_env = {**os.environ, "PYTHONIOENCODING": "utf-8:replace"}
         try:
@@ -387,27 +399,29 @@ def main() -> int:
                 env=_suite_env,
                 cwd=str(ROOT), timeout=timeout)
         except subprocess.TimeoutExpired:
-            dur = time.time() - t0
-            failed_total += 1
-            results.append((name, False, dur))
-            print(f"[FAIL] {name:<20} (timeout after {timeout}s)")
-            continue
-        dur = time.time() - t0
-        ok = r.returncode == 0
-        failed_total += 0 if ok else 1
-        results.append((name, ok, dur))
-        print(f"[{'PASS' if ok else 'FAIL'}] {name:<20} ({dur:.0f}s)")
-        if not ok:
-            tail = (r.stdout or "").strip().splitlines()[-8:]
-            errtail = (r.stderr or "").strip().splitlines()[-5:]
-            for l in tail:
-                print(f"    | {l}")
-            for l in errtail:
-                print(f"    ! {l}")
+            return False, time.time() - t0, None
+        return r.returncode == 0, time.time() - t0, r
 
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        _futs = [pool.submit(_run_suite, pos, rel, timeout)
+                 for pos, name, rel, timeout in pending]
+        for (pos, name, _rel, timeout), _fut in zip(pending, _futs):
+            ok, dur, r = _fut.result()
+            failed_total += 0 if ok else 1
+            results[pos] = (name, ok, dur, r)
+            print(f"[{'PASS' if ok else 'FAIL'}] {name:<20} ({dur:.0f}s)")
+            if not ok:
+                tail = ((r.stdout or "") if r else "").strip().splitlines()[-8:]
+                errtail = ((r.stderr or "") if r else "").strip().splitlines()[-5:]
+                for l in tail:
+                    print(f"    | {l}")
+                for l in errtail:
+                    print(f"    ! {l}")
+
+    results = [r for r in results if r is not None]
     print("=" * 64)
     ran = len(results)
-    npass = sum(1 for _, ok, _ in results if ok)
+    npass = sum(1 for _, ok, _, _ in results if ok)
     print(f"Suites: {npass}/{ran} PASS, {failed_total} suite(s) failed")
     return 1 if failed_total else 0
 

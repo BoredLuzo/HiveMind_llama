@@ -849,7 +849,8 @@ _ATL = (ROOT / "core" / "agentic_tool_loop.py").read_text(encoding="utf-8", erro
 check("22a the round log carries free VRAM", "vram_free=" in _ATL)
 check("22b the VRAM query is guarded",
       "get_live_gpu_free_mib as _vfree" in _ATL)
-_SET = (ROOT / "settings.py").read_text(encoding="utf-8", errors="replace")
+from settings_source import settings_source as _settings_src
+_SET = _settings_src()
 check("22c checkpoints are a setting", '"llama_ctx_checkpoints":' in _SET)
 check("22d the host prompt cache is a setting", '"llama_cache_ram_mib":' in _SET)
 _SRV = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")

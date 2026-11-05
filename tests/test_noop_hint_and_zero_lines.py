@@ -156,7 +156,7 @@ def test_source_guards():
         ("core/agentic_duo_state.py", "edit_noop_streak", "edit_noop_streak"),
         ("core/tool_executor.py", "_round_noop_hints", "_round_noop_hints"),
         ("tools/handlers/file_ops.py", "0-LINES-CLARITY", "0-LINES-CLARITY"),
-        ("settings.py", "duo_noop_hint_enabled", "duo_noop_hint_enabled"),
+        ("settings_defaults.py", "duo_noop_hint_enabled", "duo_noop_hint_enabled"),
     ]
     bad = []
     for rel, needle, label in checks:

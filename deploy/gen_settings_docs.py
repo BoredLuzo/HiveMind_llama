@@ -21,13 +21,16 @@ sys.path.insert(0, str(ROOT))
 from settings import DEFAULT_SETTINGS          # noqa: E402
 
 OUT = ROOT / "docs" / "settings.md"
-SRC = ROOT / "settings.py"
+# SPLIT-AWARE (2026-11-05): DEFAULT_SETTINGS lives in settings_defaults.py
+# now; settings.py re-exports it. Comments are collected from BOTH files so
+# the doc stays complete wherever a default is edited.
+SRC_FILES = (ROOT / "settings.py", ROOT / "settings_defaults.py")
 
 HEADER = """# HiveMind Settings
 
-Generated from `settings.py` (`DEFAULT_SETTINGS`) by
+Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
-its comment) in `settings.py`, then re-run the generator.
+its comment) in either file, then re-run the generator.
 
 **{count} settings keys.**
 
@@ -44,7 +47,9 @@ def _comments() -> dict[str, str]:
     explains them in a block right above. Section banners (box-drawing only)
     are skipped.
     """
-    lines = SRC.read_text(encoding="utf-8").splitlines()
+    lines: list[str] = []
+    for _src in SRC_FILES:
+        lines.extend(_src.read_text(encoding="utf-8").splitlines())
     out: dict[str, str] = {}
     for i, line in enumerate(lines):
         m = re.match(r'\s*"([a-z0-9_]+)":\s*[^#]*,\s*(?:#\s*(.*))?$', line)

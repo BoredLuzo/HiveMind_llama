@@ -33,7 +33,12 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name}{extra}")
 
 
+from settings_source import settings_source as _settings_src
+
+
 def read(rel: str) -> str:
+    if rel == "settings.py":
+        return _settings_src()
     return (ROOT / rel).read_text(encoding="utf-8", errors="replace")
 
 

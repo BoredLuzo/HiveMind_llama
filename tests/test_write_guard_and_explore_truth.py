@@ -181,7 +181,8 @@ def test_source_guard_write_guard():
 
 
 def test_source_guard_settings_default():
-    src = (Path(__file__).parent.parent / "settings.py").read_text(encoding="utf-8")
+    from settings_source import settings_source as _settings_src
+    src = _settings_src()
     if '"duo_write_guard_enabled":      True,' in src or '"duo_write_guard_enabled":     True,' in src \
             or '"duo_write_guard_enabled": True,' in src:
         ok("source_guard_settings_default (duo_write_guard_enabled Default True)")

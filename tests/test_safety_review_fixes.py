@@ -70,7 +70,8 @@ _val = get_live_gpu_free_mib()
 check("3a the live probe answers", _val is None or _val >= 0.0, f"({_val})")
 
 # ── 4. unlimited runs are bounded, shutdown is PID-scoped ────────────────
-SET = (ROOT / "settings.py").read_text(encoding="utf-8")
+from settings_source import settings_source as _settings_src
+SET = _settings_src()
 RUN = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
 check("4a until_finished has a wall-clock bound in settings",
       "duo_until_finished_max_hours" in SET)

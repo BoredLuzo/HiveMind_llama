@@ -1,8 +1,8 @@
 # HiveMind Settings
 
-Generated from `settings.py` (`DEFAULT_SETTINGS`) by
+Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
-its comment) in `settings.py`, then re-run the generator.
+its comment) in either file, then re-run the generator.
 
 **276 settings keys.**
 

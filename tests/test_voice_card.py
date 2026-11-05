@@ -44,7 +44,8 @@ def check(name, cond, extra=""):
 html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
 app = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
 server = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
-settings = (ROOT / "settings.py").read_text(encoding="utf-8", errors="replace")
+from settings_source import settings_source as _settings_src
+settings = _settings_src()
 
 # ── (a) the card ────────────────────────────────────────────────────────────
 card = html.split('id="voice-card"', 1)[1].split("<!-- Smart Preload -->", 1)[0] \
@@ -228,8 +229,9 @@ check("speech to text is findable", "Voice — Speech to text" in app)
 check("telegram voice switches are findable",
       "Telegram — Voice notes in" in app and "Telegram — Answers as voice notes" in app)
 
-# engine side
-s = (ROOT / "settings.py").read_text(encoding="utf-8", errors="replace")
+# engine side (split-aware: defaults live in settings_defaults.py now)
+from settings_source import settings_source as _settings_src2
+s = _settings_src2()
 check("all four settings default to False",
       all(('"tts_read_%s"' % k) in s for k in ("direct", "agentic", "ask", "gate")))
 
