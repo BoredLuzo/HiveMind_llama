@@ -351,7 +351,7 @@
               <span class="opt-name">Workspace</span>
               <span class="opt-hint">Repo path for new chats (empty = batch/env; saved chats keep theirs)</span>
             </div>
-            <input type="text" id="workspace-input" placeholder="C:\path\to\project"
+            <input type="text" id="workspace-input" placeholder="C:/path/to/project"
                    style="flex:1;min-width:180px;max-width:280px;font-size:11px;padding:3px 6px;background:#1a1f2a;color:#dde4ee;border:1px solid #2c3444;border-radius:4px"
                    onchange="S.workspace=this.value.trim();commitWorkspaceInput()">
           </div>
@@ -2451,43 +2451,43 @@ document.getElementById('prefetch-lead-val').textContent=v;">
       + New automation
     </button>
     <div id="automation-list"><div class="empty">No automations yet.</div></div>
-    <div id="automation-editor" style="display:none;margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+    <div id="automation-editor" style="display:none;margin-top:12px;border-top:1px solid var(--b);padding-top:10px">
       <div class="sec" id="automation-editor-title">New automation</div>
-      <label class="fld-hint">Name</label>
-      <input id="auto-name" class="rt-input" style="width:100%;margin-bottom:8px" placeholder="Daily repo triage">
-      <label class="fld-hint">Prompt</label>
-      <textarea id="auto-prompt" class="rt-input" style="width:100%;min-height:90px;margin-bottom:8px" placeholder="What should the agent do?"></textarea>
-      <label class="fld-hint">Schedule</label>
-      <select id="auto-kind" class="rt-input" style="width:100%;margin-bottom:6px" onchange="automationScheduleChanged()">
+      <label class="fld-label">Name</label>
+      <input id="auto-name" class="fld-input" style="width:100%;margin-bottom:8px" placeholder="Daily repo triage">
+      <label class="fld-label">Prompt</label>
+      <textarea id="auto-prompt" class="fld-input" style="width:100%;min-height:90px;margin-bottom:8px" placeholder="What should the agent do?"></textarea>
+      <label class="fld-label">Schedule</label>
+      <select id="auto-kind" class="fld-input" style="width:100%;margin-bottom:6px" onchange="automationScheduleChanged()">
         <option value="every">Every N minutes</option>
         <option value="once">Once, in N minutes</option>
         <option value="daily">Daily at</option>
       </select>
-      <div id="auto-interval-row" style="display:flex;gap:6px;margin-bottom:8px">
-        <input id="auto-interval" class="rt-input" type="number" min="1" value="60" style="flex:1">
+      <div id="auto-interval-row" class="fld-row" style="margin-bottom:8px">
+        <input id="auto-interval" class="fld-input" type="number" min="1" value="60">
         <span class="fld-hint" style="align-self:center">minutes</span>
       </div>
       <div id="auto-time-row" style="display:none;margin-bottom:8px">
-        <input id="auto-time" class="rt-input" type="time" value="09:00" style="width:100%">
+        <input id="auto-time" class="fld-input" type="time" value="09:00" style="width:100%">
       </div>
-      <label class="fld-hint">Mode</label>
-      <select id="auto-mode" class="rt-input" style="width:100%;margin-bottom:8px">
+      <label class="fld-label">Mode</label>
+      <select id="auto-mode" class="fld-input" style="width:100%;margin-bottom:8px">
         <option value="auto">Auto</option>
         <option value="simple" selected>Chat</option>
         <option value="pipeline">Pipeline</option>
         <option value="code_duo">Code-Duo</option>
       </select>
-      <label class="fld-hint">Tools</label>
-      <select id="auto-tier" class="rt-input" style="width:100%;margin-bottom:8px">
+      <label class="fld-label">Tools</label>
+      <select id="auto-tier" class="fld-input" style="width:100%;margin-bottom:8px">
         <option value="readonly">Read-only + web</option>
         <option value="python">Python</option>
         <option value="full">Full (write/shell)</option>
         <option value="off">Off</option>
       </select>
-      <label class="fld-hint">Workspace (empty = current)</label>
-      <input id="auto-workspace" class="rt-input" style="width:100%;margin-bottom:8px" placeholder="C:\\path\\to\\project">
-      <label class="fld-hint">When a run is active</label>
-      <select id="auto-policy" class="rt-input" style="width:100%;margin-bottom:8px">
+      <label class="fld-label">Workspace (empty = current)</label>
+      <input id="auto-workspace" class="fld-input" style="width:100%;margin-bottom:8px" placeholder="C:/path/to/project">
+      <label class="fld-label">When a run is active</label>
+      <select id="auto-policy" class="fld-input" style="width:100%;margin-bottom:8px">
         <option value="skip">Skip this occurrence</option>
         <option value="queue">Queue once, run when idle</option>
       </select>
@@ -2495,8 +2495,8 @@ document.getElementById('prefetch-lead-val').textContent=v;">
         <input id="auto-enabled" type="checkbox" checked> Enabled
       </label>
       <div style="display:flex;gap:8px">
-        <button onclick="automationSave()" class="amber-btn" style="flex:1">Save</button>
-        <button onclick="automationCancel()" class="rt-input" style="flex:0 0 auto;padding:6px 10px">Cancel</button>
+        <button onclick="automationSave()" class="amber-btn" style="flex:1">Save automation</button>
+        <button onclick="automationCancel()" class="btn">Cancel</button>
       </div>
     </div>
     <div id="automation-runs" style="margin-top:12px"></div>

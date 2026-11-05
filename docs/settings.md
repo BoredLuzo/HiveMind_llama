@@ -4,7 +4,7 @@ Generated from `settings.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in `settings.py`, then re-run the generator.
 
-**275 settings keys.**
+**276 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -20,6 +20,7 @@ its comment) in `settings.py`, then re-run the generator.
 | `ask_user_throttle_pause_message` | str | `Agent is asking too many questions — ...` | - |  |
 | `ask_user_timeout_until_finished_seconds` | int | `300` | yes |  |
 | `automap_excluded` | list | `[]` | - |  |
+| `automations_enabled` | bool | `True` | - | AUTOMATIONS : engine-owned scheduled runs (UI tab "Automations"). False is the kill switch; jobs live in automations.json, not here. |
 | `constraint_mode` | bool | `True` | yes |  |
 | `ctx_overrides` | object | `{...}` | yes |  |
 | `debug_api_enabled` | bool | `False` | - | DEBUG API : /debug/tasks returns asyncio task stacks with file paths, /debug/models registry and filesystem internals, /thinking/debug and /budget/debug expose internals - all on an unauthenticated loopback API. Off by default; the router is not even mounted… |

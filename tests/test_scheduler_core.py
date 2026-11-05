@@ -125,9 +125,60 @@ def main() -> int:
               and mgr.store.get(queue_job["id"]).get("pending_fire") is None)
 
         mgr.lane_busy = lambda: True
-        ok, note = asyncio.run(mgr.run_now(skip_job["id"]))
+        ok, note = mgr.run_now(skip_job["id"])
         check("run-now still refuses a busy lane",
               ok is False and "busy" in note)
+
+        # AUDIT-PIN (2026-11-05): a queued job must not collect a bogus
+        # skipped_busy entry on later busy ticks.
+        qjob = mgr.store.get(queue_job["id"])
+        qjob["pending_fire"] = {"due_ts": now, "queued_ts": now}
+        before_hist = len(mgr.store.history(queue_job["id"]))
+        asyncio.run(mgr.tick(now + 3))
+        check("queued job is not double-counted as skipped_busy",
+              len(mgr.store.history(queue_job["id"])) == before_hist)
+
+        # A disabled job with a pending fire must not run later.
+        mgr.lane_busy = lambda: False
+        fired2 = []
+        async def _fake_fire2(job, ts, reason=""):
+            fired2.append(job["id"])
+        mgr._fire = _fake_fire2
+        dis = mgr.store.add({
+            "name": "disabled", "prompt": "x",
+            "schedule": {"kind": "every", "interval_s": 600},
+            "next_ts": now - 5, "policy": "queue", "enabled": False})
+        dis = mgr.store.get(dis["id"])
+        dis["pending_fire"] = {"due_ts": now, "queued_ts": now}
+        mgr.store.update(dis["id"], {"pending_fire": dis["pending_fire"]})
+        asyncio.run(mgr.tick(now + 4))
+        check("disabled job never fires (even queued)",
+              not fired2 or dis["id"] not in fired2)
+
+        # Zombie once-job (next_ts None) is swept with an expired entry.
+        zm = SchedulerManager(Path(td) / "zombie.json", "http://127.0.0.1:1")
+        zomb = zm.store.add({
+            "name": "zombie", "prompt": "x",
+            "schedule": {"kind": "once", "interval_s": 60},
+            "next_ts": None, "enabled": True})
+        asyncio.run(zm.tick(now + 5))
+        check("zombie once job is swept",
+              zm.store.get(zomb["id"]) is None
+              and any(h.get("status") == "expired"
+                      for h in zm.store.history(zomb["id"])))
+
+        # Store caps and unique ids.
+        from scheduler.store import MAX_JOBS as _MJ
+        small = AutomationStore(Path(td) / "cap.json")
+        added = []
+        import itertools
+        for i in range(min(_MJ, 8)):
+            added.append(small.add({
+                "name": f"j{i}", "prompt": "x",
+                "schedule": {"kind": "every", "interval_s": 600},
+                "next_ts": now}))
+        check("store ids are unique",
+              len({a["id"] for a in added}) == len(added))
 
     html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
     js = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")

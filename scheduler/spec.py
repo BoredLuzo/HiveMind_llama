@@ -113,20 +113,3 @@ def classify_due(next_ts: float | None, now: float,
     if float(now) - ts <= max(0.0, float(grace_s)):
         return "due"
     return "missed"
-
-
-def human_next(next_ts: float | None, now: float | None = None) -> str:
-    """Short local-time label for UI/logs."""
-    if not next_ts:
-        return "never"
-    now = time.time() if now is None else now
-    delta = int(float(next_ts) - float(now))
-    if delta <= 0:
-        return "due"
-    if delta < 60:
-        return f"in {delta}s"
-    if delta < 3600:
-        return f"in {delta // 60}m"
-    if delta < 86400:
-        return f"in {delta // 3600}h {(delta % 3600) // 60}m"
-    return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(next_ts)))

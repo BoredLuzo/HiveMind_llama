@@ -346,6 +346,11 @@ DEFAULT_SETTINGS = {
     # repeats rendered as PERSISTS/FIXED/REOPENED. Runtime state per run.
     "duo_error_rollup":        True,
 
+    # AUTOMATIONS (2026-11-05): engine-owned scheduled runs (UI tab
+    # "Automations"). False is the kill switch; jobs live in
+    # automations.json, not here.
+    "automations_enabled":     True,
+
     # ════════════════════════════════════════════════════════════════════════
     # I) GIT, SANDBOX & SYSTEM
     # ════════════════════════════════════════════════════════════════════════

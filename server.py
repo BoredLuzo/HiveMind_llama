@@ -764,14 +764,21 @@ async def _startup():
     # AUTOMATIONS (2026-11-05): engine-owned scheduler. Jobs live outside
     # settings/presets and fire as normal /stream runs into their own chat.
     try:
-        from scheduler.manager import init_manager as _init_automations
-        _auto_port = int(settings.get("server_port") or 8001)
-        _auto_mgr = _init_automations(
-            Path(__file__).resolve().parent / "automations.json",
-            f"http://127.0.0.1:{_auto_port}")
-        spawn(_auto_mgr.start())
-        _logger.info("[AUTOMATION] scheduler started (%d job(s))",
-                     len(_auto_mgr.store.jobs()))
+        if not bool(settings.get("automations_enabled", True)):
+            _logger.info("[AUTOMATION] scheduler disabled by settings")
+        else:
+            from scheduler.manager import init_manager as _init_automations
+            # BOUND-PORT (2026-11-05 audit): run.py exports the REAL port
+            # (HIVEMIND_PORT override / busy-port fallback); the settings
+            # value alone could point at another HiveMind instance.
+            _auto_port = int(os.environ.get("HIVEMIND_BOUND_PORT") or
+                             settings.get("server_port") or 8001)
+            _auto_mgr = _init_automations(
+                Path(__file__).resolve().parent / "automations.json",
+                f"http://127.0.0.1:{_auto_port}")
+            spawn(_auto_mgr.start())
+            _logger.info("[AUTOMATION] scheduler started on port %d (%d job(s))",
+                         _auto_port, len(_auto_mgr.store.jobs()))
     except (ImportError, RuntimeError, OSError, ValueError, AttributeError,
             TypeError) as _auto_exc:
         _logger.warning("[AUTOMATION] scheduler not started: %s", _auto_exc)

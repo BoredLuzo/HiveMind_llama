@@ -13,7 +13,14 @@ router = APIRouter(prefix="/automations", tags=["automations"])
 
 _ALLOWED_MODES = {"auto", "simple", "pipeline", "code_duo"}
 _ALLOWED_TIERS = {"off", "readonly", "python", "full"}
-_ALLOWED_POLICY = {"skip", "queue", "replace"}
+_ALLOWED_POLICY = {"skip", "queue"}
+
+# UPDATE-WHITELIST (2026-11-05 audit): PUT must not be able to rewrite
+# bookkeeping (fires/next_ts/chat_id/pending_fire) - that was both a
+# correctness hole and a way to wedge the scheduler with junk values.
+_PATCHABLE = {"name", "prompt", "schedule", "timezone", "mode",
+              "tools_tier", "workspace", "policy", "enabled",
+              "max_runtime_s"}
 
 
 def _mgr():
@@ -27,7 +34,21 @@ def _err(msg: str, code: int = 400):
 def _schedule_from(body: dict) -> dict | None:
     sched = body.get("schedule")
     if isinstance(sched, dict):
-        return sched
+        kind = str(sched.get("kind") or "")
+        if kind == "daily":
+            hm = str(sched.get("at_hm") or "")
+            if spec.parse_schedule(f"daily {hm}") is None:
+                return None
+            return {"kind": "daily", "at_hm": hm}
+        if kind in ("every", "once"):
+            try:
+                interval = int(sched.get("interval_s") or 0)
+            except (TypeError, ValueError):
+                return None
+            if interval <= 0:
+                return None
+            return {"kind": kind, "interval_s": interval}
+        return None
     text = str(body.get("schedule_text") or "").strip()
     return spec.parse_schedule(text) if text else None
 
@@ -36,10 +57,10 @@ def _validate(body: dict) -> tuple[dict | None, str]:
     prompt = str(body.get("prompt") or "").strip()
     if not prompt:
         return None, "prompt is required"
-    name = str(body.get("name") or "Automation").strip()[:80]
+    name = str(body.get("name") or "Automation").strip()[:80] or "Automation"
     schedule = _schedule_from(body)
     if not schedule:
-        return None, "schedule is required (every/in/daily)"
+        return None, "schedule is required (every/once in minutes, daily HH:MM)"
     mode = str(body.get("mode") or "simple")
     if mode not in _ALLOWED_MODES:
         return None, f"unknown mode: {mode}"
@@ -49,6 +70,11 @@ def _validate(body: dict) -> tuple[dict | None, str]:
     policy = str(body.get("policy") or "skip")
     if policy not in _ALLOWED_POLICY:
         return None, f"unknown policy: {policy}"
+    try:
+        max_runtime_s = int(body.get("max_runtime_s") or 1800)
+    except (TypeError, ValueError):
+        return None, "max_runtime_s must be a number"
+    max_runtime_s = max(60, min(7200, max_runtime_s))
     job = {
         "name": name,
         "prompt": prompt[:8000],
@@ -58,13 +84,11 @@ def _validate(body: dict) -> tuple[dict | None, str]:
         "tools_tier": tier,
         "workspace": str(body.get("workspace") or ""),
         "policy": policy,
-        "approvals": str(body.get("approvals") or "deny"),
-        "delivery": str(body.get("delivery") or "ui"),
         "enabled": bool(body.get("enabled", True)),
-        "max_runtime_s": int(body.get("max_runtime_s") or 1800),
+        "max_runtime_s": max_runtime_s,
     }
-    job["next_ts"] = spec.next_fire_ts(
-        schedule, time.time(), job["timezone"])
+    job["next_ts"] = spec.next_fire_ts(schedule, time.time(),
+                                       job["timezone"])
     if job["next_ts"] is None:
         return None, "schedule has no next fire time"
     return job, ""
@@ -75,8 +99,7 @@ async def list_automations():
     mgr = _mgr()
     if mgr is None:
         return _err("scheduler not running", 503)
-    jobs = mgr.store.jobs()
-    return {"automations": jobs}
+    return {"automations": mgr.store.jobs()}
 
 
 @router.post("")
@@ -93,8 +116,11 @@ async def create_automation(req: Request):
     job, why = _validate(body)
     if job is None:
         return _err(why)
-    created = mgr.store.add(job)
-    return JSONResponse({"automation": created}, status_code=201)
+    try:
+        created = mgr.store.add(job)
+    except ValueError as exc:
+        return _err(str(exc))
+    return JSONResponse(created, status_code=201)
 
 
 @router.get("/{job_id}")
@@ -117,15 +143,23 @@ async def update_automation(job_id: str, req: Request):
         return _err("JSON body expected")
     if not isinstance(body, dict):
         return _err("JSON body must be an object")
-    patch = dict(body)
-    schedule = _schedule_from(body)
-    if schedule is not None:
-        patch["schedule"] = schedule
-        patch["next_ts"] = spec.next_fire_ts(
-            schedule, time.time(),
-            str(body.get("timezone") or ""))
-        patch["pending_fire"] = None
-    updated = mgr.store.update(job_id, patch)
+    current = mgr.store.get(job_id)
+    if current is None:
+        return _err("Not found", 404)
+    # Same validation as POST, on the MERGED job - a partial patch can
+    # never smuggle in an unknown mode/tier/policy or a raw schedule dict
+    # that would wedge next_fire_ts.
+    merged = {**current, **{k: v for k, v in body.items()
+                            if k in _PATCHABLE}}
+    job, why = _validate(merged)
+    if job is None:
+        return _err(why)
+    job["id"] = job_id
+    job["chat_id"] = current.get("chat_id") or ""
+    job["created_at"] = current.get("created_at")
+    job["fires"] = current.get("fires") or 0
+    job["last_fired_ts"] = current.get("last_fired_ts")
+    updated = mgr.store.update(job_id, job)
     return updated if updated is not None else _err("Not found", 404)
 
 
@@ -143,7 +177,7 @@ async def run_automation(job_id: str):
     mgr = _mgr()
     if mgr is None:
         return _err("scheduler not running", 503)
-    ok, note = await mgr.run_now(job_id)
+    ok, note = mgr.run_now(job_id)
     return JSONResponse({"ok": ok, "note": note},
                         status_code=200 if ok else 409)
 
@@ -156,8 +190,11 @@ async def toggle_automation(job_id: str):
     job = mgr.store.get(job_id)
     if job is None:
         return _err("Not found", 404)
-    updated = mgr.store.update(job_id, {"enabled": not job.get("enabled", True)})
-    return {"automation": updated}
+    # A queued fire on a now-disabled job must not run later.
+    updated = mgr.store.update(job_id, {
+        "enabled": not job.get("enabled", True),
+        "pending_fire": None})
+    return updated
 
 
 @router.get("/{job_id}/runs")

@@ -8,12 +8,14 @@ from __future__ import annotations
 import json
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from utils.file import write_json_atomic
 
 SCHEMA_VERSION = 1
 MAX_HISTORY = 200
+MAX_JOBS = 50
 
 
 def _blank() -> dict:
@@ -41,8 +43,6 @@ def _normalise_job(raw: dict, now: float) -> dict | None:
         "chat_id": str(raw.get("chat_id") or ""),
         "enabled": bool(raw.get("enabled", True)),
         "policy": str(raw.get("policy") or "skip"),
-        "approvals": str(raw.get("approvals") or "deny"),
-        "delivery": str(raw.get("delivery") or "ui"),
         "max_runtime_s": int(raw.get("max_runtime_s") or 1800),
         "next_ts": raw.get("next_ts"),
         "fires": int(raw.get("fires") or 0),
@@ -126,10 +126,12 @@ class AutomationStore:
 
     def add(self, job: dict) -> dict:
         with self._lock:
+            if len(self.data["jobs"]) >= MAX_JOBS:
+                raise ValueError(f"automation limit reached ({MAX_JOBS})")
             now = time.time()
             item = dict(job)
             if not item.get("id"):
-                item["id"] = f"a{int(now)}_{len(self.data['jobs']) + 1}"
+                item["id"] = "a" + uuid.uuid4().hex[:10]
             item.setdefault("created_at", now)
             item["updated_at"] = now
             item = _normalise_job(item, now) or item

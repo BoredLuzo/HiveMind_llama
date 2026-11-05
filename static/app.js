@@ -12127,10 +12127,14 @@ async function loadAutomations() {
       info.appendChild(title); info.appendChild(prev); info.appendChild(meta);
       const actions = document.createElement('div');
       actions.style.cssText = 'display:flex;gap:4px;margin-top:6px;flex-wrap:wrap';
-      function mk(label, fn) {
+      function mk(label, fn, cls) {
         const b = document.createElement('button');
         b.textContent = label;
-        b.style.cssText = 'background:none;border:1px solid var(--line);border-radius:4px;color:var(--tx2);font-family:inherit;font-size:9px;padding:3px 7px;cursor:pointer';
+        // PANEL BUTTONS (audit 2026-11-05): the bordered mini-button class
+        // the presets/chat panels use - the hand-rolled cssText referenced
+        // an undefined var(--line) and rendered borderless.
+        b.className = cls || 'pload';
+        b.style.marginRight = '0';
         b.onclick = function(e) { e.stopPropagation(); fn(); };
         actions.appendChild(b);
       }
@@ -12138,7 +12142,7 @@ async function loadAutomations() {
       mk('✎ Edit', function() { automationEdit(job.id); });
       mk('Runs', function() { automationShowRuns(job.id); });
       mk(job.enabled ? '⏸ Pause' : '▶ Enable', function() { automationToggle(job.id); });
-      mk('×', function() { automationDelete(job.id); });
+      mk('×', function() { automationDelete(job.id); }, 'pdel');
       info.appendChild(actions);
       item.appendChild(dot); item.appendChild(info);
       list.appendChild(item);
@@ -12158,21 +12162,30 @@ function automationScheduleChanged() {
 
 function _autoShowEditor(show) {
   const el = document.getElementById('automation-editor');
-  if (el) el.style.display = show ? 'block' : 'none';
+  if (!el) return;
+  el.style.display = show ? 'block' : 'none';
+  // EDITOR-BELOW-FOLD (audit 2026-11-05): with a long job list the editor
+  // sits under the fold - "+ New automation" looked like a no-op.
+  if (show) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function _autoField(id, value) {
+  const e = document.getElementById(id);
+  if (e && arguments.length > 1) e.value = value;
+  return e ? e.value : '';
 }
 
 function automationNew() {
   _autoEditingId = null;
-  const set = function(id, v) { const e = document.getElementById(id); if (e) e.value = v; };
-  set('auto-name', '');
-  set('auto-prompt', '');
-  set('auto-kind', 'every');
-  set('auto-interval', '60');
-  set('auto-time', '09:00');
-  set('auto-mode', 'simple');
-  set('auto-tier', 'readonly');
-  set('auto-workspace', '');
-  set('auto-policy', 'skip');
+  _autoField('auto-name', '');
+  _autoField('auto-prompt', '');
+  _autoField('auto-kind', 'every');
+  _autoField('auto-interval', '60');
+  _autoField('auto-time', '09:00');
+  _autoField('auto-mode', 'simple');
+  _autoField('auto-tier', 'readonly');
+  _autoField('auto-workspace', '');
+  _autoField('auto-policy', 'skip');
   const en = document.getElementById('auto-enabled'); if (en) en.checked = true;
   const title = document.getElementById('automation-editor-title');
   if (title) title.textContent = 'New automation';
@@ -12184,17 +12197,16 @@ function automationEdit(jobId) {
   const job = _autoJobs.find(function(j) { return j.id === jobId; });
   if (!job) return;
   _autoEditingId = jobId;
-  const set = function(id, v) { const e = document.getElementById(id); if (e) e.value = v; };
   const s = job.schedule || {};
-  set('auto-name', job.name || '');
-  set('auto-prompt', job.prompt || '');
-  set('auto-kind', s.kind === 'daily' ? 'daily' : (s.kind === 'once' ? 'once' : 'every'));
-  set('auto-interval', String(Math.max(1, Math.round((s.interval_s || 3600) / 60))));
-  set('auto-time', s.at_hm || '09:00');
-  set('auto-mode', job.mode || 'simple');
-  set('auto-tier', job.tools_tier || 'readonly');
-  set('auto-workspace', job.workspace || '');
-  set('auto-policy', job.policy || 'skip');
+  _autoField('auto-name', job.name || '');
+  _autoField('auto-prompt', job.prompt || '');
+  _autoField('auto-kind', s.kind === 'daily' ? 'daily' : (s.kind === 'once' ? 'once' : 'every'));
+  _autoField('auto-interval', String(Math.max(1, Math.round((s.interval_s || 3600) / 60))));
+  _autoField('auto-time', s.at_hm || '09:00');
+  _autoField('auto-mode', job.mode || 'simple');
+  _autoField('auto-tier', job.tools_tier || 'readonly');
+  _autoField('auto-workspace', job.workspace || '');
+  _autoField('auto-policy', job.policy || 'skip');
   const en = document.getElementById('auto-enabled'); if (en) en.checked = !!job.enabled;
   const title = document.getElementById('automation-editor-title');
   if (title) title.textContent = 'Edit automation';
@@ -12208,23 +12220,24 @@ function automationCancel() {
 }
 
 async function automationSave() {
-  const get = function(id) { const e = document.getElementById(id); return e ? e.value : ''; };
-  const kind = get('auto-kind') || 'every';
+  const kind = _autoField('auto-kind') || 'every';
   let schedule;
   if (kind === 'daily') {
-    schedule = {kind: 'daily', at_hm: get('auto-time') || '09:00'};
+    schedule = {kind: 'daily', at_hm: _autoField('auto-time') || '09:00'};
   } else {
-    const minutes = Math.max(1, parseInt(get('auto-interval'), 10) || 60);
+    const minutes = Math.max(1, parseInt(_autoField('auto-interval'), 10) || 60);
     schedule = {kind: kind, interval_s: minutes * 60};
   }
+  const prompt = _autoField('auto-prompt').trim();
+  if (!prompt) { showStatus('⚠ A prompt is required.'); return; }
   const payload = {
-    name: get('auto-name') || 'Automation',
-    prompt: get('auto-prompt'),
+    name: _autoField('auto-name') || 'Automation',
+    prompt: prompt,
     schedule: schedule,
-    mode: get('auto-mode') || 'auto',
-    tools_tier: get('auto-tier') || 'readonly',
-    workspace: get('auto-workspace') || '',
-    policy: get('auto-policy') || 'skip',
+    mode: _autoField('auto-mode') || 'simple',
+    tools_tier: _autoField('auto-tier') || 'readonly',
+    workspace: _autoField('auto-workspace') || '',
+    policy: _autoField('auto-policy') || 'skip',
     enabled: !!(document.getElementById('auto-enabled') || {}).checked,
   };
   try {
@@ -12256,17 +12269,28 @@ async function automationRun(jobId) {
 
 async function automationToggle(jobId) {
   try {
-    await fetch('/automations/' + jobId + '/toggle', {method: 'POST'});
+    const r = await fetch('/automations/' + jobId + '/toggle', {method: 'POST'});
+    if (!r.ok) {
+      const d = await r.json().catch(function() { return {}; });
+      showStatus('⚠ ' + (d.error || ('HTTP ' + r.status)));
+      return;
+    }
     loadAutomations();
-  } catch (e) {}
+  } catch (e) { showStatus('Toggle failed: ' + e.message); }
 }
 
 async function automationDelete(jobId) {
   if (!confirm('Delete this automation? Its chat history stays.')) return;
   try {
-    await fetch('/automations/' + jobId, {method: 'DELETE'});
+    const r = await fetch('/automations/' + jobId, {method: 'DELETE'});
+    if (!r.ok) {
+      const d = await r.json().catch(function() { return {}; });
+      showStatus('⚠ ' + (d.error || ('HTTP ' + r.status)));
+      return;
+    }
+    showStatus('Automation deleted.');
     loadAutomations();
-  } catch (e) {}
+  } catch (e) { showStatus('Delete failed: ' + e.message); }
 }
 
 async function automationShowRuns(jobId) {

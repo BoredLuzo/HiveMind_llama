@@ -335,6 +335,11 @@ if __name__ == "__main__":
         print(f"[WARN] Port {base_port} is in use - starting on http://{bind_host}:{alt_port}")
         base_port = alt_port
 
+    # BOUND-PORT (2026-11-05): the automations scheduler fires via loopback
+    # /stream and must know the REAL port - the settings value can differ
+    # (HIVEMIND_PORT override, busy-port fallback above).
+    os.environ["HIVEMIND_BOUND_PORT"] = str(base_port)
+
     uvicorn.run(
         "server:app",
         host=bind_host,
