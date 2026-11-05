@@ -79,6 +79,20 @@ next to the old install. Settings, models, sessions and the venv are kept.
   `replace` policy, a dead helper); job ids are unique; jobs are capped at
   50; `automations_enabled` is a settings kill switch.
 
+## Telegram and scheduling follow-ups
+
+- `/cron` on the phone is now a proxy to the engine's Automations: same
+  commands (`add every|in|at`, `list`, `del`, `run`), one scheduler, one
+  store. Existing gateway cron jobs migrate into the engine on the first
+  gateway start (skipped jobs are reported; the retry happens on the next
+  start).
+- Daily schedules accept weekdays (Mo–Su chips in the editor, `days` in the
+  API). No day selected means every day.
+- The editor shows a live next-fire preview for the draft schedule.
+- An automation that pauses on a question or approval card is marked
+  `needs_input` (orange dot) instead of failing silently, and a desktop
+  notification points at the paused run.
+
 ## Verification
 
 - Full regression gate: 310 suites.
