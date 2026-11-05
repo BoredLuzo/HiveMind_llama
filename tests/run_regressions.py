@@ -341,6 +341,11 @@ SUITES = [
 ]
 
 
+# Suites that spawn real stdio/socket subprocesses and flaked under
+# parallel load run sequentially after the batch (2026-11-05).
+_EXCLUSIVE_SUITES = {"mcp_client"}
+
+
 def main() -> int:
     for _stream in (sys.stdout, sys.stderr):
         try:
@@ -370,6 +375,7 @@ def main() -> int:
     # audit): a registered suite missing on a full checkout is a defect.
     results: list[tuple[str, bool, float, object]] = []
     pending: list[tuple[int, str, str, int]] = []
+    exclusive: list[tuple[int, str, str, int]] = []
     failed_total = 0
     for name, rel, timeout in SUITES:
         if only and only not in name.lower():
@@ -382,7 +388,16 @@ def main() -> int:
             print(f"[FAIL] {name:<20} ({rel} missing - registered but not on"
                   f" disk; --allow-missing to skip on partial checkouts)")
             continue
+        # EXCLUSIVE LANE (2026-11-05): suites that spawn real stdio/socket
+        # subprocesses flaked under parallel load (mcp_client: WinError
+        # 10053). They run sequentially after the parallel batch.
+        if name in _EXCLUSIVE_SUITES:
+            exclusive.append((-1, name, rel, timeout))
+            continue
         pending.append((len(results), name, rel, timeout))
+        results.append(None)  # type: ignore[list-item]
+    for _i, _ex in enumerate(exclusive):
+        exclusive[_i] = (len(results) + _i, _ex[1], _ex[2], _ex[3])
         results.append(None)  # type: ignore[list-item]
 
     def _run_suite(pos: int, rel: str, timeout: int) -> tuple[bool, float, object]:
@@ -402,21 +417,33 @@ def main() -> int:
             return False, time.time() - t0, None
         return r.returncode == 0, time.time() - t0, r
 
+    _ran: list[tuple[int, str, str, int]] = []
+
+    def _report(pos: int, name: str, ok: bool, dur: float, r: object) -> None:
+        nonlocal failed_total
+        failed_total += 0 if ok else 1
+        results[pos] = (name, ok, dur, r)
+        print(f"[{'PASS' if ok else 'FAIL'}] {name:<20} ({dur:.0f}s)")
+        if not ok:
+            tail = ((r.stdout or "") if r else "").strip().splitlines()[-8:]
+            errtail = ((r.stderr or "") if r else "").strip().splitlines()[-5:]
+            for l in tail:
+                print(f"    | {l}")
+            for l in errtail:
+                print(f"    ! {l}")
+
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         _futs = [pool.submit(_run_suite, pos, rel, timeout)
                  for pos, name, rel, timeout in pending]
         for (pos, name, _rel, timeout), _fut in zip(pending, _futs):
             ok, dur, r = _fut.result()
-            failed_total += 0 if ok else 1
-            results[pos] = (name, ok, dur, r)
-            print(f"[{'PASS' if ok else 'FAIL'}] {name:<20} ({dur:.0f}s)")
-            if not ok:
-                tail = ((r.stdout or "") if r else "").strip().splitlines()[-8:]
-                errtail = ((r.stderr or "") if r else "").strip().splitlines()[-5:]
-                for l in tail:
-                    print(f"    | {l}")
-                for l in errtail:
-                    print(f"    ! {l}")
+            _report(pos, name, ok, dur, r)
+        _ran.extend(pending)
+        # exclusive lane: sequential, after the parallel batch
+        for pos, name, rel, timeout in exclusive:
+            ok, dur, r = _run_suite(pos, rel, timeout)
+            _report(pos, name, ok, dur, r)
+        _ran.extend(exclusive)
 
     results = [r for r in results if r is not None]
     print("=" * 64)
