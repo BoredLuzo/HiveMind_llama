@@ -1,3 +1,22 @@
+## [1.5.5] - 2026-11-05
+
+Maintainability release on top of 1.5.4. The model registry audit fixes are
+in: models.json is merged instead of rewritten (manual registrations survive
+a scan), a single `invalidate_caches()` call drops every model cache,
+`force_refresh` really rebuilds the index, the picker dedup prefers the
+manifest/profile name over the longest parsed alias, ghost override keys
+whose file is gone are no longer listed, quant-alias collisions fall back to
+numbered aliases instead of dropping a file, `save_model_mapping` is atomic
+and refuses llama.cpp slot ids, and `add_model` stores absolute paths.
+
+Repo maintainability: `DEFAULT_SETTINGS` moved to `settings_defaults.py`
+(pure data, no I/O; settings.py re-exports it), the regression runner runs
+suites in parallel (6 workers — the full gate dropped from ~18 minutes to
+under 2 minutes; `--jobs 1` restores the old behavior), and the settings-docs
+generator is split-aware. Dead code removed from `fetch_models.py`
+(`_sha256_of_file`, `ESSENTIAL_SKIP_KEYS`) and the stray `.orig` files are
+gone.
+
 ## [1.5.4] - 2026-11-05
 
 Automations: scheduled agent runs are now owned by the engine, not the
