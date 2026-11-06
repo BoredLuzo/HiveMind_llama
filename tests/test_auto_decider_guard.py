@@ -31,7 +31,9 @@ def check(name, cond, extra=""):
 
 import routing.decider as D  # noqa: E402
 
-run_src = (ROOT / "core" / "chat_run.py").read_text(encoding="utf-8", errors="replace")
+# split 3.5: the route decision lives in chat_route_decision.py now
+run_src = ((ROOT / "core" / "chat_run.py").read_text(encoding="utf-8", errors="replace")
+           + (ROOT / "core" / "chat_route_decision.py").read_text(encoding="utf-8", errors="replace"))
 srv_src = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
 gw_src = (ROOT / "hivemind_gateway" / "bridge.py").read_text(encoding="utf-8", errors="replace")
 

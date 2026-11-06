@@ -21,6 +21,7 @@ import httpx
 from core import state as _state
 from core.chat_history_seed import _ChatHistorySeedState, _chat_history_seed
 from core.chat_route import _ChatRoutePreState, _chat_route_pre
+from core.chat_route_decision import _ChatRouteDecisionState, _chat_route_decision
 from core.chat_shortcuts import _ChatShortcutState, _chat_memory_shortcuts
 from core.chat_vision_pre import _ChatVisionPreState, _chat_vision_pre
 from core.state import (
@@ -892,147 +893,36 @@ async def run_stream(
     _judge_verdict = _rp_ps._judge_verdict
     _prepro_success = _rp_ps._prepro_success
     _task_type = _rp_ps._task_type
-    # AUTO-DECIDER (2026-10-21): the persisted agentic flag must not hijack
-    # mode="auto" while the decider is on - that is how a simple question
-    # started a coder run. An explicit request (gateway /mode agentic, body
-    # field agentic_force) still forces agentic.
-    _decider_on = _routing_decider.normalise_mode(
-        (model_overrides or {}).get("routing_decider") or settings.get("routing_decider")
-    ) != "off"
-    if duo_config.agentic_mode and mode in ("auto", "automap") and (agentic_force or not _decider_on):
-        complexity = "code_duo"
-        _complexity_source = "agentic"
-        yield await emit({"type": "status",
-            "content": "Agentic mode active - direct to Pre-Explore/Planner/Coder (no judge routing)"})
-    elif force_complexity in ("simple", "complex"):
-        complexity = force_complexity
-        _complexity_source = "manual"
-        yield await emit({"type": "status", "content": f">> complexity manually: {complexity.upper()}"})
-    elif mode == "simple":
-        complexity = "simple"
-        _complexity_source = "mode"
-    elif mode == "pipeline":
-        complexity = "complex"
-        _complexity_source = "mode"
-        if images and not _prepro_success:
-            _effective_task_type = "vision"
-    elif mode == "agent":
-        # Agent mode: tool-call loop via /v1/chat endpoint
-        complexity = "simple"
-        _complexity_source = "mode"
-    elif mode == "code_duo":
-        complexity = "code_duo"
-        _complexity_source = "mode"
-    elif mode == "automap":
-        if images and not _prepro_success:
-            complexity = "complex"
-            _complexity_source = "image"
-        else:
-            _word_count = len(user_input.split())
-            _va_wants_pipeline = (settings.get("vision_agent_enabled", False) and bool(images))
-            _decider_active = _routing_decider.normalise_mode(
-                _run_settings.get("routing_decider")) != "off"
-            if (not _decider_active and _prepro_success and _word_count <= 12
-                    and _task_type in ("general", "creative", "factual", "reasoning")
-                    and not _va_wants_pipeline):
-                complexity = "simple"
-                _complexity_source = "shortcut"
-                _effective_task_type = "factual"
-            elif (not _decider_active and not _prepro_success
-                    and _task_type in ("general", "creative") and _word_count <= 6
-                    and not _va_wants_pipeline):
-                complexity = "trivial"
-                _complexity_source = "shortcut"
-            else:
-                yield await emit({"type": "status", "content": "Automap: checking complexity..."})
-                _decision = await _decide_route(user_input)
-                complexity = _routing_decider.complexity_for(_decision)
-                _judge_verdict = dict(_decision.details.get('judge_verdict') or {})
-                _complexity_source = _decision.source
-                # ROUTING-VISIBILITY (2026-10-22, user request): the phone
-                # should see WHAT the decider decided, not just "auto".
-                yield await emit({"type": "status", "content": (
-                    f"🧭 Routing: {_decision.route} "
-                    f"({_decision.source}, conf {_decision.confidence:.2f})"
-                    + (f" · planner: yes" if _decision.planner else ""))})
-    else:
-        if images and not _prepro_success:
-            complexity = "simple"
-            _effective_task_type = "vision"
-            _complexity_source = "image_fallback"
-        else:
-            _word_count = len(user_input.split())
-            _va_wants_pipeline = (settings.get("vision_agent_enabled", False) and bool(images))
-            _decider_active = _routing_decider.normalise_mode(
-                _run_settings.get("routing_decider")) != "off"
-            if (not _decider_active and _task_type in ("general", "creative")
-                    and _word_count <= 10 and not _va_wants_pipeline):
-                complexity = "trivial"
-                _complexity_source = "shortcut"
-            else:
-                yield await emit({"type": "status", "content": "Assessing complexity..."})
-                _decision = await _decide_route(user_input)
-                complexity = _routing_decider.complexity_for(_decision)
-                _judge_verdict = dict(_decision.details.get('judge_verdict') or {})
-                _complexity_source = _decision.source
-                # ROUTING-VISIBILITY (2026-10-22, user request): the phone
-                # should see WHAT the decider decided, not just "auto".
-                yield await emit({"type": "status", "content": (
-                    f"🧭 Routing: {_decision.route} "
-                    f"({_decision.source}, conf {_decision.confidence:.2f})"
-                    + (f" · planner: yes" if _decision.planner else ""))})
-    _judge_route    = _judge_verdict.get("route", "")           # "direct"|"tool"|"pipeline"|""
-    _judge_tasktype = _judge_verdict.get("task_type", "") or _task_type
-    _judge_toolsize = _judge_verdict.get("tool_model", "small")  # "small"|"large"
-
-    if _judge_route == "pipeline" and complexity not in ("complex",):
-        complexity = "complex"
-
-    if _judge_route == "duo" and mode not in ("simple", "pipeline", "code_duo"):
-        complexity = "code_duo"
-        _complexity_source = "judge"
-        if len(_state.memory.get_session_messages()) > _sess_compress_threshold:
-            _pipeline_sess_msgs = window_by_budget(
-                _state.memory.get_session_messages(
-                    limit=40, user_cap=8000, assistant_cap=8000,
-                ),
-                _history_budget_tokens(settings),
-            )  # fresh, uncompressed
-
-    if _judge_verdict:
-        _effective_task_type = _judge_tasktype  # Judge knows task_type from full analysis
-
-    # LEARNED-ROUTE: consult routing weights for data-driven mode selection.
-    # Only overrides if enough samples exist (N >= 20) and confidence >= 0.70.
-    _routing_hint = get_routing_suggestion(_task_type)
-    if _routing_hint is not None and _routing_hint.get("confidence", 0) >= 0.70:
-        _preferred = _routing_hint["preferred_mode"]
-        _mapping = {"duo": "code_duo", "pipeline": "complex", "direct": "simple"}
-        _new_complexity = _mapping.get(_preferred)
-        if _new_complexity and _new_complexity != complexity:
-            complexity = _new_complexity
-            _complexity_source = "learned"
-            logging.getLogger("routing").debug(
-                "[LEARNED-ROUTE] task=%s -> %s (confidence=%.2f)",
-                _task_type, _new_complexity, _routing_hint["confidence"],
+    # OUTSOURCED (split 3.5): auto-decider + judge route + learned hint +
+    # direct-tools decision → _chat_route_decision().
+    _rd_ps = _ChatRouteDecisionState(
+        _decide_route=_decide_route,
+        _prepro_success=_prepro_success,
+        _run_settings=_run_settings,
+        _sess_compress_threshold=_sess_compress_threshold,
+        _task_type=_task_type,
+        agentic_force=agentic_force,
+        duo_config=duo_config,
+        emit=emit,
+        force_complexity=force_complexity,
+        images=images,
+        mode=mode,
+        model_overrides=model_overrides,
+        user_input=user_input,
+        _complexity_source=_complexity_source,
+        _effective_task_type=_effective_task_type,
+            _judge_verdict=_judge_verdict,
+        _pipeline_sess_msgs=_pipeline_sess_msgs,
             )
-            yield await emit({"type": "status",
-                "content": f"Learned routing: {_preferred} mode for '{_task_type}' (confidence {_routing_hint['confidence']:.0%})"})
-
-    # DIRECT-CHAT-TOOLS (2026-08-31): when the direct chat has tools enabled,
-    # tool-y requests are handled by the direct tool loop (run_direct) instead
-    # of the separate tool-agent path -- one unified chat context/session.
-    _direct_tools_route = bool(settings.get("direct_tools_enabled", True))
-    _route_as_tool = (
-        ((_judge_route == "tool") or (not _judge_verdict and detect_tool_request(user_input)))
-        and mode not in ("simple", "pipeline", "agent")
-        and complexity != "code_duo"
-        and not _direct_tools_route
-    )
-    if _direct_tools_route and _judge_route == "tool" and mode in ("auto", "automap") \
-            and complexity != "code_duo":
-        complexity = "simple"
-        _complexity_source = "direct_tools"
+    async for _ev in _chat_route_decision(_rd_ps):
+        yield _ev
+    _complexity_source = _rd_ps._complexity_source
+    _effective_task_type = _rd_ps._effective_task_type
+    _judge_toolsize = _rd_ps._judge_toolsize
+    _judge_verdict = _rd_ps._judge_verdict
+    _pipeline_sess_msgs = _rd_ps._pipeline_sess_msgs
+    _route_as_tool = _rd_ps._route_as_tool
+    complexity = _rd_ps.complexity
 
     if _route_as_tool:
         _available = list(S_models_cache) if S_models_cache else []
@@ -1160,8 +1050,7 @@ async def run_stream(
             chat_id=chat_id,
             run_id=run_id,
             t_total=t_total,
-            complexity=complexity,
-            complexity_source=_complexity_source,
+                    complexity_source=_complexity_source,
             effective_task_type=_effective_task_type,
             use_learned=use_learned,
             workspace=_ws_str,
