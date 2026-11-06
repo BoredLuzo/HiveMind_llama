@@ -99,7 +99,43 @@ async def run_stream(
     request_workspace: str = "",
     agentic_force: bool = False,
 ):
-    # Lazy server import (avoids an import cycle; server is loaded at runtime).
+    # CYCLE-BREAK (2026-11-05): category-A names come from their home
+    # modules now — server only re-exported them. The 15 real server-owned
+    # globals/functions (S_models_cache, THIS_FILE, _VRAM_LOOKUP_GB,
+    # _pipeline_chat_stream, ...) stay on the lazy server import until the
+    # core/runtime.py extraction.
+    from infra.run_control import (
+        _abort_event, _is_aborted,
+        _register_abort, _unregister_abort,
+        _register_step_skip, _unregister_step_skip, _clear_step_skip,
+    )
+    from vram.loader import (
+        _bk_evict, _bk_load, _bk_pin,
+        _get_loaded_models_set, _refresh_judge_keepalive,
+        smart_preload_if_needed,
+    )
+    from routing.complexity import _check_complexity_with_bias
+    from routing.model_picker import _pick_direct_model
+    from routing.agent_intent import (
+        detect_agent_intent, detect_tool_request, get_question_from_intent,
+    )
+    from routing.model_automap import (
+        detect_task_type, get_automap, get_routing_suggestion,
+    )
+    from context.chat import (
+        _load_chat_context, get_chat_workspace, history_seed,
+    )
+    from context.resume import _clear_resume_block, _load_resume_block
+    from context.compression import _compress_chat_session
+    from vision.preprocess import _filter_vision_images, _preprocess_images_to_text
+    from tools.definitions import _get_inline_tools
+    from infra.run_counter import _increment_run_counter
+    from infra.token_stats import _record_run
+    from learning.insights import _run_insight_extractor, _run_skill_distillation
+    from model_configs import (
+        append_learning_log, get_effective_config, get_learned_config,
+        read_learning_log,
+    )
     from server import (
         S_models_cache,
         THIS_FILE,
@@ -107,54 +143,18 @@ async def run_stream(
         _SIMPLE_DIRECT_MODELS,
         _VRAM_LOOKUP_GB,
         _WEBSEARCH_AVAILABLE,
-        _abort_event,
-        _bk_evict,
-        _bk_load,
-        _bk_pin,
-        _check_complexity_with_bias,
-        _clear_resume_block,
-        _clear_step_skip,
-        _compress_chat_session,
-        _filter_vision_images,
         _flush_prefetch_settings,
         _get_avg_elapsed,
-        _get_inline_tools,
-        _get_loaded_models_set,
-        _increment_run_counter,
-        _is_aborted,
-        _load_chat_context, get_chat_workspace, history_seed,
-        _load_resume_block,
         _maybe_trigger_soul_evolution,
-        _pick_direct_model,
         _pipeline_chat_stream,
-        _preprocess_images_to_text,
-        _record_run,
-        _refresh_judge_keepalive,
-        _register_abort,
-        _register_step_skip,
         _registry,
-        _run_insight_extractor,
-        _run_skill_distillation,
-        _unregister_abort,
-        _unregister_step_skip,
         _update_prefetch_lead,
         _vision_cfg,
-        append_learning_log,
         apply_learned_configs_for_run,
-        detect_agent_intent,
-        detect_task_type,
-        detect_tool_request,
-        detect_vision_need,
-        get_automap,
-        get_effective_config,
         get_effective_prompt_with_override,
-        get_learned_config,
-        get_question_from_intent,
-        get_routing_suggestion,
-        read_learning_log,
-        smart_preload_if_needed,
     )
     from context.chat import load_chat_images, save_chat_images
+    detect_vision_need = _state.detect_vision_need  # core.state owns it
 
     if duo_config is None:
         duo_config = DuoConfig()
