@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -43,6 +44,8 @@ import sys
 import time
 import zipfile
 from pathlib import Path
+
+logger = logging.getLogger("hivemind.updater")
 
 REPO = "BoredLuzo/HiveMind_llama"
 API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -76,7 +79,7 @@ APPLY_XD = ["sessions", ".hive_uploads", "learning_logs", "logs", ".venv",
 BACKUP_XD = [".venv", "llama", "logs", "sessions", "learning_logs",
              "__pycache__", TMPDIR_NAME, "update_backup_*"]
 
-VERSION_RE = re.compile(r"HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)")
+VERSION_RE = re.compile(r"HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)", re.I)
 WARN_RE = re.compile(r"(?i)\b(warning|breaking|known issues?|migrat\w*"
                      r"|attention|caution|deprecat\w*)\b")
 NO_BREAKING_RE = re.compile(r"(?i)\bno\b[^.]*\bbreaking\b")
@@ -113,7 +116,12 @@ def resolve_port(base: Path) -> int:
         try:
             return int(env)
         except ValueError:
-            pass
+            # Alt behavior: an unparseable port aborted loudly (the PS check
+            # failed and counted as "listener"). Falling back silently would
+            # check the wrong port and could apply over a live engine.
+            print(f"  [ERROR] HIVEMIND_PORT={env!r} is not a number - fix the")
+            print("         environment variable or unset it, then run the update again.")
+            raise SystemExit(1)
     try:
         data = json.loads((base / "settings.json").read_text(encoding="utf-8"))
         sp = data.get("server_port")
@@ -151,14 +159,15 @@ def _numeric_triple(v: str) -> list[int] | None:
 def _prerelease_ordinal(v: str) -> int | None:
     """preview/alpha/beta/rc/dev.N → N+1; a clean release → 999. None when
     the pre-release tag itself is malformed."""
-    m = re.search(r"(?:preview|alpha|beta|rc|dev)(?:\.(\d+))?$", v)
+    # Alt PS -match was case-insensitive and treated ANY unparseable
+    # suffix as a clean release (999) — unknown suffixes like -hotfix must
+    # not abort the update when the triple differs.
+    m = re.search(r"(?:preview|alpha|beta|rc|dev)(?:\.(\d+))?$", v, re.I)
     if m:
         try:
             return int(m.group(1) or 0) + 1
         except ValueError:
-            return None
-    if re.search(r"[a-z-]", v.split("-", 1)[-1] if "-" in v else ""):
-        return None
+            return 999
     return 999
 
 
@@ -190,7 +199,7 @@ def digest_ok(zip_path: Path, asset_digest: str) -> bool | None:
     Returns None when the metadata carries no digest (check skipped).
     Both sides lowercased — an uppercase API digest must not fail the
     compare as a false tamper alarm (DIGEST-CASE, audit 2026-11-04)."""
-    if not asset_digest.startswith("sha256:"):
+    if not asset_digest.lower().startswith("sha256:"):
         return None
     want = asset_digest[7:].lower()
     h = hashlib.sha256()
@@ -250,7 +259,8 @@ def apply_cmd(exroot: Path, base: Path) -> list[str]:
     """Apply the extracted release over the install. /XD matches against
     the SOURCE tree, so the models exclude anchors to the zip root."""
     cmd = ["robocopy", str(exroot), str(base),
-           "/E", "/R:1", "/W:1", "/XF"] + APPLY_XF + ["/XD"] + APPLY_XD
+           "/E", "/R:1", "/W:1", "/XF"] + APPLY_XF + ["/XD"] + APPLY_XD \
+          + ["/NFL", "/NDL", "/NJH", "/NP", "/NJS"]
     cmd[-1:-1] = [str(exroot / "models")]
     return cmd
 
@@ -280,7 +290,7 @@ def fetch_latest_release(tmpdir: Path) -> tuple[str, str, str] | None:
     except (OSError, ValueError):
         rel = None
     asset = next((a for a in (rel or {}).get("assets", [])
-                  if str(a.get("name", "")).endswith(".zip")), None)
+                  if str(a.get("name", "")).lower().endswith(".zip")), None)
     if not rel or not asset:
         print("  [ERROR] GitHub returned no release - rate limit or private repo?")
         print("         Try again in a minute, or download the zip manually from")
@@ -302,9 +312,15 @@ def stop_watchdog(base: Path) -> bool:
     port BEFORE anything is applied."""
     wd_was = (Path(os.environ.get("LOCALAPPDATA", "")) /
               "HiveMindGateway" / "watchdog.marker").exists()
-    if wd_was and (base / "watchdog_engine.bat").exists():
-        subprocess.run(["cmd", "/c", str(base / "watchdog_engine.bat"), "stop"],
-                       capture_output=True, timeout=120)
+    # Belt-and-suspenders (alt behavior): stop whenever the script exists,
+    # marker or not — a watchdog without its marker must not restart the
+    # engine mid-apply either.
+    if (base / "watchdog_engine.bat").exists():
+        try:
+            subprocess.run(["cmd", "/c", str(base / "watchdog_engine.bat"), "stop"],
+                           capture_output=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            logger.warning("[WATCHDOG] stop timed out - continuing (recheck below)")
     return wd_was
 
 
@@ -463,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     print()
 
     local_zip = None
-    if argv and argv[0] == "--zip":
+    if argv and argv[0].lower() == "--zip":
         if len(argv) < 2 or not argv[1]:
             print("  [ERROR] --zip needs the path to a release zip, e.g.")
             print("          update.bat --zip ..\\HiveMind_v1.3.9_release.zip")
@@ -587,7 +603,10 @@ def main(argv: list[str] | None = None) -> int:
             for w in warnings:
                 print(w)
             print("  +-------------------------------------------------------------+")
-            ans = input("  Continue anyway? [Y/n]: ").strip().lower()
+            try:
+                ans = input("  Continue anyway? [Y/n]: ").strip().lower()
+            except EOFError:
+                ans = ""  # alt set /p: empty input = default Y (continue)
             if ans == "n":
                 print("  Update cancelled. Nothing was changed.")
                 shutil.rmtree(tmpdir, ignore_errors=True)
@@ -609,8 +628,12 @@ def main(argv: list[str] | None = None) -> int:
             ["curl", "-sS", "-L", "--fail", "-o", str(tmpdir / "release.zip"),
              asset_url],
             capture_output=True, text=True, timeout=1800)
-        if r.returncode != 0 or not (tmpdir / "release.zip").exists():
+        if r.returncode != 0:
             print("  [ERROR] Download failed. Nothing was changed")
+            print(f"         backup is in {bk}")
+            return 1
+        if not (tmpdir / "release.zip").exists():
+            print("  [ERROR] Download produced no file. Nothing was changed.")
             print(f"         backup is in {bk}")
             return 1
         # I1 (audit r2): verify the downloaded asset against the release API
@@ -671,18 +694,18 @@ def main(argv: list[str] | None = None) -> int:
     # -- 8. Apply over this installation --------------------------------------
     print("  Applying update   : over this folder")
     wd_was = stop_watchdog(base)
-    if wd_was:
-        # DYING-GASP: give the watchdog its 20 s pass window, then re-check
-        # the port BEFORE anything is applied. Without this, the fetch/backup
-        # minutes above could have seen the watchdog revive a dead engine and
-        # the apply would write into it.
-        time.sleep(25)
-        if port_listener(hm_port):
-            print(f"  [ERROR] An engine is listening on port {hm_port} - the watchdog")
-            print("         restarted it while the update was preparing. Nothing was")
-            print("         applied. Close the HiveMind console window, then run this")
-            print(f"         update again. The backup folder {bk} can be deleted.")
-            return 1
+    # DYING-GASP (audit 2026-11-04): a watchdog pass that was mid-restart
+    # when stop landed still boots the engine once, inside its 20 s pass
+    # window. Give it that window, then re-check the port UNCONDITIONALLY
+    # before anything is applied (alt update.bat checked regardless of the
+    # marker — an engine started by ANYTHING must block the apply).
+    time.sleep(25)
+    if port_listener(hm_port):
+        print(f"  [ERROR] An engine is listening on port {hm_port} - the watchdog")
+        print("         restarted it while the update was preparing. Nothing was")
+        print("         applied. Close the HiveMind console window, then run this")
+        print(f"         update again. The backup folder {bk} can be deleted.")
+        return 1
     if _run_rc(apply_cmd(exroot, base)) >= 8:
         print("  [ERROR] Applying the update failed. Restore by copying the")
         print(f"         contents of {bk}\\ back over this folder.")
@@ -722,11 +745,15 @@ def main(argv: list[str] | None = None) -> int:
     refresh_uv_path()
 
     # -- 9c. Optional components ----------------------------------------------
-    info("optional components checked.")
+    info("deps refreshed + BUILD_INFO written.")
+    # Old batch ran this in the SAME console: the [missing] table and the
+    # Y/N choice prompt must be visible; capture would hide them (the
+    # choice silently waited forever). No timeout: decider/voice downloads
+    # can take longer than any fixed bound.
     co = base / "deploy" / "check_optionals.bat"
     if co.exists():
-        subprocess.run(["cmd", "/c", str(co)],
-                       capture_output=True, timeout=1800)
+        subprocess.run(["cmd", "/c", str(co)], timeout=None)
+    info("optional components checked.")
 
     # WATCHDOG RE-ARM: only after every post-apply step is done (deps,
     # optionals) — the engine must not boot while uv swaps .venv packages.
