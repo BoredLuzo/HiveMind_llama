@@ -83,9 +83,10 @@ check("the static-only skip tells the model to stop calling run_tests",
       "call run_tests again in this run." in te
       and "call run_tests again in this run." in
       (ROOT / "tools" / "runner.py").read_text(encoding="utf-8", errors="replace"))
+_fin = (ROOT / "core" / "duo_finalize.py").read_text(encoding="utf-8", errors="replace")
 check("loop_detected still delivers explicitly queued files",
-      "_loop_file_delivery" in src
-      and "explicitly queued file(s) now" in src)
+      "_loop_file_delivery" in _fin
+      and "explicitly queued file(s) now" in _fin)
 check("the agentic prompt exempts static assets from the test suite",
       "do NOT run the project test suite for those" in src)
 check("the agentic prompt forbids tests before the first write",

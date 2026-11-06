@@ -156,6 +156,7 @@ from core.wedge_handoff import (
 from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 
 # ── Imports from extracted helpers ─────────────────────────────────────
+from core.duo_finalize import _duo_run_finalize
 from core.duo_helpers import (
     build_image_desc_block, attach_images_to_last_user, resolve_image_plan,
     count_image_parts, effective_image_plan, CODER_VISION_NOTE, vision_note_for_coder,
@@ -2072,6 +2073,36 @@ def _duo_disconnect_park(ctx, ps: _DuoDisconnectParkState):
         )
     except Exception as _park_err:
         logger.warning("[DISCONNECT-PARK] Handler error: %s", _park_err)
+
+
+@dataclasses.dataclass
+@dataclasses.dataclass
+class _DuoRunFinalizeState:
+    """Finalize-tail state (split 2.1, 2026-11-05): one field per
+    run_code_duo local the finalize tail reads or writes, plus `carry`
+    for the runner-local bindings the tail also consumes (exec_mdl,
+    final_verdict, critic_issues, _recent_focus_paths, _worker_slots,
+    this_file, _warm_workers_fn, _keepalive_vision_fn)."""
+    _duo_hard_stop: bool = False
+    _graceful_stopped: bool = False
+    _duo_timed_out: bool = False
+    _loop_detected: bool = False
+    _wedge_escalated: bool = False
+    _model_load_failed: bool = False
+    _ws_str: str = ""
+    _explore_ctx: str = ""
+    _pending_send_files: list = None
+    _written_files: list = None
+    _done_tasks: list = None
+    _cs: object = None
+    _project_state: object = None
+    _project_state_run_counted: bool = False
+    _explore_only_rounds: int = 0
+    _lifetime_tool_rounds: int = 0
+    _di: int = 0
+    _n_items: int = 1
+    _loop_items: list = None
+    carry: dict = None
 
 
 @dataclasses.dataclass
@@ -7890,217 +7921,62 @@ async def run_code_duo(ctx):
                 ctx.chat_id, lambda _c: _c.__setitem__("session", _sess_now))
         except (ImportError, OSError, ValueError, TypeError) as _se:
             logger.debug("[CTX] session sidecar update failed: %s", _se)
-    if ctx.aborted() or (ctx.chat_id and ctx.is_aborted_chat(ctx.chat_id)):
-        ctx.duo_stop_reason = "aborted"
-    elif _graceful_stopped:
-        ctx.duo_stop_reason = "graceful_stop"
-    elif _duo_timed_out:
-        ctx.duo_stop_reason = "timeout"
-    elif _duo_hard_stop:
-        ctx.duo_stop_reason = "hard_stop"
-    elif _loop_detected and _wedge_escalated:
-        # WEDGE-HANDOFF: distinct stop reason — the run died on a wedged edit
-        # whose repair handoff failed or exhausted its budget (human escalation).
-        ctx.duo_stop_reason = "wedge_escalated"
-    elif _model_load_failed:
-        ctx.duo_stop_reason = "model_load_failed"
-    elif _loop_detected:
-        ctx.duo_stop_reason = "loop_detected"
-    elif ctx.exec_ctrl.state == AgentState.HALTED:
-        ctx.duo_stop_reason = (
-            ctx.exec_ctrl.stop_reason.value if ctx.exec_ctrl.stop_reason else "halted"
-        )
-    else:
-        ctx.duo_stop_reason = "completed"
-    # ── B8.3 FINAL AUTO-COMMIT (Run-Abschluss) ─────────────────────────────
-    # LOOP-AUTO-STOP COMMIT (2026-10-08, user feedback: unexpected run stops): the
-    # loop guard ends long runs as loop_detected (internally surfaced as
-    # hard_stop) - a run with 13 written files MUST still commit and push,
-    # otherwise hours of real work silently never reach GitHub. Errors and
-    # owner aborts stay commit-free by design.
-    if (ctx.duo_config.git_autocommit
-            and ctx.duo_stop_reason in ("completed", "graceful_stop", "loop_detected")
-            and _ws_str):
-        _ac_final = await _auto_commit_chunk(ctx.user_input, "", _ws_str, True,
-                                             files=list(_cs.written_files[-50:]),
-                                             commit_allowed=getattr(ctx, "workspace_commit_allowed", True))
-        if _ac_final:
-            yield await ctx.emit({"type": "status", "content": _ac_final})
-        if _ac_final and _ac_final.startswith("✅"):
-            _push_out = await _auto_push_after_commit(_ws_str)
-            if _push_out:
-                yield await ctx.emit({"type": "status", "content": _push_out})
-    elif (_git_checkpoints_enabled(ctx)
-          and not ctx.duo_config.git_autocommit
-          and ctx.duo_stop_reason in ("completed", "graceful_stop")
-          and _ws_str):
-        try:
-            from hive_functions.git_tools import exec_git_squash_checkpoints as _sq
-            # NO prefix read here anymore (2026-11-03): consolidate_only
-            # builds its own "<prefix> checkpoint: session consolidated (N
-            # checkpoints)" marker message; the `message` argument is only
-            # used by the run-file fold path.
-            _sq_out = await _sq("checkpoint consolidation",
-                                _ws_str, consolidate_only=True)
-            if _sq_out:
-                yield await ctx.emit({"type": "status", "content": _sq_out})
-            if _sq_out and _sq_out.startswith("✅"):
-                _push_out = await _auto_push_after_commit(_ws_str)
-                if _push_out:
-                    yield await ctx.emit({"type": "status", "content": _push_out})
-        except Exception as _sq_err:
-            logger.debug("[GIT-CONSOLIDATE] skipped: %s", _sq_err)
-    # AUDIT-FIX D2: resume safety net — on every non-complete stop
-    # (abort/timeout/hard_stop/loop) write a resume block, so the
-    # next start can continue. Only if none exists yet.
-    if (ctx.chat_id
-            and ctx.duo_stop_reason not in ("completed", "graceful_stop")):
-        try:
-            _di_safe = locals().get("_di", 0)
-            _n_items_safe = locals().get("_n_items", 1)
-            _loop_items_safe = locals().get("_loop_items") or [{"title": ctx.user_input}]
-            if _di_safe < _n_items_safe:
-                if not _load_resume_block(ctx.chat_id):
-                    _rem_d2 = [{"title": str(t)} for t in _loop_items_safe[_di_safe:]]
-                    if _rem_d2:
-                        _write_resume_block(
-                            chat_id=ctx.chat_id,
-                            workspace=_ws_str,
-                            chunks_total=_n_items_safe,
-                            chunks_done=_done_tasks,
-                            chunks_remaining=_rem_d2,
-                            written_files=_written_files,
-                            last_summary=" | ".join(_done_tasks),
-                            plan_msgs=[],
-                            explore_ctx=_explore_ctx,
-                            halt_reason=ctx.duo_stop_reason,
-                            pending_send_files=list(_pending_send_files),
-                        )
-        except Exception as _d2_err:
-            if isinstance(_d2_err, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
-                raise
-            logger.warning("[RESUME-SAFETY-NET] Write failed: %s", _d2_err)
-    if ctx.chat_id and ctx.duo_stop_reason == "completed":
-        ctx.clear_resume_block(ctx.chat_id)
-    ctx.phase_timer.end("coder_loop", status=ctx.duo_stop_reason)
-    logger.info("Phase-Timing: %s", ctx.phase_timer.ui_summary())
-
-    # ── ProjectState: persist run result ──
-    if _project_state is not None and ctx.chat_id:
-        try:
-            from context.project_state import ProjectStateManager
-            _project_state.last_run_timestamp = datetime.now().isoformat()
-            _project_state.last_run_success = (ctx.duo_stop_reason == "completed")
-            if not _project_state_run_counted:
-                _project_state.total_runs += 1
-                _project_state_run_counted = True
-            ProjectStateManager().save(_project_state)
-            logger.info("[PROJECT] State saved after run #%d (%s)",
-                        _project_state.total_runs, ctx.duo_stop_reason)
-        except Exception as _ps_err:
-            logger.warning("[PROJECT] Normal save failed: %s", _ps_err)
-
+    # SPLIT 2.1 (2026-11-05): the closing sequence (stop-reason ladder,
+    # final auto-commit/push, checkpoint consolidation, resume safety net,
+    # project save, run audit, send-file delivery, done, cleanup) moved
+    # verbatim to core/duo_finalize._duo_run_finalize. `carry` threads the
+    # runner-local bindings the tail also consumes; all fields sync back.
+    _fin_ps = _DuoRunFinalizeState(
+        _duo_hard_stop=_duo_hard_stop,
+        _graceful_stopped=_graceful_stopped,
+        _duo_timed_out=_duo_timed_out,
+        _loop_detected=_loop_detected,
+        _wedge_escalated=_wedge_escalated,
+        _model_load_failed=_model_load_failed,
+        _ws_str=_ws_str,
+        _explore_ctx=_explore_ctx,
+        _pending_send_files=_pending_send_files,
+        _written_files=_written_files,
+        _done_tasks=_done_tasks,
+        _cs=_cs,
+        _project_state=_project_state,
+        _project_state_run_counted=_project_state_run_counted,
+        _explore_only_rounds=_explore_only_rounds,
+        _lifetime_tool_rounds=_lifetime_tool_rounds,
+        _di=locals().get("_di", 0),
+        _n_items=locals().get("_n_items", 1),
+        _loop_items=locals().get("_loop_items") or [{"title": ctx.user_input}],
+        carry={
+            "exec_mdl": exec_mdl,
+            "final_verdict": final_verdict if "_final_verdict" in dir() else final_verdict,
+            "critic_issues": critic_issues,
+            "_recent_focus_paths": _recent_focus_paths,
+            "_worker_slots": _worker_slots,
+            "this_file": Path(__file__),
+            "_warm_workers_fn": _warm_workers_fn,
+            "_keepalive_vision_fn": _keepalive_vision_fn,
+        },
+    )
     try:
-        from core.run_audit import record_run_audit
-        record_run_audit(ctx.chat_id, {
-            "run_id": ctx.run_id,
-            "event": "run_end",
-            "stop_reason": str(ctx.duo_stop_reason or ""),
-            "written_files": sorted(_written_files or []),
-            "loop_detected": bool(_loop_detected),
-            "explore_only_rounds": int(_explore_only_rounds),
-            "total_tool_rounds": int(_lifetime_tool_rounds),
-        })
-    except Exception:
-        pass
-
-    # ── SEND-FILE: last action, after final verification ────────────────
-    # The tool only queues paths. A completed Telegram run delivers them now,
-    # after the verify gate, so a file can never go out before the final test.
-    # If the model forgot to call send_file, exactly one deliverable file in
-    # the run is sent automatically; multiple candidates stay manual.
-    _loop_file_delivery = (ctx.duo_stop_reason == "loop_detected"
-                           and bool(_pending_send_files))
-    if ((ctx.duo_stop_reason == "completed" or _loop_file_delivery)
-            and str(ctx.settings.get("source") or "").startswith("telegram")
-            and not ctx.aborted()):
-        if _loop_file_delivery:
-            # The model explicitly queued this file before the loop guard
-            # stopped the run; dropping it silently loses work the owner
-            # was already told about. Deliver only the explicit queue (no
-            # auto-pick), with a warning.
-            try:
-                yield await ctx.emit({
-                    "type": "status",
-                    "content": ("⚠ Run ended in a loop — delivering the "
-                                "explicitly queued file(s) now."),
-                })
-            except Exception:
-                logger.debug("[SEND-FILE] loop-delivery status emit failed",
-                             exc_info=True)
-            _deliver_files = list(_pending_send_files)
-        else:
-            try:
-                from core.send_files import choose_deliverables as _choose_sf
-                _deliver_files = _choose_sf(
-                    _pending_send_files, _written_files, _ws_str)
-            except (ImportError, TypeError, ValueError):
-                _deliver_files = list(_pending_send_files)
-        for _sfp in _deliver_files:
-            logger.info("[SEND-FILE] final delivery after verification: %s",
-                        _sfp)
-            yield await ctx.emit({
-                "type": "send_file",
-                "path": _sfp,
-                "workspace": _ws_str,
-            })
-    yield await ctx.emit(ctx.done_event(round(time.time() - ctx.t_total, 1), ctx.duo_stop_reason, **ctx.collect_done_metrics()))
-    try:
-        from tools.runner import _files_written_by_run as _fw_cleanup
-        _fw_cleanup.pop(str(ctx.run_id), None)
-    except (ImportError, AttributeError, TypeError):
-        logger.debug("[SEND-FILE] written-file registry cleanup failed",
-                     exc_info=True)
-    ctx.unregister_abort(ctx.run_id)
-    ctx.unregister_step_skip(ctx.run_id)  # P7 FIX: was missing — step_skip event leaked after Duo runs
-    clear_graceful_stop(ctx.run_id)
-    _cleanup_pause_state(ctx.run_id)
-    if ctx.chat_id:
-        _clear_pause_state(ctx.chat_id)
-    _cleanup_governor(ctx.chat_id or ctx.run_id)
-    _current_project_state.set(None)
-    # AUDIT-FIX 2026-08-03 (preload_workers_after_run, strenges Opt-in, Default False):
-    if bool(ctx.settings.get("preload_workers_after_run", False)):
-        _wk_slots_run = _worker_slots or []
-        if _wk_slots_run:
-            # WORKER-PIN (2026-11-01): the opt-in now also pins the reloaded
-            # workers — unpin_all() at the next run start releases them.
-            spawn(_warm_workers_fn(list(_wk_slots_run), exec_mdl, pin=True))
-    spawn(_refresh_judge_keepalive())
-    # ── Insight Extractor: Post-loop structured learning ──────────────────
-    # Fire-and-forget background task — extracts structured insights from the
-    # completed agentic loop using the INSIGHT_EXTRACTOR prompt.
-    if _written_files and ctx.duo_stop_reason == "completed" and not ctx.aborted():
-        spawn(ctx.run_insight_extractor(
-            task=ctx.user_input,
-            written_files=list(_written_files),
-            critic_verdict=final_verdict,
-            critic_issues=list(critic_issues),
-            workspace=_ws_str,
-        ))
-    # ── Skill Distillation: Run after every completed Duo loop ─────────────
-    # Previously only ran during soul evolution (too infrequent).
-    # Now runs after each Duo completion so insights get decayed/merged promptly.
-    if ctx.pipeline.memory and ctx.duo_stop_reason == "completed":
-        spawn(asyncio.to_thread(
-            ctx.run_soul_cycle, ctx.pipeline.memory, ctx.settings, list(_recent_focus_paths), ctx.this_file
-        ))
-    # ── Skill distillation (phase 2): recurring patterns → real skills ──
-    # Gated by soul_skill_writing (repurposed as "auto-distillation"). Max 1
-    if (ctx.pipeline.memory and ctx.duo_stop_reason == "completed"
-            and not ctx.aborted() and ctx.settings.get("soul_skill_writing", False)):
-        spawn(ctx.run_skill_distillation(_ws_str))
-    # Keep the vision slot warm
-    _vis_mdl = ctx.vision_cfg.get("model", "") if ctx.vision_cfg.get("enabled") else ""
-    if _vis_mdl:
-        spawn(_keepalive_vision_fn(_vis_mdl))
+        async for _ev in _duo_run_finalize(ctx, _fin_ps):
+            yield _ev
+    finally:
+        _duo_hard_stop = _fin_ps._duo_hard_stop
+        _graceful_stopped = _fin_ps._graceful_stopped
+        _duo_timed_out = _fin_ps._duo_timed_out
+        _loop_detected = _fin_ps._loop_detected
+        _wedge_escalated = _fin_ps._wedge_escalated
+        _model_load_failed = _fin_ps._model_load_failed
+        _ws_str = _fin_ps._ws_str
+        _explore_ctx = _fin_ps._explore_ctx
+        _pending_send_files = _fin_ps._pending_send_files
+        _written_files = _fin_ps._written_files
+        _done_tasks = _fin_ps._done_tasks
+        _cs = _fin_ps._cs
+        _project_state = _fin_ps._project_state
+        _project_state_run_counted = _fin_ps._project_state_run_counted
+        _explore_only_rounds = _fin_ps._explore_only_rounds
+        _lifetime_tool_rounds = _fin_ps._lifetime_tool_rounds
+        _di = _fin_ps._di
+        _n_items = _fin_ps._n_items
+        _loop_items = _fin_ps._loop_items
