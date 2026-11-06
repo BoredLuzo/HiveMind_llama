@@ -157,6 +157,7 @@ from core.fix_agent import run_fix_agent as _wedge_run_fix_agent
 
 # ── Imports from extracted helpers ─────────────────────────────────────
 from core.duo_epilogue import _duo_session_epilogue
+from core.duo_finalgate import _duo_final_verify_gate
 from core.duo_finalize import _duo_run_finalize
 from core.duo_helpers import (
     build_image_desc_block, attach_images_to_last_user, resolve_image_plan,
@@ -2093,6 +2094,27 @@ class _DuoSessionEpilogueState:
     _parts: list = dataclasses.field(default_factory=list)
     carry: dict = dataclasses.field(default_factory=dict)
     session_out: str = ""
+
+@dataclasses.dataclass
+class _DuoFinalGateState:
+    """Final-gate state (split 2.3, 2026-11-05): fields the verify-gate tail
+    reads/writes; `critic_issues` is the shared list (appends in place)."""
+    _duo_hard_stop: bool = False
+    final_verdict: str = ""
+    _duo_timed_out: bool = False
+    _written_files: list = dataclasses.field(default_factory=list)
+    _verify_mutation_serial: int = 0
+    _verify_last_ok_serial: int = 0
+    _verify_warned: bool = False
+    _ws_str: str = ""
+    _explore_ctx: str = ""
+    _di: int = 0
+    _n_items: int = 1
+    _loop_items: list = dataclasses.field(default_factory=list)
+    _done_tasks: list = dataclasses.field(default_factory=list)
+    _pending_send_files: list = dataclasses.field(default_factory=list)
+    critic_issues: list = dataclasses.field(default_factory=list)
+
 
 @dataclasses.dataclass
 class _DuoRunFinalizeState:
@@ -7792,6 +7814,29 @@ async def run_code_duo(ctx):
                 ctx.chat_id, lambda _c: _c.__setitem__("session", _sess_now))
         except (ImportError, OSError, ValueError, TypeError) as _se:
             logger.debug("[CTX] session sidecar update failed: %s", _se)
+    # SPLIT 2.3 (2026-11-05): run-timeout token + final verification hard
+    # stop moved to core/duo_finalgate._duo_final_verify_gate (state syncs
+    # `_duo_hard_stop`, `final_verdict`, `critic_issues` back).
+    _fg_ps = _DuoFinalGateState(
+        _duo_timed_out=_duo_timed_out,
+        _written_files=_written_files,
+        _verify_mutation_serial=_verify_mutation_serial,
+        _verify_last_ok_serial=_verify_last_ok_serial,
+        _verify_warned=_verify_warned,
+        _ws_str=_ws_str,
+        _explore_ctx=_explore_ctx,
+        _di=_di,
+        _n_items=_n_items,
+        _loop_items=_loop_items,
+        _done_tasks=_done_tasks,
+        _pending_send_files=_pending_send_files,
+        critic_issues=critic_issues,
+    )
+    async for _ev in _duo_final_verify_gate(ctx, _fg_ps):
+        yield _ev
+    _duo_hard_stop = _fg_ps._duo_hard_stop
+    final_verdict = _fg_ps.final_verdict
+    critic_issues = _fg_ps.critic_issues
     # SPLIT 2.1 (2026-11-05): the closing sequence (stop-reason ladder,
     # final auto-commit/push, checkpoint consolidation, resume safety net,
     # project save, run audit, send-file delivery, done, cleanup) moved
