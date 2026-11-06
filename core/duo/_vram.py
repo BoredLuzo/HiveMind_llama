@@ -5,7 +5,8 @@ logger = logging.getLogger("hivemind.duo")
 
 from vram.loader import _bk_evict, _bk_load, _get_loaded_models_set
 from tools.definitions import _get_inline_tools
-from core.duo_helpers import DEFAULT_VRAM_BUDGET_GB, update_model_capability_overrides
+from core.model_sampling import update_model_capability_overrides
+from core.duo_helpers import DEFAULT_VRAM_BUDGET_GB
 from hive_functions.num_ctx_config import resolve_ctx
 
 

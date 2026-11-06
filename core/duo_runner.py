@@ -171,8 +171,9 @@ from core.duo_helpers import (
     _should_escalate_pass_files,     _sum_edit_lines, _build_dropped_tool_retry,
     _RE_WIN_PATH, _RE_UNIX_PATH, _RE_FILE_EXT,
     _RE_CRITIC_APPROVED, _RE_CRITIC_VERDICT, _RE_CRITIC_ISSUES,
-    update_model_capability_overrides,
+    
 )
+from core.model_sampling import update_model_capability_overrides
 
 from core.plan_tracker import build_tracker_from_planner as _build_tracker_from_planner
 from core.plan_tracker import derive_step_title as _derive_step_title

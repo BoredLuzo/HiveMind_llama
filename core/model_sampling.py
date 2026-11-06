@@ -208,7 +208,15 @@ def get_sampling_profile(model_name: str, thinking: bool = False, settings: dict
 
 
 from routing.model_automap import MODEL_PROFILES as _MODEL_PROFILES_CACHE
-from core.duo_helpers import _model_cap_overrides
+
+# MOVED here (2026-11-05 cycle break 5/5): model_sampling was the only
+# reader of this dict; keeping it here removes the duo_helpers cycle.
+_model_cap_overrides: dict = {}
+
+def update_model_capability_overrides(overrides: dict | None = None):
+    _model_cap_overrides.clear()
+    _model_cap_overrides.update(overrides or {})
+
 
 
 def _model_profile(model: str) -> dict:

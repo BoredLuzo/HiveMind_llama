@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.ctx_overrides import _ctx_override_lookup  # noqa: E402
 from utils.file import write_json_atomic
 
 # HiveMind repo root — two levels up from core/state.py
@@ -156,49 +157,6 @@ _GIT_CONFIG_KEYS = [
     "git_repo_url", "git_username", "git_email", "git_token",
     "git_default_branch", "git_commit_prefix", "git_auto_push",
 ]
-
-
-def _ctx_override_lookup(ov: dict, model_name: str,
-                         agent_role: str | None) -> int | None:
-    """ctx_overrides lookup: legacy flat shape (role key, model keys, base,
-    default) and nested {"roles": {}, "models": {}} shape. Returns int|None.
-    (Extracted 2026-10-27 so the settings layer is shared by the
-    source-reporting resolver below.)"""
-    def _int(v):
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return None
-
-    base = model_name.rsplit("#", 1)[0] if "#" in model_name else model_name
-    base_name = model_name.split(":")[0] if model_name else ""
-
-    # Legacy flat shape
-    if agent_role:
-        _r = _int(ov.get(agent_role))
-        if _r:
-            return _r
-    for mk in (model_name, base, base_name):
-        if mk:
-            _m = _int(ov.get(mk))
-            if _m:
-                return _m
-
-    # Nested shape
-    roles = ov.get("roles")
-    if agent_role and isinstance(roles, dict):
-        _r = _int(roles.get(agent_role))
-        if _r:
-            return _r
-    models = ov.get("models")
-    if isinstance(models, dict):
-        for mk in (model_name, base_name):
-            if mk:
-                _m = _int(models.get(mk))
-                if _m:
-                    return _m
-
-    return _int(ov.get("default"))
 
 
 def _get_num_ctx_with_source(model: str,

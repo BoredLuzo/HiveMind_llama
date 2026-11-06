@@ -121,7 +121,7 @@ def _live_ctx_override(model_name: str, role: str) -> int | None:
     core.state._ctx_override_lookup (legacy flat + nested shapes, '#' suffix
     handling). Only the duo-role -> override-key mapping stays here."""
     try:
-        from core.state import _ctx_override_lookup
+        from core.ctx_overrides import _ctx_override_lookup
         from core import state as _st
         ov = getattr(_st, "settings", None)
         if not isinstance(ov, dict):

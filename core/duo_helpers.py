@@ -109,12 +109,6 @@ _RE_CRITIC_ISSUES = re.compile(r"issues=\[([^\]]*)\]")
 
 # ── Thinking Budget ────────────────────────────────────────────────────
 
-_model_cap_overrides: dict = {}
-
-def update_model_capability_overrides(overrides: dict | None = None):
-    _model_cap_overrides.clear()
-    _model_cap_overrides.update(overrides or {})
-
 
 def _inject_no_think_directive(msgs: list[dict]) -> list[dict]:
     return [
