@@ -100,7 +100,7 @@ def test_source_guards():
     root = Path(__file__).parent.parent
     guards = [
         ("backend/manager_load.py", 'GPU_BACKEND != "cpu" and type(self)._device_flag_supported'),
-        ("backend/manager_load.py", '_gpu_layers = 0'),
+        ("backend/llama_start_phases.py", '_gpu_layers = 0'),
         ("backend/manager_load.py", 'GPU_BACKEND != "cpu" and type(self)._backend_devices_ok'),
         ("backend/manager_load.py", 'if _moe_count > 0 and GPU_BACKEND != "cpu":'),
         ("backend/manager_evict.py", '"cpu-backend"'),

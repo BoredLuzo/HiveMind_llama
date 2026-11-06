@@ -38,7 +38,7 @@ from .llama_manager_utils import (
 )
 from .llama_slots import ModelSlot
 from .manager_process import _slot_in_flight
-from .llama_start_phases import _phase_claim
+from .llama_start_phases import _phase_claim, _phase_flags
 from typing import Optional
 from pathlib import Path
 from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, moe_cfg_for, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
@@ -1007,78 +1007,14 @@ class LlamaLoadMixin:
         _claim = await _phase_claim(self, slot, model, num_ctx)
         gguf_path = _claim.gguf_path
         _evicted_here = _claim.evicted
-        if type(self)._binary_build_number is None:
-            type(self)._binary_build_number = await asyncio.to_thread(
-                _probe_binary_build, str(LLAMA_BIN)
-            )
-            logger.info(f"llama-server Binary Build: {type(self)._binary_build_number}")
-
-        _build = type(self)._binary_build_number
-        _model_base = _strip_alias(model).split(":")[0].lower()
-        _min_build = BINARY_MIN_BUILD.get(_model_base, 0)
-        if _build > 0 and _min_build > 0 and _build < _min_build:
-            raise RuntimeError(
-                f"Binary too old for '{model}':\n"
-                f"  Installed: build {_build}\n"
-                f"  Required:  build {_min_build}+\n\n"
-                f"  → Download a new binary:\n"
-                f"    https://github.com/ggerganov/llama.cpp/releases\n"
-                f"    File: llama-bXXXX-bin-win-vulkan-x64.zip\n"
-                f"  → Then update llama_config.py → LLAMA_BIN"
-            )
-        elif _build == 0 and _min_build > 0:
-            logger.warning(
-                f"Build number of {LLAMA_BIN.name} could not be determined. "
-                f"Build {_min_build}+ is recommended for '{model}'. "
-                f"If the server crashes: update the binary to b{_min_build}+."
-            )
-
-        # ── Befehlszeile aufbauen ─────────────────────────────────────────────
-        # B3 (audit): resolve_gpu_layers returns None in auto mode = omit the
-        # flag so llama.cpp fits the layers to free VRAM itself.
-        _fit_on = False
-        _fit_target = 0
-        try:
-            from . import llama_config as _lc_fit
-            _fit_on = bool(getattr(_lc_fit, "LLAMA_FIT", False))
-            _fit_target = int(getattr(_lc_fit, "LLAMA_FIT_TARGET_MIB", 0) or 0)
-        except (ImportError, AttributeError, TypeError, ValueError):
-            _fit_on = False
-            _fit_target = 0
-        _fit_supported = bool(_fit_on and gpu_layers_override is None
-                              and GPU_BACKEND != "cpu"
-                              and await _help_supports("--fit"))
-        if _fit_on and not _fit_supported:
-            logger.info("--fit not applied (pinned layers/cpu backend or "
-                        "binary lacks the flag)")
-        _gpu_layers = resolve_gpu_layers(model, gpu_layers_override,
-                                         _GPU_LAYERS_TABLE, llama_gpu_layers_auto())
-        # OVERRIDE-PRECEDENCE (audit 2026-11-03): an explicit override wins
-        # over the registry. The CPU fallback passes 0 — the registry block
-        # used to replace it with the profile value, re-offloading the layers
-        # that just crashed and defeating the fallback.
-        if _gpu_layers is not None and gpu_layers_override is None:
-            try:
-                from .llama_config import _try_registry_gpu_layers as _reg_gl
-                _gl_reg = _reg_gl(_strip_alias(model))
-                if _gl_reg is not None:
-                    _gpu_layers = _gl_reg
-            except Exception:
-                pass
-        # CPU-BACKEND (2026-09-08): every layer runs on the CPU — a GPU-layer
-        # count from registry/table would request an offload to a GPU that
-        # does not exist.
-        if GPU_BACKEND == "cpu":
-            _gpu_layers = 0
-        import os as _os_th
-        # THREADS-DEFAULT (2026-09-08): Windows keeps the proven 16/8 pair;
-        # POSIX hosts get a CPU-count-aware default — a fixed 16 oversubscribes
-        # small Linux boxes.
-        if platform.system() == "Windows":
-            _def_threads, _def_threads_batch = 16, 8
-        else:
-            _n_cpu = max(2, min(16, (_os_th.cpu_count() or 8)))
-            _def_threads, _def_threads_batch = _n_cpu, _n_cpu
+        # OUTSOURCED (split 4.2): build check + flags/threads config → _phase_flags().
+        _flags = await _phase_flags(self, model, gpu_layers_override)
+        _gpu_layers = _flags.gpu_layers
+        _fit_supported = _flags.fit_supported
+        _fit_target = _flags.fit_target
+        _def_threads = _flags.def_threads
+        _def_threads_batch = _flags.def_threads_batch
+        _model_base = _flags.model_base
         cmd = [
             str(LLAMA_BIN),
             "--model",        str(gguf_path),

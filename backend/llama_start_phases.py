@@ -11,13 +11,17 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import platform
 import time
 from pathlib import Path
 
-from .llama_config import GPU_BACKEND, LLAMA_UBATCH, MODELS_DIR, ubatch_extra_mib
+from .llama_config import (
+    BINARY_MIN_BUILD, GPU_BACKEND, LLAMA_BIN, LLAMA_UBATCH, MODELS_DIR,
+    llama_gpu_layers_auto, resolve_gpu_layers, ubatch_extra_mib, _GPU_LAYERS_TABLE,
+)
 from .llama_manager_utils import (
     VRAM_BUDGET_GB, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
-    _VRAM_BASE_OVERHEAD_GB, _kill_slot_async,
+    _VRAM_BASE_OVERHEAD_GB, _kill_slot_async, _probe_binary_build,
 )
 from .llama_models import _strip_alias, resolve_model_path
 from .llama_vram_table import (
@@ -202,3 +206,99 @@ async def _phase_claim(self, slot, model: str, num_ctx: int) -> _ClaimPhase:
                 )
 
     return _ClaimPhase(gguf_path=gguf_path, evicted=_evicted_here)
+
+
+
+@dataclasses.dataclass
+class _FlagsPhase:
+    """Phase-2 outputs (split 4.2): the flag/threads config the cmd
+    builder consumes."""
+    gpu_layers: object = None
+    fit_supported: bool = False
+    fit_target: int = 0
+    def_threads: int = 16
+    def_threads_batch: int = 8
+    model_base: str = ""
+
+
+async def _phase_flags(self, model: str, gpu_layers_override) -> _FlagsPhase:
+    from backend.manager_load import _help_supports  # lazy: module cycle
+    if type(self)._binary_build_number is None:
+        type(self)._binary_build_number = await asyncio.to_thread(
+            _probe_binary_build, str(LLAMA_BIN)
+        )
+        logger.info(f"llama-server Binary Build: {type(self)._binary_build_number}")
+
+    _build = type(self)._binary_build_number
+    _model_base = _strip_alias(model).split(":")[0].lower()
+    _min_build = BINARY_MIN_BUILD.get(_model_base, 0)
+    if _build > 0 and _min_build > 0 and _build < _min_build:
+        raise RuntimeError(
+            f"Binary too old for '{model}':\n"
+            f"  Installed: build {_build}\n"
+            f"  Required:  build {_min_build}+\n\n"
+            f"  → Download a new binary:\n"
+            f"    https://github.com/ggerganov/llama.cpp/releases\n"
+            f"    File: llama-bXXXX-bin-win-vulkan-x64.zip\n"
+            f"  → Then update llama_config.py → LLAMA_BIN"
+        )
+    elif _build == 0 and _min_build > 0:
+        logger.warning(
+            f"Build number of {LLAMA_BIN.name} could not be determined. "
+            f"Build {_min_build}+ is recommended for '{model}'. "
+            f"If the server crashes: update the binary to b{_min_build}+."
+        )
+
+    # ── Befehlszeile aufbauen ─────────────────────────────────────────────
+    # B3 (audit): resolve_gpu_layers returns None in auto mode = omit the
+    # flag so llama.cpp fits the layers to free VRAM itself.
+    _fit_on = False
+    _fit_target = 0
+    try:
+        from . import llama_config as _lc_fit
+        _fit_on = bool(getattr(_lc_fit, "LLAMA_FIT", False))
+        _fit_target = int(getattr(_lc_fit, "LLAMA_FIT_TARGET_MIB", 0) or 0)
+    except (ImportError, AttributeError, TypeError, ValueError):
+        _fit_on = False
+        _fit_target = 0
+    _fit_supported = bool(_fit_on and gpu_layers_override is None
+                          and GPU_BACKEND != "cpu"
+                          and await _help_supports("--fit"))
+    if _fit_on and not _fit_supported:
+        logger.info("--fit not applied (pinned layers/cpu backend or "
+                    "binary lacks the flag)")
+    _gpu_layers = resolve_gpu_layers(model, gpu_layers_override,
+                                     _GPU_LAYERS_TABLE, llama_gpu_layers_auto())
+    # OVERRIDE-PRECEDENCE (audit 2026-11-03): an explicit override wins
+    # over the registry. The CPU fallback passes 0 — the registry block
+    # used to replace it with the profile value, re-offloading the layers
+    # that just crashed and defeating the fallback.
+    if _gpu_layers is not None and gpu_layers_override is None:
+        try:
+            from .llama_config import _try_registry_gpu_layers as _reg_gl
+            _gl_reg = _reg_gl(_strip_alias(model))
+            if _gl_reg is not None:
+                _gpu_layers = _gl_reg
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                AttributeError, IndexError) as _reg_err:
+            logger.debug("[GPU-LAYERS] registry lookup skipped: %s", _reg_err)
+    # CPU-BACKEND (2026-09-08): every layer runs on the CPU — a GPU-layer
+    # count from registry/table would request an offload to a GPU that
+    # does not exist.
+    if GPU_BACKEND == "cpu":
+        _gpu_layers = 0
+    import os as _os_th
+    # THREADS-DEFAULT (2026-09-08): Windows keeps the proven 16/8 pair;
+    # POSIX hosts get a CPU-count-aware default — a fixed 16 oversubscribes
+    # small Linux boxes.
+    if platform.system() == "Windows":
+        _def_threads, _def_threads_batch = 16, 8
+    else:
+        _n_cpu = max(2, min(16, (_os_th.cpu_count() or 8)))
+        _def_threads, _def_threads_batch = _n_cpu, _n_cpu
+
+    return _FlagsPhase(
+        gpu_layers=_gpu_layers, fit_supported=_fit_supported,
+        fit_target=_fit_target, def_threads=_def_threads,
+        def_threads_batch=_def_threads_batch, model_base=_model_base,
+    )
