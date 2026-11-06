@@ -66,6 +66,8 @@ check("no recorded files needs no test run",
 
 # ── the runner must surface it, not swallow it ───────────────────────────
 src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+# split 2.5: the tool-round coder prompt (bridge message) lives in duo_dtool_setup.py
+src += (ROOT / "core" / "duo_dtool_setup.py").read_text(encoding="utf-8", errors="replace")
 check("runner uses the verdict helper", "completion_verdict(" in src)
 check("runner skips the veto for static-only changes",
       "not needs_test_verification(_written_files)" in src)

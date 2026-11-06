@@ -838,9 +838,11 @@ _HELP = (ROOT / "core" / "duo_helpers.py").read_text(encoding="utf-8", errors="r
 check("21d the reason is documented in the code",
       "PREFILL-AWARE" in _HELP and "prefill_tps_for" in _HELP)
 _DUO_R = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
-check("21e the run logs the cold-prefill cost", "[PREFILL-COST]" in _DUO_R)
+# split 2.5: the dtool payload budget lives in duo_dtool_setup.py now
+_DUO_DT = (ROOT / "core" / "duo_dtool_setup.py").read_text(encoding="utf-8", errors="replace")
+check("21e the run logs the cold-prefill cost", "[PREFILL-COST]" in _DUO_DT)
 check("21f it uses the effective coder ctx, not a made-up attribute",
-      "_cold_ctx = int(_dtool_ctx or 0)" in _DUO_R)
+      "_cold_ctx = int(_dtool_ctx or 0)" in _DUO_DT)
 
 
 
