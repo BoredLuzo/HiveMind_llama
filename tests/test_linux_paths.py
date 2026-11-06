@@ -102,7 +102,7 @@ def test_source_guards():
         ("backend/llama_start_phases.py", 'GPU_BACKEND != "cpu" and type(self)._device_flag_supported'),
         ("backend/llama_start_phases.py", '_gpu_layers = 0'),
         ("backend/llama_start_phases.py", 'GPU_BACKEND != "cpu" and type(self)._backend_devices_ok'),
-        ("backend/manager_load.py", 'if _moe_count > 0 and GPU_BACKEND != "cpu":'),
+        ("backend/llama_start_phases.py", 'if _moe_count > 0 and GPU_BACKEND != "cpu":'),
         ("backend/manager_evict.py", '"cpu-backend"'),
         ("backend/llama_vram_table.py", "no VRAM to reclaim"),
         ("deploy/fetch_llamacpp.py", '"cpu"'),

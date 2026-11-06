@@ -79,6 +79,7 @@ check("1g f16/empty global -> no flags (empty value)",
       LC.dense_kv_cache_type("unknown-dense:7b", global_default="") == "")
 
 _ml = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+_ml += (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8", errors="replace")
 check("1h dense branch calls the profile-aware helper",
       "_dense_kv = dense_kv_cache_type(" in _ml)
 check("1i old static-only lookup gone",

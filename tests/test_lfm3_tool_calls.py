@@ -44,7 +44,8 @@ check("1e the lfm2.5 entry is unchanged (no drift)",
       (MODEL_PROFILES.get("lfm2.5") or {}).get("tool_call") is True)
 
 # ── 2. jinja / template ────────────────────────────────────────────────────
-SRC_LOAD = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+SRC_LOAD = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+      + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
 _jinja_line = next(ln for ln in SRC_LOAD.splitlines() if ln.startswith("_JINJA_BASES ="))
 check("2a --jinja is enabled for lfm3", '"lfm3"' in _jinja_line)
 check("2b lfm2.5 stays in the list", '"lfm2.5"' in _jinja_line)
@@ -73,7 +74,8 @@ check("5a the installer describes the tool-calling support",
 check("5b the build requirement is named", "b12001+" in CAT)
 
 # ── 6. the MoE override must beat the profile (groot case) ────────────────
-LOAD = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+LOAD = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+      + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
 _i_ovr = LOAD.index('getattr(_lc_live, "MOE_CPU_EXPERTS"')
 _i_reg = LOAD.index("_try_registry_moe as _reg_moe")
 check("6a the per-model override is resolved first", _i_ovr < _i_reg)

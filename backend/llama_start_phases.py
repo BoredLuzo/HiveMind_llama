@@ -17,9 +17,10 @@ import time
 from pathlib import Path
 
 from .llama_config import (
-    BINARY_MIN_BUILD, GPU_BACKEND, LLAMA_BIN, LLAMA_UBATCH, MODELS_DIR,
-    VULKAN_DEVICE,
-    llama_gpu_layers_auto, resolve_gpu_layers, ubatch_extra_mib, _GPU_LAYERS_TABLE,
+    BINARY_MIN_BUILD, GPU_BACKEND, KV_CACHE_TYPE, LLAMA_BIN, LLAMA_UBATCH,
+    MODELS_DIR, VULKAN_DEVICE, _MOE_EXPERT_COUNTS,
+    dense_kv_cache_type, llama_gpu_layers_auto, moe_kv_cache_types,
+    resolve_gpu_layers, ubatch_extra_mib, _GPU_LAYERS_TABLE,
 )
 from .llama_manager_utils import (
     VRAM_BUDGET_GB, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
@@ -319,6 +320,7 @@ class _CapsPhase:
 
 async def _phase_capabilities(self, cmd, _all_flags_uncached: bool) -> _CapsPhase:
     from backend.manager_load import _probe_all  # lazy: module cycle
+    from . import llama_config as _llama_cfg
     if _all_flags_uncached:
         _bn, _dev, _kv, _moe, _lm, _dspark = await asyncio.to_thread(_probe_all, str(LLAMA_BIN))
         if _bn > 0 and type(self)._binary_build_number in (None, 0):
@@ -447,3 +449,213 @@ async def _phase_capabilities(self, cmd, _all_flags_uncached: bool) -> _CapsPhas
     #   --load-mode mlock      → GGML_ASSERT(addr) in llama-mmap.cpp (crasht)
 
     return _CapsPhase(cmd=cmd, load_mode=_load_mode)
+
+
+
+@dataclasses.dataclass
+class _MoePhase:
+    """Phase-4 outputs (split 4.4): the MoE-augmented cmd; the cache
+    flag rides on the slot (as before)."""
+    cmd: list = dataclasses.field(default_factory=list)
+    moe_cache_used: bool = False
+
+
+async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
+                     moe_cache: bool, _def_threads) -> _MoePhase:
+    from backend.manager_load import _help_supports  # lazy: module cycle
+    from . import llama_config as _llama_cfg
+    _moe_model_key = _strip_alias(model).replace("-ud", "")
+    # Per-Model-Override (dict {model_key: n_cpu_moe}) > Registry-Config > Tabellen-Default.
+    _moe_count = 0
+    # MOE-PIN (2026-10-14): profile "moe": false forces dense — no expert
+    # offload even when another source (table/autodetect) suggests MoE.
+    _moe_pinned_off = False
+    try:
+        from model_configs.models_registry import get_moe_pin as _reg_moe_pin
+        if _reg_moe_pin(_moe_model_key) is False:
+            _moe_pinned_off = True
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        _moe_pinned_off = False
+    if _moe_pinned_off:
+        logger.info("MoE pin: %s is dense per model config — expert offload skipped", _moe_model_key)
+    # ORDER (2026-11-02): the per-model OVERRIDE comes first. It used to be
+    # the other way round - the registry profile won, so a model with a
+    # shipped moe_cpu_experts (groot: 32) ignored the UI value entirely.
+    # The override is also read LIVE: a module-level `from ... import
+    # MOE_CPU_EXPERTS` binds the dict from boot, and server.py replaces
+    # the attribute on a settings change - the loader then kept looking at
+    # an empty dict and the toggle did nothing.
+    _moe_src = "table"
+    try:
+        from . import llama_config as _lc_live
+        _moe_map = getattr(_lc_live, "MOE_CPU_EXPERTS", None)
+        if not _moe_map:
+            from . import llama_server_manager as _lsm_live
+            _moe_map = getattr(_lsm_live, "MOE_CPU_EXPERTS", {})
+        if isinstance(_moe_map, dict):
+            _moe_count = int(_moe_map.get(_moe_model_key, 0) or 0)
+            if _moe_count <= 0:
+                for _ok, _ov in _moe_map.items():
+                    if _moe_model_key.startswith(_ok) and int(_ov or 0) > 0:
+                        _moe_count = int(_ov)
+                        break
+        else:
+            _moe_count = int(_moe_map or 0)
+        if _moe_count > 0:
+            _moe_src = "override"
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        _moe_count = 0
+    if _moe_count <= 0:
+        try:
+            from .llama_config import _try_registry_moe as _reg_moe
+            _reg_moe_v = _reg_moe(_moe_model_key)
+            if _reg_moe_v:
+                _moe_count = _reg_moe_v
+                _moe_src = "profile"
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _reg_err:
+            logger.debug("[MOE] profile MoE-count probe skipped: %s", _reg_err)
+    if _moe_count <= 0:
+        _moe_count = _MOE_EXPERT_COUNTS.get(_moe_model_key, 0)
+        if _moe_count == 0 and _moe_model_key:
+            # Prefix-Match: GGUF auto-discovery suffixes
+            for _ek in _MOE_EXPERT_COUNTS:
+                if _moe_model_key.startswith(_ek):
+                    _moe_count = _MOE_EXPERT_COUNTS[_ek]
+                    break
+    # Modellnamen ableiten (Xb-aYb → X, ab 30B). Kleine MoE bleiben komplett
+    if _moe_count <= 0 and _moe_model_key:
+        try:
+            from .llama_config import detect_moe_count as _moe_autodetect
+            _moe_count = _moe_autodetect(_moe_model_key)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+            _moe_count = 0
+    if _moe_pinned_off:
+        _moe_count = 0
+        _moe_src = "pinned-dense"
+    if _moe_count > 0:
+        logger.info("MoE experts: %s -> %d (-n-cpu-moe, source=%s)",
+                    _moe_model_key, _moe_count, _moe_src)
+
+    # ── VRAM calibration guard (soft) ──
+    # Prefix-aware (2026-10-21): the table keys carry no tag suffixes, so an
+    # exact lookup silently skipped every "-a2b"/"-ud"/finetune tag. Use the
+    # same resolution vram_of_moe uses, or the estimate and the loader drift
+    # apart without a warning.
+    from .llama_vram_table import moe_cfg_for as _moe_cfg_for
+    _cal_cfg = _moe_cfg_for(_strip_alias(model).strip().lower())
+    if _cal_cfg and "calibrated_n_cpu_moe" in _cal_cfg and _cal_cfg["calibrated_n_cpu_moe"] != _moe_count:
+        logger.warning(
+            f"[VRAM-CALIBRATION] {model}: --n-cpu-moe={_moe_count} deviates from the calibrated value "
+            f"{_cal_cfg['calibrated_n_cpu_moe']} — the VRAM estimate (vram_of_moe) may now "
+            f"be inaccurate. Recalibrate via -lv 5 "
+            f"(KV/compute buffer size from the llama-server log)."
+        )
+
+    # ── KV cache quantization ────────────────────────────────────────────
+    # DENSE-PROFILE-KV (2026-10-27): dense_kv_cache_type consults the
+    # model profile first — the MoE path always did via
+    # moe_kv_cache_types, dense only read the static family table, so a
+    # profile q8_0 (spark-x2.6:4b) silently ran the global q4_0. No
+    # profile value -> previous chain (family table -> global; an
+    # f16/empty global still means "no quantization flags" for
+    # profile-less models).
+    if _moe_count <= 0:
+        _kv_global_active = bool(KV_CACHE_TYPE) and KV_CACHE_TYPE.lower() not in ("f16", "")
+        _dense_kv = dense_kv_cache_type(
+            _moe_model_key,
+            global_default=KV_CACHE_TYPE if _kv_global_active else "",
+        )
+        if _dense_kv:
+            if type(self)._kv_flag_supported:
+                cmd += ["--cache-type-k", _dense_kv, "--cache-type-v", _dense_kv]
+                logger.info(f"KV cache quantization active: {_dense_kv}")
+            else:
+                logger.warning(
+                    f"--cache-type-k {_dense_kv} not supported by "
+                    f"{LLAMA_BIN.name} — falling back to f16. "
+                    "Use a newer binary for q4_0 support."
+                )
+
+    # ── MoE-Offloading ────────────────────────────────────────────────────
+    _moe_cache_mib = 0
+    try:
+        from . import llama_config as _lc_cache
+        _moe_cache_mib = int(getattr(_lc_cache, "MOE_CACHE_MIB", 0) or 0)
+    except (ImportError, AttributeError, TypeError, ValueError):
+        _moe_cache_mib = 0
+    _moe_cache_used = 0
+    try:
+        slot._moe_cache_used = False
+    except AttributeError:
+        pass
+    if _moe_count > 0 and GPU_BACKEND != "cpu":
+        if type(self)._moe_flag_supported:
+            cmd += ["--n-cpu-moe", str(_moe_count)]
+            logger.info(
+                f"MoE offloading active: {_moe_count} experts on CPU "
+                f"({_moe_model_key})"
+            )
+            # THREADS-MOE (2026-10-19, revised 2026-11-03): experts in RAM
+            # make decode a memory-bound CPU gather. Use HALF of the
+            # logical CPUs (the SMT sibling adds contention, not
+            # throughput; measured 12.6 vs 16.5 tok/s at 16 vs 8 threads
+            # on an 8c/16t Ryzen).
+            try:
+                import os as _os_thr
+                try:
+                    # respect cgroup/affinity limits where available
+                    _logical = len(_os_thr.sched_getaffinity(0))
+                except (AttributeError, OSError):
+                    _logical = int(_os_thr.cpu_count() or 0)
+            except (TypeError, ValueError):
+                _logical = 0
+            _half = max(1, _logical // 2) if _logical else 0
+            _target = min(_def_threads, _half) if _half else _def_threads
+            if _target < _def_threads:
+                for _tflag in ("--threads", "--threads-batch"):
+                    if _tflag in cmd:
+                        _ti = cmd.index(_tflag)
+                        cmd[_ti + 1] = str(_target)
+                logger.info(
+                    "MoE threads: %d -> %d (half of %d logical CPUs, "
+                    "experts on CPU)", _def_threads, _target, _logical,
+                )
+            # EXPERT-CACHE (2026-11-03): opt-in --moe-cache-mib.
+            if moe_cache and _moe_cache_mib > 0:
+                if await _help_supports("--moe-cache-mib"):
+                    if GPU_BACKEND == "vulkan":
+                        logger.warning(
+                            "MoE expert cache on Vulkan: llama.cpp #30697 "
+                            "reports load crashes - a failed load is "
+                            "retried once without the flag")
+                    cmd += ["--moe-cache-mib", str(_moe_cache_mib)]
+                    _moe_cache_used = int(_moe_cache_mib)
+                    try:
+                        slot._moe_cache_used = True
+                    except AttributeError:
+                        pass
+                    logger.info(
+                        "MoE expert cache: %d MiB (--moe-cache-mib)",
+                        _moe_cache_mib)
+                else:
+                    logger.warning(
+                        "--moe-cache-mib is not supported by %s - ignored",
+                        LLAMA_BIN.name)
+            # MoE-spezifische Optimierungen
+            cmd += ["--no-warmup"]
+            if not type(self)._load_mode_supported and _llama_cfg.MLOCK_MODEL:
+                cmd += ["--mlock"]
+                logger.info("--mlock active (model locked in RAM)")
+            if type(self)._kv_flag_supported:
+                _moe_kv = moe_kv_cache_types(_moe_model_key)
+                cmd += ["--cache-type-k", _moe_kv, "--cache-type-v", _moe_kv]
+                logger.info("MoE KV cache: %s (ctx=%d, VRAM optimised)",
+                            _moe_kv, num_ctx)
+        else:
+            logger.warning(
+                f"--n-cpu-moe {_moe_count} is not supported by "
+                f"{LLAMA_BIN.name} - the MoE model runs without expert "
+                "offloading. Use a newer binary (b8278+)."
+            )
+
+    return _MoePhase(cmd=cmd, moe_cache_used=bool(slot._moe_cache_used))

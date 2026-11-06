@@ -8,7 +8,8 @@ sys.path.insert(0, str(ROOT))
 
 from settings import DEFAULT_SETTINGS              # noqa: E402
 
-ML = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+ML = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+      + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
 ME = (ROOT / "backend" / "manager_evict.py").read_text(encoding="utf-8")
 HTML = (ROOT / "index.html").read_text(encoding="utf-8")
 

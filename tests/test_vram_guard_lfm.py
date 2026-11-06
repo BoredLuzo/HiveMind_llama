@@ -65,6 +65,7 @@ check("MoE path is used, not the dense fallback",
 
 # ── 4. Der Kalibrier-Guard nutzt denselben Lookup ──────────────────────
 ml = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+ml += (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8", errors="replace")
 guard = ml.split("[VRAM-CALIBRATION]", 1)[0][-900:]
 check("calibration guard resolves via moe_cfg_for (prefix-aware)",
       "_moe_cfg_for(_strip_alias" in guard, f"({guard[-160:]!r})")
