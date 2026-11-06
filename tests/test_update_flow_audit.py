@@ -1,22 +1,25 @@
 # -*- coding: utf-8 -*-
-r"""Update/release path stress audit (2026-11-04).
+r"""Update/release path stress audit (2026-11-04, updater split 2026-11-06).
 
-Pins the updater fixes from the update-path stress audit. update.bat itself
-is NEVER executed against a real install; the suite runs the EXACT
-robocopy/PowerShell fragments extracted from update.bat against fake trees
-in %TEMP%, plus source guards so the fixes cannot silently regress.
+Pins the updater fixes from the update-path stress audit. The updater is
+NEVER executed against a real install; since the logic moved from
+update.bat to deploy/updater.py (split 5), the behavior pins call the
+updater module functions directly against fake trees in %TEMP%, and the
+source guards read updater.py + the shim. The PowerShell prune/package
+helpers are still driven as real subprocesses.
 
 Covered findings:
   1. bare /XD models excluded the tracked model_configs\models\*.json from
-     the apply AND the backup - the anchored "%BASE%\models" must ship them
+     the apply AND the backup - the anchored models dir must keep shipping
   2. a zip with several root folders applied the LAST one silently - the
-     NROOTS guard must reject that in BOTH extract sections
+     root-count guard must reject that in BOTH extract call sites
   3. the GitHub flow applied a wrong/empty zip layout and only noticed in
      the post-apply verify - core/utils/version probes must run pre-apply
   4. an install path with an apostrophe/brackets broke every inline
-     PowerShell call - %TMQ%/%EXQ% doubling + -LiteralPath must be used
+     PowerShell call - the Python updater extracts with zipfile (immune),
+     the old PS -Path form must still demonstrably fail (documents the bug)
   5. an unparseable version left VCMP empty and fell through both version
-     gates - the guard must abort
+     gates - compare_versions must return None and main must abort
   6. an uppercase API digest failed the compare as a false tamper alarm
   7. the watchdog could revive the engine mid-update (dying gasp) and the
      re-arm raced the dependency refresh - grace wait + port re-check +
@@ -28,12 +31,12 @@ Covered findings:
      own deploy helpers keep shipping
 """
 import os
-import time
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -56,56 +59,15 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name} {extra}")
 
 
-UPDATE = (ROOT / "update.bat").read_text(encoding="utf-8", errors="replace")
-ULINES = UPDATE.splitlines()
+UPD = (ROOT / "deploy" / "updater.py").read_text(encoding="utf-8", errors="replace")
+SHIM = (ROOT / "update.bat").read_text(encoding="utf-8", errors="replace")
 PRUNE_PS1 = (ROOT / "deploy" / "update_prune.ps1").read_text(encoding="utf-8", errors="replace")
 PKG_BAT = (ROOT / "deploy" / "package_release.bat").read_text(encoding="utf-8", errors="replace")
 ATTRS = (ROOT / ".gitattributes").read_text(encoding="utf-8", errors="replace")
 
+from deploy import updater as UPDMOD  # noqa: E402
+
 SERVER_PY = "HIVEMIND_VERSION = '1.3.9-audit'\n"
-
-
-def robocopy_lines():
-    return [l.strip() for l in ULINES if l.strip().lower().startswith("robocopy")]
-
-
-def ps_command(cmd, timeout=90):
-    return subprocess.run(["powershell", "-NoProfile", "-Command", cmd],
-                          capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=timeout)
-
-
-def xd_bare_names(line):
-    """Tokens of the /XD list (names only, stops at the next /flag)."""
-    seg = line.split("/XD", 1)[1] if "/XD" in line else ""
-    names = []
-    for tok in seg.split():
-        if tok.startswith("/"):
-            break
-        names.append(tok)
-    return names
-
-
-def extract_inline_ps(line, backquoted):
-    """Pull the -Command body out of a cmd line that calls powershell."""
-    if backquoted:
-        m = re.search(r'powershell -NoProfile -Command "(.+?)"`', line)
-    else:
-        m = re.search(r'powershell -NoProfile -Command "(.+)"\s*$', line)
-    return m.group(1) if m else None
-
-
-def run_cmd_fragment(tmp: Path, name: str, line: str):
-    """Run a substituted cmd line from a temp .cmd file.
-
-    `cmd /c <line>` directly would hit cmd's first-and-last-quote stripping
-    (many quoted args) - inside a batch file the line parses exactly as it
-    does in update.bat."""
-    script = tmp / f"run_{name}.cmd"
-    script.write_bytes(("\r\n" + line + "\r\n").encode("ascii"))
-    return subprocess.run(["cmd", "/c", str(script)], capture_output=True,
-                          text=True, encoding="utf-8", errors="replace",
-                          timeout=120)
 
 
 def make_zip(path, rootname, files):
@@ -132,75 +94,102 @@ def age_tree(root: Path, seconds: int = 120) -> None:
             os.utime(p, (_t, _t))
 
 
+def extract_inline_ps(line, backquoted):
+    """Pull the -Command body out of a cmd line that calls powershell."""
+    if backquoted:
+        m = re.search(r'powershell -NoProfile -Command "(.+?)"`', line)
+    else:
+        m = re.search(r'powershell -NoProfile -Command "(.+)"\s*$', line)
+    return m.group(1) if m else None
+
+
+def xd_bare_names(cmd):
+    """Tokens of the /XD list (names only, stops at the next /flag)."""
+    seg = None
+    for i, tok in enumerate(cmd):
+        if tok == "/XD":
+            seg = cmd[i + 1:]
+            break
+    names = []
+    for tok in seg or []:
+        if tok.startswith("/"):
+            break
+        names.append(tok)
+    return names
+
+
 # ── A. source guards ─────────────────────────────────────────────────────
 def section_a():
-    print("  -- A. source guards (update.bat / prune / package_release) --")
-    rc_lines = robocopy_lines()
-    apply_line = next((l for l in rc_lines if "%EXROOT%" in l), "")
-    backup_line = next((l for l in rc_lines if "%BK%" in l), "")
-    check("A1 two robocopy commands (apply + backup)",
-          len(rc_lines) == 2 and bool(apply_line) and bool(backup_line),
-          f" got {len(rc_lines)}")
+    print("  -- A. source guards (updater.py / shim / prune / package_release) --")
+    check("A1 both robocopy commands exist (apply + backup)",
+          "def backup_cmd(" in UPD and "def apply_cmd(" in UPD
+          and '"robocopy"' in UPD)
+    _bk = UPDMOD.backup_cmd(Path("B"), "bk")
+    _ap = UPDMOD.apply_cmd(Path("X"), Path("B"))
+    check("A1b both built commands are robocopy /E (no /MIR)",
+          _bk[0] == "robocopy" and _ap[0] == "robocopy"
+          and "/E" in _bk and "/E" in _ap)
 
-    check("A2 apply /XD anchors to the SOURCE root (%EXROOT%\\models)",
-          '"%EXROOT%\\models"' in apply_line)
-    check("A3 backup /XD anchors to the install root (%BASE%\\models)",
-          '"%BASE%\\models"' in backup_line)
+    check("A2 apply /XD anchors to the SOURCE root (zip models dir)",
+          'exroot / "models"' in UPD and str(Path("X") / "models") in _ap)
+    check("A3 backup /XD anchors to the install root (base models dir)",
+          'base / "models"' in UPD and str(Path("B") / "models") in _bk)
     check("A4 no bare 'models' left in any /XD list",
-          all("models" not in xd_bare_names(l) for l in rc_lines),
-          f" {[(xd_bare_names(l)) for l in rc_lines]}")
-    check("A5 no /MIR anywhere (user data would die)",
-          not any("/mir" in l.lower() for l in rc_lines))
-    check("A6 apply keeps /XF update.bat settings.json",
-          "/XF update.bat settings.json" in apply_line)
+          "models" not in xd_bare_names(_bk) and "models" not in xd_bare_names(_ap)
+          and "models" not in UPDMOD.APPLY_XD and "models" not in UPDMOD.BACKUP_XD)
+    check("A5 no /MIR in any robocopy command (user data would die)",
+          not any("/mir" in str(t).lower() for t in _bk + _ap))
+
+    check("A6 apply keeps /XF update.bat settings.json first",
+          _ap[_ap.index("/XF") + 1: _ap.index("/XF") + 3]
+          == ["update.bat", "settings.json"])
     check("A7 backup keeps update_backup_* nesting exclude",
-          "update_backup_*" in backup_line)
+          "update_backup_*" in UPDMOD.BACKUP_XD and "update_backup_*" in _bk)
 
-    check("A8 NROOTS counted in BOTH extract sections",
-          UPDATE.count("set /a NROOTS=0") == 2
-          and UPDATE.count('if not "%NROOTS%"=="1"') == 2)
+    check("A8 root count checked at BOTH extract call sites",
+          UPD.count("extract_release(") >= 2
+          and UPD.count("Zip contained no") >= 1
+          and UPD.count("root folders in the zip") >= 2)
     check("A9 pre-apply core/utils probes in the common path",
-          UPDATE.count("no core\\ folder") >= 2
-          and UPDATE.count("no utils\\ folder") >= 2)
+          UPD.count("no core\\\\ folder") >= 2
+          and UPD.count("no utils\\\\ folder") >= 2)
     check("A10 pre-apply zip-version vs tag gate",
-          'if /I not "%ZIPVER%"=="%TAGNUM%"' in UPDATE)
+          "zipver.lower() != tagnum.lower()" in UPD)
 
-    check("A11 VCMP guard present", "if not defined VCMP" in UPDATE)
-    check("A12 ASSET_DIGEST initialized", 'set "ASSET_DIGEST="' in UPDATE)
-    check("A12b PRUNED count filtered to digits (error text cannot explode the if-line)",
-          'findstr /r /c:"^[0-9][0-9]*$"`' in UPDATE
-          and 'for /f "usebackq delims=" %%P in (`type "%TMPDIR%\\prune_count.txt"'
-          in UPDATE)
-    check("A13 digest lowercased before compare", ".Substring(7).ToLower()" in UPDATE)
+    check("A11 unparseable versions abort (VCMP guard)",
+          "def compare_versions(" in UPD and "if vcmp is None:" in UPD
+          and UPDMOD.compare_versions("1.5.0x", "1.5.1") is None)
+    check("A12 ASSET_DIGEST initialized",
+          'asset_digest = ""' in UPD)
+    check("A12b prune count filtered to a pure integer (error text cannot flow in)",
+          're.search(r"^\\s*(\\d+)\\s*$"' in UPD)
+    check("A13 digest lowercased before compare",
+          'asset_digest[7:].lower()' in UPD and 'hexdigest().lower()' in UPD)
 
-    check("A14 TMQ defined from TMPDIR", 'set "TMQ=%TMPDIR:\'=\'\'%"' in UPDATE)
-    check("A15 EXQ defined in BOTH extract sections",
-          UPDATE.count('set "EXQ=%EXROOT:\'=\'\'%"') == 2)
-    check("A16 no raw %TMPDIR% inside PS single quotes",
-          "'%TMPDIR%" not in UPDATE)
-    check("A17 no raw %EXROOT% inside PS single quotes",
-          "'%EXROOT%" not in UPDATE)
-    check("A18 inline Expand-Archive uses -LiteralPath",
-          all("Expand-Archive -LiteralPath" in l
-              for l in ULINES if "Expand-Archive" in l))
+    check("A14 extraction is zipfile-based (no inline PS Expand-Archive left)",
+          "Expand-Archive" not in UPD and "extractall" in UPD)
+    check("A15 no PS-quoting shims left (%TMQ%/%EXQ% era is over)",
+          "%TMQ%" not in UPD and "%EXQ%" not in UPD)
 
-    stop_i = UPDATE.find('watchdog_engine.bat" stop')
-    grace_i = UPDATE.find("ping -n 26 127.0.0.1")
-    recheck_i = UPDATE.find("Get-NetTCPConnection", max(grace_i, 0))
-    rearm_lines = [l for l in ULINES
-                   if 'start "" /b /d' in l and "watchdog_engine.bat" in l]
+    stop_i = UPD.find('watchdog_engine.bat"), "stop"')
+    grace_i = UPD.find("time.sleep(25)")
+    recheck_i = UPD.find("port_listener(hm_port)", max(grace_i, 0))
+    rearm_calls = [l for l in UPD.splitlines()
+                   if l.strip().startswith("arm_watchdog(")]
     check("A19 watchdog stop -> grace wait -> port recheck, in order",
-          0 < stop_i < grace_i < recheck_i)
-    check("A19b grace wait uses ping (timeout /nobreak dies on redirected stdin)",
-          "timeout /t" not in UPDATE)
-    check("A20 watchdog re-arm appears exactly once", len(rearm_lines) == 1,
-          f" got {len(rearm_lines)}")
-    co_i = UPDATE.rfind('call "%~dp0deploy\\check_optionals.bat"')
-    swap_i = UPDATE.find("FINAL SELF-SWAP")
-    check("A21 re-arm after optional components, before self-swap",
-          bool(rearm_lines) and co_i < UPDATE.find(rearm_lines[0]) < swap_i)
+          0 < stop_i < grace_i < recheck_i, f" {stop_i} {grace_i} {recheck_i}")
+    check("A19b grace wait is time.sleep (the shim carries no `timeout /t`)",
+          "time.sleep(25)" in UPD and "timeout /t" not in SHIM)
+    check("A20 watchdog re-arm appears exactly once (as a call)",
+          len(rearm_calls) == 1, f" got {len(rearm_calls)}")
+    co_i = UPD.find("check_optionals.bat")
+    swap_i = SHIM.find("FINAL SELF-SWAP")
+    check("A21 re-arm after optional components, shim self-swap is last",
+          bool(rearm_calls) and co_i < UPD.find(rearm_calls[0])
+          and swap_i > 0 and ".update_new.bat" in SHIM[swap_i:]
+          and SHIM.find("pause >nul", swap_i) > swap_i)
     check("A22 apply-failure message names the stopped watchdog",
-          "watchdog is STOPPED" in UPDATE)
+          "watchdog is STOPPED" in UPD)
 
     check("A23 prune never moves the running update.bat",
           "($_ -ne 'update.bat')" in PRUNE_PS1)
@@ -220,10 +209,18 @@ def section_a():
               re.search(r"^/deploy/" + re.escape(dev) + r"\s+export-ignore",
                         ATTRS, re.M))
 
+    # shim guards: python resolution + hand-over + pause
+    check("A28 shim hands over to deploy/updater.py",
+          "deploy\\updater.py" in SHIM and "%*" in SHIM)
+    check("A29 shim resolves .venv python first (matches start_hivemind.bat)",
+          ".venv\\Scripts\\python.exe" in SHIM)
+    check("A30 shim preserves the exit code",
+          "UPD_RC=%ERRORLEVEL%" in SHIM and "exit /b %UPD_RC%" in SHIM)
 
-# ── B1. apply robocopy fragment against a fake install ───────────────────
+
+# ── B1. apply robocopy against a fake install ────────────────────────────
 def section_b1(tmp: Path):
-    print("  -- B1. apply robocopy fragment (real robocopy, fake trees) --")
+    print("  -- B1. apply robocopy (real robocopy, fake trees) --")
     ex = tmp / "apply_ex" / "HiveMind_v1.3.9-audit_release"
     base = tmp / "apply_base"
     write(ex / "core" / "a.py", "new core\n")
@@ -235,7 +232,6 @@ def section_b1(tmp: Path):
     write(ex / "settings.json", '{"token":"LEAK"}\n')
     write(ex / "sessions" / "s.bin", "zip session\n")
 
-    # Distinct size/timestamp: robocopy skips same-size+same-tick files.
     write(base / "core" / "a.py", "old core file\n")
     write(base / "model_configs" / "models" / "m1.json", '{"old": true}\n')
     write(base / "models" / "big.gguf", "user gguf\n")
@@ -245,9 +241,9 @@ def section_b1(tmp: Path):
     write(base / "update.bat", "@echo running updater\n")
     age_tree(base)
 
-    line = next(l for l in robocopy_lines() if "%EXROOT%" in l)
-    line = line.replace("%EXROOT%", str(ex)).replace("%BASE%", str(base))
-    r = run_cmd_fragment(tmp, "apply", line)
+    cmd = UPDMOD.apply_cmd(ex, base)
+    r = subprocess.run(cmd, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
     check("B1 robocopy rc < 8", r.returncode < 8, f" rc={r.returncode}")
     check("B1 tracked model_configs/models json APPLIED (the fix)",
           (base / "model_configs" / "models" / "m1.json").read_text(encoding="utf-8")
@@ -266,9 +262,9 @@ def section_b1(tmp: Path):
           (base / ".hive_uploads" / "u.bin").read_text(encoding="utf-8") == "user upload\n")
 
 
-# ── B2. backup robocopy fragment ─────────────────────────────────────────
+# ── B2. backup robocopy against a fake install ───────────────────────────
 def section_b2(tmp: Path):
-    print("  -- B2. backup robocopy fragment --")
+    print("  -- B2. backup robocopy --")
     base = tmp / "backup_base"
     write(base / "core" / "a.py", "code\n")
     write(base / "model_configs" / "models" / "m1.json", '{"current": true}\n')
@@ -279,12 +275,11 @@ def section_b2(tmp: Path):
     age_tree(base)
 
     bk = "update_backup_1.3.9-audit"
-    line = next(l for l in robocopy_lines() if "%BK%" in l)
-    line = line.replace("%BASE%", str(base)).replace("%BK%", bk)
-    r = run_cmd_fragment(tmp, "backup", line)
+    r = subprocess.run(UPDMOD.backup_cmd(base, bk), capture_output=True,
+                       text=True, encoding="utf-8", errors="replace",
+                       timeout=300)
     check("B2 robocopy rc < 8", r.returncode < 8, f" rc={r.returncode}")
     dst = base / bk
-    check("B2 robocopy rc < 8", r.returncode < 8, f" rc={r.returncode}")
     check("B2 model_configs/models json BACKED UP (the fix)",
           (dst / "model_configs" / "models" / "m1.json").read_text(encoding="utf-8")
           == '{"current": true}\n')
@@ -298,7 +293,7 @@ def section_b2(tmp: Path):
     check("B2 source tree untouched", (base / "core" / "a.py").exists())
 
 
-# ── B3. odd zip layouts vs the extract+count logic ───────────────────────
+# ── B3. odd zip layouts vs extract_release ────────────────────────────────
 def section_b3(tmp: Path):
     print("  -- B3. odd zip layouts --")
     good = tmp / "layout_good.zip"
@@ -314,23 +309,21 @@ def section_b3(tmp: Path):
     with zipfile.ZipFile(loose, "w") as z:
         z.writestr("loose.txt", "4")
 
-    counts = {}
-    for name, zp in (("good", good), ("multi", multi), ("loose", loose)):
-        dest = tmp / f"layout_ex_{name}"
-        r = ps_command(f"Expand-Archive -LiteralPath '{zp}' "
-                       f"-DestinationPath '{dest}' -Force")
-        check(f"B3 extract {name}.zip", r.returncode == 0, f" rc={r.returncode}")
-        counts[name] = sum(1 for k in dest.iterdir() if k.is_dir())
-    check("B3 good layout: exactly 1 root folder", counts["good"] == 1)
-    check("B3 multi-root hazard present (two build folders + __MACOSX junk)",
-          counts["multi"] == 3, f" dirs={counts['multi']}")
-    check("B3 loose-only zip has 0 root folders (EXROOT empty path)",
-          counts["loose"] == 0)
-    check("B3 NROOTS guards reject counts != 1 in both sections",
-          UPDATE.count('if not "%NROOTS%"=="1"') == 2)
+    for name, want_count, want_root in (("good", 1, True), ("multi", 3, False),
+                                        ("loose", 0, False)):
+        n, root = UPDMOD.extract_release(
+            tmp / f"layout_{name}.zip", tmp / f"layout_ex_{name}")
+        check(f"B3 extract {name}.zip: {want_count} root folder(s)",
+              n == want_count, f" got {n}")
+        if want_root:
+            check(f"B3 {name}.zip returns the single root", root is not None)
+        else:
+            check(f"B3 {name}.zip rejects the layout (root=None)", root is None)
+    check("B3 root-count guards reject counts != 1 in both sections",
+          UPD.count("root folders in the zip") >= 2)
 
 
-# ── B4. apostrophe/bracket install path vs the PS fragments ──────────────
+# ── B4. apostrophe/bracket install path vs the Python extractor ──────────
 def section_b4(tmp: Path):
     print("  -- B4. apostrophe/bracket install path --")
     nasty = tmp / "O'Brien's HD [1]"
@@ -343,34 +336,22 @@ def section_b4(tmp: Path):
     zp = tmpdir / "release.zip"
     shutil.copy(zp_src, zp)
 
-    ex_line = next(l for l in ULINES
-                   if "Expand-Archive" in l and "-LiteralPath" in l).strip()
-    body = extract_inline_ps(ex_line, backquoted=False)
-    check("B4 extraction fragment found in update.bat", body is not None)
-    if body:
-        fixed = body.replace("%TMQ%", str(tmpdir).replace("'", "''"))
-        r = ps_command(fixed)
-        extracted = tmpdir / "extracted"
-        check("B4 extract works on an apostrophe+bracket path (the fix)",
-              r.returncode == 0
-              and (extracted / "HiveMind_v1.3.9-audit_release" / "core").is_dir(),
-              f" rc={r.returncode}")
-        exroot = extracted / "HiveMind_v1.3.9-audit_release"
-        v_line = next(l for l in ULINES
-                      if "HIVEMIND_VERSION" in l and "-LiteralPath" in l)
-        vbody = extract_inline_ps(v_line, backquoted=True)
-        check("B4 version-probe fragment found", vbody is not None)
-        if vbody:
-            fixed_v = vbody.replace("%EXQ%", str(exroot).replace("'", "''"))
-            r2 = ps_command(fixed_v)
-            check("B4 version parsed from apostrophe path (the fix)",
-                  r2.stdout.strip() == "1.3.9-audit", f" got {r2.stdout.strip()!r}")
+    n, exroot = UPDMOD.extract_release(zp, tmpdir / "extracted")
+    check("B4 extract works on an apostrophe+bracket path (the fix)",
+          n == 1 and exroot is not None
+          and (exroot / "core").is_dir(), f" n={n}")
+    if exroot is not None:
+        check("B4 version parsed from apostrophe path (the fix)",
+              UPDMOD.read_version(exroot / "core") == "1.3.9-audit",
+              f" got {UPDMOD.read_version(exroot / 'core')!r}")
 
     # the OLD unsafe form must demonstrably fail on this path
-    old_body = (f"Expand-Archive -Path '{zp}' "
-                f"-DestinationPath '{tmpdir}\\extracted_old' -Force")
-    r3 = ps_command(old_body)
-    check("B4 OLD -Path form breaks on an apostrophe path (documents the bug)",
+    ps_cmd = (f"Expand-Archive -Path '{zp}' "
+              f"-DestinationPath '{tmpdir}\\extracted_old' -Force")
+    r3 = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd],
+                        capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=90)
+    check("B4 OLD PS -Path form breaks on an apostrophe path (documents the bug)",
           r3.returncode != 0
           or not (tmpdir / "extracted_old" / "HiveMind_v1.3.9-audit_release").exists(),
           f" rc={r3.returncode}")
@@ -394,8 +375,6 @@ def section_b5(tmp: Path):
     write(base / "update.bat", "@echo RUNNING\n")
     write(ex / "core" / "keep.py", "new\n")
     manifest = base / "update_manifest_installed.txt"
-    # the manifest lists update.bat (it shipped in the PREVIOUS zip) but the
-    # new release dropped it - the running script must survive
     manifest.write_text("core/stale.py\nupdate.bat\n", encoding="utf-8")
     r = _run_prune(base, ex, base / "update_removed_1.3.9-audit", manifest)
     check("B5 prune ran", r.returncode == 0,
@@ -430,7 +409,7 @@ def section_b7(tmp: Path):
     print("  -- B7. package_release zip-version probe fragment --")
     line = next((l for l in PKG_BAT.splitlines()
                  if "OpenRead" in l and "ZIPVER" in l), "")
-    body = extract_inline_ps(line, backquoted=True)
+    body = extract_inline_ps(line, backquoted=True) if line else None
     check("B7 cross-check fragment found", body is not None)
     if not body:
         return

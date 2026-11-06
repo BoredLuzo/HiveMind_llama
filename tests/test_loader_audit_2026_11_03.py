@@ -179,13 +179,11 @@ finally:
     VT._MOE_TABLE = _old_table
 
 # ── 7. Updates never touch the user's GGUF directory ─────────────────────────
-_apply = [ln for ln in UPDATE.splitlines() if ln.startswith('robocopy "%EXROOT%"')]
-check("18 the update apply step excludes models/",
-      bool(_apply) and "%EXROOT%\\models" in _apply[0],
-      _apply[0][:110] if _apply else "no line")
-
-# ── 8. cache retry keeps the shared post-start path; stale flag is reset ────
+_upd_src = (ROOT / "deploy" / "updater.py").read_text(encoding="utf-8")
+check("18 the update apply step excludes models/ (anchored to the zip root)",
+      'exroot / "models"' in _upd_src and "apply_cmd" in _upd_src)
 _retry = ML_SRC.split("moe_cache=False", 1)[-1].split("except Exception", 1)[0]
+
 check("19 a successful cache retry does not return early",
       "_cache_retried_ok = True" in ML_SRC and "return slot.port" not in _retry)
 check("20 the AMD/CPU fallbacks are gated on the retry flag",

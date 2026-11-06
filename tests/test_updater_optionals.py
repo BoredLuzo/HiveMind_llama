@@ -25,7 +25,7 @@ def check(name, cond, extra=""):
         print(f"  FAIL {name} {extra}")
 
 
-UPDATE = (ROOT / "update.bat").read_text(encoding="utf-8", errors="replace")
+UPDATE = (ROOT / "deploy" / "updater.py").read_text(encoding="utf-8", errors="replace")
 SCRIPT_PATH = ROOT / "deploy" / "check_optionals.bat"
 SCRIPT = SCRIPT_PATH.read_text(encoding="utf-8", errors="replace") if SCRIPT_PATH.exists() else ""
 
@@ -33,11 +33,11 @@ SCRIPT = SCRIPT_PATH.read_text(encoding="utf-8", errors="replace") if SCRIPT_PAT
 check("1a the updater calls the optional step", "check_optionals.bat" in UPDATE)
 _i = UPDATE.index("check_optionals.bat") if "check_optionals.bat" in UPDATE else -1
 check("1b it runs after the dependency refresh",
-      _i > 0 and UPDATE.index("Refresh Python dependencies") < _i)
-check("1c it runs before the final self-swap",
-      _i > 0 and "FINAL SELF-SWAP" in UPDATE[_i:])
+      _i > 0 and UPDATE.index("Refreshing deps  : requirements.txt") < _i)
+check("1c it runs before the watchdog re-arm (the shim self-swap is a shim step)",
+      _i > 0 and "arm_watchdog(base)" in UPDATE[_i:])
 check("1d the call is guarded (older zips without the file still update)",
-      'if exist "%~dp0deploy\\check_optionals.bat"' in UPDATE)
+      "if co.exists():" in UPDATE)
 
 # ── 2. detection markers ────────────────────────────────────────────────────
 for marker, what in (

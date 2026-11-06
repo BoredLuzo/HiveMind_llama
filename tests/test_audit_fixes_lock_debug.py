@@ -22,7 +22,8 @@ def check(name, cond, extra=""):
 
 
 install = (ROOT / "install.bat").read_text(encoding="utf-8", errors="replace")
-update = (ROOT / "update.bat").read_text(encoding="utf-8", errors="replace")
+update = ((ROOT / "update.bat").read_text(encoding="utf-8", errors="replace")
+          + (ROOT / "deploy" / "updater.py").read_text(encoding="utf-8", errors="replace"))
 linux = (ROOT / "deploy" / "install_linux.sh").read_text(encoding="utf-8", errors="replace")
 server = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
 tool = (ROOT / "utils" / "tool.py").read_text(encoding="utf-8", errors="replace")
@@ -36,7 +37,9 @@ _tracked = subprocess.run(["git", "ls-files", "uv.lock"], cwd=str(ROOT),
 check("uv.lock is tracked by git", _tracked.endswith("uv.lock"),
       " (untracked -> it cannot ship)")
 check("install.bat syncs frozen", "--all-extras --frozen" in install)
-check("update.bat prefers the lock", "--frozen --all-extras" in update)
+check("update.bat prefers the lock (lockfile sync, never a bare resolve)",
+      "--frozen" in update and "--all-extras" in update
+      and "uv.lock" in update)
 check("install/update keep optional packages on sync",
       install.count("--inexact") >= 1 and update.count("--inexact") >= 1)
 check("linux installer syncs frozen", "--frozen" in linux)
