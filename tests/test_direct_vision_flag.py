@@ -108,7 +108,9 @@ def test_call_site_passes_direct_images():
 
 
 def test_gate_judges_override():
-    src = (Path(__file__).parent.parent / "core" / "chat_run.py").read_text(encoding="utf-8")
+    # split 3.2: the vision gate block lives in chat_vision_pre.py now
+    src = ((Path(__file__).parent.parent / "core" / "chat_run.py").read_text(encoding="utf-8")
+           + (Path(__file__).parent.parent / "core" / "chat_vision_pre.py").read_text(encoding="utf-8"))
     hits = src.count('_run_settings.get("direct_model")')
     if hits >= 2 and '_run_settings.get("direct_model") or "").strip() or (' in src:
         ok(f"chat_run gate: merged overrides (_run_settings) beat the registry card ({hits} sites)")

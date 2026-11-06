@@ -96,7 +96,7 @@ def test_image_intake_cap():
 
 
 def test_image_save_path_no_traversal():
-    src = _src("core/chat_run.py")
+    src = _src("core/chat_vision_pre.py")  # split 3.2: image save lives here now
     if 'f"img_{_stamp}_{_ii + 1}_{_h8}.{_ext}"' in src \
             and "write_bytes" in src:
         ok("image save: server-generated filename only, no client path parts")
