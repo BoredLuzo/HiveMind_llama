@@ -22,7 +22,9 @@ from backend import llama_vram_table as VT            # noqa: E402
 from backend import manager_evict as ME               # noqa: E402
 from backend import manager_load as ML                # noqa: E402
 
-ML_SRC = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+# split 4.1: the _start_process slot-claim phase lives in llama_start_phases.py
+ML_SRC = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+          + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
 MH_SRC = (ROOT / "backend" / "manager_health.py").read_text(encoding="utf-8")
 SRV = (ROOT / "server.py").read_text(encoding="utf-8")
 UPDATE = (ROOT / "update.bat").read_text(encoding="utf-8")
@@ -189,7 +191,8 @@ check("19 a successful cache retry does not return early",
 check("20 the AMD/CPU fallbacks are gated on the retry flag",
       'if not _cache_retried_ok and "exit=-1"' in ML_SRC
       and "elif not _cache_retried_ok:" in ML_SRC)
-_start = ML_SRC.split("async def _start_process", 1)[-1][:1000]
+# split 4.1: the claim preamble is _phase_claim in llama_start_phases.py now
+_start = (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8").split("async def _phase_claim", 1)[-1][:1000]
 check("21 every load clears the per-slot cache flag first",
       "slot._moe_cache_used = False" in _start)
 check("22 the startup sync accepts the rocm backend",

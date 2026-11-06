@@ -111,7 +111,7 @@ def test_source_guards():
         ("core/duo_runner.py", "_coder_ctx_override"),
         ("core/duo_runner.py", "CODER-FALLBACK-CTX"),
         ("core/duo_runner.py", "VRAM-FALLBACK-CTX-CLAMP"),
-        ("backend/manager_load.py", "stall_abort_s=12.0"),
+        ("backend/llama_start_phases.py", "stall_abort_s=12.0"),
         ("backend/manager_load.py", "progress_abort_s=12.0"),
         ("backend/manager_load.py", "VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB)"),
         ("backend/manager_evict.py", "progress_abort_s"),

@@ -17,7 +17,8 @@ from tools.runner import _parse_approval_answer    # noqa: E402
 from utils.file import _is_protected_path          # noqa: E402
 from routers import config as RC                   # noqa: E402
 
-ML = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+ML = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+      + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
 MP = (ROOT / "backend" / "manager_process.py").read_text(encoding="utf-8")
 SRV = (ROOT / "server.py").read_text(encoding="utf-8")
 CH = (ROOT / "routers" / "chats.py").read_text(encoding="utf-8")
