@@ -804,7 +804,8 @@ check("20a the in-use guard awaits _find_loaded",
       "await _lsm_inuse._find_loaded(exec_mdl)" in _DUO)
 check("20b no bare _find_loaded call remains",
       "= _lsm_inuse._find_loaded(" not in _DUO)
-_LOAD = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+_LOAD = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+         + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8", errors="replace"))
 check("20c the loader measures VRAM headroom after a load",
       "[VRAM-TIGHT]" in _LOAD and "get_live_gpu_free_mib" in _LOAD)
 check("20d the tight-fit warning is recorded on the slot",

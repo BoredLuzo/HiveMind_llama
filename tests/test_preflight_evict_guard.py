@@ -123,10 +123,11 @@ check("(h) after run end a released pin is evictable",
                        _pre_flight_evict_candidates([_target, _pinned_idle], _target)))
 
 # ── wiring ──────────────────────────────────────────────────────────────────
-_src_ml = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+_src_ml = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+           + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8", errors="replace"))
 _src_duo = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
 check("pre-flight uses the guarded candidate helper",
-      "_cands = _pre_flight_evict_candidates(self._slots, slot)" in _src_ml)
+      "_pre_flight_evict_candidates(self._slots, slot)" in _src_ml)
 check("the old inline list comprehension is gone",
       "and not s.pinned and not getattr(s, \"_loading\", False)" not in _src_ml)
 check("refusal names model, ctx and the blocking slots",

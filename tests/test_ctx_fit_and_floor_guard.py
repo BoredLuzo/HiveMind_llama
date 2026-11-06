@@ -157,7 +157,8 @@ def test_source_guard_ctx_floor():
 
 
 def test_source_guard_manager_margins():
-    src = (Path(__file__).parent.parent / "backend" / "manager_load.py").read_text(encoding="utf-8")
+    src = ((Path(__file__).parent.parent / "backend" / "manager_load.py").read_text(encoding="utf-8")
+           + (Path(__file__).parent.parent / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
     checks = {
         "REDUCED-MARGIN-Marker": "[PRE-FLIGHT-REDUCED-MARGIN]" in src,
         "resolve_ctx_fit-Aufruf": "resolve_ctx_fit(" in src,

@@ -95,7 +95,7 @@ def _manager_sources() -> str:
     """All LlamaServerManager sources (M3c: mixin files + core)."""
     root = Path(__file__).parent.parent / "backend"
     parts = []
-    for f in sorted(root.glob("manager_*.py")) + [root / "llama_server_manager.py"]:
+    for f in sorted(root.glob("manager_*.py")) + [root / "llama_start_phases.py", root / "llama_server_manager.py"]:
         try:
             parts.append(f.read_text(encoding="utf-8"))
         except OSError:

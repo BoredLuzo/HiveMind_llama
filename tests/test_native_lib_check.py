@@ -123,8 +123,8 @@ def test_source_guards():
     root = Path(__file__).parent.parent
     checks = [
         ("backend/llama_config.py", "NESTED-LAYOUT (2026-09-13)"),
-        ("backend/manager_load.py", "POSIX-LIB-PATH (2026-09-13)"),
-        ("backend/manager_load.py", "LD_LIBRARY_PATH"),
+        ("backend/llama_start_phases.py", "POSIX-LIB-PATH (2026-09-13)"),
+        ("backend/llama_start_phases.py", "LD_LIBRARY_PATH"),
         ("deploy/fetch_llamacpp.py", "_stem.lower() in Path(n).name.lower()"),
     ]
     bad = [f"{rel}:{needle}" for rel, needle in checks

@@ -86,7 +86,8 @@ check("L5 a non-false string keeps the snapshot on",
 _st.settings.pop("mem_watch_enabled", None)
 
 # the hooks are wired: grep the three call sites
-load_src = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+load_src = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+            + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
 evict_src = (ROOT / "backend" / "manager_evict.py").read_text(encoding="utf-8")
 srv_src = (ROOT / "server.py").read_text(encoding="utf-8")
 check("H1 load hook after slot-ready",
