@@ -130,6 +130,12 @@ async def _run_peer_ratings_inner(run_id, user_input, outputs, use_learned, rati
         return
 
     if rating_mode == "direct":
+        # S1-C (audit 2026-11-07): the duo/pipeline branches bind
+        # _pipeline_chat_stream function-locally, which makes the name
+        # function-local everywhere — without this import the direct
+        # branch died on UnboundLocalError, swallowed by the broad except
+        # (direct peer ratings never ran; a8a2daa claimed this fixed).
+        from core.llm_stream import _pipeline_chat_stream
         _direct_out = outputs.get("direct", "")
         if not _direct_out:
             return

@@ -7,7 +7,7 @@ breaks that edge. All version probes (update_check.py, update.bat,
 package_release.bat, prepush_check.ps1, start_hivemind.bat) parse THIS file
 now — keep the literal line shaped so the existing regexes match unchanged:
 
-    HIVEMIND_VERSION = "1.5.5"
+    HIVEMIND_VERSION = "<major.minor.patch>"
 """
 
 HIVEMIND_VERSION = "1.5.5"

@@ -118,8 +118,9 @@ def _live_ctx_override(model_name: str, role: str) -> int | None:
     """Read the user's per-agent/per-model context override from the running
     settings. RESOLVER-ONE (2026-10-28, audit): this was a full copy of the
     ctx_overrides lookup; the canonical one lives in
-    core.state._ctx_override_lookup (legacy flat + nested shapes, '#' suffix
-    handling). Only the duo-role -> override-key mapping stays here."""
+    core.ctx_overrides._ctx_override_lookup (legacy flat + nested shapes,
+    '#' suffix handling). Only the duo-role -> override-key mapping stays
+    here."""
     try:
         from core.ctx_overrides import _ctx_override_lookup
         from core import state as _st
