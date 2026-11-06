@@ -38,7 +38,7 @@ from .llama_manager_utils import (
 )
 from .llama_slots import ModelSlot
 from .manager_process import _slot_in_flight
-from .llama_start_phases import _phase_claim, _phase_flags
+from .llama_start_phases import _phase_capabilities, _phase_claim, _phase_flags
 from typing import Optional
 from pathlib import Path
 from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, moe_cfg_for, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
@@ -1101,132 +1101,10 @@ class LlamaLoadMixin:
             or type(self)._kv_flag_supported is None
             or type(self)._load_mode_supported is None
         )
-        if _all_flags_uncached:
-            _bn, _dev, _kv, _moe, _lm, _dspark = await asyncio.to_thread(_probe_all, str(LLAMA_BIN))
-            if _bn > 0 and type(self)._binary_build_number in (None, 0):
-                type(self)._binary_build_number = _bn
-                logger.info(f"llama-server Binary Build: {_bn} (from --help/filename)")
-            if type(self)._device_flag_supported is None:
-                type(self)._device_flag_supported = _dev
-            if type(self)._kv_flag_supported is None:
-                type(self)._kv_flag_supported = _kv
-            if type(self)._moe_flag_supported is None:
-                type(self)._moe_flag_supported = _moe
-            if type(self)._load_mode_supported is None:
-                type(self)._load_mode_supported = _lm
-            if type(self)._dspark_flag_supported is None:
-                type(self)._dspark_flag_supported = _dspark
-
-        if GPU_BACKEND != "cpu" and type(self)._device_flag_supported:
-            # CUDA → "CUDA<N>" (DEVICE-FORMAT-FIX 2026-08-27: llama.cpp
-            if GPU_BACKEND == "cuda":
-                cmd += ["--device", f"CUDA{VULKAN_DEVICE}"]
-            elif GPU_BACKEND == "rocm":
-                # HIP/ROCm names devices differently (ROCm0/HIP0 by build);
-                # let llama.cpp pick the single visible device.
-                pass
-            else:
-                cmd += ["--device", f"VULKAN{VULKAN_DEVICE}"]
-        else:
-            logger.warning(
-                f"--device not supported by {LLAMA_BIN.name} - "
-                "Vulkan device selection disabled. Update the binary to b8278+ recommended."
-            )
-
-        # ── Backend DLL check (CUDA/Vulkan) ───────────────────────────────
-        # cryptic start failure. Cached once.
-        if type(self)._backend_dlls_ok is None:
-            # OS-GUARD (2026-09-19): DLL probing is Windows-only — on Linux
-            # the .so layout differs and the probe misfires. llama-server
-            # itself fails loudly at startup when its backend is broken,
-            # and the manager's health check catches that (live: Docker/
-            # CUDA host).
-            if os.name == "nt":
-                _dll_ok = await asyncio.to_thread(
-                    _probe_backend_dlls, str(LLAMA_BIN), GPU_BACKEND
-                )
-                if _dll_ok is not None:
-                    type(self)._backend_dlls_ok = _dll_ok
-                    logger.info(
-                        "Backend DLL check (%s, %s): %s",
-                        GPU_BACKEND.upper(), LLAMA_BIN.name,
-                        "DLLs complete" if _dll_ok else "DLLs missing",
-                    )
-            else:
-                type(self)._backend_dlls_ok = True
-                logger.info("Backend DLL check: skipped (non-Windows host)")
-        if type(self)._backend_dlls_ok is False:
-            _be_upper = GPU_BACKEND.upper()
-            _posix_dll = platform.system() != "Windows"
-            raise RuntimeError(
-                f"{_be_upper} DLL check failed: the runtime DLLs for "
-                f"'{GPU_BACKEND}' are missing under {LLAMA_BIN.parent}.\n\n"
-                f"  Required ({GPU_BACKEND}): "
-                + ("*ggml-cuda.{dll,so} (+ Windows: cudart64_*.dll, cublas64_*.dll, cublasLt64_*.dll)"
-                   if GPU_BACKEND == "cuda" else
-                   "*ggml-rocm.{dll,so} or *ggml-hip.{dll,so}"
-                   if GPU_BACKEND == "rocm" else
-                   "*ggml-vulkan.dll"
-                   if not _posix_dll else "lib/libggml-vulkan.so (or flat ggml-vulkan.so)")
-                + "\n"
-                f"  Binary folder: {LLAMA_BIN.parent}\n\n"
-                f"  Fix A: re-download llama.cpp — the official ZIPs bundle "
-                f"the matching DLLs:\n"
-                f"    python deploy\\fetch_llamacpp.py --backend {GPU_BACKEND} --force\n"
-                f"    (fetches the CUDA version matching the driver via nvidia-smi)\n"
-                f"  Fix B: check folder {LLAMA_BIN.parent} — is it a "
-                f"{_be_upper} build (name contains '{GPU_BACKEND}')?\n"
-                f"  Fix C: antivirus/Defender quarantined DLLs — "
-                f"restore the affected files."
-            )
-
-        # ── Backend device check (CUDA/Vulkan) ─────────────────────────────
-        #      cuda-12.4 build on 13.x driver → cudaGetDeviceCount=0 →
-        if type(self)._backend_devices_ok is None:
-            # OS-GUARD (2026-09-19): same as the DLL check — --list-devices
-            # misfires on some Linux/CUDA combos (cuda-12.4 build on 13.x
-            # driver -> cudaGetDeviceCount=0), so the probe runs on Windows
-            # only. A genuinely broken backend surfaces at llama-server
-            # startup (health check / crash recovery).
-            if os.name == "nt":
-                _dev_ok = await asyncio.to_thread(
-                    _probe_backend_devices, str(LLAMA_BIN), GPU_BACKEND
-                )
-                if _dev_ok is not None:
-                    type(self)._backend_devices_ok = _dev_ok
-                    logger.info(
-                        "Backend device check (%s, %s): %s",
-                        GPU_BACKEND.upper(), LLAMA_BIN.name,
-                        "device found" if _dev_ok else "NO device found",
-                    )
-            else:
-                type(self)._backend_devices_ok = True
-                logger.info("Backend device check: skipped (non-Windows host)")
-        if GPU_BACKEND != "cpu" and type(self)._backend_devices_ok is False and type(self)._device_flag_supported:
-            _be_upper = GPU_BACKEND.upper()
-            raise RuntimeError(
-                f"{_be_upper} device check failed: {LLAMA_BIN.name} "
-                f"lists NO {_be_upper} devices (--list-devices empty).\n\n"
-                f"  Binary: {LLAMA_BIN}\n"
-                f"  Backend: {GPU_BACKEND} (settings.json → 'gpu_backend' / env HIVEMIND_GPU_BACKEND)\n\n"
-                f"  Most common cause: the build's CUDA runtime doesn't match the driver "
-                f"(e.g. cuda-12.4 build on 13.x driver → GPU not detected).\n"
-                f"  Fix A: re-download llama.cpp — it fetches the CUDA version "
-                f"matching the driver automatically (nvidia-smi):\n"
-                f"    python deploy\\fetch_llamacpp.py --backend {GPU_BACKEND} --force\n"
-                f"  Fix B: chose a different binary? check the llama\\ folder — it must be a\n"
-                f"    {_be_upper} build (folder contains '{GPU_BACKEND}').\n"
-                f"  Fix C: point the backend in settings.json at the actually installed "
-                f"binary (\"gpu_backend\": \"vulkan\" or \"cuda\")."
-            )
-
-        # A9a (audit 2026-11-03): the capability branch below is optional, but
-        # the [LOAD-DIAG] log after Popen reads _load_mode unconditionally.
-        # Binaries without --load-mode died with UnboundLocalError AFTER a
-        # successful spawn.
-        _load_mode = "none"
-        # (2026-08-17, Hermes-35B-MoE auf Windows-Vulkan):
-        #   --load-mode mlock      → GGML_ASSERT(addr) in llama-mmap.cpp (crasht)
+        # OUTSOURCED (split 4.3): capability probes → _phase_capabilities().
+        _caps = await _phase_capabilities(self, cmd, _all_flags_uncached)
+        cmd = _caps.cmd
+        _load_mode = _caps.load_mode
         if type(self)._load_mode_supported:
             _spec_planned = self._speculation_planned(model)
             _mlock_now = _llama_cfg.MLOCK_MODEL
