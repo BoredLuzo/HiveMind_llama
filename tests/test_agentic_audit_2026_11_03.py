@@ -141,15 +141,22 @@ check("4c the compression KWARGS carry the updated system prompt",
       '_comp_kwargs["system_prompt"] = _sys_for_compress' in DQ)
 
 # ── 4d. skipped-planner runs still save the sidecar (UnboundLocal fix) ──────
+# 4d (split 2.2): the "_inloop_plan_text or" consumer moved to the epilogue
+# 4d (split 2.2): the "_inloop_plan_text or" consumer moved to the epilogue
+EPI4D = (ROOT / "core" / "duo_epilogue.py").read_text(encoding="utf-8", errors="replace")
 check("4d the in-loop plan text is initialized before the planner",
       '_inloop_plan_text = ""' in DQ
-      and DQ.index('_inloop_plan_text = ""') < DQ.index("_inloop_plan_text or") )
-check("4e aborted runs still save last_run/task context",
+      and "_inloop_plan_text or" in EPI4D)
+# 4e/f (split 2.2): the sidecar save moved to core/duo_epilogue.py — the
+# runner keeps the session-write point, the epilogue owns the context save.
+EPI = (ROOT / "core" / "duo_epilogue.py").read_text(encoding="utf-8", errors="replace")
+check("4e aborted runs still save last_run/task context (epilogue)",
       "ctx.chat_id and not ctx.is_aborted_chat" not in DQ
-      and '_eff_stop = "aborted"' in DQ)
+      and '_eff_stop = "aborted"' in EPI)
 check("4f the sidecar session is updated after the assistant turn",
       "_mutate_chat_context(" in DQ
-      and DQ.index('add_to_session("assistant"') < DQ.index("_mutate_chat_context("))
+      and DQ.index('add_to_session("assistant"') < DQ.index("_mutate_chat_context(")
+      and "_mutate_chat_context(" in EPI)
 
 
 # ── 5. writes without any execution go through the verify ladder ────────────
