@@ -261,7 +261,7 @@ async def _run_peer_ratings_inner(run_id, user_input, outputs, use_learned, rati
                 "avg_score": round(avg_score, 3),
                 "run_count": run_count,
             })
-            from server import _maybe_trigger_soul_evolution_forced  # P1-FIX: Lazy-Import
+            from learning.soul_evolution import _maybe_trigger_soul_evolution_forced
             asyncio.create_task(_maybe_trigger_soul_evolution_forced(run_count))
 
 

@@ -478,7 +478,6 @@ _pipeline_run_counter_file = THIS_FILE.parent / "run_counter.json"
 # In-Memory Counter-Cache.
 _run_counter_cache: int | None = None
 _run_counter_lock = threading.RLock()
-_last_forced_evolution_run: int = 0
 
 
 pipeline = Pipeline(memory=memory)
@@ -1257,70 +1256,14 @@ def _flush_prefetch_settings(run_prefetch_state: dict | None = None):
 from core.chat_run import run_stream
 
 
-async def _maybe_trigger_soul_evolution_forced(run_count: int):
-    """Immediately on bad peer scores, ignoring the normal interval.
-    Cooldown: at least FORCED_EVOLUTION_COOLDOWN runs between forced evolutions."""
-    global _last_forced_evolution_run
-    # Soul-Heal (14.08.): soul_evolve_agent.enabled als Toggle respektieren ?
-    _sea_cfg0 = settings.get("soul_evolve_agent", {})
-    if isinstance(_sea_cfg0, dict) and not bool(_sea_cfg0.get("enabled", False)):
-        return
-    if run_count - _last_forced_evolution_run < FORCED_EVOLUTION_COOLDOWN:
-        return
-    _last_forced_evolution_run = run_count
-
-    _sea = settings.get("soul_evolve_agent", "direct")
-    # Direct use as model= would pass a dict ─ Ollama crash.
-    reflection_model = _sea.get("model", "direct") if isinstance(_sea, dict) else str(_sea)
-    new_soul = await maybe_evolve_soul(
-        base_path           = THIS_FILE,
-        ollama_client       = pipeline.ollama,
-        model               = reflection_model,
-        learning_log_reader = read_learning_log,
-        registry_all_fn     = registry_all,
-        total_runs          = max(run_count, MIN_RUNS_FOR_EVOLUTION),
-    )
-    if new_soul:
-        append_learning_log(THIS_FILE, reflection_model, {
-            "event":                      "soul_evolution_forced",
-            "trigger":                    "low_peer_scores",
-            "run_count":                  run_count,
-            "evolution_count":            new_soul.get("evolution_count", 0),
-            "selbstverstaendnis_preview": new_soul.get("selbstverstaendnis", "")[:100],
-        })
-    # NOTE: run_soul_cycle() is no longer called here ─ it now runs after
-    # every completed Duo loop (see line ~12018). Calling it here too caused
-    # double-decay: insights lost 0.16 instead of 0.08 per cycle.
-
-
-async def _maybe_trigger_soul_evolution(run_count: int):
-    # Soul-Heal (14.08.): soul_evolve_agent.enabled als Toggle respektieren ?
-    _sea_cfg = settings.get("soul_evolve_agent", {})
-    if isinstance(_sea_cfg, dict) and not bool(_sea_cfg.get("enabled", False)):
-        return
-    if run_count < MIN_RUNS_FOR_EVOLUTION:
-        return
-    if (run_count - MIN_RUNS_FOR_EVOLUTION) % EVOLUTION_INTERVAL_RUNS != 0:
-        return
-    _sea2 = settings.get("soul_evolve_agent", "direct")
-    reflection_model = _sea2.get("model", "direct") if isinstance(_sea2, dict) else str(_sea2)
-    new_soul = await maybe_evolve_soul(
-        base_path           = THIS_FILE,
-        ollama_client       = pipeline.ollama,
-        model               = reflection_model,
-        learning_log_reader = read_learning_log,
-        registry_all_fn     = registry_all,
-        total_runs          = run_count,
-    )
-    if new_soul:
-        append_learning_log(THIS_FILE, reflection_model, {
-            "event":                      "soul_evolution",
-            "run_count":                  run_count,
-            "evolution_count":            new_soul.get("evolution_count", 0),
-            "selbstverstaendnis_preview": new_soul.get("selbstverstaendnis", "")[:100],
-        })
-    # NOTE: run_soul_cycle() removed here ─ runs after every Duo loop now.
-    # Previously caused double-decay when soul evolution + duo completion coincided.
+# CYCLE-BREAK (2026-11-05): both soul-evolution triggers moved to
+# learning/soul_evolution.py (chat_run + peer_ratings import them
+# server-free there); shims keep the server-internal call sites unchanged.
+from learning.soul_evolution import (
+    _maybe_trigger_soul_evolution, _maybe_trigger_soul_evolution_forced,
+    init_soul_evolution,
+)
+init_soul_evolution(base_path=THIS_FILE)
 
 
 # -- REST Endpoints --------------------------------------------
