@@ -122,7 +122,8 @@ async def _duo_run_finalize(ctx, ps):
         except (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt,
                 SystemExit):
             raise
-        except (OSError, RuntimeError, ValueError, TypeError) as _d2_err:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                AttributeError, IndexError) as _d2_err:
             if isinstance(_d2_err, (GeneratorExit, asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
                 raise
             logger.warning("[RESUME-SAFETY-NET] Write failed: %s", _d2_err)

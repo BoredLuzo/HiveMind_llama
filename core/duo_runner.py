@@ -3645,28 +3645,22 @@ async def run_code_duo(ctx):
                 _img_plan=_img_plan,
                 _plan_tracker=_plan_tracker,
                 _coder_caps=_coder_caps,
+                _touched_block_persisted=_touched_block_persisted,
                 carry={
                     "_coder_map_budget": _coder_map_budget,
                     "coder_mdl": coder_mdl,
                     "exec_mdl": exec_mdl,
                     "_cached_coder_port": _cached_coder_port,
-                    "_coder_port": _coder_port,
-                    "_touched_block_persisted": _touched_block_persisted,
                     "_duo_coder_sys": _duo_coder_sys,
                     "_duo_coder_temp": _duo_coder_temp,
                     "_duo_coder_tok": _duo_coder_tok,
-                    "_duo_critic_sys": _duo_critic_sys,
-                    "_duo_critic_temp": _duo_critic_temp,
-                    "_duo_critic_tok": _duo_critic_tok,
-                    "_duo_critic_tools_enabled": _critic_tools_enabled,
-                    "_critic_thinking": _critic_thinking,
-                    "_critic_profile": _critic_profile,
                     "_coder_dyn_hints": _coder_dyn_hints,
                     "_matched_skills": _matched_skills,
                     "_plan_thinking": _plan_thinking,
                     "_plan_result": _plan_result,
                     "_inloop_plan_text": _inloop_plan_text if "_inloop_plan_text" in dir() else "",
                     "_plan_content_txt": _plan_content_txt if "_plan_content_txt" in dir() else "",
+                    "_explore_has_contents": _explore_has_contents,
                 },
             )
             async for _ev in _duo_coder_round_input(ctx, _ri_ps):
@@ -3677,11 +3671,6 @@ async def run_code_duo(ctx):
             _coder_msgs = _ri_ps._coder_msgs
             _read_only_task_request = _ri_ps._read_only_task_request
             _coder_skipped_images = _ri_ps._coder_skipped_images
-            _sess_budgeted = _ri_ps._sess_budgeted
-            _prompt_prev = _ri_ps._prompt_prev
-            _steer_items = _ri_ps._steer_items
-            _steer_img_items = _ri_ps._steer_img_items
-            _steer_imgs_allowed = _ri_ps._steer_imgs_allowed
             _coder_imgs_off = _ri_ps._coder_imgs_off
             _img_plan = _ri_ps._img_plan
             _touched_block_persisted = _ri_ps._touched_block_persisted
@@ -6360,71 +6349,29 @@ async def run_code_duo(ctx):
                 _cs.set_critic_fix_override(_subtask, critic_issues)
                 critic_issues = _cs.critic_issues  # cleared by set_critic_fix_override
 
-        if _duo_timed_out:
-            if _written_files:
-                yield await ctx.emit({
-                    "type": "token",
-                    "content": (
-                        f"\n[Run-Timeout-Guard: intermediate state output — {len(_written_files)} file(s) on disk. "
-                        "For full execution: ctx.duo_config.important_task=true or ctx.duo_config.until_finished enable.]\n"
-                    ),
-                })
-            else:
-                yield await ctx.emit({
-                    "type": "token",
-                    "content": (
-                        "\n[Run-Timeout: no output on disk — the model only planned, did not write. "
-                        "Tip: ctx.duo_config.until_finished=true gives the coder more time for tool calls.]\n"
-                    ),
-                })
-                yield await ctx.emit({
-                    "type": "status",
-                    "content": "⏱ Timeout without file output — no intermediate state available.",
-                })
-
-        # unverified writes -> block correctly (true-positive protection,
-        # written_files=[]-true-positives) must not slip through.
-        if (
-            _verify_mutation_serial > _verify_last_ok_serial
-            and needs_test_verification(_written_files)
-            and not ctx.aborted()
-            and not _verify_warned
-        ):
-            _duo_hard_stop = True
-            _verify_issue_final = "Verification missing: run_bash must pass after latest file changes."
-            if _verify_issue_final not in critic_issues:
-                critic_issues.append(_verify_issue_final)
-            if not final_verdict:
-                final_verdict = "verification_required_after_write"
-            yield await ctx.emit({
-                "type": "status",
-                "content": "⛔ Run not marked completed: verification after file changes is missing.",
-            })
-            _vg_start = _di if _di < _n_items else _n_items - 1
-            _rem_vg = [{"title": str(t)} for t in _loop_items[_vg_start:]]
-            _rem_vg_titles = {r["title"] for r in _rem_vg}
-            _done_vg = [t for t in _done_tasks if str(t) not in _rem_vg_titles]
-            if ctx.chat_id and _rem_vg:
-                _write_resume_block(
-                    chat_id=ctx.chat_id,
-                    workspace=_ws_str,
-                    chunks_total=_n_items,
-                    chunks_done=_done_vg,
-                    chunks_remaining=_rem_vg,
-                    written_files=_written_files,
-                    last_summary=" | ".join(_done_vg),
-                    plan_msgs=[],
-                    explore_ctx=_explore_ctx,
-                    halt_reason="verification_required",
-                    pending_send_files=list(_pending_send_files),
-                )
-        elif (_verify_mutation_serial > _verify_last_ok_serial
-              and needs_test_verification(_written_files)
-              and not ctx.aborted()):
-            logger.warning(
-                "[VERIFY-GATE-FINAL] no hard stop (coder warned): written_files=%d _verify_warned=True (A-P0-2 fallback)",
-                len(_written_files or []),
-            )
+        # SPLIT 2.3 (2026-11-05): run-timeout token + final verification hard
+        # stop moved to core/duo_finalgate._duo_final_verify_gate (state syncs
+        # `_duo_hard_stop`, `final_verdict`, `critic_issues` back).
+        _fg_ps = _DuoFinalGateState(
+            _duo_timed_out=_duo_timed_out,
+            _written_files=_written_files,
+            _verify_mutation_serial=_verify_mutation_serial,
+            _verify_last_ok_serial=_verify_last_ok_serial,
+            _verify_warned=_verify_warned,
+            _ws_str=_ws_str,
+            _explore_ctx=_explore_ctx,
+            _di=_di,
+            _n_items=_n_items,
+            _loop_items=_loop_items,
+            _done_tasks=_done_tasks,
+            _pending_send_files=_pending_send_files,
+            critic_issues=critic_issues,
+        )
+        async for _ev in _duo_final_verify_gate(ctx, _fg_ps):
+            yield _ev
+        _duo_hard_stop = _fg_ps._duo_hard_stop
+        final_verdict = _fg_ps.final_verdict
+        critic_issues = _fg_ps.critic_issues
 
     except (GeneratorExit, asyncio.CancelledError):
         _park_ps = _DuoDisconnectParkState()
@@ -6496,43 +6443,6 @@ async def run_code_duo(ctx):
     async for _ev in _duo_session_epilogue(ctx, _epi_ps):
         yield _ev
     _duo_session_out = _epi_ps.session_out
-    ctx.memory.add_to_session("assistant", _duo_session_out)  # single write point
-    # SIDECAR-SESSION-AFTER-ASSISTANT (audit 2026-11-03): the sidecar save
-    # above ran before this line, so its "session" was permanently the
-    # current user turn; the next run cleared memory and dropped it as a
-    # trailing user -> json-less (API) chats never accumulated history.
-    if ctx.chat_id:
-        try:
-            from context.chat import _mutate_chat_context
-            _sess_now = ctx.memory.get_session_messages(
-                limit=6, user_cap=8000, assistant_cap=8000)
-            _mutate_chat_context(
-                ctx.chat_id, lambda _c: _c.__setitem__("session", _sess_now))
-        except (ImportError, OSError, ValueError, TypeError) as _se:
-            logger.debug("[CTX] session sidecar update failed: %s", _se)
-    # SPLIT 2.3 (2026-11-05): run-timeout token + final verification hard
-    # stop moved to core/duo_finalgate._duo_final_verify_gate (state syncs
-    # `_duo_hard_stop`, `final_verdict`, `critic_issues` back).
-    _fg_ps = _DuoFinalGateState(
-        _duo_timed_out=_duo_timed_out,
-        _written_files=_written_files,
-        _verify_mutation_serial=_verify_mutation_serial,
-        _verify_last_ok_serial=_verify_last_ok_serial,
-        _verify_warned=_verify_warned,
-        _ws_str=_ws_str,
-        _explore_ctx=_explore_ctx,
-        _di=_di,
-        _n_items=_n_items,
-        _loop_items=_loop_items,
-        _done_tasks=_done_tasks,
-        _pending_send_files=_pending_send_files,
-        critic_issues=critic_issues,
-    )
-    async for _ev in _duo_final_verify_gate(ctx, _fg_ps):
-        yield _ev
-    _duo_hard_stop = _fg_ps._duo_hard_stop
-    final_verdict = _fg_ps.final_verdict
-    critic_issues = _fg_ps.critic_issues
     # SPLIT 2.1 (2026-11-05): the closing sequence (stop-reason ladder,
     # final auto-commit/push, checkpoint consolidation, resume safety net,
     # project save, run audit, send-file delivery, done, cleanup) moved
@@ -6560,7 +6470,7 @@ async def run_code_duo(ctx):
         _loop_items=locals().get("_loop_items") or [{"title": ctx.user_input}],
         carry={
             "exec_mdl": exec_mdl,
-            "final_verdict": final_verdict if "_final_verdict" in dir() else final_verdict,
+            "final_verdict": final_verdict,
             "critic_issues": critic_issues,
             "_recent_focus_paths": _recent_focus_paths,
             "_worker_slots": _worker_slots,

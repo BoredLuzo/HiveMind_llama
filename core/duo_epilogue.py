@@ -13,12 +13,15 @@ import logging
 import re
 import time
 
+import httpx
+
 from utils.bg_tasks import spawn
 
 logger = logging.getLogger("hivemind.duo")
 
 
 async def _duo_session_epilogue(ctx, ps):
+    from backend.llama_client import LlamaError  # plain-Exception base; retry exhaustion re-raises it
     coder_out = ps.coder_out
     _written_files = ps._written_files
     _duo_hard_stop = ps._duo_hard_stop
@@ -143,7 +146,7 @@ async def _duo_session_epilogue(ctx, ps):
     # direct_runner.py:117 / pipeline_runner.py:775.
     try:
         _duo_run_count = ctx.increment_run_counter()
-    except (OSError, RuntimeError, ValueError) as _rc_err:
+    except (OSError, RuntimeError, ValueError, TypeError) as _rc_err:
         _duo_run_count = 0
         logger.warning("[RUN-COUNTER] Duo increment failed: %s", _rc_err)
 
@@ -210,7 +213,8 @@ async def _duo_session_epilogue(ctx, ps):
                     if ctx.aborted(): break
                     _pparts.append(_tok)
                     yield await ctx.emit({"type": "token", "content": _tok})
-            except (OSError, RuntimeError, ValueError, TypeError) as _pe:
+            except (OSError, RuntimeError, ValueError, TypeError,
+                    httpx.HTTPError, LlamaError) as _pe:
                 yield await ctx.emit({"type": "token", "content": f"[Pipeline-Error: {str(_pe)[:80]}]"})
             _pipe_out = "".join(_pparts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
             yield await ctx.emit({"type": "agent_done", "elapsed": round(time.time() - _pt, 1)})

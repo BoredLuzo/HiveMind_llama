@@ -221,7 +221,8 @@ async def _duo_compress_cycle(ctx, ps):
                     _comp_llm_cfg, _fit_comp.needed_mib, _fit_comp.free_mib,
                 )
         except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-                AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _cm_err:
+                AttributeError, ImportError, httpx.HTTPError,
+                asyncio.TimeoutError) as _cm_err:
             logger.warning(
                 "[COMPRESS-MODEL] light model %s unavailable (%s) - using coder model for compression",
                 _comp_llm_cfg, _cm_err,
@@ -266,7 +267,8 @@ async def _duo_compress_cycle(ctx, ps):
             if _rmd(_dtool_msgs, list(_written_files or [])):
                 logger.info("[REPO-MAP-DELTA] appended %d changed path(s) at compression",
                             len(list(_written_files or [])))
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _rmd_err:   # never break a run for the map (logged)
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError,
+                IndexError, ImportError) as _rmd_err:   # never break a run for the map (logged)
             logger.debug("[REPO-MAP-DELTA] skipped: %s", _rmd_err)
         # DELTA-BEFORE-COMPRESS (audit 2026-11-03):
         # _sys_for_compress was captured before the
@@ -445,7 +447,8 @@ async def _duo_compress_cycle(ctx, ps):
                         _wpn = _normalize_tool_path(str(_cp), _ws_str)
                         if _wpn:
                             _rset_rule.discard(_wpn)
-            except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _rg_err:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                    AttributeError, IndexError, ImportError) as _rg_err:
                 logger.debug("[COMPRESS-READ-GUARD] rule-evict read-guard update skipped: %s", _rg_err)
             try:
                 _pin = _build_plan_pin_msg(_subtasks, _di, _n_items)
@@ -469,6 +472,13 @@ async def _duo_compress_cycle(ctx, ps):
                         "type": "status",
                         "content": "⛔ Context compression repeatedly fails to shrink the context (3x) — run stopped.",
                     })
+                    # STOP-SYNC (audit 2026-11-06): the early return must not
+                    # discard the state alt had set at this break — the
+                    # runner's outer stop funnel keys on _loop_detected.
+                    ps._loop_detected = True
+                    ps._compress_fail_streak = _compress_fail_streak
+                    ps._rule_compress_fails = _rule_compress_fails
+                    ps._dtool_msgs = _dtool_msgs  # restored original (same object the runner passed)
                     ps.stop = True
                     return
     else:
@@ -543,6 +553,22 @@ async def _duo_compress_cycle(ctx, ps):
             "type": "status",
             "content": "⛔ Context compression repeatedly fails to shrink the context (3x) — run stopped.",
         })
+        # STOP-SYNC (audit 2026-11-06): alt carried the COMPRESSED messages
+        # and the streak/counter state across this break — sync before the
+        # early return (the runner's stop funnel keys on _loop_detected).
+        ps._loop_detected = True
+        ps._compress_fail_streak = _compress_fail_streak
+        ps._dtool_msgs = _dtool_msgs  # compressed list (reassigned above)
+        ps._est_tokens = _est_tokens
+        ps._total_tool_rounds = _total_tool_rounds
+        ps._force_compress_next = _force_compress_next
+        ps._ctx_compressions = _ctx_compressions
+        ps._llm_compress_fails = _llm_compress_fails
+        ps._rule_compress_fails = _rule_compress_fails
+        ps._MAX_COMPRESSIONS = _MAX_COMPRESSIONS
+        ps._partial_escalated = _partial_escalated
+        ps._ctx_pressure_warned = _ctx_pressure_warned
+        ps._ctx_critical_warned = _ctx_critical_warned
         ps.stop = True
         return
     if _compress_stop:

@@ -65,7 +65,9 @@ check("2a auto-approve: commit runs before mark_chunk_done",
 # critic path: mark AFTER the auto-test call inside _can_finish_round.
 # The LAST mark_chunk_done in the segment is the post-test one.
 _seg_cr = _dr[_dr.index("_can_finish_round = _approved"):]
-_seg_cr = _seg_cr[:_seg_cr.index("if _duo_timed_out")]
+# split N1: the inline verify-gate block is gone; the segment now ends at
+# the chunk loop's back edge (the moved verify-gate delegation)
+_seg_cr = _seg_cr[:_seg_cr.index("# SPLIT 2.3")]
 check("2b critic path: mark_chunk_done is the last write, after auto-test",
       "_cs.run_auto_test" in _seg_cr
       and _seg_cr.rindex("_cs.mark_chunk_done") > _seg_cr.rindex("_cs.run_auto_test"))

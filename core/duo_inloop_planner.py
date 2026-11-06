@@ -10,6 +10,7 @@ log, _inloop_plan_text for the session epilogue carry).
 from __future__ import annotations
 
 import asyncio
+import httpx
 import logging
 import time
 from functools import partial
@@ -160,7 +161,8 @@ async def _duo_inloop_planner(ctx, ps):
                     _inloop_plan_thinking = ""
                     _inloop_plan_fallback = True
             except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-                    IndexError, AttributeError, asyncio.TimeoutError) as _plan_err:
+                    IndexError, AttributeError, asyncio.TimeoutError,
+                    httpx.HTTPError) as _plan_err:
                 _plan_err_name = type(_plan_err).__name__
                 _plan_err_msg = (str(_plan_err).strip() or repr(_plan_err))[:220]
                 logger.warning(

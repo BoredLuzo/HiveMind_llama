@@ -293,7 +293,7 @@ async def _phase_flags(self, model: str, gpu_layers_override) -> _FlagsPhase:
             if _gl_reg is not None:
                 _gpu_layers = _gl_reg
         except (OSError, RuntimeError, ValueError, TypeError, KeyError,
-                AttributeError, IndexError) as _reg_err:
+                AttributeError, IndexError, ImportError) as _reg_err:
             logger.debug("[GPU-LAYERS] registry lookup skipped: %s", _reg_err)
     # CPU-BACKEND (2026-09-08): every layer runs on the CPU — a GPU-layer
     # count from registry/table would request an offload to a GPU that
@@ -466,7 +466,7 @@ class _MoePhase:
     """Phase-4 outputs (split 4.4): the MoE-augmented cmd; the cache
     flag rides on the slot (as before)."""
     cmd: list = dataclasses.field(default_factory=list)
-    moe_cache_used: bool = False
+    moe_cache_used: int = 0
 
 
 async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
@@ -521,7 +521,7 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
             if _reg_moe_v:
                 _moe_count = _reg_moe_v
                 _moe_src = "profile"
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _reg_err:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _reg_err:
             logger.debug("[MOE] profile MoE-count probe skipped: %s", _reg_err)
     if _moe_count <= 0:
         _moe_count = _MOE_EXPERT_COUNTS.get(_moe_model_key, 0)
@@ -667,7 +667,7 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                 "offloading. Use a newer binary (b8278+)."
             )
 
-    return _MoePhase(cmd=cmd, moe_cache_used=bool(slot._moe_cache_used))
+    return _MoePhase(cmd=cmd, moe_cache_used=int(slot._moe_cache_used or 0))
 
 
 
@@ -692,7 +692,7 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
     try:
         from .llama_config import _try_registry_mtp as _reg_mtp
         _mtp_from_registry = _reg_mtp(_mtp_model_key)
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _e:
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _e:
         logger.debug("[MTP] registry MTP probe skipped: %s", _e)
     _is_mtp = bool(_mtp_from_registry) if _mtp_from_registry is not None else (_mtp_model_key in _MTP_MODELS)
     # SPEC OFF-SWITCH (2026-09-17): HIVEMIND_MTP_SPEC=0 disables the
@@ -825,7 +825,7 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
         _reg_reasoning = _reg_get_reasoning(model)
         _reg_distilled = _reg_is_distilled(model)
         _reg_template = _reg_get_template(model)
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _e:
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _e:
         logger.debug("[MODEL-CONFIG] registry probe skipped: %s", _e)
 
     #
@@ -881,14 +881,16 @@ async def _phase_model_flags(self, cmd, model: str, _model_base: str,
                     subprocess.run, [cmd[0], "--help"],
                     capture_output=True, text=True, timeout=20,
                     encoding="utf-8", errors="replace")).stdout
-            except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                    AttributeError, IndexError, subprocess.TimeoutExpired):
                 _help_txt = ""
             if "--spec-draft-n-max" in _help_txt:
                 cmd += ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2"]
                 logger.info(f"--spec-type draft-mtp (n-max 2) enabled for {model} (registry mtp)")
             else:
                 logger.warning("spec-draft-n-max not supported by this binary - %s starts undrafted", model)
-    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _e:
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+            AttributeError, IndexError, subprocess.TimeoutExpired) as _e:
         logger.debug("[MTP] spec flags not applicable: %s", _e)
 
     # ── mmproj (Vision-Projektor) ─────────────────────────────────────────
@@ -1477,7 +1479,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
         try:
             from utils.mem_watch import log_snapshot as _mem_snap
             _mem_snap(f"load:{model}")
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _mem_err:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError, ImportError) as _mem_err:
             logger.debug("[MEM-WATCH] load snapshot failed: %s", _mem_err)
         # VRAM-HEADROOM (2026-10-27, live): a load that only just fits is
         # the slow case - the driver pages VRAM once the KV cache grows, and
@@ -1515,7 +1517,8 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                 # reload). Stored separately from the requested slot._vision
                 # so the duo gate can compare plan vs reality.
                 slot.vision_active = bool((_p.get("modalities") or {}).get("vision"))
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                AttributeError, IndexError, httpx.HTTPError):
             slot.swa_window = 0
     finally:
         if not _log_file_closed:

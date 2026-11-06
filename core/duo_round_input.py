@@ -41,14 +41,6 @@ async def _duo_coder_round_input(ctx, ps):
     _cached_coder_port = ps.carry["_cached_coder_port"]
     _coder_port = ps._coder_port
     _touched_block_persisted = ps._touched_block_persisted
-    _cslot3 = ps.carry.get("_cslot3")
-    _mm_ok = ps.carry.get("_mm_ok")
-    _mms = ps.carry.get("_mms")
-    _ap = ps.carry.get("_ap")
-    _st = ps.carry.get("_st")
-    _vg_err3 = ps.carry.get("_vg_err3")
-    _vu_err = ps.carry.get("_vu_err")
-    _vu_port = ps.carry.get("_vu_port")
     _duo_coder_sys = ps.carry["_duo_coder_sys"]
     _duo_coder_temp = ps.carry["_duo_coder_temp"]
     _duo_coder_tok = ps.carry["_duo_coder_tok"]
@@ -58,10 +50,6 @@ async def _duo_coder_round_input(ctx, ps):
     _plan_result = ps.carry.get("_plan_result")
     _inloop_plan_text = ps.carry.get("_inloop_plan_text") or ""
     _plan_content_txt = ps.carry.get("_plan_content_txt") or ""
-    _read_final = ps.carry.get("_read_final")
-    _touched_paths = ps.carry.get("_touched_paths")
-    _total_tool_errors_ref = ps.carry.get("_total_tool_errors_ref")
-    _last_run_bash_failure = ps.carry.get("_last_run_bash_failure")
 
     from core.duo_helpers import (
         attach_images_to_last_user, build_steer_user_message,

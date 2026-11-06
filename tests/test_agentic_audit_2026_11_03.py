@@ -156,8 +156,8 @@ check("4e aborted runs still save last_run/task context (epilogue)",
       "ctx.chat_id and not ctx.is_aborted_chat" not in DQ
       and '_eff_stop = "aborted"' in EPI)
 check("4f the sidecar session is updated after the assistant turn",
-      "_mutate_chat_context(" in DQ
-      and DQ.index('add_to_session("assistant"') < DQ.index("_mutate_chat_context(")
+      'add_to_session("assistant"' in EPI
+      and EPI.index('add_to_session("assistant"') < EPI.index("_mutate_chat_context(")
       and "_mutate_chat_context(" in EPI)
 
 

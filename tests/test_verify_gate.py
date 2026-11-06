@@ -72,7 +72,8 @@ check("runner uses the verdict helper", "completion_verdict(" in src)
 check("runner skips the veto for static-only changes",
       "not needs_test_verification(_written_files)" in src)
 check("runner also skips the final verify hard-stop for static-only changes",
-      src.count("needs_test_verification(_written_files)") >= 3)
+      (src + (ROOT / "core" / "duo_finalgate.py").read_text(encoding="utf-8", errors="replace"))
+      .count("needs_test_verification(") >= 3)
 te = (ROOT / "core" / "tool_executor.py").read_text(encoding="utf-8", errors="replace")
 check("the pre-complete auto-test skips static-only changes",
       "needs_test_verification" in te
