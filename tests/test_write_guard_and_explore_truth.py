@@ -153,7 +153,9 @@ def test_explore_truth_keeps_explored_for_real_contents():
 
 # ── Source-Guards ───────────────────────────────────────────────────────────
 def test_source_guard_explore_truth():
-    src = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    base = Path(__file__).parent.parent
+    src = ((base / "core" / "duo_runner.py").read_text(encoding="utf-8")
+           + (base / "core" / "duo_round_input.py").read_text(encoding="utf-8"))
     checks = {
         "_explore_has_contents": "_explore_has_contents" in src,
         "has_explore_ctx=_explore_has_contents": "has_explore_ctx=_explore_has_contents" in src,

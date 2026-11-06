@@ -51,7 +51,7 @@ def test_tool_loop_emits_steer():
 
 
 def test_duo_sites_emit_steer():
-    src = _src("core/duo_runner.py")
+    src = _src("core/duo_runner.py") + _src("core/duo_round_input.py")
     hits = src.count('"type": "steer"')
     old = src.count('"🧭 steered: "')
     if hits >= 2 and old == 0:

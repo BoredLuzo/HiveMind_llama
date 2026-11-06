@@ -104,19 +104,22 @@ check("7d planner reasoning never reaches the coder",
 
 # ── 3. wiring: no planner-thinking path, no dead setting/UI ────────────────
 src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+# split 2.4: the per-round coder-input build lives in duo_round_input.py now
+src_ri = (ROOT / "core" / "duo_round_input.py").read_text(encoding="utf-8", errors="replace")
+src_both = src + src_ri
 pf = (ROOT / "core" / "duo" / "preflight.py").read_text(encoding="utf-8", errors="replace")
 settings = (ROOT / "settings.py").read_text(encoding="utf-8", errors="replace")
 html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
 
 check("8a both coder branches still use the helper",
-      src.count("coder_briefing_text(") >= 2)
+      src_both.count("coder_briefing_text(") >= 2)
 check("8b no thinking-size limit remains", "_briefing_limit_tokens" not in src
       and "_briefing_limit_tokens" not in pf)
 check("8c the dead setting is gone",
       "duo_coder_briefing_think_tokens" not in settings)
 check("8d the dead UI control is gone",
       "duo-briefing-think-inp" not in html)
-check("8e the header says execution plan", "YOUR EXECUTION PLAN" in src)
+check("8e the header says execution plan", "YOUR EXECUTION PLAN" in src_both)
 check("8f the helper is re-exported by the runner",
       "coder_briefing_text," in src and callable(_runner_briefing))
 check("8g the in-loop plan is distilled before the coder sees it",
