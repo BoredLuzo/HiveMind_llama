@@ -106,7 +106,9 @@ check("7d planner reasoning never reaches the coder",
 src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
 # split 2.4: the per-round coder-input build lives in duo_round_input.py now
 src_ri = (ROOT / "core" / "duo_round_input.py").read_text(encoding="utf-8", errors="replace")
-src_both = src + src_ri
+# split 2.6: the inloop planner lives in duo_inloop_planner.py now
+src_ip = (ROOT / "core" / "duo_inloop_planner.py").read_text(encoding="utf-8", errors="replace")
+src_both = src + src_ri + src_ip
 pf = (ROOT / "core" / "duo" / "preflight.py").read_text(encoding="utf-8", errors="replace")
 settings = (ROOT / "settings.py").read_text(encoding="utf-8", errors="replace")
 html = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
@@ -123,7 +125,7 @@ check("8e the header says execution plan", "YOUR EXECUTION PLAN" in src_both)
 check("8f the helper is re-exported by the runner",
       "coder_briefing_text," in src and callable(_runner_briefing))
 check("8g the in-loop plan is distilled before the coder sees it",
-      "_distilled_execution_steps(None, _inloop_plan_text)" in src)
+      "_distilled_execution_steps(None, _inloop_plan_text)" in src_both)
 check("8h the raw in-loop plan is not appended anymore",
       '{"role": "assistant", "content": _inloop_plan_text}' not in src)
 

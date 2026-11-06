@@ -25,7 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-RUN = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
+RUN = ((ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
+       + (ROOT / "core" / "duo_inloop_planner.py").read_text(encoding="utf-8"))
 HELP = (ROOT / "core" / "duo_helpers.py").read_text(encoding="utf-8")
 PROMPTS_PY = (ROOT / "hive_functions" / "prompts.py").read_text(encoding="utf-8")
 
@@ -124,14 +125,18 @@ check("4c without a plan the coder still gets AUTONOMOUS mode",
 # ── 5. the second plan was visible answer text, not reasoning ─────────────
 # (documents the failure mode the guard removes: the in-loop plan block must
 # stay behind the gate; its emit remains a token event when it DOES run)
-_i_gate_if = RUN.index("if _run_thinking_now:")
-_i_emit = RUN.index('"content": "\\n**" + _plan_label + ":**\\n" + _inloop_plan_text')
+# split 2.6: the gated block + emit live in duo_inloop_planner.py; the
+# runner delegates it before the PLAN-TO-EXEC log
+_IP = (ROOT / "core" / "duo_inloop_planner.py").read_text(encoding="utf-8")
+_i_gate_if = _IP.index("if _run_thinking_now:")
+_i_emit = _IP.index('"content": "\\n**" + _plan_label + ":**\\n" + _inloop_plan_text')
 _i_after_block = RUN.index("[PLAN-TO-EXEC]")          # first log AFTER the gated block
 check("5a the in-loop plan emit sits inside the gated block",
-      _i_gate_if < _i_emit < _i_after_block)
+      _i_gate_if < _i_emit
+      and RUN.index("async for _ev in _duo_inloop_planner") < _i_after_block)
 check("5b the in-loop plan emit is a visible token event",
-      '{"type": "token"' in RUN[_i_emit - 200:_i_emit + 200]
-      or '{"type": "token", "content"' in RUN[_i_emit - 200:_i_emit + 300])
+      '{"type": "token"' in _IP[_i_emit - 200:_i_emit + 200]
+      or '{"type": "token", "content"' in _IP[_i_emit - 200:_i_emit + 300])
 
 # ── 6. neighbors untouched ────────────────────────────────────────────────
 check("6a follow-up hint still reaches the coder system prompt",

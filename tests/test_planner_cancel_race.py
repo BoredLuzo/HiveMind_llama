@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
+SRC = ((ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
+       + (ROOT / "core" / "duo_inloop_planner.py").read_text(encoding="utf-8"))
 
 passed = failed = 0
 
