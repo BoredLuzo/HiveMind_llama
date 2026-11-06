@@ -40,6 +40,8 @@ class _ChatVisionPreState:
     _ws_str: str = ""
     _vram_budget: float = 0.0
     _run_settings: dict = dataclasses.field(default_factory=dict)
+    _judge_gb: float | None = None
+    _saved_image_paths: list = dataclasses.field(default_factory=list)
     effective_images: list = dataclasses.field(default_factory=list)
     image_description: str = ""
     carry: dict = dataclasses.field(default_factory=dict)
