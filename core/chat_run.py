@@ -19,6 +19,7 @@ import uuid
 import httpx
 
 from core import state as _state
+from core.chat_history_seed import _ChatHistorySeedState, _chat_history_seed
 from core.chat_shortcuts import _ChatShortcutState, _chat_memory_shortcuts
 from core.chat_vision_pre import _ChatVisionPreState, _chat_vision_pre
 from core.state import (
@@ -851,93 +852,15 @@ async def run_stream(
     _saved_image_paths = _vp_ps._saved_image_paths
     effective_images = _vp_ps.effective_images
     image_description = _vp_ps.image_description
-    # HISTORY SOURCE (2026-10-03): the chat json transcript is the ONE
-    # continuation source - UI and model now share the same story. The
-    # sidecar "session" key demotes to a fallback for chats without a json.
-    # RE-SEED EVERY RUN (2026-10-04): the chat-switch tag
-    # alone only fixed A->B. Same-chat EDIT/REGENERATE kept the discarded
-    # history in memory (same chat_id -> no clear -> seed skips a filled
-    # memory). The json is ALWAYS fresher than the memory (the frontend PUTs
-    # every turn), so whenever a chat json exists it is re-seeded; the memory
-    # stays a fallback for chats without json, tagged per chat, and a new
-    # chat without id never inherits anything.
-    # LABEL-LIE FIX (2026-10-05, TG-PROBE experiment): history_seed() falls
-    # back to the sidecar INTERNALLY while this probe labelled the result
-    # 'source=json' - a live run on an empty-main-json chat logged
-    # 'source=json seeded 2' that was actually sidecar history. The
-    # provenance probe decides the label; history_seed only normalises.
-    _json_seed: list = []
-    _seed_source = "none"
-    if chat_id:
-        try:
-            from context.chat import history_seed_provenance as _seed_prov
-            _raw_seed, _raw_src = _seed_prov(chat_id)
-        except (OSError, ValueError):
-            _raw_seed, _raw_src = [], "none"
-        # BRANCH ON ORIGIN, NOT ON SEED EMPTINESS (2026-10-05, edge
-        # case): a main json holding ONLY the edited trailing user message
-        # normalizes to an empty seed - falling back on emptiness would
-        # resurrect the discarded sidecar/memory history. json/sidecar own
-        # the history: clear ALWAYS, seed whatever normalized (even empty).
-        if _raw_src in ("json", "sidecar"):
-            _json_seed = _raw_seed
-            _seed_source = _raw_src
-    _mem_cid = getattr(_state.memory, "_session_chat_id", None)
-    if _seed_source in ("json", "sidecar"):
-        # ALWAYS-RESEED: the chat files are fresher than the memory - every run.
-        _state.memory.clear_session()
-        if _json_seed:
-            _state.memory.seed_session(_json_seed)
-        try:
-            _state.memory._session_chat_id = chat_id or ""
-        except AttributeError:
-            pass
-        _logger.info("[HISTORY-SEED] chat=%s source=%s seeded %d message(s)",
-                     chat_id, _seed_source, len(_json_seed))
-    else:
-        # no turns anywhere (new chat, or only a trailing user that IS the q):
-        # never inherit another chat's history - clear unless the memory is
-        # already tagged for THIS chat.
-        if _mem_cid != (chat_id or ""):
-            _state.memory.clear_session()
-            try:
-                _state.memory._session_chat_id = chat_id or ""
-            except AttributeError:
-                pass
-        elif not chat_id and _state.memory.get_session_messages():
-            _state.memory.clear_session()
-            try:
-                _state.memory._session_chat_id = ""
-            except AttributeError:
-                pass
-
-    _pipeline_mem_ctx  = _state.pipeline.memory.as_context_string()
-    # Caps raised to sidecar parity (8000 chars): 600/1200 used to cut code
-    # answers mid-line. The window is message-count-capped via seed (40) and
-    # compression above the threshold handles older turns.
-    _pipeline_sess_msgs = _state.memory.get_session_messages(
-        limit=40, user_cap=8000, assistant_cap=8000,
+    # OUTSOURCED (split 3.3): history seed + session window + compression →
+    # _chat_history_seed().
+    _hs_ps = _ChatHistorySeedState(
+        chat_id=chat_id, mode=mode, duo_config=duo_config,
     )
-    _sess_before_window = len(_pipeline_sess_msgs)
-    # TOKEN BUDGET (2026-10-03): 40x8000 chars can dwarf a small ctx -
-    # the window keeps the newest turns and drops older ones whole.
-    _pipeline_sess_msgs = window_by_budget(
-        _pipeline_sess_msgs, _history_budget_tokens(settings),
-    )  # SESSION-CACHE: 8 DB-Calls - 1 pro Run
-    # WINDOW TRACE (2026-10-04): the seed count alone does not prove
-    # the budget reached the window - log before/after so run C's expected N
-    # (window_by_budget offline) can be checked against the log.
-    _logger.info("[SESSION-WINDOW] before=%d after=%d budget=%d",
-                 _sess_before_window, len(_pipeline_sess_msgs),
-                 _history_budget_tokens(settings))
-    # Threshold: SESSION_COMPRESS_THRESHOLD messages (configurable via settings).
-    _sess_compress_threshold = int(settings.get("session_compress_threshold", SESSION_COMPRESS_THRESHOLD))
-    _skip_compress = (mode == "code_duo" or duo_config.agentic_mode)
-    if not _skip_compress and len(_pipeline_sess_msgs) > _sess_compress_threshold:
-        _pipeline_sess_msgs = await _compress_chat_session(_pipeline_sess_msgs)
-
-
-    # Natural agent routing is controlled by the Intent-Agent toggle.
+    await _chat_history_seed(_hs_ps)
+    _pipeline_mem_ctx = _hs_ps._pipeline_mem_ctx
+    _pipeline_sess_msgs = _hs_ps._pipeline_sess_msgs
+    _sess_compress_threshold = _hs_ps._sess_compress_threshold
     _intent_cfg = settings.get("intent_agent", {}) or {}
     _intent_enabled = bool(_intent_cfg.get("enabled", False))
     intent_agent = detect_agent_intent(user_input) if _intent_enabled else None
