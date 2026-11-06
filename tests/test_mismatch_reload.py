@@ -112,7 +112,9 @@ def _loader_structure_ok(path):
 
 
 def test_ast_loader_under_dport_none():
-    src = Path(__file__).parent.parent / "core" / "duo_runner.py"
+    # split 2.7: the reload ladder lives in duo_coder_load.py now
+    base = Path(__file__).parent.parent
+    src = base / "core" / "duo_coder_load.py"
     try:
         has_loader, stop_clean = _loader_structure_ok(src)
     except SyntaxError as e:
@@ -127,10 +129,10 @@ def test_ast_loader_under_dport_none():
 def test_source_guards():
     root = Path(__file__).parent.parent
     checks = [
-        ("core/duo_runner.py", "MISMATCH-RELOAD-FIX (2026-09-10)"),
+        ("core/duo_coder_load.py", "MISMATCH-RELOAD-FIX (2026-09-10)"),
         ("core/duo_runner.py", "PLANNER-MODEL-DEFAULT (2026-09-10)"),
         ("core/duo_runner.py", "_planner_model = coder_mdl"),
-        ("core/duo_runner.py", "reload via ensure_loaded "),
+        ("core/duo_coder_load.py", "reload via ensure_loaded "),
     ]
     bad = []
     for rel, needle in checks:

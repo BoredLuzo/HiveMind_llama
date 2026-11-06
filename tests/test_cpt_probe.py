@@ -67,8 +67,9 @@ check("resolve records the cpt it got", abs(_r_small.cpt - 2.5) < 1e-9,
 check("nonsense cpt falls back to the default",
       B.resolve(8192, 0, 2000, {}).cpt == B.CPT_DEFAULT)
 
-# ── (d) source guard in duo_runner ──────────────────────────────────────────
-_src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+# ── (d) source guard in duo_runner (+ split 2.7 module) ────────────────────
+_src = ((ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+        + (ROOT / "core" / "duo_coder_load.py").read_text(encoding="utf-8", errors="replace"))
 check("duo_runner imports the tokenizer probe",
       "from backend.llama_client import tokenize_count" in _src)
 check("probe tokenizes the REAL schema JSON",

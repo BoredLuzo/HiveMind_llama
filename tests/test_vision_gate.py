@@ -203,9 +203,11 @@ def test_coder_reload_keeps_same_vision_arg():
     # coder role) - never a literal or an unrelated expression.
     import io
     import re
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "core", "duo_runner.py")
-    lines = io.open(path, encoding="utf-8").read().splitlines()
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # split 2.7: the in-loop coder reload lives in duo_coder_load.py now
+    lines = (io.open(os.path.join(base, "core", "duo_runner.py"), encoding="utf-8").read()
+             + io.open(os.path.join(base, "core", "duo_coder_load.py"), encoding="utf-8").read()
+             ).splitlines()
     _allowed = re.compile(r'^\(?_img_plan\.get\("(planner|coder)"\) == "raw"\)?$')
     # ALWAYS-VISION (42cbf22): the coder load may OR in the owner's
     # "keep the projector loaded" toggle - still derived from the image plan,

@@ -26,6 +26,13 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 SRC = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
 TREE = ast.parse(SRC)
+# split 2.1-2.7: helpers live across the split modules now
+_TREES = [TREE]
+for _mod in ("duo_finalize", "duo_epilogue", "duo_finalgate", "duo_round_input",
+             "duo_dtool_setup", "duo_inloop_planner", "duo_coder_load"):
+    _p = ROOT / "core" / (_mod + ".py")
+    if _p.exists():
+        _TREES.append(ast.parse(_p.read_text(encoding="utf-8")))
 
 HELPERS = [
     "_duo_planner_phase", "_duo_critic_review", "_duo_exec_round_task",
@@ -50,7 +57,8 @@ def check(name, cond, extra=""):
 
 # ---- declared state fields --------------------------------------------
 declared: dict[str, set[str]] = {}
-for node in TREE.body:
+for _tree in _TREES:
+  for node in _tree.body:
     if isinstance(node, ast.ClassDef) and node.name.endswith("State"):
         fields = set()
         for sub in node.body:
@@ -64,7 +72,8 @@ for node in TREE.body:
 all_fields = set().union(*declared.values()) if declared else set()
 
 # ---- helpers: nonlocal + ps writes ------------------------------------
-helper_nodes = {n.name: n for n in TREE.body
+helper_nodes = {n.name: n for _tree in _TREES
+                for n in _tree.body
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
 
 for name in HELPERS:

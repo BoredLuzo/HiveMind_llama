@@ -1898,5 +1898,9 @@
  "vram/loader.py": {
   "broad_except": 5,
   "except_pass": 2
+ },
+ "core/duo_coder_load.py": {
+  "except_pass": 2,
+  "broad_except": 5
  }
 }

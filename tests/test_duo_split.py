@@ -61,19 +61,40 @@ SRC_PATH = ROOT / "core" / "duo_runner.py"
 SRC = SRC_PATH.read_text(encoding="utf-8")
 TREE = ast.parse(SRC)
 
+# split 2.1-2.7: helpers live across the split modules now — resolve
+# fn()/cls() over all of them; src_of() returns the source a node came
+# from (for ast.get_source_segment).
+SPLIT_FILES = ["duo_runner", "duo_finalize", "duo_epilogue", "duo_finalgate",
+               "duo_round_input", "duo_dtool_setup", "duo_inloop_planner",
+               "duo_coder_load"]
+TREES = []
+NODE_SRC = {}
+for _mod in SPLIT_FILES:
+    _src = (ROOT / "core" / (_mod + ".py")).read_text(encoding="utf-8")
+    _tree = ast.parse(_src)
+    TREES.append(_tree)
+    for _n in ast.walk(_tree):
+        NODE_SRC[id(_n)] = _src
+
 
 def fn(name):
-    for node in TREE.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
-            return node
+    for _t in TREES:
+        for node in _t.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                return node
     return None
 
 
 def cls(name):
-    for node in TREE.body:
-        if isinstance(node, ast.ClassDef) and node.name == name:
-            return node
+    for _t in TREES:
+        for node in _t.body:
+            if isinstance(node, ast.ClassDef) and node.name == name:
+                return node
     return None
+
+
+def src_of(node):
+    return NODE_SRC[id(node)]
 
 
 RUNNER = fn("run_code_duo")
@@ -81,7 +102,8 @@ check("run_code_duo exists", RUNNER is not None)
 
 # ── module-level names (imports, defs, assigns) for the resolution pin ─────
 MODULE_NAMES = set(dir(builtins))
-for _n in TREE.body:
+for _tree in TREES:
+  for _n in _tree.body:
     if isinstance(_n, (ast.Import, ast.ImportFrom)):
         for _a in _n.names:
             MODULE_NAMES.add(_a.asname or _a.name.split(".")[0])
@@ -189,7 +211,7 @@ check_seam("_duo_planner_phase", "_DuoPlannerPhaseState", PLANNER_FIELDS, "b3")
 
 _h = fn("_duo_planner_phase")
 if _h is not None:
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b3] planner_result emit moved into the helper",
           "planner_result" in _seg)
     check("[b3] planner event bridge moved into the helper",
@@ -209,7 +231,7 @@ check_seam("_duo_critic_review", "_DuoCriticReviewState", CRITIC_FIELDS, "b5")
 
 _h = fn("_duo_critic_review")
 if _h is not None:
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b5] both critic variants moved into the helper",
           "_CRITIC_VERIFY_TOOLS" in _seg and "_critic_plain_payload" in _seg)
     check("[b5] duo_critic_done emit moved into the helper",
@@ -225,7 +247,7 @@ if _h is not None:
 _ft = fn("_duo_final_test")
 check("[b5] _duo_final_test is module-level async", _ft is not None and isinstance(_ft, ast.AsyncFunctionDef))
 if _ft is not None:
-    _seg = ast.get_source_segment(SRC, _ft) or ""
+    _seg = ast.get_source_segment(src_of(_ft), _ft) or ""
     check("[b5] final-test gate moved into the helper",
           "_final_test_fb" in _seg and "test_feedback_final" in _seg)
     check("[b5] completion notes stay on the shared ChunkState",
@@ -251,7 +273,7 @@ check_seam("_duo_exec_round_task", "_DuoExecRoundState", EXEC_FIELDS, "b4")
 
 _h = fn("_duo_exec_round_task")
 if _h is not None:
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b4] execute_tool_round launch moved into the helper",
           "execute_tool_round(" in _seg)
     check("[b4] heartbeat wait loop moved into the helper",
@@ -269,7 +291,7 @@ check_seam("_duo_wedge_handoff", "_DuoWedgeHandoffState", WEDGE_FIELDS, "b4")
 
 _h = fn("_duo_wedge_handoff")
 if _h is not None:
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b4] fix-agent handoff call moved into the helper",
           "_wedge_run_fix_agent" in _seg)
     check("[b4] both wedge breaks surface via break_out",
@@ -285,7 +307,7 @@ check_seam("_duo_ctx_pressure_check", "_DuoCtxPressureState", CTXP_FIELDS, "b4")
 
 _h = fn("_duo_ctx_pressure_check")
 if _h is not None:
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b4] CTX-pressure finish prompt moved into the helper",
           "[CTX CRITICAL — ~" in _seg)
     _runseg = SRC[SRC.index("async def run_code_duo"):]
@@ -298,7 +320,7 @@ check_seam("_duo_resolve_coder_port_cache", "_DuoCoderPortCacheState", PORTCACHE
 
 _h = fn("_duo_resolve_coder_port_cache")
 if _h is not None:
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b2] ensure_loaded retry moved into the helper",
           "ensure_loaded" in _seg and "Model unreachable" in _seg)
     _runseg = SRC[SRC.index("async def run_code_duo"):]
@@ -315,7 +337,7 @@ check_seam("_duo_query_actual_slot_ctx", "_DuoSlotCtxState", SLOTCTX_FIELDS, "b2
 
 _h = fn("_duo_query_actual_slot_ctx")
 if _h is not None:
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b2] slot-ctx query + Guard-C flags moved into the helper",
           "[CTX-ACTUAL] slot ctx=%d" in _seg and "CTX-FLOOR-PRECONDITION" in _seg)
     _runseg = SRC[SRC.index("async def run_code_duo"):]
@@ -327,7 +349,7 @@ check_seam("_duo_resolve_tool_budgets", "_DuoToolBudgetsState", BUDGETS_FIELDS, 
 
 _h = fn("_duo_resolve_tool_budgets")
 if _h is not None:
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b2] REAL-CPT probe + budgets resolve moved into the helper",
           "tokenize_count" in _seg and "_resolve_tool_budget(" in _seg)
     _runseg = SRC[SRC.index("async def run_code_duo"):]
@@ -346,7 +368,7 @@ if _h is not None:
     _params = {a.arg for a in _h.args.args + _h.args.kwonlyargs}
     check("[b1] park helper params explicit", _params == {"ctx", "ps"},
           f"got={sorted(_params)}")
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b1] park helper owns the _park_on_disconnect call",
           "_park_on_disconnect(" in _seg and "[DISCONNECT-PARK] Handler error" in _seg)
     _loads = {_n.id for _n in ast.walk(_h)
@@ -370,7 +392,7 @@ _h = fn("_duo_final_cleanup")
 check("[b1] _duo_final_cleanup is module-level async",
       _h is not None and isinstance(_h, ast.AsyncFunctionDef))
 if _h is not None:
-    _seg = ast.get_source_segment(SRC, _h) or ""
+    _seg = ast.get_source_segment(src_of(_h), _h) or ""
     check("[b1] cleanup helper owns unpin + evict + pause-cleanup + project save",
           ("clear_pin(" in _seg or "unpin(" in _seg) and "duo_coder_after_run" in _seg
           and "cleanup_pause(" in _seg and "ProjectStateManager().save" in _seg)
