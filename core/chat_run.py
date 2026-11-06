@@ -19,9 +19,10 @@ import uuid
 import httpx
 
 from core import state as _state
+from core.chat_shortcuts import _ChatShortcutState, _chat_memory_shortcuts
 from core.state import (
     settings,
-    registry_get, registry_set, registry_all,
+    registry_get, registry_set,
     apply_settings_to_pipeline, _get_num_ctx,
 )
 from core.duo_config import DuoConfig
@@ -34,7 +35,7 @@ from core.duo_helpers import (
     _bucket_stop_reason, should_evict_vision_after_prepro,
 )
 from context.chat_util import (
-    _make_messages, _extract_ws_query, _extract_memory, _auto_memory_from_input,
+    _make_messages, _extract_ws_query, _auto_memory_from_input,
 )
 from context.compression import SESSION_COMPRESS_THRESHOLD
 from infra.phase_timer import PhaseTimer
@@ -64,7 +65,7 @@ def _history_budget_tokens(settings) -> int:
         _nctx = 16384  # sane default when no ctx override is configured
     return max(1024, int((_nctx - 4096) * 0.35))
 from tools.websearch import _safe_web_search
-from hive_functions.prompts import AGENT_ROLES, HIVEMIND_SOUL, VISION_AGENT_PROMPT
+from hive_functions.prompts import AGENT_ROLES, VISION_AGENT_PROMPT
 from hive_functions.soul_engine import (
     build_soul_prompt_layer, load_soul, run_soul_cycle,
 )
@@ -133,8 +134,7 @@ async def run_stream(
     from infra.token_stats import _record_run
     from learning.insights import _run_insight_extractor, _run_skill_distillation
     from model_configs import (
-        append_learning_log, get_effective_config, get_learned_config,
-        read_learning_log,
+        append_learning_log, get_effective_config,
     )
     from server import (
         S_models_cache,
@@ -820,98 +820,19 @@ async def run_stream(
     def _step_skipped() -> bool:
         return step_skip_ev.is_set()
 
-    # Memory special cases
-    if _state.pipeline._is_list_memory_request(user_input):
-        logger.warning("[RUN-ENTRY] early return: list_memory_request")
-        mems = list(_state.memory.list_memories())
-        if not mems:
-            yield await emit({"type": "token", "content": "Nothing stored."})
-        else:
-            for k, v, d in mems:
-                yield await emit({"type": "token", "content": f"{k}: {v} ({d})\n"})
-        yield await emit(_done_event(0, "memory_list"))
-        _unregister_abort(run_id)
-        _unregister_step_skip(run_id)
+    # OUTSOURCED (split 3.1): memory list/forget/store + self-query early
+    # exits → _chat_memory_shortcuts(); `handled` comes back as the return.
+    _sc_ps = _ChatShortcutState(
+        user_input=user_input, images=images, run_id=run_id, mode=mode,
+        iterations=iterations, use_learned=use_learned,
+        constraint_mode=constraint_mode, t_total=t_total,
+        pipeline_soul=_pipeline_soul,
+        carry={"emit": emit, "_done_event": _done_event},
+    )
+    async for _ev in _chat_memory_shortcuts(_sc_ps):
+        yield _ev
+    if _sc_ps.handled:
         return
-
-    if _state.pipeline._is_forget_request(user_input):
-        logger.warning("[RUN-ENTRY] early return: forget (user_input=%s)", user_input[:80].replace("\n", " "))
-        words   = user_input.lower().split()
-        deleted = [k for k in list(_state.memory.get_all()) if k in words]
-        for k in deleted:
-            _state.memory.forget(k)
-        msg = f"Deleted: {', '.join(deleted)}" if deleted else "Nothing found."
-        yield await emit({"type": "token", "content": msg})
-        yield await emit(_done_event(0, "memory_forget"))
-        _unregister_abort(run_id)
-        _unregister_step_skip(run_id)
-        return
-
-    if _state.pipeline._is_memory_request(user_input):
-        logger.warning("[RUN-ENTRY] early return: memory_request")
-        _mem_key, _mem_val = _extract_memory(user_input)
-        if _mem_key and _mem_val:
-            _state.memory.remember(_mem_key, _mem_val)
-            result = f"Stored: {_mem_key} = {_mem_val}"
-        else:
-            result = await _state.pipeline._handle_memory_request(user_input)
-        _state.memory.add_to_session("user", user_input)
-        _state.memory.add_to_session("assistant", result)
-        yield await emit({"type": "token", "content": result})
-        yield await emit({"type": "memory_saved"})
-        yield await emit(_done_event(0, "memory_write"))
-        _unregister_abort(run_id)
-        _unregister_step_skip(run_id)
-        return
-
-    # Self-query
-    if _state.pipeline._is_self_question(user_input):
-        logger.warning("[RUN-ENTRY] early return: self_question")
-        reg         = registry_all()
-        model_lines = []
-        for a_key, a in _state.pipeline.agents.items():
-            model       = reg.get(a_key, a.model)
-            has_learned = get_learned_config(THIS_FILE, model, a_key) is not None
-            log_entries = len(read_learning_log(THIS_FILE, model, limit=100))
-            model_lines.append(
-                f"- {a.name} ({a_key}): {model}"
-                + (" [learned config]" if has_learned else "")
-                + (f" [{log_entries} log entries]" if log_entries else "")
-            )
-        model_info = "\n".join(model_lines)
-        mem_count  = len(list(_state.memory.list_memories()))
-        soul       = _pipeline_soul
-        soul_layer = build_soul_prompt_layer(soul)
-
-        custom_sys = (
-            HIVEMIND_SOUL
-            + (f"\n\n{soul_layer}" if soul_layer else "")
-            + f"\n\nCurrent configuration:\n{model_info}"
-            + f"\nIterations: {iterations}  Mode: {mode}"
-            + f"\nPersistent memory entries: {mem_count}"
-            + f"\nLearning preset mode: {'ON -- peer ratings active' if use_learned else 'off'}"
-            + f"\nConstraint feedback loop: {'ON -- adversarial JSON constraints' if constraint_mode else 'off'}"
-            + f"\nAutomap: {'available' if S_models_cache else 'no model cache'}"
-            + f"\nSoul evolution: v{soul.get('version', 1)}, {soul.get('evolution_count', 0)} evolutions"
-        )
-
-        agent    = _state.pipeline.agents["direct"]
-        messages = _make_messages(_state.pipeline, custom_sys, user_input, images, False, False)
-
-        yield await emit({"type": "agent", "content": "Hivemind", "model": agent.model})
-
-        parts, t = [], time.time()
-        async for tok in _pipeline_chat_stream(agent.model, messages, 0.3, 600):  # BUG-11 FIX: num_ctx via wrapper
-            parts.append(tok)
-            yield await emit({"type": "token", "content": tok})
-        yield await emit({"type": "agent_done", "elapsed": round(time.time() - t, 1)})
-        _state.memory.add_to_session("user", user_input)
-        _state.memory.add_to_session("assistant", "".join(parts))
-        yield await emit(_done_event(round(time.time() - t_total, 1), "self_query_completed"))
-        _unregister_abort(run_id)
-        _unregister_step_skip(run_id)
-        return
-
     # -- IMAGE PERSISTENCE (2026-10-03, all modes) --
     # Attached images used to live only as base64 inside the request: after
     # the run they were gone. Save them once into the workspace so they
