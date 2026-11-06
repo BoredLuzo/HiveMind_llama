@@ -1007,7 +1007,6 @@ class LlamaLoadMixin:
         _claim = await _phase_claim(self, slot, model, num_ctx)
         gguf_path = _claim.gguf_path
         _evicted_here = _claim.evicted
-        _reclaimed = _claim.reclaimed
         if type(self)._binary_build_number is None:
             type(self)._binary_build_number = await asyncio.to_thread(
                 _probe_binary_build, str(LLAMA_BIN)
