@@ -83,9 +83,9 @@ def test_retry_helped_metric():
 def test_source_guards():
     root = Path(__file__).parent.parent
     checks = [
-        ("core/duo_runner.py", "CTX-COMPRESS-RETRY"),
-        ("core/duo_runner.py", "retry_helped="),
-        ("core/duo_runner.py", "aggressive_retry=True"),
+        ("core/duo_compress_cycle.py", "CTX-COMPRESS-RETRY"),
+        ("core/duo_compress_cycle.py", "retry_helped="),
+        ("core/duo_compress_cycle.py", "aggressive_retry=True"),
         ("context/compression.py", "def _compress_tool_context"),
         ("context/compression.py", "aggressive_retry: bool = False"),
         ("context/compression.py", "MINI-SHRINK-ESCALATION"),

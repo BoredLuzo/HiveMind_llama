@@ -26,7 +26,8 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 RUN = ((ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
-       + (ROOT / "core" / "duo_inloop_planner.py").read_text(encoding="utf-8"))
+       + (ROOT / "core" / "duo_inloop_planner.py").read_text(encoding="utf-8")
+       + (ROOT / "core" / "duo_compress_cycle.py").read_text(encoding="utf-8"))
 HELP = (ROOT / "core" / "duo_helpers.py").read_text(encoding="utf-8")
 PROMPTS_PY = (ROOT / "hive_functions" / "prompts.py").read_text(encoding="utf-8")
 

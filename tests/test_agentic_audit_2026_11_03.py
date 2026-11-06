@@ -131,14 +131,16 @@ check("3e a healthy round resets the SHARED counter",
 
 
 # ── 4. repo-map delta survives the compression that follows it ──────────────
-_i_append = DQ.find("append_repo_map_delta")
-_i_recap = DQ.find("_delta_sys", _i_append)
+# 4 (split 2.8): the compression cycle lives in duo_compress_cycle.py now
+CC4 = (ROOT / "core" / "duo_compress_cycle.py").read_text(encoding="utf-8")
+_i_append = CC4.find("append_repo_map_delta")
+_i_recap = CC4.find("_delta_sys", _i_append)
 check("4a the delta is appended before compression",
-      _i_append > 0 and "append_repo_map_delta" in DQ)
+      _i_append > 0 and "append_repo_map_delta" in CC4)
 check("4b the compression system prompt is re-captured after the append",
-      _i_recap > _i_append and "_sys_for_compress = str(_delta_sys)" in DQ)
+      _i_recap > _i_append and "_sys_for_compress = str(_delta_sys)" in CC4)
 check("4c the compression KWARGS carry the updated system prompt",
-      '_comp_kwargs["system_prompt"] = _sys_for_compress' in DQ)
+      '_comp_kwargs["system_prompt"] = _sys_for_compress' in CC4)
 
 # ── 4d. skipped-planner runs still save the sidecar (UnboundLocal fix) ──────
 # 4d (split 2.2): the "_inloop_plan_text or" consumer moved to the epilogue

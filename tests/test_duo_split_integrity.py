@@ -29,7 +29,8 @@ TREE = ast.parse(SRC)
 # split 2.1-2.7: helpers live across the split modules now
 _TREES = [TREE]
 for _mod in ("duo_finalize", "duo_epilogue", "duo_finalgate", "duo_round_input",
-             "duo_dtool_setup", "duo_inloop_planner", "duo_coder_load"):
+             "duo_dtool_setup", "duo_inloop_planner", "duo_coder_load",
+             "duo_compress_cycle"):
     _p = ROOT / "core" / (_mod + ".py")
     if _p.exists():
         _TREES.append(ast.parse(_p.read_text(encoding="utf-8")))

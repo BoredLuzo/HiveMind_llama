@@ -237,8 +237,9 @@ def test_source_structure():
         fail("C5: 25% threshold missing")
     # 1.4.x: _build_plan_anchor_text moved to preflight; the CALL SITES stay in
     # run_code_duo, so both files matter here.
-    text_d = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(
-        encoding="utf-8")
+    # split 2.8: the compression call sites live in duo_compress_cycle.py now
+    text_d = ((Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+              + (Path(__file__).parent.parent / "core" / "duo_compress_cycle.py").read_text(encoding="utf-8"))
     text_pf = (Path(__file__).parent.parent / "core" / "duo" / "preflight.py").read_text(
         encoding="utf-8")
     if "plan_anchor_text=_plan_anchor_text" in text_d and "plan_anchor=_plan_anchor_text" in text_d:

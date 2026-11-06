@@ -260,8 +260,9 @@ def test_source_structure():
     else:
         fail("D1: plan-reinject block missing in compression.py")
     # 1.4.x: the helper definitions moved to preflight, the calls did not.
-    text_d = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(
-        encoding="utf-8")
+    # split 2.8: the compression call sites live in duo_compress_cycle.py now
+    text_d = ((Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+              + (Path(__file__).parent.parent / "core" / "duo_compress_cycle.py").read_text(encoding="utf-8"))
     if "_strip_stale_ctx_notices(_dtool_msgs)" in text_d:
         ok("D2: duo_runner calls _strip_stale_ctx_notices after compression")
     else:
