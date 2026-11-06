@@ -1922,7 +1922,7 @@ async def _duo_query_actual_slot_ctx(
 @dataclasses.dataclass
 class _DuoToolBudgetsState:
     """Tool-budget resolve in/out locals (moved verbatim from run_code_duo)."""
-    xtools_ws: list = None
+    xtools_ws: list = dataclasses.field(default_factory=list)
     compress_threshold: int = 0
     max_tool_rounds: int = 0
     max_tool_rounds_cfg: int = 0
@@ -2076,7 +2076,6 @@ def _duo_disconnect_park(ctx, ps: _DuoDisconnectParkState):
 
 
 @dataclasses.dataclass
-@dataclasses.dataclass
 class _DuoRunFinalizeState:
     """Finalize-tail state (split 2.1, 2026-11-05): one field per
     run_code_duo local the finalize tail reads or writes, plus `carry`
@@ -2089,20 +2088,20 @@ class _DuoRunFinalizeState:
     _loop_detected: bool = False
     _wedge_escalated: bool = False
     _model_load_failed: bool = False
+    _pending_send_files: list = dataclasses.field(default_factory=list)
+    _written_files: list = dataclasses.field(default_factory=list)
+    _done_tasks: list = dataclasses.field(default_factory=list)
+    _cs: object = None
     _ws_str: str = ""
     _explore_ctx: str = ""
-    _pending_send_files: list = None
-    _written_files: list = None
-    _done_tasks: list = None
-    _cs: object = None
     _project_state: object = None
     _project_state_run_counted: bool = False
     _explore_only_rounds: int = 0
     _lifetime_tool_rounds: int = 0
     _di: int = 0
     _n_items: int = 1
-    _loop_items: list = None
-    carry: dict = None
+    _loop_items: list = dataclasses.field(default_factory=list)
+    carry: dict = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
