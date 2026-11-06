@@ -59,7 +59,7 @@ async def run_peer_ratings(run_id, user_input, outputs, use_learned, rating_mode
 async def _run_peer_ratings_inner(run_id, user_input, outputs, use_learned, rating_mode: str = "pipeline", has_images: bool = False):
     if rating_mode == "duo":
         # Duo learning: duo_critic rates duo_coder output
-        from server import _pipeline_chat_stream
+        from core.llm_stream import _pipeline_chat_stream
         _duo_coder_out = outputs.get("duo_coder", "")
         if not _duo_coder_out:
             return
@@ -199,7 +199,7 @@ async def _run_peer_ratings_inner(run_id, user_input, outputs, use_learned, rati
 
         try:
             parts = []
-            from server import _pipeline_chat_stream
+            from core.llm_stream import _pipeline_chat_stream
             async for tok in _pipeline_chat_stream(
                 rater_model,
                 [{"role": "system", "content": PEER_RATING_PROMPT},
@@ -310,7 +310,7 @@ async def _maybe_adapt_config(model, agent_key, new_score, rating_data):
 
         prompt_hint = rating_data.get("suggested_prompt_hint", "").strip()
         if prompt_hint and len(prompt_hint) > 10 and prompt_hint not in existing_hint:
-            from server import get_effective_prompt  # P1-FIX: Lazy-Import (server.py:1332)
+            from context.chat_util import get_effective_prompt
             base_prompt = get_effective_prompt(agent_key, None) or ""
             changes["system_prompt_override"] = base_prompt + "\n\n// Learned hint: " + prompt_hint
             change_log.append(f"prompt hint added")
