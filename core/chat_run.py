@@ -20,6 +20,7 @@ import httpx
 
 from core import state as _state
 from core.chat_history_seed import _ChatHistorySeedState, _chat_history_seed
+from core.chat_route import _ChatRoutePreState, _chat_route_pre
 from core.chat_shortcuts import _ChatShortcutState, _chat_memory_shortcuts
 from core.chat_vision_pre import _ChatVisionPreState, _chat_vision_pre
 from core.state import (
@@ -156,7 +157,6 @@ async def run_stream(
         get_effective_prompt_with_override,
     )
     from context.chat import load_chat_images, save_chat_images
-    detect_vision_need = _state.detect_vision_need  # core.state owns it
 
     if duo_config is None:
         duo_config = DuoConfig()
@@ -861,112 +861,37 @@ async def run_stream(
     _pipeline_mem_ctx = _hs_ps._pipeline_mem_ctx
     _pipeline_sess_msgs = _hs_ps._pipeline_sess_msgs
     _sess_compress_threshold = _hs_ps._sess_compress_threshold
-    _intent_cfg = settings.get("intent_agent", {}) or {}
-    _intent_enabled = bool(_intent_cfg.get("enabled", False))
-    intent_agent = detect_agent_intent(user_input) if _intent_enabled else None
-
-    _prepro_active  = bool(images and _vision_cfg.get("enabled") and _vision_cfg.get("model"))
-    _prepro_success = bool(image_description and not image_description.startswith("[Vision"))
-    _effective_has_images = bool(images) and not _prepro_success
-    _task_type = detect_task_type(user_input, has_images=_effective_has_images)
-
-
-    _duo_mode_active = (mode == "code_duo" or duo_config.agentic_mode)
-    if intent_agent and _duo_mode_active:
-        intent_agent = None
-
-    if intent_agent:
-        logger.warning("[RUN-ENTRY] early return: intent_agent=%s", intent_agent)
-        question   = get_question_from_intent(user_input, intent_agent)
-        agent      = _state.pipeline.agents[intent_agent]
-        role       = AGENT_ROLES.get(intent_agent, "")
-        sys_prompt = get_effective_prompt_with_override(intent_agent, active_preset, use_learned)
-        custom_sys = f"Agent: {agent.name} in Hivemind. Role: {role}\n\n{sys_prompt}"
-        messages   = _make_messages(_state.pipeline, custom_sys, question, images, True, True, cached_mem_ctx=_pipeline_mem_ctx, cached_sess_msgs=_pipeline_sess_msgs)
-        intent_model = registry_get(intent_agent)
-        yield await emit({"type": "agent", "content": agent.name, "model": intent_model})
-        parts, t = [], time.time()
-        _think_open_i = False
-        async for tok in _pipeline_chat_stream(
-            intent_model, messages, agent.temperature, agent.max_tokens
-        ):
-            if _aborted(): break
-            if _step_skipped():   # NEW
-                yield await emit({"type": "status", "content": "-- Pre-Explore skipped."})
-                _explore_ctx = ""
-                break
-            parts.append(tok)
-            if not _think_open_i and "<think>" in tok:
-                before = tok.split("<think>")[0]
-                if before:
-                    yield await emit({"type": "token", "content": before})
-                _think_open_i = True
-            if _think_open_i and "</think>" in tok:
-                _think_open_i = False
-                after = tok.split("</think>")[-1]
-                if after:
-                    yield await emit({"type": "token", "content": after})
-            elif not _think_open_i and "<think>" not in tok:
-                yield await emit({"type": "token", "content": tok})
-        intent_out = "".join(parts).strip()  # REMOVED: implicit _re.sub() - Thinking now explicitly controlled
-        yield await emit({"type": "agent_done", "elapsed": round(time.time() - t, 1)})
-        _state.memory.add_to_session("user", user_input)
-        _state.memory.add_to_session("assistant", intent_out)
-        _intent_stop_reason = "aborted" if _aborted() else "completed"
-        yield await emit(_done_event(round(time.time() - t_total, 1), _intent_stop_reason, **_collect_done_metrics()))
-        _unregister_abort(run_id)
-        _unregister_step_skip(run_id)
+    # OUTSOURCED (split 3.4): intent agent + task type + automap suggestion +
+    # judge-prefetch wait → _chat_route_pre(); handled = early return.
+    _rp_ps = _ChatRoutePreState(
+        _aborted=_aborted,
+        _judge_prefetch_task=_judge_prefetch_task,
+        _pipeline_mem_ctx=_pipeline_mem_ctx,
+        _pipeline_sess_msgs=_pipeline_sess_msgs,
+        _step_skipped=_step_skipped,
+        active_preset=active_preset,
+        duo_config=duo_config,
+        emit=emit,
+        force_complexity=force_complexity,
+        image_description=image_description,
+        images=images,
+        mode=mode,
+        run_id=run_id,
+        t_total=t_total,
+        use_learned=use_learned,
+        user_input=user_input,
+        _done_event=_done_event,
+        _collect_done_metrics=_collect_done_metrics,
+    )
+    async for _ev in _chat_route_pre(_rp_ps):
+        yield _ev
+    if _rp_ps.handled:
         return
-
-    if mode == "automap" and not duo_config.agentic_mode:
-        available   = list(S_models_cache) if S_models_cache else list(
-            set(a.model for a in _state.pipeline.agents.values())
-        )
-        if _prepro_success:
-            vision_type = None
-            _automap_has_images = False
-        else:
-            vision_type = detect_vision_need(images, user_input)
-            _automap_has_images = bool(images)
-
-        am = get_automap(
-            user_input, available,
-            has_images=_automap_has_images,
-            task_type_override=vision_type,
-            base_path=THIS_FILE,
-            vram_budget_gb=float(settings.get("vram_budget_gb") or DEFAULT_VRAM_BUDGET_GB),
-        )
-        _automap_excluded = set(settings.get("automap_excluded", []))
-        _automap_applied  = {}
-        for agent_key, mdl in am["assignments"].items():
-            if agent_key in _state.pipeline.agents and agent_key not in _automap_excluded:
-                registry_set(agent_key, mdl)
-                _automap_applied[agent_key] = mdl
-            else:
-                _automap_applied[agent_key] = registry_get(agent_key)
-        yield await emit({
-            "type":        "automap",
-            "task_type":   am["task_type"],
-            "assignments": _automap_applied,
-            "reasoning":   am.get("reasoning", ""),
-        })
-
-    if _judge_prefetch_task and not _judge_prefetch_task.done():
-        try:
-            await asyncio.wait_for(asyncio.shield(_judge_prefetch_task), timeout=0.2)
-        except asyncio.TimeoutError:
-            pass
-        except Exception:
-            pass
-
-    # Mode decision (with force_complexity + judge_bias support)
-    _complexity_source = "judge"  # Default
-    _judge_verdict: dict = {}     # VollstÃƒÂ¤ndiges Judge-Urteil (route, task_type, tool_model)
-    _effective_task_type = _task_type
-
-    logger.warning("[RUN-TRACE] vor mode-decision")
-    logger.warning("[AGENTIC-RULE] mode=%s agentic=%s use_pipeline=%s force=%s",
-                   mode, duo_config.agentic_mode, duo_config.use_pipeline, force_complexity)
+    _complexity_source = _rp_ps._complexity_source
+    _effective_task_type = _rp_ps._effective_task_type
+    _judge_verdict = _rp_ps._judge_verdict
+    _prepro_success = _rp_ps._prepro_success
+    _task_type = _rp_ps._task_type
     # AUTO-DECIDER (2026-10-21): the persisted agentic flag must not hijack
     # mode="auto" while the decider is on - that is how a simple question
     # started a coder run. An explicit request (gateway /mode agentic, body
@@ -1066,7 +991,6 @@ async def run_stream(
     if _judge_route == "duo" and mode not in ("simple", "pipeline", "code_duo"):
         complexity = "code_duo"
         _complexity_source = "judge"
-        intent_agent = None
         if len(_state.memory.get_session_messages()) > _sess_compress_threshold:
             _pipeline_sess_msgs = window_by_budget(
                 _state.memory.get_session_messages(

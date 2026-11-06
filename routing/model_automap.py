@@ -206,8 +206,8 @@ def load_automap() -> dict:
 
 
 def get_automap(query: str = "", available: list | None = None, *,
-                has_images: bool = False, task_type_override: str = "",
-                base_path: str = "", vram_budget_gb: float = 0.0) -> dict:
+                has_images: bool = False, task_type_override: str | None = "",
+                base_path: str | Path = "", vram_budget_gb: float = 0.0) -> dict:
     """Return automap assignments for the given query and available models.
 
     Args:
