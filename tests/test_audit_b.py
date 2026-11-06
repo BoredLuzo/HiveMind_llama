@@ -150,6 +150,7 @@ check("transcribe consults the warm path before the CLI",
 
 # ── B1: queue-aware AMD commit wait (structural) ─────────────────────────
 ml = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+ml += (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8", errors="replace")
 check("ensure_loaded bumps the load sequence",
       "self._load_seq = getattr(self, \"_load_seq\", 0) + 1" in ml
       and "_my_load_seq" in ml)
@@ -172,6 +173,7 @@ check("the handoff reuse check still refuses degraded slots",
 # ── measurement-round fixes (2026-10-24): MTP env bypass, mlock no-op,
 #    spec+load-mode-none crash guard ───────────────────────────────────────
 ml_src = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8", errors="replace")
+ml_src += (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8", errors="replace")
 srv_src = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
 check("the registry-MTP block honors the env off-switch",
       "ENV-BYPASS FIX" in ml_src

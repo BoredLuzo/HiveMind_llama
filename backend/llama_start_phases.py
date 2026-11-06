@@ -13,19 +13,24 @@ import dataclasses
 import logging
 import os
 import platform
+import subprocess
 import time
 from pathlib import Path
 
 from .llama_config import (
-    BINARY_MIN_BUILD, GPU_BACKEND, KV_CACHE_TYPE, LLAMA_BIN, LLAMA_UBATCH,
-    MODELS_DIR, VULKAN_DEVICE, _MOE_EXPERT_COUNTS,
+    BINARY_MIN_BUILD, DSPARK_DRAFT_N_MAX, DSPARK_DRAFT_N_MIN,
+    DSPARK_MIN_BUILD, DSPARK_SPEC_TYPE, GPU_BACKEND, KV_CACHE_TYPE,
+    LLAMA_BIN, LLAMA_UBATCH, MODELS_DIR, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
+    MTP_DRAFT_P_MIN, MTP_SPEC_TYPE, VULKAN_DEVICE, _GPU_LAYERS_TABLE,
+    _MTP_MODELS, _MOE_EXPERT_COUNTS,
     dense_kv_cache_type, llama_gpu_layers_auto, moe_kv_cache_types,
-    resolve_gpu_layers, ubatch_extra_mib, _GPU_LAYERS_TABLE,
+    resolve_gpu_layers, ubatch_extra_mib,
 )
 from .llama_manager_utils import (
     VRAM_BUDGET_GB, VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
-    _VRAM_BASE_OVERHEAD_GB, _kill_slot_async, _probe_backend_devices,
-    _probe_backend_dlls, _probe_binary_build,
+    _VRAM_BASE_OVERHEAD_GB, _kill_slot_async, _needs_mmproj,
+    _probe_backend_devices, _probe_backend_dlls,
+    _probe_binary_build, pick_mmproj_fallback,
 )
 from .llama_models import _strip_alias, resolve_model_path
 from .llama_vram_table import (
@@ -659,3 +664,287 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
             )
 
     return _MoePhase(cmd=cmd, moe_cache_used=bool(slot._moe_cache_used))
+
+
+
+@dataclasses.dataclass
+class _ModelFlagsPhase:
+    """Phase-5 outputs (split 4.5): the model-config-augmented cmd and
+    the resolved mmproj path (consumed by the spawn tail)."""
+    cmd: list = dataclasses.field(default_factory=list)
+    mmproj_resolved: object = None
+
+
+async def _phase_model_flags(self, cmd, model: str, _model_base: str,
+                             gguf_path, vision: bool) -> _ModelFlagsPhase:
+    from backend.manager_load import (  # lazy: module cycle
+        _append_chat_template, _help_supports, _JINJA_BASES,
+        _omit_mmproj_for, _REASONING_ON_BASES,
+    )
+    from .llama_models import resolve_mmproj_path
+    # ── MTP (Multi-Token Prediction / Speculative Decoding) ────────────────
+    _mtp_model_key = _strip_alias(model)
+    _mtp_from_registry = None
+    try:
+        from .llama_config import _try_registry_mtp as _reg_mtp
+        _mtp_from_registry = _reg_mtp(_mtp_model_key)
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _e:
+        logger.debug("[MTP] registry MTP probe skipped: %s", _e)
+    _is_mtp = bool(_mtp_from_registry) if _mtp_from_registry is not None else (_mtp_model_key in _MTP_MODELS)
+    # SPEC OFF-SWITCH (2026-09-17): HIVEMIND_MTP_SPEC=0 disables the
+    # draft-mtp flags entirely (any model, MTP layers or not) —
+    # draft-mtp disables llama-server's prompt cache-reuse and has
+    # heavy prefill regressions on some backends. A/B via env without
+    # touching model configs.
+    # OFF-SWITCH INVERTED (1.3.9): the condition used to be the
+    # enable-list itself, so =0 appended --spec-type draft-mtp to
+    # EVERY model instead of switching it off.
+    if os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off") and _is_mtp:
+        # profile overrides (mtp_draft_n_max / mtp_draft_p_min) win over
+        # the module defaults; the values are clamped to sane ranges so a
+        # typo cannot produce a 0-token draft or an 8-token greedy draft
+        # (the card's sweep shows n_max 8 / p_min 0 collapses to 0.57x).
+        _draft_nmax, _draft_pmin = MTP_DRAFT_N_MAX, MTP_DRAFT_P_MIN
+        try:
+            from model_configs.models_registry import get_profile as _gp
+            _prof = _gp(_mtp_model_key) or {}
+            if _prof.get("mtp_draft_n_max") is not None:
+                _draft_nmax = int(_prof["mtp_draft_n_max"])
+            if _prof.get("mtp_draft_p_min") is not None:
+                _draft_pmin = float(_prof["mtp_draft_p_min"])
+        except (ImportError, ValueError, TypeError) as _prof_err:
+            logger.debug("MTP profile override skipped: %s", _prof_err)
+        _draft_nmax = max(1, min(4, int(_draft_nmax)))
+        _draft_pmin = max(0.0, min(0.95, float(_draft_pmin)))
+        cmd += [
+            "--spec-type", MTP_SPEC_TYPE,
+            "--spec-draft-n-max", str(_draft_nmax),
+            "--spec-draft-n-min", str(MTP_DRAFT_N_MIN),
+        ]
+        # --spec-draft-p-min exists from b12001 on; on older binaries the
+        # flag would abort the load, so gate it on the help text we read.
+        if await _help_supports("--spec-draft-p-min"):
+            cmd += ["--spec-draft-p-min", f"{_draft_pmin:g}"]
+        logger.info(
+            "MTP active: %s (draft-max=%d, draft-min=%d, draft-p-min=%s%s)",
+            MTP_SPEC_TYPE, _draft_nmax, MTP_DRAFT_N_MIN, f"{_draft_pmin:g}",
+            "" if await _help_supports("--spec-draft-p-min") else " [flag unsupported - omitted]",
+        )
+
+    # ── DSpark external drafter (Speculative-Decoding Sidecar) ──────────
+    # OFF-SWITCH (2026-10-19): HIVEMIND_DSPARK_SPEC=0 disables the drafter
+    # for every model without touching any profile. Measured with the app's
+    # own llama flags (Sharp-MiniCPM5-2B Q4 + this drafter, AMD Radeon iGPU,
+    # 16 threads): target alone 14.1 tok/s, DSpark n-max 2
+    # 10.6 (49% acceptance), n-max 4 7.7 (34%). Slower at every setting,
+    # hence switchable.
+    _draft_fn = None
+    _draft_nmax = None
+    try:
+        from .llama_config import _try_registry_dspark_draft as _reg_dd2
+        _draft_fn = _reg_dd2(_strip_alias(model))
+        # Per-model draft budget from the profile (dspark_draft_n_max); the
+        # field used to be ignored and everything ran with the global default.
+        from model_configs.models_registry import (
+            get_dspark_draft_n_max as _reg_nmax,
+        )
+        _draft_nmax = _reg_nmax(_strip_alias(model))
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        _draft_fn = None
+        _draft_nmax = None
+    if os.environ.get("HIVEMIND_DSPARK_SPEC", "1") in ("0", "false", "off"):
+        _draft_fn = None
+    if _draft_fn:
+        _draft_path = None
+        _dp = Path(_draft_fn)
+        if _dp.is_absolute() and _dp.exists():
+            _draft_path = _dp
+        else:
+            _cand = MODELS_DIR / _draft_fn
+            if _cand.exists():
+                _draft_path = _cand
+            else:
+                try:
+                    _found = list(MODELS_DIR.rglob(_draft_fn))
+                    if _found:
+                        _draft_path = _found[0]
+                except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _e:
+                    logger.debug("[MTP] draft-path probe skipped: %s", _e)
+        if _draft_path is None:
+            logger.warning(
+                "DSpark drafter configured for '%s' (%s) but not found in %s "
+                "— running without the drafter.",
+                model, _draft_fn, MODELS_DIR,
+            )
+        else:
+            _dspark_ok = type(self)._dspark_flag_supported
+            if _dspark_ok is None:
+                _dspark_ok = (type(self)._binary_build_number or 0) >= DSPARK_MIN_BUILD
+            if not _dspark_ok:
+                logger.warning(
+                    f"DSpark speculative decoding not supported for '{model}' by "
+                    f"{LLAMA_BIN.name} (needs --spec-type draft-dspark, build "
+                    f"{DSPARK_MIN_BUILD}+) — skipping the drafter."
+                )
+            else:
+                if not _draft_nmax:
+                    _draft_nmax = DSPARK_DRAFT_N_MAX
+                cmd += [
+                    "--spec-type", DSPARK_SPEC_TYPE,
+                    "--model-draft", str(_draft_path),
+                    "--spec-draft-n-max", str(_draft_nmax),
+                    "--spec-draft-n-min", str(DSPARK_DRAFT_N_MIN),
+                ]
+                logger.info(
+                    "DSpark active: %s → drafter %s (n-max=%d, n-min=%d)",
+                    model, _draft_path.name, _draft_nmax, DSPARK_DRAFT_N_MIN,
+                )
+
+    # ── Jinja-Chat-Template ───────────────────────────────────────────────
+    # (Bases: module-level _JINJA_BASES — registry "jinja" wins.)
+
+    # User-config (model_configs/models/*.json): jinja / reasoning / distilled / template.
+    _reg_jinja = None
+    _reg_reasoning = None
+    _reg_distilled = None
+    _reg_template = None
+    _reg_is_mtp = None   # audit: pre-bind — the MTP block below calls it outside this import's try
+    try:
+        from model_configs.models_registry import (
+            is_jinja as _reg_is_jinja,
+            get_reasoning as _reg_get_reasoning,
+            is_distilled as _reg_is_distilled,
+            get_chat_template as _reg_get_template,
+            is_mtp as _reg_is_mtp,
+        )
+        _reg_jinja = _reg_is_jinja(model)
+        _reg_reasoning = _reg_get_reasoning(model)
+        _reg_distilled = _reg_is_distilled(model)
+        _reg_template = _reg_get_template(model)
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _e:
+        logger.debug("[MODEL-CONFIG] registry probe skipped: %s", _e)
+
+    #
+    # Per-Request-Kontrolle via /no_think Token im System-Prompt (server.py Tool-Calls).
+    #
+    _DISTILLED_MODELS = {"qwen3.5:2b-d", "qwen3.5:4b-d", "qwen3.5:9b-d", "qwen3.5:4b-ud-v3", "qwen3.5:9b-ud"}
+    # Server <think>-Inhalte in reasoning_content → split_thinking + thinking_budget greifen.
+    # (Bases: module-level _REASONING_ON_BASES — registry "reasoning" wins.)
+    # Per-model override (duo tool-thinking toggle): the flag is bound to a
+    # specific server instance, so it must only fire for the model it was
+    # set for — a plain consume-once flag landed on whichever model loaded
+    # first (e.g. the planner) and left the coder server at template default.
+    _ro_for_model = (type(self)._reasoning_override or {}).pop(model, None)
+    if type(self)._reasoning_override is not None and not type(self)._reasoning_override:
+        type(self)._reasoning_override = None
+    if _ro_for_model is not None:
+        cmd += ["--reasoning", "on" if _ro_for_model else "off"]
+        logger.info(f"--reasoning {'on' if _ro_for_model else 'off'} for {model} (user override)")
+    elif _reg_reasoning in ("on", "off"):
+        cmd += ["--reasoning", _reg_reasoning]
+        logger.info(f"--reasoning {_reg_reasoning} for {model} (registry config)")
+    elif model in _DISTILLED_MODELS or _reg_distilled:
+        cmd += ["--reasoning", "on"]
+        logger.info(f"--reasoning on for distilled model: {model}")
+    elif _model_base in _REASONING_ON_BASES:
+        cmd += ["--reasoning", "on"]
+        logger.info(f"--reasoning on for thinking base: {model}")
+    elif _model_base in ("qwen3.5", "omnicoder"):
+        cmd += ["--reasoning", "off"]
+
+    # MTP SELF-SPECULATIVE DECODING (2026-10-08, user feedback: use mtp decoding with draft count 2):
+    # registry mtp:true models carry predictive layers - draft-mtp uses
+    # them as their own draft model. Verified on VULKAN: the server
+    # accepts the flags and generates.
+    try:
+        if (_reg_is_mtp is not None and _reg_is_mtp(model)
+                and "--spec-type" not in cmd
+                # ENV-BYPASS FIX (audit 2026-10-24): the registry block
+                # re-enabled draft-mtp even with HIVEMIND_MTP_SPEC=0 -
+                # the off-switch only covered the name-list gate.
+                and os.environ.get("HIVEMIND_MTP_SPEC", "1") not in ("0", "false", "off")):
+            # FLAG-NAME FIX (2026-10-10, exit=1 evidence): this build wants
+            # --spec-draft-n-max; the shipped --spec-draft-max is an
+            # invalid argument and CRASHED EVERY mtp-model server start
+            # (coder-load 3/3 failed -> runtime_load_error, run dead).
+            # Guarded like the KV flags below: the flag must exist in the
+            # binary's --help, otherwise the server starts undrafted.
+            _help_txt = ""
+            try:
+                # HELP-OFF-LOOP (audit 2026-11-03): this probe blocked
+                # the event loop up to 20 s on every MTP load.
+                _help_txt = (await asyncio.to_thread(
+                    subprocess.run, [cmd[0], "--help"],
+                    capture_output=True, text=True, timeout=20,
+                    encoding="utf-8", errors="replace")).stdout
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+                _help_txt = ""
+            if "--spec-draft-n-max" in _help_txt:
+                cmd += ["--spec-type", "draft-mtp", "--spec-draft-n-max", "2"]
+                logger.info(f"--spec-type draft-mtp (n-max 2) enabled for {model} (registry mtp)")
+            else:
+                logger.warning("spec-draft-n-max not supported by this binary - %s starts undrafted", model)
+    except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _e:
+        logger.debug("[MTP] spec flags not applicable: %s", _e)
+
+    # ── mmproj (Vision-Projektor) ─────────────────────────────────────────
+    # TEST SWITCH (2026-10-04): the negative test for the
+    # /props vision gate needs a server that RUNS without the projector
+    # while the plan, the profile and the file on disk all say vision.
+    # Renaming the file fires the OLDER attach-time file check instead -
+    # this env var (default off) omits --mmproj at start so ONLY the
+    # post-load /props gate can catch the drop. Value = model substring
+    # (e.g. "9b-ud" scopes it to one role; "*" = all models).
+    _mmproj_resolved = None  # H-audit: default for unlisted vision bases
+    if _omit_mmproj_for(model, vision=vision):
+        _mmproj_resolved = None
+    elif _needs_mmproj(model, vision=vision):
+        _mmproj_resolved = None
+        try:
+            _mmproj = resolve_mmproj_path(model)
+            if _mmproj:
+                _p = Path(_mmproj)
+                if _p.exists():
+                    _mmproj_resolved = _p
+                else:
+                    logger.warning(f"mmproj path does not exist on disk: {_p}")
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+            logger.warning(f"mmproj lookup failed for {model}: {e}")
+
+        if _mmproj_resolved is None:
+            # MMFALLBACK-STRICT (2026-10-01): only a size-tag MATCHING file
+            # is used — the old "first mmproj in directory" put a 2B
+            # projector on a 4B model (broken vision, wrong dimensions)
+            _gguf_dir = Path(gguf_path).parent
+            _mmproj_resolved = pick_mmproj_fallback(_gguf_dir, model)
+            if _mmproj_resolved:
+                logger.info(f"mmproj fallback (GGUF directory): {_mmproj_resolved}")
+            else:
+                logger.warning(
+                    f"mmproj fallback: no size-tag matching projector for '{model}' "
+                    f"in {_gguf_dir} — server starts WITHOUT mmproj; image requests "
+                    f"will return 0 tokens. Place a matching mmproj-*.gguf or set "
+                    f"mmproj_filename in the model registry.")
+
+        if _mmproj_resolved:
+            cmd += ["--mmproj", str(_mmproj_resolved)]
+            logger.info(f"mmproj: {_mmproj_resolved}")
+        else:
+            logger.warning(
+                f"WARNING: no mmproj found for '{model}'.\n"
+                f"  The model starts, but vision requests (images) will fail.\n"
+                f"  Fixes:\n"
+                f"    1. Re-pull the model in Ollama: ollama pull {model}\n"
+                f"    2. Place mmproj.gguf manually in {Path(gguf_path).parent}\n"
+                f"    3. Add an 'mmproj' key to models.json (if llama_models.py supports it)"
+            )
+
+    _use_jinja = _reg_jinja if _reg_jinja is not None else (_model_base in _JINJA_BASES)
+    if _use_jinja:
+        cmd += ["--jinja"]
+        logger.info(f"--jinja enabled for {model}")
+    # CHAT-TEMPLATE-ONE (2026-10-30, audit S2): one helper, one flag —
+    # registry template wins, fallback chain only for qwen*/hermes bases.
+    _append_chat_template(cmd, _model_base, _reg_template)
+
+    return _ModelFlagsPhase(cmd=cmd, mmproj_resolved=_mmproj_resolved)

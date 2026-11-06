@@ -47,7 +47,8 @@ def gate_source() -> str:
 
     Parsing the module (instead of scanning lines) also proves the file is
     syntactically intact."""
-    src = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+    src = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
+           + (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8"))
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if isinstance(node, ast.If) and "HIVEMIND_MTP_SPEC" in ast.dump(node.test):
