@@ -29,7 +29,7 @@ Release flow:
 
 ```bat
 git switch dev
-:: bump HIVEMIND_VERSION in server.py, set the CHANGELOG heading to the same
+:: bump HIVEMIND_VERSION in core/version.py, set the CHANGELOG heading to the same
 :: version, run the suite + the pre-push gate, commit
 
 git switch main
@@ -64,7 +64,7 @@ skips linting with a notice instead of failing. To bypass it in an emergency:
 1. `python tests\run_regressions.py` - the whole suite, no LLM, no models.
 2. `C:\Users\...\prepush_check.ps1` (the local gate) - 13 checks including a clean
    working tree, so it has to run **after** the commit.
-3. Bump `HIVEMIND_VERSION` in `server.py` and make the CHANGELOG heading match -
+3. Bump `HIVEMIND_VERSION` in `core/version.py` and make the CHANGELOG heading match -
    the gate compares them.
 4. `deploy\package_release.bat` builds the zip from `git archive HEAD`, so the tag
    must exist first (`BUILD_INFO.txt` records it).

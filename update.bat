@@ -94,9 +94,9 @@ REM -- 2. Current version (server.py) ----------------------------------------
 set "CURRENT="
 REM widened capture: "1.3.0-preview" must arrive WHOLE - the old [0-9.]+ only
 REM saw "1.3.0" and the compare could not tell preview from release.
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "CURRENT=%%V"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path core\version.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "CURRENT=%%V"
 if not defined CURRENT (
-    echo  [ERROR] Could not read HIVEMIND_VERSION from server.py.
+    echo  [ERROR] Could not read HIVEMIND_VERSION from core\version.py.
     echo         Is this a HiveMind installation folder?
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
@@ -153,9 +153,9 @@ if not exist "%EXROOT%\utils" (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 set "TAGNUM="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -LiteralPath '%EXQ%\server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "TAGNUM=%%V"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -LiteralPath '%EXQ%\core\version.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "TAGNUM=%%V"
 if not defined TAGNUM (
-    echo  [ERROR] Zip carries no server.py HIVEMIND_VERSION. Nothing was changed.
+    echo  [ERROR] Zip carries no core\version.py HIVEMIND_VERSION. Nothing was changed.
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 set "TAG=v%TAGNUM%"
@@ -357,9 +357,9 @@ if not exist "%EXROOT%\utils" (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 set "ZIPVER="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -LiteralPath '%EXQ%\server.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "ZIPVER=%%V"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -LiteralPath '%EXQ%\core\version.py' -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "ZIPVER=%%V"
 if not defined ZIPVER (
-    echo  [ERROR] Zip carries no server.py HIVEMIND_VERSION. Nothing was applied.
+    echo  [ERROR] Zip carries no core\version.py HIVEMIND_VERSION. Nothing was applied.
     echo         backup is in %BK%
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
@@ -425,7 +425,7 @@ if errorlevel 8 (
 echo  [OK] 8 done: files applied over this installation.
 REM -- 9. Verify -------------------------------------------------------------
 set "NEWVER="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "NEWVER=%%V"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path core\version.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "NEWVER=%%V"
 if /I not "%NEWVER%"=="%TAGNUM%" (
     echo  [ERROR] Verification failed: server.py reports "%NEWVER%", expected "%TAGNUM%".
     echo         The update did not apply cleanly. Restore by copying the

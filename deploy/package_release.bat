@@ -14,9 +14,9 @@ echo  (the git token lives in settings.json; a dirty zip leaks it).
 echo.
 
 set "VER="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path server.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "VER=%%V"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path core\version.py -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "VER=%%V"
 if not defined VER (
-    echo  [ERROR] Could not read HIVEMIND_VERSION from server.py.
+    echo  [ERROR] Could not read HIVEMIND_VERSION from core\version.py.
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 set "ROOTNAME=HiveMind_v%VER%_release"
@@ -44,9 +44,9 @@ REM uncommitted version bump produced HiveMind_v1.5.2_release.zip that
 REM actually CONTAINED the 1.5.1 build - update.bat then backed up and
 REM verified against the wrong version. The packaged server.py must match.
 set "ZIPVER="
-for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $e = $z.Entries | Where-Object { $_.FullName -eq ($env:ROOTNAME + '/server.py') } | Select-Object -First 1; if ($e) { $s = New-Object System.IO.StreamReader($e.Open()); $t = $s.ReadToEnd(); $s.Dispose(); $m = [regex]::Match($t, 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)'); if ($m.Success) { $m.Groups[1].Value } }; $z.Dispose()"`) do set "ZIPVER=%%V"
+for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $e = $z.Entries | Where-Object { $_.FullName -eq ($env:ROOTNAME + '/core/version.py') } | Select-Object -First 1; if ($e) { $s = New-Object System.IO.StreamReader($e.Open()); $t = $s.ReadToEnd(); $s.Dispose(); $m = [regex]::Match($t, 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)'); if ($m.Success) { $m.Groups[1].Value } }; $z.Dispose()"`) do set "ZIPVER=%%V"
 if not defined ZIPVER (
-    echo  [ERROR] The packaged server.py carries no HIVEMIND_VERSION.
+    echo  [ERROR] The packaged core/version.py carries no HIVEMIND_VERSION.
     del "..\%OUT%"
     echo  Press any key to continue... & pause >nul & exit /b 1
 )

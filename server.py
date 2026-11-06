@@ -103,7 +103,9 @@ import httpx
 from pathlib import Path
 # deque removed ─ unused
 
-HIVEMIND_VERSION = "1.5.5"
+# SINGLE SOURCE (2026-11-05): the version lives in core/version.py —
+# infra/mcp_client and infra/lsp_client import it without pulling in server.
+from core.version import HIVEMIND_VERSION
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")

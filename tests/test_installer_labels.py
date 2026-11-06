@@ -165,8 +165,8 @@ def main() -> int:
     check("start_hivemind.bat: python chain uses top-level labels",
           ":py_found" in sh and "goto py_found" in sh
           and ":py_known_paths" in sh)
-    check("start_hivemind.bat: version lookup takes server.py via env var",
-          'set "HM_SERVER_PY=%~dp0server.py"' in sh
+    check("start_hivemind.bat: version lookup takes core/version.py via env var",
+          'set "HM_SERVER_PY=%~dp0core\\version.py"' in sh
           and any("$env:HM_SERVER_PY" in l and "Select-String" in l
                   for l in sh.splitlines())
           and not any("'%%~dp0server.py'" in l.replace("^", "")

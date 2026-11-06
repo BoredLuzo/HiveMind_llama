@@ -22,7 +22,7 @@ set "HM_VER="
 REM PATH-VIA-ENV (2026-11-04): '%~dp0server.py' inline broke on install paths
 REM with an apostrophe (O'Brien) - the PowerShell single-quoted string ended
 REM early and the version fell back to "dev". The env var carries any path.
-set "HM_SERVER_PY=%~dp0server.py"
+set "HM_SERVER_PY=%~dp0core\version.py"
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "(Select-String -Path $env:HM_SERVER_PY -Pattern 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)').Matches[0].Groups[1].Value"`) do set "HM_VER=%%V"
 if not defined HM_VER set "HM_VER=dev"
 echo    by: Luzo ^| v%HM_VER%

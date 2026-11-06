@@ -191,7 +191,7 @@ def _client_version() -> str:
     global _VERSION
     if _VERSION is None:
         try:
-            from server import HIVEMIND_VERSION as _ver
+            from core.version import HIVEMIND_VERSION as _ver
         except (ImportError, AttributeError):
             _ver = ""
         _VERSION = str(_ver or "")

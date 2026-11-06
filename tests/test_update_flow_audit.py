@@ -228,7 +228,7 @@ def section_b1(tmp: Path):
     base = tmp / "apply_base"
     write(ex / "core" / "a.py", "new core\n")
     write(ex / "utils" / "b.py", "new utils\n")
-    write(ex / "server.py", SERVER_PY)
+    write(ex / "core" / "version.py", SERVER_PY)
     write(ex / "model_configs" / "models" / "m1.json", '{"zip": true}\n')
     write(ex / "models" / "big.gguf", "zip gguf\n")
     write(ex / "update.bat", "@echo zip updater\n")
@@ -303,7 +303,7 @@ def section_b3(tmp: Path):
     print("  -- B3. odd zip layouts --")
     good = tmp / "layout_good.zip"
     make_zip(good, "HiveMind_v1.3.9-audit_release",
-             {"core/x.py": "1", "server.py": SERVER_PY})
+             {"core/x.py": "1", "core/version.py": SERVER_PY})
     multi = tmp / "layout_multi.zip"
     with zipfile.ZipFile(multi, "w") as z:
         z.writestr("HiveMind_v1.3.9-audit_release/core/x.py", "1")
@@ -337,7 +337,7 @@ def section_b4(tmp: Path):
     nasty.mkdir()
     zp_src = tmp / "nasty.zip"
     make_zip(zp_src, "HiveMind_v1.3.9-audit_release",
-             {"core/x.py": "1", "server.py": SERVER_PY})
+             {"core/x.py": "1", "core/version.py": SERVER_PY})
     tmpdir = nasty / "_update_tmp"
     tmpdir.mkdir(parents=True)
     zp = tmpdir / "release.zip"
@@ -439,7 +439,7 @@ def section_b7(tmp: Path):
     rootname = "HiveMind_v1.3.9-audit_release"
     for ver in ("1.3.9-audit", "1.3.8-old"):
         zp = tmp / "HiveMind_v1.3.9-audit_release.zip"
-        make_zip(zp, rootname, {"server.py": f"HIVEMIND_VERSION = '{ver}'\n"})
+        make_zip(zp, rootname, {"core/version.py": f"HIVEMIND_VERSION = '{ver}'\n"})
         fixed = body.replace("..\\%OUT%", "..\\HiveMind_v1.3.9-audit_release.zip")
         r = subprocess.run(
             ["powershell", "-NoProfile", "-Command", fixed],

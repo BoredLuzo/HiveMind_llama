@@ -48,7 +48,7 @@ def _client_info() -> dict:
     """Name and version for the handshake. The version is read from the engine
     so it cannot drift (a hardcoded "1.4.9" survived two releases)."""
     try:
-        from server import HIVEMIND_VERSION as _ver
+        from core.version import HIVEMIND_VERSION as _ver
     except (ImportError, AttributeError):
         _ver = ""
     return {"name": "hivemind", "version": str(_ver or "")}

@@ -72,10 +72,10 @@ def main():
     with zipfile.ZipFile(tmp / "good.zip", "w") as z:
         z.writestr("HiveMind_v1.3.9-test/core/x.py", "a = 1\n")
         z.writestr("HiveMind_v1.3.9-test/utils/y.py", "b = 2\n")
-        z.writestr("HiveMind_v1.3.9-test/server.py", SERVER_PY)
+        z.writestr("HiveMind_v1.3.9-test/core/version.py", SERVER_PY)
     with zipfile.ZipFile(tmp / "bad.zip", "w") as z:
         z.writestr("HiveMind_v1.3.9-test/core/x.py", "a = 1\n")
-        z.writestr("HiveMind_v1.3.9-test/server.py", SERVER_PY)
+        z.writestr("HiveMind_v1.3.9-test/core/version.py", SERVER_PY)
     with zipfile.ZipFile(tmp / "empty.zip", "w") as z:
         z.writestr("loose_file.txt", "x\n")
 
@@ -94,10 +94,10 @@ def main():
     check("good: core/ present", (exroot / "core").is_dir() if exroot else False)
     check("good: utils/ present", (exroot / "utils").is_dir() if exroot else False)
     if exroot:
-        v = ps(VERSION_PS.format(srv=exroot / "server.py"))
+        v = ps(VERSION_PS.format(srv=exroot / "core" / "version.py"))
         check("good: HIVEMIND_VERSION parsed from zip", v == "1.3.9-test", f" got {v!r}")
         check("good: update.bat version regex matches this file",
-              (exroot / "server.py").read_text(encoding="utf-8").count("HIVEMIND_VERSION") == 1)
+              (exroot / "core" / "version.py").read_text(encoding="utf-8").count("HIVEMIND_VERSION") == 1)
 
     # bad.zip: utils/ fehlt -> genau das muss der Guard melden
     exroot_bad = next(iter((tmp / "extracted_bad").iterdir()), None)
@@ -128,10 +128,10 @@ def main():
           exroot_nosrv is not None
           and (exroot_nosrv / "core").is_dir()
           and (exroot_nosrv / "utils").is_dir()
-          and not (exroot_nosrv / "server.py").exists())
-    v_nosrv = ps(VERSION_PS.format(srv=exroot_nosrv / "server.py")) \
+          and not (exroot_nosrv / "core" / "version.py").exists())
+    v_nosrv = ps(VERSION_PS.format(srv=exroot_nosrv / "core" / "version.py")) \
         if exroot_nosrv else "?"
-    check("nosrv: Versions-Probe leer -> 'Zip carries no server.py' greift",
+    check("nosrv: Versions-Probe leer -> 'Zip carries no core\version.py' greift",
           v_nosrv == "", f" got {v_nosrv!r}")
 
     # ---- package_release: Leak-Check funktional gegen Fake-Zips -----------

@@ -490,8 +490,8 @@ check("16e known() is gone", "def known(" not in _SRC)
 check("16f _warned is gone", "_warned" not in _SRC)
 
 # 3. The handshake version follows the engine, it is not pinned.
-check("16g the handshake version comes from server.py",
-      "from server import HIVEMIND_VERSION" in _SRC)
+check("16g the handshake version comes from core/version.py",
+      "from core.version import HIVEMIND_VERSION" in _SRC)
 check("16h no hardcoded engine version in the client",
       not re.search(r'"version": "1\.4\.', _SRC))
 

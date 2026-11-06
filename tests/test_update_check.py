@@ -69,7 +69,8 @@ def _feed(tag):
 
 with tempfile.TemporaryDirectory() as td:
     troot = Path(td)
-    (troot / "server.py").write_text('HIVEMIND_VERSION = "1.5.3"\n',
+    (troot / "core").mkdir(parents=True, exist_ok=True)
+    (troot / "core" / "version.py").write_text('HIVEMIND_VERSION = "1.5.3"\n',
                                      encoding="utf-8")
     cpath = troot / "logs" / "cache.json"
     now = 1_000_000.0
@@ -145,7 +146,8 @@ check("U4: lookalike host rejected", not _asset_url_ok("https://github.com.evil/
 # ── cache behaviour ──────────────────────────────────────────────────────
 with tempfile.TemporaryDirectory() as td:
     root = Path(td)
-    (root / "server.py").write_text('HIVEMIND_VERSION = "1.5.0-preview"\n', encoding="utf-8")
+    (root / "core").mkdir(parents=True, exist_ok=True)
+    (root / "core" / "version.py").write_text('HIVEMIND_VERSION = "1.5.0-preview"\n', encoding="utf-8")
     cache = root / "logs" / "update_check.json"
     calls = {"n": 0}
 
@@ -169,7 +171,8 @@ with tempfile.TemporaryDirectory() as td:
     r4 = check_for_update(root, timeout=0.1, cache_path=cache,
                           fetch_json=fake_fetch, now=1000.0 + 25 * 3600)
     check("C4: stale cache refetches", calls["n"] == 2 and r4.status == "update")
-    (root / "server.py").write_text('HIVEMIND_VERSION = "1.6.0-preview"\n', encoding="utf-8")
+    (root / "core").mkdir(parents=True, exist_ok=True)
+    (root / "core" / "version.py").write_text('HIVEMIND_VERSION = "1.6.0-preview"\n', encoding="utf-8")
     r5 = check_for_update(root, timeout=0.1, cache_path=cache,
                           fetch_json=fake_fetch, now=1000.0 + 25 * 3600 + 10)
     check("C5: version change invalidates cache",

@@ -47,6 +47,8 @@ _MAX_ZIP_BYTES = 256 * 1024 * 1024
 _VER_RE = re.compile(r"^[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 _VERSION_LINE_RE = re.compile(
     r"HIVEMIND_VERSION\s*=\s*[\"']([0-9][0-9A-Za-z._-]*)[\"']")
+# SPLIT (2026-11-05): the literal lives in core/version.py now.
+_VERSION_FILE = "core/version.py"
 
 
 @dataclass(frozen=True)
@@ -93,7 +95,7 @@ def is_newer(candidate: str | Version, current: str | Version) -> bool:
 
 def read_current_version(root: Path) -> str:
     try:
-        text = (root / "server.py").read_text(encoding="utf-8", errors="replace")
+        text = (root / _VERSION_FILE).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
     match = _VERSION_LINE_RE.search(text)
