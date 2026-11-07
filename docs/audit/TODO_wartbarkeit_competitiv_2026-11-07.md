@@ -135,7 +135,8 @@
   sichtbar. Zwei Over-Selection-Bugs in `--changed` gefunden und gefixt:
   Doku-Dateien wurden vor der Auswahl nicht entfernt, und `tests/<fixture>`
   erzeugte das Muster `tests` (253/331 Suiten). Gemischte 7-Datei-Änderung:
-  331 → 14 Suiten in 2,3 s; `core/tool_loop.py` allein → 17 Suiten.
+  331 → 14 Suiten in 2,3 s; `core/tool_loop.py` allein → 17 Suiten in 38 s
+  (33 s davon `mcp_client`), also unter der 60-s-Zielmarke.
   19 Mechanik-Checks in `tests/test_regression_runner_b9.py`.
 
 - [x] **B10 · P3 · DEBT — Abhängigkeiten härten.**
