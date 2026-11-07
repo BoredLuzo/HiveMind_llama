@@ -73,8 +73,15 @@ finally:
         os.environ["COVERAGE_PROCESS_START"] = _saved_env
 check("sitecustomize imports cleanly (COVERAGE_PROCESS_START unset)",
       _import_err == "", _import_err)
-check("coverage was NOT started on import (env unset)",
-      "coverage" not in sys.modules)
+if _saved_env:
+    # A7 (deep audit 2026-11-07): under measurement this process IS a
+    # coverage process, so the "not in sys.modules" assertion is by design
+    # false; skip exactly this check instead of failing the suite.
+    h.skip("coverage was NOT started on import (env unset)",
+           "measured run: COVERAGE_PROCESS_START is set")
+else:
+    check("coverage was NOT started on import (env unset)",
+          "coverage" not in sys.modules)
 _sc_text = SITECUSTOMIZE.read_text(encoding="utf-8") if SITECUSTOMIZE.is_file() else ""
 check("sitecustomize guards on COVERAGE_PROCESS_START",
       "COVERAGE_PROCESS_START" in _sc_text)

@@ -132,6 +132,20 @@ check("h2 <=1.5.5 updater can still read server.py",
       _m_srv is not None and _m_srv.group(1) == HIVEMIND_VERSION,
       f" hit={_m_srv.group(1) if _m_srv else None!r} literal={HIVEMIND_VERSION!r}")
 
+# h3: three-way version sync (core/version.py, pyproject, CHANGELOG). The
+# prepush check is Windows-local; this puts the same guard on the Linux push
+# gate (deep audit 2026-11-07).
+_PYPROJ = (ROOT / "pyproject.toml").read_text(encoding="utf-8", errors="replace")
+_CHANGELOG = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8", errors="replace")
+_m_pyproj = re.search(r'^\s*version\s*=\s*"([^"]+)"', _PYPROJ, re.M)
+_m_changelog = re.search(r'^##\s*\[([0-9][^\]]*)\]', _CHANGELOG, re.M)
+check("h3 pyproject version matches core/version.py",
+      _m_pyproj is not None and _m_pyproj.group(1) == HIVEMIND_VERSION,
+      f" pyproject={_m_pyproj.group(1) if _m_pyproj else None!r}")
+check("h4 CHANGELOG heading matches core/version.py",
+      _m_changelog is not None and _m_changelog.group(1) == HIVEMIND_VERSION,
+      f" changelog={_m_changelog.group(1) if _m_changelog else None!r}")
+
 # ── i. digest prefix case-insensitive ──────────────────────────────────────
 from deploy import updater as UPDMOD  # noqa: E402
 import tempfile  # noqa: E402

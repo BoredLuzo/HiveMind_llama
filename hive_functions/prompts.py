@@ -141,13 +141,6 @@ def get_agent_direct_prompt(agent_name: str, agent_role: str) -> str:
 
 # ── Duo Mode & Execution ───────────────────────────────────────────────────────
 
-def build_execution_block(settings, wf_chunk):
-    rules = ["These rules OVERRIDE default behavior:"]
-    if settings.get("pre_explore"): rules.append("- Perform exploration before any write.")
-    if settings.get("chunking"):    rules.append(f"- If output > {wf_chunk} chars, split before writing.")
-    if settings.get("duo_websearch_enabled", False) and settings.get("websearch_available", False):   rules.append("- Web search is available. PREFER looking things up over guessing. If you are unsure about an API, library, or framework detail, use web_search FIRST — wrong assumptions are worse than an extra tool call.")
-    return "EXECUTION CONTROL:\n" + "\n".join(rules) + "\n"
-
 # ── Duo Coder: Modular Prompt-Blocks ──────────────────────────────────────────
 
 DUO_CODER_BASE = BASE_RULE + """

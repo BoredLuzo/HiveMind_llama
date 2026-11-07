@@ -39,10 +39,11 @@ if errorlevel 1 (
 )
 
 REM ZIP-VERSION CROSS-CHECK (audit 2026-11-04): the file NAME above comes
-REM from the working-tree server.py, but git archive packs HEAD. An
+REM from the working-tree core/version.py, but git archive packs HEAD. An
 REM uncommitted version bump produced HiveMind_v1.5.2_release.zip that
 REM actually CONTAINED the 1.5.1 build - update.bat then backed up and
-REM verified against the wrong version. The packaged server.py must match.
+REM verified against the wrong version. The packaged core/version.py must
+REM match (server.py carries only the legacy text anchor).
 set "ZIPVER="
 for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $e = $z.Entries | Where-Object { $_.FullName -eq ($env:ROOTNAME + '/core/version.py') } | Select-Object -First 1; if ($e) { $s = New-Object System.IO.StreamReader($e.Open()); $t = $s.ReadToEnd(); $s.Dispose(); $m = [regex]::Match($t, 'HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)'); if ($m.Success) { $m.Groups[1].Value } }; $z.Dispose()"`) do set "ZIPVER=%%V"
 if not defined ZIPVER (
@@ -51,7 +52,7 @@ if not defined ZIPVER (
     echo  Press any key to continue... & pause >nul & exit /b 1
 )
 if not "%ZIPVER%"=="%VER%" (
-    echo  [ERROR] Zip name says %VER% but the packaged server.py is %ZIPVER% -
+    echo  [ERROR] Zip name says %VER% but the packaged core/version.py is %ZIPVER% -
     echo         the version bump is not committed. Commit it and rebuild;
     echo         the zip was deleted, nothing was published.
     del "..\%OUT%"
@@ -65,10 +66,12 @@ REM state/audit/kill-switch files. The tracked gateway.toml.example does
 REM NOT match the anchored names below.
 REM 2026-10-16: the same check now also rejects local scratch artefacts that
 REM the tracked-tree gate flags (prepush_check.ps1 point c): out*.txt,
-REM dump_*, and ANY .patch/.csv/.log/.pyc/.gguf/.env file. requirements.txt
+REM dump_*, and ANY .patch/.csv/.log/.pyc/.gguf/.pem/.key/.env file. Runtime
+REM state JSONs (runtime_models/token_stats/run_counter), bench results/work
+REM dirs and logs/ are local-only too (deep audit 2026-11-07). requirements.txt
 REM and requirements-gateway.txt are legitimate and do NOT match (the txt
 REM rule is anchored on the "out" prefix).
-powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $bad = $z.Entries | Where-Object { $_.FullName -match '(^|/)(settings\.json|presets\.json|models\.json|vision_model\.json|routing_weights\.json|memory\.json|gguf_filename_tags\.json|gateway\.toml|gateway_state\.json|gateway_state\.json\.corrupt|gateway\.disabled|gateway\.lock|gateway_audit\.jsonl|gateway_audit\.jsonl\.\d+|gateway_state\.tmp)$' -or $_.FullName -match '(^|/)sessions/' -or $_.FullName -match '(^|/)(out[^/]*\.txt|dump_[^/]*|[^/]*\.(patch|csv|log|pyc|gguf)|\.env)$' }; if ($bad) { $bad | ForEach-Object { Write-Output ('LEAK: ' + $_.FullName) }; $z.Dispose(); exit 1 }; Write-Output ('entries: ' + $z.Entries.Count); $z.Dispose()"
+powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path '..\%OUT%')); $bad = $z.Entries | Where-Object { $_.FullName -match '(^|/)(settings\.json|presets\.json|models\.json|vision_model\.json|routing_weights\.json|memory\.json|gguf_filename_tags\.json|runtime_models\.json|token_stats\.json|run_counter\.json|gateway\.toml|gateway_state\.json|gateway_state\.json\.corrupt|gateway\.disabled|gateway\.lock|gateway_audit\.jsonl|gateway_audit\.jsonl\.\d+|gateway_state\.tmp)$' -or $_.FullName -match '(^|/)sessions/' -or $_.FullName -match '(^|/)(bench/(results|\.work)|logs)/' -or $_.FullName -match '(^|/)(out[^/]*\.txt|dump_[^/]*|[^/]*\.(patch|csv|log|pyc|gguf|pem|key)|\.env)$' }; if ($bad) { $bad | ForEach-Object { Write-Output ('LEAK: ' + $_.FullName) }; $z.Dispose(); exit 1 }; Write-Output ('entries: ' + $z.Entries.Count); $z.Dispose()"
 if errorlevel 1 (
     echo  [ERROR] Zip contains user-state files - NOT usable as a release.
     echo         Fix the tracked tree; nothing was published.

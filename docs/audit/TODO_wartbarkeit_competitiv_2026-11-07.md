@@ -1,6 +1,6 @@
 # TODO — Wartbarkeit, Release-Härtung, Wettbewerbsfähigkeit
 
-**Stand:** 2026-11-07 · Branch `dev` @ `7ce41e6` + Batch 10
+**Stand:** 2026-11-07 · Branch `dev` @ `04cb9fe` + Batch 15 (Deep-Audit)
 **Legende:** P0 = blockiert Release · P1 = als Nächstes · P2 = geplant · P3 = strategisch
 **Typ:** BUG / DESIGN / DEBT / TEST / RELEASE / COMPETE
 
@@ -63,14 +63,14 @@
   *Akzeptanz:* Browser-Test (Playwright): Toggle → `settings.json` → Reload → Toggle
   bleibt; Karten-Timer und Engine-Timeout sichtbar konsistent.
 
-- [ ] **A7 · P3 · DESIGN — `coverage_setup` schlägt unter Coverage-Messung fehl.**
+- [x] **A7 · P3 · DESIGN — `coverage_setup` schlägt unter Coverage-Messung fehl.**
   Der Check „coverage not in sys.modules“ ist im gemessenen Prozess by design falsch.
-  *Akzeptanz:* Suite erkennt `COVERAGE_PROCESS_START` und überspringt genau diesen
-  Check (Suiten-Ergebnis 321/321 auch gemessen).
+  *Erledigt 2026-11-07:* bei gesetztem `COVERAGE_PROCESS_START` wird genau
+  dieser Check als SKIP gezählt; außerhalb der Messung bleibt er scharf.
 
 ## B. Wartbarkeit (offen)
 
-- [ ] **B1 · P1 · DEBT — C4/C5-Extraktion: gemessen und verworfen.**
+- [x] **B1 · P1 · DEBT — C4/C5-Extraktion: gemessen und verworfen.**
   C4 (269 Z.) berührt **60+ Loop-State-Variablen**: neben den 32 Runner-Inputs
   auch run-persistente Compression-Zähler (`_MAX_COMPRESSIONS`,
   `_compress_fail_streak`, `_ctx_compressions`, `_ctx_critical_warned`,
@@ -80,9 +80,10 @@
   60-Feld-`RoundState`-Objekt; der erste Versuch wurde vollständig
   zurückgerollt (kein Code verändert). C5 (230 Z., 3 Loop-Crossings) hat
   dieselbe Klasse.
-  *Entscheidung:* **nicht als Ganzes extrahieren.** Stattdessen nur kleine,
-  kohäsive Sub-Blöcke mit ≤5 Outputs ziehen (Muster W4a:
-  `duo_loop_guards`) oder den Loop bewusst als Monolith belassen.
+  *Entscheidung:* **nicht als Ganzes extrahieren** (won't-do, wie B4). Stattdessen
+  nur kleine, kohäsive Sub-Blöcke mit ≤5 Outputs ziehen (Muster W4a:
+  `duo_loop_guards`) oder den Loop bewusst als Monolith belassen. Der
+  Sync-Back-Vertrag in `duo_compress_cycle` bleibt als F1 offen.
   *Akzeptanz (falls später):* Characterization-Test vor jeder Bewegung;
   kein State-Objekt >15 Felder; `duo_runner` darf nicht durch Interface-Code
   wachsen.
@@ -119,9 +120,11 @@
   jetzt mit Default `True` in `settings_defaults.py` und damit in
   `docs/settings.md` dokumentiert; kein Engine-Reader nötig.
 
-- [ ] **B6 · P2 · DEBT — Pyright-Rest: 1 Fehler (`run_code_duo` complexity).**
-  Verschwindet mit B1; danach Baseline 0 anstreben.
-  *Akzeptanz:* `deploy/pyright_baseline.py` → 0/0.
+- [ ] **B6 · P2 · DEBT — Pyright-Rest: 1 Fehler (`reportGeneralTypeIssues` in `run_code_duo`).**
+  Bleibt an B1 gekoppelt (Monolith-Entscheidung); Baseline 0/0 ist kein Ziel mehr,
+  solange der Loop bewusst steht.
+  *Akzeptanz:* 0/0 nur, wenn der Diagnostic ohne Umbau verschwindet; sonst bleibt
+  1 mit dokumentierter Begründung.
 
 - [ ] **B7 · P3 · DEBT — Ruff-Regelsatz erweitern.** (F401: 537 → 179; noch nicht aktiviert)
   Aktuell nur E9/F821/F601/F811/F841/W605; `target-version` ist 3.14.
@@ -202,6 +205,64 @@
   Vision-Inferenz mit Bild, SearXNG, konfigurierte MCP-Server, `send_file`.
   *Akzeptanz:* je Integration ein dokumentierter Smoke-Test mit Credentials/
   Fixtures; Status heute: **nicht getestet**, nicht „grün“.
+
+## F. Deep-Audit 2026-11-07 (5 Subagenten, read-only)
+
+Verdikt der Audits: **teilweise fertig.** Code-/Test-/Release-Basis ist gut,
+offen sind ein unguarded Sync-Vertrag, zwei Manager-Lock-/Retry-Themen und
+kleinere Docs-/Runner-Reste. In Batch 15 erledigt: Bench-Modus/Timeouts/
+Hidden-Test-Härtung, Eviction/Prozess-Probe off-loop, `tzdata` in die
+Produktions-Deps, CI installiert den gefrorenen Lock, Leak-Regex/Export-Ignore,
+CHANGELOG/Gateway-Contract, Dead-Surface (Aliase, `_DIRECT_TIME_NOTE`,
+`build_execution_block`, 7 tote Pre-Explore-Kwargs), Runner-Robustheit und
+Flake-Report (chronisch/partial).
+
+- [ ] **F1 · P1 · DEBT — `duo_compress_cycle` Sync-Back ist an Early-Returns unguarded.**
+  ~48 Locals werden aus `ps` gelesen und nur am natürlichen Ende (18 Felder)
+  zurückgeschrieben; zwei Stop-Pfade syncen 5 bzw. 11. Zwei `STOP-SYNC`-Fixes
+  in der Historie belegen die Bug-Klasse; `test_duo_split_integrity` sieht nur
+  deklarierte Felder, keine fehlenden Syncs.
+  *Akzeptanz:* für die mutierten Felder direkt auf `ps._x` schreiben ODER ein
+  `_sync(ps, ...)` an jedem Exit; Characterization-Test vor der Bewegung.
+
+- [ ] **F2 · P2 · PERF — Manager-Lock wird über `sleep(5)` + Kills gehalten.**
+  `_enforce_vram_budget` (backend/manager_load.py) hält `self._lock` über
+  `asyncio.sleep(5)` und `_kill_slot_async` (bis ~10 s pro Slot). Der
+  Event-Loop friert nicht mehr (Batch 15), aber alle Manager-Ops serialisieren.
+  *Akzeptanz:* Opfer unter Lock wählen, Sleep/Kill außerhalb, danach
+  re-validieren.
+
+- [ ] **F3 · P2 · PERF — 45-facher 5xx-Retry kann Prefill vervielfachen.**
+  `LlamaClient` (`_TRANSIENT_HTTP_STATUSES`, `max_attempts=45`) wiederholt auch
+  deterministische 500er (Context-Overflow/Template) und schickt jedes Mal den
+  vollen Prompt. *Akzeptanz:* generische 5xx für Side-Calls auf ~3 kappen;
+  Overflow-Marker im Body erkennen und nicht retryen.
+
+- [ ] **F4 · P3 · PERF — Restliche Sync-I/O auf dem Loop.**
+  `os.walk` in `core/duo/_pre_explore.py` und `core/duo_compress_cycle.py`,
+  Prefill-Meter liest `llama_server_{port}.log` (Dateien sind seit der Rotation
+  `..._{timestamp}.log`), Telemetrie-Append pro Call. *Akzeptanz:* `to_thread`
+  für die Walks, neueste Log-Datei globben; Telemetrie bewusst belassen.
+
+- [ ] **F5 · P3 · DEBT — `_find_loaded` Orphan-Check gibt den Lock frei und
+  mutiert nach dem Re-Acquire.** Seltener Clobber eines laufenden Loads;
+  *Akzeptanz:* Probe auf Snapshot außerhalb des Locks, Mutation nur nach
+  erneuter `_loading`-Prüfung.
+
+- [ ] **F6 · P3 · TEST — Drei Pin-Suiten mit hohem Konvertierungswert.**
+  `test_voice_card` (~100 String-Pins), `test_ui_context_card`,
+  `test_toolgen_stream_card`; nur bei Anfassen konvertieren (B3-Regel),
+  Start mit `/stt/fetch` als httpx-Verhaltenstest.
+
+- [ ] **F7 · P3 · RELEASE — Wochen-Cron testet bis zum Merge weiter `main`.**
+  `windows-full.yml` hat jetzt `ref: dev`, aber geplante Workflows lesen die
+  Datei aus dem Default-Branch; wirksam erst nach dem nächsten Release-Merge.
+  *Akzeptanz:* Merge/Release oder dokumentierter manueller Dev-Lauf.
+
+- [ ] **F8 · P3 · DEBT — Zwei Snapshot-/Rollback-Klassen mit unterschiedlicher
+  Capture-Semantik.** `WorkspaceTransaction` (re-capture) vs. `FileTransaction`
+  (first-wins). *Akzeptanz:* Divergenz an beiden Headern dokumentieren; Merge
+  nur mit Pre-Explore-Failure-Tests.
 
 ## D. Wettbewerbsfähigkeit (offen)
 

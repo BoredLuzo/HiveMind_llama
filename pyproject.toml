@@ -23,13 +23,17 @@ dependencies = [
     # Windows Credential Manager for the optional Telegram gateway (P8
     # supervisor spawns the gateway from this venv - vault access).
     "keyring>=25 ; sys_platform == 'win32'",
+    # TZ-DATA (deep audit 2026-11-07): scheduler/spec.py needs the IANA
+    # database for named timezones. It lived in the dev group only, so
+    # production installs (UV_NO_DEV=1) silently fell back to system local
+    # time while tests/CI had it - a schedule could fire at the wrong hour.
+    "tzdata>=2024.1 ; sys_platform == 'win32'",
 ]
 
 [dependency-groups]
 dev = [
     "coverage[toml]>=7.6",
     "numpy>=2.0",
-    "tzdata>=2024.1 ; sys_platform == 'win32'",
     "pytest>=8.0",
     "ruff>=0.6",
 ]

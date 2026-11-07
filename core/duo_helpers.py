@@ -534,11 +534,10 @@ def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ct
 # ── Pre-Explore ────────────────────────────────────────────────────────
 
 async def _run_parallel_pre_explore(
-    *, exec_mdl, worker_slots, partitions, xtools, xopts, xport,
-    workspace, tree_ctx, user_input, xctx_chars_limit, xmsg_hard_cap,
-    aborted_fn, step_skipped_fn, emit_fn, websearch_enabled=False,
-    searched_queries=None, preload_fn=None, parallel_enabled=True,
-    chat_id="", settings_dict=None, websearch_fn=None,
+    *, exec_mdl, worker_slots, partitions, xopts, xport,
+    workspace, tree_ctx, user_input,
+    aborted_fn, emit_fn,
+    parallel_enabled=True, chat_id="", settings_dict=None, websearch_fn=None,
     thinking_override: bool | None = None,
     llm_read_timeout: float | None = None,
 ) -> tuple:

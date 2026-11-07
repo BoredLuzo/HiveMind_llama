@@ -413,6 +413,7 @@ dependencies = [
     { name = "pypdf" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "rich" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uvicorn" },
     { name = "watchfiles" },
 ]
@@ -440,7 +441,6 @@ dev = [
     { name = "numpy" },
     { name = "pytest" },
     { name = "ruff" },
-    { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
 
 [package.metadata]
@@ -458,6 +458,7 @@ requires-dist = [
     { name = "soundfile", marker = "extra == 'voice'", specifier = ">=0.13" },
     { name = "trafilatura", marker = "extra == 'recommended'", specifier = ">=1.12" },
     { name = "tree-sitter-language-pack", marker = "extra == 'recommended'", specifier = ">=0.2" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
     { name = "uvicorn", specifier = ">=0.30" },
     { name = "watchfiles", specifier = ">=0.21" },
     { name = "winotify", marker = "sys_platform == 'win32' and extra == 'notifications'", specifier = ">=0.1.5" },
@@ -470,7 +471,6 @@ dev = [
     { name = "numpy", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.6" },
-    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
 ]
 
 [[package]]

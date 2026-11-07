@@ -89,12 +89,18 @@ try:
 
     # 3) flake report -------------------------------------------------------
     hist.write_text(json.dumps({"runs": [
+        # a partial --only run must not contribute flips
+        {"at": "t0", "partial": True,
+         "results": {"flaky": {"ok": False, "dur": 9}}},
         {"at": "t1", "results": {"steady": {"ok": True, "dur": 2},
-                                  "flaky": {"ok": True, "dur": 3}}},
+                                  "flaky": {"ok": True, "dur": 3},
+                                  "chronic": {"ok": False, "dur": 1}}},
         {"at": "t2", "results": {"steady": {"ok": True, "dur": 2},
-                                  "flaky": {"ok": False, "dur": 4}}},
+                                  "flaky": {"ok": False, "dur": 4},
+                                  "chronic": {"ok": False, "dur": 1}}},
         {"at": "t3", "results": {"steady": {"ok": True, "dur": 2},
-                                  "flaky": {"ok": True, "dur": 3}}},
+                                  "flaky": {"ok": True, "dur": 3},
+                                  "chronic": {"ok": False, "dur": 1}}},
     ]}), encoding="utf-8")
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -106,6 +112,9 @@ try:
     row = next((ln for ln in out.splitlines() if ln.strip().startswith("flaky")), "")
     check("flake report counts both flips",
           row.split()[1:2] == ["2"], f"({row!r})")
+    check("flake report lists chronic failures", "CHRONIC" in out and "chronic" in out,
+          f"({out!r})")
+    check("flake report ignores partial runs", "3 full run(s)" in out, f"({out[:80]!r})")
 
     # 4) quarantine parsing -------------------------------------------------
     qfile = tmpdir / "quarantine.json"

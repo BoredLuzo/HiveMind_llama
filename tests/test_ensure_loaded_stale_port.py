@@ -107,7 +107,10 @@ def test_source_guard_stale_port():
     src = _manager_sources()
     _probe = "await self._port_alive(slot.port)" in src
     _kill = "evictions_stale_port" in src
-    _kill_call = "slot.kill()" in src
+    # KILL-OFF-LOOP (2026-11-07): the stale-port branch now kills through
+    # _kill_slot_async (the sync slot.kill() froze the event loop).
+    _kill_call = ("await _kill_slot_async(slot)" in src
+                  or "slot.kill()" in src)
     if _probe and _kill and _kill_call:
         ok("source_guard_stale_port (TCP-Probe + evictions_stale_port + kill)")
     else:

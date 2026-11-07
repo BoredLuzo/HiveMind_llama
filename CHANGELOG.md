@@ -1,6 +1,23 @@
 ## [Unreleased]
 
-Maintainability sprint on top of 1.5.5 (no intentional behavior change).
+Maintainability sprint on top of 1.5.5, plus targeted routing and runtime
+fixes found by live tests and the 2026-11-07 deep audit.
+
+Routing: a persisted agentic mode no longer hijacks short read/list prompts
+into Code Duo (`is_simple_tool_prompt`, coding verbs veto); explicit
+`agentic_force` and explicit modes still win. The legacy tool route shares
+the direct-tools prompt rules, uses `direct_tools_max_rounds` (1..300) and
+nudges one identical repeated tool call, so a read-only task ends with an
+answer instead of `max_tool_rounds`.
+
+Runtime: slot eviction kills off the event loop (`_evict_lru_async`), the
+Windows process-count probe runs in a thread, and `tzdata` moved from the
+dev group into the shipped dependencies so named timezones work on a fresh
+install.
+
+Benchmark: new `bench/` D1 harness (raw / HiveMind direct / HiveMind duo /
+aider) with a 21-task starter corpus and hidden, tamper-proof tests. It is
+developer-only and export-ignored.
 
 Dead code and single sources of truth: `_plan_state` slot transport,
 `_dump_for_test`, 11 unused preflight re-exports, the `core/duo` package

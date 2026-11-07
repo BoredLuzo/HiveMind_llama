@@ -543,7 +543,7 @@ def _load_history() -> list[dict]:
 
 
 def _record_history(results: list[tuple], changed_mode: bool,
-                    jobs: int) -> None:
+                    jobs: int, *, partial: bool = False) -> None:
     """Append this run's pass/fail/duration per suite to the history file."""
     if "--no-history" in sys.argv:
         return
@@ -553,6 +553,9 @@ def _record_history(results: list[tuple], changed_mode: bool,
         "head": head[0] if head else "",
         "jobs": jobs,
         "changed": changed_mode,
+        # PARTIAL-RUNS (deep audit 2026-11-07): --only/--changed runs cover a
+        # subset; the flake report must not compute flips across them.
+        "partial": bool(partial),
         "results": {name: {"ok": bool(ok), "dur": round(dur, 1)}
                     for name, ok, dur, _ in results},
     }
@@ -568,11 +571,11 @@ def _record_history(results: list[tuple], changed_mode: bool,
 
 
 def _flake_report(limit: int) -> int:
-    """Print pass/fail flips per suite over the last `limit` recorded runs."""
-    runs = _load_history()[-limit:]
+    """Print pass/fail flips and persistent failures over the last runs."""
+    runs = [r for r in _load_history()[-limit:] if not r.get("partial")]
     if not runs:
         rel = _HISTORY_FILE.relative_to(ROOT)
-        print(f"No flake history yet ({rel}); a normal run writes it.")
+        print(f"No full flake history yet ({rel}); a normal full run writes it.")
         return 0
     seqs: dict[str, list[bool]] = {}
     durs: dict[str, list[float]] = {}
@@ -585,22 +588,32 @@ def _flake_report(limit: int) -> int:
             if isinstance(dur, (int, float)):
                 durs.setdefault(str(name), []).append(float(dur))
     rows = []
+    persistent = []
     for name, seq in seqs.items():
         flips = sum(1 for a, b in zip(seq, seq[1:]) if a != b)
         if flips:
             rows.append((flips, name, len(seq), sum(seq), seq[-1]))
+        elif len(seq) >= 2 and not any(seq):
+            # CHRONIC-FAILURE (deep audit 2026-11-07): a suite failing every
+            # run never flipped, so the old report could not see it at all.
+            persistent.append((name, len(seq), seq[-1]))
     rows.sort(key=lambda r: (-r[0], r[1]))
-    print(f"FLAKE REPORT: {len(runs)} run(s), "
+    print(f"FLAKE REPORT: {len(runs)} full run(s), "
           f"{runs[0].get('at', '?')} .. {runs[-1].get('at', '?')}")
-    if not rows:
-        print("  no suite flipped pass/fail in this window")
+    if not rows and not persistent:
+        print("  no suite flipped pass/fail and none failed in every run")
         return 0
-    print(f"  {'suite':24s} {'flips':>5s} {'runs':>5s} {'pass':>5s}  last   median")
-    for flips, name, n, npass, last in rows:
-        ds = sorted(durs.get(name) or [0.0])
-        median = ds[len(ds) // 2]
-        print(f"  {name:24s} {flips:5d} {n:5d} {npass:5d}  "
-              f"{'PASS' if last else 'FAIL':4s}  {median:.0f}s")
+    if rows:
+        print(f"  {'suite':24s} {'flips':>5s} {'runs':>5s} {'pass':>5s}  last   median")
+        for flips, name, n, npass, last in rows:
+            ds = sorted(durs.get(name) or [0.0])
+            median = ds[len(ds) // 2]
+            print(f"  {name:24s} {flips:5d} {n:5d} {npass:5d}  "
+                  f"{'PASS' if last else 'FAIL':4s}  {median:.0f}s")
+    if persistent:
+        print("  CHRONIC (failed in every recorded run):")
+        for name, n, last in sorted(persistent):
+            print(f"  {name:24s} {n:5d} {'FAIL':4s}")
     return 0
 
 
@@ -614,12 +627,19 @@ def main() -> int:
     only = ""
     if "--only" in sys.argv:
         i = sys.argv.index("--only")
-        only = sys.argv[i + 1].lower() if i + 1 < len(sys.argv) else ""
+        if i + 1 >= len(sys.argv) or sys.argv[i + 1].startswith("-"):
+            print("error: --only needs a name filter", file=sys.stderr)
+            return 2
+        only = sys.argv[i + 1].lower()
     ci_subset = "--ci-subset" in sys.argv
     jobs = 6
     if "--jobs" in sys.argv:
         i = sys.argv.index("--jobs")
-        jobs = max(1, int(sys.argv[i + 1]) if i + 1 < len(sys.argv) else 6)
+        try:
+            jobs = max(1, int(sys.argv[i + 1]) if i + 1 < len(sys.argv) else 6)
+        except ValueError:
+            print("error: --jobs needs an integer", file=sys.stderr)
+            return 2
     if "--help" in sys.argv or "-h" in sys.argv:
         print(__doc__)
         return 0
@@ -744,6 +764,11 @@ def main() -> int:
                 cwd=str(ROOT), timeout=timeout)
         except subprocess.TimeoutExpired:
             return False, time.time() - t0, None
+        except (OSError, subprocess.SubprocessError) as exc:
+            # A broken spawn must be a FAIL row, not a runner traceback that
+            # loses the whole run and its history entry (deep audit 2026-11-07).
+            print(f"note: could not start {rel}: {exc}", file=sys.stderr)
+            return False, time.time() - t0, None
         return r.returncode == 0, time.time() - t0, r
 
     _ran: list[tuple[int, str, str, int]] = []
@@ -779,7 +804,8 @@ def main() -> int:
     ran = len(results)
     npass = sum(1 for _, ok, _, _ in results if ok)
     print(f"Suites: {npass}/{ran} PASS, {failed_total} suite(s) failed")
-    _record_history(results, changed_mode, jobs)
+    _record_history(results, changed_mode, jobs,
+                    partial=bool(only or changed_mode))
     return 1 if failed_total else 0
 
 

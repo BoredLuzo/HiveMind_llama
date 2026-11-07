@@ -377,6 +377,7 @@ class LlamaLoadMixin:
         async def _find_loaded(self, model: str) -> Optional[_LoadSlot]: ...
         async def _find_free_slot(self) -> Optional[_LoadSlot]: ...
         def _evict_lru(self, exclude_slot: Optional[ModelSlot] = None) -> Optional[_LoadSlot]: ...
+        async def _evict_lru_async(self, exclude_slot: Optional[ModelSlot] = None) -> Optional[_LoadSlot]: ...
 
         # Binary-capability probes (class-level, filled once by
         # _phase_capabilities in llama_start_phases.py).
@@ -518,7 +519,7 @@ class LlamaLoadMixin:
                     return slot
 
             if slot is None:
-                slot = await self._find_free_slot() or self._evict_lru()
+                slot = await self._find_free_slot() or await self._evict_lru_async()
                 if slot is None:
                     raise RuntimeError("No free slot available")
                 slot._loading = True
@@ -640,9 +641,7 @@ class LlamaLoadMixin:
                         _committed, VRAM_BUDGET_GB, len(_active_workers),
                     )
                     await asyncio.sleep(5.0)
-                _extra = self._evict_lru(exclude_slot=slot)
-                if _extra is not None:
-                    await _kill_slot_async(_extra)
+                await self._evict_lru_async(exclude_slot=slot)
                 # Recalculate after eviction (stale _committed used to log wrong value)
                 _committed_after = sum(
                     vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
@@ -655,9 +654,7 @@ class LlamaLoadMixin:
                         "[VRAM-GUARD] committed=%.1fGB > budget=%.1fGB after eviction — forced extra evict",
                         _committed_after, VRAM_BUDGET_GB,
                     )
-                    _extra2 = self._evict_lru(exclude_slot=slot)
-                    if _extra2 is not None:
-                        await _kill_slot_async(_extra2)
+                    await self._evict_lru_async(exclude_slot=slot)
 
     async def ensure_loaded(self, model: str, num_ctx: Optional[int] = None,
                             pin: bool = False, vision: bool = False,
@@ -777,7 +774,7 @@ class LlamaLoadMixin:
                                     slot._idle_timeout = None
                                 return slot.port
             if slot is None:
-                slot = await self._find_free_slot() or self._evict_lru()
+                slot = await self._find_free_slot() or await self._evict_lru_async()
                 if slot is None:
                     raise RuntimeError("No free slot available")
                 slot._loading      = True
@@ -1194,7 +1191,7 @@ class LlamaLoadMixin:
             if _load_mode == "none":
                 try:
                     from backend.llama_preflight import llama_process_count as _lpc
-                    _llama_procs = _lpc()
+                    _llama_procs = await asyncio.to_thread(_lpc)
                 except (ImportError, OSError):
                     _llama_procs = -1
                 if _llama_procs != 0:

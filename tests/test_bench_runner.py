@@ -17,8 +17,9 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from bench.runner import (  # noqa: E402
-    Task, _extract_patch, aggregate, apply_patch, load_tasks,
-    prepare_workspace, print_summary, run_check,
+    Config, Task, _extract_patch, _hivemind_body, _parse_token_count,
+    _persist, aggregate, apply_patch, load_tasks, prepare_workspace,
+    print_summary, run_check,
 )
 from tests._harness import Harness  # noqa: E402
 
@@ -88,6 +89,12 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           f" ({out!r})")
     check("hidden: fixture itself is untouched",
           (tasks[0].tests / "test_task.py").read_text(encoding="utf-8") == "hidden\n")
+    blocked = prepare_workspace(tasks[0], root / "work_block")
+    (blocked / "test_task.py").mkdir()  # a directory must not shadow the test
+    ok, out = run_check(tamper_task, blocked)
+    check("hidden: a shadowing directory is replaced", ok is True, f" ({out!r})")
+    check("hidden: the installed test is a real file",
+          (blocked / "test_task.py").is_file())
 
     # ── diff handling ──────────────────────────────────────────────────────
     fenced = "here\n```diff\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+two\n```\n"
@@ -107,6 +114,33 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
         check("patch: invalid diff is reported", ok is False, f" ({detail})")
     else:
         h.skip("patch: git not installed", "git apply needs git")
+
+    # ── condition bodies / token parsing / incremental result ──────────────
+    direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False)
+    check("body: direct condition uses a real engine mode",
+          direct_body["mode"] == "simple", f" ({direct_body['mode']})")
+    check("body: direct condition asks for full tools",
+          direct_body.get("direct_tools_enabled") is True
+          and direct_body.get("direct_tools_tier") == "full")
+    duo_body = _hivemind_body(Task("t", "p", "c"), work, duo=True)
+    check("body: duo condition is code_duo + agentic",
+          duo_body["mode"] == "code_duo" and duo_body.get("duo_agentic_mode") is True)
+
+    check("tokens: plain number", _parse_token_count("345") == 345)
+    check("tokens: thousands separator", _parse_token_count("1,234") == 1234)
+    check("tokens: k suffix", _parse_token_count("1.2", "k") == 1200)
+    check("tokens: m suffix", _parse_token_count("1.5", "M") == 1_500_000)
+    check("tokens: junk is zero", _parse_token_count("nope") == 0)
+
+    out_file = root / "results" / "run.json"
+    cfg = Config(tasks_dir=root, out=out_file, model="m")
+    _persist(out_file, [{"condition": "raw", "ok": True, "seconds": 1, "tokens": 2}],
+             cfg, ["raw"], "2026-11-07T00:00:00")
+    saved = json.loads(out_file.read_text(encoding="utf-8"))
+    check("results: persisted after each cell",
+          saved["results"][0]["condition"] == "raw"
+          and saved["summary"]["raw"]["pass_rate"] == 1.0,
+          f" ({saved.get('summary')})")
 
     # ── aggregation ────────────────────────────────────────────────────────
     rows = [

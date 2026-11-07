@@ -154,6 +154,14 @@ class LlamaProcessMixin:
         return None
 
     def _evict_lru(self, exclude_slot: Optional[ModelSlot] = None) -> Optional[ModelSlot]:
+        """Select the LRU victim. Does NOT kill it.
+
+        KILL-OFF-LOOP (deep audit 2026-11-07): `ModelSlot.kill()` runs
+        taskkill/terminate/wait (up to ~10 s) and used to be called from
+        here - inside `async with self._lock`, freezing the whole event loop.
+        Async callers must use `_evict_lru_async`; the sync selector stays
+        for tests and lock-free callers.
+        """
         # PIN EXPIRY (2026-10-02): a pin protects a slot for 30 minutes from
         # its pin time — hung pins (crashed runner that never unpinned) can
         # no longer block eviction forever. MONOTONIC (audit A3): pairs with
@@ -176,5 +184,13 @@ class LlamaProcessMixin:
         logger.info(f"LRU-Evicting {lru.model} (slot {lru.slot_id})")
         self._metric_inc("evictions_total")
         self._metric_inc("evictions_lru")
-        lru.kill()
         return lru
+
+    async def _evict_lru_async(
+        self, exclude_slot: Optional[ModelSlot] = None
+    ) -> Optional[ModelSlot]:
+        """Select + kill the LRU victim without blocking the event loop."""
+        victim = self._evict_lru(exclude_slot)
+        if victim is not None:
+            await _kill_slot_async(victim)
+        return victim

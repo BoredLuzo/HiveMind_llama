@@ -40,13 +40,6 @@ def _direct_tools_note(tool_mode: str, ws_ok: bool = False) -> str:
         "Never call a tool that is not listed above."
     )
 
-_DIRECT_TIME_NOTE = (
-    "\n\nCURRENT DATE/TIME (local, set by the system):\n"
-    "  {dt}\n"
-    "Use this for any date/time questions. You can also call get_datetime() "
-    "for the same info as a tool call."
-)
-
 
 class _DirectToolsResult:
     """Mutable outcome holder for a live direct-tools run.

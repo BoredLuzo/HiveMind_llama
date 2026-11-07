@@ -108,10 +108,6 @@ try:
     from backend.llama_compat import force_kill_all as _force_kill_all
 except ImportError:
     _force_kill_all = None
-from hive_functions.planner import (
-    make_thinking_planner_sys, make_planner_sys,
-    fallback_planner_steps,
-)
 from hive_functions.test_runner import run_tests as _run_test_suite, TestResult as _TestResult
 from hive_functions.chunking import (
     load_resume_data,
@@ -998,10 +994,7 @@ _DUO_CODER_PATH_ADD = _make_duo_coder_path_add(include_websearch=False)
 
 
 # PHASE B2: Planner-Funktionen ─ delegiert an hive_functions.planner
-
-_make_duo_thinking_planner_sys = make_thinking_planner_sys
-_make_duo_planner_sys = make_planner_sys
-_fallback_planner_steps = fallback_planner_steps
+# (the old module-level aliases were unused; core modules import directly)
 
 # ─── run_stream Kernfunktion ────────────────────────────────────────────────────
 

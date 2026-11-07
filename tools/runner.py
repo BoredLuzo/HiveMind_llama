@@ -898,15 +898,13 @@ async def _check_action_approval(name: str, args: dict, workspace,
     _approval_auto_off_events.pop(str(run_id), None)
     _pending_approvals.pop(run_id, None)
     await _safe_emit({"type": "agent_resumed"})
-    # TIMEOUT AUTO-APPROVE-ONCE (2026-10-01): an empty answer can only come
-    # from the timeout (the decide endpoint rejects empty answers);
+    # TIMEOUT DENY (2026-10-03): an empty answer can only come from the
+    # timeout (the decide endpoint rejects empty answers);
     # wait_for_resume signals its own timeout as "[ask_user TIMEOUT: ...]".
-    # With duo_action_approval_timeout_s > 0 an unanswered card lets THIS
-    # call run once (unattended runs must not be wedged forever — live smoke
-    # run paused 9+ min on a run_bash card); the model sees an explicit
-    # note, the once-path rules apply (writes per file, no repo memory).
-    # The NEXT late decision is discarded once (_approval_expired), so a
-    # stale click can never approve the following gated call.
+    # With duo_action_approval_timeout_s > 0 an unanswered card DENIES this
+    # call once (fail closed) - the model picks another approach and the
+    # run cannot wedge. A late decision is discarded once (_approval_expired),
+    # so a stale click can never approve the following gated call.
     _appr_timed_out = (not str(answer or "").strip()
                        or str(answer).startswith("[ask_user TIMEOUT"))
     if _appr_timed_out and _appr_to_s > 0:

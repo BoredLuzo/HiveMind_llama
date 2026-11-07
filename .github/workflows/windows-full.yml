@@ -18,6 +18,14 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          # SCHEDULED-BRANCH (deep audit 2026-11-07): scheduled workflows run
+          # the DEFAULT branch's copy of this file. Without this ref the
+          # weekly gate tested a stale main snapshot with the old 6-worker
+          # config while dev carried the fixes. This line takes effect once
+          # this file is merged to main; until then the Monday run still uses
+          # main's copy - merge before relying on it as the dev gate.
+          ref: dev
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
@@ -27,12 +35,13 @@ jobs:
         # ship a different dependency set than the one the tree was tested
         # with (B10, 2026-11-07).
         run: uv lock --check
-      - name: Install deps
-        run: |
-          python -m pip install -q -r requirements.txt
-          python -m pip install -q pytest ruff
+      - name: Install the frozen lock set (what users actually get)
+        # LOCKED-INSTALL (deep audit 2026-11-07): the old pip step resolved
+        # newest-of-the-day from requirements floors; the exact versions
+        # install.bat/updater.py install were never exercised in CI.
+        run: uv sync --frozen
       - name: Full regression gate
         # 2026-11-07: a hosted runner has two cores - six workers flake
         # (WinError 10053 on the socket suites). --ci-subset drops the
         # three suites whose fixtures only exist on a developer box.
-        run: python tests/run_regressions.py --ci-subset --jobs 2
+        run: uv run --frozen --no-sync python tests/run_regressions.py --ci-subset --jobs 2

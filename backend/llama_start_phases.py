@@ -1080,7 +1080,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                     "[PRE-FLIGHT-EVICT] %s (slot %d) sacrificed for load %s @ctx=%d",
                     _victim.model, _victim.slot_id, model, num_ctx,
                 )
-                _victim.kill()
+                await _kill_slot_async(_victim)
                 _fit = await self._pre_flight_grace_recheck(
                     model, num_ctx, slot,
                     safety_margin_mib=VRAM_PRE_FLIGHT_REDUCED_MARGIN_MIB,
@@ -1393,7 +1393,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
         if not ready:
             _exit = slot.process.poll() if slot.process else -1
             _log_content = _log_path.read_text(encoding="utf-8", errors="replace")[-8000:]
-            slot.kill()
+            await _kill_slot_async(slot)
             if _exit is not None:
                 # ── Specific error diagnosis ────────────────────────────
                 if "key not found in model: qwen3vl.rope" in _log_content:

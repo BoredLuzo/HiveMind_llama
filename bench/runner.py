@@ -59,7 +59,8 @@ class Config:
     hivemind_url: str = "http://127.0.0.1:8001"
     conditions: list[str] = field(default_factory=lambda: list(CONDITIONS))
     runs: int = 1
-    task_timeout_s: int = 600
+    # None = use each task's timeout_s; a CLI value overrides the corpus.
+    task_timeout_s: int | None = None
     keep_work: bool = False
 
 
@@ -94,6 +95,27 @@ def prepare_workspace(task: Task, base: Path) -> Path:
     return work
 
 
+def install_hidden_tests(task: Task, work: Path) -> None:
+    """Copy tests/ over the workspace, replacing files AND directories.
+
+    copytree(dirs_exist_ok=True) silently copies a file INTO an existing
+    directory of the same name (Windows: dst/test.py/test.py), so an agent
+    could shadow a hidden test by creating that directory. Replace the
+    destination explicitly before every file.
+    """
+    if task.tests is None:
+        return
+    for src in task.tests.rglob("*"):
+        dst = work / src.relative_to(task.tests)
+        if src.is_dir():
+            dst.mkdir(parents=True, exist_ok=True)
+            continue
+        if dst.is_dir():
+            shutil.rmtree(dst)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+
 def run_check(task: Task, work: Path, timeout_s: int | None = None) -> tuple[bool, str]:
     """Run the task's check command; exit 0 = pass.
 
@@ -101,7 +123,10 @@ def run_check(task: Task, work: Path, timeout_s: int | None = None) -> tuple[boo
     its turn. The agent never sees them and cannot edit them into passing.
     """
     if task.tests is not None:
-        shutil.copytree(task.tests, work, dirs_exist_ok=True)
+        try:
+            install_hidden_tests(task, work)
+        except OSError as exc:
+            return False, f"hidden test install failed: {exc}"
     if not task.check.strip():
         return False, "task.json has no check command"
     timeout = timeout_s or task.timeout_s
@@ -169,18 +194,30 @@ async def _run_raw(task: Task, work: Path, cfg: Config) -> dict:
             "tokens": int(usage.get("total_tokens") or 0)}
 
 
-async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool) -> dict:
+def _hivemind_body(task: Task, work: Path, duo: bool) -> dict:
+    """Request body for the two HiveMind conditions.
+
+    MODE-FIX (deep audit 2026-11-07): "chat" is NOT a mode the engine knows
+    (recognized: auto|automap|simple|pipeline|agent|code_duo); it fell into
+    the judge else-branch and could route a "direct" run into pipeline/duo,
+    silently invalidating the D1 baseline. "simple" is the real direct route.
+    """
     body = {
         "q": task.prompt,
         "workspace": str(work),
         "chat_id": uuid.uuid4().hex,
-        "mode": "code_duo" if duo else "chat",
+        "mode": "code_duo" if duo else "simple",
     }
     if duo:
         body["duo_agentic_mode"] = True
     else:
         body["direct_tools_enabled"] = True
         body["direct_tools_tier"] = "full"
+    return body
+
+
+async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool) -> dict:
+    body = _hivemind_body(task, work, duo)
     done: dict = {}
     error = ""
     async with httpx.AsyncClient(timeout=httpx.Timeout(900.0, connect=10.0)) as client:
@@ -204,6 +241,15 @@ async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool) -> dict:
             "detail": error}
 
 
+def _parse_token_count(number: str, suffix: str = "") -> int:
+    """'1.2' + 'k' -> 1200; '1,234' -> 1234; junk -> 0."""
+    try:
+        value = float(str(number).replace(",", ""))
+    except ValueError:
+        return 0
+    return int(value * {"k": 1000, "m": 1_000_000}.get((suffix or "").lower(), 1))
+
+
 def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
     if shutil.which("aider") is None:
         return {"tokens": 0, "detail": "aider is not installed"}
@@ -219,16 +265,19 @@ def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
     try:
         r = subprocess.run(cmd, cwd=str(work), capture_output=True, text=True,
                            encoding="utf-8", errors="replace",
-                           timeout=task.timeout_s, env=env)
+                           timeout=cfg.task_timeout_s or task.timeout_s, env=env)
     except (OSError, subprocess.SubprocessError) as exc:
         return {"tokens": 0, "detail": f"aider failed: {exc}"}
     detail = ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
-    match = re.search(r"Tokens:\s*([\d.,]+)\s*sent.*?([\d.,]+)\s*received",
-                      detail, re.S | re.I)
+    # "Tokens: 1.2k sent, 345 received" (k/m suffixes are common).
+    match = re.search(
+        r"Tokens:\s*([\d.,]+)\s*([kKmM]?)\s*sent.*?"
+        r"([\d.,]+)\s*([kKmM]?)\s*received",
+        detail, re.S | re.I)
     tokens = 0
     if match:
-        tokens = int(match.group(1).replace(".", "").replace(",", "")) \
-            + int(match.group(2).replace(".", "").replace(",", ""))
+        tokens = (_parse_token_count(match.group(1), match.group(2))
+                  + _parse_token_count(match.group(3), match.group(4)))
     return {"tokens": tokens, "detail": detail}
 
 
@@ -292,6 +341,28 @@ def print_summary(summary: dict) -> None:
               f"{row['median_seconds']:>9.1f} {row['tokens_total']:>9d}")
 
 
+def _payload(rows: list[dict], cfg: Config, conditions: list[str],
+             started_at: str) -> dict:
+    return {
+        "started_at": started_at,
+        "model": cfg.model,
+        "runs": cfg.runs,
+        "conditions": conditions,
+        "summary": aggregate(rows),
+        "results": rows,
+    }
+
+
+def _persist(out: Path, rows: list[dict], cfg: Config,
+             conditions: list[str], started_at: str) -> None:
+    """Atomic write after every cell: a crash keeps the completed rows."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(_payload(rows, cfg, conditions, started_at), indent=1),
+                   encoding="utf-8")
+    tmp.replace(out)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tasks", default=str(Path(__file__).parent / "tasks"))
@@ -301,7 +372,8 @@ def main() -> int:
     parser.add_argument("--hivemind", default="http://127.0.0.1:8001")
     parser.add_argument("--conditions", default=",".join(CONDITIONS))
     parser.add_argument("--runs", type=int, default=1)
-    parser.add_argument("--task-timeout", type=int, default=600)
+    parser.add_argument("--task-timeout", type=int, default=None,
+                        help="override every task's timeout_s (default: per task)")
     parser.add_argument("--keep-work", action="store_true")
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
@@ -330,6 +402,7 @@ def main() -> int:
     )
 
     rows: list[dict] = []
+    started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     work_root = (Path(__file__).parent / ".work" / stamp) if cfg.keep_work else None
     if work_root is not None:
         work_root.mkdir(parents=True, exist_ok=True)
@@ -345,6 +418,7 @@ def main() -> int:
                     row = asyncio.run(_one_run(cond, task, cfg, cell))
                     row["run"] = run_idx + 1
                     rows.append(row)
+                    _persist(out, rows, cfg, conditions, started_at)
                     print(f"[run {run_idx + 1}/{cfg.runs}] {task.id:<20} {cond:<16} "
                           f"{'PASS' if row['ok'] else 'FAIL':4s} {row['seconds']:>6.1f}s")
     finally:
@@ -352,16 +426,6 @@ def main() -> int:
             tmp.cleanup()
 
     summary = aggregate(rows)
-    payload = {
-        "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "model": cfg.model,
-        "runs": cfg.runs,
-        "conditions": conditions,
-        "summary": summary,
-        "results": rows,
-    }
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, indent=1), encoding="utf-8")
     print_summary(summary)
     print(f"\nwrote {out}")
     return 0

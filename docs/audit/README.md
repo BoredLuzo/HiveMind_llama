@@ -13,6 +13,9 @@ are **not** part of the release zip (see `.gitattributes`).
 - [tool_registry.md](tool_registry.md) - tool registration
 - [tool_use.md](tool_use.md) - tool loop behaviour
 - [tools_final.md](tools_final.md) - final tool layer review
+- [TODO_wartbarkeit_competitiv_2026-11-07.md](TODO_wartbarkeit_competitiv_2026-11-07.md) -
+  live maintenance/release/competitiveness backlog (the only file here that
+  is maintained; the rest are snapshots)
 - [voice_layer.md](voice_layer.md) - speech to text and text to speech
 
 Measurements live with the code they changed (commit bodies) or in

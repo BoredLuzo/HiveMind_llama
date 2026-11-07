@@ -24,6 +24,9 @@
 /docs/architecture.md export-ignore
 /RELEASE_NOTES_*.md export-ignore
 /scripts/ export-ignore
+# bench/ is the D1 eval harness + task corpus: developer-only, never needed
+# by a user install (deep audit 2026-11-07).
+/bench/ export-ignore
 /ruff.toml export-ignore
 /.gitignore export-ignore
 /.gitattributes export-ignore
