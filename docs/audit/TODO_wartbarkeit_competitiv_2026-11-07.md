@@ -24,20 +24,32 @@
   *Evidenz:* `core/tool_loop.py:553`, `core/duo_runner.py:3604`; Direct-Runner hat
   keinen Drain.
 
-- [ ] **A3 · P1 · DESIGN/QUALITY — Auto + Agentic hijackt einfache Tool-Prompts.**
+- [x] **A3 · P1 · DESIGN/QUALITY — Auto + Agentic hijackt einfache Tool-Prompts.**
   Mit `duo_agentic_mode=true` geht „List files“ in den Code-Duo-Pfad und endet nach
   Listen-/Loop-Wiederholungen in `loop_detected` statt im Tool-Agent.
   *Akzeptanz:* Tool-Erkennung vor dem Agentic-Hijack; einfache Listen-/Read-Prompts
   landen im Direct-Tools-/Tool-Agent-Pfad, Code-Duo bleibt für echte Coding-Tasks.
   *Evidenz:* Live-Matrix, 745 Events, `[LOOP-DETECT-STOP] explore_only=3`.
+  *Erledigt 2026-11-07:* `is_simple_tool_prompt` (routing/agent_intent.py) erkennt
+  kurze Read-/List-Prompts und vetot Coding-Verben; `_chat_route_decision` nutzt
+  das vor dem persistierten Agentic-Hijack und vor dem Judge-`duo`-Override.
+  Explizites `agentic_force` und explizite Modi gewinnen weiter. Tests:
+  `tests/test_simple_tool_routing.py` (20 Checks, inkl. Coding-Gegenprobe).
 
-- [ ] **A4 · P1 · DEBT/QUALITY — Legacy-Tool-Route erreicht nur Max-Runden.**
+- [x] **A4 · P1 · DEBT/QUALITY — Legacy-Tool-Route erreicht nur Max-Runden.**
   Nach dem `ResponseNotRead`-Fix (`c5f686e`) läuft die Route, aber der 2b-Agent
   wiederholt Tool-Calls und endet mit `max_tool_rounds` statt einer Antwort.
   *Akzeptanz:* Round-Limit-/Prompt-Parität mit dem Direct-Tools-Pfad; ein einfacher
   Read-Task endet mit `completed` und einer Textantwort. Duplikat-Logik gegen
   `tool_loop.py` bereinigen (C7-Hinweis aus dem Bericht).
   *Evidenz:* Live-Retest 2026-11-07, `done stop_reason=max_tool_rounds`.
+  *Erledigt 2026-11-07:* `core/chat_tools_route.py` nutzt jetzt die gemeinsame
+  Tool-Werbung des Direct-Pfads (`_direct_tools_note`) plus eine explizite
+  Stop-Regel, `direct_tools_max_rounds` steuert beide Pfade (1..300), und ein
+  `_repeat_guard` nudgt einen identischen Wiederholungs-Call genau einmal.
+  Integrationstest `tests/test_tool_route_repeat_guard.py`: ohne Guard endet
+  der Fake-Loop in `max_tool_rounds`, mit Guard in `completed` + Textantwort;
+  `tests/test_chat_tools_route_guards.py` deckt Prompt/Signaturen/Limit ab.
 
 - [ ] **A5 · P2 · DESIGN — Doppelter Auto-Answer bei `ask_user_auto_proceed`.**
   Karten-Timer (JS, 30 s) und Engine-Timeout (30 s) können gleichzeitig antworten.
@@ -90,11 +102,11 @@
   Cache-aus-Pfad), kein Quelltext-Grep mehr. Die neuen Helper-Suiten
   (`pipeline_runner`, `chat_run`) sind vollständig Verhalten.
 
-- [ ] **B4 · P2 · TEST — Restliche Harness-Migration.** (195 von 333 Suiten migriert; Sonderformate offen)
-  Suiten mit Sonderformat (`=== Results:`, `passed=N failed=M`, Skip-Summary,
-  `<5 Checks`) sind noch nicht migriert.
-  *Akzeptanz:* Harness um diese Formate erweitert oder bewusst als Ausnahmen
-  dokumentiert; keine Verhaltensänderung.
+- [x] **B4 · P2 · TEST — Restliche Harness-Migration.** (195 von 333 Suiten migriert)
+  *Entscheidung 2026-11-07 (Owner):* **won't do** als Massenmigration. Rein
+  kosmetisch, kein Produktverhalten und kein Performance-Gewinn; jede weitere
+  Migration ist Churn. Neue Suiten nutzen den Harness, bestehende werden nur
+  beim Anfassen umgestellt. Sonderformate bleiben wie sie sind.
 
 - [x] **B5 · P2 · DEBT — Tote UI-/Settings-Altlasten.**
   `chat_autosave_enabled` (nur clientseitig), `duo_pair` (nur UI); entscheiden:
@@ -122,8 +134,10 @@
   Schwächste Kernmodule: `core/pipeline_runner.py` 2,5 %, `duo_compress_cycle` 4,1 %,
   `chat_run` 10,3 %, `llama_start_phases` 11,1 %, `_pre_explore` 11,6 %,
   `manager_load` 18,9 %.
-  *Akzeptanz:* pro Modul mindestens ein Happy-Path- und ein Fehlerpfad-Test;
-  Gesamt-Coverage >60 % ohne reine String-Pins.
+  *Akzeptanz (geändert 2026-11-07, Owner):* **kein Prozentziel.** Neue Tests nur,
+  wenn ein Modul angefasst, ein Bug gefixt oder ein Refactor abgesichert wird;
+  pro angefasstem Modul ein Happy-Path- und ein Fehlerpfad-Test, keine reinen
+  String-Pins. Coverage bleibt Diagnose, nicht Ziel.
   *Fortschritt 2026-11-07:* `project_state` (40), `background` (31), `log_noise` (33),
   `keep_awake` (27), `testmap` (26), `manager_health` (46), `compression` (58),
   `chat_route_decision` (25) mit neuen Verhaltens-Suiten abgedeckt. Batch 11:
@@ -193,6 +207,8 @@
 
 - [ ] **D1 · P2 · COMPETE — Benchmark-Runner: relativer Zuwachs statt absoluter Quote.**
   (Empfehlung aus dem Review mit Sonnet, 2026-11-07)
+  *Reihenfolge:* **nach A3/A4** (Owner, 2026-11-07) — erst das Routing fixen,
+  dann den Runner bauen, damit die Baseline nicht einen bekannten Fehler misst.
   Keine Outcome-Messung für Coding-Qualität (nur Pins/Units). Wichtig ist
   **nicht** eine hohe absolute Quote, sondern der relative Zuwachs gegenüber
   der Baseline: In RExBench scheitern Aider, Claude Code und OpenHands mit
@@ -280,3 +296,6 @@
 - Batch 11 (2026-11-07): B8-Verhaltens-Suiten für `pipeline_runner`- und
   `chat_run`-Helfer, `_phase_claim` (+13) und MoE-Phase (+4; ersetzt den
   Quelltext-Pin `j`), 333/333 Suiten grün.
+- Batch 12 (2026-11-07): A3 Simple-Tool-Routing vor Agentic/Judge-Duo, A4
+  Prompt-/Round-Parität + Repeat-Guard in der Legacy-Tool-Route; B4 als
+  won't-do geschlossen, B8-Prozentziel gestrichen, D1 nach A3/A4 eingeordnet.

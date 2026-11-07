@@ -375,6 +375,10 @@ SUITES = [
     # B8 helper coverage for the weakest core modules
     ("pipeline_runner_helpers", "tests/test_pipeline_runner_helpers.py",     30),
     ("chat_run_helpers",        "tests/test_chat_run_helpers.py",            30),
+    # A3/A4 routing + repeat-guard behavior
+    ("simple_tool_routing",     "tests/test_simple_tool_routing.py",         30),
+    ("chat_tools_route_guards", "tests/test_chat_tools_route_guards.py",     30),
+    ("tool_route_repeat_guard", "tests/test_tool_route_repeat_guard.py",     30),
 
 ]
 

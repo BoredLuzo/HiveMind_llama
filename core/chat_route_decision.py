@@ -47,7 +47,7 @@ class _ChatRouteDecisionState:
 
 
 async def _chat_route_decision(ps):
-    from routing.agent_intent import detect_tool_request
+    from routing.agent_intent import detect_tool_request, is_simple_tool_prompt
     from routing.model_automap import get_routing_suggestion
     from core.chat_run import _history_budget_tokens
     _decide_route = ps._decide_route
@@ -78,11 +78,21 @@ async def _chat_route_decision(ps):
     _decider_on = _routing_decider.normalise_mode(
         (model_overrides or {}).get("routing_decider") or settings.get("routing_decider")
     ) != "off"
+    # A3 (2026-11-07): a persisted agentic flag must not turn a simple
+    # read/list prompt into a Code Duo run. Narrow and coding-verb guarded;
+    # an explicit agentic_force (gateway /mode agentic) still wins.
+    _simple_tool = is_simple_tool_prompt(user_input)
     if duo_config.agentic_mode and mode in ("auto", "automap") and (agentic_force or not _decider_on):
-        complexity = "code_duo"
-        _complexity_source = "agentic"
-        yield await emit({"type": "status",
-            "content": "Agentic mode active - direct to Pre-Explore/Planner/Coder (no judge routing)"})
+        if _simple_tool and not agentic_force:
+            complexity = "simple"
+            _complexity_source = "tool_intent"
+            yield await emit({"type": "status",
+                "content": "Simple tool request - direct tools (Code Duo is reserved for coding tasks)"})
+        else:
+            complexity = "code_duo"
+            _complexity_source = "agentic"
+            yield await emit({"type": "status",
+                "content": "Agentic mode active - direct to Pre-Explore/Planner/Coder (no judge routing)"})
     elif force_complexity in ("simple", "complex"):
         complexity = force_complexity
         _complexity_source = "manual"
@@ -160,6 +170,16 @@ async def _chat_route_decision(ps):
                     f"🧭 Routing: {_decision.route} "
                     f"({_decision.source}, conf {_decision.confidence:.2f})"
                     + (f" · planner: yes" if _decision.planner else ""))})
+    # A3 (2026-11-07): the decider may classify a short "list files" prompt
+    # as agentic/code_duo too. Keep the same narrow tool-intent override;
+    # explicit modes and force_complexity are untouched.
+    if (_simple_tool and complexity == "code_duo"
+            and mode in ("auto", "automap") and not agentic_force):
+        complexity = "simple"
+        _complexity_source = "tool_intent"
+        yield await emit({"type": "status",
+            "content": "Simple tool request - direct tools (Code Duo is reserved for coding tasks)"})
+
     _judge_route    = _judge_verdict.get("route", "")           # "direct"|"tool"|"pipeline"|""
     _judge_tasktype = _judge_verdict.get("task_type", "") or _task_type
     _judge_toolsize = _judge_verdict.get("tool_model", "small")  # "small"|"large"
@@ -167,7 +187,8 @@ async def _chat_route_decision(ps):
     if _judge_route == "pipeline" and complexity not in ("complex",):
         complexity = "complex"
 
-    if _judge_route == "duo" and mode not in ("simple", "pipeline", "code_duo"):
+    if (_judge_route == "duo" and mode not in ("simple", "pipeline", "code_duo")
+            and not _simple_tool):
         complexity = "code_duo"
         _complexity_source = "judge"
         if len(_state.memory.get_session_messages()) > _sess_compress_threshold:

@@ -22,6 +22,76 @@ from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
 
 logger = logging.getLogger("hivemind.chat_run")
 
+# A4 (2026-11-07): the legacy tool route had its own "just act" prompt and 6
+# rounds; a read-only task then kept exploring and ended at max_tool_rounds.
+# Share the direct-tools advertisement (one source for the tool rules) and add
+# an explicit stop rule. Direct route uses the same _direct_tools_note.
+_TOOL_STOP_RULE = (
+    "\n\nSTOP RULE: when you have the answer or the task is done, reply with "
+    "the final answer in plain text and do NOT call another tool. Only call a "
+    "tool while it is still needed."
+)
+
+
+def _tool_system_prompt(ws_ok: bool) -> str:
+    """Tool advertisement shared with the direct route + the stop rule."""
+    try:
+        from core.direct_runner import _direct_tools_note
+        _note = _direct_tools_note("direct_full", ws_ok=ws_ok)
+    except (ImportError, AttributeError):
+        _note = "\n\nTOOLS ARE AVAILABLE."
+    return _note + _TOOL_STOP_RULE
+
+
+def _tool_signatures(msg: dict) -> list[str]:
+    """Stable signatures for one assistant message's tool calls."""
+    out: list[str] = []
+    for _tc in (msg or {}).get("tool_calls") or []:
+        _fn = (_tc or {}).get("function") or {}
+        _name = str(_fn.get("name") or "")
+        _args = _fn.get("arguments", "")
+        if not isinstance(_args, str):
+            import json as _json
+            try:
+                _args = _json.dumps(_args, sort_keys=True, ensure_ascii=False)
+            except (TypeError, ValueError):
+                _args = str(_args)
+        if _name:
+            out.append(f"{_name}:{_args}")
+    return out
+
+
+def _repeat_guard():
+    """on_after_round callback: nudge an identical repeated tool call once."""
+    _counts: dict[str, int] = {}
+    _nudged: set[str] = set()
+
+    async def _after_round(msg, msgs, _round, _state):
+        for _sig in _tool_signatures(msg):
+            _counts[_sig] = _counts.get(_sig, 0) + 1
+            if _counts[_sig] >= 2 and _sig not in _nudged:
+                _nudged.add(_sig)
+                msgs.append({"role": "user", "content": (
+                    "You already called this tool with the same arguments. "
+                    "The result is above - do not repeat it. Answer the user "
+                    "now, or use a different tool/arguments if something is "
+                    "still missing.")})
+        return True
+
+    return _after_round
+
+
+def _tool_round_limit(cfg: dict) -> int:
+    """direct_tools_max_rounds clamped to 1..300 (same as direct_runner)."""
+    _raw = (cfg or {}).get("direct_tools_max_rounds", 12)
+    if _raw is None or _raw == "":
+        _raw = 12
+    try:
+        _raw = int(_raw)
+    except (TypeError, ValueError):
+        _raw = 12
+    return max(1, min(300, _raw))
+
 
 @dataclasses.dataclass
 class _ChatToolsRouteState:
@@ -65,6 +135,7 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
                        registry_get("direct"))
     _tool_ctx_override = max(_get_num_ctx(_tool_model) or 4096, 8192)
     _tool_opts: dict = {"temperature": 0.1, "num_predict": 1200, "num_ctx": _tool_ctx_override}
+    _tool_ws = bool(settings.get("duo_websearch_enabled", False)) and _tool_websearch
     _tool_sys = (
         "Use the available tools to complete file and code operations. Be direct and concise.\n\n"
         "Available tools:\n"
@@ -85,18 +156,20 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
         "  3. After implementing, run tests (run_bash pytest / npm test)\n"
         "  4. On failure: re-read the region and edit_file again\n"
         "  Do not ask for confirmation - just act."
-    )
+    ) + _tool_system_prompt(_tool_ws)
     _tool_msgs = _make_messages(_state.pipeline, _tool_sys, user_input, effective_images, False, False)
     yield await emit({"type": "complexity", "content": "simple", "source": "tool"})
     yield await emit({"type": "agent", "content": "Tool Agent", "model": _tool_model})
     _tool_t = time.time()
     _tool_loop_msgs = list(_tool_msgs)
     _tool_out_parts: list[str] = []
-    _tool_max_rounds = 6
+    # A4 (2026-11-07): round-limit parity with the direct route - one setting
+    # controls both, so a user does not get 6 rounds on this path and 12 on
+    # the direct one.
+    _tool_max_rounds = _tool_round_limit(settings)
     _tool_calls: bool = False
     _tool_round = 0
     _tool_stop_reason = "completed"
-    _tool_ws = bool(settings.get("duo_websearch_enabled", False)) and _tool_websearch
     # SCHEMA-FIT (2026-10-17): this path shipped the full 25-tool schema
     # (~15.6k chars) whatever the tool-agent ctx was. Fit it to the window.
     _tool_schema_budget = 0
@@ -128,6 +201,7 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
                 http_client=_tc, port=_tool_port,
                 workspace=_ws_str,
                 abort_check=_aborted,
+                on_after_round=_repeat_guard(),
             )
             async for _ev in _loop.run(_tool_loop_msgs):
                 if _ev["type"] == "token":

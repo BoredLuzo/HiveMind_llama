@@ -48,6 +48,44 @@ def detect_tool_request(text: str) -> bool:
     return False
 
 
+# SIMPLE-TOOL-ROUTE (A3, 2026-11-07): a short read/list/inspect prompt must
+# not be hijacked into Code Duo just because agentic mode is persisted. The
+# match is deliberately narrow: short, tool-shaped, and WITHOUT a coding verb
+# - "read file X and fix it" stays a coding task. Over-matching here would
+# steal real coding runs from the duo path.
+_SIMPLE_TOOL_PATTERNS = (
+    r"\b(list|show|display|print)\b[^.\n]{0,40}\b(files?|director(?:y|ies)|folders?|contents?)\b",
+    r"\b(read|open|cat|view)\b[^.\n]{0,40}\bfiles?\b",
+    r"\b(read|open|show|cat|view)\b[^.\n]{0,60}\.[a-z0-9]{1,6}\b",
+    r"\bgit\s+(status|diff|log|show)\b",
+    r"\b(find|search|grep)\b[^.\n]{0,40}\b(files?|for|in)\b",
+    r"(?:^|\s)(?:ls|dir|pwd)(?:\s|$)",
+    r"\b(liste|zeig|lies|lese|oeffne)\b[^.\n]{0,40}\b(datei|dateien|ordner|verzeichnis|inhalt)\b",
+    r"\b(lies|lese|oeffne|zeig)\b[^.\n]{0,60}\.[a-z0-9]{1,6}\b",
+)
+_CODING_VERBS = (
+    "fix", "implement", "refactor", "rewrite", "debug", "add ", "create ",
+    "change ", "modify ", "update ", "migrate", "optimi", "improve",
+    "write ", "build ", "feature", "bug", "test",
+    "repariere", "implementiere", "refaktoriere", "schreibe", "aendere",
+    "\u00e4ndere", "optimiere", "erweitere", "debugge", "baue ", "teste",
+)
+
+
+def is_simple_tool_prompt(text: str, *, max_words: int = 24) -> bool:
+    """True for a short read/list/inspect prompt (A3 route guard).
+
+    Deterministic and cheap: no model call, no state. Coding verbs veto the
+    match so "read app.py and fix the bug" still routes to Code Duo.
+    """
+    low = (text or "").strip().lower()
+    if not low or len(low.split()) > max_words:
+        return False
+    if any(verb in low for verb in _CODING_VERBS):
+        return False
+    return any(re.search(pat, low) for pat in _SIMPLE_TOOL_PATTERNS)
+
+
 def detect_agent_intent(text):
     """Detects which pipeline agent the user wants to address."""
     lower = text.lower()
