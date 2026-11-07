@@ -194,6 +194,13 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         result.final_msgs = _final_msgs
         result.send_files = list(_send_paths)
         result.written_files = sorted(str(p) for p in _written_files)
+        # USAGE (2026-11-08): surface the loop's summed token counters so
+        # run-stats and the benchmark see real numbers for tool runs.
+        if _state is not None and (_state.prompt_tokens or _state.completion_tokens):
+            yield {"type": "usage_meta", "phase": "direct_tools",
+                   "completion_tokens": int(_state.completion_tokens),
+                   "prompt_tokens": int(_state.prompt_tokens),
+                   "cached_tokens": int(_state.cached_tokens)}
     except Exception as _e:
         _direct_log.warning("[Direct-Tools] tool loop failed: %s", _e)
         yield {"type": "status", "content": f"⚠ Tool loop error: {str(_e)[:120]}"}

@@ -18,6 +18,8 @@ are **not** part of the release zip (see `.gitattributes`).
   is maintained; the rest are snapshots)
 - [BENCHMARK_ROADMAP_2026-11-08.md](BENCHMARK_ROADMAP_2026-11-08.md) -
   phased plan for the D1/D8 benchmark runs, corpus growth and fairness rules
+- [BENCHMARK_SMOKE_2026-11-08.md](BENCHMARK_SMOKE_2026-11-08.md) -
+  Phase-1 harness smoke results (direct 2/2, duo 1/1, raw 0/2) and fixes
 - [voice_layer.md](voice_layer.md) - speech to text and text to speech
 
 Measurements live with the code they changed (commit bodies) or in

@@ -314,10 +314,14 @@ Flake-Report (chronisch/partial).
   erst beim Check einkopiert werden), JSON-Report, Delta-vs-raw-Auswertung,
   `--runs`/`--keep-work`, README. **21 Starter-Tasks** (9 Bugfix, 5 Feature,
   3 Refactor, 4 Multi-File), jede rot-vor-fix/grün-nach-Referenzfix
-  verifiziert; 28 Checks in `tests/test_bench_runner.py`.
-  Offen: 5–10 Tasks aus echten Repos und ein dokumentierter Live-Lauf
-  (inkl. Aider). **Ablauf/Runbook/Zeitbudget:**
-  `docs/audit/BENCHMARK_ROADMAP_2026-11-08.md`.
+  verifiziert; 41 Checks in `tests/test_bench_runner.py`.
+  *Smoke 2026-11-08:* `direct` 2/2 (15,6k/21,3k Tokens), `duo` 1/1 (52 s,
+  68,5k Tokens), `raw` 0/2 (ungültige Diffs) — Report
+  `docs/audit/BENCHMARK_SMOKE_2026-11-08.md`. Dabei gefixt: echter
+  `mode=simple`, Modell-Fairness (`direct_model`/duo-Rollen = `--model`) und
+  ToolLoop-Usage-Zählung (vorher ~0 Tokens für Tool-Läufe).
+  Offen: Raw-Format-Entscheidung, 5–10 Tasks aus echten Repos, Aider-Lauf.
+  **Ablauf/Runbook/Zeitbudget:** `docs/audit/BENCHMARK_ROADMAP_2026-11-08.md`.
 
 - [ ] **D2 · P2 · COMPETE — Kontext-Engine.**
   Tree-Scout/Static-Map + FTS vorhanden; inkrementeller Index, Retrieval und

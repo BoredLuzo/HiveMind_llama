@@ -83,6 +83,9 @@ try:
           state.stop_reason == "completed", f" (stop={state.stop_reason})")
     check("assistant text is emitted", text.strip() == "OK", f" ({text!r})")
     check("no error event", "error" not in types, f" ({types})")
+    check("usage is summed into the loop state",
+          state.prompt_tokens == 3 and state.completion_tokens == 1,
+          f" (prompt={state.prompt_tokens}, completion={state.completion_tokens})")
 finally:
     srv.shutdown()
 

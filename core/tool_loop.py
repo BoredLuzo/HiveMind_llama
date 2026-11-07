@@ -242,6 +242,13 @@ class ToolLoopState:
     content_parts: list[str] = field(default_factory=list)
     stop_reason: str = "completed"
 
+    # USAGE (2026-11-08): per-round server usage, summed over the loop. The
+    # direct/duo routes need this for token metrics (benchmark D1/Run-Stats);
+    # without it a 6-round tool run reported ~0 tokens.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_tokens: int = 0
+
     verify_mutation_serial: int = 0
     verify_last_ok_serial: int = 0
     verify_guard_hits: int = 0
@@ -302,6 +309,9 @@ class ToolLoop:
     async def run(self, messages: list[dict]) -> AsyncIterator[dict]:
         """Run the tool-calling loop, yielding events."""
         state = ToolLoopState()
+        self._usage_prompt = 0
+        self._usage_completion = 0
+        self._usage_cached = 0
         if self._run_id:
             _current_run_id.set(self._run_id)
 
@@ -595,6 +605,9 @@ class ToolLoop:
         # complete answer.
         state.stop_reason = _final_stop_reason(
             state.stop_reason, state.rounds_used, self.cfg.max_rounds, _exhausted)
+        state.prompt_tokens = self._usage_prompt
+        state.completion_tokens = self._usage_completion
+        state.cached_tokens = self._usage_cached
 
         if state.rounds_used >= self.cfg.max_rounds and not state.content_parts:
             _fallback = "[Tool-Agent: Max rounds reached, no output.]"
@@ -773,6 +786,7 @@ class ToolLoop:
                             _chunk = json.loads(_data)
                         except Exception:
                             continue
+                        self._add_usage(_chunk.get("usage"))
                         _choices = _chunk.get("choices") or [{}]
                         _delta = _choices[0].get("delta", {})
 
@@ -808,9 +822,26 @@ class ToolLoop:
                 raise
         raise RuntimeError(f"Tool-POST: all {self.cfg.max_post_attempts} attempts failed")
 
+    def _add_usage(self, usage) -> None:
+        """Sum one response's usage block into the per-run counters."""
+        if not isinstance(usage, dict):
+            return
+        def _n(value) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+        self._usage_prompt += _n(usage.get("prompt_tokens"))
+        self._usage_completion += _n(usage.get("completion_tokens"))
+        _details = usage.get("prompt_tokens_details")
+        self._usage_cached += (_n(usage.get("cached_tokens"))
+                               or _n((_details or {}).get("cached_tokens"))
+                               or _n(usage.get("cache_n")))
+
     def _parse_nonstream(self, resp, events: list[dict]) -> tuple[dict, str, list[dict], list[dict]]:
         """Parse non-streaming JSON response."""
         data = resp.json()
+        self._add_usage(data.get("usage"))
         if "choices" in data:
             msg = data["choices"][0].get("message", {}) if data["choices"] else {}
         else:

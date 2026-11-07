@@ -15,6 +15,12 @@ is the **delta against the raw-model baseline**.
 | `hivemind_duo` | HiveMind `/stream`, `mode=code_duo`, `duo_agentic_mode=true`. |
 | `aider` | Aider CLI against the same OpenAI-compatible llama-server. |
 
+`--model` is forced into every condition: HiveMind runs get `direct_model` /
+`duo_coder_model` / `duo_critic_model` / `duo_planner_model` overrides, so the
+comparison does not silently use the install's settings models. Token counts
+are summed from the SSE `usage_meta` events (ToolLoop rounds included); the
+`done` event is only a fallback.
+
 ## Task format
 
 ```

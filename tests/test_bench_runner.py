@@ -116,15 +116,24 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
         h.skip("patch: git not installed", "git apply needs git")
 
     # ── condition bodies / token parsing / incremental result ──────────────
-    direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False)
+    direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False,
+                                 model="qwen3.5:4b-mtp")
     check("body: direct condition uses a real engine mode",
           direct_body["mode"] == "simple", f" ({direct_body['mode']})")
     check("body: direct condition asks for full tools",
           direct_body.get("direct_tools_enabled") is True
           and direct_body.get("direct_tools_tier") == "full")
-    duo_body = _hivemind_body(Task("t", "p", "c"), work, duo=True)
+    check("body: direct condition forces the same model",
+          direct_body.get("direct_model") == "qwen3.5:4b-mtp",
+          f" ({direct_body.get('direct_model')})")
+    duo_body = _hivemind_body(Task("t", "p", "c"), work, duo=True,
+                              model="qwen3.5:4b-mtp")
     check("body: duo condition is code_duo + agentic",
           duo_body["mode"] == "code_duo" and duo_body.get("duo_agentic_mode") is True)
+    check("body: duo forces the same model for every role",
+          all(duo_body.get(k) == "qwen3.5:4b-mtp"
+              for k in ("duo_coder_model", "duo_critic_model", "duo_planner_model")),
+          f" ({ {k: duo_body.get(k) for k in ('duo_coder_model','duo_critic_model','duo_planner_model')} })")
 
     check("tokens: plain number", _parse_token_count("345") == 345)
     check("tokens: thousands separator", _parse_token_count("1,234") == 1234)

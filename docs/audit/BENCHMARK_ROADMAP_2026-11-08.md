@@ -31,7 +31,7 @@ Code/Codex auf derselben Task-Suite.
       Bedingung als „not installed“).
 - [ ] Task-Korpus auf 5–10 echte Repo-Tasks erweitern (siehe §4).
 
-### Phase 1 — Harness-Smoke (~15–30 min)
+### Phase 1 — Harness-Smoke (~15–30 min) — **bestanden 2026-11-08**
 Zwei Tasks, zwei Bedingungen, ein Lauf:
 ```bat
 python bench/runner.py --tasks bench/tasks --conditions raw,hivemind_direct ^
@@ -41,8 +41,14 @@ python bench/runner.py --tasks bench/tasks --conditions raw,hivemind_direct ^
 **Gate:** `raw` darf patchen (Diff wird angewendet), `hivemind_direct` postet
 `mode=simple` + `direct_tools_tier=full`, das Ergebnis-JSON enthält beide
 Bedingungen. Wenn nicht: Harness fixen, nicht Modelle.
+**Ergebnis:** `docs/audit/BENCHMARK_SMOKE_2026-11-08.md` — Direct 2/2,
+Duo 1/1, Raw 0/2 (ungültige Diffs). Zwei Messfehler (Modus, Tokens) und die
+Modell-Fairness wurden dabei gefixt.
 
 ### Phase 2 — Raw-Baseline kalibrieren (1 Abend)
+- **Format-Entscheidung zuerst:** Diff-only (aktuell, 4B scheitert an der
+  Syntax) oder zusätzlich ein Full-File-Format (`### FILE: path`), das der
+  Runner anwendet. Getrennt ausweisen; nicht still das Format wechseln.
 - 21 Tasks × `raw` × 3 Läufe = 63 Zellen.
 - Zweck: Rauschen messen, Task-Ausreißer finden, eine belastbare
   Baseline-Pass-Rate je Task.

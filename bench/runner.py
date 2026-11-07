@@ -194,22 +194,32 @@ async def _run_raw(task: Task, work: Path, cfg: Config) -> dict:
             "tokens": int(usage.get("total_tokens") or 0)}
 
 
-def _hivemind_body(task: Task, work: Path, duo: bool) -> dict:
+def _hivemind_body(task: Task, work: Path, duo: bool, model: str) -> dict:
     """Request body for the two HiveMind conditions.
 
     MODE-FIX (deep audit 2026-11-07): "chat" is NOT a mode the engine knows
     (recognized: auto|automap|simple|pipeline|agent|code_duo); it fell into
     the judge else-branch and could route a "direct" run into pipeline/duo,
     silently invalidating the D1 baseline. "simple" is the real direct route.
+
+    MODEL-FAIRNESS: HiveMind normally reads agents.<role>.model from settings;
+    without these overrides the conditions would silently run different models
+    than `raw`/aider. The server accepts direct/duo model keys per request.
     """
     body = {
         "q": task.prompt,
         "workspace": str(work),
         "chat_id": uuid.uuid4().hex,
         "mode": "code_duo" if duo else "simple",
+        "direct_model": model,
     }
     if duo:
         body["duo_agentic_mode"] = True
+        # Agentic duo resolves coder/critic/planner from the agent cards; the
+        # server patches both the card and the flat key for these overrides.
+        body["duo_coder_model"] = model
+        body["duo_critic_model"] = model
+        body["duo_planner_model"] = model
     else:
         body["direct_tools_enabled"] = True
         body["direct_tools_tier"] = "full"
@@ -217,9 +227,10 @@ def _hivemind_body(task: Task, work: Path, duo: bool) -> dict:
 
 
 async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool) -> dict:
-    body = _hivemind_body(task, work, duo)
+    body = _hivemind_body(task, work, duo, cfg.model)
     done: dict = {}
     error = ""
+    usage_prompt = usage_completion = 0
     async with httpx.AsyncClient(timeout=httpx.Timeout(900.0, connect=10.0)) as client:
         async with client.stream("POST",
                                  cfg.hivemind_url.rstrip("/") + "/stream",
@@ -234,9 +245,17 @@ async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool) -> dict:
                     continue
                 if ev.get("type") == "done":
                     done = ev
+                elif ev.get("type") == "usage_meta":
+                    # TOKEN-METRIC (2026-11-08): tool loops report their usage
+                    # per phase; the done event only carries the outer ledger.
+                    usage_prompt += int(ev.get("prompt_tokens") or 0)
+                    usage_completion += int(ev.get("completion_tokens") or 0)
                 elif ev.get("type") == "error":
                     error = str(ev.get("content") or ev)[:500]
-    tokens = int(done.get("tokens_generated") or 0) + int(done.get("prompt_tokens_total") or 0)
+    _usage_total = usage_prompt + usage_completion
+    tokens = _usage_total or (
+        int(done.get("tokens_generated") or 0)
+        + int(done.get("prompt_tokens_total") or 0))
     return {"tokens": tokens, "stop_reason": done.get("stop_reason", ""),
             "detail": error}
 
