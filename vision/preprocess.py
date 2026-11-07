@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio, base64, json, logging, os, re, struct, time
 from pathlib import Path
+from typing import Any, Callable
 
 THIS_FILE = Path(__file__)
 VISION_MODEL_FILE = THIS_FILE.parent.parent / "vision_model.json"
@@ -12,9 +13,11 @@ from core.duo_helpers import RE_THINK_CLEANUP as _re_think_cleanup
 
 logger = logging.getLogger("hivemind.vision")
 
-settings = None
-_get_num_ctx = None
-is_valid_preprocessing_model = None
+# Injected once by init_vision_preprocess() (server.py). Typed for the static
+# checker; all three are set before _preprocess_images_to_text() runs.
+settings: dict[str, Any] | None = None
+_get_num_ctx: Callable[..., int] | None = None
+is_valid_preprocessing_model: Callable[[str], bool] | None = None
 VISION_PREPROCESS_PROMPT = ""
 
 
@@ -171,6 +174,12 @@ async def _preprocess_images_to_text(images: list, user_query: str) -> str | Non
     global _vision_cfg
     if not _vision_cfg.get("enabled") or not _vision_cfg.get("model"):
         logger.debug("[Vision-Prepro] Abbruch: enabled=%s model=%r", _vision_cfg.get("enabled"), _vision_cfg.get("model"))
+        return None
+    # None-guard: the injected settings/callbacks exist once the server ran
+    # init_vision_preprocess(); without it there is nothing to preprocess with.
+    if settings is None or _get_num_ctx is None \
+            or is_valid_preprocessing_model is None:
+        logger.warning("[Vision-Prepro] not initialized - skipping preprocessing")
         return None
 
     model = _vision_cfg["model"]

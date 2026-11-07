@@ -16,19 +16,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import backend.llama_config as LC  # noqa: E402
 import backend.llama_start_phases as P  # noqa: E402
+from tests._harness import Harness  # noqa: E402
 
-passed = 0
-failed = 0
-
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name}{extra}")
+h = Harness()
+check = h.check
 
 
 class _Mgr:
@@ -85,8 +76,4 @@ check("--fit supported flag + target", ph_fit.fit_supported is True and ph_fit.f
 ph_nofit = _run("testmodel:1b", None, fit=True, fit_target=512, help_fit=False)
 check("binary without --fit does not claim it", ph_nofit.fit_supported is False)
 
-print()
-print("=" * 50)
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print("=" * 50)
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("llama_start_phases"))

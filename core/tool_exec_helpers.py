@@ -1181,6 +1181,13 @@ class ToolRoundState:
     # the static-only test guard needs the complete run list.
     run_written_files: list = field(default_factory=list)
     duo_seen_web_queries: set = field(default_factory=set)
+    # READ-BEFORE-EDIT (2026-11-07): run-persistent maps the runner owns
+    # (state.setdefault) and passes into every round. The executor block used
+    # to read them from this state, but the fields were missing since the
+    # executor split — the AttributeError was swallowed and the freshness
+    # nudge never fired. Declared here so the block is live again.
+    reads_seen: dict = field(default_factory=dict)
+    freshness_warned: dict = field(default_factory=dict)
     cached_coder_port: list = field(default_factory=lambda: [None])
     task_complete_blocked_count: list = field(default_factory=lambda: [0])
     total_tool_errors: list = field(default_factory=lambda: [0])

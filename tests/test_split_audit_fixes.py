@@ -182,7 +182,7 @@ _PY_TARGETS = [
     "core/duo_round_input.py", "core/duo_dtool_setup.py",
     "core/duo_inloop_planner.py", "core/duo_coder_load.py",
     "core/duo_compress_cycle.py", "core/duo_coder_preloop.py",
-    "core/duo_task_complete_gate.py",
+    "core/duo_task_complete_gate.py", "core/duo_loop_guards.py",
     "core/chat_shortcuts.py",
     "core/chat_vision_pre.py", "core/chat_history_seed.py",
     "core/chat_route.py", "core/chat_route_decision.py",

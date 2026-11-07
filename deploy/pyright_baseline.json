@@ -1,26 +1,3 @@
 {
-  "backend/llama_start_phases.py|reportAttributeAccessIssue": 1,
-  "backend/runtime_sync.py|reportAttributeAccessIssue": 1,
-  "core/duo_runner.py|reportGeneralTypeIssues": 1,
-  "core/tool_executor.py|reportArgumentType": 5,
-  "core/tool_executor.py|reportAttributeAccessIssue": 6,
-  "deploy/fetch_models.py|reportArgumentType": 2,
-  "deploy/fetch_models.py|reportAttributeAccessIssue": 3,
-  "hivemind_gateway/bridge.py|reportArgumentType": 4,
-  "hivemind_gateway/bridge.py|reportOptionalMemberAccess": 1,
-  "hivemind_gateway/bridge.py|reportPossiblyUnboundVariable": 1,
-  "hivemind_gateway/bridge.py|reportReturnType": 1,
-  "infra/mcp_server.py|reportAttributeAccessIssue": 3,
-  "infra/mcp_server.py|reportPossiblyUnboundVariable": 4,
-  "routers/config.py|reportArgumentType": 4,
-  "run.py|reportArgumentType": 3,
-  "run.py|reportAttributeAccessIssue": 1,
-  "run.py|reportPossiblyUnboundVariable": 1,
-  "server.py|reportArgumentType": 2,
-  "server.py|reportCallIssue": 2,
-  "server.py|reportOptionalMemberAccess": 1,
-  "tools/runner.py|reportArgumentType": 1,
-  "tools/runner.py|reportOptionalMemberAccess": 1,
-  "vision/preprocess.py|reportOptionalCall": 2,
-  "vision/preprocess.py|reportOptionalMemberAccess": 2
+  "core/duo_runner.py|reportGeneralTypeIssues": 1
 }

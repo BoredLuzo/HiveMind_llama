@@ -20,7 +20,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Awaitable
+from typing import TYPE_CHECKING, Callable, Awaitable, cast
 
 from tools.runner import _run_inline_tool
 from tools.limits import READ_LADDER_SAME_PATH, READ_LADDER_WIDE
@@ -41,6 +41,10 @@ from core.tool_exec_helpers import (
     _track_file_changes, _register_context_lru, _track_edit_noop,
     _recovery_saturated, _mode_can_write,
 )
+
+if TYPE_CHECKING:
+    # Type-only: the runtime object comes in via ToolRoundState.tool_ctx_lru.
+    from hive_functions.memory import ToolContextLRU
 
 _logger = logging.getLogger("tool_executor")
 
@@ -137,8 +141,6 @@ class ToolExecResult:
     loop_detected: bool = False
     duo_timed_out: bool = False
     file_changes: dict = field(default_factory=dict)
-    reads_seen: dict = field(default_factory=dict)     # norm. Pfad -> True (read_file dieser Run)
-    freshness_warned: dict = field(default_factory=dict)  # norm. Pfad -> True (Nudge schon gegeben)
     verify_mutation_serial: int = 0
     verify_last_ok_serial: int = 0
     last_run_bash_failure: dict | None = None
@@ -959,18 +961,21 @@ async def execute_tool_round(
             # stuck hook (on_tool_result) already ran above — if IT declared
             # the loop, no handoff happens (generic stop keeps priority).
             # Failures still count toward the global cap (unchanged).
-            if (getattr(trs, "wedge_state", None) is not None
+            # Type-checker: narrow the Optional field once via a local — the
+            # getattr form above did not narrow for the type checker.
+            _wedge_ws = getattr(trs, "wedge_state", None)
+            if (_wedge_ws is not None
                     and _focus_path
                     and _dname in _wedge.EDIT_FAMILY_TOOLS):
                 _wedge_repeat = _wedge.note_edit_failure(
-                    trs.wedge_state, _dname, _focus_path, _raw_s, _dresult)
+                    _wedge_ws, _dname, _focus_path, _raw_s, _dresult)
                 if (not result.loop_detected
-                        and _wedge.detect_wedge(trs.wedge_state, _focus_path, _wedge_repeat)):
+                        and _wedge.detect_wedge(_wedge_ws, _focus_path, _wedge_repeat)):
                     result.wedge_file = _focus_path
                     _logger.warning(
                         "[WEDGE] %s wedged on %s (streak=%d) — handoff signal",
                         _dname, _focus_path,
-                        _wedge.streak_of(trs.wedge_state, _focus_path))
+                        _wedge.streak_of(_wedge_ws, _focus_path))
                     break
             if _total_tool_errors[0] >= _err_cap:
                 if not _recovery_saturated(dtool_msgs):
@@ -988,6 +993,10 @@ async def execute_tool_round(
         # path when an existing file is edited blind (no read_file this run).
         # Blind edits risk EDIT_FILE_OLD_TEXT_NOT_FOUND (live: FireWork, both
         # chat runs read_file_calls=0). Light touch: info nudge, no blocking.
+        # REVIVED (2026-11-07): reads_seen/freshness_warned were missing from
+        # ToolRoundState since the executor split, so this block silently
+        # raised AttributeError and never fired. The runner now passes the
+        # run-persistent dicts; test_execute_tool_round pins both paths.
         try:
             if _dname == "read_file":
                 _rbp = str((_dargs or {}).get("path", "") or "")
@@ -998,18 +1007,21 @@ async def execute_tool_round(
                     if _rbn in trs.reads_seen:
                         _perf["reread_count"] += 1
                     trs.reads_seen[_rbn] = True
-            elif _dname in ("edit_file", "patch_file", "replace_lines")                     and not _tool_call_failed(_dresult, _dname)                     and len(trs.freshness_warned) < 4:
+            elif (_dname in ("edit_file", "patch_file", "replace_lines")
+                    and not _tool_call_failed(_dresult, _dname)
+                    and len(trs.freshness_warned) < 4):
                 _rbp = str((_dargs or {}).get("path", "") or "")
                 _rbn = os.path.normcase(os.path.normpath(_rbp)) if _rbp else ""
-                if _rbn and _rbn not in trs.reads_seen and _rbn not in trs.freshness_warned:
+                if (_rbn and _rbn not in trs.reads_seen
+                        and _rbn not in trs.freshness_warned):
                     trs.freshness_warned[_rbn] = True
                     dtool_msgs.append({"role": "user", "content": (_SYS_PREFIX +
                         f"[FRESHNESS] You just edited {_rbp} without reading it "
                         "this run. If more edits follow, read_file it first — "
                         "your context may not match the file on disk."
                     )})
-        except Exception:
-            pass
+        except (OSError, ValueError, TypeError) as _rb_err:
+            _logger.debug("[READ-BEFORE-EDIT] skipped: %s", _rb_err)
 
         # Parse errors: decrement on successful write/patch
         _note_successful_write(_dname, _dresult, result, round_state, _total_tool_errors)
@@ -1043,13 +1055,17 @@ async def execute_tool_round(
             # WEDGE-RESET (2026-09-17): a successful write on the path clears
             # its streak/hashes/history. A read alone must NOT reset —
             # re-read + retry of the same wrong edit IS the wedge pattern.
-            if getattr(trs, "wedge_state", None) is not None:
-                _wedge.note_edit_success(trs.wedge_state, _focus_path)
+            # Type-checker: same Optional-narrowing as above (local, then None check).
+            _wedge_ws = getattr(trs, "wedge_state", None)
+            if _wedge_ws is not None:
+                _wedge.note_edit_success(_wedge_ws, _focus_path)
             try:
                 from context.compression import evict_stale_reads_for_path as _evict_stale
                 _evicted_stale = _evict_stale(
                     messages=dtool_msgs,
-                    lru=trs.tool_ctx_lru,
+                    # ToolRoundState.tool_ctx_lru is typed `object`; the runner
+                    # always passes the run's ToolContextLRU instance.
+                    lru=cast("ToolContextLRU", trs.tool_ctx_lru),
                     path=_focus_path,
                     cache_horizon=trs.cache_horizon,
                     superseded=trs.superseded_paths,

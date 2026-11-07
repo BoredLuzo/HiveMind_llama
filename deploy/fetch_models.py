@@ -42,6 +42,7 @@ import os
 import re
 import shutil
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -1093,6 +1094,9 @@ def main() -> int:
                 if f.get("type") == "file":
                     print(f"      - {f['path']}")
             continue
+        # the candidate loop above assigns repo together with main_file;
+        # normalize once so both download calls below take a plain str
+        repo = str(repo or "")
         print(f"    Repo: {repo}")
 
         if args.list_only:

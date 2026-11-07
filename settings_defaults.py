@@ -560,10 +560,13 @@ DEFAULT_SETTINGS = {
     # P) ASK-USER (Pause + Resume)
     # ════════════════════════════════════════════════════════════════════════
     "ask_user_timeout_until_finished_seconds": 300,
-    # ASK-USER-AUTO-PROCEED (2026-11-02): the UI toggle existed, wrote this
-    # key - and the loader popped it as a stale key on every start, so the
-    # switch silently reset. It is a real setting: on timeout the open
-    # question is answered automatically instead of pausing the run.
+    # ASK-USER-AUTO-PROCEED (W2-3, 2026-11-07): real engine setting. When on,
+    # the ENGINE auto-answers an open ask_user question after 30 s
+    # (AUTO_PROCEED_TIMEOUT_S, infra/ask_user_governor.py) - the safety net
+    # behind the per-card "Auto 30s" timer. until_finished runs keep their
+    # own ask_user_timeout_until_finished_seconds (that configured timeout
+    # wins over the fixed 30 s). Read at question time, so toggling applies
+    # mid-run without a restart.
     "ask_user_auto_proceed":     False,
     "ask_user_max_per_10min":  5,
     "ask_user_auto_answer":    "Use best judgment, document decision in commit message.",

@@ -9,6 +9,10 @@ Run:
     python tests/run_regressions.py            # all suites (6 workers)
     python tests/run_regressions.py --only stuck_bash   # name filter (substring)
     python tests/run_regressions.py --jobs 1   # strict sequential
+    python tests/run_regressions.py --changed  # only suites plausibly affected
+                                               # by the current working-tree changes
+    python tests/run_regressions.py --changed-list                 # dry-run: print selection
+    python tests/run_regressions.py --changed --changed-ref v1.5.5 # widen the diff
 """
 import os
 import subprocess
@@ -143,6 +147,7 @@ SUITES = [
     ("toolgen_stream_card",    "tests/test_toolgen_stream_card.py",            60),
     ("error_cap_decay",        "tests/test_error_cap_decay.py",                60),
     ("action_approval",        "tests/test_action_approval.py",                60),
+    ("ask_user_auto_proceed",  "tests/test_ask_user_auto_proceed.py",          60),
     ("run_python_encoding",    "tests/test_run_python_encoding.py",            60),
     ("browser_blocked_dedup",  "tests/test_browser_blocked_dedup.py",          60),
     ("appjs_error_net",        "tests/test_appjs_error_net.py",                60),
@@ -363,6 +368,113 @@ _CI_EXCLUDED_SUITES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# --changed mode: map working-tree changes onto plausibly affected suites.
+# Deliberately a cheap text heuristic: a suite runs when its own file changed
+# or its source mentions a changed file/module. Over-selection is acceptable;
+# a missed match (suite skipped that should have run) is not.
+# ---------------------------------------------------------------------------
+_DOC_STEMS = ("readme", "changelog", "license", "notice", "contributing")
+
+
+def _git_lines(args: list[str]) -> list[str] | None:
+    """Stdout lines of a git command, or None if git fails/unavailable."""
+    try:
+        r = subprocess.run(
+            ["git", *args], cwd=str(ROOT), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if r.returncode != 0:
+        return None
+    # rstrip only: `git status --porcelain` paths are preceded by the
+    # two-char status plus one space, a leading strip would eat the path.
+    return [ln.rstrip() for ln in r.stdout.splitlines() if ln.rstrip()]
+
+
+def _changed_files(ref: str) -> list[str]:
+    """Repo-relative POSIX paths of changed files.
+
+    Primary source: `git status --porcelain` (staged, unstaged, untracked).
+    `git diff --name-only <ref>` widens the set (--changed-ref v1.5.5) and
+    doubles as the fallback when porcelain is unavailable.
+    """
+    files: set[str] = set()
+    status = _git_lines(["status", "--porcelain"])
+    if status is not None:
+        for ln in status:
+            path = ln[3:] if len(ln) > 3 else ""
+            if " -> " in path:  # rename: track the new path only
+                path = path.split(" -> ", 1)[1]
+            if path.startswith('"') and path.endswith('"'):
+                path = path[1:-1]
+            if path:
+                files.add(path)
+    else:
+        print(f"note: git status --porcelain failed; "
+              f"falling back to git diff --name-only {ref}")
+    diff: list[str] | None = None
+    if status is None or ref != "HEAD":  # vs HEAD the porcelain output already covers it
+        diff = _git_lines(["diff", "--name-only", ref])
+        if diff is None:
+            print(f"note: git diff --name-only {ref} failed"
+                  + ("; relying on status output" if status is not None else ""))
+    for ln in diff or []:
+        path = ln.split(" -> ", 1)[1] if " -> " in ln else ln
+        if path:
+            files.add(path)
+    return sorted(f.replace("\\", "/") for f in files)
+
+
+def _is_doc_file(rel: str) -> bool:
+    """True for docs-only paths (they never select suites on their own)."""
+    low = rel.lower().replace("\\", "/")
+    if low.endswith((".md", ".rst", ".adoc")) or low.startswith("docs/"):
+        return True
+    return low.rsplit("/", 1)[-1].split(".", 1)[0] in _DOC_STEMS
+
+
+def _change_patterns(rel: str) -> list[str]:
+    """Substrings tying one changed file to suites that mention it.
+
+    core/duo_runner.py -> core/duo_runner.py | core/duo_runner |
+                          core.duo_runner    | duo_runner
+    static/app.js      -> static/app.js | app.js | static
+    """
+    low = rel.lower().replace("\\", "/").rstrip("/")
+    pats = {low}
+    if low.endswith(".py"):
+        mod = low[:-3]
+        pats.add(mod)  # core/duo_runner
+        if "/" in mod:
+            d, stem = mod.rsplit("/", 1)
+            pats.add(stem)                              # duo_runner
+            pats.add(d.replace("/", ".") + "." + stem)  # core.duo_runner
+    elif "/" in low:
+        d, base = low.rsplit("/", 1)
+        pats.add(base)  # app.js
+        pats.add(d)     # static
+    return sorted(pats)
+
+
+def _select_affected(changed: list[str]) -> list[tuple[str, str, int]]:
+    """SUITES entries plausibly affected by the changed files."""
+    changed_set = set(changed)
+    pats = [p for f in changed for p in _change_patterns(f)]
+    out: list[tuple[str, str, int]] = []
+    for name, rel, timeout in SUITES:
+        if rel in changed_set:  # the suite file itself changed
+            out.append((name, rel, timeout))
+            continue
+        try:
+            text = (ROOT / rel).read_text(encoding="utf-8", errors="replace").lower()
+        except OSError:
+            continue  # missing on disk: the main loop reports/FAILs on it
+        if any(p in text for p in pats):
+            out.append((name, rel, timeout))
+    return out
+
+
 def main() -> int:
     for _stream in (sys.stdout, sys.stderr):
         try:
@@ -379,10 +491,56 @@ def main() -> int:
     if "--jobs" in sys.argv:
         i = sys.argv.index("--jobs")
         jobs = max(1, int(sys.argv[i + 1]) if i + 1 < len(sys.argv) else 6)
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(__doc__)
+        return 0
+    changed_ref = "HEAD"
+    if "--changed-ref" in sys.argv:
+        i = sys.argv.index("--changed-ref")
+        if i + 1 < len(sys.argv):
+            changed_ref = sys.argv[i + 1]
+    changed_list = "--changed-list" in sys.argv
+    changed_mode = changed_list or "--changed" in sys.argv
+    all_on_empty = "--all-on-empty" in sys.argv
+
+    # CHANGED MODE: narrow the run to suites plausibly touched by the current
+    # changes. --only / --ci-subset / --allow-missing keep applying on top.
+    active = SUITES
+    changed: list[str] = []
+    if changed_mode:
+        changed = _changed_files(changed_ref)
+        meaningful = [f for f in changed if not _is_doc_file(f)]
+        if not meaningful and not all_on_empty:
+            if not changed:
+                print("CHANGED MODE: no changed files detected (clean tree or"
+                      " git unavailable) - nothing to run, exit 0.")
+            else:
+                print(f"CHANGED MODE: only docs/README/CHANGELOG changed"
+                      f" ({len(changed)} file(s)) - nothing to run, exit 0."
+                      f" (--all-on-empty to run everything anyway)")
+            return 0
+        if meaningful:
+            active = _select_affected(changed)
+        # all_on_empty with an empty/doc-only set: keep the full SUITES list.
+        if changed_list:  # dry run: print the selection, run nothing
+            if only:
+                active = [s for s in active if only in s[0].lower()]
+            head = ", ".join(changed[:10])
+            more = f" ... (+{len(changed) - 10} more)" if len(changed) > 10 else ""
+            print(f"CHANGED MODE: {len(changed)} file(s) -> {len(active)} suite(s)"
+                  f"  [ref: {changed_ref}]")
+            if changed:
+                print(f"  changed: {head}{more}")
+            for name, _rel, _t in active:
+                print(f"  {name}")
+            return 0
 
     print("=" * 64)
     print(f"REGRESSION RUN - HiveMind Feature-Checks ({jobs} worker(s))")
     print("=" * 64)
+    if changed_mode:
+        print(f"CHANGED MODE: {len(changed)} file(s) -> {len(active)} suite(s)"
+              f"  [ref: {changed_ref}]")
 
     # PARALLEL RUNNER (2026-11-05 maintainability audit): 313 sequential
     # subprocess suites took ~18 min wall clock. Suites are independent
@@ -395,7 +553,7 @@ def main() -> int:
     pending: list[tuple[int, str, str, int]] = []
     exclusive: list[tuple[int, str, str, int]] = []
     failed_total = 0
-    for name, rel, timeout in SUITES:
+    for name, rel, timeout in active:
         if only and only not in name.lower():
             continue
         if ci_subset and name in _CI_EXCLUDED_SUITES:

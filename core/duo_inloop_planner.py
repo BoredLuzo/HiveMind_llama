@@ -88,7 +88,8 @@ async def _duo_inloop_planner(ctx, ps):
         try:
             from backend.llama_server_manager import manager as _lsm3
             _plan_port_inloop = await _lsm3.ensure_loaded(exec_mdl, num_ctx=_dtool_ctx, n_parallel=1, ctx_graceful=False, pin=True)
-        except (OSError, RuntimeError, ValueError, TypeError) as _port_err:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _port_err:
             logger.warning("Inloop planner: port not available (%s)", _port_err)
         _inloop_plan_text = ""
         _inloop_plan_thinking = ""

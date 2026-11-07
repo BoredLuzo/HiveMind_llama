@@ -47,17 +47,11 @@ if not SCRIPT.exists():
     print("\nSUMMARY langrun_guard_failclosed: 0 passed, 0 failed (skipped)")
     sys.exit(0)
 
-passed = failed = 0
+sys.path.insert(0, str(_ROOT))
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="plain", fail_code=2, pad=True)
+check = h.check
 
 
 src = SCRIPT.read_text(encoding="utf-8")
@@ -79,6 +73,5 @@ print("PROPOSAL (rework only after user's word):")
 print("  langrun_load.py: change `if _pf_procs() == 0:` to")
 print("  `if _pf_procs() <= 0:` (0 = no engine, -1 = tasklist unknown -> abort).")
 
-print(f"\nlangrun_guard fail-closed: {passed} passed, {failed} failed "
-      f"(expected: 1 failed = current fail-open proven)")
-sys.exit(0 if failed == 0 else 2)
+sys.exit(h.finish("langrun_guard fail-closed",
+                  suffix="(expected: 1 failed = current fail-open proven)"))

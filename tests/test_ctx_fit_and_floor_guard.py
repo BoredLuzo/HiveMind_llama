@@ -141,7 +141,8 @@ def test_guard_c_sequence_small_baseline_fits():
 
 # ── Source-Guard: Marker im echten duo_runner ──────────────────────────────
 def test_source_guard_ctx_floor():
-    src = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    src = ((Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+           + (Path(__file__).parent.parent / "core" / "duo_loop_guards.py").read_text(encoding="utf-8"))
     checks = {
         "CTX-FLOOR-STOP-Marker": "[CTX-FLOOR-STOP]" in src,
         "slot_degraded": "_slot_degraded" in src,

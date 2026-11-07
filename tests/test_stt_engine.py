@@ -27,19 +27,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from core import stt_engine  # noqa: E402
+from tests._harness import Harness  # noqa: E402
 
-passed = 0
-failed = 0
-
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 # ── (a) measured tiers ──────────────────────────────────────────────────────
@@ -182,6 +173,4 @@ check("is_wav_file accepts a real WAV", E.is_wav_file(_fake_wav))
 check("is_wav_file rejects garbage",
       not E.is_wav_file(Path(tempfile.mkstemp(suffix=".bin")[1])))
 
-print()
-print(f"SUMMARY stt_engine: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("stt_engine"))

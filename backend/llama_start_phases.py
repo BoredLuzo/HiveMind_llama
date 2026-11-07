@@ -612,8 +612,13 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
             try:
                 import os as _os_thr
                 try:
-                    # respect cgroup/affinity limits where available
-                    _logical = len(_os_thr.sched_getaffinity(0))
+                    # respect cgroup/affinity limits where available;
+                    # sched_getaffinity is POSIX-only - resolve dynamically
+                    # and fall back to cpu_count exactly as before.
+                    _sched_affinity = getattr(_os_thr, "sched_getaffinity", None)
+                    if _sched_affinity is None:
+                        raise AttributeError("sched_getaffinity unavailable")
+                    _logical = len(_sched_affinity(0))
                 except (AttributeError, OSError):
                     _logical = int(_os_thr.cpu_count() or 0)
             except (TypeError, ValueError):
@@ -1018,7 +1023,8 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                     )
                     _fit = self.can_fit(model, num_ctx, exclude_slot_id=slot.slot_id,
                                         extra_needed_mib=_moe_cache_used)
-        except (OSError, RuntimeError, ValueError, TypeError, asyncio.TimeoutError) as _rw_exc:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _rw_exc:
             logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
     #      gepinnte Slots bleiben unantastbar).
     if not _fit.ok:
@@ -1215,7 +1221,8 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                             "[PRE-FLIGHT] VRAM reclaimed after wait - refit %s @ctx=%d: %s",
                             model, num_ctx, "OK" if _fit.ok else "BLOCK",
                         )
-            except (OSError, RuntimeError, ValueError, TypeError, asyncio.TimeoutError) as _rw_exc:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                    AttributeError, httpx.HTTPError, asyncio.TimeoutError) as _rw_exc:
                 logger.debug("[PRE-FLIGHT] reclaim wait failed: %s", _rw_exc)
             if not _fit.ok and not VRAM_PREFLIGHT_GATE:
                 # GATE-DISABLED (2026-10-11, settings vram_preflight_gate):

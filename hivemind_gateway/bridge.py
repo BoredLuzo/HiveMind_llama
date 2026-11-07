@@ -395,12 +395,13 @@ class RunBridge:
                 "⚠️ File upload failed; the run continues.")
 
     @staticmethod
-    def _tool_line(ev: dict) -> str:
+    def _tool_line(ev: dict) -> str | None:
         """Compact one-line tool activity for the phone (Tool-Call-Relay,
         2026-10-05): '🔧 name: first-line-of-detail'. None when there is
         nothing concise to show."""
         name = str(ev.get("name") or ev.get("tool") or "tool")
-        extra = ev.get("extra") if isinstance(ev.get("extra"), dict) else {}
+        _extra_raw = ev.get("extra")
+        extra = _extra_raw if isinstance(_extra_raw, dict) else {}
         detail = ""
         for key in ("cmd", "path", "url", "query", "code", "package"):
             v = str(extra.get(key) or "").strip()
@@ -793,6 +794,9 @@ class RunBridge:
         error_text = ""
         stop_reason = ""
         last_status = ""
+        # prebound: every path that reaches the return below assigns it in
+        # the finally block; the prebind keeps that statically checkable
+        final_note = ""
         last_edited_text = ""
         last_edit = _now()
         denied = 0
@@ -1434,11 +1438,12 @@ class RunBridge:
                         + f" · model {(_rs or {}).get('routing_decider_model') or 'default'}")
         else:
             _routing = "routing: decider off (keyword rules)"
+        _ws_map = mapping.get("workspace")
         return (
             "📡 Gateway status\n"
             "\n"
             f"chat: {mapping.get('hive_chat_id', '- none yet')}\n"
-            f"workspace: {self._short_path(mapping.get('workspace')) if mapping.get('workspace') else 'engine default'}\n"
+            f"workspace: {self._short_path(_ws_map) if _ws_map else 'engine default'}\n"
             f"mode: {mode}  (phone runs only)\n"
             f"model: {ov.get('model') or 'engine default'}\n"
             f"ctx: planner {ov.get('planner_ctx') or '-'} · coder "
@@ -1818,7 +1823,7 @@ class RunBridge:
             # mirror task - log and continue with the next tick
             self._log_note(f"mirror tick failed: {type(exc).__name__}: {exc}")
 
-    def _parse_done(self, frames: list) -> str | None:
+    def _parse_done(self, frames: list | None) -> str | None:
         """stop_reason of the LAST done frame in the journal, if any."""
         for raw in reversed(frames or []):
             if isinstance(raw, str) and '"type": "done"' in raw:
@@ -2414,7 +2419,7 @@ class RunBridge:
         return "".join(parts).strip(), phase
 
     @staticmethod
-    def _full_command_from_frames(frames: list, tool: str) -> str:
+    def _full_command_from_frames(frames: list | None, tool: str) -> str:
         """Last tool_call event for `tool` in the journal frames, with
         the untruncated command from its extra (sse/events.py keeps
         extra['cmd'] whole). Empty string when not found."""

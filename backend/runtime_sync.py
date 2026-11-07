@@ -90,6 +90,6 @@ def sync_loader_settings(settings: dict) -> None:
                               "manager_prefetch", "manager_process"):
                 _mod = sys.modules.get(f"backend.{_mod_name}")
                 if _mod is not None and hasattr(_mod, "VRAM_BUDGET_GB"):
-                    _mod.VRAM_BUDGET_GB = _budget
+                    setattr(_mod, "VRAM_BUDGET_GB", _budget)
     except (TypeError, ValueError):
         logger.warning("runtime sync: vram_budget_gb ignored (bad value)")

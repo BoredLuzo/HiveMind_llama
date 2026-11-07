@@ -453,6 +453,21 @@
             <span class="sl"></span>
           </label>
         </div>
+        <!-- W2-3 (2026-11-07): engine-side safety net for ask_user. The
+             per-card "Auto 30s" timer keeps working; this global setting
+             makes the ENGINE auto-answer an open question after 30 s.
+             until-finished runs keep their configured timeout instead. -->
+        <div class="opt-row" style="margin-top:2px">
+          <div class="opt-row-left">
+            <span class="opt-name">⏱ Auto-answer ask_user</span>
+            <span class="opt-hint">Global: after 30 s the engine answers open questions itself &mdash; until-finished runs keep their configured timeout</span>
+          </div>
+          <label class="cfl-sw" style="margin:0">
+            <input type="checkbox" id="ask-user-auto-proceed-cb"
+              onchange="S.askUserAutoProceed=this.checked;postSettings({ask_user_auto_proceed:this.checked})">
+            <span class="sl"></span>
+          </label>
+        </div>
         <div id="approval-options" style="display:none;padding:4px 0 6px;border-left:2px solid rgba(72,120,192,.25);margin-left:10px;margin-top:2px">
           <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--tx2);padding:0 4px;line-height:1.5">
             The run asks before everything that changes the project —

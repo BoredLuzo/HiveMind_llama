@@ -856,9 +856,11 @@ async def _check_action_approval(name: str, args: dict, workspace,
         while True:
             _wait_t = _appr_asyncio.ensure_future(_pause_ev.wait())
             _abort_t = _appr_asyncio.ensure_future(_abort_ev.wait())
-            _waitset = {_wait_t, _abort_t}
+            _waitset: set[_appr_asyncio.Future] = {_wait_t, _abort_t}
             _timer_t = _off_t = None
-            if _appr_to_s > 0 and not _appr_manual:
+            # _auto_off_ev was armed above whenever _appr_to_s > 0; the explicit
+            # None-guard documents that invariant for the static checker.
+            if _appr_to_s > 0 and not _appr_manual and _auto_off_ev is not None:
                 _timer_t = _appr_asyncio.ensure_future(_appr_asyncio.sleep(_appr_wait_s))
                 _off_t = _appr_asyncio.ensure_future(_auto_off_ev.wait())
                 _waitset.add(_timer_t)
@@ -996,11 +998,13 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
             tool="ask_user" )
     _emit = _tool_loop_emit.get(None)
     from infra import run_control
+    from settings import load_settings as _gov_load_settings
     from infra.ask_user_governor import (
         get_run_config as _gov_config, record_ask_user as _gov_record,
         check_throttle as _gov_check, is_throttle_triggered as _gov_is_throttled,
         set_throttle_triggered as _gov_set_throttle, start_timeout as _gov_start_timeout,
-        is_timeout_answer_sent as _gov_timeout_sent,
+        is_timeout_answer_sent as _gov_timeout_sent, cancel_timeout as _gov_cancel_timeout,
+        AUTO_PROCEED_TIMEOUT_S as _gov_AUTO_PROCEED_TIMEOUT_S,
     )
     _gcfg = _gov_config(run_id)
     if _gcfg:
@@ -1058,8 +1062,24 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
                 pass
         except Exception:
             pass
-    if _gcfg and _gcfg["until_finished"] and _gcfg["timeout_s"] > 0:
-        await _gov_start_timeout(run_id, _gcfg["timeout_s"], _gcfg["auto_answer"])
+    # W2-3 (2026-11-07): governor timeout = engine-side safety net behind the
+    # per-card "Auto 30s" timer. PRECEDENCE: until_finished keeps its
+    # configured timeout (surprising an until-finished user with a 30 s
+    # auto-answer would be worse than the old behavior); auto_proceed uses a
+    # fixed 30 s matching the card label. The setting is re-read from the
+    # CURRENT settings at QUESTION time (mtime-cached load_settings), so the
+    # settings toggle applies mid-run without restarting the run; the
+    # configure_run snapshot is only the fallback for a key missing on disk.
+    _ask_timeout_used = 0
+    if _gcfg:
+        _auto_proceed_now = bool(_gov_load_settings().get(
+            "ask_user_auto_proceed", bool(_gcfg.get("auto_proceed", False))))
+        if _gcfg["until_finished"] and _gcfg["timeout_s"] > 0:
+            _ask_timeout_used = _gcfg["timeout_s"]
+        elif _auto_proceed_now:
+            _ask_timeout_used = _gov_AUTO_PROCEED_TIMEOUT_S
+        if _ask_timeout_used > 0:
+            await _gov_start_timeout(run_id, _ask_timeout_used, _gcfg["auto_answer"])
     timeout = _pause_timeout_s.get()
     import logging as _ask_diag2, time as _ask_diag_t
     import asyncio as _ask_diag_ai
@@ -1084,6 +1104,11 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
     _ask_diag2.getLogger("hivemind.tools").warning(
         "[ASK-DIAG] resumed run_id=%s after %.1fs answer_len=%d",
         run_id, _ask_diag_t.monotonic() - _ask_t0, len(answer or ""))
+    # W2-3: the question is resolved — kill a still-pending governor timeout
+    # so a stale auto-answer cannot land in a later pause of the same run
+    # (the router decision paths cancel too; this covers the pause-timeout
+    # and error exits that bypass the router).
+    _gov_cancel_timeout(run_id)
     _pending_approvals.pop(str(run_id), None)
     _note_tool_use(
         run_id, "ask_user",
@@ -1091,11 +1116,15 @@ async def _handle_ask_user(args: dict, workspace, workspace_lock) -> str:
         if not answer or not answer.strip() or str(answer).startswith("[ask_user")
         else "paused_answered",
     )
-    if _gcfg and _gov_timeout_sent(run_id):
+    if _gcfg and _ask_timeout_used > 0 and _gov_timeout_sent(run_id):
         if _emit:
             try:
+                # W2-3: report the timeout actually used (30 s auto_proceed
+                # or the configured until-finished timeout), not always the
+                # configured value.
                 await _emit({"type": "ask_user_timeout_reached", "run_id": run_id,
-                             "timeout_seconds": _gcfg["timeout_s"], "auto_answer": answer})
+                             "timeout_seconds": _ask_timeout_used,
+                             "auto_answer": answer})
             except Exception:
                 pass
     if not answer or not answer.strip():

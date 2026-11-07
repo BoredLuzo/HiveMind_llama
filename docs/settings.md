@@ -15,7 +15,7 @@ its comment) in either file, then re-run the generator.
 | `agents_user_sampling_choice` | object | `{}` | - |  |
 | `allow_cpu_offload` | bool | `True` | - |  |
 | `ask_user_auto_answer` | str | `Use best judgment, document decision ...` | yes |  |
-| `ask_user_auto_proceed` | bool | `False` | yes | ASK-USER-AUTO-PROCEED : the UI toggle existed, wrote this key - and the loader popped it as a stale key on every start, so the switch silently reset. It is a real setting: on timeout the open question is answered automatically instead of pausing the run. |
+| `ask_user_auto_proceed` | bool | `False` | yes | ASK-USER-AUTO-PROCEED (W2-3, ): real engine setting. When on, the ENGINE auto-answers an open ask_user question after 30 s (AUTO_PROCEED_TIMEOUT_S, infra/ask_user_governor.py) - the safety net behind the per-card "Auto 30s" timer. until_finished runs keep their own… |
 | `ask_user_max_per_10min` | int | `5` | yes |  |
 | `ask_user_throttle_pause_message` | str | `Agent is asking too many questions — ...` | - |  |
 | `ask_user_timeout_until_finished_seconds` | int | `300` | yes |  |

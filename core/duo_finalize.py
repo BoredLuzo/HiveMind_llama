@@ -92,7 +92,8 @@ async def _duo_run_finalize(ctx, ps):
                 _push_out = await _auto_push_after_commit(ps._ws_str)
                 if _push_out:
                     yield await ctx.emit({"type": "status", "content": _push_out})
-        except (ImportError, OSError, RuntimeError, ValueError) as _sq_err:
+        except (ImportError, OSError, RuntimeError, ValueError, KeyError,
+                AttributeError) as _sq_err:
             logger.debug("[GIT-CONSOLIDATE] skipped: %s", _sq_err)
     # AUDIT-FIX D2: resume safety net — on every non-complete stop
     # (abort/timeout/hard_stop/loop) write a resume block, so the
@@ -145,7 +146,8 @@ async def _duo_run_finalize(ctx, ps):
             ProjectStateManager().save(ps._project_state)
             logger.info("[PROJECT] State saved after run #%d (%s)",
                         ps._project_state.total_runs, ctx.duo_stop_reason)
-        except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _ps_err:
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError,
+                AttributeError) as _ps_err:
             logger.warning("[PROJECT] Normal save failed: %s", _ps_err)
 
     try:
@@ -183,7 +185,8 @@ async def _duo_run_finalize(ctx, ps):
                     "content": ("⚠ Run ended in a loop — delivering the "
                                 "explicitly queued file(s) now."),
                 })
-            except (OSError, RuntimeError, ValueError, TypeError) as _emit_err:
+            except (OSError, RuntimeError, ValueError, TypeError,
+                    AttributeError) as _emit_err:
                 logger.debug("[SEND-FILE] loop-delivery status emit failed: %s",
                              _emit_err)
             _deliver_files = list(ps._pending_send_files)

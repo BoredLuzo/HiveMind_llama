@@ -184,6 +184,7 @@ _*.py
 !__init__.py
 !core/duo/_*.py
 !tools/handlers/_shared.py
+!tests/_harness.py
 *.zip
 dist/
 *.bundle

@@ -67,7 +67,7 @@ TREE = ast.parse(SRC)
 SPLIT_FILES = ["duo_runner", "duo_finalize", "duo_epilogue", "duo_finalgate",
                "duo_round_input", "duo_dtool_setup", "duo_inloop_planner",
                "duo_coder_load", "duo_compress_cycle", "duo_coder_preloop",
-               "duo_task_complete_gate"]
+               "duo_task_complete_gate", "duo_loop_guards"]
 TREES = []
 NODE_SRC = {}
 for _mod in SPLIT_FILES:
@@ -342,8 +342,8 @@ if _h is not None:
     check("[b2] slot-ctx query + Guard-C flags moved into the helper",
           "[CTX-ACTUAL] slot ctx=%d" in _seg and "CTX-FLOOR-PRECONDITION" in _seg)
     _runseg = SRC[SRC.index("async def run_code_duo"):]
-    check("[b2] runner still owns the Guard-C round-loop stop",
-          "_slot_ctx_floor_stop = True" in _runseg)
+    check("[b2] Guard-C stop is wired through the action seam",
+          'if _lg_ps.action == "break":' in _runseg)
 
 BUDGETS_FIELDS = ["xtools_ws", "compress_threshold", "max_tool_rounds", "max_tool_rounds_cfg"]
 check_seam("_duo_resolve_tool_budgets", "_DuoToolBudgetsState", BUDGETS_FIELDS, "b2")

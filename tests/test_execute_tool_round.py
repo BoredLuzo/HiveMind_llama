@@ -175,6 +175,36 @@ check("web dedup seen set", "hivemind" in seen)
 check("web dedup second skipped", any("dedup: duplicate query" in str(m.get("content", "")) or
                                        "dedup: duplicate query" in res.last_tool_result for m in msgs))
 
+# ── 5b. READ-BEFORE-EDIT / FRESHNESS (revived 2026-11-07) ────────────────
+def _fresh_state():
+    return ToolRoundState(
+        tool_ctx_lru=_LRU(), duo_deadline_at=time.monotonic() + 60,
+        reads_seen={}, freshness_warned={})
+
+_HANDLERS["edit_file"] = "[edit_file: rewrote 'blind.py']"
+_fresh_trs = _fresh_state()
+res, hooks, msgs, rs, seen, ltl = run_round(
+    [tc("edit_file", {"path": "blind.py", "old_text": "a", "new_text": "b"})],
+    trs=_fresh_trs)
+check("blind edit gets exactly one freshness nudge",
+      sum("FRESHNESS" in str(m.get("content", "")) for m in msgs) == 1)
+check("freshness path recorded", "blind.py" in _fresh_trs.freshness_warned)
+res, hooks, msgs2, rs, seen, ltl = run_round(
+    [tc("edit_file", {"path": "blind.py", "old_text": "b", "new_text": "c"})],
+    dtool_msgs=msgs, trs=_fresh_trs)
+check("same path is nudged only once",
+      sum("FRESHNESS" in str(m.get("content", "")) for m in msgs2) == 1)
+
+_HANDLERS["read_file"] = "content of seen.py"
+_read_trs = _fresh_state()
+run_round([tc("read_file", {"path": "seen.py"})], trs=_read_trs)
+_HANDLERS["edit_file"] = "[edit_file: rewrote 'seen.py']"
+msgs3 = []
+run_round([tc("edit_file", {"path": "seen.py", "old_text": "a", "new_text": "b"})],
+          dtool_msgs=msgs3, trs=_read_trs)
+check("read before edit -> no freshness nudge",
+      not any("FRESHNESS" in str(m.get("content", "")) for m in msgs3))
+
 # ── 6. run_bash fail -> last_run_bash_failure ────────────────────────────
 _HANDLERS["run_bash"] = "[TOOL_ERROR:RUN_BASH_NONZERO] run_bash: exited with code 1."
 res, hooks, msgs, rs, seen, ltl = run_round([tc("run_bash", {"cmd": "pytest"})])

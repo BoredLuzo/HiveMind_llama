@@ -19,19 +19,10 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from deploy import updater as U  # noqa: E402
+from tests._harness import Harness  # noqa: E402
 
-passed = 0
-failed = 0
-
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name}{extra}")
+h = Harness()
+check = h.check
 
 
 # ── 1. pure version comparer ────────────────────────────────────────────────
@@ -165,8 +156,4 @@ check("watchdog stopped then re-armed", _wd["stop"] == 1 and _wd["arm"] == 1,
       f" ({_wd})")
 check("temp update dir cleaned", not (_fake / U.TMPDIR_NAME).exists())
 
-print()
-print("=" * 50)
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print("=" * 50)
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("updater_behavior"))

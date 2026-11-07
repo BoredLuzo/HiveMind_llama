@@ -22,11 +22,18 @@ ROOT = Path(__file__).parent.parent
 BASELINE = Path(__file__).parent / "lint_baseline.json"
 
 EXCLUDE_DIRS = {"__pycache__", ".git", ".venv", ".pytest_cache", "llama", "models"}
+# Local-only leftovers that are gitignored but still exist on some dev boxes.
+# A tracked/clean checkout does not have them, so the baseline must not
+# depend on their presence (2026-11-07: tools/sync_to_installs.py was
+# removed from the tracked tree and kept reappearing in --update).
+EXCLUDE_FILES = {"tools/sync_to_installs.py"}
 
 
 def _iter_py_files():
     for p in sorted(ROOT.rglob("*.py")):
         if any(part in EXCLUDE_DIRS for part in p.parts):
+            continue
+        if p.relative_to(ROOT).as_posix() in EXCLUDE_FILES:
             continue
         yield p
 

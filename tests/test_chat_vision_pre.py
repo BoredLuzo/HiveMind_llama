@@ -31,19 +31,10 @@ _fake_server._registry = _Registry()
 sys.modules["server"] = _fake_server
 
 from core.chat_vision_pre import _ChatVisionPreState, _chat_vision_pre  # noqa: E402
+from tests._harness import Harness  # noqa: E402
 
-passed = 0
-failed = 0
-
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name}{extra}")
+h = Harness()
+check = h.check
 
 
 async def _emit(event):
@@ -82,8 +73,4 @@ check("defaults: effective_images empty", ps2.effective_images == [])
 check("defaults: image_description empty", ps2.image_description == "")
 check("defaults: judge_gb None", ps2._judge_gb is None)
 
-print()
-print("=" * 50)
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print("=" * 50)
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("chat_vision_pre"))

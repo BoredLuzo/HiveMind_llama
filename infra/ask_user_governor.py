@@ -2,6 +2,11 @@
 
 Timeout: Until-Finished runs auto-answer after N seconds if user doesn't respond.
 Throttle: Hard-pause when agent fires > N ask_user events within 10 minutes.
+
+W2-3 (2026-11-07): the ask_user_auto_proceed setting turns the timeout into a
+global safety net — non-until-finished runs auto-answer after
+AUTO_PROCEED_TIMEOUT_S. until_finished keeps precedence with its own
+configured ask_user_timeout_until_finished_seconds (see tools/runner.py).
 """
 from __future__ import annotations
 import asyncio
@@ -10,6 +15,10 @@ import time
 from collections import deque
 
 logger = logging.getLogger("hivemind.ask_user_governor")
+
+# W2-3: fixed auto-answer delay for ask_user_auto_proceed — matches the
+# per-card "Auto 30s" label in the UI.
+AUTO_PROCEED_TIMEOUT_S = 30
 
 _RUN_CONFIG: dict[str, dict] = {}
 _ASK_USER_HISTORY: dict[str, deque] = {}
@@ -22,6 +31,11 @@ def configure_run(run_id: str, until_finished: bool, settings: dict) -> None:
     _RUN_CONFIG[run_id] = {
         "until_finished": until_finished,
         "timeout_s": int(settings.get("ask_user_timeout_until_finished_seconds", 300) or 300),
+        # W2-3: run-start snapshot of ask_user_auto_proceed. The handler
+        # re-reads the CURRENT value at question time (load_settings is
+        # mtime-cached), so a mid-run toggle takes effect without a restart;
+        # this snapshot is the fallback when the key is absent on disk.
+        "auto_proceed": bool(settings.get("ask_user_auto_proceed", False)),
         "max_per_10min": int(settings.get("ask_user_max_per_10min", 5) or 5),
         "auto_answer": str(
             settings.get("ask_user_auto_answer",
@@ -78,7 +92,7 @@ def clear_throttle_state(run_id: str) -> None:
     _ASK_USER_HISTORY.pop(run_id, None)
 
 
-async def start_timeout(run_id: str, timeout_s: int, auto_answer: str) -> None:
+async def start_timeout(run_id: str, timeout_s: float, auto_answer: str) -> None:
     if timeout_s <= 0:
         return
     cancel_timeout(run_id)

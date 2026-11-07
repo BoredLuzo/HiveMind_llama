@@ -781,6 +781,7 @@ async def tool_query(query: str, mode: str = "auto", iterations: int = 2, notify
 async def tool_shell(cmd: str, timeout: int = 30) -> str:
     safe   = bool(SAFE_SHELL_RE.match(cmd.strip()))
     prefix = "" if safe else "⚠ Unsafe command: "
+    proc: asyncio.subprocess.Process | None = None
     try:
         if IS_WINDOWS:
             proc = await asyncio.create_subprocess_exec(
@@ -804,12 +805,20 @@ async def tool_shell(cmd: str, timeout: int = 30) -> str:
         return prefix + (result.strip() or "(no output)")
     except asyncio.TimeoutError:
         try:
-            if not IS_WINDOWS:
-                import os as _os_kill
-                import signal as _sig_kill
-                _os_kill.killpg(_os_kill.getpgid(proc.pid), _sig_kill.SIGKILL)
-            else:
-                proc.kill()
+            if proc is not None:
+                if not IS_WINDOWS:
+                    # killpg/getpgid/SIGKILL exist on POSIX only - resolve them
+                    # dynamically so the Windows-platform analysis stays valid;
+                    # on POSIX the same call as before runs.
+                    import os as _os_kill
+                    import signal as _sig_kill
+                    _killpg = getattr(_os_kill, "killpg", None)
+                    _getpgid = getattr(_os_kill, "getpgid", None)
+                    _sigkill = getattr(_sig_kill, "SIGKILL", None)
+                    if _killpg and _getpgid and _sigkill:
+                        _killpg(_getpgid(proc.pid), _sigkill)
+                else:
+                    proc.kill()
         except (OSError, ProcessLookupError):
             pass
         return _tool_error_response(
@@ -1332,6 +1341,7 @@ async def tool_git_diff(path: str = "", ref: str = "", workspace: str = "",
         return err_env
     argv = ["diff", "--no-color", "--no-ext-diff"]
     ref_raw = str(ref or "").strip()
+    ref_clean = ""  # prebound: only read when ref_raw is set (guarded below)
     if ref_raw:
         ref_clean = _clean_git_ref(ref_raw)
         if ref_clean is None:
@@ -1532,6 +1542,7 @@ async def tool_run_tests(cmd: str = "", path: str = ".", timeout: int = 120) -> 
             "metacharacters or chaining.",
             tool="run_tests", retryable=False)
     t0 = time.monotonic()
+    proc: asyncio.subprocess.Process | None = None
     try:
         if IS_WINDOWS:
             proc = await asyncio.create_subprocess_exec(
@@ -1550,7 +1561,8 @@ async def tool_run_tests(cmd: str = "", path: str = ".", timeout: int = 120) -> 
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
         with contextlib.suppress(ProcessLookupError, OSError):
-            proc.kill()
+            if proc is not None:
+                proc.kill()
         return _tool_error_response(
             "RUN_TESTS_TIMEOUT", f"Tests timed out after {timeout}s.",
             tool="run_tests", retryable=True)

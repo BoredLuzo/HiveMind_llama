@@ -144,6 +144,9 @@ from core.duo_coder_preloop import (
 from core.duo_task_complete_gate import (
     _DuoTaskCompleteGateState, _duo_task_complete_gate,
 )
+from core.duo_loop_guards import (
+    _DuoLoopGuardsState, _duo_loop_guards,
+)
 from core.duo_coder_load import (
     _DuoCoderPortCacheState, _duo_resolve_coder_port_cache,
     _DuoSlotCtxState, _duo_query_actual_slot_ctx,
@@ -1492,6 +1495,10 @@ async def _duo_exec_round_task(
         _round_cache_horizon = len(_dtool_msgs)
         _last_too_large_ref = [_last_too_large_path]
         _cached_port_ref = [_cached_coder_port]
+        # READ-BEFORE-EDIT (2026-11-07): run-persistent maps for the freshness
+        # nudge; the executor state is rebuilt every round, these dicts are not.
+        _reads_seen = state.setdefault("_reads_seen", {})
+        _freshness_warned = state.setdefault("_freshness_warned", {})
         _exec_task = asyncio.create_task(execute_tool_round(
             tool_calls=_dr_tcs,
             dtool_msgs=_dtool_msgs,
@@ -1517,6 +1524,8 @@ async def _duo_exec_round_task(
                 file_changes=_file_changes,
                 run_written_files=_written_files,
                 duo_seen_web_queries=_duo_seen_web_queries,
+                reads_seen=_reads_seen,
+                freshness_warned=_freshness_warned,
                 cached_coder_port=_cached_port_ref,
                 task_complete_blocked_count=_task_complete_blocked,
                 total_tool_errors=_total_tool_errors_ref,
@@ -3620,106 +3629,34 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         else:
                             _ask_user_gate.set("open")
                             _ask_user_throttled_count.set(0)
-                        if _total_tool_rounds > 0 and _total_tool_rounds % 10 == 0:
-                            _hc_ok = False
-                            try:
-                                _hc_url = f"http://127.0.0.1:{_dport}/v1/models"
-                                async with httpx.AsyncClient(timeout=httpx.Timeout(connect=2.0, read=3.0, write=2.0, pool=2.0)) as _hc_client:
-                                    _hc_r = await _hc_client.get(_hc_url)
-                                    _hc_ok = _hc_r.status_code < 500
-                            except Exception:
-                                pass
-                            if not _hc_ok:
-                                logger.warning("[HEALTH-CHECK] llama-server port %s unreachable - trying reload", _dport)
-                                try:
-                                    from backend.llama_server_manager import manager as _lsm_hc
-                                    await _lsm_hc.evict(exec_mdl)
-                                    _dport = await _lsm_hc.ensure_loaded(exec_mdl, num_ctx=_dtool_opts.get("num_ctx", 4096), n_parallel=1, ctx_graceful=False, pin=True)
-                                    _cached_coder_port = _dport
-                                    _cached_coder_port_ctx = _dtool_opts.get("num_ctx", 4096)  # CTX-GUARD
-                                    yield await ctx.emit({"type": "status",
-                                        "content": "🩺 Health check: server restarted."})
-                                except Exception as _hc_exc:
-                                    logger.error("[HEALTH-CHECK] Server reload failed: %s", _hc_exc)
-                                    _ld_setter(2716); _loop_detected = True
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"⛔ Server dead after health check (port {_dport}) — run aborted."})
-                                    break
-                        # (tool-result messages) — now the central repaired function.
-                        # REPO-MAP-PIN (2026-09-06): static repo-map into the pinned
-                        # system message once per built list (marker makes later
-                        # rounds a no-op). Extends the cache-stable prefix beyond the
-                        # ~7.1k system/tool base; the map is no longer inside the big
-                        # first user message that full compression rewrites.
-                        if ctx.settings.get("duo_pin_static_map", True):
-                            try:
-                                from core.repomap_pin import pin_static_map as _pin_map_once
-                                if _pin_map_once(_dtool_msgs):
-                                    logger.warning(
-                                        "[REPO-MAP-PIN] static repo-map moved into pinned system message"
-                                    )
-                            except Exception as _pin_err:
-                                logger.debug("[REPO-MAP-PIN] skipped: %s", _pin_err)
-                        _est_tokens = _calib_tokens(_coder_real_prompt_tokens, _coder_est_at_real, _estimate_ctx_tokens(_dtool_msgs))
-                        # GUARD-REAL-BASIS (2026-08-26): all guard decisions on the
-                        # (evict/compress/90%/72%/notices) use the real
-                        # prompt_tokens value of the last round, fallback to the
-                        # estimator (round 1 / backend without usage_meta).
-                        _guard_tokens = int(_coder_real_prompt_tokens[0] or _est_tokens)
-                        # DELTA-ON-REAL (2026-10-14, audit phase 2): the server
-                        # value is one round stale. Count what was appended
-                        # since that POST (tool results, injections) with the
-                        # real/est ratio, so a full big-write round cannot slip
-                        # past the compression trigger.
-                        if _coder_real_prompt_tokens[0] > 0 and len(_dtool_msgs) > _coder_real_at_msgs_len[0]:
-                            try:
-                                _r2e = _coder_real_prompt_tokens[0] / max(1, _coder_est_at_real[0])
-                                _delta_chars = sum(
-                                    len(str(_m.get("content", "") or ""))
-                                    + len(str(_m.get("tool_calls", "") or ""))
-                                    for _m in _dtool_msgs[_coder_real_at_msgs_len[0]:]
-                                )
-                                _guard_tokens = int(_guard_tokens + _delta_chars / 4.0 * _r2e)
-                            except Exception:
-                                pass
-                        # ── GUARD C: CTX-FLOOR-STOP (2026-09-06) ─────────────
-                        # If the slot is degraded (real slot-ctx < requested ctx)
-                        # and the round-1 baseline (pinned sys/repo-map/plan/goal)
-                        # already exhausts the usable space, compression is
-                        # pointless — the run used to churn for minutes in path 1
-                        # ([CTX-FULL] skip×4) or path 2 (compress-streak×3) and
-                        # then stopped unspecifically. Guard C fires BEFORE the
-                        # first tool round with a clear message and never lets paths 1/2
-                        # be reached in exactly this case (no double firing:
-                        # same exit funnel as all _ld_setter stops).
-                        if _slot_degraded and _total_tool_rounds <= 0:
-                            try:
-                                from backend.llama_manager_utils import CTX_DOWN_MIN as _CTX_FLOOR_MIN
-                            except Exception:
-                                _CTX_FLOOR_MIN = 8192
-                            _usable_floor = _actual_ctx - 512
-                            # IMPORTANT: _est_tokens (fresh estimate of the CURRENT
-                            # _dtool_msgs) instead of _guard_tokens — the latter can carry
-                            # the previous round's cached real-prompt-tokens value
-                            # (false-positive stop after compression/chunk switch).
-                            if _actual_ctx < _CTX_FLOOR_MIN and _est_tokens >= _usable_floor:
-                                _slot_ctx_floor_stop = True
-                                logger.warning(
-                                    "[CTX-FLOOR-STOP] slot ctx=%d < min %d; round-1 est=%d >= usable %d — "
-                                    "aborting instead of compress churn (path 1/2 skipped)",
-                                    _actual_ctx, _CTX_FLOOR_MIN, int(_est_tokens), _usable_floor,
-                                )
-                                yield await ctx.emit({
-                                    "type": "status",
-                                    "content": (
-                                        f"⛔ Coder slot running at ctx={_actual_ctx} only "
-                                        f"(requested: {_dtool_ctx_requested}, minimum {_CTX_FLOOR_MIN}) — "
-                                        f"round-1 context (~{int(_est_tokens)} tokens) does not fit. "
-                                        f"Close other GPU users, lower the coder ctx or pick a smaller model."
-                                    ),
-                                })
-                                _ld_setter(3246); _loop_detected = True
-                                break
+                        # W4a (2026-11-07): health check + repo-map pin +
+                        # calibrated guard tokens + GUARD C live in
+                        # core/duo_loop_guards.
+                        _lg_ps = _DuoLoopGuardsState(
+                            exec_mdl=exec_mdl, actual_ctx=_actual_ctx,
+                            dtool_ctx_requested=_dtool_ctx_requested,
+                            slot_degraded=_slot_degraded,
+                            total_tool_rounds=_total_tool_rounds,
+                            dtool_msgs=_dtool_msgs, dtool_opts=_dtool_opts,
+                            coder_real_prompt_tokens=_coder_real_prompt_tokens,
+                            coder_est_at_real=_coder_est_at_real,
+                            coder_real_at_msgs_len=_coder_real_at_msgs_len,
+                            dport=_dport,
+                            cached_coder_port=_cached_coder_port,
+                            cached_coder_port_ctx=_cached_coder_port_ctx,
+                            est_tokens=_est_tokens,
+                            loop_detected=_loop_detected,
+                        )
+                        async for _ev in _duo_loop_guards(ctx, _lg_ps):
+                            yield _ev
+                        _dport = _lg_ps.dport
+                        _cached_coder_port = _lg_ps.cached_coder_port
+                        _cached_coder_port_ctx = _lg_ps.cached_coder_port_ctx
+                        _est_tokens = _lg_ps.est_tokens
+                        _guard_tokens = _lg_ps.guard_tokens
+                        _loop_detected = _lg_ps.loop_detected
+                        if _lg_ps.action == "break":
+                            break
                         _ctx_peak_tokens = max(_ctx_peak_tokens, int(_est_tokens))
                         _ctx_limit_seen = max(_ctx_limit_seen, int(_dtool_ctx))
                         if _dtool_ctx > 0:

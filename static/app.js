@@ -170,6 +170,7 @@ let S = {
   // Git Integration
   duoGitAutocommit: false,
   duoActionApproval: false,
+  askUserAutoProceed: false,
   gitRepoUrl: '',
   gitUsername: '',
   gitToken: '',
@@ -1041,6 +1042,10 @@ async function loadSettings() {
     S.askUserMaxPer10min = s.ask_user_max_per_10min || 5;
     S.askUserAutoAnswer = s.ask_user_auto_answer || 'Use best judgment, document decision in commit message.';
     S.askUserAutoProceed = !!s.ask_user_auto_proceed;
+    // W2-3: sync the settings-row checkbox (next to Action Approval) with
+    // the loaded value — the per-card "Auto 30s" toggle reads the same S key.
+    var _aupCb = document.getElementById('ask-user-auto-proceed-cb');
+    if (_aupCb) _aupCb.checked = S.askUserAutoProceed;
     // Ensure chunk-dependent toggles are correctly shown/hidden.
     // persist=false: a render must never write derived state back (see
     // onChunkingChange header — this post reverted saved values on reload).
@@ -6069,6 +6074,10 @@ function _renderAskCard(d) {
   // state sticks for the session, later asks auto proceed too.
   var _tg = document.createElement('label');
   _tg.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:10px;color:var(--tx2);border:1px solid var(--b2);border-radius:4px;padding:5px 10px;cursor:pointer;user-select:none';
+  // W2-3: this toggle is the SAME global setting as the settings row next
+  // to Action Approval (ask_user_auto_proceed) — with it on, the ENGINE
+  // auto-answers after 30 s even when no card timer is running.
+  _tg.title = 'Global setting (Settings \u2192 Action Approval gate): the engine auto-answers ask_user after 30 s. until-finished runs keep their configured timeout.';
   var _tgCb = document.createElement('input');
   _tgCb.type = 'checkbox';
   _tgCb.checked = !!S.askUserAutoProceed;

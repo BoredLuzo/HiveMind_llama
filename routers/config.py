@@ -524,8 +524,12 @@ def _recommended_card_temperature(model: str, role_cfg: dict) -> float | None:
         _block = next((v for v in _sampling.values() if isinstance(v, dict)), None)
     if not isinstance(_block, dict):
         return None
+    _raw_temp = _block.get("temperature")
+    if _raw_temp is None:
+        # float(None) raised TypeError -> return None; explicit guard, same result.
+        return None
     try:
-        _temp = float(_block.get("temperature"))
+        _temp = float(_raw_temp)
     except (TypeError, ValueError):
         return None
     return _temp
@@ -585,7 +589,8 @@ async def post_settings(req: Request):
         _ui_rev, _settings_force = None, False
     if not _settings_force:
         try:
-            _ui_rev_i = int(_ui_rev)
+            # int(None) raised TypeError -> -1; explicit guard, same result.
+            _ui_rev_i = int(_ui_rev) if _ui_rev is not None else -1
         except (TypeError, ValueError):
             _ui_rev_i = -1
         if 0 <= _ui_rev_i < _settings_rev:

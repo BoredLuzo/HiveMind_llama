@@ -14,6 +14,7 @@ import urllib.request
 import urllib.error
 import logging
 from logging.handlers import RotatingFileHandler
+from typing import cast
 
 # ── DEATH FORENSICS (2026-10-14, task 5): the engine died several times
 # without any traceback (last: mid-coder-call, log ended on a console ^C).
@@ -46,7 +47,9 @@ try:
     if hasattr(_fh, "register") and _sigusr1 is not None:
         # Linux audit 2026-11-03: register(signum, file=...) - passing the
         # stream as the signum raised TypeError and skipped the whole block.
-        _fh.register(_sigusr1, file=_faulthandler_stream, all_threads=True)
+        # Dynamic access: faulthandler.register is POSIX-only (typeshed only
+        # declares it off-win32), the hasattr guard above is authoritative.
+        getattr(_fh, "register")(_sigusr1, file=_faulthandler_stream, all_threads=True)
 
     def _log_death_signal(signum, frame):
         try:
@@ -111,8 +114,9 @@ except Exception as _forensics_err:
 # starting the engine detached (pythonw/WMI), console events cannot reach it.
 if sys.platform == "win32":
     _win32job = None
+    _win32_api = None
     try:
-        import win32api
+        import win32api as _win32_api
         import win32job as _win32job
     except ImportError as _pw_exc:
         # PYWIN32-HINT (2026-10-18): two different failures look identical here.
@@ -138,13 +142,15 @@ if sys.platform == "win32":
             print("         uv pip install --python .venv\\Scripts\\python.exe "
                   "--reinstall pywin32")
         print("       Or simply re-run install.bat (it re-syncs the environment).")
-    if _win32job is not None:
+    if _win32job is not None and _win32_api is not None:
         try:
-            _hjob = _win32job.CreateJobObject(None, "")
+            # typeshed's pywin32 stub declares CreateJobObject -> None, but the
+            # real pywin32 returns a handle; cast to int for the *JobObject calls.
+            _hjob = cast(int, _win32job.CreateJobObject(None, ""))
             _info = _win32job.QueryInformationJobObject(_hjob, _win32job.JobObjectExtendedLimitInformation)
             _info["BasicLimitInformation"]["LimitFlags"] = _win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
             _win32job.SetInformationJobObject(_hjob, _win32job.JobObjectExtendedLimitInformation, _info)
-            _win32job.AssignProcessToJobObject(_hjob, win32api.GetCurrentProcess())
+            _win32job.AssignProcessToJobObject(_hjob, _win32_api.GetCurrentProcess())
         except _win32job.error as _job_err:
             # best-effort: startup_cleanup still kills leftovers by port scan
             print(f"[WARN] Job-object console-kill unavailable: {_job_err}")

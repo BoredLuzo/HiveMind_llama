@@ -38,6 +38,7 @@ TARGETS = [
     "core/duo_coder_load.py",
     "core/duo_coder_preloop.py",
     "core/duo_task_complete_gate.py",
+    "core/duo_loop_guards.py",
     "core/duo_compress_cycle.py",
     "core/chat_shortcuts.py",
     "core/chat_tools_route.py",

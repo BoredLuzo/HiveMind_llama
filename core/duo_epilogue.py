@@ -113,7 +113,8 @@ async def _duo_session_epilogue(ctx, ps):
                 }
 
             _mut_ctx(ctx.chat_id, _apply_run_ctx)
-        except (ImportError, OSError, RuntimeError, ValueError, TypeError) as _ctx_err:
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError,
+                KeyError, AttributeError) as _ctx_err:
             logger.debug("[CTX] Chat context save failed: %s", _ctx_err)
 
     # D4-DIAG (2026-08-21): measure re-read inflation — repeated read_file
@@ -139,7 +140,7 @@ async def _duo_session_epilogue(ctx, ps):
     # Same counter increment as the direct_runner and pipeline_runner paths.
     try:
         _duo_run_count = ctx.increment_run_counter()
-    except (OSError, RuntimeError, ValueError, TypeError) as _rc_err:
+    except (OSError, RuntimeError, ValueError, TypeError, AttributeError) as _rc_err:
         _duo_run_count = 0
         logger.warning("[RUN-COUNTER] Duo increment failed: %s", _rc_err)
 
@@ -206,8 +207,8 @@ async def _duo_session_epilogue(ctx, ps):
                     if ctx.aborted(): break
                     _pparts.append(_tok)
                     yield await ctx.emit({"type": "token", "content": _tok})
-            except (OSError, RuntimeError, ValueError, TypeError,
-                    httpx.HTTPError, LlamaError) as _pe:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                    AttributeError, httpx.HTTPError, LlamaError) as _pe:
                 yield await ctx.emit({"type": "token", "content": f"[Pipeline-Error: {str(_pe)[:80]}]"})
             _pipe_out = "".join(_pparts).strip()  # REMOVED: implicit _re.sub() — Thinking now explicitly controlled
             yield await ctx.emit({"type": "agent_done", "elapsed": round(time.time() - _pt, 1)})

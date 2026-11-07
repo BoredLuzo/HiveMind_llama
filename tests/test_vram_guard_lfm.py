@@ -15,18 +15,10 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from backend.llama_vram_table import moe_cfg_for, vram_of_moe  # noqa: E402
+from tests._harness import Harness  # noqa: E402
 
-passed = failed = 0
-
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 # 8 GB Karte, ~7.4 GB frei (gemessen auf der Zielmaschine)
@@ -78,6 +70,4 @@ check("calibration guard no longer does an exact table lookup",
 check("guard still compares against the calibrated value",
       "calibrated_n_cpu_moe" in ml and "deviates from the calibrated value" in ml)
 
-print()
-print(f"SUMMARY vram_guard: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("vram_guard"))

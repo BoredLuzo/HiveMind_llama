@@ -32,6 +32,7 @@ import uuid
 # platform removed ─ unused (all platform checks use sys.platform)
 import threading
 import contextvars as _contextvars
+from typing import Any
 
 # QUIET-POLL (2026-09-19): the UI polls /approval/pending every 2 s while a
 # run streams (card recovery after a page reload, ask_user and destructive
@@ -690,7 +691,7 @@ async def _shutdown():
         save_settings(settings)
     except Exception as _e:
         _logger.debug("[Hivemind] flush_settings error: %s", _e)
-    if _WEBSEARCH_AVAILABLE:
+    if _WEBSEARCH_AVAILABLE and _websearch is not None:
         try:
             await _websearch.shutdown()
         except Exception as _e:
@@ -1391,7 +1392,7 @@ async def stream(req: Request):
 #   2. settings (settings.json ─ persisted user preference)
 
     _MISSING = object()
-    def _body_or_settings(key: str, settings_key: str | None = None, default=False):
+    def _body_or_settings(key: str, settings_key: str | None = None, default: Any = False):
         """body ─ settings ─ default. body ALWAYS wins (including explicit False)."""
         _sk = settings_key or key
         body_val = body.get(key, _MISSING)
@@ -1911,7 +1912,7 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
             except Exception as e:
                 return _tool_error_response("PIPELINE_CALL_FAILED",
                     f"hivemind_pipeline failed: {type(e).__name__}: {str(e)[:220]}",
-                    tool="hivemind_pipeline", mode="openai_agent", retryable=False)
+                    tool="hivemind_pipeline", mode="openai_agent")
         _tool_args = dict(args or {})
         _tool_args["__model__"] = model_for_limits
         try:
@@ -1929,7 +1930,7 @@ async def _v1_agent_mode(msgs, raw_model, temp, max_tok, chat_id, created, do_st
         except Exception as e:
             return _tool_error_response("TOOL_EXEC_EXCEPTION",
                 f"{type(e).__name__}: {str(e)[:220]}",
-                tool=name, mode="openai_agent", retryable=False)
+                tool=name, mode="openai_agent")
 
     _agent_state = {
         "stop_reason": "completed", "tool_calls": 0, "tool_errors": 0,

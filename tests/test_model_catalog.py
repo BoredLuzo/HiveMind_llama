@@ -17,18 +17,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 sys.path.insert(0, str(ROOT / "deploy"))
 import fetch_models as fm  # noqa: E402
+from tests._harness import Harness  # noqa: E402
 
-passed = failed = 0
-
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 specs = {s["key"]: s for s in fm.SPECS}
@@ -176,6 +168,4 @@ check("changelog states the determinism price",
 check("changelog drops the old essential-skip claim",
       "`--essential` implies it" not in _CH)
 
-print()
-print(f"SUMMARY model_catalog: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("model_catalog"))

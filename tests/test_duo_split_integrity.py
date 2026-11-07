@@ -30,7 +30,8 @@ TREE = ast.parse(SRC)
 _TREES = [TREE]
 for _mod in ("duo_finalize", "duo_epilogue", "duo_finalgate", "duo_round_input",
              "duo_dtool_setup", "duo_inloop_planner", "duo_coder_load",
-             "duo_compress_cycle", "duo_coder_preloop", "duo_task_complete_gate"):
+             "duo_compress_cycle", "duo_coder_preloop", "duo_task_complete_gate",
+             "duo_loop_guards"):
     _p = ROOT / "core" / (_mod + ".py")
     if _p.exists():
         _TREES.append(ast.parse(_p.read_text(encoding="utf-8")))

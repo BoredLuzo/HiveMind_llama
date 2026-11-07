@@ -23,21 +23,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def ok(name):
-    global passed
-    passed += 1
-    print(f"  PASS  {name}")
-
-
-def fail(name, msg=""):
-    global failed
-    failed += 1
-    print(f"  FAIL  {name}  {msg}")
-
+h = Harness(style="box", width=60)
+ok = h.ok
+fail = h.fail
 
 ROOT = Path(__file__).parent.parent
 
@@ -193,7 +183,4 @@ if __name__ == "__main__":
     test_manifest_file_covers_catalog()
     test_settings_defaults_resolve()
     test_write_models_json_pins()
-    print("\n" + "=" * 60)
-    print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-    print("=" * 60)
-    sys.exit(1 if failed else 0)
+    sys.exit(h.finish("gguf_tag_pinning"))

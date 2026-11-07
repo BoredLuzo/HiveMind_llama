@@ -11,20 +11,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from core.toolcall_sanitize import sanitize_invalid_tool_call_history as _san
+from core.toolcall_sanitize import sanitize_invalid_tool_call_history as _san  # noqa: E402
+from tests._harness import Harness  # noqa: E402
 
-passed = 0
-failed = 0
-
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 def tc(cid, args):
@@ -89,8 +80,4 @@ check("S12: compression resets the high-water mark",
       re.search(r"_dtool_msgs = _cc_ps\._dtool_msgs\s*\n\s*_sanitize_upto = 0",
                 _src) is not None)
 
-print()
-print("=" * 50)
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print("=" * 50)
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("toolcall_sanitize"))
