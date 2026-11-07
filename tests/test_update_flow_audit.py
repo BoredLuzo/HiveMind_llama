@@ -180,6 +180,8 @@ def section_a():
           0 < stop_i < grace_i < recheck_i, f" {stop_i} {grace_i} {recheck_i}")
     check("A19b grace wait is time.sleep (the shim carries no `timeout /t`)",
           "time.sleep(25)" in UPD and "timeout /t" not in SHIM)
+    check("A19c port recheck is unconditional (only the grace wait is marker-gated)",
+          "    if wd_was:\n        time.sleep(25)\n    if port_listener(hm_port):" in UPD)
     check("A20 watchdog re-arm appears exactly once (as a call)",
           len(rearm_calls) == 1, f" got {len(rearm_calls)}")
     co_i = UPD.find("check_optionals.bat")
@@ -192,9 +194,22 @@ def section_a():
           bool(rearm_calls) and co_i < UPD.find(rearm_calls[0])
           and swap_i > 0 and ".update_new.bat" in last_line
           and "exit /b" in last_line
-          and SHIM.find("pause >nul") < swap_i)
+          and SHIM.rfind("pause >nul") < swap_i)
     check("A22 apply-failure message names the stopped watchdog",
           "watchdog is STOPPED" in UPD)
+    check("A28 optional components run in the same console (no capture, no timeout)",
+          'subprocess.run(["cmd", "/c", str(co)], timeout=None)' in UPD)
+    check("A29 shim resolves py -3.14 to a real path (quote-safe)",
+          "print(sys.executable)" in SHIM and 'set "PY=py -3.14"' not in SHIM)
+    check("A30 shim swaps update.bat only after a successful update",
+          'if not "%UPD_RC%"=="0" exit /b %UPD_RC%' in SHIM)
+    check("A31 updater main has a top-level TimeoutExpired/OSError guard",
+          "except subprocess.TimeoutExpired as exc:" in UPD
+          and "except OSError as exc:" in UPD)
+    _rc_i = UPD.find("def _run_rc")
+    _rc_seg = UPD[_rc_i:UPD.find("\ndef ", _rc_i + 5)]
+    check("A32 _run_rc has no mid-apply timeout (alt batch had none)",
+          "timeout=" not in _rc_seg)
 
     check("A23 prune never moves the running update.bat",
           "($_ -ne 'update.bat')" in PRUNE_PS1)

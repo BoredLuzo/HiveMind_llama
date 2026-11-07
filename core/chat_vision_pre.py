@@ -227,7 +227,8 @@ async def _chat_vision_pre(ps):
                 _logger.debug("[Vision-Evict] No evict - %.1f+%.1f+%.1f=%.1fGB <= %.1fGB budget",
                               _vision_gb, _direct_gb, _judge_gb,
                               _vision_gb + _direct_gb + _judge_gb, _budget_gb)
-        except (OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError, IndexError) as _ve:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError,
+                AttributeError, IndexError, httpx.HTTPError) as _ve:
             _logger.debug("[Vision-Evict] Check failed (%s) - evicting to be safe", _ve)
             try:
                 await _bk_evict(_vision_model_name)

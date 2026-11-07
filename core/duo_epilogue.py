@@ -39,9 +39,6 @@ async def _duo_session_epilogue(ctx, ps):
     _touched_paths = ps.carry.get("_touched_paths")
     _total_tool_errors_ref = ps.carry.get("_total_tool_errors_ref")
     _last_run_bash_failure = ps.carry.get("_last_run_bash_failure")
-    coder_mdl = ps.carry.get("coder_mdl", "")
-    final_verdict = ps.carry.get("final_verdict")
-    run_peer_ratings = ps.carry["run_peer_ratings"]
     if _loop_detected:
         _written_list = sorted(ps._written_files or [])
         _auto_summary = (
@@ -51,14 +48,10 @@ async def _duo_session_epilogue(ctx, ps):
                if _written_list else "none")
             + f"\nTool rounds used: {ps._lifetime_tool_rounds}."
         )
-        _drop_diag_names = []
-        _drop_diag_retries = "n/a"
-        try:
-            _dd_locals = locals()
-            _drop_diag_names = list(_dd_locals.get("_drop_names") or [])[-8:]
-            _drop_diag_retries = _dd_locals.get("_dr_dropped_tool_retries", "n/a")
-        except NameError as _dd_err:
-            logger.debug("[AUTO-STOP] diag locals probe failed: %s", _dd_err)
+        # The values live in run_code_duo's scope; the 2.2 carve moved this
+        # block into a module, so a locals() probe here always came up empty.
+        _drop_diag_names = list(ps.carry.get("_drop_names") or [])[-8:]
+        _drop_diag_retries = ps.carry.get("_dr_dropped_tool_retries", "n/a")
         logger.warning(
             "[AUTO-STOP] loop_detected Diagnose: tool_errors=%d explore_only_rounds=%d "
             "last_bash_failure=%s written_files=%d dropped_tool_retries=%s drop_names=%s",

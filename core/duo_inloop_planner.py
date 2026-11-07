@@ -47,6 +47,7 @@ async def _duo_inloop_planner(ctx, ps):
     _plan_tracker = ps._plan_tracker
     _is_first_outer_round = ps._is_first_outer_round
     _goal_summary = ps._goal_summary
+    _duo_timed_out = ps._duo_timed_out
     _inloop_plan_text = ""
 
     # ctx.duo_config.thinking_per_chunk=True: Thinking in EVERY chunk.
@@ -244,3 +245,4 @@ async def _duo_inloop_planner(ctx, ps):
     ps._run_thinking_now = _run_thinking_now
     ps._inloop_plan_text = _inloop_plan_text
     ps._dtool_msgs = _dtool_msgs
+    ps._duo_timed_out = _duo_timed_out

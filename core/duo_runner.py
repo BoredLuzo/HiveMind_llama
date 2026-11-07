@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import AsyncIterator
 import asyncio
 from utils.bg_tasks import spawn  # noqa: E402
 import traceback, hashlib, json, logging, os, re, sys, time, uuid
@@ -1876,6 +1877,7 @@ class _DuoInloopPlannerState:
     _plan_tracker: object = None
     _is_first_outer_round: bool = False
     _goal_summary: str = ""
+    _duo_timed_out: bool = False
     _run_thinking_now: bool = False
     _inloop_plan_text: str = ""
     carry: dict = dataclasses.field(default_factory=dict)
@@ -2111,7 +2113,7 @@ async def _duo_final_cleanup(ctx, ps: _DuoFinalCleanupState):
             logger.warning("[PROJECT] Save in finally failed: %s", _save_err)
 
 
-async def run_code_duo(ctx):
+async def run_code_duo(ctx) -> AsyncIterator[dict]:
     """Code-duo handler: iterative coder+critic loop."""
     # PLANNER-OFF (2026-11-04): chunking is a planner feature ("Planner
     # creates N subtasks"). With the planner toggle off there is no plan and
@@ -3646,6 +3648,7 @@ async def run_code_duo(ctx):
                 _plan_tracker=_plan_tracker,
                 _coder_caps=_coder_caps,
                 _touched_block_persisted=_touched_block_persisted,
+                _coder_port=_coder_port,
                 carry={
                     "_coder_map_budget": _coder_map_budget,
                     "coder_mdl": coder_mdl,
@@ -3661,6 +3664,7 @@ async def run_code_duo(ctx):
                     "_inloop_plan_text": _inloop_plan_text if "_inloop_plan_text" in dir() else "",
                     "_plan_content_txt": _plan_content_txt if "_plan_content_txt" in dir() else "",
                     "_explore_has_contents": _explore_has_contents,
+                    "_final_verdict": final_verdict,
                 },
             )
             async for _ev in _duo_coder_round_input(ctx, _ri_ps):
@@ -3774,6 +3778,7 @@ async def run_code_duo(ctx):
                     _plan_tracker=_plan_tracker,
                     _is_first_outer_round=_is_first_outer_round,
                     _goal_summary=_goal_summary,
+                    _duo_timed_out=_duo_timed_out,
                     carry={
                         "exec_mdl": exec_mdl,
                         "coder_mdl": coder_mdl,
@@ -3790,6 +3795,7 @@ async def run_code_duo(ctx):
                 _dtool_msgs = _ip_ps._dtool_msgs
                 _run_thinking_now = _ip_ps._run_thinking_now
                 _inloop_plan_text = _ip_ps._inloop_plan_text
+                _duo_timed_out = _ip_ps._duo_timed_out
                 # PLAN-TO-EXEC DEBUG: Log state after planning step to diagnose early-exit.
                 logger.warning(
                     "[PLAN-TO-EXEC] _is_tool_round=%s ctx.aborted=%s _dtool_msgs_len=%d "
@@ -6473,8 +6479,10 @@ async def run_code_duo(ctx):
             "final_verdict": final_verdict,
             "critic_issues": critic_issues,
             "_recent_focus_paths": _recent_focus_paths,
+            "_drop_names": locals().get("_drop_names") or [],
+            "_dr_dropped_tool_retries": locals().get("_dr_dropped_tool_retries", "n/a"),
             "_worker_slots": _worker_slots,
-            "this_file": Path(__file__),
+            "this_file": ctx.this_file,
             "_warm_workers_fn": _warm_workers_fn,
             "_keepalive_vision_fn": _keepalive_vision_fn,
         },

@@ -266,8 +266,11 @@ def apply_cmd(exroot: Path, base: Path) -> list[str]:
 
 
 def _run_rc(cmd: list[str]) -> int:
+    # No timeout: the old batch had none, and a long apply must not be
+    # aborted mid-write. Other step timeouts become a clean rc 1 via the
+    # __main__ guard.
     r = subprocess.run(cmd, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=3600)
+                       encoding="utf-8", errors="replace")
     return r.returncode
 
 
@@ -699,7 +702,8 @@ def main(argv: list[str] | None = None) -> int:
     # window. Give it that window, then re-check the port UNCONDITIONALLY
     # before anything is applied (alt update.bat checked regardless of the
     # marker — an engine started by ANYTHING must block the apply).
-    time.sleep(25)
+    if wd_was:
+        time.sleep(25)
     if port_listener(hm_port):
         print(f"  [ERROR] An engine is listening on port {hm_port} - the watchdog")
         print("         restarted it while the update was preparing. Nothing was")
@@ -781,4 +785,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except subprocess.TimeoutExpired as exc:
+        print(f"  [ERROR] A step timed out ({exc}). The update did not complete.")
+        sys.exit(1)
+    except OSError as exc:
+        print(f"  [ERROR] {exc}")
+        sys.exit(1)

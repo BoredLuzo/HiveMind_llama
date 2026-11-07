@@ -667,7 +667,11 @@ async def _phase_moe(self, slot, cmd, model: str, num_ctx: int,
                 "offloading. Use a newer binary (b8278+)."
             )
 
-    return _MoePhase(cmd=cmd, moe_cache_used=int(slot._moe_cache_used or 0))
+    # The MiB value lives in the local `_moe_cache_used`; the slot attribute
+    # is only the bool marker (used elsewhere as a flag). Returning
+    # int(slot...) would collapse every cache size to 1 MiB and make the
+    # VRAM pre-flight under-estimate by (MOE_CACHE_MIB - 1).
+    return _MoePhase(cmd=cmd, moe_cache_used=_moe_cache_used)
 
 
 

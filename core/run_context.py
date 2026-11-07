@@ -20,7 +20,7 @@ class RunContext:
     active_preset: str = ""
     constraint_mode: bool = True
     force_complexity: str | None = None
-    skip_agents: set = field(default_factory=frozenset)
+    skip_agents: set | frozenset = field(default_factory=frozenset)
     judge_bias: int = 50
     duo_config: Any = None  # DuoConfig instance
     chat_id: str | None = None
@@ -89,27 +89,27 @@ class RunContext:
     this_file: Any = None
 
     # ── Callable references (inner functions from run_stream) ──
-    emit: Callable[[dict], Awaitable[str]] = lambda _: asyncio.sleep(0)
+    emit: Callable[[dict], Awaitable[Any]] = lambda _: asyncio.sleep(0)
     done_event: Callable = lambda *a, **kw: {}
     aborted: Callable[[], bool] = lambda: False
     step_skipped: Callable[[], bool] = lambda: False
-    maybe_preload: Callable = None
+    maybe_preload: Any = None
     maybe_trigger_soul_evolution: Callable = lambda *a: None
     auto_memory_from_input: Callable = lambda *a: None
 
     # ── Module-level function references ──
     pick_direct_model: Callable = lambda *a: ""
     get_num_ctx: Callable = lambda *a, **kw: None
-    bk_load: Callable = None
-    bk_pin: Callable = None
-    bk_evict: Callable = None
-    get_loaded_models_set: Callable = None
-    smart_preload_if_needed: Callable = None
-    safe_web_search: Callable = None
+    bk_load: Any = None
+    bk_pin: Any = None
+    bk_evict: Any = None
+    get_loaded_models_set: Any = None
+    smart_preload_if_needed: Any = None
+    safe_web_search: Any = None
     extract_ws_query: Callable = lambda *a: ""
     make_messages: Callable = lambda *a, **kw: []
-    pipeline_chat_stream: Callable = None
-    refresh_judge_keepalive: Callable = None
+    pipeline_chat_stream: Any = None
+    refresh_judge_keepalive: Any = None
     model_profile: Callable = lambda *a: {}
     is_truncated: Callable = lambda *a: False
 
@@ -126,8 +126,8 @@ class RunContext:
     flush_prefetch_settings: Callable = lambda *a: None
 
     # ── Prefetch / runtime helpers ──
-    prefetch_judge_once: Callable = None
-    do_prefetch: Callable = None
+    prefetch_judge_once: Any = None
+    do_prefetch: Any = None
     runtime_telemetry_snapshot: Callable = lambda: {}
     runtime_delta: Callable = lambda *a: 0
     resolve_duo_runtime_profile: Callable = lambda *a, **kw: "balanced"

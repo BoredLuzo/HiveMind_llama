@@ -63,6 +63,8 @@ IP = (ROOT / "core/duo_inloop_planner.py").read_text(encoding="utf-8", errors="r
 PH = (ROOT / "backend" / "llama_start_phases.py").read_text(encoding="utf-8", errors="replace")
 UPD = (ROOT / "deploy" / "updater.py").read_text(encoding="utf-8", errors="replace")
 VER = (ROOT / "core" / "version.py").read_text(encoding="utf-8", errors="replace")
+VIS = (ROOT / "core" / "chat_vision_pre.py").read_text(encoding="utf-8", errors="replace")
+PYB = (ROOT / "deploy" / "pyright_baseline.py").read_text(encoding="utf-8", errors="replace")
 
 # ── a. dispatch complexity ──────────────────────────────────────────────────
 _i = CHAT_RUN.find("def _build_run_context():")
@@ -143,9 +145,44 @@ check("i3 no digest skips",
       UPDMOD.digest_ok(_zp, "") is None)
 
 # ── j. MoE MiB int ──────────────────────────────────────────────────────────
+# The slot attribute is only the bool marker (`slot._moe_cache_used = True`);
+# the size lives in the local `_moe_cache_used = int(_moe_cache_mib)`.
 check("j _phase_moe returns the MiB int (not the slot bool)",
-      "bool(slot._moe_cache_used)" not in PH
-      and "moe_cache_used=int(slot._moe_cache_used or 0)" in PH)
+      "moe_cache_used=_moe_cache_used" in PH
+      and "int(slot._moe_cache_used" not in PH
+      and "_moe_cache_used = int(_moe_cache_mib)" in PH)
+
+# ── l-o. follow-ups found in the re-review (2026-11-07) ────────────────────
+check("l the finalize carry passes ctx.this_file (skills dir)",
+      '"this_file": ctx.this_file' in RUNNER
+      and '"this_file": Path(__file__)' not in RUNNER)
+check("m _coder_port travels as the state field",
+      "_coder_port=_coder_port," in _ri)
+check("m2 _final_verdict travels in the carry",
+      '"_final_verdict": final_verdict' in _ri)
+check("n inloop planner syncs _duo_timed_out",
+      "_duo_timed_out = ps._duo_timed_out" in IP
+      and "ps._duo_timed_out = _duo_timed_out" in IP)
+check("o vision outer VRAM handler covers httpx",
+      "IndexError, httpx.HTTPError) as _ve" in VIS)
+
+# ── p-q. process gaps from the re-review (2026-11-07) ──────────────────────
+check("p auto-stop diag reads the runner carry (no module-scope locals probe)",
+      'ps.carry.get("_drop_names"' in EPI and "_dd_locals" not in EPI)
+_PY_TARGETS = [
+    "core/duo_finalize.py", "core/duo_epilogue.py", "core/duo_finalgate.py",
+    "core/duo_round_input.py", "core/duo_dtool_setup.py",
+    "core/duo_inloop_planner.py", "core/duo_coder_load.py",
+    "core/duo_compress_cycle.py", "core/chat_shortcuts.py",
+    "core/chat_vision_pre.py", "core/chat_history_seed.py",
+    "core/chat_route.py", "core/chat_route_decision.py",
+    "core/llm_stream.py", "core/ctx_overrides.py", "core/run_context.py",
+    "core/stream.py", "learning/soul_evolution.py",
+    "backend/llama_start_phases.py", "deploy/updater.py",
+]
+check("q pyright baseline covers every split module",
+      all(t in PYB for t in _PY_TARGETS),
+      f" missing={[t for t in _PY_TARGETS if t not in PYB]}")
 
 # ── bonus: ordering pins that only make sense together ─────────────────────
 check("k1 the epilogue runs before the finalize tail (single-write order)",

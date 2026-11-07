@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import asyncio
 from utils.bg_tasks import spawn  # noqa: E402
-import hashlib
 import json
 import logging
-import re
 import threading
 import time
 import uuid
@@ -26,8 +24,7 @@ from core.chat_shortcuts import _ChatShortcutState, _chat_memory_shortcuts
 from core.chat_vision_pre import _ChatVisionPreState, _chat_vision_pre
 from core.state import (
     settings,
-    registry_get, registry_set,
-    apply_settings_to_pipeline, _get_num_ctx,
+    registry_get, apply_settings_to_pipeline, _get_num_ctx,
 )
 from core.duo_config import DuoConfig
 from core.run_context import RunContext
@@ -36,19 +33,17 @@ from core.model_sampling import _model_profile
 from core.duo_helpers import (
     DEFAULT_VRAM_BUDGET_GB,
     _resolve_duo_runtime_profile, _resolve_duo_run_timeout_seconds,
-    _bucket_stop_reason, should_evict_vision_after_prepro,
+    _bucket_stop_reason,
 )
 from context.chat_util import (
     _make_messages, _extract_ws_query, _auto_memory_from_input,
 )
-from context.compression import SESSION_COMPRESS_THRESHOLD
 from infra.phase_timer import PhaseTimer
 from routing import decider as _routing_decider
 from infra import editor_context as _editor_ctx
 from infra.token_stats import _estimate_tokens_from_content
 from utils.math import percentile_float as _percentile_float
 from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
-from utils.token import window_by_budget
 
 
 def _history_budget_tokens(settings) -> int:
@@ -69,7 +64,7 @@ def _history_budget_tokens(settings) -> int:
         _nctx = 16384  # sane default when no ctx override is configured
     return max(1024, int((_nctx - 4096) * 0.35))
 from tools.websearch import _safe_web_search
-from hive_functions.prompts import AGENT_ROLES, VISION_AGENT_PROMPT
+from hive_functions.prompts import VISION_AGENT_PROMPT
 from hive_functions.soul_engine import (
     build_soul_prompt_layer, load_soul, run_soul_cycle,
 )
@@ -121,18 +116,11 @@ async def run_stream(
     )
     from routing.complexity import _check_complexity_with_bias
     from routing.model_picker import _pick_direct_model
-    from routing.agent_intent import (
-        detect_agent_intent, detect_tool_request, get_question_from_intent,
-    )
-    from routing.model_automap import (
-        detect_task_type, get_automap, get_routing_suggestion,
-    )
     from context.chat import (
-        _load_chat_context, get_chat_workspace, history_seed,
+        _load_chat_context, get_chat_workspace,
     )
     from context.resume import _clear_resume_block, _load_resume_block
-    from context.compression import _compress_chat_session
-    from vision.preprocess import _filter_vision_images, _preprocess_images_to_text
+    from vision.preprocess import _filter_vision_images
     from tools.definitions import _get_inline_tools
     from infra.run_counter import _increment_run_counter
     from infra.token_stats import _record_run
