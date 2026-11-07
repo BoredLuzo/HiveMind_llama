@@ -58,12 +58,22 @@
 
 ## B. Wartbarkeit (offen)
 
-- [ ] **B1 · P1 · DEBT — C4/C5-Extraktion nur mit explizitem `RoundState`.**
-  Ctx-Pressure/Compression: 48 freie Namen, 13 Outputs, 3 Breaks; Round-Tail: 3
-  Loop-Crossings. Ein 61-Feld-Extract wäre die verbotene Überkomplexität.
-  *Akzeptanz:* `RoundState`-Dataclass (nur Felder, keine Logikbewegung) →
-  Characterization-Tests für den Loop → Extraktion mit Action-Enum; `duo_runner`
-  unter ~5.000 Zeilen; Pyright-Komplexitätsfehler verschwindet.
+- [ ] **B1 · P1 · DEBT — C4/C5-Extraktion: gemessen und verworfen.**
+  C4 (269 Z.) berührt **60+ Loop-State-Variablen**: neben den 32 Runner-Inputs
+  auch run-persistente Compression-Zähler (`_MAX_COMPRESSIONS`,
+  `_compress_fail_streak`, `_ctx_compressions`, `_ctx_critical_warned`,
+  `_ctx_evictions`, `_force_compress_next`, `_last_force_compress_round`,
+  `_swa_triggered_compress`, …) sowie `_dtool_msgs`, `_est_tokens`,
+  `_guard_tokens`. Eine saubere Extraktion erzeugt genau das verbotene
+  60-Feld-`RoundState`-Objekt; der erste Versuch wurde vollständig
+  zurückgerollt (kein Code verändert). C5 (230 Z., 3 Loop-Crossings) hat
+  dieselbe Klasse.
+  *Entscheidung:* **nicht als Ganzes extrahieren.** Stattdessen nur kleine,
+  kohäsive Sub-Blöcke mit ≤5 Outputs ziehen (Muster W4a:
+  `duo_loop_guards`) oder den Loop bewusst als Monolith belassen.
+  *Akzeptanz (falls später):* Characterization-Test vor jeder Bewegung;
+  kein State-Objekt >15 Felder; `duo_runner` darf nicht durch Interface-Code
+  wachsen.
 
 - [x] **B2 · P1 · DEBT — `backend/manager_load.py` aus Pyright-TARGETS ausgelassen.**
   55 Cross-Mixin-Attributfehler; ein TYPE_CHECKING-Kontrakt wie in
