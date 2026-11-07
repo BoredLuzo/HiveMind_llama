@@ -1,6 +1,6 @@
 # TODO — Wartbarkeit, Release-Härtung, Wettbewerbsfähigkeit
 
-**Stand:** 2026-11-07 · Branch `dev` @ `04cb9fe` + Batch 15 (Deep-Audit)
+**Stand:** 2026-11-08 · Branch `dev` @ `3273240` + Batch 16 (F2/F3)
 **Legende:** P0 = blockiert Release · P1 = als Nächstes · P2 = geplant · P3 = strategisch
 **Typ:** BUG / DESIGN / DEBT / TEST / RELEASE / COMPETE
 
@@ -227,18 +227,23 @@ Flake-Report (chronisch/partial).
   verbietet direkte `ps.*`-Writes außerhalb des Helpers (`ps.stop` ausgenommen)
   und prüft „jeder Return synct vorher“.
 
-- [ ] **F2 · P2 · PERF — Manager-Lock wird über `sleep(5)` + Kills gehalten.**
+- [x] **F2 · P2 · PERF — Manager-Lock wird über `sleep(5)` + Kills gehalten.**
   `_enforce_vram_budget` (backend/manager_load.py) hält `self._lock` über
   `asyncio.sleep(5)` und `_kill_slot_async` (bis ~10 s pro Slot). Der
   Event-Loop friert nicht mehr (Batch 15), aber alle Manager-Ops serialisieren.
-  *Akzeptanz:* Opfer unter Lock wählen, Sleep/Kill außerhalb, danach
-  re-validieren.
+  *Erledigt 2026-11-07:* drei kurze kritische Abschnitte (Snapshot, frische
+  Auswahl, Re-Check); Sleep und beide Kills laufen außerhalb des Locks.
+  `tests/test_manager_vram_lock.py` (16 Checks) beweist die Reihenfolge und
+  dass beim Kill das Lock nicht gehalten wird.
 
-- [ ] **F3 · P2 · PERF — 45-facher 5xx-Retry kann Prefill vervielfachen.**
+- [x] **F3 · P2 · PERF — 45-facher 5xx-Retry kann Prefill vervielfachen.**
   `LlamaClient` (`_TRANSIENT_HTTP_STATUSES`, `max_attempts=45`) wiederholt auch
   deterministische 500er (Context-Overflow/Template) und schickt jedes Mal den
-  vollen Prompt. *Akzeptanz:* generische 5xx für Side-Calls auf ~3 kappen;
-  Overflow-Marker im Body erkennen und nicht retryen.
+  vollen Prompt.
+  *Erledigt 2026-11-07:* `_should_retry_http_status` — 500/502/504 max. 3
+  Versuche, Overflow-Marker („exceed“/„context window“/…) nie; 408/429/503
+  behalten den langen Retry. Beide Pfade (`chat`, `chat_stream`) nutzen den
+  Helper; 49 Checks inkl. Fake-Client-Integration.
 
 - [ ] **F4 · P3 · PERF — Restliche Sync-I/O auf dem Loop.**
   `os.walk` in `core/duo/_pre_explore.py` und `core/duo_compress_cycle.py`,
@@ -379,3 +384,10 @@ Flake-Report (chronisch/partial).
 - Batch 14 (2026-11-07): D1-Starter-Korpus mit 21 verifizierten Tasks
   (Bugfix/Feature/Refactor/Multi-File), versteckte Tests werden erst beim
   Check einkopiert (tamper-proof), 28 Harness-Checks.
+- Batch 15 (2026-11-07/08): Deep-Audit-Fixes — Bench-Modus/Timeouts,
+  Eviction + Prozess-Probe off-loop, `tzdata` in Produktions-Deps,
+  gefrorener CI-Lock, Leak-Regex/Export-Ignore, Docs/Dead-Surface,
+  Runner-Robustheit und Flake-Report; 337/337.
+- Batch 16 (2026-11-08): F2 Manager-Lock-Scope (Sleep/Kills außerhalb,
+  16 Checks) und F3 5xx-Retry-Policy (500/502/504 max. 3, Overflow nie;
+  49 Checks); 339/339.

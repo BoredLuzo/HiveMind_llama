@@ -337,6 +337,7 @@ SUITES = [
     ("max_rounds_truth",        "tests/test_max_rounds_truth.py",            20),
     ("loop_detected_stream",    "tests/test_loop_detected_stream.py",        20),
     ("backend_slot_invariants", "tests/test_backend_slot_invariants.py",     20),
+    ("manager_vram_lock",       "tests/test_manager_vram_lock.py",           30),
     ("unpin_resolution",        "tests/test_unpin_resolution.py",            30),
     ("prefetch_order",          "tests/test_prefetch_order.py",              20),
     ("critic_empty_verdict",    "tests/test_critic_empty_verdict.py",        20),
@@ -380,6 +381,8 @@ SUITES = [
     ("chat_tools_route_guards", "tests/test_chat_tools_route_guards.py",     30),
     ("tool_route_repeat_guard", "tests/test_tool_route_repeat_guard.py",     30),
     ("bench_runner",            "tests/test_bench_runner.py",                30),
+    # F3 retry policy (deep audit 2026-11-07): 5xx cap + overflow no-retry
+    ("llama_client_retry",      "tests/test_llama_client_retry.py",          30),
 
 ]
 

@@ -81,9 +81,13 @@ check("4 the CPU fallback override wins over the registry",
 check("5 CPU backend skips VRAM eviction entirely",
       "if running_slots and GPU_BACKEND != \"cpu\":" in ML_SRC
       and 'if GPU_BACKEND == "cpu":\n            return' in ML_SRC)
+# F2 (deep audit 2026-11-07): the lock-shrink put the committed-VRAM helper
+# between the cpu short-circuit and the first lock acquisition - the return
+# must still precede every lock acquisition inside the guard.
+_guard_src = ML_SRC.split("async def _enforce_vram_budget", 1)[1].split("async def ", 1)[0]
 check("6 Vram guard short-circuits before taking the lock",
-      'if GPU_BACKEND == "cpu":\n            return\n        async with self._lock:'
-      in ML_SRC)
+      'if GPU_BACKEND == "cpu":\n            return' in _guard_src
+      and _guard_src.index('if GPU_BACKEND == "cpu":') < _guard_src.index("async with self._lock:"))
 
 # CPU path: the method returns before touching the lock. A fake lock that
 # raises proves it did not enter the GPU branch.

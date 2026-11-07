@@ -37,6 +37,43 @@ def _retry_backoff(attempt: int, status_code: int = 0) -> float:
     return min(1.5, 0.25 * (attempt + 1))
 
 
+# RETRY-POLICY (F3, deep audit 2026-11-07): a deterministic 500 (context
+# overflow, chat-template/grammar error) used to be retried 45x with the
+# FULL prompt - hours of repeated 35B prefill while the run looked alive.
+# 408/429/503 keep the long retry (timeouts, rate limits, model load and
+# eviction are genuinely transient); generic 500/502/504 get a short cap
+# and an overflow-shaped body never retries at all.
+_OVERFLOW_MARKERS = ("exceed", "context", "too many tokens",
+                     "context window", "n_predict")
+_HTTP_SERVER_ERRORS = {500, 502, 504}
+
+
+def _is_context_overflow_body(body: str) -> bool:
+    """Heuristic: does the error body look like a context-overflow rejection?"""
+    if not body:
+        return False
+    low = body.lower()
+    return any(marker in low for marker in _OVERFLOW_MARKERS)
+
+
+def _should_retry_http_status(status_code: int, body: str, attempt: int,
+                              max_attempts: int = 45) -> bool:
+    """True only when another attempt can plausibly succeed."""
+    if status_code not in _TRANSIENT_HTTP_STATUSES:
+        return False
+    if attempt >= max_attempts - 1:
+        return False
+    if status_code in _HTTP_SERVER_ERRORS:
+        if _is_context_overflow_body(body):
+            return False
+        # plain 5xx: 3 total attempts (attempt 0/1 may fire again,
+        # attempt 2 is the last one) - enough for a real blip, harmless
+        # for a deterministic error.
+        return attempt < 2
+    # 408/429/503: unchanged long retry
+    return True
+
+
 async def tokenize_count(port: int, text: str, timeout_s: float = 5.0) -> int | None:
     """Real token count for `text` from the running llama-server (/tokenize).
 
@@ -155,7 +192,8 @@ class LlamaClient:
                     port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
                     await asyncio.sleep(backoff)
                     continue
-                if r.status_code in _TRANSIENT_HTTP_STATUSES and attempt < max_attempts - 1:
+                if _should_retry_http_status(
+                        r.status_code, r.text[:2000], attempt, max_attempts):
                     backoff = _retry_backoff(attempt, r.status_code)
                     self._log.warning(
                         "req=%s chat transient status=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",
@@ -313,7 +351,10 @@ class LlamaClient:
                             port = await self._recover_model_port(model, ctx, old_port=port, vision=_vision)
                             await asyncio.sleep(backoff)
                             continue
-                        if r.status_code in _TRANSIENT_HTTP_STATUSES and attempt < max_attempts - 1:
+                        if _should_retry_http_status(
+                                r.status_code,
+                                body.decode(errors="replace")[:2000],
+                                attempt, max_attempts):
                             backoff = _retry_backoff(attempt, r.status_code)
                             self._log.warning(
                                 "req=%s stream transient status=%s model=%s attempt=%d/%d port=%s backoff=%.2fs",

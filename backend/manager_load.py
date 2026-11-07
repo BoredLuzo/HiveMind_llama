@@ -623,13 +623,25 @@ class LlamaLoadMixin:
         # short-circuits cpu; this guard must too.
         if GPU_BACKEND == "cpu":
             return
-        async with self._lock:
-            _committed = sum(
+
+        def _committed_gb() -> float:
+            return sum(
                 vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
                 if moe_cfg_for(_strip_alias(s.model))
                 else _vram_of(s.model)
                 for s in self._slots if s.model
             )
+
+        # LOCK-SHRINK (deep audit 2026-11-07): the 5s worker wait and the LRU
+        # kills (each up to ~10s via to_thread) used to run INSIDE self._lock,
+        # serializing every manager op (ensure_loaded/prefetch/touch/unpin)
+        # behind a role switch for up to ~15s. Each critical section now only
+        # snapshots committed VRAM / selects a victim; the sleep and both
+        # kills run OUTSIDE the lock, and each re-lock recomputes so the
+        # victim choice is as fresh as possible.
+        async with self._lock:
+            _committed = _committed_gb()
+            _need_wait = False
             if _committed > VRAM_BUDGET_GB:
                 _active_workers = [
                     s for s in self._slots
@@ -640,21 +652,35 @@ class LlamaLoadMixin:
                         "[VRAM-GUARD] Committed=%.1fGB > budget=%.1fGB — %d active worker(s) still running. Waiting 5s.",
                         _committed, VRAM_BUDGET_GB, len(_active_workers),
                     )
-                    await asyncio.sleep(5.0)
-                await self._evict_lru_async(exclude_slot=slot)
-                # Recalculate after eviction (stale _committed used to log wrong value)
-                _committed_after = sum(
-                    vram_of_moe(_strip_alias(s.model), s._num_ctx if s._num_ctx > 0 else 4096)
-                    if moe_cfg_for(_strip_alias(s.model))
-                    else _vram_of(s.model)
-                    for s in self._slots if s.model
+                    _need_wait = True
+        if _need_wait:
+            await asyncio.sleep(5.0)
+
+        async with self._lock:
+            # Fresh recompute (the unlocked wait may already have resolved the
+            # pressure) before selecting the victim.
+            _committed = _committed_gb()
+            _victim = (self._evict_lru(exclude_slot=slot)
+                       if _committed > VRAM_BUDGET_GB else None)
+        if _victim is not None:
+            await _kill_slot_async(_victim)
+
+        if _committed <= VRAM_BUDGET_GB:
+            return
+
+        async with self._lock:
+            # Recalculate after eviction (stale _committed used to log wrong value)
+            _committed_after = _committed_gb()
+            if _committed_after > VRAM_BUDGET_GB:
+                logging.getLogger("vram_guard").warning(
+                    "[VRAM-GUARD] committed=%.1fGB > budget=%.1fGB after eviction — forced extra evict",
+                    _committed_after, VRAM_BUDGET_GB,
                 )
-                if _committed_after > VRAM_BUDGET_GB:
-                    logging.getLogger("vram_guard").warning(
-                        "[VRAM-GUARD] committed=%.1fGB > budget=%.1fGB after eviction — forced extra evict",
-                        _committed_after, VRAM_BUDGET_GB,
-                    )
-                    await self._evict_lru_async(exclude_slot=slot)
+                _victim2 = self._evict_lru(exclude_slot=slot)
+            else:
+                _victim2 = None
+        if _victim2 is not None:
+            await _kill_slot_async(_victim2)
 
     async def ensure_loaded(self, model: str, num_ctx: Optional[int] = None,
                             pin: bool = False, vision: bool = False,
