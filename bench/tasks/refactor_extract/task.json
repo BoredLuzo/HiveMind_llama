@@ -1,0 +1,6 @@
+{
+ "id": "refactor_extract",
+ "prompt": "calc_even.process(values) contains the even check inline. Extract it into is_even(n) in the same module and use it in process. Keep process behavior unchanged.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

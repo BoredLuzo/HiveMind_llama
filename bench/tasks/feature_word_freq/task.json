@@ -1,0 +1,6 @@
+{
+ "id": "feature_word_freq",
+ "prompt": "Add word_freq(text) to freq.py: return a dict of lowercase words and their counts. Punctuation (commas, dots, exclamation marks) must not become part of a word.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

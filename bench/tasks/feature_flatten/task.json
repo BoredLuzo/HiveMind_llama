@@ -1,0 +1,6 @@
+{
+ "id": "feature_flatten",
+ "prompt": "Add flatten(nested) to nested.py: return a flat list from arbitrarily nested lists, preserving order.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

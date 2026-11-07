@@ -1,0 +1,6 @@
+{
+ "id": "fix_int_div",
+ "prompt": "average(a, b) in stats.py truncates the result. Fix it so it returns the true average as a float.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

@@ -1,0 +1,6 @@
+{
+ "id": "fix_off_by_one",
+ "prompt": "count_items(items) in range_sum.py returns the wrong number for non-empty lists. Fix it so it counts every item.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

@@ -1,0 +1,6 @@
+{
+ "id": "feature_chunk",
+ "prompt": "Add chunk(items, size) to chunks.py: split a list into consecutive lists of at most size items. Empty input gives []. Raise ValueError when size < 1.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

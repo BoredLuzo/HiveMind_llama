@@ -1,0 +1,6 @@
+{
+ "id": "fix_regex_word",
+ "prompt": "contains_word(text, word) in words2.py matches substrings. Make it match whole words, case-insensitively.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

@@ -1,0 +1,6 @@
+{
+ "id": "refactor_dedupe",
+ "prompt": "validators.py repeats the same text validation in validate_name and validate_city. Extract a private _validate_text(value) helper and use it in both. Behavior must not change.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

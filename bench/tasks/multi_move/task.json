@@ -1,0 +1,6 @@
+{
+ "id": "multi_move",
+ "prompt": "Move slugify(text) from text_utils.py into a new module slugs.py. Keep `from text_utils import slugify` working as a re-export.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

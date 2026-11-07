@@ -1,0 +1,6 @@
+{
+ "id": "fix_mutable_default",
+ "prompt": "add_tag(tag) in tags.py leaks tags between calls. Fix it so every call without an explicit list starts empty.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

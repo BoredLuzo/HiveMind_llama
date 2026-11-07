@@ -1,0 +1,6 @@
+{
+ "id": "multi_config",
+ "prompt": "config.mode() in config.py always returns 'prod'. Read the environment variable APP_MODE on every call instead, defaulting to 'prod'. service.describe() must reflect the change without edits to service.py.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

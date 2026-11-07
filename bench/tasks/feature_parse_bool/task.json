@@ -1,0 +1,6 @@
+{
+ "id": "feature_parse_bool",
+ "prompt": "Add parse_bool(value) to bools.py. Accept true/false, yes/no, 1/0 case-insensitively; return bool. Raise ValueError for anything else.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

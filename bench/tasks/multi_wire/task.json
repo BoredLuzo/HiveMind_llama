@@ -1,0 +1,6 @@
+{
+ "id": "multi_wire",
+ "prompt": "Create mathx.py with square(n). Change main.compute(n) to call mathx.square instead of doing the multiplication itself. Behavior stays n*n.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

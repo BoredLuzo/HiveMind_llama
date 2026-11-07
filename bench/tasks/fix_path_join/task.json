@@ -1,0 +1,6 @@
+{
+ "id": "fix_path_join",
+ "prompt": "join_path(base, name) in paths.py builds paths by hand and produces duplicate or mixed separators. Use the platform-correct join.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

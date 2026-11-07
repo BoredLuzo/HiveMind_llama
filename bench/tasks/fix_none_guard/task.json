@@ -1,0 +1,6 @@
+{
+ "id": "fix_none_guard",
+ "prompt": "first_word(text) in words.py crashes on empty or whitespace-only input. Return an empty string in those cases.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

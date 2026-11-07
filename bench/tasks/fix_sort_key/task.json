@@ -1,0 +1,6 @@
+{
+ "id": "fix_sort_key",
+ "prompt": "sort_people(people) in people.py only sorts by age. Sort by age first, then by name for equal ages.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

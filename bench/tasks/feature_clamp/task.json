@@ -1,0 +1,6 @@
+{
+ "id": "feature_clamp",
+ "prompt": "Add clamp(value, lo, hi) to limits.py: return value bounded to [lo, hi]. Raise ValueError when lo > hi.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

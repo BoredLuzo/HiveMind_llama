@@ -1,0 +1,6 @@
+{
+ "id": "fix_json_serialize",
+ "prompt": "to_json(data) in jsonio.py returns a Python repr instead of JSON. Return a JSON string with sorted keys.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

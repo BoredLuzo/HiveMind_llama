@@ -19,13 +19,15 @@ is the **delta against the raw-model baseline**.
 
 ```
 bench/tasks/<task>/
-  task.json      {"id": "...", "prompt": "...", "check": "python -m unittest -q", "timeout_s": 300}
-  repo/          starting workspace (copied fresh for every run/condition)
+  task.json      {"id": "...", "prompt": "...", "check": "python -m unittest -q test_task", "timeout_s": 300}
+  repo/          starting workspace, visible to the agent (copied fresh per run)
+  tests/          hidden tests, copied in ONLY for the check (never visible)
 ```
 
-`check` runs with the workspace as cwd; exit code 0 = pass. Hidden tests live
-in `repo/` and are not repeated in the prompt. The runner never modifies
-`repo/` itself.
+`check` runs with the workspace as cwd; exit code 0 = pass. Hidden tests are
+installed after the agent is done, overwriting any same-named file, so an
+agent cannot edit them into passing. The runner never modifies `repo/` or
+`tests/` themselves.
 
 ## Run
 
@@ -47,6 +49,22 @@ workspaces under `bench/.work/` for inspection.
 - **delta_vs_raw** — pass-rate difference (fraction, not percent) to `raw`.
 - **median_seconds**, **tokens_total** — a harness that takes twice as long
   has to earn that with better results.
+
+## Starter corpus (21 tasks)
+
+Synthetic, dependency-free, each verified red before the reference fix and
+green after it:
+
+- **bugfix:** `fix_add`, `fix_off_by_one`, `fix_mutable_default`,
+  `fix_none_guard`, `fix_int_div`, `fix_sort_key`, `fix_path_join`,
+  `fix_json_serialize`, `fix_regex_word`
+- **feature:** `feature_clamp`, `feature_chunk`, `feature_parse_bool`,
+  `feature_word_freq`, `feature_flatten`
+- **refactor:** `refactor_extract`, `refactor_rename`, `refactor_dedupe`
+- **multi-file:** `multi_move`, `multi_wire`, `multi_config`, `multi_shape`
+
+Still missing for D1: 5–10 tasks from real repositories (where "correct" is
+known) and, optionally, Aider's public benchmark tasks as a shared yardstick.
 
 ## Notes and limits
 

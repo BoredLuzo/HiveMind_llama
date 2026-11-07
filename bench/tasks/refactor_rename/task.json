@@ -1,0 +1,6 @@
+{
+ "id": "refactor_rename",
+ "prompt": "Rename calc_total(prices) in pricing.py to total_price(prices). Keep calc_total working as an alias for backward compatibility.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

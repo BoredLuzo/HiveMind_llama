@@ -47,6 +47,7 @@ class Task:
     check: str
     timeout_s: int = 600
     repo: Path | None = None
+    tests: Path | None = None
 
 
 @dataclass
@@ -71,12 +72,14 @@ def load_tasks(tasks_dir: Path) -> list[Task]:
         except (OSError, ValueError) as exc:
             raise SystemExit(f"invalid task {spec}: {exc}") from exc
         repo = spec.parent / "repo"
+        tests = spec.parent / "tests"
         tasks.append(Task(
             id=str(data.get("id") or spec.parent.name),
             prompt=str(data.get("prompt") or ""),
             check=str(data.get("check") or ""),
             timeout_s=int(data.get("timeout_s") or 600),
             repo=repo if repo.is_dir() else None,
+            tests=tests if tests.is_dir() else None,
         ))
     return tasks
 
@@ -92,7 +95,13 @@ def prepare_workspace(task: Task, base: Path) -> Path:
 
 
 def run_check(task: Task, work: Path, timeout_s: int | None = None) -> tuple[bool, str]:
-    """Run the task's check command; exit 0 = pass."""
+    """Run the task's check command; exit 0 = pass.
+
+    Hidden tests (task/tests/) are copied in only now, after the agent had
+    its turn. The agent never sees them and cannot edit them into passing.
+    """
+    if task.tests is not None:
+        shutil.copytree(task.tests, work, dirs_exist_ok=True)
     if not task.check.strip():
         return False, "task.json has no check command"
     timeout = timeout_s or task.timeout_s

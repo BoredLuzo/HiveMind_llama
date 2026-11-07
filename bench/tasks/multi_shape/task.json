@@ -1,0 +1,6 @@
+{
+ "id": "multi_shape",
+ "prompt": "Extend shapes.py with rectangle_area(w, h). Change report.total_area(shapes) to accept circles {type: circle, r} and rectangles {type: rect, w, h}, summing their areas. Keep circle_area unchanged.",
+ "check": "python -m unittest -q test_task",
+ "timeout_s": 300
+}

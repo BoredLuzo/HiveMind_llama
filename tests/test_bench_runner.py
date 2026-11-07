@@ -44,6 +44,9 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
 
     # ── task loading ───────────────────────────────────────────────────────
     _task_dir(root, "alpha", with_repo=True)
+    hidden = root / "alpha" / "tests"
+    hidden.mkdir()
+    (hidden / "test_task.py").write_text("hidden\n", encoding="utf-8")
     _task_dir(root, "beta", with_repo=False)
     tasks = load_tasks(root)
     check("load: both tasks found", [t.id for t in tasks] == ["alpha", "beta"],
@@ -53,6 +56,8 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           f" ({tasks[0].prompt!r})")
     check("load: repo only when present",
           tasks[0].repo is not None and tasks[1].repo is None)
+    check("load: hidden tests detected",
+          tasks[0].tests is not None and tasks[1].tests is None)
 
     # ── workspace isolation ────────────────────────────────────────────────
     work = prepare_workspace(tasks[0], root / "work")
@@ -69,6 +74,20 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     ok, out = run_check(Task("e", "e", "  "), work)
     check("check: empty command fails closed", ok is False and "no check" in out,
           f" ({out!r})")
+
+    # ── hidden tests: installed late, tamper-proof ─────────────────────────
+    tamper = prepare_workspace(tasks[0], root / "work_hidden")
+    (tamper / "test_task.py").write_text("tampered\n", encoding="utf-8")
+    tamper_task = Task(
+        "alpha", "fix", "python -c \"import sys; "
+        "sys.exit(0 if open('test_task.py').read().strip() == 'hidden' else 1)\"",
+        tests=tasks[0].tests,
+    )
+    ok, out = run_check(tamper_task, tamper)
+    check("hidden: agent copy is overwritten before the check", ok is True,
+          f" ({out!r})")
+    check("hidden: fixture itself is untouched",
+          (tasks[0].tests / "test_task.py").read_text(encoding="utf-8") == "hidden\n")
 
     # ── diff handling ──────────────────────────────────────────────────────
     fenced = "here\n```diff\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+two\n```\n"
@@ -123,5 +142,19 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
         name in out for name in ("raw", "hivemind_direct", "hivemind_duo")), f" ({out!r})")
     check("report: shows the delta column", "+1.00" in out and "+0.50" in out,
           f" ({out!r})")
+
+# ── shipped starter corpus ─────────────────────────────────────────────────
+corpus = load_tasks(ROOT / "bench" / "tasks")
+check("corpus: at least 20 tasks", len(corpus) >= 20, f" ({len(corpus)})")
+check("corpus: ids are unique", len({t.id for t in corpus}) == len(corpus))
+check("corpus: every task has prompt/check/tests",
+      all(t.prompt and t.check and t.tests is not None for t in corpus),
+      f" ({[t.id for t in corpus if not (t.prompt and t.check and t.tests)]})")
+check("corpus: every task has a repo fixture",
+      all(t.repo is not None for t in corpus),
+      f" ({[t.id for t in corpus if t.repo is None]})")
+check("corpus: hidden tests use the standard check",
+      all("test_task" in t.check for t in corpus),
+      f" ({[t.id for t in corpus if 'test_task' not in t.check]})")
 
 sys.exit(h.finish("bench_runner"))

@@ -242,10 +242,13 @@
   Bedingung. **Kein absolutes Quoten-Ziel.**
   *Fortschritt 2026-11-07:* Gerüst steht — `bench/runner.py` mit den vier
   Bedingungen (`raw`, `hivemind_direct`, `hivemind_duo`, `aider`),
-  Task-Format (`task.json` + `repo/`), JSON-Report, Delta-vs-raw-Auswertung,
-  `--runs`/`--keep-work`, Beispiel-Task `fix_add`, README. 20 Checks in
-  `tests/test_bench_runner.py`. Offen: 20–40 echte Tasks, 5–10 Repo-Tasks
-  und ein dokumentierter Live-Lauf mit Aider.
+  Task-Format (`task.json` + sichtbares `repo/` + versteckte `tests/`, die
+  erst beim Check einkopiert werden), JSON-Report, Delta-vs-raw-Auswertung,
+  `--runs`/`--keep-work`, README. **21 Starter-Tasks** (9 Bugfix, 5 Feature,
+  3 Refactor, 4 Multi-File), jede rot-vor-fix/grün-nach-Referenzfix
+  verifiziert; 28 Checks in `tests/test_bench_runner.py`.
+  Offen: 5–10 Tasks aus echten Repos und ein dokumentierter Live-Lauf
+  (inkl. Aider).
 
 - [ ] **D2 · P2 · COMPETE — Kontext-Engine.**
   Tree-Scout/Static-Map + FTS vorhanden; inkrementeller Index, Retrieval und
@@ -307,3 +310,6 @@
   won't-do geschlossen, B8-Prozentziel gestrichen, D1 nach A3/A4 eingeordnet.
 - Batch 13 (2026-11-07): D1-Gerüst `bench/` (vier Bedingungen, Task-Format,
   JSON-Report, Delta vs. raw), Beispiel-Task und 20 Harness-Checks.
+- Batch 14 (2026-11-07): D1-Starter-Korpus mit 21 verifizierten Tasks
+  (Bugfix/Feature/Refactor/Multi-File), versteckte Tests werden erst beim
+  Check einkopiert (tamper-proof), 28 Harness-Checks.
