@@ -16,24 +16,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = 0
-failed = 0
-skipped = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True, skipped=0)
+check = h.check
 
 
 def skip(name, why=""):
-    global skipped
-    skipped += 1
+    h.skipped += 1
     print(f"  SKIP {name}{(' - ' + why) if why else ''}")
 
 
@@ -263,8 +253,7 @@ def main() -> int:
             {"path": "../escape.html", "workspace": str(ws)}))
         check("gateway refuses an escaping event path", br.ms.docs == [])
 
-    print(f"\nSUMMARY send_file: {passed} passed, {failed} failed, {skipped} skipped")
-    return 1 if failed else 0
+    return h.finish("send_file")
 
 
 if __name__ == "__main__":

@@ -20,18 +20,10 @@ sys.path.insert(0, str(ROOT))
 from hivemind_gateway import state as S
 from utils.file import _inline_check_workspace
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness(style="counts")
+check = h.check
 
 
 # ── 1. geometry: state home outside the repo / any workspace ────────────
@@ -86,6 +78,4 @@ print(f"  NOTE state path: {state_file}")
 print("  VERDICT: rejected — state path lives outside every workspace; "
       "no residual risk entry required.")
 
-print()
-print(f"passed={passed} failed={failed}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish())

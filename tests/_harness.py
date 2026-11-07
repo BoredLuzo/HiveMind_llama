@@ -17,6 +17,8 @@ Summary styles (the exact shapes the suites had before consolidation):
   box     (default)  blank line + "=" * width + counts line + "=" * width
   summary            blank line + "SUMMARY <suite>: n passed, m failed"
   plain              blank line + "<suite>: n passed, m failed[ <suffix>]"
+  results            blank line + "=== Results: n passed, m failed ==="
+  counts             blank line + "passed=n failed=m"
 
 Constructor knobs reproduce the historical per-suite line formats:
   width=N     box width (50 default, gguf tag pinning used 60)
@@ -25,18 +27,22 @@ Constructor knobs reproduce the historical per-suite line formats:
               trailing space on lines with an empty extra)
   gap=N       spaces between PASS/FAIL and the name (1 default; ok()/fail()
               always print the wide 2-space gguf format)
+  skipped=X   None (default) hides the skipped count; an int (0 also) makes
+              the results/summary styles append ", X skipped"
 """
 
 
 class Harness:
     """Pass/fail counter + printer for one standalone suite."""
 
-    def __init__(self, *, style="box", width=50, fail_code=1, pad=False, gap=1):
+    def __init__(self, *, style="box", width=50, fail_code=1, pad=False, gap=1,
+                 skipped=None):
         self.style = style
         self.width = width
         self.fail_code = fail_code
         self.pad = pad
         self.gap = gap
+        self.skipped = skipped  # None = no skipped count; int = track + print
         self.passed = 0
         self.failed = 0
 
@@ -63,6 +69,13 @@ class Harness:
         """Wide FAIL line ('  FAIL  name  msg') - historical gguf-tag-pinning format."""
         return self._record(name, False, "  " + msg, 2)
 
+    def skip(self, name, why=""):
+        """Count and print a skipped check ('  SKIP name (why)')."""
+        if self.skipped is None:
+            self.skipped = 0
+        self.skipped += 1
+        print(f"  SKIP {name} ({why})" if why else f"  SKIP {name}")
+
     def finish(self, suite="", *, suffix=""):
         """Print the suite summary and return the process exit code (0 = clean)."""
         p, f = self.passed, self.failed
@@ -73,9 +86,19 @@ class Harness:
             print(f"  {p} passed, {f} failed  (total {p + f})")
             print(bar)
         elif self.style == "summary":
-            print(f"SUMMARY {suite}: {p} passed, {f} failed")
+            line = f"SUMMARY {suite}: {p} passed, {f} failed"
+            if self.skipped is not None:
+                line += f", {self.skipped} skipped"
+            print(line)
         elif self.style == "plain":
             print(f"{suite}: {p} passed, {f} failed" + (f" {suffix}" if suffix else ""))
+        elif self.style == "results":
+            line = f"=== Results: {p} passed, {f} failed"
+            if self.skipped is not None:
+                line += f", {self.skipped} skipped"
+            print(line + " ===")
+        elif self.style == "counts":
+            print(f"passed={p} failed={f}")
         else:
             raise ValueError(f"unknown summary style: {self.style!r}")
         return 0 if f == 0 else self.fail_code

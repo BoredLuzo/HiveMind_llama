@@ -86,7 +86,7 @@
   *Akzeptanz:* pro angefasster Suite mindestens ein Verhaltens-Test; Pins nur für
   Architektur-Invarianten, die sich nicht verhalten testen lassen.
 
-- [ ] **B4 · P2 · TEST — Restliche Harness-Migration.** (143 Suiten migriert; Sonderformate offen)
+- [ ] **B4 · P2 · TEST — Restliche Harness-Migration.** (183 Suiten migriert; Sonderformate offen)
   Suiten mit Sonderformat (`=== Results:`, `passed=N failed=M`, Skip-Summary,
   `<5 Checks`) sind noch nicht migriert.
   *Akzeptanz:* Harness um diese Formate erweitert oder bewusst als Ausnahmen
@@ -116,7 +116,8 @@
   *Akzeptanz:* pro Modul mindestens ein Happy-Path- und ein Fehlerpfad-Test;
   Gesamt-Coverage >60 % ohne reine String-Pins.
   *Fortschritt 2026-11-07:* `project_state` (40), `background` (31), `log_noise` (33),
-  `keep_awake` (27) mit neuen Verhaltens-Suiten abgedeckt.
+  `keep_awake` (27), `testmap` (26), `manager_health` (46), `compression` (58),
+  `chat_route_decision` (25) mit neuen Verhaltens-Suiten abgedeckt.
 
 - [ ] **B9 · P3 · TEST — Testlaufzeit und Flake-Quarantäne.**
   Voller Lauf ~8–12 min (6 Worker); `--changed` existiert, aber kein Impact-Mapping
@@ -124,10 +125,11 @@
   *Akzeptanz:* `--changed` <60 s für typische Fixes; wiederkehrende Flakes werden
   quarantänisiert statt retry-verdeckt.
 
-- [ ] **B10 · P3 · DEBT — Abhängigkeiten härten.**
+- [x] **B10 · P3 · DEBT — Abhängigkeiten härten.**
   `requirements.txt` nutzt `>=`; `uv.lock` ist die exakte Quelle.
-  *Akzeptanz:* CI/Release nutzen `uv sync --frozen`; `requirements.txt` bleibt
-  Installer-Fallback und wird gegen den Lock geprüft.
+  *Erledigt 2026-11-07:* beide CI-Workflows prüfen `uv lock --check`
+  (`astral-sh/setup-uv@v5`); der Updater nutzt bereits `uv sync --frozen`.
+  `requirements.txt` bleibt Installer-Fallback.
 
 ## C. Release-/Update-Härtung (offen)
 

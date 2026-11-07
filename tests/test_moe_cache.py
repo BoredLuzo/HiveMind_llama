@@ -13,17 +13,10 @@ ML = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
 ME = (ROOT / "backend" / "manager_evict.py").read_text(encoding="utf-8")
 HTML = (ROOT / "index.html").read_text(encoding="utf-8")
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="results", pad=True)
+check = h.check
 
 
 check("1 moe_cache_mib defaults to off", DEFAULT_SETTINGS.get("moe_cache_mib") == 0)
@@ -39,5 +32,4 @@ check("7 the model tab has the input", 'id="moe-cache-mib"' in HTML)
 check("8 the UI explains the trade-off", "moe-cache-mib" in HTML
       and "#30697" in HTML)
 
-print(f"\n=== Results: {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

@@ -27,20 +27,11 @@ from context.compression import (  # noqa: E402
     _validate_compression_summary,
 )
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def ok(name):
-    global passed
-    passed += 1
-    print(f"  PASS  {name}")
-
-
-def fail(name, msg=""):
-    global failed
-    failed += 1
-    print(f"  FAIL  {name}  {msg}")
+h = Harness(style="results")
+ok = h.ok
+fail = h.fail
 
 
 class _MockResp:
@@ -274,9 +265,8 @@ def main():
     test_source_structure()
     print("\n-- D: Real duo_runner anchor-building path --")
     test_real_duo_runner_anchor_path()
-    print(f"\n=== Results: {passed} passed, {failed} failed ===")
-    return failed
+    return h.finish()
 
 
 if __name__ == "__main__":
-    sys.exit(1 if main() else 0)
+    sys.exit(main())

@@ -22,20 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def ok(name):
-    global passed
-    passed += 1
-    print(f"  PASS  {name}")
-
-
-def fail(name, msg=""):
-    global failed
-    failed += 1
-    print(f"  FAIL  {name}  {msg}")
+h = Harness(style="results")
+ok = h.ok
+fail = h.fail
 
 
 def main():
@@ -68,7 +59,7 @@ def main():
                 fail("fail-closed deny", f"kind={kind} dt={dt:.1f}s txt={txt[:80]}")
         except AttributeError as e:
             fail("crash instead of deny", f"AttributeError: {e}")
-            return failed
+            return 1 if h.failed else 0
 
         if tr._approval_expired.get("apto-run-1"):
             ok("late-decision guard armed (next click discarded once)")
@@ -113,9 +104,8 @@ def main():
         })
         shutil.rmtree(str(wd), ignore_errors=True)
 
-    print(f"\n=== Results: {passed} passed, {failed} failed ===")
-    return failed
+    return h.finish()
 
 
 if __name__ == "__main__":
-    sys.exit(1 if main() else 0)
+    sys.exit(main())

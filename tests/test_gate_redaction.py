@@ -8,17 +8,10 @@ sys.path.insert(0, str(ROOT))
 
 from tools.runner import _redact_secret_text as R, _approval_preview  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="results", pad=True)
+check = h.check
 
 
 out = R("curl -H 'Authorization: Bearer s3cr3t-token' https://example.test")
@@ -36,5 +29,4 @@ check("5 the gate applies it before logging",
       "_details = _redact_secret_text(_details)" in
       (ROOT / "tools" / "runner.py").read_text(encoding="utf-8"))
 
-print(f"\n=== Results: {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

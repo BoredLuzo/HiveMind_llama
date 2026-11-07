@@ -12,17 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="results", pad=True)
+check = h.check
 
 
 UPDATE = (ROOT / "deploy" / "updater.py").read_text(encoding="utf-8", errors="replace")
@@ -83,5 +76,4 @@ if SCRIPT_PATH.exists():
 else:
     check("5 the script exists", False)
 
-print(f"\n=== Results: {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

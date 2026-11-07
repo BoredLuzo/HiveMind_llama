@@ -18,18 +18,10 @@ from hivemind_gateway.redaction import (
     scrub_text,
 )
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness(style="counts")
+check = h.check
 
 
 TOKEN = "7488112345:AAH9x_TEST_TOKEN_abcdEFGHijklMNOpqrs"
@@ -107,6 +99,4 @@ check("mangled multi-segment token fully redacted",
       TOKEN.split(':', 1)[1] not in _s3 and _mangled not in _s3
       and "***REDACTED***" in _s3, _s3[:80])
 
-print()
-print(f"passed={passed} failed={failed}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish())

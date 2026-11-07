@@ -15,17 +15,10 @@ sys.path.insert(0, str(ROOT))
 
 from backend.llama_slots import ModelSlot        # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="results", pad=True)
+check = h.check
 
 
 s = ModelSlot(0)
@@ -64,5 +57,4 @@ with mock.patch("time.monotonic", return_value=10_000.0):
     check("8 a fresh mark after a stale one is active again",
           s2.in_flight == 2 and s2.in_flight_active() and not s2.evictable)
 
-print(f"\n=== Results: {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

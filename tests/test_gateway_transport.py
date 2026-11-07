@@ -17,18 +17,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hivemind_gateway.telegram_api import TelegramApi
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness(style="counts")
+check = h.check
 
 
 class CapturingHttpx:
@@ -101,9 +93,7 @@ async def _main():
     check("sendDocument has no link preview params",
           "link_preview_options" not in (form or {}))
 
-    print()
-    print(f"passed={passed} failed={failed}")
-    sys.exit(0 if failed == 0 else 1)
+    sys.exit(h.finish())
 
 
 asyncio.run(_main())

@@ -21,6 +21,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5
+      - name: Dependency lock is current
+        # The updater installs with `uv sync --frozen`; a stale uv.lock would
+        # ship a different dependency set than the one the tree was tested
+        # with (B10, 2026-11-07).
+        run: uv lock --check
       - name: Install deps
         run: |
           python -m pip install -q -r requirements.txt

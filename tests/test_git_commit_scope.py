@@ -29,17 +29,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="results", pad=True)
+check = h.check
 
 
 def git(repo, *args):
@@ -199,5 +192,4 @@ _empty_out = asyncio.run(P._auto_commit_chunk("u", "s", str(ROOT), True, files=[
 check("8a a run with no written files does not emit a commit note",
       _empty_out == "", _empty_out[:60])
 
-print(f"\n=== Results: {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

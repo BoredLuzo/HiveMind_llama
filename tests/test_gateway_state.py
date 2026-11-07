@@ -15,18 +15,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import hivemind_gateway.state as S
 from hivemind_gateway.state import GatewayState
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness(style="counts")
+check = h.check
 
 
 tmp = Path(tempfile.mkdtemp(prefix="gw_state_"))
@@ -144,6 +136,4 @@ check("runtime settings survive reload",
 check("schema keys still survive reload", st_r2.offset == 123
       and st_r2.owner_telegram_id is None)
 
-print()
-print(f"passed={passed} failed={failed}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish())

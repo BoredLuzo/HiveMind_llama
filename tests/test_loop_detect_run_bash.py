@@ -28,20 +28,11 @@ from hive_functions.chunking import (  # noqa: E402
     compute_bash_changed,
 )
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def ok(name):
-    global passed
-    passed += 1
-    print(f"  PASS  {name}")
-
-
-def fail(name, msg=""):
-    global failed
-    failed += 1
-    print(f"  FAIL  {name}  {msg}")
+h = Harness(style="results")
+ok = h.ok
+fail = h.fail
 
 
 # ── A: signature_changed isoliert ────────────────────────────────────────────
@@ -362,9 +353,8 @@ def main():
     test_diff_null_on_cache_fns()
     print("\n-- D: source structure --")
     test_source_structure()
-    print(f"\n=== Results: {passed} passed, {failed} failed ===")
-    return failed
+    return h.finish()
 
 
 if __name__ == "__main__":
-    sys.exit(1 if main() else 0)
+    sys.exit(main())

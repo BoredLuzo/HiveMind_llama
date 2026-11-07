@@ -24,18 +24,10 @@ from hivemind_gateway.hive_client import HiveUnreachable
 from hivemind_gateway.state import GatewayState
 from hivemind_gateway.telegram_api import TelegramApiError
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness(style="counts")
+check = h.check
 
 
 class FakeResponse:
@@ -1863,6 +1855,4 @@ def t_429_retry():
 
 asyncio.run(_main())
 t_429_retry()
-print()
-print(f"passed={passed} failed={failed}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish())

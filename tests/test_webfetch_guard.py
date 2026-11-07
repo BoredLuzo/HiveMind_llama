@@ -17,18 +17,10 @@ import socket as _socket
 
 from tools.websearch import _guard_fetch_target, _guard_fetch_url
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness(style="counts")
+check = h.check
 
 
 _RESOLVE_TABLE = {
@@ -95,9 +87,7 @@ def main() -> int:
     finally:
         _socket.getaddrinfo = orig
 
-    print()
-    print(f"passed={passed} failed={failed}")
-    return 0 if failed == 0 else 1
+    return h.finish()
 
 
 if __name__ == "__main__":

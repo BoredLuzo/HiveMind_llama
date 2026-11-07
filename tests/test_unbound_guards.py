@@ -14,17 +14,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-passed = failed = 0
+sys.path.insert(0, str(ROOT))
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="results", pad=True)
+check = h.check
 
 
 def _find_func(tree, name):
@@ -74,5 +69,4 @@ if fn is not None:
         check("2c _load_mode is bound before the capability branch",
               init_line is not None, f"(line {init_line})")
 
-print(f"\n=== Results: {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

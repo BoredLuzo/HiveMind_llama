@@ -20,17 +20,10 @@ import settings as S                       # noqa: E402
 import apply_model_defaults as AMD         # noqa: E402
 from deploy.fetch_models import ESSENTIAL_KEYS  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="results", pad=True)
+check = h.check
 
 
 # ── 1. the shipped defaults describe a real setup ───────────────────────────
@@ -98,5 +91,4 @@ check("3j the report is non-empty", bool(real))
 (Path(td) / "models.json").unlink()
 check("4a no models -> no changes", AMD.apply(td, dry_run=True) == [])
 
-print(f"\n=== Results: {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

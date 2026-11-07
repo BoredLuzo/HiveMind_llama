@@ -18,18 +18,10 @@ sys.path.insert(0, str(ROOT))
 
 from tests.test_no_new_silent_excepts import BASELINE, _count_file, collect
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness(style="counts")
+check = h.check
 
 
 PKG = ROOT / "hivemind_gateway"
@@ -82,6 +74,4 @@ for p in sorted(PKG.glob("*.py")):
 check("hivemind_gateway/ introduces no silent-except debt", bad == [],
       f" ({bad})" if bad else "")
 
-print()
-print(f"passed={passed} failed={failed}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish())

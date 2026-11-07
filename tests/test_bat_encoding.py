@@ -11,21 +11,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-
-passed = 0
-failed = 0
+sys.path.insert(0, str(ROOT))
 
 
-def ok(name):
-    global passed
-    passed += 1
-    print(f"  PASS  {name}")
+from tests._harness import Harness  # noqa: E402
 
-
-def fail(name, msg=""):
-    global failed
-    failed += 1
-    print(f"  FAIL  {name}  {msg}")
+h = Harness(style="results")
+ok = h.ok
+fail = h.fail
 
 
 def main():
@@ -103,9 +96,8 @@ def main():
         ok("no duplicate decider block")
     else:
         fail("no duplicate decider block", ":decider_done still present")
-    print(f"\n=== Results: {passed} passed, {failed} failed ===")
-    return failed
+    return h.finish()
 
 
 if __name__ == "__main__":
-    sys.exit(1 if main() else 0)
+    sys.exit(main())

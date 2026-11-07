@@ -14,23 +14,11 @@ sys.path.insert(0, str(ROOT))
 
 from core import documents as D  # noqa: E402
 
-passed = failed = skipped = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
-
-def skip(name, why):
-    global skipped
-    skipped += 1
-    print(f"  SKIP {name} ({why})")
+h = Harness(style="results", pad=True, skipped=0)
+check = h.check
+skip = h.skip
 
 
 HAS_PYPDF = importlib.util.find_spec("pypdf") is not None
@@ -170,5 +158,4 @@ check("4m start_owner_run honors document_prompt",
 check("4n a document is not injected into an active run",
       "document was not injected" in MAIN)
 
-print(f"\n=== Results: {passed} passed, {failed} failed, {skipped} skipped ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

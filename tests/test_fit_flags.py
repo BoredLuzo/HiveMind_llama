@@ -14,17 +14,10 @@ ML = ((ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
 CFG = (ROOT / "backend" / "llama_config.py").read_text(encoding="utf-8")
 HTML = (ROOT / "index.html").read_text(encoding="utf-8")
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="results", pad=True)
+check = h.check
 
 
 check("1 fit is ON by default (toggle it off for a custom MoE split)",
@@ -39,5 +32,4 @@ check("6 runtime globals exist", "LLAMA_FIT" in CFG)
 check("7 the model tab has the toggle", 'id="llama-fit-toggle"' in HTML
       and 'id="llama-fit-target"' in HTML)
 
-print(f"\n=== Results: {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

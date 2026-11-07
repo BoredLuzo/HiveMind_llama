@@ -27,25 +27,11 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from core import stt_audio  # noqa: E402
 from core.stt_engine import SttError  # noqa: E402
 
-passed = 0
-failed = 0
-skipped = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
-
-def skip(name, why):
-    global skipped
-    skipped += 1
-    print(f"  SKIP {name} ({why})")
+h = Harness(style="summary", pad=True, skipped=0)
+check = h.check
+skip = h.skip
 
 
 def _wav_bytes(seconds=1.0, rate=16000, freq=440.0, channels=1) -> bytes:
@@ -109,10 +95,9 @@ if not HAVE_AUDIO:
               "pip install" in exc.message and "voice" in exc.message.lower())
     else:
         check("the error carries the install command", False)
-    print()
-    print(f"SUMMARY stt_audio: {passed} passed, {failed} failed, {skipped} skipped")
+    h.finish("stt_audio")
     print("  (install the voice group to run the decode layer: pip install -r requirements-voice.txt)")
-    sys.exit(0 if failed == 0 else 1)
+    sys.exit(0 if h.failed == 0 else 1)
 
 # ── decode layer (soundfile present) ───────────────────────────────────────
 raw_wav = _wav_bytes(seconds=1.0, rate=16000)
@@ -206,6 +191,4 @@ except (OSError, ValueError) as _exc:
     check("another process can read the decoded WAV", False, f" ({_exc})")
 
 
-print()
-print(f"SUMMARY stt_audio: {passed} passed, {failed} failed, {skipped} skipped")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("stt_audio"))

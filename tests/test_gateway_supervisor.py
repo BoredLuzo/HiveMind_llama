@@ -12,18 +12,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from infra.gateway_supervisor import clear, note_heartbeat, status
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness(style="counts")
+check = h.check
 
 
 def main() -> int:
@@ -48,9 +40,7 @@ def main() -> int:
     check("clear() stops immediately",
           status(now=2001.0)["running"] is False)
 
-    print()
-    print(f"passed={passed} failed={failed}")
-    return 0 if failed == 0 else 1
+    return h.finish()
 
 
 if __name__ == "__main__":

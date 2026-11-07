@@ -26,19 +26,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+sys.path.insert(0, str(ROOT))
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="counts", pad=True)
+check = h.check
 
 
 # ── source guard: the gate must keep its polarity ───────────────────────────
@@ -130,6 +123,4 @@ def main():
 
 
 main()
-print()
-print(f"passed={passed} failed={failed}")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())

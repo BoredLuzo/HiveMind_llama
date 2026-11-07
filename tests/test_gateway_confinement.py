@@ -29,18 +29,10 @@ from tools.handlers.code_intel import (
 
 MARKER = "XQZ-SECRET-9137"
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness(style="counts")
+check = h.check
 
 
 def _short8x3(p: Path) -> str | None:
@@ -142,9 +134,7 @@ async def _main():
         subprocess.run(["cmd", "/c", "rmdir", str(junc)],
                        capture_output=True)
 
-    print()
-    print(f"passed={passed} failed={failed}")
-    sys.exit(0 if failed == 0 else 1)
+    sys.exit(h.finish())
 
 
 asyncio.run(_main())

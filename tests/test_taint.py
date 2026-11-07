@@ -21,17 +21,10 @@ sys.path.insert(0, str(ROOT))
 
 from tools import taint as T          # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="results", pad=True)
+check = h.check
 
 
 # ── 1. which sources are untrusted ─────────────────────────────────────────
@@ -117,5 +110,4 @@ check("6b its source is recorded", _sources == ("web_fetch",))
 T.clear()
 check("6c clear() isolates the next run", not T.is_tainted())
 
-print(f"\n=== Results: {passed} passed, {failed} failed ===")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish())
