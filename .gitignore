@@ -12,6 +12,12 @@ logs/
 .ruff_cache/
 .pytest_cache/
 
+# Coverage artifacts (tests/coverage_run.py): parallel .coverage.<host>.<pid>
+# data files, the merged .coverage and the htmlcov/ report - never committed
+.coverage
+.coverage.*
+htmlcov/
+
 # Model junk
 *.incomplete
 *.lock

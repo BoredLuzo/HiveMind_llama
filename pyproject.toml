@@ -27,6 +27,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "coverage[toml]>=7.6",
     "pytest>=8.0",
     "ruff>=0.6",
 ]

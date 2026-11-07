@@ -20,20 +20,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def ok(name):
-    global passed
-    passed += 1
-    print(f"  PASS  {name}")
-
-
-def fail(name, msg=""):
-    global failed
-    failed += 1
-    print(f"  FAIL  {name}  {msg}")
+h = Harness(style="box", width=60)
+ok = h.ok
+fail = h.fail
 
 
 def _hermes_needs(ctx):
@@ -183,7 +174,4 @@ if __name__ == "__main__":
     test_guard_c_sequence_small_baseline_fits()
     test_source_guard_ctx_floor()
     test_source_guard_manager_margins()
-    print("\n" + "=" * 60)
-    print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-    print("=" * 60)
-    sys.exit(1 if failed else 0)
+    sys.exit(h.finish("ctx_fit_and_floor_guard"))

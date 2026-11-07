@@ -13,18 +13,10 @@ from hive_functions.ctx_utils import (
     ContextBudget,
 )
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 # ── budget_session_msgs: greedy, newest first ─────────────────────────
@@ -80,8 +72,4 @@ check("budget: rich tier", b_rich.max_snippet_files == 10)
 # total property konsistent
 check("budget: total == sum", b_comf.total == b_comf.plan + b_comf.contracts + b_comf.snippets + b_comf.index + b_comf.static_map)
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("ctx_budget"))

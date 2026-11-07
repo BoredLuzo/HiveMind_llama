@@ -15,18 +15,10 @@ import core.tool_executor as TE
 from core.tool_exec_helpers import ToolRoundState
 from core.agentic_duo_state import DuoRoundState
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 # ── Mocks ───────────────────────────────────────────────────────────────
@@ -418,8 +410,4 @@ check("send_file is blocked outside Telegram runs",
       not any(e.get("type") == "send_file" for e in _no_sf_hooks.events)
       and not _no_sf_res.extra_user_msg)
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("execute_tool_round"))

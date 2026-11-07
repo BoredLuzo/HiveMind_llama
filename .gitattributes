@@ -27,3 +27,11 @@
 /ruff.toml export-ignore
 /.gitignore export-ignore
 /.gitattributes export-ignore
+
+# Coverage tooling (2026-11-07): dev-only measurement setup for the standalone
+# suites; the generated .coverage* data files are gitignored. The tests/ entries
+# are already covered by /tests/ above - listed explicitly for self-documentation.
+/.coveragerc export-ignore
+/tests/coverage_site/** export-ignore
+/tests/coverage_run.py export-ignore
+/requirements-dev.txt export-ignore

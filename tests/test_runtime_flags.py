@@ -17,17 +17,10 @@ from backend import llama_server_manager as lsm
 from backend import manager_load as ml
 from backend.runtime_flags import apply_runtime_flags
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="plain", pad=True)
+check = h.check
 
 
 _FIELDS = ("CACHE_REUSE", "CACHE_RAM_MIB", "CTX_CHECKPOINTS", "MLOCK_MODEL",
@@ -59,5 +52,4 @@ finally:
         for _f, _v in _vals.items():
             setattr(_m, _f, _v)
 
-print(f"\nruntime_flags: {passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish("runtime_flags"))

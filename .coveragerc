@@ -1,0 +1,46 @@
+# Coverage measurement for the standalone regression suites
+# (tests/coverage_run.py -> tests/run_regressions.py -> tests/test_*.py).
+#
+# Dev-only tooling: excluded from the release zip via .gitattributes
+# (export-ignore) and never read by normal runs or shipped code.
+#
+# INI format (coverage's native [section] layout); the [toml] extra in the
+# dev dependency group keeps parity if settings ever move into pyproject.toml.
+
+[run]
+# Every measured process writes its own .coverage.<host>.<pid>.<rand> file
+# (started by tests/coverage_site/sitecustomize.py + COVERAGE_PROCESS_START).
+# Merge them afterwards with `coverage combine`.
+parallel = True
+source =
+    core
+    backend
+    tools
+    context
+    infra
+    learning
+    hive_functions
+    routers
+    vision
+    vram
+    hivemind_gateway
+
+[paths]
+# Map module paths back to one canonical prefix when combining (worktrees,
+# venv site-packages copies). First entry wins; "." is this checkout.
+source =
+    .
+    */repo_gateway/
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    if __name__ == .__main__.:
+omit =
+    tests/*
+    */__pycache__/*
+    */archive/*
+    */archives/*
+    */site-packages/*

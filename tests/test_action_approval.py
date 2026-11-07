@@ -23,18 +23,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
+
+h = Harness(style="box", width=60)
 
 
 def check(name, cond, msg=""):
-    global passed, failed
     if cond:
-        passed += 1
-        print(f"  PASS  {name}")
+        h.ok(name)
     else:
-        failed += 1
-        print(f"  FAIL  {name}  {msg}")
+        h.fail(name, msg)
 
 
 def test_answer_parsing():
@@ -429,7 +427,4 @@ if __name__ == "__main__":
     test_gate_flow()
     test_decide_stores_tool_and_drops_duplicates()
     test_gate_force_rides_body_only()
-    print("\n" + "=" * 60)
-    print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-    print("=" * 60)
-    sys.exit(1 if failed else 0)
+    sys.exit(h.finish("action_approval"))

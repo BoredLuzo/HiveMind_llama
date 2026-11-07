@@ -74,6 +74,26 @@ python deploy\pyright_baseline.py --write   :: refresh after fixes
 CI runs the same gate in the `types` job of `linux-core.yml`. Do not lower the
 baseline by suppressing errors; fix the annotation or leave the entry frozen.
 
+## Coverage measurement
+
+`tests\coverage_run.py` wraps the regression runner and measures the runner
+plus every suite subprocess it spawns (gateway/engine grandchildren included):
+
+```bat
+uv sync --group dev                       :: once - coverage lives in the dev group
+python tests\coverage_run.py --changed    :: measured run, flags pass through
+python tests\coverage_run.py --report     :: run + combine + report in one go
+python -m coverage combine                :: or merge .coverage.* manually...
+python -m coverage report --skip-covered  :: ...then show the table
+```
+
+Every measured process writes its own parallel `.coverage.*` file (via
+`tests\coverage_site\sitecustomize.py` + `COVERAGE_PROCESS_START`), which
+`coverage combine` merges; the wrapper clears stale data files first. Without
+`coverage` installed the wrapper still runs the suite, unmeasured. Normal
+runs and the release zip are untouched: `.coveragerc`, the helper scripts and
+`requirements-dev.txt` are `export-ignore`, the data files are gitignored.
+
 ## Before a release
 
 1. `python tests\run_regressions.py` - the whole suite, no LLM, no models.
