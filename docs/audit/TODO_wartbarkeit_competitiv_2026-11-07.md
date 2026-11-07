@@ -82,11 +82,15 @@
   55 → 0 Fehler, in TARGETS, Baseline 1/1 (nur `run_code_duo`-Komplexität).
 
 - [ ] **B3 · P2 · DEBT — Source-String-Pins → Verhaltens-Tests.**
-  193/331 Suiten nutzen den Shared Harness; viele Pins greppen weiter Quelltext.
+  195/333 Suiten nutzen den Shared Harness; viele Pins greppen weiter Quelltext.
   *Akzeptanz:* pro angefasster Suite mindestens ein Verhaltens-Test; Pins nur für
   Architektur-Invarianten, die sich nicht verhalten testen lassen.
+  *Fortschritt 2026-11-07:* Pin `j` in `test_split_audit_fixes` ist jetzt ein
+  echter `_phase_moe`-Probe (Cache-MiB als int, Slot-Bool-Marker, Flags im cmd,
+  Cache-aus-Pfad), kein Quelltext-Grep mehr. Die neuen Helper-Suiten
+  (`pipeline_runner`, `chat_run`) sind vollständig Verhalten.
 
-- [ ] **B4 · P2 · TEST — Restliche Harness-Migration.** (193 Suiten migriert; Sonderformate offen)
+- [ ] **B4 · P2 · TEST — Restliche Harness-Migration.** (195 von 333 Suiten migriert; Sonderformate offen)
   Suiten mit Sonderformat (`=== Results:`, `passed=N failed=M`, Skip-Summary,
   `<5 Checks`) sind noch nicht migriert.
   *Akzeptanz:* Harness um diese Formate erweitert oder bewusst als Ausnahmen
@@ -122,7 +126,10 @@
   Gesamt-Coverage >60 % ohne reine String-Pins.
   *Fortschritt 2026-11-07:* `project_state` (40), `background` (31), `log_noise` (33),
   `keep_awake` (27), `testmap` (26), `manager_health` (46), `compression` (58),
-  `chat_route_decision` (25) mit neuen Verhaltens-Suiten abgedeckt.
+  `chat_route_decision` (25) mit neuen Verhaltens-Suiten abgedeckt. Batch 11:
+  `pipeline_runner`-Helfer (17 Checks), `chat_run`-Helfer (14),
+  `llama_start_phases._phase_claim` (+13) und der MoE-Phase-Probe (+4).
+  Coverage-Neuvermessung steht noch aus.
 
 - [x] **B9 · P3 · TEST — Testlaufzeit und Flake-Quarantäne.**
   Voller Lauf ~8–12 min (6 Worker); `--changed` existiert, aber kein Impact-Mapping
@@ -270,3 +277,6 @@
 - Batch 10 (2026-11-07): B5 dokumentiert (UI-only-Keys), B9 Flake-Historie/
   Quarantäne/`--flake-report`, zwei `--changed`-Over-Selection-Bugs gefixt,
   D1-Benchmark-Plan (relativer Zuwachs) aufgenommen.
+- Batch 11 (2026-11-07): B8-Verhaltens-Suiten für `pipeline_runner`- und
+  `chat_run`-Helfer, `_phase_claim` (+13) und MoE-Phase (+4; ersetzt den
+  Quelltext-Pin `j`), 333/333 Suiten grün.

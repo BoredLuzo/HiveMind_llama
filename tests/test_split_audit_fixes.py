@@ -30,9 +30,11 @@ source guard or a direct behavioral probe:
   j  the MoE phase returns the MiB int, not a bool (pre-flight VRAM
      under-estimation)
 """
+import asyncio
 import re
 import sys
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -144,13 +146,57 @@ check("i2 a real mismatch still fails",
 check("i3 no digest skips",
       UPDMOD.digest_ok(_zp, "") is None)
 
-# ── j. MoE MiB int ──────────────────────────────────────────────────────────
+# ── j. MoE MiB int (behavior probe; was a source pin) ──────────────────────
 # The slot attribute is only the bool marker (`slot._moe_cache_used = True`);
-# the size lives in the local `_moe_cache_used = int(_moe_cache_mib)`.
-check("j _phase_moe returns the MiB int (not the slot bool)",
-      "moe_cache_used=_moe_cache_used" in PH
-      and "int(slot._moe_cache_used" not in PH
-      and "_moe_cache_used = int(_moe_cache_mib)" in PH)
+# the size must travel as the returned int. A pin cannot prove the value, so
+# the phase now runs with a fake manager and a forced MoE cache.
+import backend.llama_config as _LC  # noqa: E402
+import backend.llama_start_phases as _P  # noqa: E402
+
+
+class _MoeMgr:
+    _moe_flag_supported = True
+    _load_mode_supported = True
+    _kv_flag_supported = True
+
+
+class _MoeSlot:
+    _moe_cache_used = False
+
+
+def _run_moe(moe_cache: bool):
+    slot = _MoeSlot()
+    with mock.patch.object(_P, "_strip_alias", return_value="m"), \
+         mock.patch.object(_P, "_MOE_EXPERT_COUNTS", {"m": 8}), \
+         mock.patch.object(_LC, "MOE_CPU_EXPERTS", {}), \
+         mock.patch.object(_LC, "_try_registry_moe", return_value=0), \
+         mock.patch.object(_LC, "MOE_CACHE_MIB", 512), \
+         mock.patch.object(_P, "GPU_BACKEND", "vulkan"), \
+         mock.patch.object(_P, "moe_kv_cache_types", return_value="q4_0"), \
+         mock.patch("backend.llama_vram_table.moe_cfg_for", return_value={}), \
+         mock.patch("backend.manager_load._help_supports",
+                    new=mock.AsyncMock(return_value=True)):
+        phase = asyncio.run(_P._phase_moe(_MoeMgr(), slot, [], "m:1b",
+                                          4096, moe_cache, 8))
+    return phase, slot
+
+
+_ph_moe, _slot_moe = _run_moe(True)
+check("j1 _phase_moe returns the cache MiB as int (not the slot bool)",
+      _ph_moe.moe_cache_used == 512 and not isinstance(_ph_moe.moe_cache_used, bool),
+      f" ({_ph_moe.moe_cache_used!r})")
+check("j2 the slot carries the bool marker",
+      _slot_moe._moe_cache_used is True and "--moe-cache-mib" in _ph_moe.cmd,
+      f" ({_slot_moe._moe_cache_used})")
+check("j3 expert offload and cache flags are both in the cmd",
+      "--n-cpu-moe" in _ph_moe.cmd and "512" in _ph_moe.cmd,
+      f" ({_ph_moe.cmd})")
+_ph_nocache, _slot_nocache = _run_moe(False)
+check("j4 cache off -> zero MiB, no --moe-cache-mib, slot flag stays false",
+      _ph_nocache.moe_cache_used == 0
+      and "--moe-cache-mib" not in _ph_nocache.cmd
+      and _slot_nocache._moe_cache_used is False,
+      f" ({_ph_nocache.moe_cache_used}/{_ph_nocache.cmd})")
 
 # ── l-o. follow-ups found in the re-review (2026-11-07) ────────────────────
 check("l the finalize carry passes ctx.this_file (skills dir)",

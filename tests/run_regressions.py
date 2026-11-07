@@ -372,6 +372,9 @@ SUITES = [
     ("llama_start_phases",      "tests/test_llama_start_phases.py",          90),
     # B9 runner mechanics (flake history/quarantine/changed patterns)
     ("regression_runner_b9",    "tests/test_regression_runner_b9.py",        30),
+    # B8 helper coverage for the weakest core modules
+    ("pipeline_runner_helpers", "tests/test_pipeline_runner_helpers.py",     30),
+    ("chat_run_helpers",        "tests/test_chat_run_helpers.py",            30),
 
 ]
 

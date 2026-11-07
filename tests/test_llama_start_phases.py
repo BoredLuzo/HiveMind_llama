@@ -7,6 +7,7 @@ support and the thread defaults. The process seam is mocked.
 """
 import asyncio
 import sys
+import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -75,5 +76,108 @@ check("--fit supported flag + target", ph_fit.fit_supported is True and ph_fit.f
       f" ({ph_fit.fit_supported}/{ph_fit.fit_target})")
 ph_nofit = _run("testmodel:1b", None, fit=True, fit_target=512, help_fit=False)
 check("binary without --fit does not claim it", ph_nofit.fit_supported is False)
+
+# ── 6. _phase_claim: slot preamble, file checks, eviction guards ───────────
+class _Slot:
+    def __init__(self, *, slot_id=1, port=8100, model="peer:1b",
+                 num_ctx=4096, running=False, pinned=False):
+        self.slot_id = slot_id
+        self.port = port
+        self.model = model
+        self._num_ctx = num_ctx
+        self.is_running = running
+        self.pinned = pinned
+        self._moe_cache_used = True
+        self._orphan_port = 4242
+        self.last_used = 0.0
+
+
+class _MgrClaim:
+    def __init__(self, slots=()):
+        self._slots = list(slots)
+
+    async def _port_alive(self, port):
+        return False
+
+
+def _claim(slot, *, resolved, slots=(), patches=()):
+    stack = [mock.patch.object(P, "resolve_model_path", return_value=resolved)]
+    stack.extend(patches)
+    for p in stack:
+        p.start()
+    try:
+        return asyncio.run(P._phase_claim(_MgrClaim(slots), slot, "m:1b", 4096))
+    finally:
+        for p in reversed(stack):
+            p.stop()
+
+
+def _missing(slot, *, resolved, models_dir):
+    with mock.patch.object(P, "resolve_model_path", return_value=resolved), \
+         mock.patch.object(LC, "MODELS_DIR", models_dir):
+        try:
+            asyncio.run(P._phase_claim(_MgrClaim(), slot, "m:1b", 4096))
+        except FileNotFoundError as exc:
+            return str(exc)
+    return ""
+
+
+with tempfile.TemporaryDirectory() as td:
+    gguf = Path(td) / "m.gguf"
+    gguf.write_bytes(b"x")
+
+    slot = _Slot()
+    ph = _claim(slot, resolved=str(gguf))
+    check("claim: returns the resolved gguf", str(ph.gguf_path) == str(gguf),
+          f" ({ph.gguf_path})")
+    check("claim: no eviction without peers", ph.evicted is False)
+    check("claim: stale moe cache flag is reset", slot._moe_cache_used is False)
+    check("claim: recycled slot loses its orphan port", slot._orphan_port is None)
+    check("claim: last_used is stamped for the idle monitor", slot.last_used > 0)
+
+    slot_r = _Slot(running=True)
+    with mock.patch.object(P, "_kill_slot_async", new=mock.AsyncMock()) as kill:
+        ph_r = _claim(slot_r, resolved=str(gguf))
+    check("claim: a running slot is killed", kill.await_count == 1)
+    check("claim: the kill is reported as eviction", ph_r.evicted is True)
+
+    msg_dir = _missing(_Slot(), resolved=None, models_dir=str(Path(td) / "nope"))
+    check("claim: missing models dir names HIVEMIND_MODELS_DIR",
+          "Models folder missing" in msg_dir and "HIVEMIND_MODELS_DIR" in msg_dir,
+          f" ({msg_dir.splitlines()[0] if msg_dir else ''})")
+    msg_ptr = _missing(_Slot(), resolved=None, models_dir=td)
+    check("claim: unknown model points at scan_models",
+          "Check models.json" in msg_ptr, f" ({msg_ptr.splitlines()[0] if msg_ptr else ''})")
+    msg_gone = _missing(_Slot(), resolved=str(Path(td) / "gone.gguf"), models_dir=td)
+    check("claim: missing gguf file is refused",
+          "does not exist on disk" in msg_gone,
+          f" ({msg_gone.splitlines()[0] if msg_gone else ''})")
+
+    # over-budget peer: pinned => keep it, unpinned => kill it
+    vram_patches = [
+        mock.patch.object(P, "GPU_BACKEND", "vulkan"),
+        mock.patch.object(P, "VRAM_BUDGET_GB", 7.5),
+        mock.patch.object(P, "_VRAM_BASE_OVERHEAD_GB", 0.0),
+        mock.patch.object(P, "vram_of_moe", return_value=10.0),
+    ]
+    peer_pinned = _Slot(slot_id=2, running=True, pinned=True)
+    with mock.patch.object(P, "_kill_slot_async", new=mock.AsyncMock()) as kill:
+        ph_pin = _claim(_Slot(slot_id=1), resolved=str(gguf),
+                        slots=[peer_pinned], patches=vram_patches)
+    check("claim: pinned peer is never evicted", kill.await_count == 0)
+    check("claim: pinned peer leaves evicted false", ph_pin.evicted is False)
+
+    peer_free = _Slot(slot_id=2, running=True, pinned=False)
+    with mock.patch.object(P, "_kill_slot_async", new=mock.AsyncMock()) as kill, \
+         mock.patch.object(P, "_slot_in_flight", return_value=False), \
+         mock.patch.object(P, "wait_for_vram_reclaim",
+                           new=mock.AsyncMock(return_value=True)) as reclaim, \
+         mock.patch("backend.llama_start_phases.asyncio.sleep",
+                    new=mock.AsyncMock()):
+        ph_kill = _claim(_Slot(slot_id=1), resolved=str(gguf),
+                         slots=[peer_free], patches=vram_patches)
+    check("claim: unpinned peer is evicted", kill.await_count == 1)
+    check("claim: eviction waits for VRAM reclaim", reclaim.await_count == 1)
+    check("claim: peer eviction sets evicted", ph_kill.evicted is True)
 
 sys.exit(h.finish("llama_start_phases"))
