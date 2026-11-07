@@ -1314,7 +1314,7 @@ class McpClient:
         # configuration, not whatever the engine's settings.json says now
         self._last_settings: dict | None = None
         self._server_errors: dict[str, str] = {}
-        self._conns: dict[str, ServerConn] = {}
+        self._conns: dict[str, HttpConn | ServerConn] = {}
         # server name -> the protocol version its connection last accepted;
         # offered again when a reload has to rebuild the connection
         self._negotiated: dict[str, str] = {}
@@ -1381,7 +1381,9 @@ class McpClient:
                 # environment variable never takes effect (the old bearer
                 # stayed cached and every call kept failing with 401).
                 try:
-                    if spec.kind == "http":
+                    # Only HTTP connections carry a bearer token; the name
+                    # lookup above is keyed independent of kind.
+                    if spec.kind == "http" and isinstance(conn, HttpConn):
                         conn._bearer = _resolve_bearer(spec)
                 except McpError as exc:
                     conn._die(str(exc))
@@ -1569,7 +1571,7 @@ class McpClient:
                      for r in rows]
             return ("[MCP] reloaded.\n" + ("\n".join(lines) if lines else
                                           "no servers configured")
-                    + f"\nAvailable tools: {len(self._defs) - 1}")
+                    + f"\nAvailable tools: {len(self._defs or []) - 1}")
         target = self._names.get(name)
         if not target:
             hint = ""

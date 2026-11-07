@@ -15,18 +15,12 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from infra.security import _is_loopback_client, external_bind_decision
 
-passed = 0
-failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 # Loopback classifier
@@ -67,6 +61,4 @@ check("run.py flips the flag on non-loopback binds",
       "EXTERNAL_BIND[\"on\"] = True" in _run
       and 'not in ("127.0.0.1", "::1", "localhost")' in _run)
 
-print()
-print(f"SUMMARY bind_guard: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("bind_guard"))

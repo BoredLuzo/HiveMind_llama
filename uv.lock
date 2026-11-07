@@ -437,8 +437,10 @@ voice = [
 [package.dev-dependencies]
 dev = [
     { name = "coverage" },
+    { name = "numpy" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
 
 [package.metadata]
@@ -465,8 +467,10 @@ provides-extras = ["voice", "browser", "notifications", "recommended"]
 [package.metadata.requires-dev]
 dev = [
     { name = "coverage", extras = ["toml"], specifier = ">=7.6" },
+    { name = "numpy", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.6" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2024.1" },
 ]
 
 [[package]]

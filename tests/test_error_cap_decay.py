@@ -21,18 +21,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.tool_exec_helpers import _note_successful_write
 
-passed = 0
-failed = 0
+
+from tests._harness import Harness  # noqa: E402
+
+h = Harness(width=60)
 
 
 def check(name, cond, msg=""):
-    global passed, failed
     if cond:
-        passed += 1
-        print(f"  PASS  {name}")
+        h.ok(name)
     else:
-        failed += 1
-        print(f"  FAIL  {name}  {msg}")
+        h.fail(name, msg)
 
 
 class _RS:
@@ -73,7 +72,4 @@ def test_decay():
 
 if __name__ == "__main__":
     test_decay()
-    print("\n" + "=" * 60)
-    print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-    print("=" * 60)
-    sys.exit(1 if failed else 0)
+    sys.exit(h.finish("error_cap_decay"))

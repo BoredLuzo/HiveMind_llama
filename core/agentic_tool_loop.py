@@ -208,13 +208,19 @@ class AgenticToolLoop(ToolLoop):
                 "no image parts anymore (images_in_request=0)")
             if not getattr(self.round_state, "_vision_note_retract_emitted", False):
                 try:
-                    self.round_state._vision_note_retract_emitted = True
+                    # Dynamic flag (not a DuoRoundState field) - set via
+                    # setattr so the optional attribute stays out of the
+                    # dataclass schema; reads below use getattr defaults.
+                    setattr(self.round_state, "_vision_note_retract_emitted", True)
                     await self._emit({"type": "status",
                         "content": "ℹ The image is no longer in the coder's context "
                                    "(window) - later rounds work from the plan only."})
                 except (AttributeError, TypeError):
                     pass
 
+        # Bound before the loop: with max_post_attempts <= 0 the range is
+        # empty and the error path below must not hit an unbound name.
+        _post_attempt = 0
         for _post_attempt in range(self.cfg.max_post_attempts):
             try:
                 # ── S2 (2026-08-23): constrained decoding on retry rounds ──
@@ -437,8 +443,11 @@ class AgenticToolLoop(ToolLoop):
                         # far more honest than any event-gap estimate.
                         _sse_timings = _sse_chunk.get("timings") or {}
                         if _sse_timings.get("predicted_per_second"):
-                            self.round_state.decode_tps = float(
-                                _sse_timings["predicted_per_second"])
+                            # decode_tps is a run-persistent ad-hoc counter
+                            # (not a declared DuoRoundState field) - setattr
+                            # keeps that dynamic contract explicit.
+                            setattr(self.round_state, "decode_tps", float(
+                                _sse_timings["predicted_per_second"]))
                         # PREFILL-RATE (2026-10-09): the same final chunk carries
                         # the prompt-processing side - prompt_ms / prompt_n feed
                         # the a+b*depth prefill model (step 1h).
@@ -456,7 +465,9 @@ class AgenticToolLoop(ToolLoop):
                             try:
                                 if _dr_prompt_timings["prompt_ms"] > 0 and _dr_prompt_timings["prompt_n"] > 0:
                                     from core.budgets import update_prefill_ema as _upe
-                                    _upe(getattr(self.round_state, "exec_model", None),
+                                    # exec_model is a declared DuoRoundState
+                                    # field (str) - direct access, always bound.
+                                    _upe(self.round_state.exec_model,
                                          _dr_prompt_timings["prompt_n"]
                                          / (_dr_prompt_timings["prompt_ms"] / 1000.0),
                                          prompt_n=_dr_prompt_timings["prompt_n"])
@@ -476,9 +487,9 @@ class AgenticToolLoop(ToolLoop):
                                 "cached_tokens": _cached,
                                 "gen_ms": int((time.monotonic() - _gen_t0) * 1000),
                             }
-                            if getattr(self.round_state, "decode_tps", None):
-                                _dr_usage_final["decode_tps"] = float(
-                                    self.round_state.decode_tps)
+                            _dr_tps = getattr(self.round_state, "decode_tps", None)
+                            if _dr_tps:
+                                _dr_usage_final["decode_tps"] = float(_dr_tps)
                             # CACHE-TELEMETRY (2026-09-04): reuse% per coder round.
                             # prompt gross + cached klein => Prefix/Suffix-Cache
                             # was invalidated (in-place mutation, compression).
@@ -704,7 +715,7 @@ class AgenticToolLoop(ToolLoop):
                             # (live 2026-10-31: AttributeError every round).
                             from core.budgets import update_cpt_ema as _update_cpt_ema
                             _update_cpt_ema(
-                                getattr(self.round_state, "exec_model", None),
+                                self.round_state.exec_model,
                                 _tel_chars,
                                 int((_dr_usage_final or {}).get("prompt_tokens") or 0),
                             )
@@ -945,7 +956,7 @@ class AgenticToolLoop(ToolLoop):
 
     #  Helpers 
 
-    async def _emit(self, event: dict) -> None:
+    async def _emit(self, event: dict) -> dict:
         # THINKING-RESCUE (2026-08-22): buffer events serially — so the
         # duo_runner can replay the thinking chunks when the stream was aborted.
         try:
@@ -961,6 +972,9 @@ class AgenticToolLoop(ToolLoop):
                 await self._emit_fn(event)
             except Exception:
                 pass
+        # Same contract as ToolLoop._emit (returns the event); no caller in
+        # this loop consumes it, but the override must stay signature-clean.
+        return event
 
     async def _ensure_loaded(self, model: str) -> int:
         from backend.llama_server_manager import manager as _lsm

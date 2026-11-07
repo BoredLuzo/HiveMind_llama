@@ -274,7 +274,8 @@ def _drop_whole_oldest(
     """
     if not messages:
         return [], 0, []
-    protected = set(protected_ids or ())
+    # ids() returns int - keep the set explicitly typed so additions type-check.
+    protected: set[int] = set(protected_ids or ())
     for _i, _m in enumerate(messages):
         if _i < max(0, int(protect_prefix or 0)) or _m.get("role") == "system":
             protected.add(id(_m))
@@ -466,7 +467,7 @@ def _compress_rule_based(messages: list, target_tokens: int = 0,
 def _validate_compression_summary(summary: str,
                                    written_files: list[str],
                                    done_tasks: list[str],
-                                   known_partitions: list[str] = None,
+                                   known_partitions: list[str] | None = None,
                                    plan_anchor: str = "") -> bool:
     if known_partitions is None:
         known_partitions = []
@@ -561,7 +562,7 @@ async def _compress_tool_context(
     aggressive_retry: bool = False,
     tail_tool_max_chars: int = 0,
     target_tokens: int = 0,
-) -> tuple[list, dict, dict]:
+) -> tuple[list, set, dict]:
 
 
     _keep_recent = max(0, int(keep_recent_msgs or 0))
@@ -906,10 +907,17 @@ async def _compress_chat_session(sess_msgs: list) -> list:
 
     _summary = ""
     try:
-        _sum_model = _registry_get("direct") or _registry_get("analyst") or ""
+        # Local aliases: the injectables are Callable | None until
+        # init_compression() wires them; a None here lands in the except
+        # below exactly like a failed call did before.
+        _reg_get = _registry_get
+        _pipe_stream = _pipeline_chat_stream
+        if _reg_get is None or _pipe_stream is None:
+            raise RuntimeError("compression pipeline not initialized")
+        _sum_model = _reg_get("direct") or _reg_get("analyst") or ""
         if _sum_model:
             _parts: list[str] = []
-            async for tok in _pipeline_chat_stream(
+            async for tok in _pipe_stream(
                 _sum_model,
                 [{"role": "user", "content": _compress_prompt}],
                 0.1, 400

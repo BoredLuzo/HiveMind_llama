@@ -15,17 +15,12 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from routers.config import preset_autoload_stale  # noqa: E402
 
-passed = failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 # ── the decision itself ──────────────────────────────────────────────────
@@ -59,6 +54,4 @@ check("a preset application stamps applied_at == saved_at in one write",
 check("every plain save stamps settings_saved_at",
       'settings["settings_saved_at"] = saved_at or _now_iso()' in set_src)
 
-print()
-print(f"SUMMARY preset_autoload_guard: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("preset_autoload_guard"))

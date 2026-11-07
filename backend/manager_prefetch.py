@@ -17,9 +17,27 @@ from .llama_manager_utils import (
 import asyncio
 import httpx
 import logging
+from typing import TYPE_CHECKING
 logger = logging.getLogger("llama_manager")
 
 class LlamaPrefetchMixin:
+
+    if TYPE_CHECKING:
+        # Cross-mixin contract: these attributes/methods live on sibling
+        # mixins and are bound in LlamaServerManager.__init__. Declared here
+        # (types only, no runtime effect) so this mixin can be type-checked
+        # in isolation.
+        _telemetry: dict[str, int]
+        _pending_prefetch: list[tuple[str, int]]
+        _prefetch_tasks: set[asyncio.Task]
+        _slots: list[ModelSlot]
+        _shared_http_client: httpx.AsyncClient | None
+
+        async def _start_process(self, slot: ModelSlot, model: str, num_ctx: int,
+                                 vision: bool = False, n_parallel: int = 1,
+                                 gpu_layers_override: int | None = None,
+                                 ctx_graceful: bool = True,
+                                 moe_cache: bool = True) -> None: ...
 
     def _metric_inc(self, key: str, amount: int = 1):
         self._telemetry[key] = int(self._telemetry.get(key, 0)) + int(amount)

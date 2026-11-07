@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json, logging, threading, time
 from pathlib import Path
+from typing import Callable
 from utils.file import write_json_atomic as _write_json_atomic
 
 logger = logging.getLogger("hivemind.chat_context")
@@ -10,8 +11,10 @@ _chat_ctx_locks_guard = threading.Lock()
 _cache_lock: threading.Lock = threading.Lock()
 _chats_cache: dict = {}
 _SESSIONS_DIR: Path | None = None
-_file_signature_matches = None
-_build_file_signature = None
+# Injected by init_chat_context(); None until then (same pattern as
+# _SESSIONS_DIR above).
+_file_signature_matches: Callable[..., bool] | None = None
+_build_file_signature: Callable[..., object] | None = None
 
 def init_chat_context(sessions_dir, chats_cache=None, cache_lock=None,
                       file_signature_matches=None, build_file_signature=None):
@@ -187,6 +190,9 @@ def _ctx_path_for_chat(chat_id: str) -> Path | None:
         if chat and chat.get("_file"):
             p = Path(chat["_file"])
             return p.with_suffix(".context.json")
+        if _SESSIONS_DIR is None:
+            # Not initialized yet (same guard as _read_chat_json).
+            return None
         for f in _SESSIONS_DIR.glob(f"*_{chat_id}.json"):
             return f.with_suffix(".context.json")
         # STANDALONE FALLBACK (2026-10-14): API-driven runs have no session
@@ -224,8 +230,12 @@ def _chat_context_valid(ctx: dict, explore_ttl: int = 3600) -> bool:
         return False
     if time.time() - ctx.get("ts", 0) > explore_ttl:
         return False
+    _sig_matches = _file_signature_matches
+    if _sig_matches is None:
+        # Signature checks unavailable -> treat context as unverified.
+        return False
     for path_str, cached_mtime in ctx.get("files", {}).items():
-        if not _file_signature_matches(path_str, cached_mtime):
+        if not _sig_matches(path_str, cached_mtime):
             return False
     return True
 

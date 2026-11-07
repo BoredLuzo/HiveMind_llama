@@ -24,18 +24,12 @@ from core.duo_runner import (  # noqa: E402
     BRIEFING_OFF, BRIEFING_PLAN_ONLY,
 )
 
-passed = 0
-failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 SMALL = "Check the router file first. " * 20
@@ -129,6 +123,4 @@ check("8g the in-loop plan is distilled before the coder sees it",
 check("8h the raw in-loop plan is not appended anymore",
       '{"role": "assistant", "content": _inloop_plan_text}' not in src)
 
-print()
-print(f"SUMMARY coder_briefing: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("coder_briefing"))

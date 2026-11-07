@@ -33,17 +33,12 @@ import backend.manager_load as ML    # noqa: E402
 import backend.llama_server_manager as LSM  # noqa: E402
 from hive_functions.prompts import PROMPTS  # noqa: E402
 
-passed = failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 class _FakeReq:
@@ -167,6 +162,4 @@ finally:
         del LSM.VRAM_PREFLIGHT_GATE
     _tmp.cleanup()
 
-print()
-print(f"SUMMARY preset_prompts_refix: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("preset_prompts_refix"))

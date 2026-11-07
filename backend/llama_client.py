@@ -186,7 +186,7 @@ class LlamaClient:
                 try:
                     from utils.perf_log import perf_line as _perf_line
                     self._log.info(_perf_line(
-                        kind="side", model=model, port=port,
+                        kind="side", model=model, port=str(port),
                         usage=data.get("usage") or {},
                         timings=data.get("timings") or {}))
                 except (ImportError, AttributeError, TypeError) as _perf_err:

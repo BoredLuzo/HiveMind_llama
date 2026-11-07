@@ -19,7 +19,7 @@ _THIS_DIR = Path(__file__).parent.parent
 _MODELS_JSON = _THIS_DIR / "models.json"
 
 # ── Cache ──────────────────────────────────────────────────────────────────────
-_index_cache: dict[str, Path] = {}     # canonical_name → Path
+_index_cache: dict[str, Path] | None = {}     # canonical_name → Path (None = invalidated)
 _index_ts: float = 0.0
 _INDEX_TTL: float = 30.0
 # NAMES_TTL must never exceed INDEX_TTL (2026-11-05 audit): the name
@@ -27,7 +27,7 @@ _INDEX_TTL: float = 30.0
 # renamed/deleted model up to 30 s after the index had moved on.
 
 
-_names_cache: list[str] = []
+_names_cache: list[str] | None = []
 _names_cache_ts: float = 0.0
 _NAMES_TTL: float = min(60.0, _INDEX_TTL)
 

@@ -50,6 +50,11 @@ def _clear_stale_data() -> int:
     sees this run's data. Narrow OSError catch: deletion is best effort."""
     removed = 0
     for p in ROOT.glob(".coverage*"):
+        if p == CONFIG:
+            # `.coverage*` also matches `.coveragerc` — never delete the
+            # config itself (2026-11-07: a measured run silently went
+            # unmeasured because the wrapper removed its own config).
+            continue
         try:
             p.unlink()
             removed += 1

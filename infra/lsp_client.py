@@ -42,6 +42,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import overload
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
@@ -249,6 +250,14 @@ def canonical_uri(uri: str) -> str:
 _URI_KEYS = {"uri": "path", "targetUri": "targetPath"}
 
 
+@overload
+def _decode_uris(obj: dict) -> dict: ...
+@overload
+def _decode_uris(obj: list) -> list: ...
+@overload
+def _decode_uris(obj: object) -> object: ...
+
+
 def _decode_uris(obj):
     """Recursively replace LSP uri fields with local paths, so callers never
     deal with file:///C:/... strings (2026-10-31: definition, references,
@@ -266,7 +275,7 @@ def _decode_uris(obj):
     return obj
 
 
-def _decode_workspace_edit(edit):
+def _decode_workspace_edit(edit: dict) -> dict:
     """Decode a rename WorkspaceEdit: the keys of `changes` are document
     URIs (not values), so they need their own pass; documentChanges entries
     carry the uri as a value and are covered by _decode_uris."""

@@ -10,18 +10,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import context.chat as _chat
 from core.run_audit import record_run_audit, load_run_audit
 
-passed = 0
-failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+
+check = h.check
 
 
 # ── Chat-Context mocken (in-memory) ────────────────────────────────────
@@ -63,8 +57,4 @@ record_run_audit("", {"event": "x"})
 check("no-op empty chat_id", True)
 check("load unknown -> []", load_run_audit("does_not_exist") == [])
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("run_audit"))

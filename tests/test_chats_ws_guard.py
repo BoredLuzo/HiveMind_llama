@@ -14,18 +14,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-passed = 0
-failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 class _FakeRequest:
@@ -89,9 +83,7 @@ def main():
     finally:
         _loop.call_soon_threadsafe(_loop.stop)
 
-    print()
-    print(f"SUMMARY chats_ws_guard: {passed} passed, {failed} failed")
-    sys.exit(0 if failed == 0 else 1)
+    sys.exit(h.finish("chats_ws_guard"))
 
 
 main()

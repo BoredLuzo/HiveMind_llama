@@ -4,14 +4,16 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from context.chat import _load_chat_context, _mutate_chat_context
 
 logger = logging.getLogger("hivemind.resume")
-build_resume_block = None
-load_resume_data = None
-_clear_abort_event = None
-_is_aborted = None
+# Injected via init_resume_deps(); None until then.
+build_resume_block: Callable[..., dict] | None = None
+load_resume_data: Callable[[dict], dict | None] | None = None
+_clear_abort_event: Callable[[str], Awaitable] | None = None
+_is_aborted: Callable[[str], bool] | None = None
 
 
 def init_resume_deps(build_resume_block_fn=None, load_resume_data_fn=None,
@@ -49,6 +51,8 @@ def _write_resume_block(
     pending_send_files: list[str] | None = None,
 ):
     def _apply(ctx: dict):
+        if build_resume_block is None:
+            raise RuntimeError("resume deps not initialized (init_resume_deps)")
         _block = build_resume_block(
             workspace=workspace,
             chunks_total=chunks_total,
@@ -89,6 +93,8 @@ def _write_resume_block(
 
 
 def _load_resume_block(chat_id: str) -> dict | None:
+    if load_resume_data is None:
+        raise RuntimeError("resume deps not initialized (init_resume_deps)")
     ctx = _load_chat_context(chat_id)
     return load_resume_data(ctx)
 
@@ -98,7 +104,8 @@ def _clear_resume_block(chat_id: str):
 
 
 async def _try_resume(chat_id: str, emit_fn) -> tuple[dict | None, list]:
-
+    if _clear_abort_event is None:
+        raise RuntimeError("resume deps not initialized (init_resume_deps)")
     await _clear_abort_event(chat_id)
     data = _load_resume_block(chat_id)
     if not data:
@@ -143,7 +150,8 @@ async def _check_abort_and_maybe_save_resume(
     emit_fn,
     pending_send_files: list[str] | None = None,
 ) -> tuple[bool, list]:
-
+    if _is_aborted is None:
+        raise RuntimeError("resume deps not initialized (init_resume_deps)")
     if not _is_aborted(chat_id):
         return False, []
     if chunks_remaining:

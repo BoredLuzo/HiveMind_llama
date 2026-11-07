@@ -114,16 +114,28 @@ def _posix_preexec():
             import resource as _r
         except ImportError:
             return
+        # getattr guards: the rlimit constants are POSIX-only and every
+        # mainstream POSIX target (Linux) has them - a platform that lacks
+        # one simply skips that limit instead of aborting the preexec.
+        _setrlimit = getattr(_r, "setrlimit", None)
+        if _setrlimit is None:
+            return
         _want: list = []
         if _mem_mb > 0:
-            _want.append((_r.RLIMIT_AS, _mem_mb * 1024 * 1024))
+            _rlim_as = getattr(_r, "RLIMIT_AS", None)
+            if _rlim_as is not None:
+                _want.append((_rlim_as, _mem_mb * 1024 * 1024))
         if _procs > 0:
-            _want.append((_r.RLIMIT_NPROC, _procs))
+            _rlim_nproc = getattr(_r, "RLIMIT_NPROC", None)
+            if _rlim_nproc is not None:
+                _want.append((_rlim_nproc, _procs))
         if _cpu_s > 0:
-            _want.append((_r.RLIMIT_CPU, _cpu_s))
+            _rlim_cpu = getattr(_r, "RLIMIT_CPU", None)
+            if _rlim_cpu is not None:
+                _want.append((_rlim_cpu, _cpu_s))
         for _res, _val in _want:
             try:
-                _r.setrlimit(_res, (_val, _val))
+                _setrlimit(_res, (_val, _val))
             except (OSError, ValueError) as _exc:
                 # the child continues without that limit; the parent never sees
                 # this directly, so it goes to the log for post-mortems
@@ -173,13 +185,20 @@ def kill_tree(proc, taskkill_timeout: int = 5) -> None:
             except Exception:
                 pass
         return
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
-    except Exception:
+    # POSIX-only attrs (absent from the win32 stdlib surface) - getattr with
+    # a fallback keeps the non-Windows branch platform-honest; on Linux the
+    # attribute is always present, so behavior is unchanged there.
+    _killpg = getattr(os, "killpg", None)
+    _getpgid = getattr(os, "getpgid", None)
+    _sigkill = getattr(signal, "SIGKILL", None)
+    if _killpg is not None and _getpgid is not None and _sigkill is not None:
         try:
-            proc.kill()
+            _killpg(_getpgid(pid), _sigkill)
         except Exception:
-            pass
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
 
 async def kill_tree_and_reap(proc, taskkill_timeout: int = 5) -> None:

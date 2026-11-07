@@ -18,17 +18,12 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from context.compression import _compress_tool_context  # noqa: E402
 
-passed = failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="plain")
+
+check = h.check
 
 
 class _NoClient:
@@ -96,5 +91,4 @@ check("smaller cap yields shorter content",
 check("smaller cap still keeps the tail", all("FAILED test_x" in (m.get("content") or "")
                                               for m in tools3))
 
-print(f"\ntail_cap: {passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish("tail_cap"))

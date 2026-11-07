@@ -24,17 +24,12 @@ from hivemind_gateway.bridge import RunBridge  # noqa: E402
 from hivemind_gateway.config import GatewayConfig  # noqa: E402
 from hivemind_gateway.state import GatewayState  # noqa: E402
 
-passed = failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 class _Hive:
@@ -139,6 +134,4 @@ check("/follow exists in the dispatch", 'elif name == "follow":' in MAIN)
 check("/follow is documented", '"/follow"' in CMDS or "'/follow'" in CMDS or "/follow <on|off>" in CMDS)
 check("/mode baseline is refreshed per run", 'self.state.data["mode_engine_seen"] = str(' in SRC)
 
-print()
-print(f"SUMMARY follow_ui: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("follow_ui"))

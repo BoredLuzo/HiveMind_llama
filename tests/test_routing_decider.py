@@ -18,17 +18,12 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from routing import decider as D  # noqa: E402
 
-passed = failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 class FakeEncoder:
@@ -216,6 +211,4 @@ for _forced, _route in (("trivial", "direct"), ("complex", "agentic")):
     check(f"resolve forced {_forced} ignores the encoder",
           _d.source == "force" and _d.route == _route and _enc.calls == 0)
 
-print()
-print(f"SUMMARY routing_decider: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("routing_decider"))

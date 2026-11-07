@@ -2,13 +2,35 @@
 from __future__ import annotations
 
 import asyncio, ctypes, json, logging, re, sys
+from typing import Any, Awaitable, Callable, Protocol
 
 logger = logging.getLogger("hivemind.insights")
 
+
+class _OllamaLike(Protocol):
+    """Subset of the pipeline's ollama client used here."""
+
+    def chat(self, **kwargs: Any) -> Awaitable[str]: ...
+
+
+class _PipelineLike(Protocol):
+    """Subset of the pipeline object injected by init_insights()."""
+
+    ollama: _OllamaLike
+
+
+class _InsightMemory(Protocol):
+    """Subset of hive_functions.memory.Memory used here."""
+
+    def remember_repo_insight(self, insight: str, trigger_path: str = "",
+                              source: str = "critic",
+                              relevance_score: float = 1.0) -> bool: ...
+
+
 _bg_insight_sem: asyncio.Semaphore | None = None
-_registry_get: callable | None = None
-_pipeline: object | None = None
-_memory: object | None = None
+_registry_get: Callable[[str], str] | None = None
+_pipeline: _PipelineLike | None = None
+_memory: _InsightMemory | None = None
 
 # POST-RUN-GUARD (2026-09-04): Nach langen Runs ist der Arbeitsspeicher durch
 # den (mlock) evicted Big-Model oft noch nicht wieder frei (live: ram_free 1.4GB
@@ -135,7 +157,8 @@ async def _run_insight_extractor(
     if not written_files or not task:
         return
     # Use own semaphore — independent from peer ratings
-    if _bg_insight_sem.locked():
+    _sem = _bg_insight_sem
+    if _sem is None or _sem.locked():
         return
     # POST-RUN-GUARD: kein neues Modell in knappem RAM laden (sonst 240s-Stall)
     if _low_ram_skip():
@@ -171,14 +194,17 @@ async def _run_insight_extractor(
             _extractor_model = _warm
             logger.debug("[InsightExtractor] Low RAM (%.1f GB) - reusing loaded model %s", _avail_gb, _warm)
 
-    async with _bg_insight_sem:
+    _pipe = _pipeline
+    if _pipe is None:
+        return  # deps not injected (init_insights)
+    async with _sem:
         try:
             _messages = [
                 {"role": "system", "content": INSIGHT_EXTRACTOR},
                 {"role": "user", "content": _user_msg},
             ]
             _raw = await asyncio.wait_for(
-                _pipeline.ollama.chat(
+                _pipe.ollama.chat(
                     model=_extractor_model,
                     messages=_messages,
                     temperature=0.2,
@@ -226,7 +252,10 @@ async def _run_insight_extractor(
 
                 # BUG-4 FIX: Seed relevance_score with extractor confidence
                 # instead of always 1.0 — low-confidence insights decay faster.
-                _saved = _memory.remember_repo_insight(
+                _mem = _memory
+                if _mem is None:
+                    return  # deps not injected (init_insights)
+                _saved = _mem.remember_repo_insight(
                     _insight_text[:400],
                     trigger_path=_trigger_path,
                     source=_source[:40],
@@ -276,6 +305,10 @@ async def _run_skill_distillation(workspace: str):
 
     if not _memory or not _pipeline or not _registry_get:
         return
+    # Locals: pyright cannot narrow the module-level injectables, and the
+    # guard above is the single init check for this task.
+    _pipe = _pipeline
+    _mem = _memory
     # POST-RUN-GUARD: kein neues Modell in knappem RAM laden (sonst 240s-Stall)
     if _low_ram_skip():
         return
@@ -329,7 +362,7 @@ async def _run_skill_distillation(workspace: str):
         )
         try:
             _raw = await asyncio.wait_for(
-                _pipeline.ollama.chat(
+                _pipe.ollama.chat(
                     model=_distiller_model,
                     messages=[
                         {"role": "system", "content": SKILL_DISTILLER},

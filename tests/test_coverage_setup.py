@@ -110,6 +110,8 @@ if mod is not None:
     _wt = WRAPPER.read_text(encoding="utf-8")
     check("wrapper prepends coverage_site to PYTHONPATH",
           "coverage_site" in _wt and "PYTHONPATH" in _wt)
+    check("wrapper never deletes .coveragerc",
+          "p == CONFIG" in _wt and "continue" in _wt)
 
 # --- packaging metadata: dev-only files stay out of the release zip --------
 _attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8")

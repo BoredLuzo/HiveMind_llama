@@ -17,17 +17,12 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 import routers.git as git_router  # noqa: E402
@@ -80,6 +75,4 @@ check("3b an already initialised workspace keeps its .git", (ws2 / ".git").exist
 check("3c and the endpoint does not claim a clone", r3.get("ok") is True
       or "already" in str(r3).lower(), f" ({str(r3)[:70]})")
 
-print()
-print(f"SUMMARY git_clone_cleanup: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("git_clone_cleanup"))

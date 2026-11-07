@@ -17,18 +17,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-passed = 0
-failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -78,9 +72,7 @@ def main():
     check("manifest rewritten from new tree",
           lines == [r"core\keep.py"], f" got {lines}")
 
-    print()
-    print(f"SUMMARY update_prune: {passed} passed, {failed} failed")
-    sys.exit(0 if failed == 0 else 1)
+    sys.exit(h.finish("update_prune"))
 
 
 main()

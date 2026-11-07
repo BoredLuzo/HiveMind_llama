@@ -16,17 +16,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = failed = 0
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True, style="summary")
+
+check = h.check
 
 
 APP = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
@@ -87,6 +82,4 @@ check("entries are registered in the agents panel", "'Voice / Routing'" in APP)
 check("matcher tests each term as a substring",
       "terms.some(function(t) { return hay.indexOf(t) >= 0; })" in APP)
 
-print()
-print(f"SUMMARY feature_search_coverage: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("feature_search_coverage"))
