@@ -102,10 +102,17 @@ check("e2 the helper reads the field (not the carry)",
 # ── f. compress stop syncs ─────────────────────────────────────────────────
 _cc_lines = CC.splitlines()
 _stop_lines = [n for n, l in enumerate(_cc_lines) if l.strip() == "ps.stop = True"]
+# F1 (deep audit 2026-11-07): both stops and the natural end go through
+# _sync_state(); the helper itself must write _loop_detected.
+_sync_helper = CC[CC.find("def _sync_state"):]
+_sync_helper = _sync_helper[:_sync_helper.find("\n    # COMPRESS-DIAG")
+                         or _sync_helper.find("\n    _compress_reason")]
+_helper_syncs_loop = "ps._loop_detected = _loop_detected" in _sync_helper
 _synced = 0
 for n in _stop_lines:
     _window = "\n".join(_cc_lines[max(0, n - 25): n])
-    _synced += 1 if "ps._loop_detected = True" in _window else 0
+    _synced += 1 if ("ps._loop_detected = True" in _window
+                     or ("_sync_state()" in _window and _helper_syncs_loop)) else 0
 check("f every compress stop syncs _loop_detected before returning",
       len(_stop_lines) == 2 and _synced == 2, f" stops={len(_stop_lines)} synced={_synced}")
 

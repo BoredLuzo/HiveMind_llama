@@ -138,4 +138,43 @@ for name in HELPERS:
 check("no helper reaches into run_code_duo's round counter", not leaks,
       f"({sorted(leaks)})" if leaks else "")
 
+# ---- F1: compress-cycle exits sync through one helper ------------------
+# Deep audit 2026-11-07: the cycle synced 18 fields at the natural end but
+# only 5/11 at its two stop returns. Every exit must call _sync_state(), and
+# no other direct ps write may bypass it (ps.stop is the signal, not state).
+_cc_src = (ROOT / "core" / "duo_compress_cycle.py").read_text(
+    encoding="utf-8", errors="replace")
+_cc_tree = ast.parse(_cc_src)
+_cc_fn = next((n for n in _cc_tree.body
+               if isinstance(n, ast.AsyncFunctionDef)
+               and n.name == "_duo_compress_cycle"), None)
+check("compress cycle exists", _cc_fn is not None)
+if _cc_fn is not None:
+    _sync_fn = next((n for n in ast.walk(_cc_fn)
+                     if isinstance(n, ast.FunctionDef)
+                     and n.name == "_sync_state"), None)
+    check("compress cycle: _sync_state helper exists", _sync_fn is not None)
+    _sync_lines = [n.lineno for n in ast.walk(_cc_fn)
+                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id == "_sync_state"]
+    _returns = [n.lineno for n in ast.walk(_cc_fn)
+                if isinstance(n, ast.Return) and n.value is None]
+    check("compress cycle: every stop return syncs first",
+          len(_sync_lines) >= 3
+          and all(any(line < ret for line in _sync_lines) for ret in _returns),
+          f"(sync={_sync_lines}, returns={_returns})")
+    _sync_nodes = set(ast.walk(_sync_fn)) if _sync_fn is not None else set()
+    _direct = []
+    for _node in ast.walk(_cc_fn):
+        if _node in _sync_nodes:
+            continue
+        if isinstance(_node, ast.Assign):
+            for _tgt in _node.targets:
+                if (isinstance(_tgt, ast.Attribute)
+                        and isinstance(_tgt.value, ast.Name)
+                        and _tgt.value.id == "ps" and _tgt.attr != "stop"):
+                    _direct.append(_tgt.attr)
+    check("compress cycle: no direct ps write bypasses the sync helper",
+          not _direct, f"({sorted(set(_direct))})" if _direct else "")
+
 sys.exit(h.finish("duo_split_integrity"))

@@ -16,6 +16,8 @@ are **not** part of the release zip (see `.gitattributes`).
 - [TODO_wartbarkeit_competitiv_2026-11-07.md](TODO_wartbarkeit_competitiv_2026-11-07.md) -
   live maintenance/release/competitiveness backlog (the only file here that
   is maintained; the rest are snapshots)
+- [BENCHMARK_ROADMAP_2026-11-08.md](BENCHMARK_ROADMAP_2026-11-08.md) -
+  phased plan for the D1/D8 benchmark runs, corpus growth and fairness rules
 - [voice_layer.md](voice_layer.md) - speech to text and text to speech
 
 Measurements live with the code they changed (commit bodies) or in

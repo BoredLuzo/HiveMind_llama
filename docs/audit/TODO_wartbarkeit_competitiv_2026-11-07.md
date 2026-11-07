@@ -217,13 +217,15 @@ CHANGELOG/Gateway-Contract, Dead-Surface (Aliase, `_DIRECT_TIME_NOTE`,
 `build_execution_block`, 7 tote Pre-Explore-Kwargs), Runner-Robustheit und
 Flake-Report (chronisch/partial).
 
-- [ ] **F1 · P1 · DEBT — `duo_compress_cycle` Sync-Back ist an Early-Returns unguarded.**
+- [x] **F1 · P1 · DEBT — `duo_compress_cycle` Sync-Back ist an Early-Returns unguarded.**
   ~48 Locals werden aus `ps` gelesen und nur am natürlichen Ende (18 Felder)
   zurückgeschrieben; zwei Stop-Pfade syncen 5 bzw. 11. Zwei `STOP-SYNC`-Fixes
   in der Historie belegen die Bug-Klasse; `test_duo_split_integrity` sieht nur
   deklarierte Felder, keine fehlenden Syncs.
-  *Akzeptanz:* für die mutierten Felder direkt auf `ps._x` schreiben ODER ein
-  `_sync(ps, ...)` an jedem Exit; Characterization-Test vor der Bewegung.
+  *Erledigt 2026-11-07:* ein `_sync_state()` schreibt alle 18 Felder und wird
+  an beiden Stop-Returns UND am natürlichen Ende aufgerufen; ein AST-Guard
+  verbietet direkte `ps.*`-Writes außerhalb des Helpers (`ps.stop` ausgenommen)
+  und prüft „jeder Return synct vorher“.
 
 - [ ] **F2 · P2 · PERF — Manager-Lock wird über `sleep(5)` + Kills gehalten.**
   `_enforce_vram_budget` (backend/manager_load.py) hält `self._lock` über
@@ -309,7 +311,8 @@ Flake-Report (chronisch/partial).
   3 Refactor, 4 Multi-File), jede rot-vor-fix/grün-nach-Referenzfix
   verifiziert; 28 Checks in `tests/test_bench_runner.py`.
   Offen: 5–10 Tasks aus echten Repos und ein dokumentierter Live-Lauf
-  (inkl. Aider).
+  (inkl. Aider). **Ablauf/Runbook/Zeitbudget:**
+  `docs/audit/BENCHMARK_ROADMAP_2026-11-08.md`.
 
 - [ ] **D2 · P2 · COMPETE — Kontext-Engine.**
   Tree-Scout/Static-Map + FTS vorhanden; inkrementeller Index, Retrieval und
@@ -343,7 +346,9 @@ Flake-Report (chronisch/partial).
 - [ ] **D8 · P3 · COMPETE — Benchmark gegen Claude Code / Codex / Aider.**
   Ohne Vergleich keine „competitive“-Aussage.
   *Akzeptanz:* dieselbe Task-Suite wie D1, dokumentierte Success-/Kosten-/
-  Latenzwerte; D1 (relativer Zuwachs) ist die Pflicht, D8 die Kür.
+  Latenzwerte; D1 (relativer Zuwachs) ist die Pflicht, D8 die Kür. Same-Model-
+  Teil (Aider) und Referenz-Teil (Claude Code/Codex mit Default-Modellen)
+  getrennt ausweisen — siehe `BENCHMARK_ROADMAP_2026-11-08.md` §2 Phase 5.
 
 ## E. Bereits erledigt (Referenz)
 

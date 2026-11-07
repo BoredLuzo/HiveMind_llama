@@ -87,7 +87,33 @@ async def _duo_compress_cycle(ctx, ps):
     _rule_compress_used = ps._rule_compress_used
     _total_tool_rounds = ps._total_tool_rounds
 
-    # it's in hivemind.log.
+    def _sync_state() -> None:
+        """Write every field the runner consumes; every exit calls this.
+
+        F1 (deep audit 2026-11-07): the cycle used to sync 18 fields at the
+        natural end but only 5/11 at the two stop returns. Callers of the
+        early exits silently lost whichever counter changed before the stop.
+        """
+        ps._MAX_COMPRESSIONS = _MAX_COMPRESSIONS
+        ps._compress_fail_streak = _compress_fail_streak
+        ps._ctx_compressions = _ctx_compressions
+        ps._ctx_critical_warned = _ctx_critical_warned
+        ps._ctx_full_skips = _ctx_full_skips
+        ps._ctx_pressure_warned = _ctx_pressure_warned
+        ps._dtool_msgs = _dtool_msgs
+        ps._est_tokens = _est_tokens
+        ps._explore_only_rounds = _explore_only_rounds
+        ps._force_compress_next = _force_compress_next
+        ps._llm_compress_fails = _llm_compress_fails
+        ps._loop_detected = _loop_detected
+        ps._no_write_nudged = _no_write_nudged
+        ps._no_write_rounds = _no_write_rounds
+        ps._partial_escalated = _partial_escalated
+        ps._rule_compress_fails = _rule_compress_fails
+        ps._rule_compress_used = _rule_compress_used
+        ps._total_tool_rounds = _total_tool_rounds
+
+    # COMPRESS-DIAG (2026-08-17): the reason is logged with the trigger below.
     _compress_reason = (
         "force" if _force_compress_next else
         getattr(_guard_decision, "reason", "threshold")
@@ -472,12 +498,8 @@ async def _duo_compress_cycle(ctx, ps):
                         "content": "⛔ Context compression repeatedly fails to shrink the context (3x) — run stopped.",
                     })
                     # STOP-SYNC (audit 2026-11-06): the early return must not
-                    # discard the state alt had set at this break — the
-                    # runner's outer stop funnel keys on _loop_detected.
-                    ps._loop_detected = True
-                    ps._compress_fail_streak = _compress_fail_streak
-                    ps._rule_compress_fails = _rule_compress_fails
-                    ps._dtool_msgs = _dtool_msgs  # restored original (same object the runner passed)
+                    # discard state the runner's outer stop funnel reads.
+                    _sync_state()
                     ps.stop = True
                     return
     else:
@@ -552,22 +574,9 @@ async def _duo_compress_cycle(ctx, ps):
             "type": "status",
             "content": "⛔ Context compression repeatedly fails to shrink the context (3x) — run stopped.",
         })
-        # STOP-SYNC (audit 2026-11-06): alt carried the COMPRESSED messages
-        # and the streak/counter state across this break — sync before the
-        # early return (the runner's stop funnel keys on _loop_detected).
-        ps._loop_detected = True
-        ps._compress_fail_streak = _compress_fail_streak
-        ps._dtool_msgs = _dtool_msgs  # compressed list (reassigned above)
-        ps._est_tokens = _est_tokens
-        ps._total_tool_rounds = _total_tool_rounds
-        ps._force_compress_next = _force_compress_next
-        ps._ctx_compressions = _ctx_compressions
-        ps._llm_compress_fails = _llm_compress_fails
-        ps._rule_compress_fails = _rule_compress_fails
-        ps._MAX_COMPRESSIONS = _MAX_COMPRESSIONS
-        ps._partial_escalated = _partial_escalated
-        ps._ctx_pressure_warned = _ctx_pressure_warned
-        ps._ctx_critical_warned = _ctx_critical_warned
+        # STOP-SYNC (audit 2026-11-06, F1 2026-11-07): one sync point covers
+        # the compressed messages and every counter the stop paths mutate.
+        _sync_state()
         ps.stop = True
         return
     if _compress_stop:
@@ -665,21 +674,4 @@ async def _duo_compress_cycle(ctx, ps):
                     _ctx_set.add(_wp)
 
     # ── sync back: everything the runner consumes after this block ──
-    ps._MAX_COMPRESSIONS = _MAX_COMPRESSIONS
-    ps._compress_fail_streak = _compress_fail_streak
-    ps._ctx_compressions = _ctx_compressions
-    ps._ctx_critical_warned = _ctx_critical_warned
-    ps._ctx_full_skips = _ctx_full_skips
-    ps._ctx_pressure_warned = _ctx_pressure_warned
-    ps._dtool_msgs = _dtool_msgs
-    ps._est_tokens = _est_tokens
-    ps._explore_only_rounds = _explore_only_rounds
-    ps._force_compress_next = _force_compress_next
-    ps._llm_compress_fails = _llm_compress_fails
-    ps._loop_detected = _loop_detected
-    ps._no_write_nudged = _no_write_nudged
-    ps._no_write_rounds = _no_write_rounds
-    ps._partial_escalated = _partial_escalated
-    ps._rule_compress_fails = _rule_compress_fails
-    ps._rule_compress_used = _rule_compress_used
-    ps._total_tool_rounds = _total_tool_rounds
+    _sync_state()
