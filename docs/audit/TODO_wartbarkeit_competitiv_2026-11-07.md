@@ -119,17 +119,24 @@
 
 ## C. Release-/Update-Härtung (offen)
 
-- [ ] **C1 · P1 · RELEASE — Release-ZIP aus `HEAD` bauen und frisch installieren.**
+- [x] **C1 · P1 · RELEASE — Release-ZIP aus `HEAD` bauen und frisch installieren.**
   Bisher nur Quell-/Clean-Checkout getestet; kein `package_release.bat`-Lauf und
   keine Installation aus dem erzeugten ZIP.
-  *Akzeptanz:* ZIP bauen, in leeres Verzeichnis entpacken, `start_hivemind.bat`,
-  `/health`, Direct-Chat; keine Leaks (settings/models/sessions).
+  *Erledigt 2026-11-07:* ZIP aus isoliertem Worktree (`git archive HEAD`),
+  368 Entries, ein Root, keine Leaks (settings/presets/models/tests/sessions),
+  BUILD_INFO=c4efbac. Frische `uv sync --frozen`-Installation: `/health` ok,
+  35 Modelle, Direct-Chat completed, `read_file`-Tool, UI 200. Einziger Befund:
+  korrupter 0-Byte-Eintrag im lokalen uv-Cache für pydantic-core; `uv cache
+  clean pydantic-core` + Reinstall behebt es (nicht im ZIP).
 
-- [ ] **C2 · P1 · RELEASE — Update-Migration 1.5.5 → nächste Version testen.**
+- [x] **C2 · P1 · RELEASE — Update-Migration 1.5.5 → nächste Version testen.**
   `server.py`-Kompatibilitätsanker ist gepinnt, aber der **alte** 1.5.5-`update.bat`
   wurde noch nicht gegen ein ZIP aus dem aktuellen Tree ausgeführt.
-  *Akzeptanz:* Fake-/echte 1.5.5-Installation + altes `update.bat --zip` → Backup,
-  Apply, Verify, BUILD_INFO; kein „Zip carries no server.py HIVEMIND_VERSION“.
+  *Erledigt 2026-11-07:* Original-1.5.5-Installation + altes `update.bat --zip`
+  gegen das neue ZIP: Backup `update_backup_1.5.5`, Apply, Verify grün, neue
+  Module (`duo_coder_preloop`, `duo_task_complete_gate`, `chat_tools_route`,
+  `duo_loop_guards`) vorhanden, `update.bat` auf neuen Shim geswapst,
+  BUILD_INFO/Manifest korrekt. Der `server.py`-Anker hat die alte Probe getragen.
 
 - [ ] **C3 · P1 · RELEASE — Erster `windows-full`-Cron-Lauf (Montag) beobachten.**
   Python 3.14, `--ci-subset --jobs 2`, Exklusiv-Lane, Timeout 60.
