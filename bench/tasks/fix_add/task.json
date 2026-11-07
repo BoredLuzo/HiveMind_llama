@@ -1,0 +1,6 @@
+{
+  "id": "fix_add",
+  "prompt": "The unit test test_calc.py fails. Fix calc.py so that `python -m unittest -q` passes. Do not modify the test.",
+  "check": "python -m unittest -q",
+  "timeout_s": 300
+}

@@ -240,6 +240,12 @@
   *Akzeptanz:* `bench/`-Runner + Task-Format + Result-JSON, reproduzierbarer
   Lauf, Wochenvergleich; Report mit Pass-Rate, Delta, Laufzeit und Tokens je
   Bedingung. **Kein absolutes Quoten-Ziel.**
+  *Fortschritt 2026-11-07:* Gerüst steht — `bench/runner.py` mit den vier
+  Bedingungen (`raw`, `hivemind_direct`, `hivemind_duo`, `aider`),
+  Task-Format (`task.json` + `repo/`), JSON-Report, Delta-vs-raw-Auswertung,
+  `--runs`/`--keep-work`, Beispiel-Task `fix_add`, README. 20 Checks in
+  `tests/test_bench_runner.py`. Offen: 20–40 echte Tasks, 5–10 Repo-Tasks
+  und ein dokumentierter Live-Lauf mit Aider.
 
 - [ ] **D2 · P2 · COMPETE — Kontext-Engine.**
   Tree-Scout/Static-Map + FTS vorhanden; inkrementeller Index, Retrieval und
@@ -299,3 +305,5 @@
 - Batch 12 (2026-11-07): A3 Simple-Tool-Routing vor Agentic/Judge-Duo, A4
   Prompt-/Round-Parität + Repeat-Guard in der Legacy-Tool-Route; B4 als
   won't-do geschlossen, B8-Prozentziel gestrichen, D1 nach A3/A4 eingeordnet.
+- Batch 13 (2026-11-07): D1-Gerüst `bench/` (vier Bedingungen, Task-Format,
+  JSON-Report, Delta vs. raw), Beispiel-Task und 20 Harness-Checks.

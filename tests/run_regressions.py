@@ -379,6 +379,7 @@ SUITES = [
     ("simple_tool_routing",     "tests/test_simple_tool_routing.py",         30),
     ("chat_tools_route_guards", "tests/test_chat_tools_route_guards.py",     30),
     ("tool_route_repeat_guard", "tests/test_tool_route_repeat_guard.py",     30),
+    ("bench_runner",            "tests/test_bench_runner.py",                30),
 
 ]
 

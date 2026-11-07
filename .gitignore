@@ -16,6 +16,10 @@ logs/
 tests/.regression_history.json
 tests/.regression_history.json.tmp
 
+# Benchmark work dirs and result files (bench/runner.py, D1) - local only
+bench/.work/
+bench/results/
+
 # Coverage artifacts (tests/coverage_run.py): parallel .coverage.<host>.<pid>
 # data files, the merged .coverage and the htmlcov/ report - never committed
 .coverage

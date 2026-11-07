@@ -1,0 +1,127 @@
+# -*- coding: utf-8 -*-
+"""Behavior checks: bench/runner.py (D1 scaffold, 2026-11-07).
+
+No model or server: task loading, workspace isolation, check execution,
+diff extraction/application and the aggregation math are covered.
+"""
+import io
+import json
+import shutil
+import sys
+import tempfile
+from contextlib import redirect_stdout
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+from bench.runner import (  # noqa: E402
+    Task, _extract_patch, aggregate, apply_patch, load_tasks,
+    prepare_workspace, print_summary, run_check,
+)
+from tests._harness import Harness  # noqa: E402
+
+h = Harness()
+check = h.check
+
+
+def _task_dir(root: Path, name: str, *, with_repo: bool) -> None:
+    task = root / name
+    task.mkdir(parents=True)
+    (task / "task.json").write_text(json.dumps({
+        "id": name, "prompt": f"fix {name}", "check": "python -c \"pass\"",
+        "timeout_s": 30,
+    }), encoding="utf-8")
+    if with_repo:
+        repo = task / "repo"
+        repo.mkdir()
+        (repo / "a.txt").write_text("one\n", encoding="utf-8")
+
+
+with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
+    root = Path(td)
+
+    # ── task loading ───────────────────────────────────────────────────────
+    _task_dir(root, "alpha", with_repo=True)
+    _task_dir(root, "beta", with_repo=False)
+    tasks = load_tasks(root)
+    check("load: both tasks found", [t.id for t in tasks] == ["alpha", "beta"],
+          f" ({[t.id for t in tasks]})")
+    check("load: prompt/check carried",
+          tasks[0].prompt == "fix alpha" and tasks[0].check.startswith("python"),
+          f" ({tasks[0].prompt!r})")
+    check("load: repo only when present",
+          tasks[0].repo is not None and tasks[1].repo is None)
+
+    # ── workspace isolation ────────────────────────────────────────────────
+    work = prepare_workspace(tasks[0], root / "work")
+    check("workspace: repo is copied", (work / "a.txt").read_text(encoding="utf-8") == "one\n")
+    (work / "a.txt").write_text("changed\n", encoding="utf-8")
+    check("workspace: source repo is untouched",
+          (tasks[0].repo / "a.txt").read_text(encoding="utf-8") == "one\n")
+
+    # ── check execution ────────────────────────────────────────────────────
+    ok, out = run_check(Task("p", "p", "python -c \"print('ok')\""), work)
+    check("check: exit 0 is a pass", ok is True, f" ({out!r})")
+    ok, out = run_check(Task("f", "f", "python -c \"raise SystemExit(3)\""), work)
+    check("check: non-zero is a fail", ok is False)
+    ok, out = run_check(Task("e", "e", "  "), work)
+    check("check: empty command fails closed", ok is False and "no check" in out,
+          f" ({out!r})")
+
+    # ── diff handling ──────────────────────────────────────────────────────
+    fenced = "here\n```diff\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+two\n```\n"
+    check("patch: fenced diff is extracted",
+          _extract_patch(fenced).startswith("--- a/a.txt"),
+          f" ({_extract_patch(fenced)[:20]!r})")
+    check("patch: plain text passes through",
+          _extract_patch("--- a/x\n") == "--- a/x")
+    if shutil.which("git"):
+        (work / "a.txt").write_text("one\n", encoding="utf-8")
+        patch = "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+two\n"
+        ok, detail = apply_patch(patch, work)
+        check("patch: valid diff applies", ok is True, f" ({detail})")
+        check("patch: file content changed",
+              (work / "a.txt").read_text(encoding="utf-8") == "two\n")
+        ok, detail = apply_patch("not a diff at all\n", work)
+        check("patch: invalid diff is reported", ok is False, f" ({detail})")
+    else:
+        h.skip("patch: git not installed", "git apply needs git")
+
+    # ── aggregation ────────────────────────────────────────────────────────
+    rows = [
+        {"condition": "raw", "ok": False, "seconds": 10, "tokens": 100},
+        {"condition": "raw", "ok": False, "seconds": 20, "tokens": 300},
+        {"condition": "hivemind_direct", "ok": True, "seconds": 40, "tokens": 500},
+        {"condition": "hivemind_direct", "ok": True, "seconds": 60, "tokens": 700},
+        {"condition": "hivemind_duo", "ok": True, "seconds": 30, "tokens": 200},
+        {"condition": "hivemind_duo", "ok": False, "seconds": 50, "tokens": 400},
+    ]
+    summary = aggregate(rows)
+    check("aggregate: raw baseline is 0.0", summary["raw"]["pass_rate"] == 0.0)
+    check("aggregate: direct is 1.0 with +1.0 delta",
+          summary["hivemind_direct"]["pass_rate"] == 1.0
+          and summary["hivemind_direct"]["delta_vs_raw"] == 1.0,
+          f" ({summary['hivemind_direct']})")
+    check("aggregate: duo is 0.5 with +0.5 delta",
+          summary["hivemind_duo"]["pass_rate"] == 0.5
+          and summary["hivemind_duo"]["delta_vs_raw"] == 0.5,
+          f" ({summary['hivemind_duo']})")
+    check("aggregate: median duration",
+          summary["raw"]["median_seconds"] == 15.0,
+          f" ({summary['raw']['median_seconds']})")
+    check("aggregate: tokens summed",
+          summary["hivemind_direct"]["tokens_total"] == 1200,
+          f" ({summary['hivemind_direct']['tokens_total']})")
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        print_summary(summary)
+    out = buf.getvalue()
+    check("report: prints every condition", all(
+        name in out for name in ("raw", "hivemind_direct", "hivemind_duo")), f" ({out!r})")
+    check("report: shows the delta column", "+1.00" in out and "+0.50" in out,
+          f" ({out!r})")
+
+sys.exit(h.finish("bench_runner"))
