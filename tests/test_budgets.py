@@ -22,19 +22,10 @@ from core.budgets import (resolve, set_active, update_cpt_ema,
                           update_prefill_ema, cpt_for)  # noqa: E402
 from tools.limits import SCHEMA_FRAC  # noqa: E402
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True)
+check = h.check
 
 print("=== budgets: derivation, base case, monotonicity, overrides ===")
 
@@ -208,8 +199,4 @@ for rel in scan_files:
 check("no model names / size staffels in budget+tool-selection code",
       not bad, str(bad[:3]))
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("budgets"))

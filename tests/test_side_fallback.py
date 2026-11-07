@@ -24,18 +24,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="plain")
+check = h.check
 
 def pick(msg):
     """Mirror of the branch in llama_client.chat / fix_agent (skip policy)."""
@@ -73,5 +65,4 @@ check("fix_agent: no bare content-only return left",
       not re.search(r"final_text = \(msg\.get\(\"content\"\) or \"\"\)\.strip\(\)\n\s*if not tcs",
                     fa))
 
-print(f"\nside_fallback: {passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish("side_fallback"))

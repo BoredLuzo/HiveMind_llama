@@ -18,18 +18,10 @@ HTML = (ROOT / "index.html").read_text(encoding="utf-8", errors="replace")
 CSS = (ROOT / "static" / "style.css").read_text(encoding="utf-8", errors="replace")
 JS = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 # ── 1. Eine Karte statt drei loser Bloecke ──────────────────────────────
 check("context card exists", 'id="ctx-agentic-card"' in HTML)
@@ -111,6 +103,4 @@ check("no absolute inline margins on the moved wrappers",
 check("no inline purple label style left",
       'font-size:11px;color:#9a74dc;cursor:pointer' not in HTML)
 
-print()
-print(f"SUMMARY ui_context_card: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("ui_context_card"))

@@ -13,18 +13,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 RAW = (ROOT / "install.bat").read_bytes()
 TEXT = RAW.decode("ascii", errors="replace")
@@ -97,6 +89,4 @@ idx_shortcut = TEXT.index("REM [5/9] Desktop shortcut")
 check("order is llama, tools, shortcut", TEXT.index("REM [3/9] llama.cpp backend")
       < idx_tools < idx_shortcut < idx_models)
 
-print()
-print(f"SUMMARY installer_coreutils: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("installer_coreutils"))

@@ -12,18 +12,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import threading  # noqa: E402
 import infra.token_stats as ts  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 # ── aggregation: coder model is the run identity, planner-only runs count ─
 daily = {
@@ -128,6 +120,4 @@ check("excluded = abort + graceful", _g["excluded"] == 1, f"({_g['excluded']})")
 check("ok% = 1 of 2 judged (graceful not a fail)",
       abs(_g["completed_share"] - 0.5) < 0.01, f"({_g['completed_share']})")
 
-print()
-print(f"SUMMARY token_stats_by_model: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("token_stats_by_model"))

@@ -14,18 +14,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 from infra import shell_env as S  # noqa: E402
 
@@ -95,6 +87,4 @@ check("install hint uses winget", S.INSTALL_HINT == "winget install Microsoft.Co
 check("POSIX_TOOLS covers what models write",
       {"grep", "sed", "awk", "head", "tail", "find"} <= set(S.POSIX_TOOLS))
 
-print()
-print(f"SUMMARY shell_env: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("shell_env"))

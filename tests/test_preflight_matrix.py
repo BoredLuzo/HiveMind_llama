@@ -20,18 +20,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from backend import llama_preflight as LP  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="plain")
+check = h.check
 
 # --- GGUF present / missing -------------------------------------------
 gg = Path(tempfile.gettempdir()) / "_audit_matrix.gguf"
@@ -110,5 +102,4 @@ src = Path(LP.__file__).read_text(encoding="utf-8")
 check("both platform paths implemented (os.name check + pgrep fallback)",
       'os.name == "nt"' in src and "pgrep" in src)
 
-print(f"\npreflight_matrix: {passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish("preflight_matrix"))

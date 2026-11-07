@@ -10,18 +10,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import routers.config as rc  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 # a preset saved BEFORE the budget was raised / before a role existed
 _OLD_PRESET = {
@@ -51,6 +43,4 @@ check("thinking settings survive", _d.get("thinking") is True
 check("roles the preset never knew survive",
       s["agents"].get("duo_coder", {}).get("max_tokens") == 12000)
 
-print()
-print(f"SUMMARY preset_merge: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("preset_merge"))

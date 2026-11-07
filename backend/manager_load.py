@@ -42,7 +42,7 @@ from .llama_start_phases import (
     _phase_capabilities, _phase_claim, _phase_flags, _phase_moe,
     _phase_model_flags, _phase_preflight_and_spawn,
 )
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from pathlib import Path
 from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, moe_cfg_for, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
 from .llama_models import resolve_model_path, list_available_models, resolve_mmproj_path, _strip_alias
@@ -345,6 +345,45 @@ def _append_chat_template(cmd: list, model_base: str, reg_template: str | None) 
 
 
 class LlamaLoadMixin:
+
+    if TYPE_CHECKING:
+        # Cross-mixin contract: these attributes/methods live on sibling
+        # mixins and are bound in LlamaServerManager.__init__. Declared here
+        # (types only, no runtime effect) so this mixin can be type-checked
+        # in isolation. Signatures mirror the real definitions in
+        # LlamaProcessMixin / LlamaEvictMixin / LlamaPrefetchMixin exactly
+        # (incl. async-ness) so the composed LlamaServerManager type is
+        # unchanged.
+        _slots: list[ModelSlot]
+        _lock: asyncio.Lock
+        _pending_prefetch: list[tuple[str, int]]
+
+        # ModelSlot infers `model` / `_entry_load_seq` as None-only (their
+        # assignments in llama_slots.py are unannotated), but the load path
+        # writes model names / load-seq ints into them. Subtype used for
+        # typing only (no runtime effect) so the load path can assign.
+        class _LoadSlot(ModelSlot):
+            model: str | None
+            _entry_load_seq: int | None
+
+        def _metric_inc(self, key: str, amount: int = 1) -> None: ...
+        def _get_shared_http_client(self) -> httpx.AsyncClient: ...
+        def _has_active_prefetch(self, model: str, num_ctx: int) -> bool: ...
+        def _queue_contains_prefetch(self, model: str, num_ctx: int) -> bool: ...
+        def _schedule_prefetch_task(self, slot: ModelSlot, model: str,
+                                    num_ctx: int) -> None: ...
+        async def _port_alive(self, port: int) -> bool: ...
+        async def _kill_port(self, port: int) -> None: ...
+        async def _find_loaded(self, model: str) -> Optional[_LoadSlot]: ...
+        async def _find_free_slot(self) -> Optional[_LoadSlot]: ...
+        def _evict_lru(self, exclude_slot: Optional[ModelSlot] = None) -> Optional[_LoadSlot]: ...
+
+        # Binary-capability probes (class-level, filled once by
+        # _phase_capabilities in llama_start_phases.py).
+        _device_flag_supported: bool | None = None
+        _kv_flag_supported: bool | None = None
+        _load_mode_supported: bool | None = None
+        _binary_build_number: int | None = None
 
     async def _adopt_or_kill_port(self, slot) -> str:
         model_name, _props_cache = await self._fetch_slot_props(slot)
@@ -943,6 +982,13 @@ class LlamaLoadMixin:
             if getattr(_slot, "_vision", False):
                 return True
             _model = _slot.model
+            # TYPING-GUARD: the loop filter above only matches slots with a
+            # model name, so this cannot fire in practice. ModelSlot infers
+            # `model` as None-only (unannotated init assignment), and the
+            # guard documents the precondition + narrows _model for the
+            # restart call below.
+            if not _model:
+                return False
             _ctx = int(getattr(_slot, "_num_ctx", 0) or 0) or CONTEXT_SIZE_DEFAULT
             _was_pinned = bool(_slot.pinned)
             _n_parallel = int(getattr(_slot, "_n_parallel", 1) or 1)

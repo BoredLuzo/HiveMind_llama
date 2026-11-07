@@ -25,18 +25,10 @@ from context.ctx_guard import (  # noqa: E402
     cache_ram_required_mib, resolve_compress_threshold,
     PROMPT_CACHE_KIB_PER_TOKEN)
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="plain")
+check = h.check
 
 check("entry cost constant matches the measurement",
       abs(PROMPT_CACHE_KIB_PER_TOKEN - 18.0) < 0.01)
@@ -71,5 +63,4 @@ ml = (ROOT / "backend" / "manager_load.py").read_text(encoding="utf-8")
 check("loader warns about the cache/threshold shortfall",
       "cache_ram_required_mib" in ml and "CACHE-RAM" in ml.upper())
 
-print(f"\ncache_budget: {passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish("cache_budget"))

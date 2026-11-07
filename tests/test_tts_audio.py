@@ -23,19 +23,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from core import tts_audio  # noqa: E402
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 def synth_wav(seconds=3.0, sr=24000, f0=95.0) -> bytes:
     """A voiced-ish signal with syllable-like amplitude modulation."""
@@ -131,6 +122,4 @@ try:
 except ImportError:
     print("  SKIP opus (soundfile not installed)")
 
-print()
-print(f"SUMMARY tts_audio: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("tts_audio"))

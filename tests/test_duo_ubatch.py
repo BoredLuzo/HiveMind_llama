@@ -22,18 +22,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from backend.llama_config import (  # noqa: E402
     resolve_ubatch_sizes, LLAMA_UBATCH, LLAMA_UBATCH_DEFAULT, LLAMA_BATCH_DEFAULT)
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="plain")
+check = h.check
 
 # default
 check("module default is 256", LLAMA_UBATCH_DEFAULT == 256, f"({LLAMA_UBATCH_DEFAULT})")
@@ -87,5 +79,4 @@ check("helper resolves ubatch via the resolver",
       "resolve_ubatch_sizes(settings)" in _rf)
 check("duo_ubatch triggers the preset flag sync", '"duo_ubatch"' in cfg)
 
-print(f"\nduo_ubatch: {passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish("duo_ubatch"))

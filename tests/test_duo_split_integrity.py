@@ -44,18 +44,10 @@ HELPERS = [
     "_duo_disconnect_park",
 ]
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="plain")
+check = h.check
 
 # ---- declared state fields --------------------------------------------
 declared: dict[str, set[str]] = {}
@@ -146,5 +138,4 @@ for name in HELPERS:
 check("no helper reaches into run_code_duo's round counter", not leaks,
       f"({sorted(leaks)})" if leaks else "")
 
-print(f"\nduo_split_integrity: {passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish("duo_split_integrity"))

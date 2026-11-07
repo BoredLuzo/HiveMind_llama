@@ -8,18 +8,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from core.duo.preflight import completion_verdict, needs_test_verification  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 # ── no write since the last green test -> nothing to verify ──────────────
 check("no write since last green test -> ok",
@@ -162,6 +154,4 @@ check("the chunk loop passes written files to the mapping",
       "written_files=written_files or list(self.written_files)" in
       (ROOT / "hive_functions" / "chunking.py").read_text(encoding="utf-8", errors="replace"))
 
-print()
-print(f"SUMMARY verify_gate: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("verify_gate"))

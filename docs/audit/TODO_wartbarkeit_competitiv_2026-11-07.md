@@ -6,7 +6,7 @@
 
 ## A. Design-Lücken aus dem Live-Test (alle offen)
 
-- [ ] **A1 · P1 · DESIGN — Pause auf Direct-Runs ist wirkungslos.**
+- [ ] **A1 · P1 · DESIGN (zurückgestellt: Direct-Feature später) — Pause auf Direct-Runs ist wirkungslos.**
   `/pause/{run_id}` setzt `request_pause_after_chunk`, geprüft wird das Flag nur im
   Duo-Chunk-Loop (`core/duo_runner.py:2957`). Ein Direct-Stream pausiert nicht.
   *Akzeptanz:* Direct-Runner prüft an einer sicheren Token-/Rundengrenze und hält an;
@@ -15,7 +15,7 @@
   *Evidenz:* Live-Matrix 2026-11-07, `/pause` → `pause_requested`, danach
   `/pause-state` `{"active":false}`, `/resume` 409.
 
-- [ ] **A2 · P1 · DESIGN — Steer-Injection nur an Tool-/Chunk-Grenzen.**
+- [ ] **A2 · P1 · DESIGN (zurückgestellt: Direct-Feature später) — Steer-Injection nur an Tool-/Chunk-Grenzen.**
   Queue (`/api/run/{run_id}/steer`) funktioniert; ein reiner Direct-Run ohne Tools
   injiziert den Text nicht mitten in der Antwort, sondern erst nach Run-Ende
   (Frontend-Queue).
@@ -65,17 +65,18 @@
   Characterization-Tests für den Loop → Extraktion mit Action-Enum; `duo_runner`
   unter ~5.000 Zeilen; Pyright-Komplexitätsfehler verschwindet.
 
-- [ ] **B2 · P1 · DEBT — `backend/manager_load.py` aus Pyright-TARGETS ausgelassen.**
+- [x] **B2 · P1 · DEBT — `backend/manager_load.py` aus Pyright-TARGETS ausgelassen.**
   55 Cross-Mixin-Attributfehler; ein TYPE_CHECKING-Kontrakt wie in
   `manager_prefetch.py` fehlt.
-  *Akzeptanz:* Modul in TARGETS, 0 neue Fehler (Baseline-Beitrag), Tests grün.
+  *Erledigt 2026-11-07:* TYPE_CHECKING-Kontrakt wie `manager_prefetch.py`,
+  55 → 0 Fehler, in TARGETS, Baseline 1/1 (nur `run_code_duo`-Komplexität).
 
 - [ ] **B3 · P2 · DEBT — Source-String-Pins → Verhaltens-Tests.**
   63/322 Suiten nutzen den Shared Harness; viele Pins greppen weiter Quelltext.
   *Akzeptanz:* pro angefasster Suite mindestens ein Verhaltens-Test; Pins nur für
   Architektur-Invarianten, die sich nicht verhalten testen lassen.
 
-- [ ] **B4 · P2 · TEST — Restliche Harness-Migration.**
+- [ ] **B4 · P2 · TEST — Restliche Harness-Migration.** (103 Suiten migriert; Sonderformate offen)
   Suiten mit Sonderformat (`=== Results:`, `passed=N failed=M`, Skip-Summary,
   `<5 Checks`) sind noch nicht migriert.
   *Akzeptanz:* Harness um diese Formate erweitert oder bewusst als Ausnahmen
@@ -102,6 +103,8 @@
   `manager_load` 18,9 %.
   *Akzeptanz:* pro Modul mindestens ein Happy-Path- und ein Fehlerpfad-Test;
   Gesamt-Coverage >60 % ohne reine String-Pins.
+  *Fortschritt 2026-11-07:* `project_state` (40), `background` (31), `log_noise` (33),
+  `keep_awake` (27) mit neuen Verhaltens-Suiten abgedeckt.
 
 - [ ] **B9 · P3 · TEST — Testlaufzeit und Flake-Quarantäne.**
   Voller Lauf ~8–12 min (6 Worker); `--changed` existiert, aber kein Impact-Mapping

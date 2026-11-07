@@ -27,19 +27,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 from settings import DEFAULT_SETTINGS                          # noqa: E402
 
@@ -84,6 +75,4 @@ check("_s honours a configured value",
       _fa_s("duo_wedge_handoff_max_tokens", 1) == 1200,
       " (DEFAULT_SETTINGS wins over the fallback - expected)")
 
-print()
-print(f"SUMMARY wedge_ctx: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("wedge_ctx"))

@@ -18,18 +18,10 @@ from hivemind_gateway.bridge import RunBridge  # noqa: E402
 from hivemind_gateway.config import GatewayConfig  # noqa: E402
 from hivemind_gateway.state import GatewayState  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 class _Resp:
     def __init__(self, status_code=200, body=None):
@@ -182,6 +174,4 @@ check("voice handler marks the run as spoken", "voiced.from_voice = True" in src
 check("owner run passes the flag to the bridge",
       'from_voice=bool(getattr(p, "from_voice", False))' in src)
 
-print()
-print(f"SUMMARY voice_decider: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("voice_decider"))

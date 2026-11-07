@@ -14,18 +14,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from core.duo.preflight import stuck_handler  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 class _Ctrl:
     max_repeats = 3
@@ -103,6 +95,4 @@ ctx = _Ctx()
 call("run_tests", {}, "3 passed", ctx, total=2)
 check("green run_tests resets the stuck history", ctx.exec_ctrl.resets == 1)
 
-print()
-print(f"SUMMARY stuck_handler: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("stuck_handler"))

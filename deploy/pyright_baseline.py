@@ -70,6 +70,7 @@ TARGETS = [
     "backend/llama_config.py",
     "backend/llama_models.py",
     "backend/manager_prefetch.py",
+    "backend/manager_load.py",
     "tools/definitions.py",
     "tools/sandbox.py",
     "context/chat.py",

@@ -11,18 +11,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from hive_functions.testmap import map_edits_to_tests, is_test_file  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
-
+h = Harness(pad=True, style="summary")
+check = h.check
 
 def _ws(structure: dict) -> str:
     tmp = tempfile.mkdtemp(prefix="hivemind_testmap_")
@@ -102,6 +94,4 @@ ws = _ws(many)
 check("result is capped at 8 test files",
       len(map_edits_to_tests(ws, [f"mod{i}.py" for i in range(12)])) == 8)
 
-print()
-print(f"SUMMARY testmap: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("testmap"))
