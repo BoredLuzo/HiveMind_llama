@@ -76,7 +76,7 @@ def test_query_error_never_reuses():
 
 
 def test_ast_honest_cached_ctx():
-    src = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    src = _src_duo()
     if "_cached_coder_port_ctx = _plan_port_actual_ctx" in src \
             and "_plan_port_actual_ctx >= _coder_ctx_need" in src:
         ok("duo_runner: cached coder ctx is the REAL slot ctx; reuse checks coder need")
@@ -95,7 +95,8 @@ def test_always_vision_toggle_pins():
 
 
 def _src_duo():
-    return (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    return ((Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+            + (Path(__file__).parent.parent / "core" / "duo_coder_preloop.py").read_text(encoding="utf-8"))
 
 if __name__ == "__main__":
     test_small_planner_slot_is_not_reused()

@@ -130,6 +130,14 @@ check("h the first probe hit equals the real literal",
       _m is not None and _m.group(1) == HIVEMIND_VERSION,
       f" hit={_m.group(1) if _m else None!r} literal={HIVEMIND_VERSION!r}")
 
+# h2: the update.bat shipped with <=1.5.5 reads server.py, not core/version.py.
+# A text-only anchor in server.py keeps the upgrade path for existing installs.
+_SRV = (ROOT / "server.py").read_text(encoding="utf-8", errors="replace")
+_m_srv = re.search(r"HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)", _SRV)
+check("h2 <=1.5.5 updater can still read server.py",
+      _m_srv is not None and _m_srv.group(1) == HIVEMIND_VERSION,
+      f" hit={_m_srv.group(1) if _m_srv else None!r} literal={HIVEMIND_VERSION!r}")
+
 # ── i. digest prefix case-insensitive ──────────────────────────────────────
 from deploy import updater as UPDMOD  # noqa: E402
 import tempfile  # noqa: E402
@@ -173,9 +181,12 @@ _PY_TARGETS = [
     "core/duo_finalize.py", "core/duo_epilogue.py", "core/duo_finalgate.py",
     "core/duo_round_input.py", "core/duo_dtool_setup.py",
     "core/duo_inloop_planner.py", "core/duo_coder_load.py",
-    "core/duo_compress_cycle.py", "core/chat_shortcuts.py",
+    "core/duo_compress_cycle.py", "core/duo_coder_preloop.py",
+    "core/duo_task_complete_gate.py",
+    "core/chat_shortcuts.py",
     "core/chat_vision_pre.py", "core/chat_history_seed.py",
     "core/chat_route.py", "core/chat_route_decision.py",
+    "core/chat_tools_route.py",
     "core/llm_stream.py", "core/ctx_overrides.py", "core/run_context.py",
     "core/stream.py", "learning/soul_evolution.py",
     "backend/llama_start_phases.py", "deploy/updater.py",

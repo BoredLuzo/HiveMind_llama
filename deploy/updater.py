@@ -47,6 +47,12 @@ from pathlib import Path
 
 logger = logging.getLogger("hivemind.updater")
 
+# update.bat runs this file directly (sys.path[0] is deploy/), so the repo
+# root must be importable explicitly for the shared version regex.
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
 REPO = "BoredLuzo/HiveMind_llama"
 API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
 TMPDIR_NAME = "_update_tmp"
@@ -79,7 +85,6 @@ APPLY_XD = ["sessions", ".hive_uploads", "learning_logs", "logs", ".venv",
 BACKUP_XD = [".venv", "llama", "logs", "sessions", "learning_logs",
              "__pycache__", TMPDIR_NAME, "update_backup_*"]
 
-VERSION_RE = re.compile(r"HIVEMIND_VERSION\s*=\s*.([0-9][0-9.a-z-]*)", re.I)
 WARN_RE = re.compile(r"(?i)\b(warning|breaking|known issues?|migrat\w*"
                      r"|attention|caution|deprecat\w*)\b")
 NO_BREAKING_RE = re.compile(r"(?i)\bno\b[^.]*\bbreaking\b")
@@ -100,10 +105,19 @@ def fail(msg: str) -> "int":
 
 def read_version(core_dir: Path) -> str | None:
     """HIVEMIND_VERSION from core/version.py — widened capture keeps
-    "1.3.0-preview" whole (the old [0-9.]+ saw only "1.3.0")."""
+    "1.3.0-preview" whole (the old [0-9.]+ saw only "1.3.0").
+
+    The regex lives in core/version.py (one truth for updater +
+    update_check). A damaged install without that module returns None,
+    exactly like a missing literal did before.
+    """
+    try:
+        from core.version import VERSION_LINE_RE
+    except ImportError:
+        return None
     vf = core_dir / "version.py"
     try:
-        m = VERSION_RE.search(vf.read_text(encoding="utf-8", errors="replace"))
+        m = VERSION_LINE_RE.search(vf.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return None
     return m.group(1) if m else None

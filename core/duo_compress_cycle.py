@@ -83,7 +83,6 @@ async def _duo_compress_cycle(ctx, ps):
     _no_write_nudged = ps._no_write_nudged
     _no_write_rounds = ps._no_write_rounds
     _partial_escalated = ps._partial_escalated
-    _plan_state = ps._plan_state
     _rule_compress_fails = ps._rule_compress_fails
     _rule_compress_used = ps._rule_compress_used
     _total_tool_rounds = ps._total_tool_rounds
@@ -681,7 +680,6 @@ async def _duo_compress_cycle(ctx, ps):
     ps._no_write_nudged = _no_write_nudged
     ps._no_write_rounds = _no_write_rounds
     ps._partial_escalated = _partial_escalated
-    ps._plan_state = _plan_state
     ps._rule_compress_fails = _rule_compress_fails
     ps._rule_compress_used = _rule_compress_used
     ps._total_tool_rounds = _total_tool_rounds

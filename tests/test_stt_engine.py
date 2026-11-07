@@ -170,9 +170,14 @@ check("preload has no server for parakeet",
 E.stop_warm()
 
 
-check("a non-WAV file is refused with a clear code",
-      _code(lambda: E.transcribe(Path(tempfile.mkstemp(suffix=".ogg")[1]),
-                                 settings={"stt_enabled": True, "stt_model": "tiny"})) == "STT_DECODE_FAILED")
+# HERMETIC (2026-11-07 CI audit): the WAV gate sits after the engine/model
+# probes, so a clean runner without whisper installed returned STT_NO_ENGINE.
+# Mock the probes: this check is about the file-format refusal.
+with mock.patch.object(E, "binary_path", return_value="whisper-cli"), \
+     mock.patch.object(E, "model_path", return_value=Path("model.bin")):
+    check("a non-WAV file is refused with a clear code",
+          _code(lambda: E.transcribe(Path(tempfile.mkstemp(suffix=".ogg")[1]),
+                                     settings={"stt_enabled": True, "stt_model": "tiny"})) == "STT_DECODE_FAILED")
 check("is_wav_file accepts a real WAV", E.is_wav_file(_fake_wav))
 check("is_wav_file rejects garbage",
       not E.is_wav_file(Path(tempfile.mkstemp(suffix=".bin")[1])))

@@ -180,7 +180,7 @@ def test_validate_empty_anchor_and_partition_regression():
 def test_real_duo_runner_anchor_path():
     """Point 3: REAL duo_runner anchor-building path - real PlanTracker/PlanStep
     objects go through the non-chunking branch (subtasks empty, tracker present)."""
-    from core.duo_runner import _build_plan_anchor_text
+    from core.duo.preflight import _build_plan_anchor_text
     from core.plan_tracker import PlanTracker
 
     tracker = PlanTracker([

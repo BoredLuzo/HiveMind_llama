@@ -251,8 +251,8 @@ async def vram_estimate(model: str = "", ctx: int = 4096):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@router.get("/log")
-async def vram_log(model: str = ""):
+def _vram_log_scan(model: str = ""):
+    """Sync log scan (runs in a worker thread, not on the event loop)."""
     import glob as _glob
     log_dir = Path(__file__).parent.parent / "logs"
     log_dir.mkdir(exist_ok=True)
@@ -275,6 +275,13 @@ async def vram_log(model: str = ""):
     if errors:
         return {"error": errors[-1] if len(errors) == 1 else f"{len(errors)} errors: " + errors[-1]}
     return {"error": "No errors found in logs"}
+
+
+@router.get("/log")
+async def vram_log(model: str = ""):
+    # Up to six complete logs synchronously in an async handler blocked the
+    # event loop (2026-11-07 audit) - the scan is plain IO, move it off.
+    return await asyncio.to_thread(_vram_log_scan, model)
 
 
 @router.post("/budget")

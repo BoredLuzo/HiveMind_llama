@@ -21,7 +21,7 @@ from core.duo.preflight import (  # noqa: E402
     coder_briefing_text,
 )
 from core.duo_runner import (  # noqa: E402
-    BRIEFING_OFF, BRIEFING_PLAN_ONLY, coder_briefing_text as _runner_briefing,
+    BRIEFING_OFF, BRIEFING_PLAN_ONLY,
 )
 
 passed = 0
@@ -122,8 +122,8 @@ check("8c the dead setting is gone",
 check("8d the dead UI control is gone",
       "duo-briefing-think-inp" not in html)
 check("8e the header says execution plan", "YOUR EXECUTION PLAN" in src_both)
-check("8f the helper is re-exported by the runner",
-      "coder_briefing_text," in src and callable(_runner_briefing))
+check("8f the helper lives in preflight and the coder branches call it",
+      "def coder_briefing_text(" in pf and "coder_briefing_text(" in src_both)
 check("8g the in-loop plan is distilled before the coder sees it",
       "_distilled_execution_steps(None, _inloop_plan_text)" in src_both)
 check("8h the raw in-loop plan is not appended anymore",

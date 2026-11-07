@@ -71,10 +71,3 @@ def audit_plan_payload_facts(chat_id: str, run_id: str, *, dtool_msgs: list,
         "first_outer_round": bool(is_first_outer_round),
     })
 
-
-def _dump_for_test(chat_id: str) -> str:
-    """Test-Helfer: liefert das rohe Audit-JSON als String (Debug)."""
-    try:
-        return json.dumps(load_run_audit(chat_id), ensure_ascii=False)
-    except Exception:
-        return ""

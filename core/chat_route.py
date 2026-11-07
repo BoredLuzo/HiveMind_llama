@@ -62,9 +62,10 @@ async def _chat_route_pre(ps):
     from routing.model_automap import detect_task_type
     from routing.model_automap import get_automap
     from server import (
-        S_models_cache, THIS_FILE, _pipeline_chat_stream,
+        S_models_cache, THIS_FILE,
         _vision_cfg, get_effective_prompt_with_override,
     )
+    from core.llm_stream import _pipeline_chat_stream
     _aborted = ps._aborted
     detect_vision_need = _state.detect_vision_need
     _judge_prefetch_task = ps._judge_prefetch_task

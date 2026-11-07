@@ -170,8 +170,10 @@ class TelegramApi:
         result = payload.get("result")
         return result if isinstance(result, dict) else {"result": result}
 
-    async def download_file(self, file_id: str, max_bytes: int = 20 * 1024 * 1024) -> bytes:
+    async def download_file(self, file_id: str | None, max_bytes: int = 20 * 1024 * 1024) -> bytes:
         """getFile + GET the file URL. Size-capped, never logs the token."""
+        if not file_id:
+            raise TelegramApiError("getFile", "no file_id in the update")
         meta = await self.get_file(file_id)
         # LEVEL-FIX (2026-10-22, live): _call already returns the INNER
         # result — the file object {file_id, file_size, file_path}. The old

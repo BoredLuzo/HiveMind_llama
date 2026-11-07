@@ -2,6 +2,7 @@
 """AgenticToolLoop  ToolLoop subclass with duo_runner's POST+retry logic."""
 from __future__ import annotations
 import asyncio, json, logging, os, re, time
+from pathlib import Path
 import httpx
 
 from core.tool_loop import ToolLoop, ToolLoopConfig, _build_tool_call_grammar, _grammar_compatible, _USE_GBNF_GRAMMAR
@@ -16,6 +17,31 @@ _CODER_VISION_REPLACEMENT = (
     "\n\n[VISION UPDATE]: the image is NO LONGER in your context (it fell "
     "out of the window after earlier rounds). Work from the plan and the "
     "task text - do NOT invent visual details you cannot currently see.")
+
+_DIAG_SLOT_LOG = (0.0, None)  # (checked_at, newest slot log | None)
+
+
+def _diag_newest_slot_log():
+    """Newest llama-server log, cached for 30 s.
+
+    LONG-RUN-DIAG used to glob + stat ~30 rotated logs on every coder round;
+    the newest path is stable for much longer (2026-11-07 audit).
+    """
+    global _DIAG_SLOT_LOG
+    _now = time.time()
+    if _now - _DIAG_SLOT_LOG[0] < 30.0:
+        return _DIAG_SLOT_LOG[1]
+    _path = None
+    try:
+        _logs = Path(__file__).resolve().parent.parent / "logs"
+        _slots = sorted(_logs.glob("llama_server_*.log"),
+                        key=lambda f: f.stat().st_mtime, reverse=True)
+        if _slots:
+            _path = _slots[0]
+    except OSError:
+        _path = None
+    _DIAG_SLOT_LOG = (_now, _path)
+    return _path
 
 
 def _retract_vision_note_if_lost(msgs: list) -> list:
@@ -724,17 +750,13 @@ class AgenticToolLoop(ToolLoop):
                             except (OSError, AttributeError, ValueError):
                                 pass
                         try:
-                            from pathlib import Path as _P
                             # TAIL-READ (2026-10-31, audit): read_text() pulled
                             # the WHOLE slot log (hundreds of MB after a long
-                            # run) to keep 40 KB, every coder round. Anchor the
-                            # path at the repo root instead of the CWD.
-                            _logs = _P(__file__).resolve().parent.parent / "logs"
-                            _slots = sorted(
-                                _logs.glob("llama_server_*.log"),
-                                key=lambda f: f.stat().st_mtime, reverse=True)
-                            if _slots:
-                                with _slots[0].open("rb") as _fh:
+                            # run) to keep 40 KB, every coder round. The newest
+                            # path itself is cached for 30 s (2026-11-07).
+                            _slot_log = _diag_newest_slot_log()
+                            if _slot_log is not None:
+                                with _slot_log.open("rb") as _fh:
                                     _fh.seek(0, 2)
                                     _fh.seek(max(0, _fh.tell() - 40000))
                                     _txt = _fh.read(40000).decode(

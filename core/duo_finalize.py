@@ -26,8 +26,9 @@ async def _duo_run_finalize(ctx, ps):
     ctx.duo_stop_reason is SET here (the ladder) and must only be read
     after the runner's sync.
     """
+    from core.duo.preflight import _git_checkpoints_enabled
     from core.duo_runner import (
-        _auto_commit_chunk, _auto_push_after_commit, _git_checkpoints_enabled,
+        _auto_commit_chunk, _auto_push_after_commit,
         _load_resume_block, _write_resume_block, _warm_workers_fn,
         _cleanup_governor, _cleanup_pause_state,
     )

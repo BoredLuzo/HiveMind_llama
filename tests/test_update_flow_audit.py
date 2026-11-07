@@ -237,6 +237,24 @@ def section_a():
     check("A30 shim preserves the exit code",
           "UPD_RC=%ERRORLEVEL%" in SHIM and "exit /b %UPD_RC%" in SHIM)
 
+    # A32 (2026-11-07): the packaging leak list is a hand copy of APPLY_XF.
+    # A newly protected file that is not added there ships the user's state.
+    _leak_line = next((l for l in PKG_BAT.splitlines() if "LEAK: " in l), "")
+    _lm = re.search(r"-match '([^']+)'", _leak_line)
+    _leak_re = re.compile(_lm.group(1)) if _lm else None
+    _missing = []
+    if _leak_re is None:
+        _missing.append("<leak regex not found>")
+    else:
+        for _name in UPDMOD.APPLY_XF:
+            if _name == "update.bat":  # must ship, overlaid by the updater
+                continue
+            _probe = "HiveMind_v1.0/" + _name.replace(".*", ".12345")
+            if _leak_re.search(_probe) is None:
+                _missing.append(_name)
+    check("A32 package_release leak list covers APPLY_XF",
+          not _missing, f"(missing: {_missing})")
+
 
 # ── B1. apply robocopy against a fake install ────────────────────────────
 def section_b1(tmp: Path):

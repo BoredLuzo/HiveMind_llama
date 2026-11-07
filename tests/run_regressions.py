@@ -338,13 +338,29 @@ SUITES = [
     ("agentic_audit",           "tests/test_agentic_audit_2026_11_03.py",    30),
     ("audit_fixes_p0",          "tests/test_audit_fixes_2026_11_03.py",       30),
     ("lsp_security",            "tests/test_lsp_security.py",                20),
+    # D-package behavior coverage (2026-11-07 audit)
+    ("updater_behavior",        "tests/test_updater_behavior.py",           180),
+    ("chat_vision_pre",         "tests/test_chat_vision_pre.py",             60),
+    ("llama_start_phases",      "tests/test_llama_start_phases.py",          90),
 
 ]
 
 
 # Suites that spawn real stdio/socket subprocesses and flaked under
 # parallel load run sequentially after the batch (2026-11-05).
-_EXCLUSIVE_SUITES = {"mcp_client"}
+# 2026-11-07: the real LSP servers and the HTTP-poll suite joined the lane
+# for the same reason (CI runners are slower and share two cores).
+_EXCLUSIVE_SUITES = {
+    "mcp_client", "wait_ready", "lsp_real_pyright", "lsp_real_rust",
+}
+
+# Suites whose fixtures only exist on a developer box. `--ci-subset` drops
+# them; a normal local run still executes them (2026-11-07 CI audit).
+_CI_EXCLUDED_SUITES = {
+    "langrun_guard_failclosed",  # reads ../HiveMind_dev/langrun_load.py
+    "vram_guard_lfm",            # live-only model profile
+    "model_catalog",             # live-only model profile
+}
 
 
 def main() -> int:
@@ -358,6 +374,7 @@ def main() -> int:
     if "--only" in sys.argv:
         i = sys.argv.index("--only")
         only = sys.argv[i + 1].lower() if i + 1 < len(sys.argv) else ""
+    ci_subset = "--ci-subset" in sys.argv
     jobs = 6
     if "--jobs" in sys.argv:
         i = sys.argv.index("--jobs")
@@ -381,6 +398,9 @@ def main() -> int:
     for name, rel, timeout in SUITES:
         if only and only not in name.lower():
             continue
+        if ci_subset and name in _CI_EXCLUDED_SUITES:
+            print(f"[SKIP] {name:24s} (--ci-subset: developer-only fixtures)")
+            continue
         if not (ROOT / rel).exists():
             if "--allow-missing" in sys.argv:
                 print(f"[SKIP] {name:24s} (--allow-missing: file not present)")
@@ -398,7 +418,10 @@ def main() -> int:
         pending.append((len(results), name, rel, timeout))
         results.append(None)  # type: ignore[list-item]
     for _i, _ex in enumerate(exclusive):
-        exclusive[_i] = (len(results) + _i, _ex[1], _ex[2], _ex[3])
+        # Take the next free slot as-is: adding _i double-counts the
+        # placeholders appended by earlier iterations (latent bug, exposed
+        # 2026-11-07 when the lane grew past one suite).
+        exclusive[_i] = (len(results), _ex[1], _ex[2], _ex[3])
         results.append(None)  # type: ignore[list-item]
 
     def _run_suite(pos: int, rel: str, timeout: int) -> tuple[bool, float, object]:

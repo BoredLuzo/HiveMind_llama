@@ -73,7 +73,8 @@ for _mode in ("direct_full", "tool_agent"):
 
 # ── (c) wiring ──────────────────────────────────────────────────────────────
 _dr = (ROOT / "core" / "direct_runner.py").read_text(encoding="utf-8", errors="replace")
-_cr = (ROOT / "core" / "chat_run.py").read_text(encoding="utf-8", errors="replace")
+_cr = ((ROOT / "core" / "chat_run.py").read_text(encoding="utf-8", errors="replace")
+       + (ROOT / "core" / "chat_tools_route.py").read_text(encoding="utf-8", errors="replace"))
 _du = ((ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
        + (ROOT / "core" / "duo_coder_load.py").read_text(encoding="utf-8", errors="replace"))
 check("direct_runner computes a schema budget",

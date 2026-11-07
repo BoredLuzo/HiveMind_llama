@@ -49,5 +49,6 @@ def _ctx_override_lookup(ov: dict, model_name: str,
 
     # DEFAULT-FALLBACK (restored 2026-11-07, regression from the 0361af0
     # cycle-break move): the flat/nested shapes above may miss entirely;
-    # a numeric ctx_overrides.default must still apply (alt state.py:201).
+    # a numeric ctx_overrides.default must still apply (the old core/state.py
+    # resolver did the same).
     return _int(ov.get("default"))

@@ -1,3 +1,32 @@
+## [Unreleased]
+
+Maintainability sprint on top of 1.5.5 (no intentional behavior change).
+
+Dead code and single sources of truth: `_plan_state` slot transport,
+`_dump_for_test`, 11 unused preflight re-exports, the `core/duo` package
+re-exports and the `_pipeline_chat_stream` server shim are gone; the version
+regex lives in `core/version.py` (updater + update_check import it); the
+`server.py` compatibility anchor keeps the ≤1.5.5 updater able to read the
+version for the next upgrade.
+
+Structure: `duo_runner` shed the pre-loop model/VRAM/evict block
+(`core/duo_coder_preloop.py`, -571 lines) and the task-complete verify gate
+(`core/duo_task_complete_gate.py`, -190); `chat_run` replaced 13 nonlocals
+with `RunTokenLedger`/`PrefetchCoordinator` and moved the inline tool route
+to `core/chat_tools_route.py`; the `dir()`/`locals()` probe class is gone.
+
+Efficiency: tool-call sanitizer scans only new messages (two reset points),
+the prefill meter reads a 64 KB tail instead of the whole slot log, the
+long-run diagnostics cache the newest slot-log path for 30 s, `/vram/log`
+runs off the event loop, and the critic reads at most 2000 chars per written
+file.
+
+CI and quality: Python 3.14 in both workflows, `windows-full` runs
+`--ci-subset --jobs 2` with an exclusive lane for socket/LSP suites,
+checkout-safe guards in the five environment-dependent suites, ruff target
+3.14, behavior suites for updater/vision-pre/start-phases, and a pyright
+baseline lowered from 191 to 53 (0 NEW).
+
 ## [1.5.5] - 2026-11-05
 
 Maintainability release on top of 1.5.4. The model registry audit fixes are

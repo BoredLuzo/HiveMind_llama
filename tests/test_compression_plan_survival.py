@@ -101,7 +101,7 @@ def test_anchor_carries_full_plan_body():
     # USER DECISION (2026-10-04): "600 zu wenig, der fertige Plan soll als
     # Ganzes durchgegeben werden" - the anchor carries the COMPLETE plan
     # body, no truncation. Every visual detail survives compression.
-    from core.duo_runner import _build_plan_anchor_text
+    from core.duo.preflight import _build_plan_anchor_text
     long_plan = "Full plan:\n" + PLAN_DETAILS + "\n" + ("more detail line\n" * 120)
     anchor = _build_plan_anchor_text(SUBTASK_TITLES, None, plan_content=long_plan)
     assert "PLAN:\nFull plan:" in anchor

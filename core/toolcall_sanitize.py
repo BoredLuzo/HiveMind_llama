@@ -19,8 +19,13 @@ import re
 _PATH_RE = re.compile(r'"path"\s*:\s*"([^"]+)"')
 
 
-def sanitize_invalid_tool_call_history(messages: list) -> int:
+def sanitize_invalid_tool_call_history(messages: list, start: int = 0) -> int:
     """Remove assistant tool_calls with invalid JSON arguments in place.
+
+    `start` limits the JSON scan to the newly appended suffix: callers that
+    sanitized the prefix already pass their high-water mark, so the common
+    case no longer re-parses the whole history every round (2026-11-07 audit).
+    Removal still walks the full list to drop orphaned tool results.
 
     Also removes tool messages whose tool_call_id references a removed call and
     appends a short "[REMOVED]" user notice so the coder does not forget that a
@@ -31,7 +36,7 @@ def sanitize_invalid_tool_call_history(messages: list) -> int:
         return 0
 
     bad: dict = {}  # tool_call_id -> (function name, raw args)
-    for m in messages:
+    for m in messages[max(0, int(start)):]:
         if not isinstance(m, dict) or m.get("role") != "assistant":
             continue
         for tc in m.get("tool_calls") or []:

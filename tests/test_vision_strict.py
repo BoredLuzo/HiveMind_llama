@@ -64,7 +64,8 @@ check("truthy-but-not-True is not proof ('yes')",
       vision_note_for_coder(RAW, "yes") == "")
 
 # ── (b) wiring ──────────────────────────────────────────────────────────────
-_src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+_src = ((ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+        + (ROOT / "core" / "duo_coder_preloop.py").read_text(encoding="utf-8", errors="replace"))
 check("pre-prompt build asks the helper",
       "_vn_pre = vision_note_for_coder(_img_plan, _cv_pre)" in _src)
 check("the raw branch no longer appends the note unconditionally",

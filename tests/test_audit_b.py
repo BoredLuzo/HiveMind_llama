@@ -159,7 +159,8 @@ check("the commit wait gates on a real successor",
       and "if _peers_active and _successor_pending:" in ml)
 
 # ── B5: planner-handoff ctx pin (structural) ─────────────────────────────
-dr = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+dr = ((ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8", errors="replace")
+      + (ROOT / "core" / "duo_coder_preloop.py").read_text(encoding="utf-8", errors="replace"))
 check("planner load ctx helper exists and covers the coder need",
       "def _planner_load_ctx(model: str, ctx_final: int) -> int:" in dr
       and "return max(ctx_final, int(_need)) if _need else ctx_final" in dr)

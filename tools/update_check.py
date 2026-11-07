@@ -34,6 +34,11 @@ from pathlib import Path
 REPO = "BoredLuzo/HiveMind_llama"
 RELEASES_API = f"https://api.github.com/repos/{REPO}/releases?per_page=20"
 ROOT = Path(__file__).resolve().parent.parent
+# The launcher runs this file directly (sys.path[0] is tools/), so the repo
+# root must be importable explicitly.
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from core.version import VERSION_LINE_RE as _VERSION_LINE_RE  # noqa: E402
 # 24h for an "update available"/dismissed result: the user decided, do not
 # re-nag. A cached "current" result expires much sooner (2026-11-05, live):
 # a release published right after a machine's daily check stayed invisible
@@ -45,8 +50,6 @@ USER_AGENT = "HiveMind-UpdateCheck/1.0"
 _ALLOWED_DOWNLOAD_HOSTS = ("github.com", "githubusercontent.com")
 _MAX_ZIP_BYTES = 256 * 1024 * 1024
 _VER_RE = re.compile(r"^[vV]?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
-_VERSION_LINE_RE = re.compile(
-    r"HIVEMIND_VERSION\s*=\s*[\"']([0-9][0-9A-Za-z._-]*)[\"']")
 # SPLIT (2026-11-05): the literal lives in core/version.py now.
 _VERSION_FILE = "core/version.py"
 

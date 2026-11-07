@@ -55,7 +55,7 @@ class RunContext:
     vision_agent_prompt: str = ""
 
     # ── Models cache & routing tables ──
-    models_cache: set = field(default_factory=set)
+    models_cache: list = field(default_factory=list)
     simple_direct_models: dict = field(default_factory=dict)
     complex_direct_models: dict = field(default_factory=dict)
     vram_lookup_gb: dict = field(default_factory=dict)
@@ -66,7 +66,7 @@ class RunContext:
     memory: Any = None
     registry: dict = field(default_factory=dict)
     exec_ctrl: Any = None
-    pipeline_soul: str = ""
+    pipeline_soul: dict = field(default_factory=dict)
     duo_stop_reason: str = ""
     duo_timed_out: bool = False
     chunks_total: int = 0
@@ -135,14 +135,14 @@ class RunContext:
     # Additional module-level function references
     registry_get: Callable = lambda *a: ""
     get_effective_prompt_with_override: Callable = lambda *a, **kw: ""
-    run_peer_ratings: Callable = lambda *a, **kw: None
+    run_peer_ratings: Callable | None = None
     run_soul_cycle: Callable = lambda *a, **kw: None
     get_effective_config: Callable = lambda *a, **kw: {}
     is_aborted_global: Callable = lambda *a: False
     clear_resume_block: Callable = lambda *a: None
     run_insight_extractor: Callable = lambda *a, **kw: None
     run_skill_distillation: Callable = lambda *a, **kw: None
-    resolve_resume_block: Callable = lambda *a, **kw: {}
+    resolve_resume_block: Callable | None = None
     load_resume_block: Callable = lambda *a, **kw: {}
     is_aborted_chat: Callable = lambda *a: False
     append_learning_log: Callable = lambda *a, **kw: None

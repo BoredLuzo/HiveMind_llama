@@ -24,7 +24,7 @@ from context.compression import (  # noqa: E402
     _compress_tool_context,
     _validate_compression_summary,
 )
-from core.duo_runner import (  # noqa: E402
+from core.duo.preflight import (  # noqa: E402
     _build_plan_anchor_text,
     _strip_stale_ctx_notices,
 )

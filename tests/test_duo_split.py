@@ -66,7 +66,8 @@ TREE = ast.parse(SRC)
 # from (for ast.get_source_segment).
 SPLIT_FILES = ["duo_runner", "duo_finalize", "duo_epilogue", "duo_finalgate",
                "duo_round_input", "duo_dtool_setup", "duo_inloop_planner",
-               "duo_coder_load", "duo_compress_cycle"]
+               "duo_coder_load", "duo_compress_cycle", "duo_coder_preloop",
+               "duo_task_complete_gate"]
 TREES = []
 NODE_SRC = {}
 for _mod in SPLIT_FILES:

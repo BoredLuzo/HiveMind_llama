@@ -136,7 +136,7 @@ async def _duo_session_epilogue(ctx, ps):
     except (OSError, RuntimeError, ValueError, TypeError, re.error) as _rs_err:
         logger.debug("[READ-STATS] Evaluation failed: %s", _rs_err)
 
-    # direct_runner.py:117 / pipeline_runner.py:775.
+    # Same counter increment as the direct_runner and pipeline_runner paths.
     try:
         _duo_run_count = ctx.increment_run_counter()
     except (OSError, RuntimeError, ValueError, TypeError) as _rc_err:

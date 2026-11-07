@@ -82,7 +82,8 @@ def test_degraded_slot_forces_reload():
 
 # ── Source-Guard ────────────────────────────────────────────────────────────
 def test_source_guard_planner_coder_verify():
-    src = (Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+    src = ((Path(__file__).parent.parent / "core" / "duo_runner.py").read_text(encoding="utf-8")
+           + (Path(__file__).parent.parent / "core" / "duo_coder_preloop.py").read_text(encoding="utf-8"))
     _has_liveness = "_plan_port_alive" in src
     _has_ctx_ok = "_planner_ctx_ok" in src
     _gate = "and _planner_ctx_ok" in src

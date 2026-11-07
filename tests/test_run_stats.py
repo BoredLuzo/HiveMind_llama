@@ -37,9 +37,9 @@ css = _read("static/style.css")
 # ── engine: the done event names the model ────────────────────────────────
 check("done event carries the model", '"model": _ev_model' in chat_run)
 check("model resolution prefers coder then direct then synthesizer",
-      '_run_models.get("coder")' in chat_run
-      and '_run_models.get("direct")' in chat_run
-      and '_run_models.get("synthesizer")' in chat_run)
+      '_ledger.models.get("coder")' in chat_run
+      and '_ledger.models.get("direct")' in chat_run
+      and '_ledger.models.get("synthesizer")' in chat_run)
 
 # ── engine: the direct path reports real usage, not just estimates ────────
 check("direct stream passes usage_out to llama chat_stream",

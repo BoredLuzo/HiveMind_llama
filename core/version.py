@@ -9,5 +9,11 @@ now — keep the literal line shaped so the existing regexes match unchanged:
 
     HIVEMIND_VERSION = "<major.minor.patch>"
 """
+import re
+
+# ONE regex for the Python side (updater + update_check import it). The
+# .bat/.ps1 probes parse the same shape but cannot import Python.
+VERSION_LINE_RE = re.compile(
+    r"HIVEMIND_VERSION\s*=\s*[\"']([0-9][0-9A-Za-z._-]*)[\"']", re.I)
 
 HIVEMIND_VERSION = "1.5.5"

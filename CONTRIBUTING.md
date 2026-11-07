@@ -59,6 +59,21 @@ git config core.hooksPath scripts/hooks
 skips linting with a notice instead of failing. To bypass it in an emergency:
 `git commit --no-verify` (and say so in the commit message).
 
+## Type checking
+
+`deploy\pyright_baseline.py` runs pyright over the tree and compares the result
+with the frozen `deploy\pyright_baseline.json`. Existing errors are the
+baseline; only NEW errors fail the gate. When a change fixes typing debt,
+refresh the baseline in the same commit:
+
+```bat
+python deploy\pyright_baseline.py           :: gate: 0 NEW
+python deploy\pyright_baseline.py --write   :: refresh after fixes
+```
+
+CI runs the same gate in the `types` job of `linux-core.yml`. Do not lower the
+baseline by suppressing errors; fix the annotation or leave the entry frozen.
+
 ## Before a release
 
 1. `python tests\run_regressions.py` - the whole suite, no LLM, no models.

@@ -97,8 +97,15 @@ def _llama_prefill_progress(port) -> dict | None:
         if not _lp.exists():
             return None
         _mtime = _lp.stat().st_mtime
-        with _lp.open("r", encoding="utf-8", errors="replace") as _f:
-            _lines = _f.readlines()[-60:]
+        # TAIL-READ (2026-11-07 audit): readlines() pulled the WHOLE slot log
+        # (hundreds of MB after a long run) synchronously in the event loop
+        # every heartbeat (~10 s while streaming). The newest progress line is
+        # always in the last few KB; a bounded read is enough.
+        with _lp.open("rb") as _f:
+            _f.seek(0, 2)
+            _f.seek(max(0, _f.tell() - 65536))
+            _txt = _f.read(65536).decode("utf-8", errors="replace")
+        _lines = _txt.splitlines()[-60:]
         for _ln in reversed(_lines):
             if "prompt eval time" in _ln or "        eval time" in _ln:
                 # newest completed task already passed prefill → decode phase

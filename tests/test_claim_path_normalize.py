@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from core.duo_runner import _claim_abs_path     # noqa: E402
+from core.duo_task_complete_gate import _claim_abs_path     # noqa: E402
 
 passed = failed = 0
 

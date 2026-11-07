@@ -22,7 +22,7 @@ flowchart TD
     RT --> D2["Pipeline<br>Analyst, Refiner, Critic, Synthesizer"]
     RT --> D3["Code Duo<br>Planner, Coder, Critic"]
 
-    D1 --> CORE["core/<br>duo_runner, tool_loop,<br>pipeline_runner, chat_run"]
+    D1 --> CORE["core/<br>duo_runner + core/duo split modules,<br>tool_loop, pipeline_runner, chat_run"]
     D2 --> CORE
     D3 --> CORE
 
@@ -140,7 +140,8 @@ already-pinned system is a no-op.
 
 The map is frozen for the life of a run. There is no delta generator, so files
 created or deleted mid-run do not appear in the pinned map until the next run.
-That is a known, deliberate gap (there is a TODO in `core/repomap_pin.py`).
+That is a known, deliberate gap: a delta generator would add cache-invalidating
+state for a case the next run already covers.
 
 The point of the pinning is cache stability: the stable prefix grows from
 system + tool definitions (~7.1k tokens) to system + tools + map (~8k+),
@@ -209,8 +210,7 @@ compression instead. That fallback is the common case on tight VRAM and costs
 about 100 to 140 seconds per compression, measured. The trade-off to know
 about: loading the light model can evict the coder (Vulkan serialization) and
 throw away the whole KV cache. Candidate mitigations are partial compression
-(the default first resort, below) and pinning the coder during a run; there is
-a TODO block for it in `core/duo_runner.py`.
+(the default first resort, below) and pinning the coder during a run.
 
 ### Summary generation
 
@@ -351,10 +351,9 @@ After two consecutive no-ops on one path, a `[NO-OP]` hint suggests a fresh
 `duo_noop_hint_enabled` (default on). Related: `edit_file` results report
 `+0 lines, +N chars` when a same-line-count change actually happened.
 
-Known follow-up (TODO in `core/tool_executor.py`): arg-compact strips written
-content from history, which can push later rounds into full-file rewrite churn
-on files whose content is no longer visible. Size thresholds or a read-first
-nudge are planned.
+Known trade-off: arg-compact strips written content from history, which can
+push later rounds into full-file rewrite churn on files whose content is no
+longer visible. Size thresholds or a read-first nudge would reduce it.
 
 ## 11. Read ladder
 

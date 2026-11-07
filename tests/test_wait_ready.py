@@ -110,7 +110,11 @@ async def _run(mode, timeout):
 
 
 ok, dt = asyncio.run(_run("json_ok", 10))
-check("1a json health + models probe -> ready fast", ok is True and dt < 5, f" ({dt:.1f}s)")
+# Ready on the FIRST poll: the health hit is the deterministic "fast path"
+# signal. A wall-clock bound flakes on loaded CI runners (2026-11-07 audit).
+check("1a json health + models probe -> ready fast",
+      ok is True and _Handler.hits["health"] == 1 and dt < 8,
+      f" ({dt:.1f}s, {_Handler.hits['health']} health hit(s))")
 
 ok, _ = asyncio.run(_run("mcp", 6))
 check("1b MCP server hint -> never ready", ok is False)
@@ -128,9 +132,14 @@ check("1e models probe down -> not ready", ok is False)
 
 _dead = SimpleNamespace(url=url, process=SimpleNamespace(poll=lambda: 1))
 _Handler.mode = "json_ok"
+_Handler.hits["health"] = 0
 t0 = time.time()
 ok = asyncio.run(ModelSlot.wait_ready(_dead, timeout=5))
-check("1f dead process -> immediate False", ok is False and time.time() - t0 < 1.5)
+# "Immediate" = the dead process is detected BEFORE any HTTP poll; a strict
+# 1.5s wall-clock bound flakes under CI load (2026-11-07 audit).
+check("1f dead process -> immediate False",
+      ok is False and _Handler.hits["health"] == 0 and time.time() - t0 < 5,
+      f" ({time.time() - t0:.2f}s, {_Handler.hits['health']} health hit(s))")
 
 srv.shutdown()
 print(f"\nwait_ready: {passed} passed, {failed} failed")

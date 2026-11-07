@@ -228,21 +228,20 @@ def stop_instance(killer=None) -> str:
     guard as acquire_instance_lock). `killer` is injectable for tests."""
     import json
     if killer is None:
-        import subprocess
-
-        if os.name == "nt":
-            def killer(pid: int) -> None:
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                               capture_output=True)
-        else:
-            # X3 (audit r2): taskkill is Windows-only - Linux stop died
-            # with FileNotFoundError and left the lock behind.
-            def killer(pid: int) -> None:
+        def _killer(pid: int) -> None:
+            if os.name == "nt":
+                import subprocess as _sp
+                _sp.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                        capture_output=True)
+            else:
+                # X3 (audit r2): taskkill is Windows-only - Linux stop died
+                # with FileNotFoundError and left the lock behind.
                 import signal as _sig
                 try:
                     os.kill(pid, _sig.SIGTERM)
                 except OSError:
                     pass
+        killer = _killer
     p = gw_state.lock_path()
     if not p.exists():
         return ("No gateway lock found — no instance is recorded as "
@@ -344,7 +343,7 @@ class Gateway:
 
     # -- outbound (always via send()) ------------------------------------
 
-    async def reply(self, chat_id: str | int, text: str,
+    async def reply(self, chat_id: str | int | None, text: str,
                     reply_to_message_id: int | None = None,
                     reply_markup: dict | None = None) -> None:
         await gw_send.send(self.api, self.owner_id, chat_id, text=text,
@@ -1129,6 +1128,8 @@ class Gateway:
             return
         if not ok:  # pragma: no cover - verify returns True or raises
             return
+        if p.from_id is None:
+            return
         self.owner_id = p.from_id
         self.state.set_owner(
             p.from_id,
@@ -1257,15 +1258,14 @@ async def process_update(gw: Gateway, raw: dict) -> None:
             if p.text.startswith("cmd:") or p.text == "cmdcancel":
                 # /help buttons: a tap runs the COMMAND, never a prompt
                 await gw.handle_command_callback(p)
-            elif p.text.startswith("appr:"):
+            elif p.text.startswith("appr:") and p.callback_id:
                 note = await gw.bridge.approval_callback(p.callback_id,
                                                          p.text)
-                if p.callback_id:
-                    try:
-                        await gw.api.answer_callback_query(p.callback_id,
-                                                           text=note)
-                    except TelegramApiError as exc:
-                        log.warning("[APPR] toast failed: %s", exc)
+                try:
+                    await gw.api.answer_callback_query(p.callback_id,
+                                                       text=note)
+                except TelegramApiError as exc:
+                    log.warning("[APPR] toast failed: %s", exc)
             else:
                 log.info("[DROP] owner callback %s", p.update_id)
         elif p.kind == "edited_message":

@@ -5,7 +5,7 @@
 # BLE001 blind-except, S110 try-except-pass) — the two except classes are
 # frozen per-file by tests/test_no_new_silent_excepts.py (AST counter with a
 # baseline; fails when a file gains new silent except handlers).
-target-version = "py312"
+target-version = "py314"
 line-length = 200
 
 [lint]

@@ -98,7 +98,7 @@ from infra.token_stats import (
 )
 from learning.insights import init_insights, _run_insight_extractor, _run_skill_distillation
 
-_files_read_in_run: _contextvars.ContextVar[set] = _contextvars.ContextVar("_files_read_in_run", default=None)
+_files_read_in_run: _contextvars.ContextVar[set | None] = _contextvars.ContextVar("_files_read_in_run", default=None)
 import httpx
 from pathlib import Path
 # deque removed ─ unused
@@ -106,6 +106,12 @@ from pathlib import Path
 # SINGLE SOURCE (2026-11-05): the version lives in core/version.py —
 # infra/mcp_client and infra/lsp_client import it without pulling in server.
 from core.version import HIVEMIND_VERSION
+
+# UPDATE-COMPAT (2026-11-07): update.bat shipped with <=1.5.5 reads the
+# version from THIS file (Select-String, first match) before applying a zip.
+# The literal below is text only — core/version.py stays the executable
+# source. Keep it in sync; test_split_audit_fixes (h2) pins the match.
+# HIVEMIND_VERSION = "1.5.5"
 
 # ─── Early logger definition ───
 logger = logging.getLogger("hivemind.server")
@@ -594,9 +600,9 @@ except ImportError:
     )
 
 
-# CYCLE-BREAK (2026-11-05): the implementation moved to core/llm_stream.py
-# (peer_ratings imports it server-free there); this shim keeps the
-# server-internal callers and the compression injection unchanged.
+# CYCLE-BREAK (2026-11-05): the implementation lives in core/llm_stream.py
+# (peer_ratings/chat_route/chat_run import it there directly). server.py uses
+# it only for the compression injection below.
 from core.llm_stream import _pipeline_chat_stream  # noqa: E402
 
 

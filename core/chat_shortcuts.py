@@ -40,7 +40,8 @@ class _ChatShortcutState:
 
 
 async def _chat_memory_shortcuts(ps):
-    from server import S_models_cache, THIS_FILE, _pipeline_chat_stream
+    from server import S_models_cache, THIS_FILE
+    from core.llm_stream import _pipeline_chat_stream
     emit = ps.carry["emit"]
     _done_event = ps.carry["_done_event"]
     user_input = ps.user_input

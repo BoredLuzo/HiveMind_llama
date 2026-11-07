@@ -829,7 +829,7 @@ work for you.
 | `start_llama.bat` | alias for start_hivemind.bat |
 | `stop_llama.bat` | stop server + all llama-server.exe (frees VRAM) |
 | `update_llama.bat` | update llama.cpp to the latest nightly |
-| `update.bat` | update HiveMind itself from the latest GitHub release |
+| `update.bat` | update HiveMind itself from the latest GitHub release (shim for `deploy/updater.py`) |
 | `setup_models.bat` | download / register / add custom models |
 | `start_mcp.bat` | MCP HTTP server for IDEs, port 8090 |
 | `searxng.bat` | SearXNG manager |
@@ -841,6 +841,9 @@ work for you.
 
 `update.bat` checks GitHub for the latest release, backs the current code up to
 `update_backup_<version>\` and applies the new build over this folder.
+The logic lives in `deploy/updater.py`; `update.bat` is a thin shim that
+resolves Python and hands over, and the updater swaps in the new shim as its
+last step (self-swap) so the running batch file is never overwritten mid-run.
 `settings.json`, `models.json`, `.venv\`, `llama\`, `logs\` and `sessions\` are
 never touched; new settings keys pick up their defaults on the next start, and
 `start_hivemind.bat` installs new Python packages on demand; the update itself syncs from `uv.lock`, so a release installs exactly the versions it was tested with.

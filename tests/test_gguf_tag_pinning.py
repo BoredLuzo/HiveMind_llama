@@ -69,6 +69,14 @@ def _build_index_in(tmp: Path):
     importlib.reload(_lc)
     import backend.llama_models as lm
     importlib.reload(lm)
+    # HERMETIC (2026-11-07 CI audit): the shipped manifest became a runtime
+    # cache and is not in a clean checkout. Point the lookup at a fixture
+    # manifest instead of depending on the developer's local cache.
+    _manifest = tmp / "gguf_filename_tags.json"
+    _manifest.write_text(json.dumps({name: want for name, (want, _a) in CATALOG.items()}),
+                         encoding="utf-8")
+    lm._FILENAME_TAG_MAP_FILE = _manifest
+    lm._filename_tag_map = None
     return lm._build_index(), lm
 
 
@@ -118,25 +126,10 @@ def test_hermes_midname_mtp_registers():
 def test_manifest_file_covers_catalog():
     # SHIP-HYGIENE (2026-10-07): the manifest is a runtime cache and is no
     # longer shipped in release zips - the engine rebuilds it on demand.
-    _man_path = ROOT / "model_configs" / "gguf_filename_tags.json"
-    if not _man_path.exists():
-        ok("Manifest cache not shipped (runtime file) - skipped")
-        return
-    man = json.loads(_man_path.read_text(encoding="utf-8"))
-    required = [
-        "qwen3.5-4b-q4_k_m.gguf",
-        "qwen3.5-2b-q4_k_m.gguf",
-        "gemma-4-e4b-it-qat-ud-q4_k_xl.gguf",
-        "gemma-4-e2b-it-qat-ud-q4_k_xl.gguf",
-        "qwen3.6-35b-a3b-ud-q4_k_xl.gguf",
-        "hermes3.6-35b-a3b-uncensored-genesis-v13-mtp-apex-compact.gguf",
-        "lfm2.5-2.6b-q4_k_m.gguf",
-    ]
-    missing = [k for k in required if k not in man]
-    if not missing:
-        ok("Shipped manifest deckt alle 7 Katalog-Dateien ab")
-    else:
-        fail("manifest_file", f"fehlt: {missing}")
+    # A clean checkout therefore has no file to check; a partial local cache
+    # must not turn the suite red (2026-11-07 CI audit). The mechanism itself
+    # is covered by test_manifest_primary_tags with a fixture manifest.
+    ok("Manifest is a runtime cache - no shipped-file check")
 
 
 def test_settings_defaults_resolve():
@@ -169,8 +162,16 @@ def test_write_models_json_pins():
         (tmp / fname).write_bytes(b"x" * 64)
     # ISOLATED (2026-10-19): writing the app's models.json from a test polluted the
     # repo, and a deploy sync then overwrote the LIVE model index with temp paths.
+    # ISOLATED (2026-11-07 CI audit): the known-filename manifest is written via
+    # fetch_models.ROOT too - point it at the temp dir during the call.
     out = tmp / "models.json"
-    fm.write_models_json(tmp, out=out)
+    (tmp / "model_configs").mkdir(exist_ok=True)
+    _orig_root = fm.ROOT
+    fm.ROOT = tmp
+    try:
+        fm.write_models_json(tmp, out=out)
+    finally:
+        fm.ROOT = _orig_root
     m = json.loads(out.read_text(encoding="utf-8"))
     bad = []
     if not m.get("qwen3.5:4b-mtp", "").endswith("Qwen3.5-4B-Q4_K_M.gguf"):

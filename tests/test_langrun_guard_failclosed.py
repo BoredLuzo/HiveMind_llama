@@ -41,6 +41,12 @@ _DEV = _pick("HIVEMIND_DEV_DIR", _ROOT.parent.parent / "HiveMind_dev",
 
 SCRIPT = _DEV / "langrun_load.py"
 
+if not SCRIPT.exists():
+    # Developer-tree script, not part of the repo (2026-11-07 CI audit).
+    print("  SKIP langrun_load.py (script lives outside the repo)")
+    print("\nSUMMARY langrun_guard_failclosed: 0 passed, 0 failed (skipped)")
+    sys.exit(0)
+
 passed = failed = 0
 
 

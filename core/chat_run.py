@@ -7,6 +7,7 @@ and delegates to run_stream_orchestrated (core/stream.py).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from utils.bg_tasks import spawn  # noqa: E402
 import json
 import logging
@@ -21,6 +22,7 @@ from core.chat_history_seed import _ChatHistorySeedState, _chat_history_seed
 from core.chat_route import _ChatRoutePreState, _chat_route_pre
 from core.chat_route_decision import _ChatRouteDecisionState, _chat_route_decision
 from core.chat_shortcuts import _ChatShortcutState, _chat_memory_shortcuts
+from core.chat_tools_route import _ChatToolsRouteState, _chat_tools_route
 from core.chat_vision_pre import _ChatVisionPreState, _chat_vision_pre
 from core.state import (
     settings,
@@ -29,6 +31,26 @@ from core.state import (
 from core.duo_config import DuoConfig
 from core.run_context import RunContext
 from core.stream import run_stream_orchestrated
+
+@dataclasses.dataclass
+class RunTokenLedger:
+    """Per-run token counters (was six nonlocal names in run_stream)."""
+    token_estimate: int = 0
+    real_by_phase: dict = dataclasses.field(default_factory=dict)
+    prompt_by_phase: dict = dataclasses.field(default_factory=dict)
+    cached_by_phase: dict = dataclasses.field(default_factory=dict)
+    models: dict = dataclasses.field(default_factory=dict)
+    requests: int = 0
+
+
+@dataclasses.dataclass
+class PrefetchCoordinator:
+    """VRAM cache + in-flight counters of the prefetch path."""
+    vram_cache: set = dataclasses.field(default_factory=set)
+    inflight: int = 0
+    inflight_max: int = 0
+
+
 from core.model_sampling import _model_profile
 from core.duo_helpers import (
     DEFAULT_VRAM_BUDGET_GB,
@@ -91,7 +113,7 @@ async def run_stream(
     active_preset,
     constraint_mode: bool = True,
     force_complexity: str | None = None,
-    skip_agents: set = frozenset(),
+    skip_agents: set | frozenset = frozenset(),
     judge_bias: int = 50,
     chat_id: str | None = None,
     duo_config: DuoConfig | None = None,
@@ -138,13 +160,13 @@ async def run_stream(
         _flush_prefetch_settings,
         _get_avg_elapsed,
         _maybe_trigger_soul_evolution,
-        _pipeline_chat_stream,
         _registry,
         _update_prefetch_lead,
         _vision_cfg,
         apply_learned_configs_for_run,
         get_effective_prompt_with_override,
     )
+    from core.llm_stream import _pipeline_chat_stream
     from context.chat import load_chat_images, save_chat_images
 
     if duo_config is None:
@@ -240,30 +262,22 @@ async def run_stream(
             "pipeline_critic": "pipeline_critic",
         }.get(str(phase or ""), "coder_loop")
 
-    # Per-run token estimate accumulator - incremented by emit() on content events
-    _run_token_estimate: int = 0
-    _run_real_tokens_by_phase: dict = {}
-    _run_prompt_by_phase: dict = {}
-    _run_cached_by_phase: dict = {}
-    _run_models: dict = {}
-    _run_requests: int = 0
+    _ledger = RunTokenLedger()
 
     async def emit(data: dict) -> str:
-        nonlocal _run_token_estimate, _run_real_tokens_by_phase, _run_models, _run_requests
-        nonlocal _run_prompt_by_phase, _run_cached_by_phase
         # Track generated output tokens from content events (all token types)
         _tok_types = {"token", "thinking_token", "planner_token", "planner_thinking_token", "planner_plan_token"}
         if data.get("type") in _tok_types and data.get("content"):
             n = _estimate_tokens_from_content(str(data["content"]))
-            _run_token_estimate += n
+            _ledger.token_estimate += n
             _phase_timer.add_tokens(n)
         # A-P2-7: echte completion_tokens vom llama.cpp-Server akkumulieren (pro Phase).
         if data.get("type") == "usage_meta" and data.get("completion_tokens"):
             _ph = str(data.get("phase") or "coder")
-            _run_requests += 1
-            _run_real_tokens_by_phase[_ph] = _run_real_tokens_by_phase.get(_ph, 0) + int(data["completion_tokens"])
-            _run_prompt_by_phase[_ph] = _run_prompt_by_phase.get(_ph, 0) + int(data.get("prompt_tokens") or 0)
-            _run_cached_by_phase[_ph] = _run_cached_by_phase.get(_ph, 0) + int(data.get("cached_tokens") or 0)
+            _ledger.requests += 1
+            _ledger.real_by_phase[_ph] = _ledger.real_by_phase.get(_ph, 0) + int(data["completion_tokens"])
+            _ledger.prompt_by_phase[_ph] = _ledger.prompt_by_phase.get(_ph, 0) + int(data.get("prompt_tokens") or 0)
+            _ledger.cached_by_phase[_ph] = _ledger.cached_by_phase.get(_ph, 0) + int(data.get("cached_tokens") or 0)
             # D2-DIAG (2026-08-21): detect cache miss — large prompt, small cached,
             # correlatable with [CTX-COMPRESS].
             try:
@@ -280,7 +294,7 @@ async def run_stream(
             _pt_key = str(data.get("timer_key") or _pt_key_for_phase(_ph))
             _phase_timer.add_real(_pt_key, int(data["completion_tokens"]), float(data.get("gen_ms") or 0.0))
         if data.get("type") == "run_meta" and isinstance(data.get("models"), dict):
-            _run_models.update(data["models"])
+            _ledger.models.update(data["models"])
             return ""
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -342,19 +356,17 @@ async def run_stream(
         return _bucket_stop_reason(stop_reason)
 
     def _done_event(elapsed: float, stop_reason: str = "completed", **extra) -> dict:
-        nonlocal _run_token_estimate, _run_real_tokens_by_phase
-        nonlocal _run_prompt_by_phase, _run_cached_by_phase
-        _real_total = sum(int(v) for v in _run_real_tokens_by_phase.values() if isinstance(v, (int, float)))
-        _prompt_total = sum(int(v) for v in _run_prompt_by_phase.values() if isinstance(v, (int, float)))
-        _cached_total = sum(int(v) for v in _run_cached_by_phase.values() if isinstance(v, (int, float)))
-        _tokens_to_record = _real_total if _real_total > 0 else _run_token_estimate
+        _real_total = sum(int(v) for v in _ledger.real_by_phase.values() if isinstance(v, (int, float)))
+        _prompt_total = sum(int(v) for v in _ledger.prompt_by_phase.values() if isinstance(v, (int, float)))
+        _cached_total = sum(int(v) for v in _ledger.cached_by_phase.values() if isinstance(v, (int, float)))
+        _tokens_to_record = _real_total if _real_total > 0 else _ledger.token_estimate
         if _real_total > 0:
             logger.info("[A-P2-7] real eval_counts=%d prompt=%d cached=%d (by phase=%s) heuristic=%d -- recording %d",
                         _real_total, _prompt_total, _cached_total,
-                        _run_real_tokens_by_phase, _run_token_estimate, _tokens_to_record)
+                        _ledger.real_by_phase, _ledger.token_estimate, _tokens_to_record)
         _record_ok = stop_reason in ("completed", "loop_detected", "timeout", "hard_stop", "graceful_stop", "aborted")
         if _record_ok and _tokens_to_record > 0:
-            _phases = dict(_run_real_tokens_by_phase)
+            _phases = dict(_ledger.real_by_phase)
             _phases_ms: dict = {}
             try:
                 _snap = _phase_timer.snapshot()
@@ -384,7 +396,7 @@ async def run_stream(
                 pass
             # a chat/direct run knows its model only through the registry
             _direct_model_for_stats: dict = {}
-            if not _run_models:
+            if not _ledger.models:
                 try:
                     from core.state import registry_get as _rg_stats
                     _rm_stats = _rg_stats("direct") or _rg_stats("analyst") or ""
@@ -408,13 +420,13 @@ async def run_stream(
                     # DIRECT/CHAT (2026-10-20): only the duo runner emits
                     # run_meta, so a plain chat run recorded no model at all and
                     # never showed up in the per-model stats.
-                    "models": _run_models or _direct_model_for_stats,
+                    "models": _ledger.models or _direct_model_for_stats,
                     # TOKEN-TRACKER 1.1.0: input/cache dimension
                     "prompt_tokens": _prompt_total,
                     "cached_tokens": _cached_total,
-                    "requests": _run_requests,
-                    "phases_prompt": dict(_run_prompt_by_phase),
-                    "phases_cached": dict(_run_cached_by_phase),
+                    "requests": _ledger.requests,
+                    "phases_prompt": dict(_ledger.prompt_by_phase),
+                    "phases_cached": dict(_ledger.cached_by_phase),
                     # METRICS-EXPAND (2026-10-19)
                     "phases_ms": _phases_ms,
                     # MODE-TRACKING (2026-10-20): what actually ran, not just what
@@ -444,12 +456,12 @@ async def run_stream(
         # report through run_meta; a plain chat run only knows the registry
         # slot (same fallback the run record uses).
         _ev_model = ""
-        if _run_models:
+        if _ledger.models:
             _ev_model = str(
-                _run_models.get("coder")
-                or _run_models.get("direct")
-                or _run_models.get("synthesizer")
-                or next(iter(_run_models.values()), "")
+                _ledger.models.get("coder")
+                or _ledger.models.get("direct")
+                or _ledger.models.get("synthesizer")
+                or next(iter(_ledger.models.values()), "")
             )
         else:
             try:
@@ -465,7 +477,7 @@ async def run_stream(
             "tokens_generated": _tokens_to_record,
             "prompt_tokens_total": _prompt_total,
             "cached_tokens_total": _cached_total,
-            "requests_total": _run_requests,
+            "requests_total": _ledger.requests,
             "model": _ev_model,
         }
         if extra:
@@ -565,7 +577,7 @@ async def run_stream(
     _exec_ctrl                = None  # duo_runner / pipeline_runner
     _resolve_resume_block     = None  # Runner bei Resume
     _do_prefetch              = None  # _schedule_prefetch()
-    _prefetch_judge_once      = None
+    _prefetch_judge_once: object = None  # bound as an inner coroutine when used
     run_peer_ratings          = None
 
     use_learned   = settings.get("learning_preset_mode", False)
@@ -586,7 +598,8 @@ async def run_stream(
         pass
     logger.warning("[RUN-TRACE] abort/stepskip registered run_id=%s", run_id)
     _agent_elapsed: dict = {}   # agent_key - elapsed seconds, fÃƒÂ¼r Log + Prefetch-Kalibrierung
-    _vram_cache:    set  = await _get_loaded_models_set() if smart_preload else set()
+    _pf = PrefetchCoordinator(
+        vram_cache=await _get_loaded_models_set() if smart_preload else set())
 
     # Phase H: run-scoped perf metrics + prefetch tuning state.
     _ctx_pressure_peak = 0.0
@@ -595,8 +608,6 @@ async def run_stream(
     _ctx_evictions = 0
     _ctx_compressions = 0
     _tool_round_durations: list[float] = []
-    _prefetch_inflight = 0
-    _prefetch_inflight_max = 0
     _prefetch_run_active = True
     _prefetch_state = {
         "prefetch_agent_avgs": dict(settings.get("prefetch_agent_avgs", {}) or {}),
@@ -637,7 +648,7 @@ async def run_stream(
             "metrics_agent_p50_s": round(_percentile_float(_agent_vals, 0.5), 3),
             "metrics_agent_p95_s": round(_percentile_float(_agent_vals, 0.95), 3),
             "metrics_prefetch_lead_s": float(_prefetch_state.get("prefetch_lead_seconds", settings.get("prefetch_lead_seconds", 8.0))),
-            "metrics_prefetch_inflight_max": int(_prefetch_inflight_max),
+            "metrics_prefetch_inflight_max": int(_pf.inflight_max),
             "metrics_runtime_evictions": _runtime_delta(_rt_now, "evictions_total"),
             "metrics_runtime_evictions_manual": _runtime_delta(_rt_now, "evictions_manual"),
             "metrics_runtime_evictions_lru": _runtime_delta(_rt_now, "evictions_lru"),
@@ -655,10 +666,9 @@ async def run_stream(
         }
 
     async def _maybe_preload(model: str) -> str | None:
-        nonlocal _vram_cache
         if not smart_preload:
             return None
-        did_load, _vram_cache = await smart_preload_if_needed(model, _vram_cache)
+        did_load, _pf.vram_cache = await smart_preload_if_needed(model, _pf.vram_cache)
         if did_load:
             return await emit({"type": "status", "content": f">> Smart Preload: {model.split(':')[0]} -> VRAM"})
         return None
@@ -679,13 +689,13 @@ async def run_stream(
         # Phase H: load-aware lead backoff under VRAM contention.
         try:
             _budget = max(2.0, _vram_budget)
-            _used = sum(float(_VRAM_LOOKUP_GB.get(m, 4.0)) for m in _vram_cache)
+            _used = sum(float(_VRAM_LOOKUP_GB.get(m, 4.0)) for m in _pf.vram_cache)
             _pressure = _used / max(0.1, _budget)
             if _pressure >= 0.85:
                 lead = max(2.0, lead * 0.7)
             elif _pressure >= 0.75:
                 lead = max(2.5, lead * 0.82)
-            if _prefetch_inflight >= 2:
+            if _pf.inflight >= 2:
                 lead = max(2.0, lead * 0.85)
         except Exception:
             pass
@@ -693,9 +703,8 @@ async def run_stream(
         delay = max(0.5, (start + avg - lead) - now) if avg > 0 else 0.5
 
         async def _do_prefetch():
-            nonlocal _vram_cache, _prefetch_inflight, _prefetch_inflight_max
-            _prefetch_inflight += 1
-            _prefetch_inflight_max = max(_prefetch_inflight_max, _prefetch_inflight)
+            _pf.inflight += 1
+            _pf.inflight_max = max(_pf.inflight_max, _pf.inflight)
             try:
                 await asyncio.sleep(delay)
                 if not _prefetch_run_active or _abort_event(run_id) is None:
@@ -703,7 +712,7 @@ async def run_stream(
                 # Refresh the cache before prefetching.
                 try:
                     _fresh = await _get_loaded_models_set(max_age=0)
-                    _vram_cache = _fresh
+                    _pf.vram_cache = _fresh
                 except Exception:
                     pass
                 # Pipeline agents bypass judge protection via a direct httpx call.
@@ -712,15 +721,15 @@ async def run_stream(
                     next_model == _judge_mdl or next_model.split(":")[0] == _judge_mdl.split(":")[0]
                 ))
                 if _is_judge_model:
-                    _already_warm = next_model in _vram_cache or any(
-                        next_model.split(":")[0] == m.split(":")[0] for m in _vram_cache
+                    _already_warm = next_model in _pf.vram_cache or any(
+                        next_model.split(":")[0] == m.split(":")[0] for m in _pf.vram_cache
                     )
                     if not _already_warm:
                         try:
                             _pf_ctx = _get_num_ctx(next_model)
                             from backend import api_prefetch_next as _api_pf_next
                             await _api_pf_next(next_model, num_ctx=_pf_ctx)
-                            _vram_cache |= {next_model}
+                            _pf.vram_cache |= {next_model}
                         except Exception:
                             pass
                 else:
@@ -731,7 +740,7 @@ async def run_stream(
             except Exception as _pf_err:
                 logger.warning("Prefetch task failed (%s via %s): %s", next_model, current_agent, str(_pf_err)[:120])
             finally:
-                _prefetch_inflight = max(0, _prefetch_inflight - 1)
+                _pf.inflight = max(0, _pf.inflight - 1)
 
         spawn(_do_prefetch())
 
@@ -752,7 +761,7 @@ async def run_stream(
         and 10 < int(judge_bias) < 90
     )
     if _can_need_judge and bool(settings.get("judge_prefetch_before_complexity", False)):
-        async def _prefetch_judge_once():
+        async def _run_prefetch_judge_once():
             try:
                 _judge_model = _registry.get("judge", "")
                 if not _judge_model:
@@ -772,7 +781,8 @@ async def run_stream(
                 await _api_pf_next(_judge_model, num_ctx=_get_num_ctx(_judge_model, "judge"))
             except Exception:
                 pass
-        _judge_prefetch_task = asyncio.create_task(_prefetch_judge_once())
+        _prefetch_judge_once = _run_prefetch_judge_once
+        _judge_prefetch_task = asyncio.create_task(_run_prefetch_judge_once())
 
     # IMAGE-CONTEXT (2026-11-04): the transcript stores text, so a text-only
     # follow-up in a direct chat used to lose the photo it referred to. Keep
@@ -831,7 +841,7 @@ async def run_stream(
         user_input=user_input, mode=mode, _ws_str=_ws_str,
         _vram_budget=_vram_budget, _run_settings=_run_settings,
         effective_images=effective_images,
-        image_description=image_description,
+        image_description=image_description or "",
         carry={"emit": emit},
     )
     async for _ev in _chat_vision_pre(_vp_ps):
@@ -913,112 +923,21 @@ async def run_stream(
     complexity = _rd_ps.complexity
 
     if _route_as_tool:
-        _available = list(S_models_cache) if S_models_cache else []
-        # small: simple file reads, git - qwen2.5:3b suffices
-        if _judge_toolsize == "large":
-            _tool_priority = ["qwen3.5:4b", "qwen3.5:9b-ud", "qwen3.5:2b", "granite-4.1:3b"]
-        else:
-            _tool_priority = ["qwen3.5:2b", "granite-4.1:3b", "qwen3.5:4b", "qwen3.5:9b-ud"]
-        _tool_model = next((m for m in _tool_priority if m in _available),
-                           registry_get("direct"))
-        _tool_ctx_override = max(_get_num_ctx(_tool_model) or 4096, 8192)
-        _tool_opts: dict = {"temperature": 0.1, "num_predict": 1200, "num_ctx": _tool_ctx_override}
-        _tool_sys = (
-            "Use the available tools to complete file and code operations. Be direct and concise.\n\n"
-            "Available tools:\n"
-            "  read_file(path, start_line?, end_line?) - read file (optional: line range only)\n"
-            "  get_signatures(path, max_items?) - structural overview with line numbers\n"
-            "  find_files(pattern, path?)  - glob search: '**/*.py', 'src/*.ts'\n"
-            "  list_dir(path)              - list directory contents\n"
-            "  search_code(pattern, path?) - regex search across code files\n"
-            "  edit_file(path, old_text, new_text) - surgical edit (preferred for modifications)\n"
-            "  edit_file(path, edits)      - create new files OR modify existing ones\n"
-            "  run_bash(cmd)               - shell command: tests, pip install, npm run, grep...\n"
-            "  run_python(code)            - execute python snippet directly\n"
-            "  git_status(cmd)             - git: status|diff|log|show\n"
-            "  git_commit(message)         - commit all changes with message\n\n"
-            "Workflow:\n"
-            "  1. Explore first (list_dir / find_files / read_file)\n"
-            "  2. Modify existing files with edit_file\n"
-            "  3. After implementing, run tests (run_bash pytest / npm test)\n"
-            "  4. On failure: re-read the region and edit_file again\n"
-            "  Do not ask for confirmation - just act."
+        # C7 (2026-11-07 maintainability sprint): the inline tool route lives
+        # in core/chat_tools_route.py (verbatim motion; return-terminated).
+        _tool_ps = _ChatToolsRouteState(
+            judge_toolsize=_judge_toolsize,
+            models_cache=list(S_models_cache) if S_models_cache else [],
+            user_input=user_input, effective_images=effective_images,
+            ws_str=_ws_str, run_id=run_id, t_total=t_total,
+            websearch_available=_WEBSEARCH_AVAILABLE, aborted=_aborted,
+            emit=emit, done_event=_done_event,
+            collect_done_metrics=_collect_done_metrics,
         )
-        _tool_msgs = _make_messages(_state.pipeline, _tool_sys, user_input, effective_images, False, False)
-        yield await emit({"type": "complexity", "content": "simple", "source": "tool"})
-        yield await emit({"type": "agent", "content": "Tool Agent", "model": _tool_model})
-        _tool_t = time.time()
-        _tool_loop_msgs = list(_tool_msgs)
-        _tool_out_parts: list[str] = []
-        _tool_max_rounds = 6
-        _tool_calls: list = []
-        _tool_round = 0
-        _tool_stop_reason = "completed"
-        _tool_ws = bool(settings.get("duo_websearch_enabled", False)) and _WEBSEARCH_AVAILABLE
-        # SCHEMA-FIT (2026-10-17): this path shipped the full 25-tool schema
-        # (~15.6k chars) whatever the tool-agent ctx was. Fit it to the window.
-        _tool_schema_budget = 0
-        try:
-            from core.budgets import schema_budget_for as _sbf
-            _tool_schema_budget = _sbf(_tool_ctx_override, _tool_model)
-        except (ImportError, AttributeError, TypeError, ValueError):
-            _tool_schema_budget = 0
-        _active_tools = _get_inline_tools(include_websearch=_tool_ws, mode="tool_agent",
-                                          budget_chars=_tool_schema_budget or None)
-        # Timeout strategy:
-        _tool_read_timeout_s = float(settings.get("duo_llm_slow_timeout_s", 300))
-        _tool_http_timeout = _make_httpx_timeout(read_s=_tool_read_timeout_s)
-        try:
-            from backend.llama_server_manager import manager as _lsm
-            _tool_port = await _lsm.ensure_loaded(_tool_model, num_ctx=_tool_opts.get("num_ctx", 4096))
-            async with httpx.AsyncClient(timeout=_tool_http_timeout) as _tc:
-                from core.tool_loop import ToolLoop, ToolLoopConfig
-                _loop = ToolLoop(
-                    config=ToolLoopConfig(
-                        stream=False, max_rounds=_tool_max_rounds, max_post_attempts=1,
-                        model=_tool_model, temperature=_tool_opts.get("temperature", 0.2),
-                        max_tokens=_tool_opts.get("num_predict", 1200),
-                        num_ctx=_tool_opts.get("num_ctx", 4096),
-                        tools=_active_tools, tool_mode="tool_agent",
-                        include_websearch=_tool_ws,
-                        read_timeout_s=_tool_read_timeout_s,
-                    ),
-                    http_client=_tc, port=_tool_port,
-                    workspace=_ws_str,
-                    abort_check=_aborted,
-                )
-                async for _ev in _loop.run(_tool_loop_msgs):
-                    if _ev["type"] == "token":
-                        _tool_out_parts.append(_ev["content"])
-                    yield await emit(_ev)
-                _tool_stop_reason = _loop.state.stop_reason
-                _tool_calls = bool(_loop.state.tool_calls_made)
-        except httpx.TimeoutException as _te:
-            _elapsed_so_far = round(time.time() - _tool_t, 1)
-            _err = f"[Tool timeout after {_elapsed_so_far}s - model did not respond in time. try a smaller model or simplify the request.]"
-            yield await emit({"type": "token", "content": _err})
-            _tool_out_parts.append(_err)
-            _tool_stop_reason = "timeout"
-        except Exception as _te:
-            _err = f"[Tool error: {type(_te).__name__}: {str(_te)[:200]}]"
-            yield await emit({"type": "token", "content": _err})
-            _tool_out_parts.append(_err)
-            _tool_stop_reason = "error"
-        else:
-            if _tool_stop_reason == "max_tool_rounds" and _tool_calls and not _aborted():
-                _limit_msg = f"\n[Max. {_tool_max_rounds} tool rounds reached]"
-                yield await emit({"type": "token", "content": _limit_msg})
-                _tool_out_parts.append(_limit_msg)
-            elif _aborted():
-                _tool_stop_reason = "aborted"
-        _tool_out = "".join(_tool_out_parts)
-        yield await emit({"type": "agent_done", "elapsed": round(time.time() - _tool_t, 1)})
-        _state.memory.add_to_session("user", user_input)
-        _state.memory.add_to_session("assistant", _tool_out)
-        yield await emit(_done_event(round(time.time() - t_total, 1), _tool_stop_reason, **_collect_done_metrics()))
-        _unregister_abort(run_id)
-        _unregister_step_skip(run_id)
-        return
+        async for _ev in _chat_tools_route(_tool_ps):
+            yield _ev
+        if _tool_ps.stop:
+            return
 
     # --------------------------------------------------------------------------
 
@@ -1056,7 +975,7 @@ async def run_stream(
             memory=_state.memory,
             registry=_registry,
             vram_budget=_vram_budget,
-            vram_cache=_vram_cache,
+            vram_cache=_pf.vram_cache,
             websearch_available=_WEBSEARCH_AVAILABLE,
             pipeline_mem_ctx=_pipeline_mem_ctx,
             pipeline_sess_msgs=_pipeline_sess_msgs,

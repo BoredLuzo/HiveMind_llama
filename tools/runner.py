@@ -55,20 +55,20 @@ from tools.handlers import (
 from tools.browser import browser_tool as _browser_tool
 
 # Phase A.3: Read-Guard ContextVar (defined as module level in server.py)
-_files_read_in_run: _contextvars.ContextVar[set] = _contextvars.ContextVar(
+_files_read_in_run: _contextvars.ContextVar[set | None] = _contextvars.ContextVar(
     "_files_read_in_run", default=None
 )
 # READ-SIGNATURES (2026-09-17): path -> (mtime_ns, size) captured at read_file
 # time; edit_file's fuzzy fallback requires an unchanged signature so edits on
 # stale/externally-modified files fail clearly instead of fuzzy-matching.
 _read_signatures: dict = {}
-_files_in_context: _contextvars.ContextVar[set] = _contextvars.ContextVar(
+_files_in_context: _contextvars.ContextVar[set | None] = _contextvars.ContextVar(
     "_files_in_context", default=None
 )
-_files_seen_in_run: _contextvars.ContextVar[set] = _contextvars.ContextVar(
+_files_seen_in_run: _contextvars.ContextVar[set | None] = _contextvars.ContextVar(
     "_files_seen_in_run", default=None
 )
-_files_written_in_run: _contextvars.ContextVar[set] = _contextvars.ContextVar(
+_files_written_in_run: _contextvars.ContextVar[set | None] = _contextvars.ContextVar(
     "_files_written_in_run", default=None
 )
 # RUN-WIDE fallback (2026-11-04): tool calls can run in child tasks that each
@@ -148,7 +148,7 @@ _ask_user_throttled_count: _contextvars.ContextVar[int] = _contextvars.ContextVa
 )
 
 # A-P1-9: web-search call budget (governor analogous to ask_user). Mutable list [n]
-_web_search_count: _contextvars.ContextVar[list] = _contextvars.ContextVar(
+_web_search_count: _contextvars.ContextVar[list | None] = _contextvars.ContextVar(
     "web_search_count", default=None
 )
 _WEBSEARCH_BUDGET_DEFAULT = 20
@@ -178,7 +178,7 @@ def _consume_web_search_budget() -> bool:
 # FETCH-BUDGET (2026-10-14, audit phase 7): web_fetch previously drained the
 # SAME pool as web_search — a pure doc-fetching run silently killed search.
 # Separate counter, own settings key (webfetch_max_calls, same default).
-_web_fetch_count: _contextvars.ContextVar[list] = _contextvars.ContextVar(
+_web_fetch_count: _contextvars.ContextVar[list | None] = _contextvars.ContextVar(
     "web_fetch_count", default=None
 )
 
@@ -199,7 +199,7 @@ def _consume_web_fetch_budget() -> bool:
 
 
 # A-P1-6: Dependency-Install-Call-Budget (Governor analog web_search). Install-
-_install_count: _contextvars.ContextVar[list] = _contextvars.ContextVar(
+_install_count: _contextvars.ContextVar[list | None] = _contextvars.ContextVar(
     "install_count", default=None
 )
 _INSTALL_BUDGET_DEFAULT = 3
@@ -225,7 +225,7 @@ def _consume_install_budget() -> bool:
 # hallucination or an IDE client) ran unbounded. Same governor pattern; the
 # fallback limit lives here because there is no settings key yet and this
 # pass must not change settings.py.
-_mcp_call_count: _contextvars.ContextVar[list] = _contextvars.ContextVar(
+_mcp_call_count: _contextvars.ContextVar[list | None] = _contextvars.ContextVar(
     "mcp_call_count", default=None
 )
 _MCP_CALL_BUDGET_DEFAULT = 40

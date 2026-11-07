@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "core" / "duo_runner.py"
+SRC = ROOT / "core" / "duo_task_complete_gate.py"
 
 passed = failed = 0
 

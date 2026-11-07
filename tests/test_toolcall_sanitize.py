@@ -3,10 +3,12 @@
 
 Run: python tests/test_toolcall_sanitize.py
 """
+import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from core.toolcall_sanitize import sanitize_invalid_tool_call_history as _san
@@ -69,6 +71,23 @@ check("S7: object arguments fine", _san(msgs_obj) == 0)
 
 # empty input
 check("S8: empty input", _san([]) == 0 and _san(None) == 0)
+
+# suffix scan (2026-11-07): a high-water mark skips the already-clean prefix
+msgs_suffix = [
+    {"role": "assistant", "content": "", "tool_calls": [tc("old", bad)]},
+    {"role": "user", "content": "x"},
+    {"role": "assistant", "content": "", "tool_calls": [tc("new", '{"path":"ok.js"}')]},
+]
+check("S10: start= skips the sanitized prefix",
+      _san(msgs_suffix, start=2) == 0 and len(msgs_suffix) == 3)
+
+# pin the two reset points in the runner
+_src = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
+check("S11: runner passes its high-water mark",
+      "start=_sanitize_upto" in _src)
+check("S12: compression resets the high-water mark",
+      re.search(r"_dtool_msgs = _cc_ps\._dtool_msgs\s*\n\s*_sanitize_upto = 0",
+                _src) is not None)
 
 print()
 print("=" * 50)

@@ -13,7 +13,7 @@ class PolicyViolation(RuntimeError):
 
 
 async def send(api, owner_chat_id: str | int | None,
-               chat_id: str | int, *, text: str | None = None,
+               chat_id: str | int | None, *, text: str | None = None,
                new_text: str | None = None, message_id: int | None = None,
                document_bytes: bytes | None = None,
                filename: str | None = None,

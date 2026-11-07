@@ -28,6 +28,11 @@ from .llama_config import (
     NO_MMAP_MIN_BUILD,
     MOE_CPU_EXPERTS, _MOE_EXPERT_COUNTS,
     MLOCK_MODEL, CACHE_REUSE,
+    # Runtime-synced knobs (server.py assigns the live settings values to
+    # this module at boot; importing the defaults declares the attributes
+    # for type checkers instead of creating them dynamically).
+    MOE_CACHE_MIB, LLAMA_FIT, LLAMA_FIT_TARGET_MIB,
+    CACHE_RAM_MIB, CTX_CHECKPOINTS, VRAM_PREFLIGHT_GATE, LLAMA_UBATCH,
     MTP_SPEC_TYPE, MTP_DRAFT_N_MAX, MTP_DRAFT_N_MIN,
     _MTP_MODELS,
     _GPU_LAYERS_TABLE,

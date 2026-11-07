@@ -1,6 +1,7 @@
 from __future__ import annotations
 from collections.abc import AsyncIterator
 import asyncio
+from typing import TYPE_CHECKING
 from utils.bg_tasks import spawn  # noqa: E402
 import traceback, hashlib, json, logging, os, re, sys, time, uuid
 from datetime import datetime
@@ -100,32 +101,6 @@ from hive_functions.test_runner import (
     run_tests as _run_test_suite, TestResult as _TestResult, NO_TESTS_RE,
 )
 
-def _claim_abs_path(fp: str, workspace: str) -> str:
-    """Absolute path for a task_complete file claim.
-
-    Windows models sometimes emit "/C:/dir/file" - os.path.isabs accepts it,
-    os.path.exists does not. Strip the extra leading slash on Windows.
-    """
-    _p = str(fp or "")
-    if os.name == "nt" and re.match(r"^/[A-Za-z]:", _p):
-        _p = _p[1:]
-    return _p if os.path.isabs(_p) else os.path.join(workspace, _p)
-
-
-# VERIFY-GATE PROMPT: shared by the veto fallback and the auto-verify
-# no-tests branch - one wording, two call sites.
-_VERIFY_REQUIRED_PROMPT = (
-    "[VERIFY REQUIRED] You called task_complete but the last file write "
-    "has not been followed by a successful test run.\n"
-    "Do this NOW, in this order:\n"
-    "1. Call run_tests. If it reports no suite, write a minimal smoke test "
-    "that exercises the created files and run it via run_bash instead "
-    "(e.g. python selftest.py).\n"
-    "2. Ensure it exits with code 0.\n"
-    "3. Then call task_complete again with status "
-    "{completed, blockers, build_status}."
-)
-
 from hive_functions.language_config import build_test_hint as _build_test_hint
 from hive_functions.num_ctx_config import resolve_ctx
 
@@ -163,6 +138,12 @@ from core.duo_round_input import _duo_coder_round_input
 from core.duo_dtool_setup import _duo_dtool_setup
 from core.duo_inloop_planner import _duo_inloop_planner
 from core.duo_compress_cycle import _duo_compress_cycle
+from core.duo_coder_preloop import (
+    _DuoCoderPreloopState, _duo_coder_preloop,
+)
+from core.duo_task_complete_gate import (
+    _DuoTaskCompleteGateState, _duo_task_complete_gate,
+)
 from core.duo_coder_load import (
     _DuoCoderPortCacheState, _duo_resolve_coder_port_cache,
     _DuoSlotCtxState, _duo_query_actual_slot_ctx,
@@ -186,10 +167,12 @@ from core.duo_helpers import (
     _RE_CRITIC_APPROVED, _RE_CRITIC_VERDICT, _RE_CRITIC_ISSUES,
     
 )
-from core.model_sampling import update_model_capability_overrides
-
 from core.plan_tracker import build_tracker_from_planner as _build_tracker_from_planner
 from core.plan_tracker import derive_step_title as _derive_step_title
+from core.plan_tracker import PlanTracker
+
+if TYPE_CHECKING:
+    from context.project_state import ProjectState
 
 # ── Extracted pure utilities (core/duo/_utils.py) ──
 from core.duo._utils import (
@@ -215,6 +198,13 @@ _DUO_CRITIC_GEN_DEFAULT  = PROMPTS.get("duo_critic_general",
 
 _DUO_HEARTBEAT_KEY = "duo_heartbeat_seconds"
 _DUO_HEARTBEAT_DEFAULT = 10
+
+# ROUND-LOOP CONSTANTS (2026-11-07 audit): compiled/set once instead of
+# re-creating them on every coder round.
+_RE_JSON_FENCE = re.compile(r'```(?:json)?\s*(\{.*?\})\s*```', re.DOTALL)
+_EXPLORE_TOOLS = {"find_files", "search_code", "list_dir", "read_file"}
+_WRITE_TOOLS = {"write_file", "edit_file", "patch_file", "write_file_append",
+                "replace_lines", "undo_last", "run_bash", "run_python"}
 
 
 
@@ -285,15 +275,13 @@ _READONLY_CODER_NOTE = (
 
 
 
-# PREFLIGHT-EXTRACT (1.4.x): the module-level helpers live in core/duo/preflight.py
-# now. Re-exported here so existing imports (coder_briefing_text, ...) keep working.
-from core.duo.preflight import (  # noqa: F401
+# PREFLIGHT-EXTRACT (1.4.x): the module-level helpers live in core/duo/preflight.py.
+from core.duo.preflight import (
     completion_verdict,
     stuck_handler,
     plan_emit_fn,
     plan_aborted_fn,
     plan_heartbeat_fn,
-    inloop_plan_emit_fn,
     evict_model_handler,
     calib_est_tokens as _calib_tokens,
     keepalive_vision as _keepalive_vision_fn,
@@ -306,24 +294,14 @@ from core.duo.preflight import (  # noqa: F401
     _apply_thinking_kwargs,
     _auto_commit_chunk,
     _await_with_hb,
-    _build_dtool_base,
-    _build_os_hint,
-    _build_plan_anchor_text,
-    _build_plan_pin_msg,
-    _build_touched_context,
     _drain_thinking_rescue,
     _git_checkpoint_at_chunk_start,
-    _git_checkpoints_enabled,
-    _inject_plan_into_coder_msgs,
     _ld_setter,
     _llama_prefill_progress,
     _park_on_disconnect,
     _read_hb_interval,
     _resolve_fallback_model,
-    _strip_stale_ctx_notices,
-    _distilled_execution_steps,
     needs_test_verification,
-    coder_briefing_text,
 )
 
 
@@ -354,7 +332,7 @@ class _DuoPlannerPhaseState:
     subtasks: list = dataclasses.field(default_factory=list)
     plan_thinking: str = ""
     plan_content_txt: str = ""
-    plan_result: object = None
+    plan_result: "PlannerResult | None" = None
     planner_used_fallback: bool = False
     planner_fallback_reason: str = ""
     planner_parse_mode: str = "none"
@@ -365,7 +343,7 @@ class _DuoPlannerPhaseState:
     plan_port: int | None = None
     plan_ctx_final: int | None = None
     duo_timed_out: bool = False
-    plan_tracker: object = None
+    plan_tracker: "PlanTracker | None" = None
 
 async def _duo_planner_phase(
     ctx, ps: _DuoPlannerPhaseState, *,
@@ -431,8 +409,24 @@ async def _duo_planner_phase(
             _planner_ctx_cap = _planner_ctx_cap_cfg
         _planner_ctx_cap = max(4096, _planner_ctx_cap)
 
+        # PREBIND (2026-11-07, E3): defined before the try so the except
+        # paths and the port re-resolution never read an unbound name.
+        _lsm_plan_pre = None
+
+        def _planner_load_ctx(model: str, ctx_final: int) -> int:
+            try:
+                if model != coder_mdl:
+                    return ctx_final
+                _need = (
+                    resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
+                    if ctx.duo_config.agentic_mode
+                    else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
+                )
+                return max(ctx_final, int(_need)) if _need else ctx_final
+            except (NameError, TypeError, ValueError):
+                return ctx_final
+
         try:
-            _lsm_plan_pre = None
             from backend.llama_server_manager import manager as _lsm_plan_pre
 
             if ctx.settings.get("duo_planner_use_coder_ctx", True):
@@ -513,18 +507,6 @@ async def _duo_planner_phase(
             # graceful cascade still protects tight-VRAM cases: a
             # degraded slot is refused by the existing handoff check,
             # exactly as before — worst case is today's behavior.
-            def _planner_load_ctx(model: str, ctx_final: int) -> int:
-                try:
-                    if model != coder_mdl:
-                        return ctx_final
-                    _need = (
-                        resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
-                        if ctx.duo_config.agentic_mode
-                        else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
-                    )
-                    return max(ctx_final, int(_need)) if _need else ctx_final
-                except (NameError, TypeError, ValueError):
-                    return ctx_final
             _plan_port: int | None = None
             # AUDIT F4 (2026-10-24): the pin overrides an explicit
             # planner ctx target — say so instead of doing it silently.
@@ -533,6 +515,7 @@ async def _duo_planner_phase(
                 yield await ctx.emit({"type": "status", "content": (
                     f"⚙️ Planner ctx pinned {_plan_ctx_final} → {_pin_ctx} tok "
                     "(planner is the coder model — slot reuse avoids a mid-run reload)")})
+            _ensure_timeout = 450.0
             try:
                 _ensure_timeout = float(ctx.settings.get("duo_planner_ttl_seconds", 0) or 0) or float(ctx.settings.get("duo_planner_ensure_load_timeout_s", 450.0) or 450.0)
                 _plan_port = await _await_with_hb(
@@ -1190,6 +1173,8 @@ async def _duo_critic_review(
             # Max 3 rounds to keep VRAM pressure low on 8GB GPUs.
             _critic_tc_msgs  = list(_critic_msgs)
             _critic_tc_max   = 3
+            _cresp = None
+            _c_gen_t0 = 0.0
             try:
                 async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc:
                   for _ctr in range(_critic_tc_max):
@@ -1228,6 +1213,8 @@ async def _duo_critic_review(
                                 await asyncio.sleep(3.0)
                                 continue
                             raise
+                    if _cresp is None:
+                        raise RuntimeError("Critic POST failed after retries")
                     if _cresp.status_code != 200:
                         raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
                     _cd = _cresp.json()
@@ -1299,6 +1286,8 @@ async def _duo_critic_review(
             _critic_plain_payload = _apply_thinking_kwargs(
                 _critic_plain_payload, _critic_profile, _critic_thinking, coder_tool_think=False
             )
+            _cresp = None
+            _c_gen_t0 = 0.0
             try:
                 async with httpx.AsyncClient(timeout=_critic_tc_timeout) as _chttpc_plain:
                     for _critic_post_attempt in range(3):
@@ -1318,6 +1307,8 @@ async def _duo_critic_review(
                                 await asyncio.sleep(3.0)
                                 continue
                             raise
+                    if _cresp is None:
+                        raise RuntimeError("Critic POST failed after retries")
                     if _cresp.status_code != 200:
                         raise RuntimeError(f"Critic HTTP {_cresp.status_code}: {_cresp.text[:200]}")
                     _cd = _cresp.json()
@@ -1677,7 +1668,7 @@ async def _duo_wedge_handoff(
                 # CTX-MATCH (2026-10-17): the fix agent defaulted
                 # to 8192 while the coder may run at another ctx;
                 # ensure_loaded then killed and reloaded the warm
-                # slot (manager_load.py:402) - the opposite of the
+                # slot (manager_load.ensure_loaded) - the opposite of the
                 # "NEVER evicts" promise in fix_agent's docstring.
                 num_ctx=int(_dtool_ctx or 8192),
             )
@@ -1846,7 +1837,7 @@ class _DuoRoundInputState:
     coder_out: str = ""
     _explore_ctx: str = ""
     _img_plan: dict = dataclasses.field(default_factory=dict)
-    _plan_tracker: object = None
+    _plan_tracker: "PlanTracker | None" = None
     _coder_caps: object = None
     skip_round: bool = False
     _touched_block_persisted: str = ""
@@ -1874,7 +1865,7 @@ class _DuoInloopPlannerState:
     _dtool_ctx: int = 0
     _coder_input: str = ""
     _explore_ctx: str = ""
-    _plan_tracker: object = None
+    _plan_tracker: "PlanTracker | None" = None
     _is_first_outer_round: bool = False
     _goal_summary: str = ""
     _duo_timed_out: bool = False
@@ -1936,8 +1927,8 @@ class _DuoCompressCycleState:
     _max_tool_rounds: int = 0
     _n_items: int = 1
     _partial_compression: bool = False
-    _plan_result: object = None
-    _plan_tracker: object = None
+    _plan_result: "PlannerResult | None" = None
+    _plan_tracker: "PlanTracker | None" = None
     _read_counts: dict = dataclasses.field(default_factory=dict)
     _seen_explore_paths: set = dataclasses.field(default_factory=set)
     _subtasks: list = dataclasses.field(default_factory=list)
@@ -1959,7 +1950,6 @@ class _DuoCompressCycleState:
     _no_write_nudged: bool = False
     _no_write_rounds: int = 0
     _partial_escalated: bool = False
-    _plan_state: str = ""
     _rule_compress_fails: int = 0
     _rule_compress_used: bool = False
     _total_tool_rounds: int = 0
@@ -2007,7 +1997,7 @@ class _DuoRunFinalizeState:
     _cs: object = None
     _ws_str: str = ""
     _explore_ctx: str = ""
-    _project_state: object = None
+    _project_state: "ProjectState | None" = None
     _project_state_run_counted: bool = False
     _explore_only_rounds: int = 0
     _lifetime_tool_rounds: int = 0
@@ -2032,7 +2022,7 @@ class _DuoFinalCleanupState:
     exec_mdl: str = ""
     _run_id_global: str = ""
     _duo_pinned: list | None = None
-    _project_state: object = None
+    _project_state: "ProjectState | None" = None
     _project_state_run_counted: bool = False
 
 
@@ -2511,6 +2501,11 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         # warning; evict/coder-load cleanup was skipped). Default to the
         # coder model: the evict logic then simply excludes the coder itself.
         _planner_model = coder_mdl
+        # C2 (2026-11-07): the extracted pre-loop block always receives these
+        # two; planner-skipping paths (resume/follow-up) never ran the
+        # finally-sync, so initialize them like _planner_model above.
+        _plan_ctx_final = 0
+        _plan_port = None
         # RESUME-DEFAULT (2026-10-04, live UI test): the plan is computed in
         # the planner block below, which RESUME runs skip entirely - every
         # later read (vision gates, traces, attach) crashed the whole run
@@ -2577,6 +2572,14 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
 
         # Fortschritt). No-Overwrite-Guard wie im Safety-Net.
         _total_tool_rounds: int = 0
+        # C1 (2026-11-07): loop-scoped names read by the finalize/save paths.
+        # Defaults here make every former `in dir()` / `locals().get()` probe
+        # a plain field read.
+        _di = 0
+        _n_items = 1
+        _loop_items = [{"title": ctx.user_input}]
+        _drop_names: list = []
+        _dr_dropped_tool_retries = "n/a"
         # SEND-FILE: paths validated by the tool, delivered only after the
         # final verification. Run-persistent across tool rounds.
         _pending_send_files: list[str] = []
@@ -2741,605 +2744,34 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
             _duo_coder_sys += "\n\n" + _follow_up_hint
 
 
-        # WEBSEARCH-DEDUP (audit 2026-10-24): the availability guidance now
-        # lives ONLY in _build_duo_coder_sys (duo_helpers gates on the same
-        # per-run flag) - this second copy burned ~110 tokens per run saying
-        # the same thing twice.
-        # Writes were being truncated by the token limit or rejected as too large
-        # AFTER full generation (7-minute total loss). Instruct proactively with
-        # an exact per-call char cap (same source as the runtime tool check:
-        # resolve_write_char_limits).
-        try:
-            _wb_hint_budget = max(1024, int(_duo_coder_tok))
-            _wb_hint_cpt = float(ctx.settings.get("duo_write_chars_per_token", 2.5))
-            _wb_limit = 20000
-            try:
-                from utils.tool import resolve_write_char_limits as _wcl
-                _wb_limit = int((_wcl(exec_mdl, _wb_hint_budget, _wb_hint_cpt) or (20000, 20000))[0] or _wb_limit)
-            except Exception:
-                pass
-            _wb_hint_safe = max(2000, int(_wb_limit) - 1000)
-            # WRITE-RULES-DEDUPE (2026-09-17): the full chunk/marker contract
-            # also lives in the write_file/write_file_append tool descriptions
-            # — the system block now carries only the per-model numbers.
-            _duo_coder_sys += (
-                f"\n\nWRITE RULES (soft target): write_file accepts at most ~{_wb_limit} "
-                f"characters per call (chunks well below ~{_wb_hint_safe}) and writes the "
-                f"COMPLETE file (create or overwrite). To change parts of an existing "
-                f"file: edit_file with old_text copied VERBATIM from your last read_file "
-                f"(must be unique in the file) and new_text as the replacement. If a write "
-                f"call is cut off by the output limit, the server keeps everything up to "
-                f"the last complete line and tells you the line — continue from there with "
-                f"write_file_append, never by rewriting from the start."
-            )
-        except Exception:
-            pass
-
-        try:
-            _planner_is_coder = (
-                _planner_model is not None
-                and _planner_model == coder_mdl
-            )
-        except (NameError, UnboundLocalError):
-            _planner_is_coder = False
-        try:
-            _plan_port_available = _plan_port is not None
-        except (NameError, UnboundLocalError):
-            _plan_port_available = False
-        # STALE-PORT-GUARD (2026-08-31): "Planner=Coder" may only take over the
-        # planner port as coder port if a server is really listening there.
-        # Otherwise the coder inherits a phantom slot (dead port) and crashes
-        # immediately with ConnectError (observed live in the planner path).
-        _plan_port_alive = False
-        if _plan_port_available:
-            try:
-                from backend.llama_server_manager import manager as _lsm_pv
-                _plan_port_alive = await _lsm_pv._port_alive(_plan_port)
-            except Exception:
-                _plan_port_alive = False
-        # CTX-ACTUAL-FOR-PLANNER (2026-09-06): the manager may have silently
-        # degraded the slot to a smaller ctx (old: 768-MiB margin → 4096).
-        # planner==coder must then NOT inherit the slot as coder — the coder
-        # needs its full configured context and otherwise loads fresh.
-        _plan_port_actual_ctx = 0
-        _plan_port_vision = False
-        if _plan_port_available and _plan_port_alive:
-            try:
-                for _s_pp in _lsm_pv._slots:
-                    if getattr(_s_pp, "port", None) == _plan_port and getattr(_s_pp, "_num_ctx", 0):
-                        _plan_port_actual_ctx = int(_s_pp._num_ctx)
-                        _plan_port_vision = bool(getattr(_s_pp, "_vision", False))
-                        break
-                if not _plan_port_actual_ctx:
-                    async with httpx.AsyncClient(
-                        timeout=httpx.Timeout(connect=3.0, read=3.0, write=3.0, pool=3.0),
-                    ) as _c_pp:
-                        _props_pp = (await _c_pp.get(f"http://127.0.0.1:{_plan_port}/props")).json()
-                    _plan_port_actual_ctx = int((_props_pp.get("default_generation_settings") or {}).get("n_ctx") or 0)
-            except Exception:
-                _plan_port_actual_ctx = 0
-        try:
-            _plan_ctx_req = int(_plan_ctx_final or 0)
-        except (NameError, TypeError):
-            _plan_ctx_req = 0
-        # CODER ALWAYS-VISION TOGGLE (2026-10-06, owner idea): when the
-        # owner steers images regularly, the mid-run projector upgrade
-        # (~15 s stall) is avoidable — load the coder WITH the projector
-        # from the start. Opt-in (default OFF): the mmproj costs VRAM every
-        # run even when no image ever arrives.
-        _always_vision = (bool(ctx.settings.get("duo_coder_always_vision", False))
-                          and not bool(ctx.settings.get("duo_coder_images_off", False)))
-        # PLANNER-EVICT-BEFORE-CODER (2026-10-06, owner decision): the
-        # planner slot may only be REUSED as the coder slot when it already
-        # runs at the CODER's effective ctx. The old check compared against
-        # the PLANNER's own ctx target — a planner at 8192 handed the coder
-        # an 8192 slot while the coder budget said 80896, the exact
-        # cached-port ctx mismatch that kills tool rounds (LD-SET 2497,
-        # live 2026-10-06 13:03: "[Planner=Coder] stays in VRAM" with
-        # ctx=8192 vs budget 80896). With the honest requirement, a normal
-        # agentic run always evicts the planner slot before the coder
-        # loads: same model → the ctx-mismatch kill+reload in ensure_loaded,
-        # different model → the SERIAL-SLOTS evict below.
-        try:
-            _coder_ctx_need = (
-                resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
-                if ctx.duo_config.agentic_mode
-                else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
-            )
-        except (NameError, TypeError, ValueError):
-            _coder_ctx_need = 0
-        # Reuse only if the slot runs at >= planner req AND >= coder need.
-        # Query errors (actual==0) → conservatively no reuse (a clean
-        # reload is safer).
-        _planner_ctx_ok = bool(
-            _plan_port_actual_ctx
-            and _plan_port_actual_ctx >= _plan_ctx_req
-            and (_coder_ctx_need <= 0 or _plan_port_actual_ctx >= _coder_ctx_need)
+        # C2 (2026-11-07 maintainability sprint): the pre-loop model/VRAM/
+        # evict + tool-setup block moved VERBATIM to core/duo_coder_preloop.
+        # Inputs/outputs travel through the state; early exits set
+        # ps.stop and the runner returns after draining the generator.
+        _pre_ps = _DuoCoderPreloopState(
+            done_tasks=_done_tasks, written_files=_written_files,
+            subtasks=_subtasks, explore_ctx=_explore_ctx, ws_str=_ws_str,
+            coder_mdl=coder_mdl, exec_mdl=exec_mdl,
+            planner_model=_planner_model, duo_coder_tok=_duo_coder_tok,
+            duo_pinned=_duo_pinned, worker_slots=_worker_slots,
+            plan_ctx_final=_plan_ctx_final, plan_port=_plan_port,
+            use_parallel=_use_parallel, xexplore_mdl=_xexplore_mdl,
+            workers_were_loaded=_workers_were_loaded,
+            skip_coder_pin=_skip_coder_pin, img_plan=_img_plan,
+            duo_hard_stop=_duo_hard_stop,
         )
-        if _planner_is_coder and _plan_port_available and _plan_port_alive \
-                and _planner_ctx_ok and (not _always_vision or _plan_port_vision):
-            _cached_coder_port = _plan_port
-            _cached_coder_port_ctx = _plan_port_actual_ctx  # honest slot ctx (>= coder need)
-            logger.info("[Planner=Coder] Model stays in VRAM - slot ctx=%d covers coder need=%d (vision=%s)",
-                        _plan_port_actual_ctx, max(_plan_ctx_req, _coder_ctx_need),
-                        _plan_port_vision)
-            yield await ctx.emit({
-                "type": "status",
-                "content": (
-                    f"⚡ Planner=Coder — {_planner_model.split(':')[0]} stays in VRAM, "
-                    f"slot ctx={_plan_port_actual_ctx} covers the coder"
-                ),
-            })
-        elif _planner_is_coder and _plan_port_available and _plan_port_alive \
-                and (not _planner_ctx_ok or (_always_vision and not _plan_port_vision)):
-            _ctx_need_eff = max(_plan_ctx_req, _coder_ctx_need)
-            if _planner_ctx_ok and _always_vision and not _plan_port_vision:
-                logger.info(
-                    "[PLANNER=CODER] always-vision toggle: slot has no projector — "
-                    "planner slot evicted, coder loads fresh WITH mmproj")
-                yield await ctx.emit({
-                    "type": "status",
-                    "content": (
-                        f"⚡ Always-vision: coder loads WITH the projector — "
-                        "planner slot freed for a fresh load."
-                    ),
-                })
-            else:
-                logger.warning(
-                    "[PLANNER=CODER-CTX-MISMATCH] slot ctx=%d < required %d "
-                    "(planner=%d, coder=%d) — planner slot evicted, coder "
-                    "loads fresh at full ctx",
-                    _plan_port_actual_ctx, _ctx_need_eff,
-                    _plan_ctx_req, _coder_ctx_need,
-                )
-            # TRUE EVICTION (2026-10-06, steer retest): the fresh coder load
-            # takes a FREE slot — without an explicit kill the planner slot
-            # stayed resident. Two slots holding the same model then broke
-            # every name-based lookup (incl. the steer-image vision upgrade
-            # hitting the planner slot while the coder POSTed the other).
-            try:
-                from backend.llama_server_manager import manager as _lsm_pev
-                await _lsm_pev.evict(_planner_model)
-            except (RuntimeError, OSError) as _pev_err:
-                logger.warning("[PLANNER=CODER] planner evict failed: %s", _pev_err)
-            if not _planner_ctx_ok:
-                yield await ctx.emit({
-                    "type": "status",
-                    "content": (
-                        f"⚡ Planner=Coder — slot runs at ctx={_plan_port_actual_ctx} only, "
-                        f"coder needs {_ctx_need_eff} — planner slot freed, "
-                        "loading coder model fresh (full context)."
-                    ),
-                })
-        elif _planner_is_coder and _plan_port_available and not _plan_port_alive:
-            logger.warning(
-                "[Planner=Coder] Planner port %s dead (phantom slot) — cache discarded, "
-                "normal coder load runs.",
-                _plan_port,
-            )
-            yield await ctx.emit({
-                "type": "status",
-                "content": "⚠ Planner=Coder port unreachable — reloading coder model",
-            })
-
-        try:
-            _scp = _skip_coder_pin
-        except (NameError, UnboundLocalError):
-            _scp = False
-        from backend.llama_server_manager import manager as _lsm2
-        from backend.llama_server_manager import VRAMPreFlightError as _VRAMPreFlightError
-        _coder_load_ok = False
-        # VRAM-FALLBACK-CTX (2026-09-07): when the coder is pushed to a smaller
-        # model at a reduced ctx (_fb_ctx), this override pins _coder_ctx_eff
-        # to the fallback ctx for the rest of the run — otherwise the tool
-        # round keeps demanding the full target ctx and stops in the cached
-        # ctx mismatch (LD-SET 2497). The override is RUN-local: a new run
-        # starts again with the full target ctx; within this run there is
-        # deliberately no mid-run upgrade path back to the original model
-        # (fallback = model switch for the run), so no reset is needed
-        # (only fresh across runs).
-        _coder_ctx_override = 0
-        if (_explore_ctx or _workers_were_loaded) and _scp:
-            try:
-                yield await ctx.emit({"type": "status", "content": "🧹 Freeing VRAM (unloading worker models)…"})
-                _evicted_workers = 0
-                if _use_parallel:
-                    for _ws_entry in _worker_slots:
-                        _wm = _ws_entry.get("model", "")
-                        _wm_base = _wm.rsplit("#", 1)[0] if "#" in _wm else _wm
-                        if _wm_base != exec_mdl:
-                            await _lsm2.evict(_wm)
-                            _evicted_workers += 1
-                if _xexplore_mdl != exec_mdl:
-                    await _lsm2.evict(_xexplore_mdl)
-                    _evicted_workers += 1
-                try:
-                    _loaded_after = await _lsm2.list_loaded()
-                    _exec_base = exec_mdl.rsplit("#", 1)[0] if "#" in exec_mdl else exec_mdl
-                    _planner_base = _planner_model.rsplit("#", 1)[0] if "#" in _planner_model else _planner_model
-                    for _lm in _loaded_after:
-                        _lname = str(_lm.get("name") or _lm.get("model") or "")
-                        if not _lname:
-                            continue
-                        _lbase = _lname.rsplit("#", 1)[0] if "#" in _lname else _lname
-                        if _lbase != _exec_base and _lbase != _planner_base:
-                            await _lsm2.evict(_lname)
-                            _evicted_workers += 1
-                except Exception:
-                    pass
-                # hits a dead port → TCP close → frontend: "Error in input stream".
-                if _evicted_workers > 0:
-                    await asyncio.sleep(1.5)
-                if _planner_is_coder and _plan_port_available and _plan_port_alive and _planner_ctx_ok:
-                    _coder_load_ok = True
-                    _coder_ctx_post = (
-                        resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
-                        if ctx.duo_config.agentic_mode
-                        else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
-                    )
-                    yield await ctx.emit({"type": "status",
-                        "content": f"✅ Coder ready ({exec_mdl.split(':')[0]} — Planner=Coder, no reload)"})
-                    # FIX (2026-08-31): The fast path did not emit the "agent"
-                    # event (coder phase switch in the frontend) → after
-                    # "coder ready" nothing happened in the UI anymore.
-                    if _subtasks:
-                        yield await ctx.emit({"type": "status",
-                            "content": f"🖊️ Coder active — {len(_subtasks)} subtask(s), starting with chunk 1"})
-                    yield await ctx.emit({
-                        "type": "agent",
-                        "content": "Code",
-                        "model": exec_mdl.split(":")[0] if exec_mdl else "Agentic",
-                        "role": "Writes code",
-                    })
-                else:
-                    _coder_ctx_post = (
-                        resolve_ctx(ctx.settings.get("duo_coder_ctx_agentic"), coder_mdl, "agentic")
-                        if ctx.duo_config.agentic_mode
-                        else resolve_ctx(ctx.settings.get("duo_coder_ctx_normal"), coder_mdl, "coder")
-                    )
-                    yield await ctx.emit({"type": "status",
-                        "content": f"⏳ Loading coder ({exec_mdl.split(':')[0]}, ctx={_coder_ctx_post})…"})
-                    _coder_load_ok = False
-                    _coder_ctx_try = _coder_ctx_post
-                    _coder_ttl_s = float(ctx.settings.get("duo_coder_ttl_seconds", 0) or 0)
-                    _coder_load_timeout = _coder_ttl_s if _coder_ttl_s > 0 else 150.0
-                    # SERIAL-SLOTS (2026-09-10): evict the planner before the
-                    # coder loads when the models differ. Previously both slots
-                    # stayed resident when they fit side by side, which traded
-                    # coder ctx headroom for a reload-free transition.
-                    if bool(ctx.settings.get("duo_evict_planner_on_coder", True)):
-                        try:
-                            _planner_base_cmp = _planner_model.rsplit("#", 1)[0]
-                            _exec_base_cmp = exec_mdl.rsplit("#", 1)[0]
-                            if _planner_base_cmp != _exec_base_cmp:
-                                await _lsm2.evict(_planner_model)
-                                logger.warning(
-                                    "[SERIAL-SLOTS] planner %s evicted for coder %s",
-                                    _planner_model, exec_mdl,
-                                )
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"🧹 Planner unloaded — full VRAM for the coder."})
-                        except (RuntimeError, OSError, asyncio.TimeoutError) as _serial_err:
-                            logger.debug("[SERIAL-SLOTS] planner evict failed: %s", _serial_err)
-                    # WORKER-PIN RELEASE (EOD-audit P2-1, 2026-11-01):
-                    # unpin_all used to live only in the planner phase —
-                    # planner-off/resume/skip runs never released the
-                    # keep-warm pins, so pinned workers could block this
-                    # coder pre-flight. Released here, right before the
-                    # ladder; the planner phase re-pins nothing.
-                    try:
-                        _lsm2.unpin_all()
-                    except Exception as _ua_err:
-                        logger.debug("[SERIAL-SLOTS] unpin_all failed: %s", _ua_err)
-                    for _cl_attempt in range(5):
-                        try:
-                            # VISION RELOAD HINT (2026-10-01): if the coder
-                            # needs the projector but its slot runs without
-                            # one, ensure_loaded will kill + restart with
-                            # mmproj — tell the user up front.
-                            if _img_plan.get("coder") == "raw":
-                                try:
-                                    _prev_slot = await _lsm2._find_loaded(exec_mdl)
-                                except Exception:
-                                    _prev_slot = None
-                                if _prev_slot is not None and not _prev_slot._vision:
-                                    _gguf_gb = 1.5
-                                    try:
-                                        from backend.llama_models import resolve_model_path as _rmp
-                                        _gp = _rmp(exec_mdl)
-                                        if _gp and Path(_gp).exists():
-                                            _gguf_gb = Path(_gp).stat().st_size / (1024 ** 3)
-                                    except Exception:
-                                        pass
-                                    yield await ctx.emit({"type": "status",
-                                        "content": f"loading with image support (mmproj), ~{max(15, int(_gguf_gb * 8))} s — one-time reload"})
-                            yield await ctx.emit({"type": "status",
-                                "content": f"⏳ Loading coder ({exec_mdl.split(':')[0]}, ctx={_coder_ctx_try})…"})
-                            _coder_port = await asyncio.wait_for(
-                                # STRICT-CTX: the coder needs its configured
-                                # full ctx OR a clear error — never a silently
-                                # degraded slot (manager: 768→256→error).
-                                _lsm2.ensure_loaded(exec_mdl, num_ctx=_coder_ctx_try,
-                                                    n_parallel=1, ctx_graceful=False, pin=True,
-                                                    vision=(_img_plan.get("coder") == "raw" or _always_vision)),
-                                timeout=_coder_load_timeout,
-                            )
-                            _coder_load_ok = True
-                            _coder_ctx_post = _coder_ctx_try
-                            _cached_coder_port = _coder_port
-                            _cached_coder_port_ctx = _coder_ctx_try
-                            _duo_pinned.add(exec_mdl)
-                            break
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                "Coder load timeout (attempt %d/5) ctx=%d",
-                                _cl_attempt + 1, _coder_ctx_try,
-                            )
-                            # LOAD-RACE FIX (2026-11-01): a timeout is usually
-                            # a STALE half-initialized server from a racing
-                            # load (live: a queued groot@131072 preload from
-                            # run-end starved the real run's coder load — the
-                            # old code logged "attempt 1/3" and hard-stopped
-                            # IMMEDIATELY, no attempt 2 ever ran). Evict the
-                            # stuck attempt and ride the same ctx ladder the
-                            # other branches use; hard-stop only at the floor.
-                            # EOD-AUDIT P1-1: the abort check MUST run before
-                            # the retry — /stop is a cooperative Event (the
-                            # emit succeeds anyway), so without this an
-                            # aborted run burned ~10 min of load/kill churn.
-                            if ctx.aborted():
-                                yield await ctx.emit({"type": "status",
-                                    "content": "⏹ Coder load aborted (run was stopped)"})
-                                ctx.phase_timer.skip("coder_loop")
-                                clear_graceful_stop(ctx.run_id)
-                                _cleanup_pause_state(ctx.run_id)
-                                if ctx.chat_id:
-                                    _clear_pause_state(ctx.chat_id)
-                                _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                _pre_loop_resume(ctx, _ws_str, _explore_ctx,
-                                                 _done_tasks, _written_files, "aborted")
-                                ctx.duo_stop_reason = "aborted"
-                                yield await ctx.emit(ctx.done_event(
-                                    round(time.time() - ctx.t_total, 1),
-                                    ctx.duo_stop_reason,
-                                    **ctx.collect_done_metrics(),
-                                ))
-                                return
-                            try:
-                                from backend.llama_server_manager import manager as _lsm_to
-                                await _lsm_to.evict(exec_mdl)
-                            except Exception:
-                                pass
-                            if _cl_attempt < 4 and _coder_ctx_try > 8192:
-                                _next_ctx = max(8192, int(_coder_ctx_try / 2))
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"⟳ Coder load timeout at ctx={_coder_ctx_try} — evicting the "
-                                              f"stuck load, retry {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
-                                await asyncio.sleep(4.0)
-                                if ctx.aborted():
-                                    # the sleep is the second abort window
-                                    yield await ctx.emit({"type": "status",
-                                        "content": "⏹ Coder load aborted (run was stopped during retry wait)"})
-                                    ctx.phase_timer.skip("coder_loop")
-                                    clear_graceful_stop(ctx.run_id)
-                                    _cleanup_pause_state(ctx.run_id)
-                                    if ctx.chat_id:
-                                        _clear_pause_state(ctx.chat_id)
-                                    _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                    _pre_loop_resume(ctx, _ws_str, _explore_ctx,
-                                                     _done_tasks, _written_files, "aborted")
-                                    ctx.duo_stop_reason = "aborted"
-                                    yield await ctx.emit(ctx.done_event(
-                                        round(time.time() - ctx.t_total, 1),
-                                        ctx.duo_stop_reason,
-                                        **ctx.collect_done_metrics(),
-                                    ))
-                                    return
-                                _coder_ctx_try = _next_ctx
-                                continue
-                            yield await ctx.emit({
-                                "type": "status",
-                                "content": (
-                                    f"⛔ Coder load timeout at ctx={_coder_ctx_try} — "
-                                    "ctx too large for model/VRAM. Please reduce ctx."
-                                ),
-                            })
-                            ctx.phase_timer.skip("coder_loop")
-                            clear_graceful_stop(ctx.run_id)
-                            _cleanup_pause_state(ctx.run_id)
-                            if ctx.chat_id:
-                                _clear_pause_state(ctx.chat_id)
-                            _cleanup_governor(ctx.chat_id or ctx.run_id)
-                            _duo_hard_stop = True
-                            _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
-                            ctx.duo_stop_reason = "hard_stop"
-                            yield await ctx.emit(ctx.done_event(
-                                round(time.time() - ctx.t_total, 1),
-                                ctx.duo_stop_reason,
-                                **ctx.collect_done_metrics(),
-                            ))
-                            return
-                        except _VRAMPreFlightError as _vpf:
-                            # NO-SILENT-FALLBACK (2026-09-15, user decision): a
-                            # different (smaller) model must NEVER take over the
-                            # coder role — a fallback model edits files it does
-                            # not understand (live: 9b request, 4b fallback
-                            # edited files blind). Abort with the exact reason
-                            # instead. The ctx/VRAM guard (vram_guard) already
-                            # catches the worst mismatches pre-run; this branch
-                            # is for everything the guard's table misses.
-                            logger.warning(
-                                "[CODER-VRAM] %s not loadable (free=%d MiB, external=%d MiB, ctx_try=%s) — "
-                                "aborting, no fallback",
-                                exec_mdl, _vpf.free_mib, _vpf.external_usage_est_mib, _coder_ctx_try,
-                            )
-                            _duo_hard_stop = True
-                            yield await ctx.emit({"type": "status",
-                                "content": (
-                                    f"⛔ Coder ({exec_mdl}) does not fit into VRAM: "
-                                    f"needed at ctx {_coder_ctx_try}, only {_vpf.free_mib} MiB free "
-                                    f"(~{_vpf.external_usage_est_mib} MiB used by other apps). "
-                                    "No fallback loaded — reduce the ctx slider, close GPU-heavy "
-                                    "apps, or pick a model that fits. Run ended with a resume block."
-                                )})
-                            # VRAM-BLOCK-CTX-CASCADE (2026-10-11): a pre-flight block is not a
-                            # model mismatch - same model, smaller ctx. Cascade like the generic
-                            # retry instead of hard-stopping (mellum @120832 blocked, @49152
-                            # fits). Falls through to hard_stop on the last attempt or at floor.
-                            if _cl_attempt < 4 and _coder_ctx_try > 8192:
-                                _next_ctx = max(8192, int(_coder_ctx_try / 2))
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"⟳ Coder does not fit at ctx={_coder_ctx_try} — retrying "
-                                              f"attempt {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
-                                await asyncio.sleep(4.0)
-                                _coder_ctx_try = _next_ctx
-                                continue
-                            _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
-                            break
-                        except Exception as _cl_err:
-                            if ctx.aborted():
-                                yield await ctx.emit({"type": "status",
-                                    "content": "⏹ Coder load aborted (run was stopped)"})
-                                ctx.phase_timer.skip("coder_loop")
-                                clear_graceful_stop(ctx.run_id)
-                                _cleanup_pause_state(ctx.run_id)
-                                if ctx.chat_id:
-                                    _clear_pause_state(ctx.chat_id)
-                                _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                # to the in-loop abort) + done_event.
-                                _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, "aborted")
-                                ctx.duo_stop_reason = "aborted"
-                                yield await ctx.emit(ctx.done_event(
-                                    round(time.time() - ctx.t_total, 1),
-                                    ctx.duo_stop_reason,
-                                    **ctx.collect_done_metrics(),
-                                ))
-                                return
-                            logger.warning(
-                                "Coder-load attempt %d/5 failed (%s): %s",
-                                _cl_attempt + 1, type(_cl_err).__name__, str(_cl_err)[:120],
-                            )
-                            if _cl_attempt < 4:
-                                _next_ctx = max(8192, int(_coder_ctx_try / 2))
-                                yield await ctx.emit({"type": "status",
-                                    "content": f"⟳ Coder load error ({type(_cl_err).__name__}), retry {_cl_attempt+2}/5 with ctx={_next_ctx} in 4s…"})
-                                await asyncio.sleep(4.0)
-                                _coder_ctx_try = _next_ctx
-                                if ctx.aborted():
-                                    yield await ctx.emit({"type": "status",
-                                        "content": "⏹ Coder load aborted (run was stopped)"})
-                                    ctx.phase_timer.skip("coder_loop")
-                                    clear_graceful_stop(ctx.run_id)
-                                    _cleanup_pause_state(ctx.run_id)
-                                    if ctx.chat_id:
-                                        _clear_pause_state(ctx.chat_id)
-                                    _cleanup_governor(ctx.chat_id or ctx.run_id)
-                                    _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files, "aborted")
-                                    ctx.duo_stop_reason = "aborted"
-                                    yield await ctx.emit(ctx.done_event(
-                                        round(time.time() - ctx.t_total, 1),
-                                        ctx.duo_stop_reason,
-                                        **ctx.collect_done_metrics(),
-                                    ))
-                                    return
-                    if not _coder_load_ok:
-                        _duo_hard_stop = True
-                        _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
-                        yield await ctx.emit({"type": "status",
-                            "content": f"⛔ Coder ({exec_mdl.split(':')[0]}) could not be loaded — run aborted."})
-                        ctx.phase_timer.skip("coder_loop")
-                        clear_graceful_stop(ctx.run_id)
-                        _cleanup_pause_state(ctx.run_id)
-                        if ctx.chat_id:
-                            _clear_pause_state(ctx.chat_id)
-                        _cleanup_governor(ctx.chat_id or ctx.run_id)
-                        yield await ctx.emit({"type": "status", "content": "Coder-Load final failure: process aborted."})
-                        ctx.duo_stop_reason = "hard_stop"
-                        yield await ctx.emit(ctx.done_event(
-                            round(time.time() - ctx.t_total, 1),
-                            ctx.duo_stop_reason,
-                            **ctx.collect_done_metrics(),
-                        ))
-                        return
-                    yield await ctx.emit({"type": "status",
-                        "content": f"✅ Coder ready ({exec_mdl.split(':')[0]})"})
-                    # VISION-TRUTH GATE post-load (2026-10-04):
-                    # /props.modalities.vision is read AFTER every load (also
-                    # the in-loop reload). A dropped projector must not leave
-                    # the raw-image plan + [VISION] note claiming the coder
-                    # sees the image. None (/props unreachable) trusts the plan.
-                    if _img_plan.get("coder") == "raw" and _coder_port is not None:
-                        try:
-                            from backend.llama_server_manager import manager as _lsm_vgate2
-                            _cslot2 = _lsm_vgate2.get_slot_by_port(int(_coder_port))
-                            _cv2 = getattr(_cslot2, "vision_active", None) if _cslot2 is not None else None
-                            if _cv2 is False:
-                                _img_plan, _vg_warns2 = effective_image_plan(
-                                    _img_plan, coder_slot_vision=_cv2,
-                                    has_description=bool(str(getattr(ctx, "image_description", "") or "").strip()))
-                                # RETRACT EVIDENCE (2026-10-04): the
-                                # negative test grades THIS line - it proves
-                                # the note left the actually-sent system
-                                # prompt (note present=True beforehand).
-                                _had_note = CODER_VISION_NOTE in _duo_coder_sys
-                                _duo_coder_sys = _duo_coder_sys.replace(CODER_VISION_NOTE, "")
-                                logger.warning("[DUO][VISION-GATE] [VISION] note retracted "
-                                               "from coder system prompt (was present=%s)", _had_note)
-                                for _w in _vg_warns2:
-                                    logger.warning("[DUO][VISION-GATE] %s", _w)
-                                    yield await ctx.emit({"type": "status", "content": "⚠ " + _w})
-                            elif _cv2 is True:
-                                # STRICT-VISION (2026-10-17): the projector IS
-                                # loaded, so the claim is now proven. The
-                                # pre-prompt build could not know it (this slot
-                                # was loaded in this run) - add the note here.
-                                if _img_plan.get("coder") == "raw" \
-                                        and CODER_VISION_NOTE not in _duo_coder_sys:
-                                    _duo_coder_sys += CODER_VISION_NOTE
-                                    logger.info("[DUO][VISION-GATE] [VISION] note added "
-                                                "(projector confirmed by /props)")
-                            else:
-                                # None = unproven (/props unreachable or no
-                                # modalities field). Do not claim the model can
-                                # see the image.
-                                if CODER_VISION_NOTE in _duo_coder_sys:
-                                    _duo_coder_sys = _duo_coder_sys.replace(CODER_VISION_NOTE, "")
-                                    logger.warning("[DUO][VISION-GATE] coder vision state UNKNOWN "
-                                                   "(/props reports no modalities?) - [VISION] note "
-                                                   "not claimed (strict rule)")
-                        except (ImportError, AttributeError, TypeError, ValueError) as _vg_err2:
-                            logger.debug("[DUO][VISION-GATE] coder post-load check skipped: %s", _vg_err2)
-                    if _subtasks:
-                        yield await ctx.emit({"type": "status",
-                            "content": f"🖊️ Coder active — {len(_subtasks)} subtask(s), starting with chunk 1"})
-                    yield await ctx.emit({
-                        "type": "agent",
-                        "content": "Code",
-                        "model": exec_mdl.split(":")[0] if exec_mdl else "Agentic",
-                        "role": "Writes code",
-                    })
-            except Exception as _evict_err:
-                # hits a dead port → TCP close → frontend: "Error in input stream".
-                logger.warning("Worker-evict/coder-load after explore failed: %s", _evict_err)
-                if not _coder_load_ok:
-                    yield await ctx.emit({"type": "status",
-                        "content": f"⛔ Coder could not be loaded after evict error: {str(_evict_err)[:80]}"})
-                    ctx.phase_timer.skip("coder_loop")
-                    clear_graceful_stop(ctx.run_id)
-                    _cleanup_pause_state(ctx.run_id)
-                    if ctx.chat_id:
-                        _clear_pause_state(ctx.chat_id)
-                    _cleanup_governor(ctx.chat_id or ctx.run_id)
-                    # AUDIT-FIX 2026-08-04: Evict-Exception + Load-Fail — hard_stop +
-                    _duo_hard_stop = True
-                    _pre_loop_resume(ctx, _ws_str, _explore_ctx, _done_tasks, _written_files)
-                    ctx.duo_stop_reason = "hard_stop"
-                    yield await ctx.emit(ctx.done_event(
-                        round(time.time() - ctx.t_total, 1),
-                        ctx.duo_stop_reason,
-                        **ctx.collect_done_metrics(),
-                    ))
-                    return
+        async for _ev in _duo_coder_preloop(ctx, _pre_ps):
+            yield _ev
+        _duo_coder_sys = _pre_ps.duo_coder_sys
+        _always_vision = _pre_ps.always_vision
+        _coder_ctx_override = _pre_ps.coder_ctx_override
+        _coder_port = _pre_ps.coder_port
+        _cached_coder_port = _pre_ps.cached_coder_port
+        _cached_coder_port_ctx = _pre_ps.cached_coder_port_ctx
+        _img_plan = _pre_ps.img_plan
+        _duo_hard_stop = _pre_ps.duo_hard_stop
+        if _pre_ps.stop:
+            return
 
         # MONOTONIC-DEADLINE (audit A3): the run deadline lives on
         # time.monotonic() — a wall-clock (NTP) jump used to expire or extend
@@ -3661,8 +3093,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     "_matched_skills": _matched_skills,
                     "_plan_thinking": _plan_thinking,
                     "_plan_result": _plan_result,
-                    "_inloop_plan_text": _inloop_plan_text if "_inloop_plan_text" in dir() else "",
-                    "_plan_content_txt": _plan_content_txt if "_plan_content_txt" in dir() else "",
+                    "_inloop_plan_text": _inloop_plan_text,
+                    "_plan_content_txt": _plan_content_txt,
                     "_explore_has_contents": _explore_has_contents,
                     "_final_verdict": final_verdict,
                 },
@@ -3753,7 +3185,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         "_duo_runtime_profile": _duo_runtime_profile,
                         "_coder_ctx_eff": _coder_ctx_eff,
                         "_coder_map_budget": _coder_map_budget,
-                        "_plan_result": _plan_result if "_plan_result" in dir() else None,
+                        "_plan_result": _plan_result,
                     },
                 )
                 async for _ev in _duo_dtool_setup(ctx, _ds_ps):
@@ -3785,9 +3217,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         "_planner_step_cap": _planner_step_cap,
                         "_exec_has_thinking": _exec_has_thinking,
                         "_fup_task_ctx": _fup_task_ctx,
-                        "_has_plan": _has_plan if "_has_plan" in dir() else False,
-                        "_duo_deadline_at": _duo_deadline_at if "_duo_deadline_at" in dir() else None,
-                        "_duo_run_timeout_s": _duo_run_timeout_s if "_duo_run_timeout_s" in dir() else 0,
+                        "_has_plan": _has_plan,
+                        "_duo_deadline_at": _duo_deadline_at,
+                        "_duo_run_timeout_s": _duo_run_timeout_s,
                     },
                 )
                 async for _ev in _duo_inloop_planner(ctx, _ip_ps):
@@ -3913,7 +3345,11 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         timeout=httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=5.0),
                     )
                     _stored_threshold = int(ctx.settings.get("duo_compress_threshold", 0))
-                    _plan_state = ""  # initialized before loop; updated during compression
+                    # TOOLCALL-SANITIZE high-water mark (2026-11-07 audit):
+                    # the history is append-only between compressions, so only
+                    # messages from here on need the JSON scan. Reset to 0 when
+                    # compression replaces _dtool_msgs.
+                    _sanitize_upto = 0
                     # CACHE-FRIENDLY + DYNAMIC OUTPUT RESERVE (2026-09-05):
                     # effective threshold = auto_floor*ctx (P1). The previous
                     # P2 deduction (ctx - max_tokens - reserve) is gone because
@@ -4525,7 +3961,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 _no_write_nudged=_no_write_nudged,
                                 _no_write_rounds=_no_write_rounds,
                                 _partial_escalated=_partial_escalated,
-                                _plan_state=_plan_state,
                                 _rule_compress_fails=_rule_compress_fails,
                                 _rule_compress_used=_rule_compress_used,
                                 _total_tool_rounds=_total_tool_rounds,
@@ -4540,6 +3975,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _ctx_full_skips = _cc_ps._ctx_full_skips
                             _ctx_pressure_warned = _cc_ps._ctx_pressure_warned
                             _dtool_msgs = _cc_ps._dtool_msgs
+                            _sanitize_upto = 0  # compression rewrote the history
                             _est_tokens = _cc_ps._est_tokens
                             _explore_only_rounds = _cc_ps._explore_only_rounds
                             _force_compress_next = _cc_ps._force_compress_next
@@ -4548,7 +3984,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _no_write_nudged = _cc_ps._no_write_nudged
                             _no_write_rounds = _cc_ps._no_write_rounds
                             _partial_escalated = _cc_ps._partial_escalated
-                            _plan_state = _cc_ps._plan_state
                             _rule_compress_fails = _cc_ps._rule_compress_fails
                             _rule_compress_used = _cc_ps._rule_compress_used
                             _total_tool_rounds = _cc_ps._total_tool_rounds
@@ -4575,12 +4010,12 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             if _sys:
                                 _dtool_msgs.remove(_sys)
                                 _dtool_msgs.insert(0, _sys)
-                        import json as _json_roles
-                        logger.debug(
-                            "[ROLE-DUMP] round=%d system_count=%d roles=%s",
-                            _di, sum(1 for m in _dtool_msgs if m.get("role") == "system"),
-                            _json_roles.dumps([m.get("role") for m in _dtool_msgs]),
-                        )
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "[ROLE-DUMP] round=%d system_count=%d roles=%s",
+                                _di, sum(1 for m in _dtool_msgs if m.get("role") == "system"),
+                                json.dumps([m.get("role") for m in _dtool_msgs]),
+                            )
                         # D3-NOISE-FIX (2026-08-22): pure tail append (new messages
                         # SCAN-GATE (2026-09-09): pure diagnostics — the per-message signature
                         # scan only runs with DEBUG logging (was an O(n) scan every round).
@@ -4701,7 +4136,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         # tool_calls with malformed JSON args (llama 500 re-parse).
                         try:
                             from core.toolcall_sanitize import sanitize_invalid_tool_call_history as _sanitize_tc
-                            _sanitized_tc = _sanitize_tc(_dtool_msgs)
+                            _sanitized_tc = _sanitize_tc(_dtool_msgs, start=_sanitize_upto)
+                            _sanitize_upto = len(_dtool_msgs)
                             if _sanitized_tc:
                                 logger.warning(
                                     "[TOOLCALL-REPAIR] removed %d invalid tool-call entrie(s) from history before POST",
@@ -4880,10 +4316,6 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             _dr_content = _preprocess_think_blocks(_dr_content)
                             _dr_msg = {**_dr_msg, "content": _dr_content}
                         # Strip ```json ... ``` Markdown fences (Qwen3.6 wraps tool calls)
-                        _RE_JSON_FENCE = re.compile(
-                            r'```(?:json)?\s*(\{.*?\})\s*```',
-                            re.DOTALL,
-                        )
                         if _dr_content and "```" in _dr_content:
                             _dr_content = _RE_JSON_FENCE.sub(lambda m: m.group(1), _dr_content)
                             _dr_msg = {**_dr_msg, "content": _dr_content}
@@ -5383,203 +4815,33 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             if _exec_result.duo_timed_out:
                                 _duo_timed_out = True
                         if _exec_result.task_complete_called:
-                            # Verify-Gate (Agentic-Mode): ensure run_bash ran after last write
-                            if ctx.duo_config.agentic_mode:
-                                _verdict = completion_verdict(
-                                    mutation_serial=_verify_mutation_serial,
-                                    last_ok_serial=_verify_last_ok_serial,
-                                    has_written_files=bool(_written_files),
-                                    vetoes=_verify_gate_blocks if _verify_warned else 0,
-                                )
-                                if _verdict == "unverified":
-                                    _verify_gate_blocks += 1
-                                    _completion_unverified = True
-                                    logger.warning(
-                                        "[VERIFY-GATE] task_complete accepted after %d vetoes "
-                                        "WITHOUT a green test run — result marked unverified",
-                                        _verify_gate_blocks,
-                                    )
-                                elif (_verdict == "veto"
-                                      and not needs_test_verification(_written_files)):
-                                    # Static-only change (HTML/CSS/MD/...): a
-                                    # repo-wide test run would only surface
-                                    # unrelated pre-existing failures and
-                                    # derail the completion into an edit/test
-                                    # loop. No test suite applies here.
-                                    logger.info(
-                                        "[VERIFY-GATE] no testable code changed "
-                                        "(%d file(s)) - completion accepted without tests",
-                                        len(_written_files or []))
-                                elif _verdict == "veto":
-                                    _exec_result.task_complete_called = False
-                                    _verify_gate_blocks += 1
-                                    _verify_warned = True
-                                    # AUTO-VERIFY (2026-10-23): the harness runs
-                                    # the verify suite itself on veto — green →
-                                    # verified, red → failures into context,
-                                    # scoped via the edit→test mapping ([] → full).
-                                    _av_paths: list[str] | None = None
-                                    try:
-                                        from hive_functions.testmap import map_edits_to_tests as _av_map
-                                        _av_paths = _av_map(_ws_str, list(_written_files or [])) or None
-                                    except Exception as _av_map_err:
-                                        logger.debug(
-                                            "[VERIFY-GATE] veto test mapping failed: %s", _av_map_err)
-                                    # AUDIT FIX (F3, 2026-10-24): the inline
-                                    # await used to block this generator for
-                                    # up to 180 s with no heartbeat yield and
-                                    # no deadline grace — the run could die as
-                                    # duo_timed_out right after a GREEN verify.
-                                    try:
-                                        _av_res = await _await_with_hb(
-                                            lambda: _run_test_suite(
-                                                workspace=_ws_str, timeout=90,
-                                                chat_id=ctx.chat_id or "",
-                                                paths=_av_paths,
-                                            ),
-                                            timeout=200.0,
-                                            emit_fn=ctx.emit,
-                                            label="Auto-Verify: running the test suite",
-                                            interval=10.0,
-                                        )
-                                    except Exception as _av_exc:
-                                        _av_res = None
-                                        logger.warning(
-                                            "[VERIFY-GATE] auto-verify run_tests failed: %s: %s",
-                                            type(_av_exc).__name__, str(_av_exc)[:150],
-                                        )
-                                    if _av_res is not None and _av_res.is_clean():
-                                        _verify_last_ok_serial = _verify_mutation_serial
-                                        # re-arm the gate: the next write cycle
-                                        # gets its own veto+auto-verify chance
-                                        # (vetoes>=1 would downgrade it straight
-                                        # to "unverified")
-                                        _verify_gate_blocks = 0
-                                        _verify_warned = False
-                                        _exec_result.task_complete_called = True
-                                        logger.info(
-                                            "[VERIFY-GATE] auto-verify green — completion accepted as verified"
-                                        )
-                                        _dtool_msgs.append({"role": "user", "content": (
-                                            "[AUTO-VERIFY] The harness ran the test suite itself "
-                                            "after your task_complete: ALL TESTS GREEN. "
-                                            "Your completion is accepted as verified."
-                                        )})
-                                        # AUDIT FIX (F1): bare `await ctx.emit` never
-                                        # reached the SSE stream (emit only serializes)
-                                        # — the status events must be yielded.
-                                        try:
-                                            yield await ctx.emit({"type": "status", "content": (
-                                                "✅ Auto-Verify: tests green — completion verified"
-                                            )})
-                                        except Exception as _av_emit_err:
-                                            logger.debug(
-                                                "[VERIFY-GATE] auto-verify green emit failed: %s",
-                                                _av_emit_err)
-                                        # AUDIT FIX (F3b): the verify run (up to 200 s)
-                                        # consumed run budget — grant a fresh grace so
-                                        # a green verify cannot be followed by
-                                        # duo_timed_out (same shape as the wedge handoff).
-                                        _av_grace = time.monotonic() + 300.0
-                                        if _av_grace > _duo_deadline_at:
-                                            _gref = state.setdefault(
-                                                "_grace_extensions_ref", [0])
-                                            if int(_gref[0]) < 1:
-                                                _gref[0] = int(_gref[0]) + 1
-                                                _duo_deadline_at = _av_grace
-                                            else:
-                                                logger.warning(
-                                                    "[DEADLINE-GRACE] auto-verify "
-                                                    "succeeded, but the one allowed "
-                                                    "extension is spent - deadline stays")
-                                    elif _av_res is not None and (
-                                            not _av_res.command
-                                            or NO_TESTS_RE.search(str(_av_res.raw_output or ""))):
-                                        # AUDIT FIX (F2): "nothing ran" is broader than
-                                        # command=="" — a workspace WITH a manifest but
-                                        # zero tests also answers exit 5 / "no tests ran"
-                                        # with a non-empty command. That is a nudge, not
-                                        # a red suite.
-                                        logger.info(
-                                            "[VERIFY-GATE] auto-verify: no tests ran in workspace — smoke-test nudge")
-                                        _dtool_msgs.append({"role": "user", "content": (
-                                            _VERIFY_REQUIRED_PROMPT
-                                        )})
-                                    elif _av_res is not None:
-                                        _av_note = (f"{_av_res.failure_count} test failure(s)"
-                                                    if _av_res.failure_count
-                                                    else "the test run did not pass")
-                                        _dtool_msgs.append({"role": "user", "content": (
-                                            "[VERIFY REQUIRED] You called task_complete but the harness "
-                                            "re-ran the tests itself and they FAILED:\n"
-                                            + str(_av_res.inject_msg)[:900] + "\n"
-                                            "Fix the failures above, run_tests again, then call "
-                                            "task_complete. Do NOT call task_complete while tests are red."
-                                        )})
-                                        try:
-                                            yield await ctx.emit({"type": "status", "content": (
-                                                f"❌ Auto-Verify: {_av_note} — completion blocked"
-                                            )})
-                                        except Exception as _av_emit_err:
-                                            logger.debug(
-                                                "[VERIFY-GATE] auto-verify red emit failed: %s",
-                                                _av_emit_err)
-                                    else:
-                                        # Harness could not run the suite — fall
-                                        # back to instructing the model.
-                                        # vague "run your tests" — baseline FAIL repo_peon r1
-                                        # run_tests → no-suite fallback run_bash → task_complete.
-                                        _dtool_msgs.append({"role": "user", "content": (
-                                            _VERIFY_REQUIRED_PROMPT
-                                        )})
-                            # Fall-through: re-check after Verify injection
-                            if not _exec_result.task_complete_called:
-                                pass  # Verify blocked the completion — loop continues
-                            else:
-                                # TC-LOOP-FIX: an accepted task_complete ends the
-                                # tool loop immediately (observed live Run 10: coder called
-                                # task_complete 4x+ in a row, chunk path never reached).
-                                # Verify that files claimed in task_complete actually exist on disk
-                                _missing = []
-                                for _fp in sorted(_written_files or []):
-                                    # CLAIM-PATH (2026-11-03, live): a model
-                                    # wrote "/C:/.../big.py"; os.path.isabs
-                                    # says True and exists() says False, so a
-                                    # real file was reported missing.
-                                    _fp_n = _claim_abs_path(_fp, _ws_str)
-                                    if not os.path.exists(_fp_n):
-                                        _missing.append(_fp)
-                                if _missing:
-                                    logger.warning(
-                                        "[TASK_COMPLETE VERIFY] %d file(s) claimed but missing: %s",
-                                        len(_missing), _missing[:10],
-                                    )
-                                if _completion_unverified:
-                                    # make the unverified completion visible instead of
-                                    # letting it read like a verified one
-                                    try:
-                                        await ctx.emit({"type": "status", "content": (
-                                            "⚠ Completed without a green test run after the "
-                                            "last write — treat this result as unverified."
-                                        )})
-                                    except Exception as _uv_err:
-                                        logger.debug(
-                                            "[VERIFY-GATE] unverified status emit failed: %s", _uv_err
-                                        )
-                                    logger.warning(
-                                        "[VERIFY-GATE] run ended unverified "
-                                        "(written_files=%d, last_ok_serial=%d, mutation_serial=%d)",
-                                        len(_written_files or []), _verify_last_ok_serial,
-                                        _verify_mutation_serial,
-                                    )
-                                _grace_round_active = False
+                            # C3 (2026-11-07 maintainability sprint): the
+                            # verify gate lives in core/duo_task_complete_gate.
+                            _tc_ps = _DuoTaskCompleteGateState(
+                                ctx=ctx, exec_result=_exec_result,
+                                written_files=_written_files,
+                                dtool_msgs=_dtool_msgs, ws_str=_ws_str,
+                                verify_mutation_serial=_verify_mutation_serial,
+                                state=state, verify_warned=_verify_warned,
+                                verify_last_ok_serial=_verify_last_ok_serial,
+                                verify_gate_blocks=_verify_gate_blocks,
+                                completion_unverified=_completion_unverified,
+                                duo_deadline_at=_duo_deadline_at,
+                                grace_round_active=_grace_round_active,
+                            )
+                            async for _ev in _duo_task_complete_gate(ctx, _tc_ps):
+                                yield _ev
+                            _verify_warned = _tc_ps.verify_warned
+                            _verify_last_ok_serial = _tc_ps.verify_last_ok_serial
+                            _verify_gate_blocks = _tc_ps.verify_gate_blocks
+                            _completion_unverified = _tc_ps.completion_unverified
+                            _duo_deadline_at = _tc_ps.duo_deadline_at
+                            _grace_round_active = _tc_ps.grace_round_active
+                            if _tc_ps.action == "break":
                                 break
                         _total_tool_rounds += 1
                         _lifetime_tool_rounds += 1
                         # Exploration-loop detection: track rounds with only explore tools
-                        _EXPLORE_TOOLS = {"find_files", "search_code", "list_dir", "read_file"}
-                        _WRITE_TOOLS = {"write_file", "edit_file", "patch_file", "write_file_append",
-                                        "replace_lines", "undo_last", "run_bash", "run_python"}
                         _round_tool_names = {
                             tc.get("function", {}).get("name", "") for tc in (_dr_tcs or [])
                         }
@@ -5931,9 +5193,14 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                         if not _wp:
                             continue
                         try:
-                            _fc = Path(_wp).read_text(encoding="utf-8", errors="replace")
+                            # SIZE-CAP (2026-11-07 audit): the critic only
+                            # consumes the first 2000 chars; read_text() pulled
+                            # whole generated files every write round.
+                            with Path(_wp).open("r", encoding="utf-8",
+                                                errors="replace") as _fh:
+                                _fc = _fh.read(2000)
                             if _fc:
-                                _file_parts_critic.append(f"# {_wp}\n{_fc[:2000]}")
+                                _file_parts_critic.append(f"# {_wp}\n{_fc}")
                         except Exception as _err:
                             if isinstance(_err, (
                                 GeneratorExit,
@@ -6436,9 +5703,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _est_tokens=_est_tokens,
         _parts=_parts,
         carry={
-            "_plan_result": _plan_result if "_plan_result" in dir() else None,
-            "_inloop_plan_text": _inloop_plan_text if "_inloop_plan_text" in dir() else "",
-            "_touched_paths": _touched_paths if "_touched_paths" in dir() else [],
+            "_plan_result": _plan_result,
+            "_inloop_plan_text": _inloop_plan_text,
+            "_touched_paths": _touched_paths,
             "_total_tool_errors_ref": _total_tool_errors_ref,
             "_last_run_bash_failure": _last_run_bash_failure,
             "coder_mdl": coder_mdl,
@@ -6471,16 +5738,16 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _project_state_run_counted=_project_state_run_counted,
         _explore_only_rounds=_explore_only_rounds,
         _lifetime_tool_rounds=_lifetime_tool_rounds,
-        _di=locals().get("_di", 0),
-        _n_items=locals().get("_n_items", 1),
-        _loop_items=locals().get("_loop_items") or [{"title": ctx.user_input}],
+        _di=_di,
+        _n_items=_n_items,
+        _loop_items=_loop_items,
         carry={
             "exec_mdl": exec_mdl,
             "final_verdict": final_verdict,
             "critic_issues": critic_issues,
             "_recent_focus_paths": _recent_focus_paths,
-            "_drop_names": locals().get("_drop_names") or [],
-            "_dr_dropped_tool_retries": locals().get("_dr_dropped_tool_retries", "n/a"),
+            "_drop_names": _drop_names,
+            "_dr_dropped_tool_retries": _dr_dropped_tool_retries,
             "_worker_slots": _worker_slots,
             "this_file": ctx.this_file,
             "_warm_workers_fn": _warm_workers_fn,

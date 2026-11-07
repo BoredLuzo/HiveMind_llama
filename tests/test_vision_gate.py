@@ -207,6 +207,7 @@ def test_coder_reload_keeps_same_vision_arg():
     # split 2.7: the in-loop coder reload lives in duo_coder_load.py now
     lines = (io.open(os.path.join(base, "core", "duo_runner.py"), encoding="utf-8").read()
              + io.open(os.path.join(base, "core", "duo_coder_load.py"), encoding="utf-8").read()
+             + io.open(os.path.join(base, "core", "duo_coder_preloop.py"), encoding="utf-8").read()
              ).splitlines()
     _allowed = re.compile(r'^\(?_img_plan\.get\("(planner|coder)"\) == "raw"\)?$')
     # ALWAYS-VISION (42cbf22): the coder load may OR in the owner's
