@@ -29,8 +29,7 @@ async def _duo_run_finalize(ctx, ps):
     from core.duo.preflight import _git_checkpoints_enabled
     from core.duo_runner import (
         _auto_commit_chunk, _auto_push_after_commit,
-        _load_resume_block, _write_resume_block, _warm_workers_fn,
-        _cleanup_governor, _cleanup_pause_state,
+        _load_resume_block, _write_resume_block, _cleanup_governor, _cleanup_pause_state,
     )
     from infra.run_control import clear_graceful_stop
     from context.pause_state import clear_pause_state as _clear_pause_state

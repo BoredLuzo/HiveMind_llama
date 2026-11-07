@@ -46,17 +46,10 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 UPD = (ROOT / "deploy" / "updater.py").read_text(encoding="utf-8", errors="replace")
@@ -486,9 +479,7 @@ def main():
         section_b7(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print()
-    print(f"SUMMARY update_flow_audit: {passed} passed, {failed} failed")
-    sys.exit(0 if failed == 0 else 1)
+    sys.exit(h.finish("update_flow_audit"))
 
 
 main()

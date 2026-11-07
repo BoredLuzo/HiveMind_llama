@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from typing import cast
 import time
 
 from core import state as _state

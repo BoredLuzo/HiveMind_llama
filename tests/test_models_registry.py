@@ -16,20 +16,14 @@ from model_configs.models_registry import (
 )
 from core.model_sampling import get_sampling_profile
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 _registry_dir = Path(__file__).parent.parent / "model_configs" / "models"
 _test_files = []
 
 
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+
+h = Harness()
+check = h.check
 
 
 def _cleanup():
@@ -139,8 +133,4 @@ _cleanup()
 refresh()
 check("26 sampling cleaned up", get_sampling("smp-model:1b") == {})
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("models_registry"))

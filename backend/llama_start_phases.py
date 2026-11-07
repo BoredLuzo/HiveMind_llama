@@ -329,7 +329,6 @@ class _CapsPhase:
 
 async def _phase_capabilities(self, cmd, _all_flags_uncached: bool) -> _CapsPhase:
     from backend.manager_load import _probe_all  # lazy: module cycle
-    from . import llama_config as _llama_cfg
     if _all_flags_uncached:
         _bn, _dev, _kv, _moe, _lm, _dspark = await asyncio.to_thread(_probe_all, str(LLAMA_BIN))
         if _bn > 0 and type(self)._binary_build_number in (None, 0):

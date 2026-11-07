@@ -11,14 +11,14 @@ from core.duo._pre_explore import _explore_extract_files
 from core.duo_helpers import read_loop_key
 from hive_functions.loop_machine import AgentState, StopReason
 import httpx
-from vram.loader import _bk_load, _bk_evict, _get_loaded_models_set
+from vram.loader import _bk_load
 
-import asyncio, hashlib, json, logging, os, re, sys, time, uuid
+import asyncio, logging, os, time
 from context.chat import (
-    _load_chat_context, _chat_context_valid, _mutate_chat_context, _save_chat_context,
+    _load_chat_context, _save_chat_context,
 )
-from context.resume import _check_abort_and_maybe_save_resume, _write_resume_block, _load_resume_block
-from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
+from context.resume import _write_resume_block, _load_resume_block
+from utils.tool import parse_tool_args as _parse_tool_args
 
 logger = logging.getLogger("hivemind.duo")
 _DUO_HEARTBEAT_KEY = "duo_heartbeat_seconds"

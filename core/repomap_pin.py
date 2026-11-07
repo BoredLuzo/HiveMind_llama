@@ -17,7 +17,6 @@ The block is capped (MAX_DELTA_LINES) so it cannot grow without bound.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 _PIN_MARKER = "[REPO-MAP — pinned, byte-stable]"
 _MAP_HEADING = "## Static Repo-Map"

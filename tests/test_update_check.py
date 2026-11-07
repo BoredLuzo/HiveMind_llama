@@ -23,18 +23,10 @@ from tools.update_check import (
     _asset_url_ok,
 )
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+_h = Harness()
+check = _h.check
 
 
 def rel(tag, *, draft=False, zip_asset=True, host="github.com"):
@@ -222,8 +214,4 @@ check("R2: CheckResult roundtrip",
       CheckResult.from_dict(CheckResult(status="current", current="1.5.0").as_dict()).status
       == "current")
 
-print()
-print("=" * 50)
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print("=" * 50)
-sys.exit(0 if failed == 0 else 1)
+sys.exit(_h.finish("update_check"))

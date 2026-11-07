@@ -15,17 +15,10 @@ from hivemind_gateway.cron_proxy import (  # noqa: E402
     job_line, legacy_to_engine, spec_to_body,
 )
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 def main() -> int:
@@ -78,8 +71,7 @@ def main() -> int:
                       "fires": 0, "last_status": ""})
     check("list line: no next_ts renders ?", "next ?" in line2)
 
-    print(f"\nSUMMARY cron_proxy: {passed} passed, {failed} failed")
-    return 1 if failed else 0
+    return h.finish("cron_proxy")
 
 
 if __name__ == "__main__":

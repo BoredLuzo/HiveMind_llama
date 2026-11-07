@@ -15,18 +15,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import routing.decider as D
 from routing.decider import EncoderBackend, Decision
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 def main():
@@ -64,9 +56,7 @@ def main():
     # restore: the real live model name for other suites
     D._BACKEND = None
 
-    print()
-    print(f"SUMMARY decider_unload: {passed} passed, {failed} failed")
-    sys.exit(0 if failed == 0 else 1)
+    sys.exit(h.finish("decider_unload"))
 
 
 main()

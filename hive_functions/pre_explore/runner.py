@@ -7,13 +7,13 @@ import asyncio
 import time
 
 from .context import _build_explore_ctx
-from .contracts import _contract_fail_count
 from .partition import _make_fallback_partition
 from .context import _merge_partition_messages
 from .llm import _reset_pre_explore_usage
 from .llm import _snapshot_pre_explore_usage
 from .partition import _worker_drain
 from .contracts import logger
+from .contracts import _contract_fail_count  # noqa: F401 -- module-global initial value for `global _contract_fail_count` (reset in run_pre_explore)
 
 async def run_pre_explore(
     *,

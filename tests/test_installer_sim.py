@@ -33,18 +33,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = 0
-failed = 0
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 def build_env(fakebin=None, extra=None):
@@ -287,9 +281,7 @@ def main() -> int:
     case_voice_tts_env_fail()
     case_install_abort_paren_path()
     case_install_optionals_garbage_voice_pick()
-    print()
-    print(f"SUMMARY installer_sim: {passed} passed, {failed} failed")
-    return 0 if failed == 0 else 1
+    return h.finish("installer_sim")
 
 
 if __name__ == "__main__":

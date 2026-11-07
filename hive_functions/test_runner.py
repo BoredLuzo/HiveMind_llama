@@ -6,9 +6,8 @@ from __future__ import annotations
 import re
 import os
 import asyncio
-import platform
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from settings import load_settings

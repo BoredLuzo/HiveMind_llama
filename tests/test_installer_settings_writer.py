@@ -26,18 +26,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = 0
-failed = 0
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 BAT = (ROOT / "install.bat").read_text(encoding="ascii", errors="replace")
@@ -142,6 +136,4 @@ check("voice pick normalizes unknown input to skip",
 check("no stale (step 1/8) text left", "(step 1/8)" not in BAT)
 check("optionals path says step 1/9", "(step 1/9)" in BAT)
 
-print()
-print(f"SUMMARY installer_settings_writer: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("installer_settings_writer"))

@@ -22,18 +22,10 @@ from hive_functions.memory import ToolContextLRU, _recall_marker  # noqa: E402
 from context.compression import evict_stale_reads_for_path  # noqa: E402
 from core import tool_exec_helpers as H  # noqa: E402
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
@@ -174,8 +166,4 @@ _register_reads(lruH3, msgsH3)
 evH3 = evict_stale_reads_for_path(messages=msgsH3, lru=lruH3, path="a.py")
 check("D8: default cache_horizon keeps legacy in-place eviction", evH3 == 1, f" got={evH3}")
 
-print()
-print("=" * 50)
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print("=" * 50)
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("ctx_lru_invalidation"))

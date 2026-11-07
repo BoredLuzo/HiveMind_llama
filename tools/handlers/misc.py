@@ -6,7 +6,6 @@ from pathlib import Path
 from tools.errors import tool_error_response as _tool_error_response
 import json
 
-from . import _shared
 
 
 async def _inline_tool_subagent_research(args: dict, workspace: Path, workspace_lock: str | None) -> str:

@@ -10,18 +10,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import core.state
 import tools.runner as R
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 def reset():
@@ -61,8 +53,4 @@ del core.state.settings["duo_install_max_calls"]
 
 core.state.settings = _orig_settings
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("tool_budgets"))

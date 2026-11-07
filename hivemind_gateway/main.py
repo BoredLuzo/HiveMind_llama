@@ -37,7 +37,6 @@ from .bridge import RunBridge
 from .config import GatewayConfig, load_gateway_config, resolve_config_path
 from .hive_client import HiveClient, HiveUnreachable
 from .redaction import attach_redaction_to_root
-from .send import PolicyViolation
 from .state import GatewayState, kill_switch_active
 from .telegram_api import TelegramApi, TelegramApiError
 

@@ -18,18 +18,10 @@ from tools.definitions import (
     _filter_tools_for_mode,
 )
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 def _validate_args(schema_params: dict, args: dict) -> list[str]:
@@ -137,8 +129,4 @@ _full = _filter_tools_for_mode(_all, "duo_full")
 check("full includes run_bash",
       any(t["function"]["name"] == "run_bash" for t in _full))
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("tool_arg_schemas"))

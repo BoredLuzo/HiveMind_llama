@@ -1,8 +1,7 @@
 """Pre-Explore RAM-Cache (aus server.py extrahiert)."""
 from __future__ import annotations
-import asyncio, hashlib as _hashlib, json, logging, os, threading, time
+import asyncio, hashlib as _hashlib, json, logging, time
 from pathlib import Path
-from hive_functions.tree_scout import parse_contract_summary
 from utils.patterns import _RE_WIN_PATH, _RE_UNIX_PATH
 
 logger = logging.getLogger("hivemind.pre_explore_cache")

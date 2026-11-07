@@ -567,7 +567,6 @@ def physical_cores() -> int | None:
     if _PHYS_CORES is not None:
         return _PHYS_CORES or None
     import os as _os
-    import re as _re
     import subprocess as _sp
     try:
         if _os.name == "nt":

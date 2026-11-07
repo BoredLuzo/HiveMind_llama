@@ -14,13 +14,10 @@ if _sys_early.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 import core.state as _state
 from core.state import (
-    detect_vision_need,
-    registry_get, registry_set, registry_all,
-    apply_settings_to_pipeline,
+    registry_get, apply_settings_to_pipeline,
     _ws_configure, _refresh_safe_profile_policy,
 )
 import json
-import copy
 import logging
 import traceback
 import sys
@@ -28,7 +25,6 @@ import os
 import hmac
 import time
 import re
-import uuid
 # platform removed ─ unused (all platform checks use sys.platform)
 import threading
 import contextvars as _contextvars
@@ -51,53 +47,34 @@ class _AccessPollQuietFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(_AccessPollQuietFilter())
 
-from utils.math import percentile_float as _percentile_float
-from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
-from routing.agent_intent import detect_agent_intent, get_question_from_intent, detect_tool_request
 from core.duo_helpers import DEFAULT_VRAM_BUDGET_GB
 
 # ─── Shadow-Def Replacements: imports from extracted modules ───
-from routing.model_picker import _pick_direct_model
-from routing.complexity import _check_complexity_with_bias
-from vram.loader import _bk_load, _bk_pin, _bk_evict
-from vram.loader import _get_loaded_models_set, smart_preload_if_needed, _refresh_judge_keepalive
-from vision.preprocess import _filter_vision_images, _preprocess_images_to_text, init_vision_preprocess
+from vision.preprocess import init_vision_preprocess
 from vision.preprocess import _load_vision_model_cfg
 from core.duo_config import DuoConfig
-from core.run_context import RunContext
-from core.stream import run_stream_orchestrated
 
 # ─── Shadow-Def Imports from tools modules ───
 from tools.definitions import _get_inline_tools
 from tools.runner import _run_inline_tool as _run_inline_tool_runner
 from context.chat import (
     init_chat_context,
-    _get_chat_ctx_lock, _load_chat_context_locked, _save_chat_context_locked,
-    _mutate_chat_context, _ctx_path_for_chat, _load_chat_context,
-    get_chat_workspace, history_seed,
-    _save_chat_context, _chat_context_valid,
 )
 from context.resume import (
     init_resume_deps,
-    _write_resume_block, _load_resume_block, _clear_resume_block,
-    _try_resume, _check_abort_and_maybe_save_resume,
 )
-from context.compression import init_compression, SESSION_COMPRESS_THRESHOLD, _compress_chat_session
+from context.compression import init_compression
 from context.pause_state import init_pause_state
 from infra.run_control import (
     init_run_control,
-    _get_abort_lock, _get_abort_event, _clear_abort_event,
-    _is_aborted, _cleanup_abort_registry,
-    _register_abort, _unregister_abort, _abort_event,
-    _register_step_skip, _step_skip_event, _clear_step_skip, _unregister_step_skip,
+    _clear_abort_event,
+    _is_aborted,
 )
-from infra.run_counter import init_run_counter, _increment_run_counter
+from infra.run_counter import init_run_counter
 from infra.token_stats import (
     init_token_stats,
-    _load_token_stats, _save_token_stats, _record_run,
-    _estimate_tokens_from_content,
 )
-from learning.insights import init_insights, _run_insight_extractor, _run_skill_distillation
+from learning.insights import init_insights
 
 _files_read_in_run: _contextvars.ContextVar[set | None] = _contextvars.ContextVar("_files_read_in_run", default=None)
 import httpx
@@ -132,28 +109,16 @@ try:
 except ImportError:
     _force_kill_all = None
 from hive_functions.planner import (
-    run_planner, run_inloop_planner, PlannerResult,
     make_thinking_planner_sys, make_planner_sys,
     fallback_planner_steps,
 )
 from hive_functions.test_runner import run_tests as _run_test_suite, TestResult as _TestResult
 from hive_functions.chunking import (
-    build_chunk_context,
-    ChunkState,
-    ChunkAction,
-    # Resume helpers
-    resume_block_is_valid,
     load_resume_data,
     build_resume_block,
     # File signature helpers
     build_file_signature,
     file_signature_matches,
-)
-from infra.phase_timer import PhaseTimer
-from hive_functions.ctx_utils import (
-    compute_content_budget,
-    explore_to_planner_ctx,
-    ContextBudget,
 )
 print(f"Hivemind v{HIVEMIND_VERSION} | Backend: {_BACKEND.upper()} ({OLLAMA_HOST})")
 
@@ -176,15 +141,11 @@ _chat_abort_lock: asyncio.Lock | None = None
 _TOOL_BUDGET_NORMAL = {"fast": 20, "balanced": 40, "heavy": 60}
 
 from core.duo_helpers import (
-    _resolve_duo_runtime_profile,
-    _resolve_duo_run_timeout_seconds,
     _bucket_stop_reason,
-    count_image_parts,
 )
 
 
 from tools.websearch import (
-    _get_websearch_timeout_seconds,
     _safe_web_search,
     _safe_web_fetch,
 )
@@ -230,10 +191,6 @@ from infra.log_noise import _install_uvicorn_noise_filter
 _install_uvicorn_noise_filter()
 
 from hive_functions.pipeline import Pipeline
-from hive_functions.tree_scout import (
-    get_workspace_tree, partition_tree, partition_tree_async,
-    parse_contract_summary,
-)
 from hive_functions.hivemind_feature.ast_tools import (
     get_signatures_report,
     edit_ast_file,
@@ -241,42 +198,25 @@ from hive_functions.hivemind_feature.ast_tools import (
 )
 from hive_functions.memory import Memory
 from hive_functions.prompts import (
-    PROMPTS, AGENT_ROLES,
-    HIVEMIND_SOUL,          # moved from server.py inline definition
-    PEER_RATING_PROMPT,     # moved from server.py inline definition
-    VISION_AGENT_PROMPT,    # moved from server.py inline definition
-    VISION_PREPROCESS_PROMPT,
-    build_partition_explore_prompt,
-    EXPLORE_CODEBASE_PROMPT,
-    DUO_CRITIC_TOOLS_SYSTEM,
+    PROMPTS, VISION_PREPROCESS_PROMPT,
 )
 
 _MAX_TREE_DEPTH = 4
 _MAX_TREE_FILES = 200
 from hive_functions.language_config import LANGUAGE_RUNNERS as _LANGUAGE_RUNNERS, detect_language as _detect_language
 from settings import (
-    load_settings, save_settings,
-    DEFAULT_AGENT_CFG, DEFAULT_SETTINGS
+    load_settings, save_settings
 )
 from model_configs import (
-    init_base_configs, get_base_config, list_base_configs,
-    get_learned_config, save_learned_config, get_effective_config,
-    list_learned_models, list_learned_configs, delete_learned_config,
-    reset_learned_configs, append_learning_log, read_learning_log,
-    clear_learning_log
+    init_base_configs, get_effective_config
 )
 from routing.model_automap import (
-    get_automap, get_model_display_map, detect_task_type,
-    get_routing_weights_summary, get_routing_suggestion,
     is_valid_preprocessing_model,
-    save_routing_weights,
-    _VISION_PREPROCESSING_ALLOWLIST,
 )
 
 # ─── Model Capability Overrides (P1 FIX) ─────────────────────────────────────────
 # Kanonische Implementierung: core/model_sampling._model_profile
 # (hardcoded hints + user config from model_configs/models/*.json + cap overrides).
-from core.model_sampling import _model_profile
 
 # ─── Websearch ───────────────────────────────────────────────────────────────────
 try:
@@ -286,13 +226,6 @@ except ImportError:
     _websearch = None  # type: ignore
     _WEBSEARCH_AVAILABLE = False
 
-from hive_functions.soul_engine import (
-    load_soul, save_soul, build_soul_prompt_layer,
-    maybe_evolve_soul, get_soul_summary, reset_soul,
-    run_soul_cycle,
-    MIN_RUNS_FOR_EVOLUTION, EVOLUTION_INTERVAL_RUNS,
-    FORCED_EVOLUTION_COOLDOWN,
-)
 try:
     from hive_functions.git_tools import (
         exec_git_commit,
@@ -323,7 +256,7 @@ app      = FastAPI()
 # allow RCE via /internal/tool/exec. Non-browser clients (curl, httpx, MCP,
 # CLI) send no Origin header and stay unaffected.
 
-from infra.security import _csrf_origin_host, _csrf_origin_guard, _external_bind_guard
+from infra.security import _csrf_origin_guard, _external_bind_guard
 
 app.middleware("http")(_csrf_origin_guard)
 # EXTERNAL-BIND GUARD (2026-10-21): active only when run.py resolved a
@@ -1109,9 +1042,7 @@ def get_effective_prompt_with_override(agent_key, preset_name, use_learned):
 from tools.errors import tool_error_response as _tool_error_response
 
 from context.chat_util import (
-    _extract_ws_query, _trim_query,
-    get_effective_prompt, _make_messages,
-    _extract_memory, _auto_memory_from_input,
+    get_effective_prompt,
 )
 
 
@@ -1267,7 +1198,8 @@ from core.chat_run import run_stream
 # learning/soul_evolution.py (chat_run + peer_ratings import them
 # server-free there); shims keep the server-internal call sites unchanged.
 from learning.soul_evolution import (
-    _maybe_trigger_soul_evolution, _maybe_trigger_soul_evolution_forced,
+    # noqa: F401 -- re-export: core.chat_run does `from server import _maybe_trigger_soul_evolution`
+    _maybe_trigger_soul_evolution, _maybe_trigger_soul_evolution_forced,  # noqa: F401
     init_soul_evolution,
 )
 init_soul_evolution(base_path=THIS_FILE)

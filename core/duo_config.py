@@ -1,6 +1,6 @@
 """DuoConfig dataclass — bundles 18 parameters into one object."""
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass

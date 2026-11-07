@@ -1,6 +1,5 @@
 """VRAM model loader (extracted from server.py)."""
 from __future__ import annotations
-import asyncio
 import logging
 import time
 

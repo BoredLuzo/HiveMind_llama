@@ -21,18 +21,10 @@ from core.tool_executor import (  # noqa: E402
     _WRITE_ARG_COMPACT_MIN,
 )
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 def _big_args(path, n=None):
@@ -93,8 +85,4 @@ check("N3: falscher Index -> no-op",
 check("N4: kein assistant/keine tool_calls -> no-op",
       _compact([{"role": "user", "content": "t"}], 0, {"id": "x"}, "write_file", _big_args("x.py"), {}) == 0)
 
-print()
-print("=" * 50)
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print("=" * 50)
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("tool_arg_compact"))

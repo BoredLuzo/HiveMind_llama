@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from backend.runtime_flags import RUNTIME_FLAG_KEYS as _RUNTIME_FLAG_KEYS
 from settings import (
-    load_settings, save_settings,
+    save_settings,
     load_presets, save_presets,
     get_custom_prompt, save_custom_prompt,
     delete_custom_prompts_for_preset, copy_prompts_to_preset,

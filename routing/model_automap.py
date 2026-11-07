@@ -9,7 +9,7 @@ v0.96 FIXES:
   - qwen3.6 profile corrected: tool_call=True (supports function calling via chat-template)
 """
 from __future__ import annotations
-import logging, os, json, re
+import logging, json, re
 
 from settings import load_settings as _load_settings
 settings = _load_settings()  # Runtime settings dict

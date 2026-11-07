@@ -11,17 +11,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-passed = failed = 0
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from tests._harness import Harness  # noqa: E402
 
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="plain", pad=True)
+check = h.check
 
 
 _duo = (ROOT / "core" / "duo_runner.py").read_text(encoding="utf-8")
@@ -61,5 +56,4 @@ check("416 with an unknown size asks the server (HEAD)",
 check("throttled ctx-full round is skipped, not shipped",
       "skipping this round instead of" in _duo)
 
-print(f"\ndeadline_and_416: {passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish("deadline_and_416"))

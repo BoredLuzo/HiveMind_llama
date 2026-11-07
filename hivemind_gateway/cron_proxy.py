@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import time
 
-from hivemind_gateway.cron import parse_spec
 
 
 def cron_help() -> str:

@@ -1,4 +1,3 @@
-import re
 from pathlib import Path
 
 from core.duo_helpers import _RE_CRITIC_APPROVED, _RE_CRITIC_VERDICT, _RE_CRITIC_ISSUES

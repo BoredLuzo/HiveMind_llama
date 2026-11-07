@@ -1,7 +1,7 @@
 """Vision-Preprocessing (aus server.py extrahiert)."""
 from __future__ import annotations
 
-import asyncio, base64, json, logging, os, re, struct, time
+import asyncio, base64, json, logging, struct
 from pathlib import Path
 from typing import Any, Callable
 

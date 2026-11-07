@@ -23,27 +23,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core import wedge_handoff as wh
 from core.fix_agent import parse_verdict, result_from_verdict
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def ok(name):
-    global passed
-    passed += 1
-    print(f"  PASS  {name}")
-
-
-def fail(name, msg=""):
-    global failed
-    failed += 1
-    print(f"  FAIL  {name}  {msg}")
-
+h = Harness(width=60)
 
 def check(name, cond, msg=""):
-    if cond:
-        ok(name)
-    else:
-        fail(name, msg)
+    return h.ok(name) if cond else h.fail(name, msg)
+ok = h.ok
+fail = h.fail
 
 
 # ── 1. Streak trigger (pure) ────────────────────────────────────────────────
@@ -306,7 +293,4 @@ if __name__ == "__main__":
     test_verdict_parsing()
     test_invalidate_read_signature()
     test_executor_wedge_trigger()
-    print("\n" + "=" * 60)
-    print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-    print("=" * 60)
-    sys.exit(1 if failed else 0)
+    sys.exit(h.finish("wedge_handoff"))

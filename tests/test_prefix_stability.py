@@ -16,18 +16,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from core.tool_exec_helpers import _maybe_activate_reactive_think
 from core.agentic_duo_state import DuoRoundState
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 class _Hooks:
@@ -129,8 +121,4 @@ _retract_vision_note_if_lost(_from_history)
 check("vision retract sees a note already in history", len(_from_history) == 3,
       f" ({len(_from_history)} messages)")
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("prefix_stability"))

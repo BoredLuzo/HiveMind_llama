@@ -5,15 +5,9 @@ from __future__ import annotations
 from .llama_slots import ModelSlot
 from typing import Optional
 from .llama_manager_utils import (
-    CanFitResult, _WIN_CNF, VRAM_BUDGET_GB,
-    LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
-    _OLLAMA_ONLY_BASES, _MMPROJ_REQUIRED_BASES, _VISION_CAPABLE_BASES,
-    _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
-    VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
-    _needs_mmproj, _gguf_path_to_model_name,
-    _probe_binary_build,
-    _probe_backend_devices, _probe_backend_dlls,
-    _prefetch_key, _tcp_alive, _kill_port_sync, _nm,
+    VRAM_BUDGET_GB,  # noqa: F401 -- runtime_sync live-syncs this attr (hasattr-gated)
+    _kill_slot_async,
+    _tcp_alive, _kill_port_sync, _nm,
 )
 import asyncio
 import httpx

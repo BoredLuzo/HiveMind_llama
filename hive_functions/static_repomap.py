@@ -18,7 +18,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -451,7 +450,7 @@ def _cache_key(workspace_root: str, partitions: list[dict]) -> str:
 def _cache_valid(entry: dict, workspace_root: str) -> bool:
     if time.time() - entry.get("ts", 0) > _CACHE_TTL:
         return False
-    from hive_functions.chunking import build_file_signature, file_signature_matches
+    from hive_functions.chunking import file_signature_matches
     for rel, sig in (entry.get("sigs") or {}).items():
         abs_path = os.path.join(workspace_root, rel)
         if not file_signature_matches(abs_path, sig, allow_missing=True):

@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 import asyncio
 from typing import TYPE_CHECKING
 from utils.bg_tasks import spawn  # noqa: E402
-import traceback, hashlib, json, logging, os, re, sys, time, uuid
+import traceback, json, logging, re, time, uuid
 from datetime import datetime
 from pathlib import Path
 import dataclasses
@@ -13,18 +13,12 @@ from functools import partial
 logger = logging.getLogger("hivemind.duo")
 
 # ── VRAM / Backend ──
-from vram.loader import (
-    _bk_evict, _bk_load, _get_loaded_models_set, _refresh_judge_keepalive,
-)
 
 # ── Learning ──
 from learning.peer_ratings import run_peer_ratings
 
 # ── Context ──
-from context.chat import (
-    _load_chat_context, _chat_context_valid, _mutate_chat_context, _save_chat_context,
-)
-from context.resume import _check_abort_and_maybe_save_resume, _write_resume_block, _load_resume_block
+from context.resume import _check_abort_and_maybe_save_resume, _write_resume_block, _load_resume_block  # noqa: F401 -- re-export: core.duo_finalize does `from core.duo_runner import _load_resume_block`
 from infra.run_control import (
     is_graceful_stop_requested, clear_graceful_stop,
     is_pause_requested, clear_pause_request,
@@ -38,12 +32,10 @@ from context.pause_state import (
     clear_pause_state as _clear_pause_state,
 )
 from infra.ask_user_governor import cleanup_governor as _cleanup_governor
-from context.compression import _evict_stale_tool_outputs, _compress_tool_context, _compress_rule_based
+from context.compression import _evict_stale_tool_outputs
 from context.ctx_guard import (
     decide_context_action as _decide_context_action,
     resolve_compress_threshold as _resolve_compress_threshold,
-    should_use_partial as _ctx_should_use_partial,
-    plan_partial_cut_index as _ctx_plan_partial_cut_index,
     clamp_request_max_tokens as _clamp_request_max_tokens,
     clamp_coder_ctx_to_slot as _clamp_coder_ctx_to_slot,
     min_viable_tool_budget as _min_viable_tool_budget,
@@ -60,45 +52,32 @@ from tools.workspace import new_transaction, get_transaction
 from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
 from utils.token import estimate_ctx_tokens as _estimate_ctx_tokens
 from utils.token import CHARS_PER_TOKEN as _CHARS_PER_TOKEN
-from utils.file import normalize_tool_path as _normalize_tool_path
 
 # ── SSE ──
-from sse.events import (
-    make_tool_call_event as _make_tool_call_event,
-    make_tool_result_event as _make_tool_result_event,
-)
 
 # ── Explore ──
 from explore.cache import (
-    _pre_explore_cache, _explore_cache_key, _explore_cache_valid,
-    _pre_explore_cache_set, _get_pre_explore_lock,
     _pre_explore_cache_invalidate_workspace,
-    _PRE_EXPLORE_CACHE_TTL, _explore_extract_files,
 )
 
 # ── Hive Functions ──
-from hive_functions.tree_scout import (
-    get_workspace_tree, partition_tree_async, parse_contract_summary,
-    TREE_HEADER_PREFIX,
-)
 from hive_functions.prompts import (
-    EXPLORE_CODEBASE_PROMPT, DUO_CRITIC_TOOLS_SYSTEM, PROMPTS,
+    DUO_CRITIC_TOOLS_SYSTEM, PROMPTS,
 )
 from hive_functions.ctx_utils import (
     compute_content_budget, ContextBudget, explore_to_planner_ctx,
-    compute_char_caps, budget_session_msgs, extract_known_files,
-    budget_explore_window, derive_static_map_budget,
+    compute_char_caps, derive_static_map_budget,
 )
 from hive_functions.planner import (
-    run_planner, run_inloop_planner, PlannerResult,
+    run_planner, PlannerResult,
     make_thinking_planner_sys, make_planner_sys, fallback_planner_steps,
     make_planner_analysis_sys,
 )
-from hive_functions.chunking import ChunkState, build_chunk_context, ChunkAction
+from hive_functions.chunking import ChunkState, ChunkAction
 from hive_functions.loop_machine import AgentState, StopReason, ExecutionController
 from hive_functions.memory import ToolContextLRU
 from hive_functions.test_runner import (
-    run_tests as _run_test_suite, TestResult as _TestResult, NO_TESTS_RE,
+    run_tests as _run_test_suite, TestResult as _TestResult,
 )
 
 from hive_functions.language_config import build_test_hint as _build_test_hint
@@ -154,20 +133,15 @@ from core.duo_coder_load import (
 )
 from core.duo_finalize import _duo_run_finalize
 from core.duo_helpers import (
-    build_image_desc_block, attach_images_to_last_user, resolve_image_plan,
-    count_image_parts, effective_image_plan, CODER_VISION_NOTE, vision_note_for_coder,
+    build_image_desc_block, resolve_image_plan,
+    effective_image_plan, vision_note_for_coder,
     build_steer_user_message as _build_steer_user_message,
-    DEFAULT_VRAM_BUDGET_GB, is_read_only_request, RE_THINK_CLEANUP as _re_think_cleanup,
-    _preprocess_think_blocks, _inject_no_think_directive, _resolve_tool_budget, _resolve_tool_read_timeout_seconds,
-    _calculate_thinking_tokens, _build_duo_coder_sys,
+    RE_THINK_CLEANUP as _re_think_cleanup,
+    _preprocess_think_blocks, _calculate_thinking_tokens, _build_duo_coder_sys,
     should_compress_after_truncated_drop as _should_compress_after_truncated_drop,
-    inloop_plan_should_run as _inloop_plan_should_run,
-    _run_parallel_pre_explore, _build_symbol_reference_hints,
-    _compress_fail_streak_update, _explore_size_tolerance, _collect_new_explore_paths,
-    read_loop_key,
-    _should_escalate_pass_files,     _sum_edit_lines, _build_dropped_tool_retry,
-    _RE_WIN_PATH, _RE_UNIX_PATH, _RE_FILE_EXT,
-    _RE_CRITIC_APPROVED, _RE_CRITIC_VERDICT, _RE_CRITIC_ISSUES,
+    _build_symbol_reference_hints,
+    _explore_size_tolerance, _collect_new_explore_paths,
+    _sum_edit_lines, _build_dropped_tool_retry,
     
 )
 from core.plan_tracker import build_tracker_from_planner as _build_tracker_from_planner
@@ -179,7 +153,7 @@ if TYPE_CHECKING:
 
 # ── Extracted pure utilities (core/duo/_utils.py) ──
 from core.duo._utils import (
-    _merge_down, _split_paths_by_parent, _parse_critic_tune,
+    _parse_critic_tune,
     _is_retryable_ollama_err, _build_soft_check,
 )
 
@@ -280,7 +254,6 @@ _READONLY_CODER_NOTE = (
 
 # PREFLIGHT-EXTRACT (1.4.x): the module-level helpers live in core/duo/preflight.py.
 from core.duo.preflight import (
-    completion_verdict,
     stuck_handler,
     plan_emit_fn,
     plan_aborted_fn,
@@ -289,7 +262,6 @@ from core.duo.preflight import (
     calib_est_tokens as _calib_tokens,
     keepalive_vision as _keepalive_vision_fn,
     emit_chunk_planner_heartbeat as _planner_hb_fn,
-    write_pre_loop_resume as _pre_loop_resume,
     halt_with_resume as _halt_fn,
     unpin_duo_models as _unpin_duo_fn,
     warm_workers_after_run as _warm_workers_fn,
@@ -304,7 +276,6 @@ from core.duo.preflight import (
     _park_on_disconnect,
     _read_hb_interval,
     _resolve_fallback_model,
-    needs_test_verification,
 )
 
 

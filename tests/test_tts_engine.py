@@ -30,18 +30,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 def make_wav(seconds=4.0, sr=24000) -> bytes:
@@ -238,6 +230,4 @@ check("a single keep-alive client is reused", "def _client()" in code
 check("the client is created lazily", "_http_client = None" in code)
 
 
-print()
-print(f"SUMMARY tts_engine: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("tts_engine"))

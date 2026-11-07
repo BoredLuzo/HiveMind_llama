@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from settings import load_settings, save_settings
+from settings import load_settings, save_settings  # noqa: F401 -- tests patch `git_router.load_settings`
 import core.state as _state
 from core.state import (
     settings, _GIT_CONFIG_KEYS,

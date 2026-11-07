@@ -16,18 +16,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.browser import _check_blocked_repeat, _blocked_navigations
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
+h = Harness(width=60)
 
 def check(name, cond, msg=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS  {name}")
-    else:
-        failed += 1
-        print(f"  FAIL  {name}  {msg}")
+    return h.ok(name) if cond else h.fail(name, msg)
 
 
 def test_escalation():
@@ -59,7 +53,4 @@ def test_independence():
 if __name__ == "__main__":
     test_escalation()
     test_independence()
-    print("\n" + "=" * 60)
-    print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-    print("=" * 60)
-    sys.exit(1 if failed else 0)
+    sys.exit(h.finish("browser_blocked_dedup"))

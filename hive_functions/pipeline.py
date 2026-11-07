@@ -30,7 +30,7 @@ if _root_dir not in sys.path:
 from hive_functions.prompts import PROMPTS, AGENT_ROLES
 from hive_functions.memory import Memory
 from infra.config import (
-    DEFAULT_MODEL, MAX_ITERATIONS, SESSIONS_DIR,
+    MAX_ITERATIONS, SESSIONS_DIR,
     MODEL_ANALYST, MODEL_REFINER, MODEL_CRITIC,
     MODEL_SYNTHESIZER, MODEL_DIRECT, MODEL_JUDGE,
 )

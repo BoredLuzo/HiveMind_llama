@@ -16,18 +16,10 @@ from core.error_rollup import (
     render_rollup,
 )
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 def tb(file_line: int, message: str) -> str:
@@ -156,8 +148,4 @@ _st.mark_all_fixed()
 check("resolved capped at 64", len(_st.resolved) <= 64,
       f" got {len(_st.resolved)}")
 
-print()
-print("=" * 50)
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print("=" * 50)
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("error_rollup"))

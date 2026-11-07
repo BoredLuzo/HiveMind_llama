@@ -15,17 +15,10 @@ from scheduler.spec import (  # noqa: E402
 from scheduler.store import AutomationStore  # noqa: E402
 from scheduler.manager import SchedulerManager  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+_h = Harness(style="summary", pad=True)
+check = _h.check
 
 
 def main() -> int:
@@ -216,8 +209,7 @@ def main() -> int:
           "automations_router" in srv and "init_manager" in srv
           and "scheduler started" in srv)
 
-    print(f"\nSUMMARY scheduler_core: {passed} passed, {failed} failed")
-    return 1 if failed else 0
+    return _h.finish("scheduler_core")
 
 
 if __name__ == "__main__":

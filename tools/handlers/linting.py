@@ -13,7 +13,6 @@ import shutil as _shutil_x6
 _bash_bin = _shutil_x6.which("bash") or "/bin/sh"
 import sys
 
-from . import _shared
 
 from .exec_tools import _ps_quote_path
 

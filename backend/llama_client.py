@@ -9,11 +9,10 @@ import json
 import logging
 import time
 import uuid
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator
 
 from .llama_server_manager import manager
 from .llama_config import CONTEXT_SIZE_DEFAULT
-from .llama_models import resolve_model_path
 
 
 class LlamaError(Exception):

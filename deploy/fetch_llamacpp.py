@@ -20,7 +20,6 @@ Stdlib only (urllib/zipfile/tarfile) — no extra dependencies needed.
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
 import re

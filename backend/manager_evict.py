@@ -3,22 +3,16 @@
 from __future__ import annotations
 
 from .llama_manager_utils import (
-    CanFitResult, _WIN_CNF, VRAM_BUDGET_GB,
-    LLAMA_STARTUP_READY_TIMEOUT_SECONDS,
-    _OLLAMA_ONLY_BASES, _MMPROJ_REQUIRED_BASES, _VISION_CAPABLE_BASES,
-    _VRAM_BASE_OVERHEAD_GB, _VRAM_PRE_FLIGHT_GRACE_S,
+    CanFitResult, VRAM_BUDGET_GB,
+    _VRAM_PRE_FLIGHT_GRACE_S,
     VRAM_PRE_FLIGHT_MARGIN_MIB,
-    VRAMPreFlightError, _available_ram_gb, _kill_slot_async,
-    _needs_mmproj, _gguf_path_to_model_name,
-    _probe_binary_build,
-    _probe_backend_devices, _probe_backend_dlls,
-    _prefetch_key, _tcp_alive, _kill_port_sync, _nm,
+    _kill_slot_async,
 )
 from .llama_slots import ModelSlot
 from .llama_config import DEFAULT_IDLE_TIMEOUT_SECONDS, ubatch_extra_mib
 from typing import Optional
-from .llama_models import resolve_model_path, list_available_models, resolve_mmproj_path, _strip_alias
-from .llama_vram_table import vram_of as _vram_of, vram_of_with_ctx as _vram_of_ctx, vram_of_moe, VRAM_OVERFLOW_MODELS, _MOE_TABLE, get_live_gpu_free_mib, wait_for_vram_reclaim, TOTAL_VRAM_MIB
+from .llama_models import _strip_alias
+from .llama_vram_table import vram_of as _vram_of, vram_of_moe, get_live_gpu_free_mib
 import asyncio
 import time
 import logging

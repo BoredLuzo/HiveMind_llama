@@ -1,7 +1,6 @@
 """Debug API-Router."""
 import asyncio
 import json
-import traceback
 from pathlib import Path
 
 from fastapi import APIRouter

@@ -1,14 +1,14 @@
 from __future__ import annotations
-import asyncio, hashlib, json, logging, math, os, re, time
+import asyncio, hashlib, json, logging, re, time
 from pathlib import Path
 import httpx
 
 logger = logging.getLogger("hivemind.duo")
 
-from context.chat import _load_chat_context, _chat_context_valid, _mutate_chat_context, _save_chat_context, _SESSIONS_DIR
+from context.chat import _load_chat_context, _chat_context_valid, _save_chat_context, _SESSIONS_DIR
 from context.resume import _try_resume
 from utils.token import CHARS_PER_TOKEN as _CPT
-from tools.definitions import _get_inline_tools, _filter_tools_for_mode
+from tools.definitions import _filter_tools_for_mode
 from explore.cache import (
     _pre_explore_cache, _explore_cache_key, _explore_cache_valid,
     _pre_explore_cache_set, _get_pre_explore_lock,
@@ -543,7 +543,6 @@ async def _phase_pre_explore_prepare(ctx, state: dict):
     # WORKER-N_PARALLEL-FIX 355:
     # _use_parallel = bool(ctx.settings.duo_parallel_preexplore) — User-Toggle.
     # Config multi-worker: exploration_agent.workers → n_parallel=1 each.
-    import math as _math  # MATH-IMPORT-FIX: must be available before first use here
     _parallel_setting_est = ctx.duo_config.parallel_preexplore
     _use_parallel = bool(_parallel_setting_est)
     _xworker_cfgs_for_est = (ctx.settings.get("exploration_agent") or {}).get("workers") or []

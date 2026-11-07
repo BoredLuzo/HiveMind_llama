@@ -15,7 +15,6 @@ import threading
 import time
 import uuid
 
-import httpx
 
 from core import state as _state
 from core.chat_history_seed import _ChatHistorySeedState, _chat_history_seed
@@ -65,7 +64,6 @@ from routing import decider as _routing_decider
 from infra import editor_context as _editor_ctx
 from infra.token_stats import _estimate_tokens_from_content
 from utils.math import percentile_float as _percentile_float
-from utils.httpx_utils import make_httpx_timeout as _make_httpx_timeout
 
 
 def _history_budget_tokens(settings) -> int:
@@ -143,7 +141,6 @@ async def run_stream(
     )
     from context.resume import _clear_resume_block, _load_resume_block
     from vision.preprocess import _filter_vision_images
-    from tools.definitions import _get_inline_tools
     from infra.run_counter import _increment_run_counter
     from infra.token_stats import _record_run
     from learning.insights import _run_insight_extractor, _run_skill_distillation

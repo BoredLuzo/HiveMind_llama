@@ -38,13 +38,12 @@ from __future__ import annotations
 
 
 import logging
-import os
 import re
 from utils.patterns import _RE_PATH_KEY, _RE_REL_PATH_HINT
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Awaitable, Any
+from typing import TYPE_CHECKING, Any
 
 from hive_functions.ctx_utils import budget_explore_window
 
@@ -772,7 +771,6 @@ class ChunkState:
         - On test fail with no retries: appends to ``completion_notes``,
           clears ``test_retries``.
         """
-        import asyncio  # local import to avoid top-level overhead
 
         _is_last = (di == n_items - 1)
 

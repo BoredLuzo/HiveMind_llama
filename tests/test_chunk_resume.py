@@ -22,18 +22,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(pad=True)
+check = h.check
 
 
 print("=== 1. structural: every _di += 1 persists a chunk checkpoint ===")
@@ -197,8 +189,4 @@ _sf_blank = build_resume_block(
 check("blank entries are dropped", _sf_blank["resume"]["pending_send_files"] == [])
 
 shutil.rmtree(_tmp, ignore_errors=True)
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("chunk_resume"))

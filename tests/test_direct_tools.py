@@ -24,18 +24,10 @@ from tools.websearch import WEB_SEARCH_TOOL_DEF, WEB_FETCH_TOOL_DEF
 from settings import DEFAULT_SETTINGS
 from core.run_context import RunContext
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 print("-- 1) Direct-Tool-Mode Allowlists --")
@@ -228,8 +220,4 @@ finally:
     _tl.ToolLoop = _orig_loop
     _defs.init_websearch(False, None)
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("direct_tools"))

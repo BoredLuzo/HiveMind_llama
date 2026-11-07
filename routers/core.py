@@ -11,9 +11,8 @@ from infra.run_control import (
     _get_abort_event, _step_skip_event, _abort_event,
     set_user_answer, get_decision_id,
     request_graceful_stop, _run_abort_registry,
-    request_pause_after_chunk, signal_resume, is_pause_requested,
-    signal_abort_during_pause, pause_abort_signal_pending,
-    _RESUME_SIGNALS, is_pause_pending,
+    request_pause_after_chunk, signal_resume, signal_abort_during_pause, pause_abort_signal_pending,
+    is_pause_pending,
     is_pause_waiting, queue_steer, steer_queue_view,
 )
 from infra.ask_user_governor import (
@@ -24,7 +23,6 @@ from infra.ask_user_governor import (
 from core.state import settings
 import core.state as _state
 from context.pause_state import load_pause_state
-from utils.tool import parse_tool_args as _parse_tool_args
 from tools.errors import tool_error_response as _tool_error_response, parse_tool_error as _parse_tool_error
 from tools.runner import _run_inline_tool
 from tools.runner import _APPROVAL_TOOLS as _INTERNAL_MUTATING_TOOLS

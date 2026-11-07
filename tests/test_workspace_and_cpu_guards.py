@@ -27,18 +27,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 from core.duo_helpers import cpu_prefill_warning, CPU_CTX_WARN_TOKENS  # noqa: E402
@@ -161,6 +153,4 @@ check("chat_run explains the fallback to the user",
       "does not exist" in _src_cr and "using {_fb_ws} instead" in _src_cr)
 check("chat_run returns a code, not a bare exit",
       "fallback_for_invalid_request as _fb_invalid" in _src_cr)
-print()
-print(f"SUMMARY workspace_and_cpu_guards: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("workspace_and_cpu_guards"))

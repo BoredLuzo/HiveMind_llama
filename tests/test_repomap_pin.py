@@ -11,18 +11,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from core.repomap_pin import pin_static_map
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 MAP = (
@@ -116,8 +108,4 @@ check("T2: pinned system untouched when updated map copy arrives",
 check("T3: updated map copy stays in user history (append-only)",
       MAP_V2 in str(_msgs_v2[1].get("content", "")))
 
-print()
-print("=" * 50)
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print("=" * 50)
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("repomap_pin"))

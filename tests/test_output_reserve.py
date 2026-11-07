@@ -21,18 +21,10 @@ from core.duo_helpers import (
     _bucket_stop_reason as _bucket,
 )
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 # ── clamp_request_max_tokens ────────────────────────────────────────────────
@@ -92,8 +84,4 @@ check("B3: graceful_stop is a normal stop", _bucket("graceful_stop") == "none")
 check("V6: requested > actual pins to actual", _clamp_ctx(70000, 17500) == 17500)
 check("V7: requested <= actual stays", _clamp_ctx(16384, 32768) == 16384)
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("output_reserve"))

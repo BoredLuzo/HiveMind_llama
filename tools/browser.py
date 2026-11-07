@@ -8,7 +8,6 @@ import asyncio
 import contextvars
 import functools
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 

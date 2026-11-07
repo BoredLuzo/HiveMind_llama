@@ -11,7 +11,6 @@ recovery — those remain in duo_runner.
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -24,7 +23,7 @@ from typing import TYPE_CHECKING, Callable, Awaitable, cast
 
 from tools.runner import _run_inline_tool
 from tools.limits import READ_LADDER_SAME_PATH, READ_LADDER_WIDE
-from utils.tool import parse_tool_args as _parse_tool_args, run_bash_failed as _run_bash_failed
+from utils.tool import parse_tool_args as _parse_tool_args
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
 from tools.errors import tool_call_failed as _tool_call_failed, tool_error_has_code as _tool_error_has_code, tool_error_response as _tool_error_response
 from core.agentic_duo_state import DuoRoundState

@@ -13,17 +13,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from backend import llama_preflight as LP  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="plain", pad=True)
+check = h.check
 
 
 # 1. RAM guard conditions (fail-closed era: unknown model blocks)
@@ -79,5 +72,4 @@ LP.kill_process_tree(proc.pid, timeout_s=5)
 time.sleep(0.5)
 check("tree kill ended the process", proc.poll() is not None)
 
-print(f"\nload_preflight: {passed} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+sys.exit(h.finish("load_preflight"))

@@ -19,17 +19,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from backend import llama_models as LM  # noqa: E402
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 def _fake_gguf(path: Path, mb: int) -> Path:
@@ -127,8 +120,7 @@ def main() -> int:
         check("slot id never lands in models.json",
               not any(k.startswith("llamacpp:") for k in saved))
 
-    print(f"\nSUMMARY multi_quant_models: {passed} passed, {failed} failed")
-    return 1 if failed else 0
+    return h.finish("multi_quant_models")
 
 
 if __name__ == "__main__":

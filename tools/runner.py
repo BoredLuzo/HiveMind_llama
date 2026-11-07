@@ -10,7 +10,7 @@ from pathlib import Path
 from tools.errors import tool_error_response as _tool_error_response
 from tools.definitions import _tool_names_for_mode
 from tools.workspace import get_transaction
-from utils.file import fuzzy_resolve_path as _fuzzy_resolve_path, _inline_resolve_path, _inline_check_workspace, normalize_tool_path as _normalize_tool_path
+from utils.file import fuzzy_resolve_path as _fuzzy_resolve_path, _inline_resolve_path, normalize_tool_path as _normalize_tool_path
 from tools.handlers import (
     _inline_tool_read_file,
     _inline_tool_get_signatures,

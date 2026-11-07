@@ -19,17 +19,10 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 MODEL = "qwen3.5:4b"
@@ -270,6 +263,4 @@ check("no loop_detected / abort in the stop reason",
 check("a coder token/tool event stream existed (status relay)",
       any(t in ("status", "token", "tool_call", "agent") for t in _types))
 
-print()
-print(f"SUMMARY duo_e2e_smoke: {passed} passed, {failed} failed")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("duo_e2e_smoke"))

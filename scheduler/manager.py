@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 
 from scheduler import spec
-from scheduler.store import AutomationStore, MAX_JOBS
+from scheduler.store import AutomationStore
 
 logger = logging.getLogger("hivemind.scheduler")
 

@@ -7,17 +7,15 @@ import json
 import json as _json_tc
 import logging
 import re as _re_tc
-import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import AsyncIterator, Callable, Awaitable
 
 import httpx
 
 from infra.run_control import drain_steer_messages
-from tools.errors import tool_call_failed, tool_error_has_code
-from tools.definitions import _get_inline_tools, _filter_tools_for_mode, get_tools_for_phase
-from tools.runner import _run_inline_tool, _current_run_id, _pause_timeout_s, _tool_loop_emit
+from tools.errors import tool_call_failed
+from tools.definitions import get_tools_for_phase
+from tools.runner import _run_inline_tool, _current_run_id, _tool_loop_emit
 from sse.events import make_tool_call_event as _make_tool_call_event, make_tool_result_event as _make_tool_result_event
 from core.duo_helpers import RE_THINK_CLEANUP as _RE_THINK_CLEANUP, parse_sse_delta as _parse_sse_delta, count_image_parts as _count_image_parts, build_steer_user_message as _build_steer_user_message
 

@@ -86,7 +86,7 @@
   *Akzeptanz:* pro angefasster Suite mindestens ein Verhaltens-Test; Pins nur für
   Architektur-Invarianten, die sich nicht verhalten testen lassen.
 
-- [ ] **B4 · P2 · TEST — Restliche Harness-Migration.** (103 Suiten migriert; Sonderformate offen)
+- [ ] **B4 · P2 · TEST — Restliche Harness-Migration.** (143 Suiten migriert; Sonderformate offen)
   Suiten mit Sonderformat (`=== Results:`, `passed=N failed=M`, Skip-Summary,
   `<5 Checks`) sind noch nicht migriert.
   *Akzeptanz:* Harness um diese Formate erweitert oder bewusst als Ausnahmen
@@ -102,10 +102,12 @@
   Verschwindet mit B1; danach Baseline 0 anstreben.
   *Akzeptanz:* `deploy/pyright_baseline.py` → 0/0.
 
-- [ ] **B7 · P3 · DEBT — Ruff-Regelsatz erweitern.**
+- [ ] **B7 · P3 · DEBT — Ruff-Regelsatz erweitern.** (F401: 537 → 179; noch nicht aktiviert)
   Aktuell nur E9/F821/F601/F811/F841/W605; `target-version` ist 3.14.
-  *Akzeptanz:* schrittweise F401/S110/BLE001 mit Baseline/Pre-Commit; keine
-  Verhaltensänderung.
+  *Fortschritt 2026-11-07:* 358 ungenutzte Importe entfernt (54 Dateien),
+  6 begründete `# noqa: F401`-Keeps, ruff/test grün. F401 bleibt aus, bis
+  Fassaden (`llama_server_manager`, `manager_load`, `__init__`) per
+  `__all__`/per-file-ignores explizit sind und die Test-Residuen bereinigt sind.
 
 - [ ] **B8 · P2 · TEST — Coverage 46,12 % gezielt heben.**
   Schwächste Kernmodule: `core/pipeline_runner.py` 2,5 %, `duo_compress_cycle` 4,1 %,

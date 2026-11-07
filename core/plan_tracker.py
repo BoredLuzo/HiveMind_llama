@@ -20,7 +20,6 @@ from __future__ import annotations
 import datetime
 import fnmatch
 import logging
-import os
 import re
 from dataclasses import dataclass, field
 

@@ -7,7 +7,7 @@ from typing import Optional
 
 from .llama_server_manager import manager
 from .llama_config import CONTEXT_SIZE_DEFAULT, DEFAULT_IDLE_TIMEOUT_SECONDS
-from .llama_models import list_available_models, resolve_model_path
+from .llama_models import list_available_models
 
 logger = logging.getLogger("llama_compat")
 

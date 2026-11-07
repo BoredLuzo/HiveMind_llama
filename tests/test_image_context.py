@@ -17,17 +17,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import context.chat as C
 
-passed = failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(name, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {name} {extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {name} {extra}")
+h = Harness(style="summary", pad=True)
+check = h.check
 
 
 PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * 32).decode()
@@ -71,8 +64,7 @@ def main() -> int:
         check("a global shutdown wipes every chat image",
               C.load_chat_images("chat123") == [])
 
-    print(f"\nSUMMARY image_context: {passed} passed, {failed} failed")
-    return 1 if failed else 0
+    return h.finish("image_context")
 
 
 if __name__ == "__main__":

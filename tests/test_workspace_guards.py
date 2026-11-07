@@ -12,18 +12,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.file import _is_protected_path, _inline_check_workspace, normalize_tool_path
 from tools.errors import parse_tool_error
 
-passed = 0
-failed = 0
+from tests._harness import Harness  # noqa: E402
 
-
-def check(label, cond, extra=""):
-    global passed, failed
-    if cond:
-        passed += 1
-        print(f"  PASS {label}{extra}")
-    else:
-        failed += 1
-        print(f"  FAIL {label}{extra}")
+h = Harness()
+check = h.check
 
 
 ROOT = Path(__file__).parent.parent.resolve()
@@ -70,8 +62,4 @@ check("norm: relative joined + lower", n.endswith("/tmp/ws/foo.py"), f" ({n})")
 n2 = normalize_tool_path(str(ROOT / "README.md"), str(ROOT))
 check("norm: absolute kept + fwd-slash", n2.replace("\\", "/") == str(ROOT / "README.md").replace("\\", "/").lower())
 
-print()
-print(f"{'='*50}")
-print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-print(f"{'='*50}")
-sys.exit(0 if failed == 0 else 1)
+sys.exit(h.finish("workspace_guards"))

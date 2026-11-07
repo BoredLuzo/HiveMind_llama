@@ -30,27 +30,16 @@ APP = ROOT / "static" / "app.js"
 SIM = ROOT / "tests" / "tg_stream_sim.js"
 DIFF_SIM = ROOT / "tests" / "tg_diff_cleanup_sim.js"
 
-passed = 0
-failed = 0
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from tests._harness import Harness  # noqa: E402
 
-def ok(name):
-    global passed
-    passed += 1
-    print(f"  PASS  {name}")
-
-
-def fail(name, msg=""):
-    global failed
-    failed += 1
-    print(f"  FAIL  {name}  {msg}")
-
+h = Harness(width=60)
 
 def check(name, cond, msg=""):
-    if cond:
-        ok(name)
-    else:
-        fail(name, msg)
+    return h.ok(name) if cond else h.fail(name, msg)
+ok = h.ok
+fail = h.fail
 
 
 def test_static_wiring():
@@ -121,7 +110,4 @@ def test_behavior_sim():
 if __name__ == "__main__":
     test_static_wiring()
     test_behavior_sim()
-    print("\n" + "=" * 60)
-    print(f"  {passed} passed, {failed} failed  (total {passed + failed})")
-    print("=" * 60)
-    sys.exit(1 if failed else 0)
+    sys.exit(h.finish("toolgen_stream_card"))
