@@ -653,6 +653,12 @@ class ToolLoop:
                         raise RuntimeError(f"Tool-POST HTTP {_resp.status_code}: {_err_body}")
 
                     # ── Parse non-streaming response ──
+                    # RESPONSE-NOT-READ (2026-11-07 live test): we are inside
+                    # `client.stream(...)`, so .json()/.text raise
+                    # httpx.ResponseNotRead until the body is drained. The
+                    # legacy tool-agent route (stream=False) hit this on every
+                    # run and ended with stop_reason=error.
+                    await _resp.aread()
                     return self._parse_nonstream(_resp, _events)
 
             except httpx.ConnectError:

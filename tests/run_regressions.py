@@ -80,6 +80,7 @@ SUITES = [
     ("duo_split",                 "tests/test_duo_split.py",                    60),
     ("duo_loop_guards",           "tests/test_duo_loop_guards.py",              30),
     ("coverage_setup",            "tests/test_coverage_setup.py",               30),
+    ("tool_loop_nonstream",       "tests/test_tool_loop_nonstream.py",          30),
     ("tool_descriptions",         "tests/test_tool_descriptions.py",            60),
     ("live_findings",             "tests/test_live_findings.py",                60),
     ("content_budget_tokens",     "tests/test_content_budget_tokens.py",        60),
