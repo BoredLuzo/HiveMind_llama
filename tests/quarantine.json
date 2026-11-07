@@ -1,0 +1,5 @@
+{
+  "_comment": "Reviewed known-flaky suites (B9). The runner SKIPS every entry and prints [QUAR] with its reason; --include-quarantined still runs them. Never add a suite just to get a green run: first try to fix it, then record why it is quarantined and when it should be revisited.",
+  "_format": "\"suite_name\": {\"reason\": \"WinError 10053 under parallel load\", \"since\": \"2026-11-07\", \"revisit\": \"2026-12-01\"}",
+  "_empty": true
+}

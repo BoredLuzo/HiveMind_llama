@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**276 settings keys.**
+**277 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -21,6 +21,7 @@ its comment) in either file, then re-run the generator.
 | `ask_user_timeout_until_finished_seconds` | int | `300` | yes |  |
 | `automap_excluded` | list | `[]` | - |  |
 | `automations_enabled` | bool | `True` | - | AUTOMATIONS : engine-owned scheduled runs (UI tab "Automations"). False is the kill switch; jobs live in automations.json, not here. |
+| `chat_autosave_enabled` | bool | `True` | yes | UI-side only (B5, ): gates the browser's chat autosave - it flushes the chat json before /stream and after edits. The engine never reads it, and that is intentional: persistence is a client decision. Listed here so the checkbox is discoverable and round-trips through… |
 | `constraint_mode` | bool | `True` | yes |  |
 | `ctx_overrides` | object | `{...}` | yes |  |
 | `debug_api_enabled` | bool | `False` | - | DEBUG API : /debug/tasks returns asyncio task stacks with file paths, /debug/models registry and filesystem internals, /thinking/debug and /budget/debug expose internals - all on an unauthenticated loopback API. Off by default; the router is not even mounted… |

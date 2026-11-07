@@ -13,15 +13,27 @@ Run:
                                                # by the current working-tree changes
     python tests/run_regressions.py --changed-list                 # dry-run: print selection
     python tests/run_regressions.py --changed --changed-ref v1.5.5 # widen the diff
+    python tests/run_regressions.py --flake-report [N]  # flake stats over the last N runs
+    python tests/run_regressions.py --include-quarantined  # also run quarantined suites
 """
+import json
 import os
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
+
+# FLAKE HISTORY (B9, 2026-11-07): every run appends pass/fail/duration per
+# suite to a local, git-ignored file. `--flake-report` reads it; a suite that
+# keeps flipping is added to quarantine.json instead of being retried, so a
+# flake cannot hide behind a retry. Neither file ships in the release ZIP.
+_HISTORY_FILE = ROOT / "tests" / ".regression_history.json"
+_QUARANTINE_FILE = ROOT / "tests" / "quarantine.json"
+_HISTORY_KEEP = 30  # runs kept; ~330 suites each, still a small JSON file
 
 # (name, relPath, timeout seconds) - only actually present tests.
 SUITES = [
@@ -358,6 +370,8 @@ SUITES = [
     ("updater_behavior",        "tests/test_updater_behavior.py",           180),
     ("chat_vision_pre",         "tests/test_chat_vision_pre.py",             60),
     ("llama_start_phases",      "tests/test_llama_start_phases.py",          90),
+    # B9 runner mechanics (flake history/quarantine/changed patterns)
+    ("regression_runner_b9",    "tests/test_regression_runner_b9.py",        30),
 
 ]
 
@@ -464,7 +478,12 @@ def _change_patterns(rel: str) -> list[str]:
     elif "/" in low:
         d, base = low.rsplit("/", 1)
         pats.add(base)  # app.js
-        pats.add(d)     # static
+        # A changed test fixture/data file must not select every suite via the
+        # "tests" directory pattern (B9, 2026-11-07: tests/quarantine.json
+        # matched 253/331 suites). Docs are already filtered before selection,
+        # but keep the same guard here for direct callers.
+        if d.split("/", 1)[0] not in ("tests", "docs"):
+            pats.add(d)  # static
     return sorted(pats)
 
 
@@ -486,6 +505,97 @@ def _select_affected(changed: list[str]) -> list[tuple[str, str, int]]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Flake history + quarantine (B9, 2026-11-07). History is written on every
+# normal run; `--flake-report` summarises it. Quarantine is an explicit,
+# reviewed JSON file (no automatic quarantine): a suite is skipped with a
+# reason until someone fixes it or passes --include-quarantined.
+# ---------------------------------------------------------------------------
+def _load_json_object(path: Path) -> dict:
+    """Parsed JSON object from `path`; {} for missing/corrupt/wrong-shaped."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _load_quarantine() -> dict[str, dict]:
+    """Suite-name -> {reason, since, ...}; keys starting with '_' are notes."""
+    raw = _load_json_object(_QUARANTINE_FILE)
+    return {str(k): v for k, v in raw.items()
+            if not str(k).startswith("_") and isinstance(v, dict)}
+
+
+def _load_history() -> list[dict]:
+    runs = _load_json_object(_HISTORY_FILE).get("runs")
+    if not isinstance(runs, list):
+        return []
+    return [r for r in runs if isinstance(r, dict)]
+
+
+def _record_history(results: list[tuple], changed_mode: bool,
+                    jobs: int) -> None:
+    """Append this run's pass/fail/duration per suite to the history file."""
+    if "--no-history" in sys.argv:
+        return
+    head = _git_lines(["rev-parse", "--short", "HEAD"])
+    run = {
+        "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "head": head[0] if head else "",
+        "jobs": jobs,
+        "changed": changed_mode,
+        "results": {name: {"ok": bool(ok), "dur": round(dur, 1)}
+                    for name, ok, dur, _ in results},
+    }
+    runs = _load_history()
+    runs.append(run)
+    tmp = _HISTORY_FILE.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps({"runs": runs[-_HISTORY_KEEP:]}, indent=1),
+                       encoding="utf-8")
+        os.replace(tmp, _HISTORY_FILE)
+    except OSError as exc:
+        print(f"note: could not write flake history: {exc}")
+
+
+def _flake_report(limit: int) -> int:
+    """Print pass/fail flips per suite over the last `limit` recorded runs."""
+    runs = _load_history()[-limit:]
+    if not runs:
+        rel = _HISTORY_FILE.relative_to(ROOT)
+        print(f"No flake history yet ({rel}); a normal run writes it.")
+        return 0
+    seqs: dict[str, list[bool]] = {}
+    durs: dict[str, list[float]] = {}
+    for run in runs:
+        for name, res in (run.get("results") or {}).items():
+            if not isinstance(res, dict) or "ok" not in res:
+                continue
+            seqs.setdefault(str(name), []).append(bool(res["ok"]))
+            dur = res.get("dur")
+            if isinstance(dur, (int, float)):
+                durs.setdefault(str(name), []).append(float(dur))
+    rows = []
+    for name, seq in seqs.items():
+        flips = sum(1 for a, b in zip(seq, seq[1:]) if a != b)
+        if flips:
+            rows.append((flips, name, len(seq), sum(seq), seq[-1]))
+    rows.sort(key=lambda r: (-r[0], r[1]))
+    print(f"FLAKE REPORT: {len(runs)} run(s), "
+          f"{runs[0].get('at', '?')} .. {runs[-1].get('at', '?')}")
+    if not rows:
+        print("  no suite flipped pass/fail in this window")
+        return 0
+    print(f"  {'suite':24s} {'flips':>5s} {'runs':>5s} {'pass':>5s}  last   median")
+    for flips, name, n, npass, last in rows:
+        ds = sorted(durs.get(name) or [0.0])
+        median = ds[len(ds) // 2]
+        print(f"  {name:24s} {flips:5d} {n:5d} {npass:5d}  "
+              f"{'PASS' if last else 'FAIL':4s}  {median:.0f}s")
+    return 0
+
+
 def main() -> int:
     for _stream in (sys.stdout, sys.stderr):
         try:
@@ -505,6 +615,12 @@ def main() -> int:
     if "--help" in sys.argv or "-h" in sys.argv:
         print(__doc__)
         return 0
+    if "--flake-report" in sys.argv:
+        i = sys.argv.index("--flake-report")
+        n = 20
+        if i + 1 < len(sys.argv) and sys.argv[i + 1].isdigit():
+            n = max(1, int(sys.argv[i + 1]))
+        return _flake_report(n)
     changed_ref = "HEAD"
     if "--changed-ref" in sys.argv:
         i = sys.argv.index("--changed-ref")
@@ -531,7 +647,10 @@ def main() -> int:
                       f" (--all-on-empty to run everything anyway)")
             return 0
         if meaningful:
-            active = _select_affected(changed)
+            # DOCS-EXCLUDE (B9, 2026-11-07): select from `meaningful`, not
+            # `changed`. docs/settings.md used to contribute the pattern
+            # "settings" and pull ~260/331 suites into a docs-only diff.
+            active = _select_affected(meaningful)
         # all_on_empty with an empty/doc-only set: keep the full SUITES list.
         if changed_list:  # dry run: print the selection, run nothing
             if only:
@@ -564,8 +683,17 @@ def main() -> int:
     pending: list[tuple[int, str, str, int]] = []
     exclusive: list[tuple[int, str, str, int]] = []
     failed_total = 0
+    quarantine = _load_quarantine()
+    include_quarantined = "--include-quarantined" in sys.argv
     for name, rel, timeout in active:
         if only and only not in name.lower():
+            continue
+        if name in quarantine and not include_quarantined:
+            # QUARANTINE (B9): an explicitly reviewed known flake is skipped,
+            # with a reason, instead of being retried into a green run.
+            reason = str(quarantine[name].get("reason") or "known flake")
+            print(f"[QUAR] {name:24s} (quarantined: {reason};"
+                  f" --include-quarantined to run)")
             continue
         if ci_subset and name in _CI_EXCLUDED_SUITES:
             print(f"[SKIP] {name:24s} (--ci-subset: developer-only fixtures)")
@@ -643,6 +771,7 @@ def main() -> int:
     ran = len(results)
     npass = sum(1 for _, ok, _, _ in results if ok)
     print(f"Suites: {npass}/{ran} PASS, {failed_total} suite(s) failed")
+    _record_history(results, changed_mode, jobs)
     return 1 if failed_total else 0
 
 

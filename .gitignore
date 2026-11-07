@@ -11,6 +11,10 @@ logs/
 # Lint / test caches
 .ruff_cache/
 .pytest_cache/
+# Flake history written by tests/run_regressions.py (B9) - local, per machine.
+# quarantine.json IS committed: it is a reviewed decision, not runtime state.
+tests/.regression_history.json
+tests/.regression_history.json.tmp
 
 # Coverage artifacts (tests/coverage_run.py): parallel .coverage.<host>.<pid>
 # data files, the merged .coverage and the htmlcov/ report - never committed

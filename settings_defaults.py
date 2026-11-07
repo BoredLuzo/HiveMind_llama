@@ -388,6 +388,12 @@ DEFAULT_SETTINGS = {
     "keep_awake_during_run":   True,
     # Windows toasts for run start/end and approval cards.
     "desktop_notifications":   True,
+    # UI-side only (B5, 2026-11-07): gates the browser's chat autosave - it
+    # flushes the chat json before /stream and after edits. The engine never
+    # reads it, and that is intentional: persistence is a client decision.
+    # Listed here so the checkbox is discoverable and round-trips through
+    # settings.json instead of depending on a hand-edited key.
+    "chat_autosave_enabled":   True,
     "constraint_mode":         True,
     "git_repo_url":            "",
     "git_username":            "",
