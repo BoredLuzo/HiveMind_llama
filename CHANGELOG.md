@@ -15,6 +15,10 @@ Windows process-count probe runs in a thread, and `tzdata` moved from the
 dev group into the shipped dependencies so named timezones work on a fresh
 install.
 
+Ask-user: the card no longer runs its own 30 s auto-answer timer; the engine
+governor is the single source, so one question can never receive two
+autonomous answers. The card checkbox still persists the global setting.
+
 Benchmark: new `bench/` D1 harness (raw / HiveMind direct / HiveMind duo /
 aider) with a 21-task starter corpus and hidden, tamper-proof tests. It is
 developer-only and export-ignored.

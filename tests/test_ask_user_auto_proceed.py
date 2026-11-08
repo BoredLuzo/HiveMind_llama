@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""ask_user_auto_proceed tests (W2-3, 2026-11-07).
+"""ask_user_auto_proceed tests (W2-3, 2026-11-07; A5 2026-11-08).
 
-The UI toggle existed before but only drove the per-card "Auto 30s" timer.
-W2-3 wires it into the ENGINE: the ask_user governor timeout now also starts
+The UI toggle used to drive a per-card "Auto 30s" timer; A5 removed that
+timer so the ENGINE governor is the single auto-answer source.
+W2-3 wires the setting into the ENGINE: the ask_user governor timeout starts
 for non-until-finished runs when ask_user_auto_proceed is on, using a fixed
 30 s (AUTO_PROCEED_TIMEOUT_S). Precedence: until_finished keeps its
 configured ask_user_timeout_until_finished_seconds. The setting is re-read
@@ -18,6 +19,7 @@ Pinned here:
      when both off, and the CURRENT value wins over the run-start snapshot.
   4. Unit: start_timeout(run_id, 0, ...) is a no-op; a tiny timeout calls
      infra.run_control.set_user_answer with the auto answer (<1 s).
+  5. A5: the ask_user card runs no timer and only persists the setting.
 
 Run: python tests/test_ask_user_auto_proceed.py
 Exit 0 = all pass, Exit 1 = failures.
@@ -212,11 +214,24 @@ def test_start_timeout_unit():
             rc.cleanup_pause(rid)
 
 
+def test_ui_single_source():
+    """A5: the engine is the only auto-answer source; the card runs no timer."""
+    app = (ROOT / "static" / "app.js").read_text(encoding="utf-8", errors="replace")
+    start = app.index("var _tg = document.createElement('label')")
+    end = app.index("_inp.addEventListener('keydown'", start)
+    card = app[start:end]
+    check("A5 card runs no auto-answer timer", "setInterval" not in card)
+    check("A5 card label names the engine source", "engine 30s" in card)
+    check("A5 toggle still persists the global setting",
+          "postSettings({ ask_user_auto_proceed: _tgCb.checked })" in card)
+
+
 if __name__ == "__main__":
     print("== ask_user_auto_proceed (W2-3) ==")
     test_configure_run_auto_proceed()
     test_source_pins()
     test_engine_starts_timeout()
     test_start_timeout_unit()
+    test_ui_single_source()
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

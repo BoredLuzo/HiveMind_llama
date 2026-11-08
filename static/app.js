@@ -6069,14 +6069,14 @@ function _renderAskCard(d) {
   _skip.style.cssText = 'font-size:10px;padding:5px 10px;border:1px solid #f0ad4e55;color:#f0ad4e';
   _skip.textContent = '\u23E9 Proceed autonomously';
   _skip.onclick = function() { _sendAnswer('(no user input, proceed autonomously)'); };
-  // AUTO-PROCEED (2026-09-19): optional toggle with a visible timer. On:
-  // the question auto answers with the autonomous text after 30s. The
-  // state sticks for the session, later asks auto proceed too.
+  // AUTO-PROCEED (2026-09-19; A5 2026-11-08): the toggle persists the global
+  // setting. The ENGINE governor performs the 30 s auto-answer; the card no
+  // longer runs its own timer (two sources raced on the same question).
   var _tg = document.createElement('label');
   _tg.style.cssText = 'display:flex;align-items:center;gap:5px;font-size:10px;color:var(--tx2);border:1px solid var(--b2);border-radius:4px;padding:5px 10px;cursor:pointer;user-select:none';
   // W2-3: this toggle is the SAME global setting as the settings row next
-  // to Action Approval (ask_user_auto_proceed) — with it on, the ENGINE
-  // auto-answers after 30 s even when no card timer is running.
+  // to Action Approval (ask_user_auto_proceed); the engine auto-answers
+  // after 30 s when it is on.
   _tg.title = 'Global setting (Settings \u2192 Action Approval gate): the engine auto-answers ask_user after 30 s. until-finished runs keep their configured timeout.';
   var _tgCb = document.createElement('input');
   _tgCb.type = 'checkbox';
@@ -6086,30 +6086,21 @@ function _renderAskCard(d) {
   var _tgTm = document.createElement('span');
   _tgTm.style.cssText = "color:#f0ad4e;font-family:'IBM Plex Mono',monospace";
   _tg.appendChild(_tgCb); _tg.appendChild(_tgTxt); _tg.appendChild(_tgTm);
-  var _tgIv = null;
-  function _stopTimer() {
-    if (_tgIv) { clearInterval(_tgIv); _tgIv = null; }
-    _tgTm.textContent = '';
-  }
-  function _startTimer() {
-    _stopTimer();
-    var _left = 30;
-    _tgTm.textContent = '00:30';
-    _tgIv = setInterval(function() {
-      _left--;
-      if (_left <= 0) { _stopTimer(); _sendAnswer('(no user input, proceed autonomously)'); return; }
-      var _m = Math.floor(_left / 60), _s = String(_left % 60).padStart(2, '0');
-      _tgTm.textContent = '0' + _m + ':' + _s;
-    }, 1000);
+  // A5 (2026-11-08): the ENGINE governor is the single auto-answer source.
+  // The card used to run its own 30 s interval and could race the engine's
+  // 30 s timeout (two answers for one question). The checkbox now only
+  // toggles the global setting; when on, the engine answers after 30 s.
+  function _syncTimerLabel() {
+    _tgTm.textContent = _tgCb.checked ? 'engine 30s' : '';
   }
   _tgCb.onchange = function() {
     S.askUserAutoProceed = _tgCb.checked;
     // Persisted as a setting: survives reloads and is part of presets
     // (the preset save snapshots settings.json).
     postSettings({ ask_user_auto_proceed: _tgCb.checked });
-    if (_tgCb.checked) _startTimer(); else _stopTimer();
+    _syncTimerLabel();
   };
-  if (S.askUserAutoProceed) _startTimer();
+  _syncTimerLabel();
   _inp.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') { e.preventDefault(); _send.click(); }
   });

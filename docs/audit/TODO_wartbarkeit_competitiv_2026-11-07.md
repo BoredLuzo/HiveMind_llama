@@ -1,6 +1,6 @@
 # TODO — Wartbarkeit, Release-Härtung, Wettbewerbsfähigkeit
 
-**Stand:** 2026-11-08 · Branch `dev` @ `95adfd5` + Batch 17 (F4/F5/F8, Aider)
+**Stand:** 2026-11-08 · Branch `dev` @ `c18e9d8` + Batch 18 (A5/A6)
 **Legende:** P0 = blockiert Release · P1 = als Nächstes · P2 = geplant · P3 = strategisch
 **Typ:** BUG / DESIGN / DEBT / TEST / RELEASE / COMPETE
 
@@ -51,17 +51,20 @@
   der Fake-Loop in `max_tool_rounds`, mit Guard in `completed` + Textantwort;
   `tests/test_chat_tools_route_guards.py` deckt Prompt/Signaturen/Limit ab.
 
-- [ ] **A5 · P2 · DESIGN — Doppelter Auto-Answer bei `ask_user_auto_proceed`.**
+- [x] **A5 · P2 · DESIGN — Doppelter Auto-Answer bei `ask_user_auto_proceed`.**
   Karten-Timer (JS, 30 s) und Engine-Timeout (30 s) können gleichzeitig antworten.
   Aktuell harmlos (spätes `set_user_answer` ist No-op/409), aber zwei Quellen.
-  *Akzeptanz:* eine Quelle (Engine) oder Karten-Timer sendet kein Auto-Answer mehr,
-  wenn das Setting aktiv ist; Race-Test.
-  *Evidenz:* `static/app.js` Karten-Timer, `tools/runner.py` Governor-Timeout.
+  *Erledigt 2026-11-08:* der Karten-Timer ist entfernt; der Checkbox-Toggle
+  persistiert nur noch `ask_user_auto_proceed`, die Engine ist die einzige
+  Auto-Answer-Quelle (`engine 30s` im Label). Guards in
+  `tests/test_ask_user_auto_proceed.py`.
 
-- [ ] **A6 · P2 · TEST — UI-Verdrahtung von `ask_user_auto_proceed` nur per API geprüft.**
+- [x] **A6 · P2 · TEST — UI-Verdrahtung von `ask_user_auto_proceed` nur per API geprüft.**
   Checkbox unter dem Action-Approval-Gate ist im Browser nicht durchgeklickt worden.
-  *Akzeptanz:* Browser-Test (Playwright): Toggle → `settings.json` → Reload → Toggle
-  bleibt; Karten-Timer und Engine-Timeout sichtbar konsistent.
+  *Erledigt 2026-11-08:* echter Playwright-Test gegen die laufende Engine
+  (`toggle flips` → `/settings` folgt → Reload hält den Wert → Original
+  wiederhergestellt). Opt-in-Skript `tests/browser/test_ask_user_toggle.py`
+  (nicht in der CI, braucht Engine + Browser).
 
 - [x] **A7 · P3 · DESIGN — `coverage_setup` schlägt unter Coverage-Messung fehl.**
   Der Check „coverage not in sys.modules“ ist im gemessenen Prozess by design falsch.
@@ -261,10 +264,14 @@ Flake-Report (chronisch/partial).
   Prozess, Registry-Identität). Bei Änderung Rescan statt Reset; 52 Checks in
   `test_find_loaded_race.py`.
 
-- [ ] **F6 · P3 · TEST — Drei Pin-Suiten mit hohem Konvertierungswert.**
+- [x] **F6 · P3 · TEST — Drei Pin-Suiten mit hohem Konvertierungswert.**
   `test_voice_card` (~100 String-Pins), `test_ui_context_card`,
   `test_toolgen_stream_card`; nur bei Anfassen konvertieren (B3-Regel),
   Start mit `/stt/fetch` als httpx-Verhaltenstest.
+  *Entscheidung 2026-11-08:* **won't do als Massenkonvertierung** (wie B4).
+  Diese Suiten sichern UI-Verdrahtung, die sich ohne Browser/JS-Runtime nicht
+  sinnvoll verhalten testen lässt; Konvertierung nur, wenn der jeweilige
+  Code ohnehin angefasst wird.
 
 - [ ] **F7 · P3 · RELEASE — Wochen-Cron testet bis zum Merge weiter `main`.**
   `windows-full.yml` hat jetzt `ref: dev`, aber geplante Workflows lesen die
@@ -406,3 +413,6 @@ Flake-Report (chronisch/partial).
 - Batch 17 (2026-11-08): F4 Sync-I/O (Walks/Prefill-Meter, 41 Checks),
   F5 `_find_loaded`-Race (52 Checks), F8 Divergenz dokumentiert; Aider
   0.86.2 separat installiert, `--aider-bin` verdrahtet, Smoke 1/1; 341/341.
+- Batch 18 (2026-11-08): A5 Karten-Timer entfernt (Engine einzige
+  Auto-Answer-Quelle), A6 Playwright-Browsertest bestanden und als
+  Opt-in-Skript abgelegt, F6 als won't-do geschlossen.
