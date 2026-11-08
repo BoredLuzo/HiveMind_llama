@@ -1935,18 +1935,18 @@ async def _run_inline_tool(
                 except Exception:
                     pass
                 # POST-WRITE-LSP (2026-10-31): attach compact diagnostics
-                # when a language server is already warm. Silent by design -
-                # a broken/missing server must never turn a successful
-                # write into a tool error, and a cold server is only warmed
-                # for the next write. The file_ops handlers already attach a
-                # pyright/per-language lint block for Python — skip the LSP
-                # block then, or the model reads the same errors twice.
+                # LSP-FIRST (2026-11-08): the LSP result wins when it ran;
+                # otherwise the file_ops lint block stays as the fallback.
+                # Silent by design - a broken/missing server must never turn
+                # a successful write into a tool error.
                 try:
-                    if "[lint/" not in _result:
-                        from tools.handlers.lsp import auto_diagnostics_block as _lsp_auto
-                        _lsp_note = await _lsp_auto(workspace, args["path"])
-                        if _lsp_note:
-                            _result += "\n\n" + _lsp_note
+                    from tools.handlers.lsp import (
+                        auto_diagnostics_block as _lsp_auto,
+                        merge_post_write_diagnostics as _lsp_merge,
+                    )
+                    _lsp_note, _lsp_handled = await _lsp_auto(
+                        workspace, args["path"], return_status=True)
+                    _result = _lsp_merge(_result, _lsp_note, _lsp_handled)
                     from tools.handlers.lsp import notify_watched_change as _lsp_watch
                     _lsp_watch(workspace, [args["path"]])
                 except (ImportError, OSError, RuntimeError, ValueError,

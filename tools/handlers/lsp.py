@@ -27,6 +27,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+from typing import Literal, overload
 
 from infra import lsp_client as _lsp
 from infra import lsp_registry as _registry
@@ -579,9 +580,27 @@ def _warm_lsp_async(mgr, language: str) -> asyncio.Task:
     return task
 
 
+@overload
+async def auto_diagnostics_block(workspace: Path, path: str, *,
+                                 max_lines: int = 8,
+                                 return_status: Literal[False] = False) -> str: ...
+
+
+@overload
+async def auto_diagnostics_block(workspace: Path, path: str, *,
+                                 max_lines: int = 8,
+                                 return_status: Literal[True]) -> tuple[str, bool]: ...
+
+
 async def auto_diagnostics_block(workspace: Path, path: str,
-                                 *, max_lines: int = 8) -> str:
+                                 *, max_lines: int = 8,
+                                 return_status: bool = False) -> str | tuple[str, bool]:
     """Compact diagnostics for a file the agent just wrote, or "".
+
+    With ``return_status=True`` returns ``(text, handled)``: ``handled`` is
+    True only when the LSP actually ran and published diagnostics (even when
+    the file is clean). The write dispatcher uses that to decide whether the
+    pre-existing lint fallback stays.
 
     Called from the shared write dispatcher. It is deliberately cheap:
     - only when lsp_enabled and lsp_auto_diagnostics are on;
@@ -590,61 +609,83 @@ async def auto_diagnostics_block(workspace: Path, path: str,
       gets the diagnostics;
     - short wait (max 1.5s), hard line cap, every failure is silent.
     """
+    def _r(text: str, handled: bool):
+        return (text, handled) if return_status else text
+
     if not _lsp_enabled():
-        return ""
+        return _r("", False)
     settings = _lsp_settings()
     if not _truthy(settings.get("lsp_auto_diagnostics"), True):
-        return ""
+        return _r("", False)
     raw = str(path or "").strip()
     if not raw:
-        return ""
+        return _r("", False)
     p = _inline_resolve_path(workspace, raw)
     language = _registry.language_for_path(p)
     if language is None:
-        return ""
+        return _r("", False)
     try:
         sig = (p.stat().st_mtime_ns, p.stat().st_size)
     except OSError:
-        return ""
+        return _r("", False)
     key = str(p).lower() if os.name == "nt" else str(p)
     if _AUTO_DIAG_CACHE.get(key) == sig:
-        return ""
+        return _r("", True)
     mgr = _get_manager(workspace)
     if not mgr.is_started(language):
         # AUTONOMOUS-WARM (2026-11-08): start the server from the write path.
         # Wait at most 3 s; a slower server keeps warming in the background
         # and the next write gets the diagnostics.
         if not _truthy(settings.get("lsp_auto_warm_on_write"), True):
-            return ""
+            return _r("", False)
         _warm = _warm_lsp_async(mgr, language)
         try:
             await asyncio.wait_for(asyncio.shield(_warm), timeout=3.0)
         except (asyncio.TimeoutError, _lsp.LspError, OSError, RuntimeError):
             pass
         if not mgr.is_started(language):
-            return ""
+            return _r("", False)
     wait_s = min(_coerce_float(settings.get("lsp_diagnostics_wait_s"), 5.0),
                  1.5)
     try:
         diags = await mgr.diagnostics(p, wait_s=wait_s, allow_pull=False)
     except (_lsp.LspError, OSError, asyncio.TimeoutError):
-        return ""
+        return _r("", False)
     if not mgr.has_diagnostics(p):
-        return ""  # server is still analyzing; the explicit tool can retry
+        return _r("", False)  # still analyzing; the explicit tool can retry
     _AUTO_DIAG_CACHE[key] = sig
     if len(_AUTO_DIAG_CACHE) > 128:
         _AUTO_DIAG_CACHE.clear()
     if not diags:
-        return ""
+        return _r("", True)
     cap = max(1, min(int(max_lines or 8), 20))
     body = _fmt_diagnostics(_rel(workspace, p), diags, cap)
     errors = sum(1 for d in diags
                  if isinstance(d, dict) and d.get("severity") == 1)
     if len(diags) > cap:
         body += f"\n(+{len(diags) - cap} more diagnostic(s))"
-    return (f"[LSP auto-diagnostics after writing {_rel(workspace, p)}: "
+    text = (f"[LSP auto-diagnostics after writing {_rel(workspace, p)}: "
             f"{len(diags)} finding(s), {errors} error(s) - fix before "
             f"verification]\n" + body)
+    return _r(text, True)
+
+
+def merge_post_write_diagnostics(result: str, lsp_note: str,
+                                 lsp_handled: bool) -> str:
+    """LSP wins when it ran; otherwise the file_ops lint block is the fallback.
+
+    file_ops always appends its lint block (`\\n[lint/...`). When the LSP
+    published diagnostics - even a clean result - drop that block and use the
+    LSP text. When the LSP was unavailable/cold, keep the lint block.
+    """
+    if not lsp_handled:
+        return result
+    _lint_at = result.find("\n[lint/")
+    if _lint_at != -1:
+        result = result[:_lint_at]
+    if lsp_note:
+        result = result.rstrip() + "\n\n" + lsp_note
+    return result
 
 
 async def _inline_tool_lsp_diagnostics(args: dict, workspace: Path,

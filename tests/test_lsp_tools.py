@@ -552,7 +552,7 @@ def _auto_key(ws):
 
 
 def _auto_flow(ws, path, *, enabled=True, started=True, published=True,
-               diag=None, warm=True):
+               diag=None, warm=True, status=False):
     async def _go():
         set_settings(lsp_enabled=enabled, lsp_auto_diagnostics=True,
                      lsp_auto_warm_on_write=warm)
@@ -563,7 +563,8 @@ def _auto_flow(ws, path, *, enabled=True, started=True, published=True,
         fake.diag_result = list(diag or [])
         LH._MANAGERS[_auto_key(ws)] = fake
         try:
-            return await LH.auto_diagnostics_block(ws, path)
+            return await LH.auto_diagnostics_block(
+                ws, path, return_status=status)
         finally:
             LH._MANAGERS.clear()
     return asyncio.run(_go())
@@ -588,6 +589,33 @@ check("12d no publication yet -> no misleading auto block", _out == "")
 _out = _auto_flow(_auto_ws, "sample.py", diag=[DIAGS[0]])
 check("12e a warm server with a clean file -> no block",
       _auto_flow(_auto_ws, "sample.py", diag=[]) == "")
+
+# 12f: status tells the write dispatcher whether LSP is authoritative.
+_txt, _handled = _auto_flow(_auto_ws, "sample.py", diag=DIAGS, status=True)
+check("12f LSP findings are handled", _handled is True and _txt)
+_txt, _handled = _auto_flow(_auto_ws, "sample.py", diag=[], status=True)
+check("12g LSP clean is handled (lint fallback can be dropped)",
+      _handled is True and _txt == "")
+_txt, _handled = _auto_flow(_auto_ws, "sample.py", started=False,
+                            warm=False, diag=DIAGS, status=True)
+check("12h LSP unavailable is not handled (lint stays)",
+      _handled is False and _txt == "")
+_txt, _handled = _auto_flow(_auto_ws, "sample.py", published=False,
+                            diag=DIAGS, status=True)
+check("12i LSP still analyzing is not handled",
+      _handled is False and _txt == "")
+
+_lint = "written\n[lint/python WARNINGS (pyright)]:\nfoo"
+check("12j LSP wins: lint block is replaced",
+      LH.merge_post_write_diagnostics(_lint, "LSP-OK", True)
+      == "written\n\nLSP-OK")
+check("12k LSP clean: lint block is dropped",
+      LH.merge_post_write_diagnostics(_lint, "", True) == "written")
+check("12l LSP unavailable: lint block stays",
+      LH.merge_post_write_diagnostics(_lint, "LSP-OK", False) == _lint)
+check("12m no lint block: LSP is appended",
+      LH.merge_post_write_diagnostics("written", "LSP-OK", True)
+      == "written\n\nLSP-OK")
 
 # explicit lsp_diagnostics must not report "clean" before the first publish
 def _pending_setup(mgr):
