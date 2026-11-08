@@ -1,6 +1,6 @@
 # Benchmark Roadmap
 
-**As of:** 2026-11-08 · Branch `dev` @ `e89cc40`
+**As of:** 2026-11-08 · Branch `dev` @ `281aeeb`
 **Goal:** measure the **relative gain over the raw model**, then compare
 honestly with Aider/Claude Code/Codex on the same task suite.
 

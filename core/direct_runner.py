@@ -27,6 +27,10 @@ def _direct_tools_note(tool_mode: str, ws_ok: bool = False) -> str:
     if tool_mode == "direct":
         _list = ("web_search / web_fetch" if ws_ok
                  else "no tools (web search is currently unavailable)")
+    elif tool_mode == "direct_research":
+        _list = ("read/search tools (read_file, list_dir, find_files, "
+                 "search_code, get_signatures, find_references)"
+                 + (", web_search / web_fetch" if ws_ok else ""))
     elif tool_mode == "direct_python":
         _list = ("read_file, list_dir, find_files, search_code, get_signatures, "
                  "find_references, run_python" + (", web_search / web_fetch" if ws_ok else ""))
@@ -152,7 +156,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
 
         _loop = ToolLoop(
             config=ToolLoopConfig(
-                stream=True, max_rounds=_rounds, max_post_attempts=1,
+                stream=True, max_rounds=_rounds, max_post_attempts=3,
                 read_timeout_s=_read_timeout,
                 model=model, temperature=getattr(_agent, "temperature", 0.4),
                 max_tokens=_max_tokens, num_ctx=_num_ctx,

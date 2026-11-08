@@ -57,7 +57,7 @@ CI and quality: Python 3.14 in both workflows, `windows-full` runs
 `--ci-subset --jobs 2` with an exclusive lane for socket/LSP suites,
 checkout-safe guards in the five environment-dependent suites, ruff target
 3.14, behavior suites for updater/vision-pre/start-phases, and a pyright
-baseline lowered from 191 to 53 (0 NEW).
+baseline lowered from 191 to 1 (0 NEW).
 
 ## [1.5.5] - 2026-11-05
 

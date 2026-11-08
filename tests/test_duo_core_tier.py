@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """Behavior checks: core coder tier + research tier (2026-11-08).
 
-The coder defaults to a 16-tool core set (read/edit/run/tests) instead of the
-35-tool full set. Git/web/MCP/browser/LSP are opt-in via
-`duo_coder_tool_tier=full`. Direct gets a research tier (web + read/search,
-no write/exec).
+The coder defaults to a 17-tool core set (read/edit/run/tests + LSP
+diagnostics) instead of the 33-tool full set. Git/web/MCP/browser/LSP extras
+are opt-in via `duo_coder_tool_tier=full`. Direct gets a research tier
+(web + read/search, no write/exec).
 """
 import json
 import sys

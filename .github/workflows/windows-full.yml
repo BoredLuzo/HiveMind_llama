@@ -1,6 +1,6 @@
 name: windows-full
 
-# FULL-WINDOWS-GATE (2026-11-04): the complete 307-suite gate needs fixtures
+# FULL-WINDOWS-GATE (2026-11-04): the complete 343-suite gate needs fixtures
 # and tools that exist on a developer box, not on a clean hosted runner
 # (model configs, rust-analyzer, local model files). It was previously part
 # of linux-core.yml and failed on every push, which turned the Linux workflow
@@ -29,6 +29,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install pyright language server
+        # test_lsp_real_pyright otherwise skips with exit 0 on the hosted
+        # runner (deep audit 2026-11-08) - real LSP coverage needs the binary.
+        run: npm install -g pyright
       - uses: astral-sh/setup-uv@v5
       - name: Dependency lock is current
         # The updater installs with `uv sync --frozen`; a stale uv.lock would

@@ -421,6 +421,13 @@ def import_dom_messages(chat_id: str, messages: list,
 @router.get("")
 async def list_chats():
     await asyncio.to_thread(_ensure_cache)
+    # ABORT-REGISTRY SWEEP (deep audit 2026-11-08): the helper existed but was
+    # never called; listing chats is the natural refresh point.
+    try:
+        from infra import run_control as _rc
+        await _rc._cleanup_abort_registry()
+    except (ImportError, AttributeError, OSError, RuntimeError):
+        pass
     result = []
     def _get_items():
         with _cache_lock:

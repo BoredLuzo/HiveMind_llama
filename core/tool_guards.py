@@ -38,10 +38,10 @@ def repeat_guard():
             if _counts[_sig] >= 2 and _sig not in _nudged:
                 _nudged.add(_sig)
                 msgs.append({"role": "user", "content": (
-                    "You already called this tool with the same arguments. "
-                    "The result is above - do not repeat it. Answer the user "
-                    "now, or use a different tool/arguments if something is "
-                    "still missing.")})
+                    "You already called this tool with the same arguments "
+                    "earlier in this run. If its result is still in context, "
+                    "use it instead of repeating; if it was compressed away "
+                    "or you need fresh verification, re-running is fine.")})
         return True
 
     return _after_round

@@ -398,6 +398,9 @@ DEFAULT_SETTINGS = {
     # Listed here so the checkbox is discoverable and round-trips through
     # settings.json instead of depending on a hand-edited key.
     "chat_autosave_enabled":   True,
+    # UI-side only: VRAM panel refresh interval (static/app.js). The engine
+    # never reads it; listed so the postSettings key is discoverable.
+    "vram_refresh_interval_s": 8,
     "constraint_mode":         True,
     "git_repo_url":            "",
     "git_username":            "",

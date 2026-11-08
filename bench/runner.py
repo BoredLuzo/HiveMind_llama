@@ -66,6 +66,9 @@ class Config:
     runs: int = 1
     # None = use each task's timeout_s; a CLI value overrides the corpus.
     task_timeout_s: int | None = None
+    # Hard wall-clock cap per cell (agent phase). A heartbeating but wedged
+    # until_finished run must not hold the whole run for hours.
+    cell_timeout_s: int = 1800
     keep_work: bool = False
     # Optional path to aider (a separate venv is fine; not on PATH).
     aider_bin: str = ""
@@ -82,9 +85,13 @@ def _file_map(root: Path | None) -> dict[str, str]:
         if not path.is_file():
             continue
         rel = path.relative_to(root)
-        if any(part in ("__pycache__", ".git", ".pytest_cache") for part in rel.parts):
-            continue
         if path.name == "model.patch":
+            continue
+        if any(part in ("__pycache__", ".git", ".pytest_cache", ".ruff_cache",
+                        ".mypy_cache", ".venv", "node_modules", "htmlcov")
+               for part in rel.parts):
+            continue
+        if path.name in (".coverage",):
             continue
         try:
             if path.stat().st_size > 1_000_000:
@@ -126,11 +133,11 @@ def diff_stats(repo: Path | None, work: Path) -> dict:
                 removed += 1
     return {
         "files_changed": len(changed),
-        "changed_files": changed,
+        "changed_files": changed[:100],
         "lines_added": added,
         "lines_removed": removed,
-        "new_files": new_files,
-        "deleted_files": deleted,
+        "new_files": new_files[:100],
+        "deleted_files": deleted[:100],
     }
 
 
@@ -353,6 +360,18 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
         # duo_tool_rounds=0 runs the coder WITHOUT tools. Pin the shipped
         # default (50); otherwise "duo" measures a text-only coder.
         body["duo_tool_rounds"] = 50
+        # TIER/VERIFICATION PINS (2026-11-08 audit): the install may carry
+        # duo_coder_tool_tier=full and test-feedback toggles; pin the core
+        # tier and disable the auto-test feedback loops so the condition is
+        # reproducible across machines.
+        body["duo_coder_tool_tier"] = "core"
+        body["duo_test_feedback"] = False
+        body["duo_test_feedback_chunk"] = False
+        body["duo_test_feedback_final"] = False
+        # Context: the 2026-11-08 runs used 32k; pin it instead of inheriting
+        # an install-specific override.
+        body["duo_coder_ctx_agentic"] = 32768
+        body["duo_coder_ctx_normal"] = 32768
         # Agentic duo resolves coder/critic/planner from the agent cards; the
         # server patches both the card and the flat key for these overrides.
         body["duo_coder_model"] = model
@@ -496,6 +515,7 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
         "tokens": int(extra.get("tokens") or 0),
         "stop_reason": extra.get("stop_reason", ""),
         "detail": extra.get("detail", "") or check_out,
+        "check_output": check_out[-2000:],
         **_churn,
     }
 
@@ -552,6 +572,27 @@ def _persist(out: Path, rows: list[dict], cfg: Config,
     tmp.replace(out)
 
 
+async def _preflight(cfg: Config, conditions: list[str]) -> str:
+    """Fail fast when a required endpoint is dead (empty string = OK)."""
+    need_llama = any(c in ("raw", "raw_files", "aider") for c in conditions)
+    need_hive = any(c.startswith("hivemind_") for c in conditions)
+    async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=3.0)) as client:
+        if need_llama:
+            try:
+                r = await client.get(cfg.llama_url.rstrip("/") + "/v1/models")
+                r.raise_for_status()
+            except httpx.HTTPError as exc:
+                return f"llama-server at {cfg.llama_url}: {exc}"
+        if need_hive:
+            try:
+                r = await client.get(cfg.hivemind_url.rstrip("/") + "/health")
+                r.raise_for_status()
+            except httpx.HTTPError as exc:
+                return f"HiveMind at {cfg.hivemind_url}: {exc}"
+    return ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tasks", default=str(Path(__file__).parent / "tasks"))
@@ -563,6 +604,8 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--task-timeout", type=int, default=None,
                         help="override every task's timeout_s (default: per task)")
+    parser.add_argument("--cell-timeout", type=int, default=1800,
+                        help="hard wall-clock cap per agent cell (default 1800s)")
     parser.add_argument("--aider-bin", default="",
                         help="path to aider(.exe); default PATH or "
                              "HIVEMIND_AIDER_BIN")
@@ -593,9 +636,15 @@ def main() -> int:
         llama_url=args.llama, hivemind_url=args.hivemind,
         conditions=conditions, runs=max(1, args.runs),
         task_timeout_s=args.task_timeout, keep_work=args.keep_work,
+        cell_timeout_s=max(1, args.cell_timeout),
         aider_bin=args.aider_bin,
         duo_planner=not args.no_duo_planner,
     )
+
+    _pf = asyncio.run(_preflight(cfg, conditions))
+    if _pf:
+        print(f"preflight failed: {_pf}", file=sys.stderr)
+        return 3
 
     rows: list[dict] = []
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -611,7 +660,19 @@ def main() -> int:
                     # Unique workspace per run/condition: a reused task dir
                     # would accumulate the previous agent's edits.
                     cell = base / f"run{run_idx + 1}" / cond
-                    row = asyncio.run(_one_run(cond, task, cfg, cell))
+                    try:
+                        row = asyncio.run(asyncio.wait_for(
+                            _one_run(cond, task, cfg, cell),
+                            timeout=cfg.cell_timeout_s))
+                    except asyncio.TimeoutError:
+                        row = {
+                            "task": task.id, "condition": cond, "ok": False,
+                            "seconds": float(cfg.cell_timeout_s), "tokens": 0,
+                            "stop_reason": "cell_timeout",
+                            "detail": f"cell timeout after {cfg.cell_timeout_s}s",
+                            "check_output": "",
+                            **diff_stats(task.repo, cell / task.id),
+                        }
                     row["run"] = run_idx + 1
                     rows.append(row)
                     _persist(out, rows, cfg, conditions, started_at)

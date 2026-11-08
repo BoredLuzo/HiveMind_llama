@@ -63,4 +63,14 @@ check("summary: categories split bugfix/feature",
       and _sum["categories"]["aider"].get("feature") == 1.0,
       f" ({_sum['categories']})")
 
+# 2026-11-08: overlapping result files must not double-vote a cell.
+_dup = summarize([
+    {"task": "dup", "condition": "raw", "run": 1, "ok": True},
+    {"task": "dup", "condition": "raw", "run": 1, "ok": False},
+])
+check("summary: duplicate (condition, task, run) is deduped",
+      _dup["conditions"]["raw"]["cells"] == 1
+      and _dup["conditions"]["raw"]["pass_rate"] == 0.0,
+      f" ({_dup['conditions']})")
+
 sys.exit(h.finish("bench_analyze"))

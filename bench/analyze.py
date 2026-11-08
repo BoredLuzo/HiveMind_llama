@@ -33,7 +33,11 @@ def wilson(passes: int, total: int) -> tuple[float, float]:
 
 
 def majority_verdicts(rows: list[dict]) -> dict[str, dict[str, bool]]:
-    """condition -> task -> passed in the majority of its runs."""
+    """condition -> task -> passed in the majority of its runs.
+
+    A tie (e.g. 1 pass / 1 fail) counts as NOT passed; use 3+ runs for a
+    meaningful majority.
+    """
     counts: dict[str, dict[str, list[bool]]] = {}
     for row in rows:
         cond = str(row.get("condition") or "")
@@ -67,6 +71,14 @@ def _category(task: str) -> str:
 
 
 def summarize(rows: list[dict]) -> dict:
+    # DEDUPE (2026-11-08): overlapping result files (resumed run + original)
+    # must not double-vote a task. Keep the last row per (condition, task, run).
+    _unique: dict[tuple, dict] = {}
+    for _idx, _row in enumerate(rows):
+        _key = (str(_row.get("condition") or ""), str(_row.get("task") or ""),
+                _row.get("run", _idx))
+        _unique[_key] = _row
+    rows = list(_unique.values())
     conditions: dict[str, dict] = {}
     for cond in sorted({str(r.get("condition") or "") for r in rows} - {""}):
         mine = [r for r in rows if r.get("condition") == cond]

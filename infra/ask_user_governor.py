@@ -81,10 +81,6 @@ def set_throttle_triggered(run_id: str) -> None:
     _THROTTLE_TRIGGERED[run_id] = True
 
 
-def clear_throttle_triggered(run_id: str) -> None:
-    _THROTTLE_TRIGGERED.pop(run_id, None)
-
-
 def clear_throttle_state(run_id: str) -> None:
 
 

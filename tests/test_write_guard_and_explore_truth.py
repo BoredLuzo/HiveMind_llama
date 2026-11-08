@@ -47,13 +47,15 @@ def _guard_decision(tool_mode, name, exists, *, allow_overwrite=False,
     """Replik der neuen Guard-Logik (duo_full narrow write_file + alter Pfad)."""
     if external_dispatch:
         return "allow"
-    _guard_active_old = (read_guard_enabled and (tool_mode or "") != "duo_full")
+    _guard_active_old = (read_guard_enabled
+                         and (tool_mode or "") not in ("duo_full", "duo_core"))
     _seen = read or any_read or written or in_context
     if _guard_active_old and exists and not _seen:
         return "block"
     # WRITE-GUARD-duo_full (2026-09-06): nur write_file, nur bestehend,
     # nur ungesehen, nur ohne allow_overwrite, nur bei enabled Flag.
-    if (tool_mode or "") == "duo_full" and name == "write_file" \
+    if (tool_mode or "") in ("duo_full", "duo_core") \
+            and name == "write_file" \
             and exists and not allow_overwrite and not _seen and guard_enabled:
         return "block"
     return "allow"
@@ -104,6 +106,14 @@ def test_guard_does_not_block_edit_file():
             "allow", _guard_decision("duo_full", "edit_file", True))
     _expect("duo_full patch_file existing unread -> allow",
             "allow", _guard_decision("duo_full", "patch_file", True))
+    # CORE-TIER (2026-11-08): the default coder is duo_core; edit_file must
+    # stay free there too, while the destructive write_file alias stays gated.
+    _expect("duo_core edit_file existing unread -> allow",
+            "allow", _guard_decision("duo_core", "edit_file", True))
+    _expect("duo_core patch_file existing unread -> allow",
+            "allow", _guard_decision("duo_core", "patch_file", True))
+    _expect("duo_core write_file existing unread -> block",
+            "block", _guard_decision("duo_core", "write_file", True))
 
 
 def test_old_guard_unchanged_for_non_duo_full():

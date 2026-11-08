@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**279 settings keys.**
+**280 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -283,6 +283,7 @@ its comment) in either file, then re-run the generator.
 | `vision_preprocess_timeout_seconds` | int | `30` | - |  |
 | `vram_budget_gb` | float | `7.5` | yes |  |
 | `vram_preflight_gate` | bool | `True` | yes | VRAM pre-flight gate : when True (default), loads estimated not to fit are refused before llama-server starts (estimate can be wrong for foreign models - turning this OFF makes the engine attempt the load and halve ctx on real failures instead). |
+| `vram_refresh_interval_s` | int | `8` | yes | UI-side only: VRAM panel refresh interval (static/app.js). The engine never reads it; listed so the postSettings key is discoverable. |
 | `warn_on_cpu_offload` | bool | `True` | - |  |
 | `websearch_auto_trigger` | bool | `True` | - |  |
 | `workspace` | str | `` | yes |  |

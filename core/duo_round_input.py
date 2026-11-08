@@ -354,11 +354,6 @@ async def _duo_coder_round_input(ctx, ps):
     ps._coder_msgs = _coder_msgs
     ps._read_only_task_request = _read_only_task_request
     ps._coder_skipped_images = _coder_skipped_images
-    ps._sess_budgeted = _sess_budgeted
-    ps._prompt_prev = _prompt_prev
-    ps._steer_items = _steer_items
-    ps._steer_img_items = _steer_img_items
-    ps._steer_imgs_allowed = _steer_imgs_allowed
     ps._coder_imgs_off = _coder_imgs_off
     ps._img_plan = _img_plan
     ps._touched_block_persisted = _touched_block_persisted

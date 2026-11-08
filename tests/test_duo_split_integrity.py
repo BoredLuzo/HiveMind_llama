@@ -42,6 +42,9 @@ HELPERS = [
     "_duo_query_actual_slot_ctx", "_duo_resolve_coder_port_cache",
     "_duo_resolve_tool_budgets", "_duo_final_cleanup", "_duo_final_test",
     "_duo_disconnect_park",
+    # 2026-11-08: the newer split seams must honor the same contract.
+    "_duo_coder_round_input", "_duo_compress_cycle", "_duo_coder_preloop",
+    "_duo_task_complete_gate", "_duo_loop_guards",
 ]
 
 from tests._harness import Harness  # noqa: E402

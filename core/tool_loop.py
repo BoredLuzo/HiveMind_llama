@@ -309,6 +309,10 @@ class ToolLoop:
     async def run(self, messages: list[dict]) -> AsyncIterator[dict]:
         """Run the tool-calling loop, yielding events."""
         state = ToolLoopState()
+        # Publish the partial state immediately: a retry-exhausted POST raises
+        # out of the generator before the final assignment, and callers still
+        # need the tokens spent so far (deep audit 2026-11-08).
+        self.state = state
         self._usage_prompt = 0
         self._usage_completion = 0
         self._usage_cached = 0
@@ -841,6 +845,13 @@ class ToolLoop:
         self._usage_cached += (_n(usage.get("cached_tokens"))
                                or _n((_details or {}).get("cached_tokens"))
                                or _n(usage.get("cache_n")))
+        # Keep the published state in sync so a failed POST still reports the
+        # tokens spent before the exception.
+        _state = getattr(self, "state", None)
+        if _state is not None:
+            _state.prompt_tokens = self._usage_prompt
+            _state.completion_tokens = self._usage_completion
+            _state.cached_tokens = self._usage_cached
 
     def _parse_nonstream(self, resp, events: list[dict]) -> tuple[dict, str, list[dict], list[dict]]:
         """Parse non-streaming JSON response."""

@@ -111,7 +111,8 @@ class LlamaProcessMixin:
             return True   # snapshot-dead process no longer dead
         return False
 
-    async def _find_loaded(self, model: str) -> Optional[ModelSlot]:
+    async def _find_loaded(self, model: str, *,
+                           lock_held: bool = False) -> Optional[ModelSlot]:
 
 
         for slot in self._slots:
@@ -140,7 +141,11 @@ class LlamaProcessMixin:
                 # live slot — the slot can be claimed/reset while the lock is
                 # released; re-validated before any mutation below.
                 _snap = _probe_snapshot(slot)
-                _held = self._lock.locked()
+                # LOCK-OWNERSHIP (deep audit 2026-11-08): only release when
+                # the CALLER actually holds the manager lock. `locked()` is
+                # true for any holder, so the old probe could drop another
+                # coroutine's critical section.
+                _held = lock_held
                 if _held:
                     self._lock.release()
                 try:
@@ -170,7 +175,11 @@ class LlamaProcessMixin:
                 # probe; a free slot claimed during the probe (loader starts,
                 # binds later) must not be "stale-discarded" below.
                 _snap = _probe_snapshot(slot)
-                _held = self._lock.locked()
+                # LOCK-OWNERSHIP (deep audit 2026-11-08): only release when
+                # the CALLER actually holds the manager lock. `locked()` is
+                # true for any holder, so the old probe could drop another
+                # coroutine's critical section.
+                _held = lock_held
                 if _held:
                     self._lock.release()
                 try:
@@ -183,6 +192,10 @@ class LlamaProcessMixin:
                     # untouched and continue the normal lookup path.
                     return self._rescan_active_slot(model)
                 if api_ok:
+                    # ORPHAN-REGISTRY (deep audit 2026-11-08): mark the adopted
+                    # server so is_running/idle/LRU can manage it and the next
+                    # lookup does not probe again.
+                    slot._orphan_port = slot.port
                     if not slot._ready_event.is_set():
                         slot._ready_event.set()
                     self._metric_inc("orphan_rehabilitations")

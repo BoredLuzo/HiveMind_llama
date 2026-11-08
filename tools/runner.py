@@ -1595,7 +1595,7 @@ async def _run_inline_tool(
         # write_file/edit_file on existing files there produced red errors and
         # empty diffs ("Waiting for coder output.").
         _guard_active = (not _is_external_dispatch() and _read_guard_enabled()
-                         and (tool_mode or "") != "duo_full")
+                         and (tool_mode or "") not in ("duo_full", "duo_core"))
         if _guard_active and _fp_check.exists() and _target not in _read_set and _target not in _any_read_set and _target not in _written_set and not _in_context:
             if name == "write_file":
                 return _normalize_meta_paths(
@@ -1626,7 +1626,7 @@ async def _run_inline_tool(
         #   - _in_context                = real pre-explore content in context
         #   - allow_overwrite            = explicit escape hatch
         if (
-            (tool_mode or "") == "duo_full"
+            (tool_mode or "") in ("duo_full", "duo_core")
             and name == "write_file"
             and _fp_check.exists()
             and not args.get("allow_overwrite")

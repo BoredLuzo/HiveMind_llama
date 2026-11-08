@@ -46,12 +46,15 @@ modes. With `lsp_enabled=false` all `lsp_*` schemas are removed.
 
 After a successful `write_file`, `edit_file`, `patch_file`,
 `replace_lines` or `write_file_append`, the dispatcher appends a compact
-`[LSP auto-diagnostics after writing …]` block (8-line cap) **when a server
-for that language is already warm** and fires
+`[LSP auto-diagnostics after writing …]` block (8-line cap) and fires
 `workspace/didChangeWatchedFiles` for the written path (an index hint for
 gopls/rust-analyzer; external edits are still synced lazily on the next
-call). A write never starts a cold server. `lsp_auto_diagnostics` (default
-`true`) disables the block (the watched-file hint stays on).
+call). A cold server is warmed in the background
+(`lsp_auto_warm_on_write`, default `true`) with a bounded 3 s wait; when it
+is not ready, the next write gets the diagnostics. If the LSP is disabled
+or fails, the pyright/per-language lint block remains the fallback.
+`lsp_auto_diagnostics` (default `true`) disables the block (the watched-file
+hint stays on).
 
 ## Workspace settings
 
@@ -72,7 +75,8 @@ therefore reaches rust-analyzer; broken or missing files answer `{}`.
 | `lsp_client_timeout_s` | `30` | Per-request timeout; also caps initialize. |
 | `lsp_diagnostics_wait_s` | `5.0` | Wait for the first/new diagnostics publication. |
 | `lsp_idle_timeout_s` | `600` | Close an idle language server after this many seconds; 0 = off. |
-| `lsp_auto_diagnostics` | `true` | Attach diagnostics to successful writes when warm. |
+| `lsp_auto_diagnostics` | `true` | Attach diagnostics to successful writes. |
+| `lsp_auto_warm_on_write` | `true` | Warm a cold server from the write path (bounded 3 s wait). |
 | `lsp_max_diagnostics` | `50` | Diagnostics per call. |
 | `lsp_max_results` | `50` | Locations/symbols/actions per call. |
 

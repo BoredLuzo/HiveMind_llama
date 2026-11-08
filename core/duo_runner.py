@@ -1825,11 +1825,6 @@ class _DuoRoundInputState:
     _coder_msgs: list = dataclasses.field(default_factory=list)
     _read_only_task_request: bool = False
     _coder_skipped_images: bool = False
-    _sess_budgeted: list = dataclasses.field(default_factory=list)
-    _prompt_prev: str = ""
-    _steer_items: list = dataclasses.field(default_factory=list)
-    _steer_img_items: list = dataclasses.field(default_factory=list)
-    _steer_imgs_allowed: bool = False
     _coder_imgs_off: bool = False
     _parts: list = dataclasses.field(default_factory=list)
     _t: float = 0.0
@@ -2818,6 +2813,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
         _accumulated_replan_bonus: int = 0
         _di = 0
         _est_tokens = 0
+        _guard_tokens: float = 0.0
         _parts: list = []
         _last_run_bash_failure = None
         while _di < _n_items:
@@ -3617,6 +3613,7 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                             cached_coder_port=_cached_coder_port,
                             cached_coder_port_ctx=_cached_coder_port_ctx,
                             est_tokens=_est_tokens,
+                            guard_tokens=_guard_tokens,
                             loop_detected=_loop_detected,
                         )
                         async for _ev in _duo_loop_guards(ctx, _lg_ps):

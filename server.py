@@ -1395,10 +1395,18 @@ async def stream(req: Request):
     # invalid values are ignored so an old gateway cannot widen the tools.
     if "direct_tools_tier" in body:
         _dt_tier = str(body.get("direct_tools_tier") or "").strip().lower()
-        if _dt_tier in ("off", "readonly", "python", "full"):
+        if _dt_tier in ("off", "readonly", "research", "python", "full"):
             _model_overrides["direct_tools_tier"] = _dt_tier
         elif _dt_tier in ("websearch", "web"):
             _model_overrides["direct_tools_tier"] = "readonly"
+
+    # CORE-CODER-TIER (2026-11-08): the coder reads duo_coder_tool_tier from
+    # the run settings snapshot. Benchmarks/gateways need to pin it per run;
+    # invalid values are ignored (never widen the tool set by accident).
+    if "duo_coder_tool_tier" in body:
+        _dct_tier = str(body.get("duo_coder_tool_tier") or "").strip().lower()
+        if _dct_tier in ("core", "full"):
+            _model_overrides["duo_coder_tool_tier"] = _dct_tier
 
     # G1 (full audit 2026-10-05): the Telegram gateway sends
     # duo_action_approval_enabled=true with its runs so the documented

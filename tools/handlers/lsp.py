@@ -139,6 +139,13 @@ def _get_manager(workspace: Path):
             # (audit R2).
             for _key, _old in _evicted:
                 try:
+                    # Cancel in-flight warm-ups first: a late start_language
+                    # could spawn a server after close_all enumerated its
+                    # connections (deep audit 2026-11-08).
+                    for (_mid, _lang), _wt in list(_LSP_WARM_TASKS.items()):
+                        if _mid == id(_old):
+                            _wt.cancel()
+                            _LSP_WARM_TASKS.pop((_mid, _lang), None)
                     _t = asyncio.create_task(_old.close_all())
                     _bg_close_tasks.add(_t)
                     _t.add_done_callback(_bg_close_tasks.discard)

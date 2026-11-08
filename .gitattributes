@@ -24,6 +24,8 @@
 # benchmark docs are developer-only, like the harness itself
 /docs/benchmarks/ export-ignore
 /docs/architecture.md export-ignore
+# legacy German workplan; dev-only, not user documentation
+/docs/gateway_realrun_wp2.md export-ignore
 /RELEASE_NOTES_*.md export-ignore
 /scripts/ export-ignore
 # bench/ is the D1 eval harness + task corpus: developer-only, never needed

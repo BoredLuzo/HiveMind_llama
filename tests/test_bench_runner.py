@@ -155,6 +155,8 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     (_changed / "a.py").write_text("one\nTWO\nthree\nfour\n", encoding="utf-8")
     (_changed / "new.py").write_text("new\n", encoding="utf-8")
     (_changed / "model.patch").write_text("ignored\n", encoding="utf-8")
+    (_changed / ".ruff_cache").mkdir()
+    (_changed / ".ruff_cache" / "x.py").write_text("cache\n", encoding="utf-8")
     _churn = diff_stats(_base, _changed)
     check("churn: changed files are listed",
           _churn["changed_files"] == ["a.py", "b.py", "new.py"], f" ({_churn})")
@@ -165,6 +167,8 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           _churn["lines_added"] == 3 and _churn["lines_removed"] == 2,
           f" ({_churn['lines_added']}/{_churn['lines_removed']})")
     check("churn: model.patch is ignored", "model.patch" not in _churn["changed_files"])
+    check("churn: tool caches are ignored",
+          not any(".ruff_cache" in f for f in _churn["changed_files"] + _churn["new_files"]))
 
     # ── aider discovery ────────────────────────────────────────────────────
     _cfg_bad = Config(tasks_dir=root, out=root / "x.json", model="m",
@@ -211,6 +215,16 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     check("body: duo pins tool rounds (install 0 would disable tools)",
           duo_body.get("duo_tool_rounds") == 50,
           f" ({duo_body.get('duo_tool_rounds')})")
+    check("body: duo pins the core tool tier",
+          duo_body.get("duo_coder_tool_tier") == "core",
+          f" ({duo_body.get('duo_coder_tool_tier')})")
+    check("body: duo disables test-feedback loops",
+          duo_body.get("duo_test_feedback_final") is False
+          and duo_body.get("duo_test_feedback_chunk") is False)
+    check("body: duo pins the coder context",
+          duo_body.get("duo_coder_ctx_agentic") == 32768
+          and duo_body.get("duo_coder_ctx_normal") == 32768,
+          f" ({duo_body.get('duo_coder_ctx_agentic')})")
     duo_solo = _hivemind_body(Task("t", "p", "c"), work, duo=True,
                               model="qwen3.5:4b-mtp", duo_planner=False)
     check("body: coder-alone mode turns the planner off",

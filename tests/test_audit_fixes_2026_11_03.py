@@ -92,8 +92,10 @@ check("6c idle monitor is started at boot",
       "_lsm_startup.start_idle_monitor()" in SRV)
 check("6d peer eviction skips in-flight slots",
       "not s.pinned and not _slot_in_flight(s)" in ML)
-check("6e _find_loaded does not release an unheld lock",
-      "self._lock.locked()" in MP)
+check("6e _find_loaded uses explicit lock ownership",
+      "lock_held: bool = False" in MP
+      and "self._lock.locked()" not in MP
+      and "lock_held=True" in ML)
 check("6f oversize chat saves answer 413", 'status_code=413' in CH
       and '"chat_too_large"' in CH)
 check("6g Linux install keeps models/llama/.cache",

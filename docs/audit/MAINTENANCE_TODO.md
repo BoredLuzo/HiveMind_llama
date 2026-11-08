@@ -2,7 +2,7 @@
 
 Live maintenance/release/competitiveness backlog. Translated from the German backlog on 2026-11-08; this is the maintained copy.
 
-**As of:** 2026-11-08 · Branch `dev` @ `e89cc40` + docs cleanup
+**As of:** 2026-11-08 · Branch `dev` @ `281aeeb`
 **Legend:** P0 = blocks release · P1 = next up · P2 = planned · P3 = strategic
 **Type:** BUG / DESIGN / DEBT / TEST / RELEASE / COMPETE
 

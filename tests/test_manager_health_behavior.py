@@ -91,7 +91,7 @@ class FakeManager(MH.LlamaHealthMixin):
     def _prune_prefetch_tasks(self):
         self._prefetch_tasks = {t for t in self._prefetch_tasks if not t.done()}
 
-    async def _find_loaded(self, model):
+    async def _find_loaded(self, model, **_kw):
         for s in self._slots:
             if MH._nm(s.model or "") == MH._nm(model or ""):
                 return s

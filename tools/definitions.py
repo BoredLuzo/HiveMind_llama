@@ -600,7 +600,8 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     # RESEARCH TIER (2026-11-08): Direct is the web/research assistant. Web +
     # read/search only; no write/run/lsp/git/mcp. Token-saving middle ground
     # between "direct" (web only) and "direct_python".
-    "direct_research": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
+    "direct_research": set(_READ_ONLY_INLINE_TOOL_NAMES)
+                       | {"web_search", "web_fetch", "task_complete"},
     "direct_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch",
                                              "send_file"},
 }

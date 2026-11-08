@@ -99,7 +99,6 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
     _done_event = ps.done_event
     _collect_done_metrics = ps.collect_done_metrics
 
-    _available = list(ps.models_cache) if ps.models_cache else []
     # small: simple file reads, git - qwen2.5:3b suffices
     if _judge_toolsize == "large":
         _tool_priority = ["qwen3.5:4b", "qwen3.5:9b-ud", "qwen3.5:2b", "granite-4.1:3b"]
@@ -110,20 +109,23 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
     _tool_ctx_override = max(_get_num_ctx(_tool_model) or 4096, 8192)
     _tool_opts: dict = {"temperature": 0.1, "num_predict": 1200, "num_ctx": _tool_ctx_override}
     _tool_ws = bool(settings.get("duo_websearch_enabled", False)) and _tool_websearch
+    # SCHEMA-FIT (2026-10-17): fit to the tool-agent ctx. TOOL-LIST-DRIFT
+    # (deep audit 2026-11-08): the prompt used to hard-code 11 tools while the
+    # real schema ships the full tool_agent set (LSP/run_tests/... included).
+    # Build the list from the schema that is actually sent.
+    _tool_schema_budget = 0
+    try:
+        from core.budgets import schema_budget_for as _sbf
+        _tool_schema_budget = _sbf(_tool_ctx_override, _tool_model)
+    except (ImportError, AttributeError, TypeError, ValueError):
+        _tool_schema_budget = 0
+    _active_tools = _get_inline_tools(include_websearch=_tool_ws, mode="tool_agent",
+                                      budget_chars=_tool_schema_budget or None)
+    _tool_names_txt = ", ".join(t["function"]["name"] for t in _active_tools)
     _tool_sys = (
-        "Use the available tools to complete file and code operations. Be direct and concise.\n\n"
-        "Available tools:\n"
-        "  read_file(path, start_line?, end_line?) - read file (optional: line range only)\n"
-        "  get_signatures(path, max_items?) - structural overview with line numbers\n"
-        "  find_files(pattern, path?)  - glob search: '**/*.py', 'src/*.ts'\n"
-        "  list_dir(path)              - list directory contents\n"
-        "  search_code(pattern, path?) - regex search across code files\n"
-        "  edit_file(path, old_text, new_text) - surgical edit (preferred for modifications)\n"
-        "  edit_file(path, edits)      - create new files OR modify existing ones\n"
-        "  run_bash(cmd)               - shell command: tests, pip install, npm run, grep...\n"
-        "  run_python(code)            - execute python snippet directly\n"
-        "  git_status(cmd)             - git: status|diff|log|show\n"
-        "  git_commit(message)         - commit all changes with message\n\n"
+        "Use the available tools to complete file and code operations. "
+        "Be direct and concise.\n\n"
+        "Available tools: " + _tool_names_txt + "\n\n"
         "Workflow:\n"
         "  1. Explore first (list_dir / find_files / read_file)\n"
         "  2. Modify existing files with edit_file\n"
@@ -144,16 +146,6 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
     _tool_calls: bool = False
     _tool_round = 0
     _tool_stop_reason = "completed"
-    # SCHEMA-FIT (2026-10-17): this path shipped the full 25-tool schema
-    # (~15.6k chars) whatever the tool-agent ctx was. Fit it to the window.
-    _tool_schema_budget = 0
-    try:
-        from core.budgets import schema_budget_for as _sbf
-        _tool_schema_budget = _sbf(_tool_ctx_override, _tool_model)
-    except (ImportError, AttributeError, TypeError, ValueError):
-        _tool_schema_budget = 0
-    _active_tools = _get_inline_tools(include_websearch=_tool_ws, mode="tool_agent",
-                                      budget_chars=_tool_schema_budget or None)
     # Timeout strategy:
     _tool_read_timeout_s = float(settings.get("duo_llm_slow_timeout_s", 300))
     _tool_http_timeout = _make_httpx_timeout(read_s=_tool_read_timeout_s)
@@ -164,7 +156,7 @@ async def _chat_tools_route(ps: _ChatToolsRouteState):
             from core.tool_loop import ToolLoop, ToolLoopConfig
             _loop = ToolLoop(
                 config=ToolLoopConfig(
-                    stream=False, max_rounds=_tool_max_rounds, max_post_attempts=1,
+                    stream=False, max_rounds=_tool_max_rounds, max_post_attempts=3,
                     model=_tool_model, temperature=_tool_opts.get("temperature", 0.2),
                     max_tokens=_tool_opts.get("num_predict", 1200),
                     num_ctx=_tool_opts.get("num_ctx", 4096),

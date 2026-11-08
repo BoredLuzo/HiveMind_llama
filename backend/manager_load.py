@@ -374,7 +374,7 @@ class LlamaLoadMixin:
                                     num_ctx: int) -> None: ...
         async def _port_alive(self, port: int) -> bool: ...
         async def _kill_port(self, port: int) -> None: ...
-        async def _find_loaded(self, model: str) -> Optional[_LoadSlot]: ...
+        async def _find_loaded(self, model: str, *, lock_held: bool = False) -> Optional[_LoadSlot]: ...
         async def _find_free_slot(self) -> Optional[_LoadSlot]: ...
         def _evict_lru(self, exclude_slot: Optional[ModelSlot] = None) -> Optional[_LoadSlot]: ...
         async def _evict_lru_async(self, exclude_slot: Optional[ModelSlot] = None) -> Optional[_LoadSlot]: ...
@@ -510,7 +510,7 @@ class LlamaLoadMixin:
         _need_start = False
         slot = None
         async with self._lock:
-            slot = await self._find_loaded(model)
+            slot = await self._find_loaded(model, lock_held=True)
             if slot:
                 if not slot._loading:
                     slot.touch()
@@ -586,7 +586,7 @@ class LlamaLoadMixin:
             if self._has_active_prefetch(model, _prefetch_ctx):
                 logger.debug("Prefetch skipped (already active): %s", model)
                 return
-            if await self._find_loaded(model):
+            if await self._find_loaded(model, lock_held=True):
                 return
 
             current_vram = sum(_vram_of(s.model) for s in self._slots if s.model)
@@ -662,6 +662,11 @@ class LlamaLoadMixin:
             _committed = _committed_gb()
             _victim = (self._evict_lru(exclude_slot=slot)
                        if _committed > VRAM_BUDGET_GB else None)
+            if _victim is not None:
+                # CLAIM-FOR-KILL (deep audit 2026-11-08): mark the victim as
+                # loading before the lock is released so a concurrent loader
+                # cannot select and re-claim it while the kill is in flight.
+                _victim._loading = True
         if _victim is not None:
             await _kill_slot_async(_victim)
 
@@ -677,6 +682,8 @@ class LlamaLoadMixin:
                     _committed_after, VRAM_BUDGET_GB,
                 )
                 _victim2 = self._evict_lru(exclude_slot=slot)
+                if _victim2 is not None:
+                    _victim2._loading = True
             else:
                 _victim2 = None
         if _victim2 is not None:
@@ -719,7 +726,7 @@ class LlamaLoadMixin:
                     logger.warning(
                         "ensure_loaded: orphan-adoption scan failed: %s", _adopt_exc
                     )
-            slot = await self._find_loaded(model)
+            slot = await self._find_loaded(model, lock_held=True)
             if slot:
                 if slot._loading and needs_vision_reload(slot._vision, vision):
                     # VISION-LOAD-RACE (2026-10-06, live 11:13): a text-only

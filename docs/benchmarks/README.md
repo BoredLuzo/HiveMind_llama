@@ -46,9 +46,10 @@ tests overwrite same-named agent files immediately before the check.
   carry `direct_model` and all duo role overrides; Aider uses the same
   OpenAI-compatible endpoint.
 - **Pinned agentic settings:** `until_finished=true`, `duo_planner` explicit,
-  `duo_chunking=false`, `duo_tool_rounds=50`. Install settings cannot silently
-  change what a condition measures (one run measured `duo_tool_rounds=0`,
-  i.e. a coder without tools).
+  `duo_chunking=false`, `duo_tool_rounds=50`, `duo_coder_tool_tier=core`,
+  `duo_test_feedback* = false`, coder ctx 32768. Install settings cannot
+  silently change what a condition measures (one run measured
+  `duo_tool_rounds=0`, i.e. a coder without tools).
 - **Tool tiers:** the coder defaults to `duo_core` (read/edit/run/tests +
   LSP diagnostics); `duo_coder_tool_tier=full` opts into
   git/web/MCP/browser/LSP extras. A benchmark comparing tiers must pin the

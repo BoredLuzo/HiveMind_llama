@@ -172,6 +172,7 @@ In Simple/Direct chat the model can use tools through a tier
 |------|-------|-------|
 | Off | `off` | pure chat |
 | Websearch | `readonly` | `web_search`, `web_fetch` only |
+| Research | `research` | read/search tools + web (no write/exec) |
 | Python | `python` | read tools + web + `run_python` |
 | Full | `full` | read/write/exec: `edit_file`, `run_bash`, background, git, ... |
 
@@ -230,8 +231,9 @@ Mode-scoped toolset (`tools/definitions.py`):
 | Misc | `get_datetime`, `remember` (durable key/value memory), `hivemind_pipeline` (OpenAI-compatible agent endpoint) |
 | Web | `web_search`, `web_fetch` (SearXNG, added when available) |
 
-Tool scoping per phase: `duo_full`, `duo_readonly`, `pre_explore`,
-`critic_verify`, `tool_agent`, `mcp_agent`, `openai_agent`.
+Tool scoping per phase: `duo_core` (the default coder set),
+`duo_full`, `duo_readonly`, `pre_explore`, `critic_verify`, `tool_agent`,
+`mcp_agent`, `openai_agent`.
 
 ### Language servers (LSP)
 
@@ -258,10 +260,12 @@ no per-language flags, and `lsp_servers` overrides a command.
 Read-only modes get the eight read tools plus `lsp_code_actions`;
 `lsp_rename` and `lsp_format` are full-mode only. A missing server answers
 `LSP_UNAVAILABLE`
-with an install hint. With a server already running, a successful write/edit
-gets a compact `[LSP auto-diagnostics …]` block (8-line cap); a write never
-starts a cold server, and `lsp_auto_diagnostics` (default true) turns the
-block off. With `lsp_enabled=false` the `lsp_*` schemas are removed entirely;
+with an install hint. A successful write/edit warms the server in the
+background (`lsp_auto_warm_on_write`, default true, bounded 3 s wait) and
+attaches a compact `[LSP auto-diagnostics …]` block (8-line cap); when the
+LSP is unavailable, the pyright/per-language lint block stays as the
+fallback. `lsp_auto_diagnostics` (default true) turns the block off. With
+`lsp_enabled=false` the `lsp_*` schemas are removed entirely;
 TSX/JSX are sent as `typescriptreact`/`javascriptreact`.
 
 Full tool arguments, tiers, errors and the server registry:

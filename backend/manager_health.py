@@ -133,7 +133,7 @@ class LlamaHealthMixin:
 
     async def unpin(self, model: str, keep_alive_seconds: float = 600.0):
         async with self._lock:
-            slot = await self._find_loaded(model)
+            slot = await self._find_loaded(model, lock_held=True)
             if slot:
                 slot.pinned        = False
                 slot._idle_timeout = keep_alive_seconds

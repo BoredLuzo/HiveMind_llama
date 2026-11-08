@@ -35,6 +35,9 @@ jobs:
           python tests/test_safe_profile_models.py
           python tests/test_preset_token_scrub.py
           python tests/test_loader_audit_2026_11_03.py
+          # Tier resolution + LSP tool contract (stdlib-only, 2026-11-08).
+          python tests/test_duo_core_tier.py
+          python tests/test_lsp_tools.py
           # Gateway/document/send-file/image fixes: all of these import only
           # stdlib + httpx (+ pypdf for real extraction) on Linux.
           python tests/test_gateway_send.py

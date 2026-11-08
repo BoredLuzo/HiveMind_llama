@@ -134,7 +134,7 @@ async def amain():
     s = _orphan_slot(mgr)
     s._ready_event.set()                 # stale junk a reset must clear
     async with mgr._lock:                # caller holds the lock (ensure_loaded)
-        out = await mgr._find_loaded(MODEL)
+        out = await mgr._find_loaded(MODEL, lock_held=True)
     check("A-dead: returns None (slot discarded, lookup continues)", out is None)
     check("A-dead: slot.model cleared under the lock", s.model is None)
     check("A-dead: orphan marker cleared", s._orphan_port is None)
@@ -148,7 +148,7 @@ async def amain():
     s = _stale_slot(mgr)
     s._ready_event.set()
     async with mgr._lock:
-        out = await mgr._find_loaded(MODEL)
+        out = await mgr._find_loaded(MODEL, lock_held=True)
     check("B-dead: returns None", out is None)
     check("B-dead: slot.model cleared (reset under lock)", s.model is None)
     check("B-dead: ready event cleared", not s._ready_event.is_set())
@@ -161,7 +161,7 @@ async def amain():
     s = _orphan_slot(mgr)
     mgr.probe_port_alive = True
     async with mgr._lock:
-        out = await mgr._find_loaded(MODEL)
+        out = await mgr._find_loaded(MODEL, lock_held=True)
     check("A-alive: returns the slot", out is s)
     check("A-alive: slot.model untouched", s.model == MODEL)
     check("A-alive: no reset (orphan marker kept)", s._orphan_port == s.port)
@@ -172,7 +172,7 @@ async def amain():
     s = _stale_slot(mgr)
     mgr.probe_port_alive = True
     async with mgr._lock:
-        out = await mgr._find_loaded(MODEL)
+        out = await mgr._find_loaded(MODEL, lock_held=True)
     check("B-alive: returns the slot (rehabilitated)", out is s)
     check("B-alive: slot.model untouched", s.model == MODEL)
     check("B-alive: rehabilitation counted", mgr.metrics.get("orphan_rehabilitations") == 1)
@@ -187,7 +187,7 @@ async def amain():
     s._ready_event.set()
     mgr.race_hook = _claim_hook(mgr, s)
     async with mgr._lock:
-        out = await mgr._find_loaded(MODEL)
+        out = await mgr._find_loaded(MODEL, lock_held=True)
     check("race-A: slot NOT reset (model intact)", s.model == MODEL)
     check("race-A: in-flight claim NOT clobbered (_loading stays True)",
           s._loading is True)
@@ -205,7 +205,7 @@ async def amain():
     mgr.probe_port_alive = True
     mgr.race_hook = _claim_hook(mgr, s)
     async with mgr._lock:
-        out = await mgr._find_loaded(MODEL)
+        out = await mgr._find_loaded(MODEL, lock_held=True)
     check("race-A-alive: claimed slot NOT touched (model intact)", s.model == MODEL)
     check("race-A-alive: _loading stays True", s._loading is True)
     check("race-A-alive: lookup returns the claimed slot", out is s)
@@ -217,7 +217,7 @@ async def amain():
     s = _orphan_slot(mgr)
     mgr.race_hook = _steal_hook(mgr, s)
     async with mgr._lock:
-        out = await mgr._find_loaded(MODEL)
+        out = await mgr._find_loaded(MODEL, lock_held=True)
     check("race-model: stolen slot keeps its new model (NOT reset to None)",
           s.model == "other-model")
     check("race-model: no active slot for our model -> None", out is None)
@@ -231,7 +231,7 @@ async def amain():
     s._ready_event.set()
     mgr.race_hook = _claim_hook(mgr, s)
     async with mgr._lock:
-        out = await mgr._find_loaded(MODEL)
+        out = await mgr._find_loaded(MODEL, lock_held=True)
     check("race-B: claimed slot NOT reset (model intact)", s.model == MODEL)
     check("race-B: _loading stays True", s._loading is True)
     check("race-B: ready event NOT cleared", s._ready_event.is_set())

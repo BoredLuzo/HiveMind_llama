@@ -1080,6 +1080,7 @@ async def _phase_preflight_and_spawn(self, slot, cmd, model: str,
                     "[PRE-FLIGHT-EVICT] %s (slot %d) sacrificed for load %s @ctx=%d",
                     _victim.model, _victim.slot_id, model, num_ctx,
                 )
+                _victim._loading = True  # claim-for-kill (2026-11-08)
                 await _kill_slot_async(_victim)
                 _fit = await self._pre_flight_grace_recheck(
                     model, num_ctx, slot,
