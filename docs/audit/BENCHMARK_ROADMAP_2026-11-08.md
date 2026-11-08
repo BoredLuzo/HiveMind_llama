@@ -47,6 +47,8 @@ Duo 1/1, Raw 0/2 (ungültige Diffs). Zwei Messfehler (Modus, Tokens) und die
 Modell-Fairness wurden dabei gefixt.
 
 ### Phase 2 — Raw-Baseline kalibrieren (1 Abend)
+- **Status 2026-11-08:** auf den 21 Starter-Tasks erledigt — `raw` 3× (63
+  Zellen, 0 %) und `raw_files` 3× (63, 71,4 %). Echte Repo-Tasks fehlen noch.
 - **Format-Entscheidung (2026-11-08):** `raw_files` (Full-File) ist die
   primäre No-Tool-Baseline (3 Läufe); `raw` (Diff) läuft einmal als strikte
   Gegenprobe. Im Smoke: `raw` 0/2, `raw_files` 2/2 bei denselben Tasks —
@@ -59,6 +61,9 @@ Modell-Fairness wurden dabei gefixt.
   entfernt.
 
 ### Phase 3 — HiveMind-Bedingungen (1 Nacht)
+- **Status 2026-11-08:** `hivemind_direct` 3× erledigt (63 Zellen, 92,1 %);
+  `hivemind_duo` bewusst ausgesetzt, weil der 4B-Coder nicht editiert —
+  braucht den 35B-Lauf.
 - `hivemind_direct` und `hivemind_duo`, je 3 Läufe = 126 Zellen.
 - Messen: Pass-Rate, Delta vs. `raw`, Median-Dauer, Tokens.
 - **Gate:** `hivemind_direct` > `raw` auf dem Gesamtkorpus, sonst zuerst
@@ -67,6 +72,8 @@ Modell-Fairness wurden dabei gefixt.
   Mehrkosten (Zeit/Tokens) rechtfertigt.
 
 ### Phase 4 — Aider-Baseline (1 Nacht)
+- **Status 2026-11-08:** erledigt (63 Zellen, 90,5 %, 946 Tokens/Zelle);
+  Aider 0.86.2, gleiches Modell/Server.
 - `aider` mit demselben Modell und llama-server, 3 Läufe = 63 Zellen.
 - Aider-Flags: `--yes --no-git --no-auto-commits --message`.
 - **Gate:** Vergleichbarkeit dokumentieren (Aider sieht dieselben sichtbaren

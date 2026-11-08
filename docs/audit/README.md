@@ -22,6 +22,9 @@ are **not** part of the release zip (see `.gitattributes`).
   Phase-1 harness smoke results (direct 2/2, duo 1/1, raw 0/2) and fixes
 - [BENCHMARK_RUN_2026-11-08.md](BENCHMARK_RUN_2026-11-08.md) -
   quiet 6-task run with aider comparison (aider 100%, direct 100%, duo 0% at 4B)
+- [BENCHMARK_RUN_21TASKS_2026-11-08.md](BENCHMARK_RUN_21TASKS_2026-11-08.md) -
+  21 tasks x 3 runs x 4 conditions: no measurable direct-vs-aider quality
+  difference at 4B, direct costs ~22x tokens
 - [voice_layer.md](voice_layer.md) - speech to text and text to speech
 
 Measurements live with the code they changed (commit bodies) or in

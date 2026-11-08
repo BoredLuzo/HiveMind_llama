@@ -382,6 +382,7 @@ SUITES = [
     ("chat_tools_route_guards", "tests/test_chat_tools_route_guards.py",     30),
     ("tool_route_repeat_guard", "tests/test_tool_route_repeat_guard.py",     30),
     ("bench_runner",            "tests/test_bench_runner.py",                30),
+    ("bench_analyze",           "tests/test_bench_analyze.py",               30),
     # F3 retry policy (deep audit 2026-11-07): 5xx cap + overflow no-retry
     ("llama_client_retry",      "tests/test_llama_client_retry.py",          30),
     # F4 sync-I/O off the loop (deep audit 2026-11-07): prefill meter reads

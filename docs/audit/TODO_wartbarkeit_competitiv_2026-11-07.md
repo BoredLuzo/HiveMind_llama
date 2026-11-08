@@ -339,7 +339,13 @@ Flake-Report (chronisch/partial).
   direct 100 % (20,2 s, 22.554 Tok/Zelle), raw_files 67 %, duo 0 % (4B-Coder
   editiert nicht; Planner läuft). Report `BENCHMARK_RUN_2026-11-08.md`;
   Duo braucht den 35B-Lauf, bevor es bewertet wird.
-  Offen: 5–10 Tasks aus echten Repos und der 35B-/3×-Lauf.
+  *21-Task-Lauf 2026-11-08 (3 Läufe, 252 Zellen):* aider 90,5 % [81–96],
+  direct 92,1 % [83–97], **McNemar p=1,0** → kein messbarer
+  Qualitätsunterschied; direct kostet ~22× Tokens (21.228 vs. 946/Zelle) und
+  1,6× Zeit. raw_files 71,4 %, raw 0 %. Kategorien komplementär (direct
+  Feature 100 %, aider Multi-File 100 %). Report
+  `BENCHMARK_RUN_21TASKS_2026-11-08.md`.
+  Offen: 5–10 Tasks aus echten Repos und der 35B-/Duo-Lauf.
   **Ablauf/Runbook/Zeitbudget:** `docs/audit/BENCHMARK_ROADMAP_2026-11-08.md`.
 
 - [ ] **D2 · P2 · COMPETE — Kontext-Engine.**
