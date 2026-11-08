@@ -10,6 +10,7 @@ Modell `qwen3.5:4b-mtp` (Q4_K_M). Ein Lauf pro Zelle.
 | Bedingung | Tasks | Pass | Dauer | Tokens | Bemerkung |
 |---|---|---:|---:|---:|---|
 | `raw` | 2 | **0/2** | 5,5 s / 12,9 s | 334 / 781 | Modell lieferte korrupten bzw. nicht anwendbaren Diff; Harness/Patch/Check liefen korrekt |
+| `raw_files` | 2 | **2/2** | 3,5 s / 6,3 s | 680 | Full-File-Format (`### FILE:`) statt Diff — beide Fixes korrekt angewendet |
 | `hivemind_direct` | 2 | **2/2** | 25,5 s / 20,3 s | 15.559 / 21.273 | `mode=simple`, Full-Tools, versteckte Tests grün |
 | `hivemind_duo` | 1 | **1/1** | 52,0 s | 68.478 | agentic Code-Duo, versteckter Test grün |
 | `aider` | — | — | — | — | nicht installiert; Runner meldet das ehrlich als Fehlzelle |
@@ -32,15 +33,16 @@ Roh-JSON: `%TEMP%\hm_bench_smoke_raw.json`, `..._hm2.json`, `..._duo.json`
 4. **Hidden Tests** sind manipulationssicher (Verzeichnis-Shadowing wird
    ersetzt), Timeouts werden pro Task respektiert, Ergebnisse werden nach
    jeder Zelle atomar geschrieben.
+5. **Raw-Format:** `raw` (Diff) ist als strikte Baseline 0/2, `raw_files`
+   (Full-File) löst dieselben Tasks 2/2. Die 0 % waren also ein
+   Formatproblem, kein fehlendes Task-Verständnis. Beide bleiben getrennt.
 
 ## Offene Punkte vor Phase 2
 
-- **`raw` = 0/2** ist als Baseline legitim, macht den relativen Zuwachs aber
-  degeneriert. Vor der Kalibrierung entscheiden:
-  (a) Diff-Format beibehalten und 0 % akzeptieren, oder
-  (b) dem Raw-Modell ein einfacheres Full-File-Format (`### FILE: path`)
-  geben, damit die Baseline nicht nur an der Diff-Syntax scheitert.
-  Empfehlung: (b) testen, aber getrennt ausweisen.
+- **Raw-Format entschieden:** `raw_files` wird die **primäre** No-Tool-Baseline
+  (3 Läufe), `raw` (Diff) läuft einmal als strikte Gegenprobe. Beide werden im
+  Report getrennt ausgewiesen; `raw_files` ist bewusst kein Werkzeug-Agent,
+  sondern ein Ein-Prompt-Modell mit Full-File-Ausgabe.
 - **Aider installieren** (`pip install aider-chat` oder offizieller Installer)
   und Phase 4 vorbereiten.
 - **5–10 echte Repo-Tasks** ergänzen (Roadmap §4), sonst messen die 21
@@ -50,11 +52,11 @@ Roh-JSON: `%TEMP%\hm_bench_smoke_raw.json`, `..._hm2.json`, `..._duo.json`
 
 ## Verdikt
 
-Phase 1 ist **bestanden**: Alle drei lauffähigen Bedingungen haben den
+Phase 1 ist **bestanden**: Alle vier lauffähigen Bedingungen haben den
 kompletten Pfad (HTTP/SSE → Agent → Workspace → versteckter Test → JSON)
-durchlaufen; Direct und Duo haben die Tasks gelöst, Raw ist ehrlich
-gescheitert. Die zwei gefundenen Messfehler (Modus, Tokens) hätten die
-D1-Zahlen sonst still verfälscht.
+durchlaufen; Direct und Duo haben die Tasks gelöst, Raw-Diff ist ehrlich
+gescheitert und Raw-Files hat dieselben Tasks gelöst. Die zwei gefundenen
+Messfehler (Modus, Tokens) hätten die D1-Zahlen sonst still verfälscht.
 
 **Nächster Schritt:** Entscheidung zum Raw-Format, Aider installieren,
 dann Phase 2 (Raw-Baseline 3×) gemäß `BENCHMARK_ROADMAP_2026-11-08.md`.

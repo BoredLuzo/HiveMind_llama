@@ -316,8 +316,8 @@ Flake-Report (chronisch/partial).
   3 Refactor, 4 Multi-File), jede rot-vor-fix/grün-nach-Referenzfix
   verifiziert; 41 Checks in `tests/test_bench_runner.py`.
   *Smoke 2026-11-08:* `direct` 2/2 (15,6k/21,3k Tokens), `duo` 1/1 (52 s,
-  68,5k Tokens), `raw` 0/2 (ungültige Diffs) — Report
-  `docs/audit/BENCHMARK_SMOKE_2026-11-08.md`. Dabei gefixt: echter
+  68,5k Tokens), `raw` 0/2 (ungültige Diffs), `raw_files` 2/2 (680 Tokens) —
+  Report `docs/audit/BENCHMARK_SMOKE_2026-11-08.md`. Dabei gefixt: echter
   `mode=simple`, Modell-Fairness (`direct_model`/duo-Rollen = `--model`) und
   ToolLoop-Usage-Zählung (vorher ~0 Tokens für Tool-Läufe).
   Offen: Raw-Format-Entscheidung, 5–10 Tasks aus echten Repos, Aider-Lauf.

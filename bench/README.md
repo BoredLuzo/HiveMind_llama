@@ -11,7 +11,8 @@ is the **delta against the raw-model baseline**.
 | Condition | What runs |
 |---|---|
 | `raw` | One prompt, no tools. The model must answer with a unified diff, which the runner applies with `git apply`. |
-| `hivemind_direct` | HiveMind `/stream`, `mode=chat`, direct tools tier `full`. |
+| `raw_files` | One prompt, no tools. The model returns full corrected files (`### FILE: path` blocks); the runner writes them into the workspace. Opt-in (not in the default condition list), because it is easier than a diff and must be reported separately. |
+| `hivemind_direct` | HiveMind `/stream`, `mode=simple`, direct tools tier `full`. |
 | `hivemind_duo` | HiveMind `/stream`, `mode=code_duo`, `duo_agentic_mode=true`. |
 | `aider` | Aider CLI against the same OpenAI-compatible llama-server. |
 

@@ -37,7 +37,11 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parent.parent
-CONDITIONS = ("raw", "hivemind_direct", "hivemind_duo", "aider")
+# raw        = one prompt, unified diff (the strict baseline)
+# raw_files  = one prompt, full corrected files (optional, separately reported:
+#              small models often fail on diff syntax, not on the fix itself)
+CONDITIONS = ("raw", "raw_files", "hivemind_direct", "hivemind_duo", "aider")
+DEFAULT_CONDITIONS = ("raw", "hivemind_direct", "hivemind_duo", "aider")
 
 
 @dataclass
@@ -57,7 +61,7 @@ class Config:
     model: str
     llama_url: str = "http://127.0.0.1:8080"
     hivemind_url: str = "http://127.0.0.1:8001"
-    conditions: list[str] = field(default_factory=lambda: list(CONDITIONS))
+    conditions: list[str] = field(default_factory=lambda: list(DEFAULT_CONDITIONS))
     runs: int = 1
     # None = use each task's timeout_s; a CLI value overrides the corpus.
     task_timeout_s: int | None = None
@@ -167,10 +171,61 @@ def apply_patch(patch_text: str, work: Path) -> tuple[bool, str]:
     return r.returncode == 0, ((r.stdout or "") + (r.stderr or "")).strip()[-1000:]
 
 
+_FILE_BLOCK_RE = re.compile(
+    r"###\s*FILE:\s*(?P<path>[^\n]+)\n```[^\n]*\n(?P<content>.*?)\n```", re.S)
+_DIFF_PROMPT = ("Return ONLY a unified diff (git apply format). Do not explain.")
+_FILES_PROMPT = (
+    "Return the complete corrected content of every file you change. Use "
+    "exactly this format for each file, no diff and no explanation:\n\n"
+    "### FILE: relative/path.py\n```python\n<complete file content>\n```")
+
+
+def _parse_file_blocks(text: str) -> dict[str, str]:
+    """Parse '### FILE: path' + fenced block pairs from model output."""
+    out: dict[str, str] = {}
+    for match in _FILE_BLOCK_RE.finditer(text or ""):
+        name = match.group("path").strip().strip("`").strip()
+        if name:
+            out[name] = match.group("content")
+    return out
+
+
+def _safe_rel_path(name: str) -> Path | None:
+    """Workspace-relative path or None (absolute / .. / drive paths)."""
+    clean = str(name or "").strip().replace("\\", "/")
+    if not clean or clean.startswith("/") or re.match(r"^[A-Za-z]:", clean):
+        return None
+    path = Path(clean)
+    if path.is_absolute():
+        return None
+    if any(part == ".." for part in path.parts):
+        return None
+    return path
+
+
+def apply_full_files(text: str, work: Path) -> tuple[bool, str]:
+    """Write the model's full-file blocks; reject paths outside the workspace."""
+    blocks = _parse_file_blocks(text)
+    if not blocks:
+        return False, "no '### FILE:' block in model output"
+    written: list[str] = []
+    for name, content in blocks.items():
+        rel = _safe_rel_path(name)
+        if rel is None:
+            return False, f"unsafe path in model output: {name!r}"
+        dst = work / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not content.endswith("\n"):
+            content += "\n"
+        dst.write_text(content, encoding="utf-8")
+        written.append(rel.as_posix())
+    return True, "wrote " + ", ".join(written)
+
+
 # ── conditions ─────────────────────────────────────────────────────────────
-async def _run_raw(task: Task, work: Path, cfg: Config) -> dict:
-    prompt = (task.prompt + "\n\nReturn ONLY a unified diff (git apply format). "
-              "Do not explain.")
+async def _run_raw(task: Task, work: Path, cfg: Config, *,
+                   full_files: bool = False) -> dict:
+    prompt = task.prompt + "\n\n" + (_FILES_PROMPT if full_files else _DIFF_PROMPT)
     payload = {
         "model": cfg.model,
         "messages": [
@@ -188,7 +243,10 @@ async def _run_raw(task: Task, work: Path, cfg: Config) -> dict:
         data = r.json()
     msg = ((data.get("choices") or [{}])[0].get("message") or {})
     text = str(msg.get("content") or "")
-    applied, detail = apply_patch(text, work)
+    if full_files:
+        applied, detail = apply_full_files(text, work)
+    else:
+        applied, detail = apply_patch(text, work)
     usage = data.get("usage") or {}
     return {"patch_applied": applied, "detail": detail,
             "tokens": int(usage.get("total_tokens") or 0)}
@@ -307,6 +365,8 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     try:
         if cond == "raw":
             extra = await _run_raw(task, work, cfg)
+        elif cond == "raw_files":
+            extra = await _run_raw(task, work, cfg, full_files=True)
         elif cond == "hivemind_direct":
             extra = await _run_hivemind(task, work, cfg, duo=False)
         elif cond == "hivemind_duo":
@@ -389,7 +449,7 @@ def main() -> int:
     parser.add_argument("--model", default="qwen3.5:4b-mtp")
     parser.add_argument("--llama", default="http://127.0.0.1:8080")
     parser.add_argument("--hivemind", default="http://127.0.0.1:8001")
-    parser.add_argument("--conditions", default=",".join(CONDITIONS))
+    parser.add_argument("--conditions", default=",".join(DEFAULT_CONDITIONS))
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--task-timeout", type=int, default=None,
                         help="override every task's timeout_s (default: per task)")

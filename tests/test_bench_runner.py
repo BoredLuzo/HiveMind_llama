@@ -17,8 +17,9 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from bench.runner import (  # noqa: E402
-    Config, Task, _extract_patch, _hivemind_body, _parse_token_count,
-    _persist, aggregate, apply_patch, load_tasks, prepare_workspace,
+    Config, DEFAULT_CONDITIONS, Task, _extract_patch, _hivemind_body,
+    _parse_file_blocks, _parse_token_count, _persist, _safe_rel_path,
+    aggregate, apply_full_files, apply_patch, load_tasks, prepare_workspace,
     print_summary, run_check,
 )
 from tests._harness import Harness  # noqa: E402
@@ -114,6 +115,34 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
         check("patch: invalid diff is reported", ok is False, f" ({detail})")
     else:
         h.skip("patch: git not installed", "git apply needs git")
+
+    # ── full-file raw variant ──────────────────────────────────────────────
+    _blocks = _parse_file_blocks(
+        "noise\n### FILE: calc.py\n```python\ndef add(a, b):\n    return a + b\n```\n"
+        "### FILE: new/helper.py\n```python\nX = 1\n```\n")
+    check("files: two blocks parsed", list(_blocks) == ["calc.py", "new/helper.py"],
+          f" ({list(_blocks)})")
+    check("files: content kept", "return a + b" in _blocks.get("calc.py", ""))
+    check("files: no blocks -> empty", _parse_file_blocks("just prose") == {})
+    check("files: relative path accepted", _safe_rel_path("src/x.py") is not None)
+    check("files: parent escape rejected", _safe_rel_path("../evil.py") is None)
+    check("files: absolute posix rejected", _safe_rel_path("/etc/passwd") is None)
+    check("files: windows drive rejected", _safe_rel_path("C:\\evil.py") is None)
+
+    full_work = prepare_workspace(tasks[0], root / "work_files")
+    ok, detail = apply_full_files(
+        "### FILE: calc.py\n```python\nprint('fixed')\n```\n", full_work)
+    check("files: full-file block is written", ok is True, f" ({detail})")
+    check("files: writer creates new files",
+          apply_full_files("### FILE: pkg/new.py\n```\nY = 2\n```\n", full_work)[0]
+          and (full_work / "pkg" / "new.py").is_file())
+    ok, detail = apply_full_files("### FILE: ../evil.py\n```\nx\n```\n", full_work)
+    check("files: unsafe path refuses the batch", ok is False and "unsafe" in detail,
+          f" ({detail})")
+    check("files: unsafe path did not write outside",
+          not (root / "evil.py").exists())
+    check("default conditions keep raw_files opt-in",
+          "raw" in DEFAULT_CONDITIONS and "raw_files" not in DEFAULT_CONDITIONS)
 
     # ── condition bodies / token parsing / incremental result ──────────────
     direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False,

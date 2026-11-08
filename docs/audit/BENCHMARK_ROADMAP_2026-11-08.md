@@ -46,10 +46,11 @@ Duo 1/1, Raw 0/2 (ungültige Diffs). Zwei Messfehler (Modus, Tokens) und die
 Modell-Fairness wurden dabei gefixt.
 
 ### Phase 2 — Raw-Baseline kalibrieren (1 Abend)
-- **Format-Entscheidung zuerst:** Diff-only (aktuell, 4B scheitert an der
-  Syntax) oder zusätzlich ein Full-File-Format (`### FILE: path`), das der
-  Runner anwendet. Getrennt ausweisen; nicht still das Format wechseln.
-- 21 Tasks × `raw` × 3 Läufe = 63 Zellen.
+- **Format-Entscheidung (2026-11-08):** `raw_files` (Full-File) ist die
+  primäre No-Tool-Baseline (3 Läufe); `raw` (Diff) läuft einmal als strikte
+  Gegenprobe. Im Smoke: `raw` 0/2, `raw_files` 2/2 bei denselben Tasks —
+  das 0 % war ein Syntax-, kein Verständnisproblem. Getrennt ausweisen.
+- 21 Tasks × `raw_files` × 3 Läufe = 63 Zellen (+ 21 Diff-Zellen).
 - Zweck: Rauschen messen, Task-Ausreißer finden, eine belastbare
   Baseline-Pass-Rate je Task.
 - **Gate:** Kein Task darf im Check flaken (3/3 gleiches Ergebnis oder
