@@ -213,7 +213,7 @@ async def _duo_coder_round_input(ctx, ps):
         # coder to open with a tool call, and forbid textual tool-call
         # syntax. Otherwise a tool-finetuned model free-styles
         # "[TOOL_CALL] …"/"edit_file<argkey>…" that nothing parses.
-        from core.duo_runner import _READONLY_CODER_NOTE
+        from core.duo_helpers import _READONLY_CODER_NOTE
         _exec_header = _READONLY_CODER_NOTE
         if _subtasks:
             # PLAN-DEDUP (2026-09-09): the [Plan — N subtasks] preview is

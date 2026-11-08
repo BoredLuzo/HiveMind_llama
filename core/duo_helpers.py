@@ -11,6 +11,16 @@ from pathlib import Path
 
 DEFAULT_VRAM_BUDGET_GB = 7.5
 
+# READ-ONLY-CODER-NOTE (moved from duo_runner 2026-11-08): duo_round_input
+# needs it too; keeping it here removes the extracted-module back-edge.
+_READONLY_CODER_NOTE = (
+    "[READ-ONLY REQUEST — file tools are DISABLED]\n"
+    "Answer in plain text from the provided codebase context. If you would call a "
+    "tool, describe the outcome in text instead.\n"
+    "IMPORTANT: textual tool-call syntax will NOT be executed — never output "
+    "[TOOL_CALL] … [END_TOOL_CALL], edit_file<argkey>…, <function=…> or bare tool JSON."
+)
+
 _READ_ONLY_KEYWORDS = (
     "read-only", "readonly", "no write", "do not write", "don't write",
     "do not modify", "don't modify",

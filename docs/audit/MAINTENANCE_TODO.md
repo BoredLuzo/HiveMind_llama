@@ -307,6 +307,33 @@ runner robustness and flake report (chronic/partial).
   *Done 2026-11-07:* the divergence and the merge precondition are documented at both
   class headers; no code merge (semantics stay as they are).
 
+- [x] **F9 · P1 · DEBT — Deep audit after the 1.5.5 refactor wave.**
+  *Done 2026-11-08:* explicit lock ownership in `_find_loaded` (manager callers
+  pass `lock_held=True`; core callers never release a lock they do not own),
+  claim-for-kill (`_loading=True`) for LRU/pre-flight victims, rehabilitated
+  orphans keep the orphan port, `duo_core` exempted from the READ_REQUIRED
+  write guard (the `write_file` alias stays gated), `direct_research` prompt +
+  `task_complete`, split-integrity covers the five new seams (dead `_ri_ps`
+  writes/fields removed), legacy tool prompt built from the real schema,
+  abort-registry sweep wired, benchmark tier/test-feedback/ctx pins + server
+  lift, cell timeout/preflight/check_output/churn/analyze fixes, docs/CI.
+
+- [ ] **F10 · P2 · TEST — LSP tool settings bypass the run snapshot.**
+  `tools/handlers/lsp.py` reads the live `core.state.settings` for
+  `lsp_auto_diagnostics`/`lsp_auto_warm_on_write`, so a benchmark cannot pin
+  them per request. *Acceptance:* route both through the run settings snapshot,
+  or require an isolated install for benchmarks (current documented fallback).
+
+- [ ] **F11 · P3 · PERF — Coder 5xx retry still lacks the body cap.**
+  `AgenticToolLoop` retries generic 5xx up to 20 times; the F3 cap lives only
+  in `backend/llama_client.py`. *Acceptance:* reuse `_should_retry_http_status`
+  in the agentic retry branch.
+
+- [ ] **F12 · P3 · DEBT — `tool_phase` subset bypasses the tier filter.**
+  `ToolLoop` replaces the payload with `get_tools_for_phase` when a phase is
+  set, without intersecting `_tool_names_for_mode`; currently no caller sets
+  it. *Acceptance:* intersect when `cfg.tool_mode` is set.
+
 ## D. Competitiveness (open)
 
 - [ ] **D1 · P2 · COMPETE — Benchmark runner: relative gain instead of absolute quota.**
@@ -471,3 +498,7 @@ runner robustness and flake report (chronic/partial).
 - Batch 18 (2026-11-08): A5 card timer removed (engine the only auto-answer source),
   A6 Playwright browser test passed and stored as an opt-in script, F6 closed as
   won't-do.
+- Batch 19 (2026-11-08): deep audit (4 subagents) — manager lock ownership/claim-
+  for-kill fixes, duo_core write guard, direct_research prompt, split-integrity
+  coverage, benchmark pins/timeout/preflight/churn/analyze, docs/CI; 343/343.
+  Remaining: F10 (LSP settings snapshot), F11/F12 (P3).

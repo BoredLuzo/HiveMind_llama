@@ -142,7 +142,7 @@ from core.duo_helpers import (
     _build_symbol_reference_hints,
     _explore_size_tolerance, _collect_new_explore_paths,
     _sum_edit_lines, _build_dropped_tool_retry,
-    resolve_coder_tool_mode,
+    resolve_coder_tool_mode, _READONLY_CODER_NOTE,
 )
 from core.plan_tracker import build_tracker_from_planner as _build_tracker_from_planner
 from core.plan_tracker import derive_step_title as _derive_step_title
@@ -242,13 +242,7 @@ BRIEFING_OFF = "off"
 
 
 
-_READONLY_CODER_NOTE = (
-    "[READ-ONLY REQUEST — file tools are DISABLED]\n"
-    "Answer in plain text from the provided codebase context. If you would call a "
-    "tool, describe the outcome in text instead.\n"
-    "IMPORTANT: textual tool-call syntax will NOT be executed — never output "
-    "[TOOL_CALL] … [END_TOOL_CALL], edit_file<argkey>…, <function=…> or bare tool JSON."
-)
+# _READONLY_CODER_NOTE is imported from core.duo_helpers (no back-edge).
 
 
 
