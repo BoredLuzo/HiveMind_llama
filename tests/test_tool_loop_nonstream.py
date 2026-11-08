@@ -42,7 +42,10 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         if length:
-            self.rfile.read(length)
+            try:
+                self.server.request_body = json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                self.server.request_body = {}
         body = json.dumps({
             "choices": [{"message": {"role": "assistant", "content": "OK"}}],
             "usage": {"completion_tokens": 1, "prompt_tokens": 3},
@@ -86,6 +89,9 @@ try:
     check("usage is summed into the loop state",
           state.prompt_tokens == 3 and state.completion_tokens == 1,
           f" (prompt={state.prompt_tokens}, completion={state.completion_tokens})")
+    check("prompt prefix cache is requested",
+          getattr(srv, "request_body", {}).get("cache_prompt") is True,
+          f" ({getattr(srv, 'request_body', {}).get('cache_prompt')})")
 finally:
     srv.shutdown()
 

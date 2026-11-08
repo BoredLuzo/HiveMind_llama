@@ -23,6 +23,7 @@ from tools import definitions as _defs
 from tools.websearch import WEB_SEARCH_TOOL_DEF, WEB_FETCH_TOOL_DEF
 from settings import DEFAULT_SETTINGS
 from core.run_context import RunContext
+from core.direct_runner import _direct_tools_note
 
 from tests._harness import Harness  # noqa: E402
 
@@ -47,6 +48,14 @@ check("direct_python adds run_python only",
 check("direct_full = full inline + web + send_file",
       _allow["direct_full"] == set(_defs._INLINE_TOOL_NAMES)
       | {"web_search", "web_fetch", "send_file"})
+
+# 2026-11-08: direct is an ASSISTANT tier; the note must tell the model to
+# stop calling tools once it has the answer (fewer re-sent prompts).
+_note_full = _direct_tools_note("direct_full")
+check("direct prompt has a stop rule",
+      "WITHOUT calling another tool" in _note_full, f" ({_note_full[:60]!r})")
+check("readonly direct note advertises no write tools",
+      "edit_file" not in _direct_tools_note("direct", ws_ok=True))
 _names_plain = {t["function"]["name"]
                 for t in _defs._get_inline_tools(mode="direct_full")}
 _names_tg = {t["function"]["name"] for t in _defs._get_inline_tools(

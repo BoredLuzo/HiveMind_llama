@@ -13,7 +13,9 @@ answer instead of `max_tool_rounds`.
 Runtime: slot eviction kills off the event loop (`_evict_lru_async`), the
 Windows process-count probe runs in a thread, and `tzdata` moved from the
 dev group into the shipped dependencies so named timezones work on a fresh
-install.
+install. Tool-loop requests set `cache_prompt`, and the direct prompt tells
+the model to answer without another tool call when it is done (fewer
+re-sent rounds).
 
 Ask-user: the card no longer runs its own 30 s auto-answer timer; the engine
 governor is the single source, so one question can never receive two

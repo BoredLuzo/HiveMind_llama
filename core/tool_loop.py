@@ -359,6 +359,10 @@ class ToolLoop:
                 # it no usage arrives at all - six runs lost [CACHE] and
                 # telemetry to this on 09./10.10.).
                 "stream_options": {"include_usage": True},
+                # PREFIX-CACHE (2026-11-08): keep the system/tools prefix
+                # reusable across rounds. The messages only grow at the tail,
+                # so llama.cpp can skip re-prefill for the cached part.
+                "cache_prompt": True,
                 "temperature":       _smp.get("temperature", self.cfg.temperature),
                 "top_p":             _smp.get("top_p", 0.95),
                 "top_k":             int(_smp.get("top_k", 20)),

@@ -37,6 +37,8 @@ def _direct_tools_note(tool_mode: str, ws_ok: bool = False) -> str:
         "\n\nTOOLS ARE AVAILABLE: " + _list + ".\n"
         "Use tools ONLY when they actually help — for pure knowledge, conversation, "
         "math or general questions answer directly from your knowledge. "
+        "When you have the answer or the change is complete, reply in plain text "
+        "WITHOUT calling another tool. "
         "Never call a tool that is not listed above."
     )
 
