@@ -30,11 +30,13 @@ _core = _names("duo_core")
 check("coder core: read/edit/run/tests present",
       {"read_file", "edit_file", "write_file", "run_bash", "run_tests",
        "task_complete", "ask_user"} <= _core, f" ({sorted(_core)})")
-check("coder core: no git/web/mcp/browser/lsp/subagent",
+check("coder core: no git/web/mcp/browser/lsp_status/subagent",
       not ({"git_status", "git_commit", "web_search", "web_fetch", "browser",
             "lsp_status", "subagent_research", "install_package"} & _core),
       f" ({sorted(_core & {'git_status', 'web_search', 'browser', 'lsp_status'})})")
-check("coder core: exact 16-tool set", len(_core) == 16, f" ({len(_core)})")
+check("coder core: LSP diagnostics included (warms auto-diagnostics)",
+      "lsp_diagnostics" in _core)
+check("coder core: exact 17-tool set", len(_core) == 17, f" ({len(_core)})")
 
 _full = _get_inline_tools(mode="duo_full")
 _core_json = len(json.dumps(_get_inline_tools(mode="duo_core")))

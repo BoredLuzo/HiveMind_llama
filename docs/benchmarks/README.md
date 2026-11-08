@@ -49,9 +49,10 @@ tests overwrite same-named agent files immediately before the check.
   `duo_chunking=false`, `duo_tool_rounds=50`. Install settings cannot silently
   change what a condition measures (one run measured `duo_tool_rounds=0`,
   i.e. a coder without tools).
-- **Tool tiers:** the coder defaults to `duo_core` (read/edit/run/tests);
-  `duo_coder_tool_tier=full` opts into git/web/MCP/browser/LSP. A benchmark
-  comparing tiers must pin the setting per condition.
+- **Tool tiers:** the coder defaults to `duo_core` (read/edit/run/tests +
+  LSP diagnostics); `duo_coder_tool_tier=full` opts into
+  git/web/MCP/browser/LSP extras. A benchmark comparing tiers must pin the
+  setting per condition.
 - **Fresh workspace** per run/condition; the task fixtures are never modified.
 - **No claims beyond the data:** synthetic tasks and one model do not prove a
   general coding advantage.

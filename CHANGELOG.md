@@ -10,10 +10,10 @@ the direct-tools prompt rules, uses `direct_tools_max_rounds` (1..300) and
 nudges one identical repeated tool call, so a read-only task ends with an
 answer instead of `max_tool_rounds`.
 
-Tools: the coder now defaults to `duo_core` (16 read/edit/run/test tools,
-~2.7k schema instead of ~5k); `duo_coder_tool_tier=full` opts into
-git/web/MCP/browser/LSP. Direct gains a `research` tier (web + read/search,
-no write/exec) and defaults to `readonly`.
+Tools: the coder now defaults to `duo_core` (17 read/edit/run/test tools +
+LSP diagnostics, ~2.8k schema instead of ~5k); `duo_coder_tool_tier=full`
+opts into git/web/MCP/browser/LSP extras. Direct gains a `research` tier
+(web + read/search, no write/exec) and defaults to `readonly`.
 
 Runtime: slot eviction kills off the event loop (`_evict_lru_async`), the
 Windows process-count probe runs in a thread, and `tzdata` moved from the

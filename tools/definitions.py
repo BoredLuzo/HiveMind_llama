@@ -560,6 +560,9 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
         "find_files", "search_code", "edit_file", "write_file",
         "write_file_append", "undo_last", "run_bash", "run_python",
         "run_tests", "task_complete", "ask_user", "get_datetime",
+        # LSP diagnostics stays in core: post-write auto-diagnostics only
+        # fire when a server is warm, and this is the tool that warms it.
+        "lsp_diagnostics",
     },
     # WEDGE-HANDOFF (2026-09-17): fresh-context repair delegate. Read + write
     # family, deliberately NO run_bash/git/ask_user/browser — minimal-invasive
