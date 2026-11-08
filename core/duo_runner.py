@@ -142,7 +142,7 @@ from core.duo_helpers import (
     _build_symbol_reference_hints,
     _explore_size_tolerance, _collect_new_explore_paths,
     _sum_edit_lines, _build_dropped_tool_retry,
-    
+    resolve_coder_tool_mode,
 )
 from core.plan_tracker import build_tracker_from_planner as _build_tracker_from_planner
 from core.plan_tracker import derive_step_title as _derive_step_title
@@ -3446,7 +3446,8 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                     _tool_ctx_lru = ToolContextLRU(default_ttl=int(ctx.settings.get("duo_tool_output_ttl", 3) or 3))
                     # P2-7 FIX: Use module-level keyword tuple + reuse _read_only_task_request
                     _read_only_task = _read_only_task_request
-                    _tool_mode = "duo_readonly" if _read_only_task else "duo_full"
+                    _tool_mode = resolve_coder_tool_mode(
+                        ctx.settings, read_only=_read_only_task)
                     _active_tools = _filter_tools_for_mode(
                         _xtools_ws,
                         mode=_tool_mode,

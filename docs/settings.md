@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**277 settings keys.**
+**278 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -30,7 +30,7 @@ its comment) in either file, then re-run the generator.
 | `desktop_notifications` | bool | `True` | - | Windows toasts for run start/end and approval cards. |
 | `direct_tools_enabled` | bool | `True` | yes |  |
 | `direct_tools_max_rounds` | int | `12` | yes |  |
-| `direct_tools_tier` | str | `readonly` | yes | off \| readonly(websearch only) \| python(read+python) \| full |
+| `direct_tools_tier` | str | `readonly` | yes | off \| readonly(websearch) \| research(web+read) \| python(read+python) \| full |
 | `disable_thinking_in_planner` | bool | `False` | - |  |
 | `document_max_chars` | int | `120000` | - | PDF/text extraction limits (engine /documents/extract). The gateway sends bytes, the engine answers text or a DOC_* code. |
 | `document_max_pages` | int | `40` | - |  |
@@ -50,6 +50,7 @@ its comment) in either file, then re-run the generator.
 | `duo_coder_model` | str | `` | yes | Automatic/override keys that DEFAULT_SETTINGS now exposes explicitly (previously only implicit read fallbacks in the consumers). |
 | `duo_coder_tool_thinking` | bool | `False` | yes |  |
 | `duo_coder_tool_thinking_auto_mode` | str | `off` | yes |  |
+| `duo_coder_tool_tier` | str | `core` | yes | CORE CODER TIER : default "core" (16 tools: read/edit/run/ tests) instead of "full" (35 incl. git/web/MCP/browser/LSP). Full is opt-in when a task really needs those tools. |
 | `duo_coder_ttl_seconds` | int | `0` | yes | 0 = auto (420s), >0 = Override |
 | `duo_coding_mode` | bool | `True` | yes |  |
 | `duo_compress_auto_floor` | float | `0.7` | - |  |

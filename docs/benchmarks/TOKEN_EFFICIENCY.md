@@ -74,9 +74,11 @@ magnitude is still real: Direct's minimum of ~15.5k is almost exactly
 2. **Adaptive round/token budget.** Small tasks: few rounds; stop after a
    successful edit plus a visible test pass. Do not run to `until_finished`
    by default for assistant-sized work.
-3. **Tier the tool schema for the coder.** read/edit/run_bash/run_tests only,
-   not the full 33-tool set. Direct already has `direct` (3 tools, ~450
-   tokens) and `direct_python` (18, ~2,400); the coder has no such tier.
+3. **Tier the tool schema for the coder.** The coder now defaults to
+   `duo_core` (16 tools: read/edit/run/tests, ~2.7k chars-tokens) instead of
+   `duo_full` (33 tools, ~5k); `duo_coder_tool_tier=full` opts into
+   git/web/MCP/browser/LSP. Direct has `direct` (3), `direct_research`
+   (web+read, ~1.5k), `direct_python` (18), `direct_full` (33).
 4. **Line-range reads.** `read_file(start_line, end_line)` instead of whole
    files; reads are valuable, but they should be cheap.
 5. **Do not re-read the same range.** The shared no-progress guard

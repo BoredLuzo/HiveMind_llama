@@ -147,6 +147,8 @@
         <label for="dt-tier-off" title="Pure chat — no tools">Off</label>
         <input type="radio" name="direct_tools_tier" id="dt-tier-readonly" value="readonly" onchange="setDirectToolsTier(this.value)">
         <label for="dt-tier-readonly" title="Web search only (no file read)">Websearch</label>
+        <input type="radio" name="direct_tools_tier" id="dt-tier-research" value="research" onchange="setDirectToolsTier(this.value)">
+        <label for="dt-tier-research" title="Web + read/search (research, no write)">Research</label>
         <input type="radio" name="direct_tools_tier" id="dt-tier-python" value="python" onchange="setDirectToolsTier(this.value)">
         <label for="dt-tier-python" title="Read + run_python">Python</label>
         <input type="radio" name="direct_tools_tier" id="dt-tier-full" value="full" onchange="setDirectToolsTier(this.value)">
@@ -286,6 +288,18 @@
             <option value="3">3</option>
             <option value="10">10</option>
             <option value="50">All (50)</option>
+          </select>
+        </div>
+
+        <div class="opt-row" style="margin-top:4px">
+          <div class="opt-row-left">
+            <span class="opt-name">Tool set</span>
+            <span class="opt-hint">Core = read/edit/run/tests; Full adds git/web/MCP/browser/LSP</span>
+          </div>
+          <select id="duo-coder-tool-tier" onchange="S.duoCoderToolTier=this.value;postSettings({duo_coder_tool_tier:this.value})"
+            style="background:#10131a;border:1px solid #2e3a4e;border-radius:4px;padding:3px 6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c8d4e4;width:84px;flex-shrink:0">
+            <option value="core">Core</option>
+            <option value="full">Full</option>
           </select>
         </div>
 

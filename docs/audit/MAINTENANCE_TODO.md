@@ -379,6 +379,13 @@ runner robustness and flake report (chronic/partial).
   Direct. The cause of the earlier 0% was `duo_tool_rounds=0` (tools off), not the 4B
   model. Open: 5–10 tasks from real repos and the 35B/duo run.
 
+  *Token tiers 2026-11-08:* the coder now defaults to `duo_core` (16 tools,
+  ~2.7k schema vs ~5k full); `duo_coder_tool_tier=full` opts into git/web/MCP/
+  browser/LSP. Direct gains `direct_research` (web+read, no write/exec).
+  Live 2-task coder core smoke: 2/2, ~48k tokens/cell (the earlier full-tool
+  2-task smoke was ~62k; different task mix, indicative). A/B on 21 tasks and
+  churn metrics still pending.
+
   **Procedure/runbook/time budget:** `docs/benchmarks/ROADMAP.md`.
 
 - [ ] **D2 · P2 · COMPETE — Context engine.**

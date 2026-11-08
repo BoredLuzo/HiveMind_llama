@@ -59,6 +59,7 @@ SUITES = [
     ("compress_plan_reinject",    "tests/test_compress_plan_reinject.py",      120),
     ("destructive_gate",          "tests/test_destructive_gate.py",            120),
     ("direct_tools",              "tests/test_direct_tools.py",                120),
+    ("duo_core_tier",             "tests/test_duo_core_tier.py",                30),
     ("ensure_loaded_stale_port",  "tests/test_ensure_loaded_stale_port.py",     60),
     ("vision_load_race",          "tests/test_vision_load_race.py",              60),
     ("direct_vision_flag",        "tests/test_direct_vision_flag.py",            60),

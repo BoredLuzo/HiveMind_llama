@@ -408,6 +408,7 @@ async def run_direct(ctx):
             _direct_tier = "readonly"
         _direct_tool_mode = {
             "readonly": "direct",
+            "research": "direct_research",
             "python": "direct_python",
             "full": "direct_full",
         }.get(_direct_tier, "")

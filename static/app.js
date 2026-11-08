@@ -105,6 +105,7 @@ let S = {
     // Code
   duoPair: 'focused',
   duoToolRounds: 0,
+  duoCoderToolTier: 'core',
   duoUsePipeline: false,
   duoProfileSpeedModel: 'qwen3.5:4b',
   duoProfileQualityModel: 'qwen3.5:9b-ud',
@@ -397,12 +398,13 @@ function setDirectToolsTier(v) {
 var _DIRECT_TIER_HINTS = {
   off:      'Off \u2014 pure chat, no tools.',
   readonly: 'Websearch \u2014 web_search/web_fetch only (no file read).',
+  research: 'Research \u2014 web + read/search tools (no write, no exec).',
   python:   'Python \u2014 Read + run_python (run code snippets).',
   full:     'Full \u2014 Read/Write/Exec incl. edit_file + run_bash. Needed for real coding requests.',
 };
 
 // TIER-LABEL (2026-09-02): display names for the stored tier values.
-var _TIER_LABEL = { off: 'Off', readonly: 'Websearch', python: 'Python', full: 'Full' };
+var _TIER_LABEL = { off: 'Off', readonly: 'Websearch', research: 'Research', python: 'Python', full: 'Full' };
 
 function updateDirectToolsTierHint() {
   var h = document.getElementById('direct-tools-tier-hint');
@@ -970,6 +972,11 @@ async function loadSettings() {
       }
       dtrSel.value = String(S.duoToolRounds);
     }
+    var dcttSel = document.getElementById('duo-coder-tool-tier');
+    if (dcttSel) {
+      S.duoCoderToolTier = (s.duo_coder_tool_tier || 'core').toString();
+      dcttSel.value = S.duoCoderToolTier === 'full' ? 'full' : 'core';
+    }
     var dpipeEl = document.getElementById('duo-pipeline-toggle');
     if (dpipeEl) { S.duoUsePipeline = s.duo_use_pipeline || false; dpipeEl.checked = S.duoUsePipeline; }
     var dctEl = document.getElementById('duo-critic-tools-toggle');
@@ -1284,7 +1291,7 @@ _syncFlagCheck('mcp-client-toggle', S.mcpClientEnabled);
     S.directToolsRounds = parseInt(s.direct_tools_max_rounds || 12) || 12;
     var _dtEl = document.getElementById('direct-tools-toggle');
     if (_dtEl) _dtEl.checked = S.directToolsEnabled;
-    var _dtTierRadio = document.getElementById('dt-tier-' + ((S.directToolsTier === 'python' || S.directToolsTier === 'full' || S.directToolsTier === 'off') ? S.directToolsTier : 'readonly'));
+    var _dtTierRadio = document.getElementById('dt-tier-' + ((S.directToolsTier === 'research' || S.directToolsTier === 'python' || S.directToolsTier === 'full' || S.directToolsTier === 'off') ? S.directToolsTier : 'readonly'));
     if (_dtTierRadio) _dtTierRadio.checked = true;
     var _dtR = document.getElementById('direct-tools-rounds');
     var _dtRV = document.getElementById('direct-tools-rounds-v');

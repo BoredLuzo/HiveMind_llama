@@ -533,6 +533,19 @@ def _build_duo_coder_sys(ctx, has_plan: bool, has_subtasks: bool, has_explore_ct
 
 # ── Pre-Explore ────────────────────────────────────────────────────────
 
+def resolve_coder_tool_mode(settings: dict | None, read_only: bool = False) -> str:
+    """Tool mode for the coder round: readonly > core (default) > full.
+
+    CORE (2026-11-08): the coder defaults to the token-saving core set
+    (read/edit/run/tests). `duo_coder_tool_tier=full` opts into the previous
+    behaviour with git/web/MCP/browser/LSP tools.
+    """
+    if read_only:
+        return "duo_readonly"
+    tier = str((settings or {}).get("duo_coder_tool_tier", "core") or "core")
+    return "duo_full" if tier.strip().lower() == "full" else "duo_core"
+
+
 async def _run_parallel_pre_explore(
     *, exec_mdl, worker_slots, partitions, xopts, xport,
     workspace, tree_ctx, user_input,

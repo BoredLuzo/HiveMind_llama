@@ -112,6 +112,10 @@ DEFAULT_SETTINGS = {
     # be able to write files; 0 silently disabled the whole tool loop and
     # chunking then produced text-only "implementations".
     "duo_tool_rounds":         50,
+    # CORE CODER TIER (2026-11-08): default "core" (16 tools: read/edit/run/
+    # tests) instead of "full" (35 incl. git/web/MCP/browser/LSP). Full is
+    # opt-in when a task really needs those tools.
+    "duo_coder_tool_tier":     "core",
     "duo_use_pipeline":        False,
     "duo_critic_tools":        False,
     # CHUNKING DEFAULT OFF (2026-10-27, owner): stays a working opt-in, but a
@@ -498,7 +502,7 @@ DEFAULT_SETTINGS = {
     # models emit POSIX bash; powershell chokes on every line), else
     # powershell. "bash"/"powershell" force one.
     "run_bash_shell":          "auto",
-    "direct_tools_tier":       "readonly",   # off | readonly(websearch only) | python(read+python) | full
+    "direct_tools_tier":       "readonly",   # off | readonly(websearch) | research(web+read) | python(read+python) | full
     "direct_tools_max_rounds": 12,
 
     # ════════════════════════════════════════════════════════════════════════

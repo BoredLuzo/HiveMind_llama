@@ -552,6 +552,15 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
     "duo_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch",
                                            "replace_lines", "edit_ast",
                                            "send_file"},
+    # CORE CODER (2026-11-08): token-saving default for the coder/planner.
+    # Read + edit + run + tests only. Git/web/MCP/browser/LSP/background/
+    # install/subagent stay out and become opt-in via duo_full.
+    "duo_core": {
+        "read_file", "get_signatures", "find_references", "list_dir",
+        "find_files", "search_code", "edit_file", "write_file",
+        "write_file_append", "undo_last", "run_bash", "run_python",
+        "run_tests", "task_complete", "ask_user", "get_datetime",
+    },
     # WEDGE-HANDOFF (2026-09-17): fresh-context repair delegate. Read + write
     # family, deliberately NO run_bash/git/ask_user/browser — minimal-invasive
     # fix only; all handler-level guards (noop, shrink, block-sniff,
@@ -585,6 +594,10 @@ _TOOL_MODE_ALLOWLISTS: dict[str, set[str]] = {
                "ask_user", "task_complete", "get_datetime"},
     "direct_python": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch", "run_python"}
                      | _LSP_READ_TIER_EXTRAS,
+    # RESEARCH TIER (2026-11-08): Direct is the web/research assistant. Web +
+    # read/search only; no write/run/lsp/git/mcp. Token-saving middle ground
+    # between "direct" (web only) and "direct_python".
+    "direct_research": set(_READ_ONLY_INLINE_TOOL_NAMES) | {"web_search", "web_fetch"},
     "direct_full": set(_INLINE_TOOL_NAMES) | {"web_search", "web_fetch",
                                              "send_file"},
 }
