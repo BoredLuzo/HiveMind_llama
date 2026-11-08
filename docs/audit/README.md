@@ -13,18 +13,10 @@ are **not** part of the release zip (see `.gitattributes`).
 - [tool_registry.md](tool_registry.md) - tool registration
 - [tool_use.md](tool_use.md) - tool loop behaviour
 - [tools_final.md](tools_final.md) - final tool layer review
-- [TODO_wartbarkeit_competitiv_2026-11-07.md](TODO_wartbarkeit_competitiv_2026-11-07.md) -
-  live maintenance/release/competitiveness backlog (the only file here that
-  is maintained; the rest are snapshots)
-- [BENCHMARK_ROADMAP_2026-11-08.md](BENCHMARK_ROADMAP_2026-11-08.md) -
-  phased plan for the D1/D8 benchmark runs, corpus growth and fairness rules
-- [BENCHMARK_SMOKE_2026-11-08.md](BENCHMARK_SMOKE_2026-11-08.md) -
-  Phase-1 harness smoke results (direct 2/2, duo 1/1, raw 0/2) and fixes
-- [BENCHMARK_RUN_2026-11-08.md](BENCHMARK_RUN_2026-11-08.md) -
-  quiet 6-task run with aider comparison (aider 100%, direct 100%, duo 0% at 4B)
-- [BENCHMARK_RUN_21TASKS_2026-11-08.md](BENCHMARK_RUN_21TASKS_2026-11-08.md) -
-  21 tasks x 3 runs x 4 conditions: no measurable direct-vs-aider quality
-  difference at 4B, direct costs ~22x tokens
+- [MAINTENANCE_TODO.md](MAINTENANCE_TODO.md) - live maintenance/release/
+  competitiveness backlog (English, maintained; the rest are snapshots)
+- Benchmarks live in [../benchmarks/](../benchmarks/): README, ROADMAP,
+  RESULTS_2026-11-08, TOKEN_EFFICIENCY
 - [voice_layer.md](voice_layer.md) - speech to text and text to speech
 
 Measurements live with the code they changed (commit bodies) or in
