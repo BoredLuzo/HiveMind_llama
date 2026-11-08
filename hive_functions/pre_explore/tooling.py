@@ -46,6 +46,14 @@ def _apply_patch(original, patch):
 
 
 class FileTransaction:
+    """Pre-explore snapshot/rollback.
+
+    CAPTURE SEMANTICS: FIRST-WINS on purpose - rollback must restore the
+    file as it was BEFORE pre-explore started, not an intermediate write.
+    `tools/workspace.py:WorkspaceTransaction` is the re-capturing sibling for
+    fix loops; do not merge them without the pre-explore failure-path tests
+    (deep audit 2026-11-07).
+    """
     def __init__(self):
         self._snap: dict[str, str | None] = {}
         self._on = False

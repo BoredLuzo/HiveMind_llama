@@ -59,6 +59,53 @@ def _window_params(ctx) -> tuple[int, int]:
     )
 
 
+# F4 (deep audit 2026-11-07): the PageRank-fallback partition walk below is a
+# FULL os.walk over the workspace - synchronous I/O that must never run on the
+# asyncio event loop. Extracted verbatim from run_code_duo's parallel branch so
+# it can be dispatched with asyncio.to_thread; the ignore list, extension
+# filter, chunk cap and the sorted(dirs)/sorted(files) ordering (which is what
+# makes the result deterministic) are unchanged, so the selected files and the
+# partition order are identical to the old inline logic.
+_PRE_EXPLORE_IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv",
+                            "venv", ".mypy_cache", ".pytest_cache", "dist", "build"}
+_PRE_EXPLORE_CODE_EXTS = {".py", ".js", ".ts", ".jsx", ".tsx", ".go",
+                          ".rs", ".cpp", ".c", ".h", ".java", ".cs",
+                          ".rb", ".php", ".swift", ".kt", ".md", ".json",
+                          ".yaml", ".yml", ".toml", ".cfg", ".ini",
+                          ".html", ".css", ".scss", ".less", ".sh", ".bat",
+                          ".ps1", ".sql", ".r", ".lua", ".vim", ".el",
+                          ".dockerfile", ".makefile", ".cmake",
+                          ".txt", ".rst", ".tex", ".csv"}
+
+
+def _walk_code_partitions(ws_str: str, max_files: int) -> list[dict]:
+    """SYNC helper — the caller MUST run it via ``asyncio.to_thread``.
+
+    Walks the whole workspace and chunks the matching code files into
+    partitions of <= max_files paths each (relative, forward slashes).
+    Deterministic: directories and files are visited in sorted order, so the
+    returned partition list is stable for a given tree.
+    """
+    import os as _os
+    _cap = max(1, int(max_files))
+    _parts: list[dict] = []
+    for _root, _dirs, _files in _os.walk(ws_str):
+        _dirs[:] = [d for d in sorted(_dirs) if d not in _PRE_EXPLORE_IGNORE_DIRS]
+        _rel = _os.path.relpath(_root, ws_str).replace("\\", "/")
+        _rel = "" if _rel == "." else _rel
+        _fps = [
+            _os.path.join(_rel, f).replace("\\", "/").lstrip("/")
+            for f in sorted(_files)
+            if _os.path.splitext(f)[1].lower() in _PRE_EXPLORE_CODE_EXTS
+        ]
+        if _fps:
+            for _ci in range(0, max(1, len(_fps)), _cap):
+                _chunk = _fps[_ci:_ci + _cap]
+                _lbl = (_rel or "__root__") + (f":sz{_ci//_cap+1}" if len(_fps) > _cap else "")
+                _parts.append({"paths": _chunk, "label": _lbl})
+    return _parts
+
+
 def _partitions_from_window(window_paths: list[str], effective_max_files: int) -> list[dict]:
 
 
@@ -1616,38 +1663,17 @@ async def _phase_pre_explore(ctx, state: dict):
                                                  preselect_paths=_window_paths)
                 else:
                     # PageRank-selektierten Analyse-Fenster bauen (voller Walk + Ranking,
-                    import os as _os
                     _walk_parts: list[dict] = []
-                    _IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv",
-                                    "venv", ".mypy_cache", ".pytest_cache", "dist", "build"}
                     if _window_paths:
                         _walk_parts = _partitions_from_window(_window_paths, _effective_max_files)
                     else:
                         try:
-                            for _root, _dirs, _files in _os.walk(_ws_str):
-                                _dirs[:] = [d for d in sorted(_dirs) if d not in _IGNORE_DIRS]
-                                _rel = _os.path.relpath(_root, _ws_str).replace("\\", "/")
-                                _rel = "" if _rel == "." else _rel
-                                _code_exts = {".py", ".js", ".ts", ".jsx", ".tsx", ".go",
-                                              ".rs", ".cpp", ".c", ".h", ".java", ".cs",
-                                              ".rb", ".php", ".swift", ".kt", ".md", ".json",
-                                              ".yaml", ".yml", ".toml", ".cfg", ".ini",
-                                              ".html", ".css", ".scss", ".less", ".sh", ".bat",
-                                              ".ps1", ".sql", ".r", ".lua", ".vim", ".el",
-                                              ".dockerfile", ".makefile", ".cmake",
-                                              ".txt", ".rst", ".tex", ".csv"}
-                                _fps = [
-                                    _os.path.join(_rel, f).replace("\\", "/").lstrip("/")
-                                    for f in sorted(_files)
-                                    if _os.path.splitext(f)[1].lower() in _code_exts
-                                ]
-                                if _fps:
-                                    for _ci in range(0, max(1, len(_fps)), max(1, _effective_max_files)):
-                                        _chunk = _fps[_ci:_ci + _effective_max_files]
-                                        _lbl = (_rel or "__root__") + (f":sz{_ci//_effective_max_files+1}" if len(_fps) > _effective_max_files else "")
-                                        _walk_parts.append({"paths": _chunk, "label": _lbl})
+                            # F4 (deep audit 2026-11-07): the full-tree os.walk is
+                            # sync I/O — run it on a worker thread, never on the loop.
+                            _walk_parts = await asyncio.to_thread(
+                                _walk_code_partitions, _ws_str, _effective_max_files)
                         except Exception:
-                            pass
+                            _walk_parts = []
                     _partitions = _walk_parts if _walk_parts else [{"paths": [], "catch_all": True, "label": "__root__"}]
 
                 _root_parts = [

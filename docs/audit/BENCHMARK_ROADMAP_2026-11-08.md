@@ -27,8 +27,9 @@ Code/Codex auf derselben Task-Suite.
 - [ ] Ein Modell für alle Bedingungen festlegen (`qwen3.5:4b-mtp` als
       schneller Start; `qwen3.6:35b-a3b-ud` als Qualitätslauf).
 - [ ] llama-server-Port und HiveMind-Port notieren (`--llama`, `--hivemind`).
-- [ ] Aider installieren und `aider --version` prüfen (sonst läuft die
-      Bedingung als „not installed“).
+- [x] Aider installieren und `aider --version` prüfen (0.86.2 in
+      `C:\Users\NtheP\Desktop\HiveMind_bench_tools\aider`, per
+      `--aider-bin`/`HIVEMIND_AIDER_BIN` angeben; nicht im PATH).
 - [ ] Task-Korpus auf 5–10 echte Repo-Tasks erweitern (siehe §4).
 
 ### Phase 1 — Harness-Smoke (~15–30 min) — **bestanden 2026-11-08**

@@ -274,6 +274,7 @@ SUITES = [
     ("ws_guards_chats_skills", "tests/test_ws_guards_chats_skills.py",         60),
     ("tts_start_decay",        "tests/test_tts_start_decay_pin.py",            30),
     ("manager_lock",            "tests/test_manager_lock.py",                  30),
+    ("find_loaded_race",        "tests/test_find_loaded_race.py",              30),
     ("git_clone_cleanup",       "tests/test_git_clone_cleanup.py",              30),
     ("cron",                    "tests/test_cron.py",                           60),
     ("mmproj_fallback",         "tests/test_mmproj_fallback.py",                60),
@@ -383,6 +384,9 @@ SUITES = [
     ("bench_runner",            "tests/test_bench_runner.py",                30),
     # F3 retry policy (deep audit 2026-11-07): 5xx cap + overflow no-retry
     ("llama_client_retry",      "tests/test_llama_client_retry.py",          30),
+    # F4 sync-I/O off the loop (deep audit 2026-11-07): prefill meter reads
+    # the newest timestamped slot log via to_thread; walk helpers likewise
+    ("prefill_log_tail",        "tests/test_prefill_log_tail.py",            30),
 
 ]
 

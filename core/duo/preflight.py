@@ -78,7 +78,54 @@ def _read_hb_interval(settings: dict | None) -> int:
         return _DUO_HEARTBEAT_DEFAULT
 
 
-def _llama_prefill_progress(port) -> dict | None:
+# PREFILL-METER LOG DISCOVERY (F4 deep audit 2026-11-07): slot logs are
+# timestamped `llama_server_{port}_{YYYYMMDD-HHMMSS}.log` (SLOT-LOG-ROTATION
+# 2026-10-09) and live in <repo>/logs — the old fixed
+# `llama_server_{port}.log` path (which also pointed at core/logs, not
+# <repo>/logs) never matched, so the meter always returned None. Discovery
+# globs the port's rotated logs and takes the newest by mtime, cached for
+# 30 s like agentic_tool_loop._diag_newest_slot_log (glob+stat per port is
+# not free and the newest file is stable for the whole server run).
+_PREFILL_LOG_TTL = 30.0  # seconds
+_PREFILL_LOG_TAIL_BYTES = 65536
+_PREFILL_LOG_CACHE: dict[tuple[str, int], tuple[float, Path | None]] = {}
+
+
+def _prefill_logs_dir() -> Path:
+    return Path(__file__).resolve().parent.parent.parent / "logs"
+
+
+def _newest_slot_log(logs_dir: Path, port: int) -> Path | None:
+    """SYNC helper — the caller MUST run it via ``asyncio.to_thread``.
+
+    Newest ``llama_server_{port}_*.log`` in logs_dir by mtime (ties broken by
+    name for determinism); None when the dir is missing/empty for the port.
+    """
+    try:
+        _cands = sorted(logs_dir.glob(f"llama_server_{int(port)}_*.log"),
+                        key=lambda f: (f.stat().st_mtime, f.name))
+    except OSError:
+        return None
+    return _cands[-1] if _cands else None
+
+
+def _read_slot_log_tail(path: Path,
+                        nbytes: int = _PREFILL_LOG_TAIL_BYTES) -> tuple[float, str]:
+    """SYNC helper — the caller MUST run it via ``asyncio.to_thread``.
+
+    TAIL-READ (2026-11-07 audit): readlines() pulled the WHOLE slot log
+    (hundreds of MB after a long run) synchronously in the event loop every
+    heartbeat (~10 s while streaming). The newest progress line is always in
+    the last few KB; a bounded read is enough. Returns (mtime, decoded tail).
+    """
+    _mtime = path.stat().st_mtime
+    with path.open("rb") as _f:
+        _f.seek(0, 2)
+        _f.seek(max(0, _f.tell() - nbytes))
+        return _mtime, _f.read(nbytes).decode("utf-8", errors="replace")
+
+
+async def _llama_prefill_progress(port, *, logs_dir=None) -> dict | None:
     """PREFILL-METER (2026-09-20): tail the coder slot's llama-server log for
     the newest prompt-processing progress line and interpolate forward from
     it (llama.cpp only logs once per 1024-token batch — on a 40 tok/s Vulkan
@@ -86,25 +133,31 @@ def _llama_prefill_progress(port) -> dict | None:
     mtime gives the line's age, the line itself gives total (n/progress) and
     rate, so the meter moves smoothly between log flushes. Returns None for
     small prompts (<3k tokens — they finish before the first log line and
-    the plain elapsed counter is the better UI) and while decoding."""
+    the plain elapsed counter is the better UI) and while decoding.
+
+    F4 (2026-11-07): async — the glob/discovery (30 s cache per
+    (logs_dir, port)) and the bounded tail read both run via
+    asyncio.to_thread, so the heartbeat loop never does blocking I/O.
+    A "no log yet" result is cached for the same TTL (server start creates
+    the file within seconds; at worst the meter is blind for one 30 s
+    window — the same trade-off agentic_tool_loop makes).
+    """
     if not port:
         return None
     try:
-        from pathlib import Path as _Path
         import re as _re
-        import time as _time
-        _lp = _Path(__file__).parent.parent / "logs" / f"llama_server_{int(port)}.log"
-        if not _lp.exists():
+        _logs = Path(logs_dir) if logs_dir is not None else _prefill_logs_dir()
+        _key = (str(_logs), int(port))
+        _now = time.time()
+        _cached = _PREFILL_LOG_CACHE.get(_key)
+        if _cached is None or _now - _cached[0] >= _PREFILL_LOG_TTL:
+            _lp = await asyncio.to_thread(_newest_slot_log, _logs, int(port))
+            _PREFILL_LOG_CACHE[_key] = (_now, _lp)
+        else:
+            _lp = _cached[1]
+        if _lp is None:
             return None
-        _mtime = _lp.stat().st_mtime
-        # TAIL-READ (2026-11-07 audit): readlines() pulled the WHOLE slot log
-        # (hundreds of MB after a long run) synchronously in the event loop
-        # every heartbeat (~10 s while streaming). The newest progress line is
-        # always in the last few KB; a bounded read is enough.
-        with _lp.open("rb") as _f:
-            _f.seek(0, 2)
-            _f.seek(max(0, _f.tell() - 65536))
-            _txt = _f.read(65536).decode("utf-8", errors="replace")
+        _mtime, _txt = await asyncio.to_thread(_read_slot_log_tail, _lp)
         _lines = _txt.splitlines()[-60:]
         for _ln in reversed(_lines):
             if "prompt eval time" in _ln or "        eval time" in _ln:
@@ -124,7 +177,7 @@ def _llama_prefill_progress(port) -> dict | None:
                 _total = _n / _prog
                 if _total < 3000:
                     return None
-                _age = _time.time() - _mtime
+                _age = time.time() - _mtime
                 if _age > 45.0:
                     # log silent for 45s+ → not actively prefilling
                     return None

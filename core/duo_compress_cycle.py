@@ -35,6 +35,38 @@ from utils.token import estimate_ctx_tokens as _estimate_ctx_tokens
 
 logger = logging.getLogger("hivemind.duo")
 
+# F4 (deep audit 2026-11-07): the post-compress re-anchor inventory is a full
+# os.walk over the workspace - synchronous I/O that must never run on the
+# asyncio event loop. Extracted verbatim from the inline loop (same ignore
+# list, same stop-at-first-`cap`-files semantics) so it can be dispatched with
+# asyncio.to_thread. The final sort only makes the message order deterministic
+# (the old walk order was whatever the filesystem enumerated); the set of
+# collected files and the cap are unchanged.
+_COMPRESS_INVENTORY_IGNORE_DIRS = ("node_modules", ".git", "dist",
+                                   ".hive_uploads", "__pycache__")
+
+
+def _walk_workspace_inventory(ws_str: str, cap: int = 80) -> list[str]:
+    """SYNC helper — the caller MUST run it via ``asyncio.to_thread``.
+
+    Relative (forward-slash) paths of the first `cap` files found by a
+    top-down workspace walk, sorted for deterministic output.
+    """
+    _inv: list[str] = []
+    _inv_n = 0
+    for _iroot, _idirs, _ifnames in os.walk(ws_str):
+        _idirs[:] = [x for x in _idirs if x not in _COMPRESS_INVENTORY_IGNORE_DIRS]
+        for _ifn in _ifnames:
+            if _inv_n >= cap:
+                break
+            _irel = os.path.relpath(
+                os.path.join(_iroot, _ifn), ws_str)
+            _inv.append(_irel.replace("\\", "/"))
+            _inv_n += 1
+        if _inv_n >= cap:
+            break
+    return sorted(_inv)
+
 
 async def _duo_compress_cycle(ctx, ps):
     exec_mdl = ps.carry["exec_mdl"]
@@ -361,21 +393,9 @@ async def _duo_compress_cycle(ctx, ps):
             # a fresh project inventory right after the
             # compressed messages are installed.
             try:
-                _inv = []
-                _inv_n = 0
-                for _iroot, _idirs, _ifnames in os.walk(_ws_str):
-                    _idirs[:] = [x for x in _idirs if x not in
-                                 ("node_modules", ".git", "dist",
-                                  ".hive_uploads", "__pycache__")]
-                    for _ifn in _ifnames:
-                        if _inv_n >= 80:
-                            break
-                        _irel = os.path.relpath(
-                            os.path.join(_iroot, _ifn), _ws_str)
-                        _inv.append(_irel.replace("\\", "/"))
-                        _inv_n += 1
-                    if _inv_n >= 80:
-                        break
+                # F4 (deep audit 2026-11-07): the os.walk inventory is sync
+                # I/O — run it on a worker thread, never on the loop.
+                _inv = await asyncio.to_thread(_walk_workspace_inventory, _ws_str)
                 if _inv:
                     _dtool_msgs.append({"role": "user", "content":
                         "[PROJECT FILES - these exist in the workspace "

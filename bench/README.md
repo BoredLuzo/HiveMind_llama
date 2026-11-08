@@ -43,7 +43,14 @@ python bench/runner.py --list
 python bench/runner.py --model qwen3.5:4b-mtp --runs 3
 python bench/runner.py --conditions raw,hivemind_direct --runs 1 ^
   --llama http://127.0.0.1:8080 --hivemind http://127.0.0.1:8001
+python bench/runner.py --conditions aider ^
+  --aider-bin C:\Users\NtheP\Desktop\HiveMind_bench_tools\aider\.venv\Scripts\aider.exe
 ```
+
+Aider may live in its own venv (recommended, see
+`HiveMind_bench_tools/aider`); pass `--aider-bin` or set
+`HIVEMIND_AIDER_BIN`. The runner adds the workspace files to Aider's chat
+automatically.
 
 `--runs N` repeats every task/condition N times; local models are noisy, so
 use 3–5 and compare pass rates, not single runs. Results go to

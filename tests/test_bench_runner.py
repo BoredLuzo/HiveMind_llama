@@ -17,9 +17,10 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from bench.runner import (  # noqa: E402
-    Config, DEFAULT_CONDITIONS, Task, _extract_patch, _hivemind_body,
-    _parse_file_blocks, _parse_token_count, _persist, _safe_rel_path,
-    aggregate, apply_full_files, apply_patch, load_tasks, prepare_workspace,
+    Config, DEFAULT_CONDITIONS, Task, _aider_files, _extract_patch,
+    _hivemind_body, _parse_file_blocks, _parse_token_count, _persist,
+    _resolve_aider_bin, _run_aider, _safe_rel_path, aggregate,
+    apply_full_files, apply_patch, load_tasks, prepare_workspace,
     print_summary, run_check,
 )
 from tests._harness import Harness  # noqa: E402
@@ -143,6 +144,27 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           not (root / "evil.py").exists())
     check("default conditions keep raw_files opt-in",
           "raw" in DEFAULT_CONDITIONS and "raw_files" not in DEFAULT_CONDITIONS)
+
+    # ── aider discovery ────────────────────────────────────────────────────
+    _cfg_bad = Config(tasks_dir=root, out=root / "x.json", model="m",
+                      aider_bin=str(root / "missing-aider.exe"))
+    check("aider: missing explicit path is rejected",
+          _resolve_aider_bin(_cfg_bad) == "")
+    _fake_aider = root / "fake-aider.exe"
+    _fake_aider.write_text("", encoding="utf-8")
+    _cfg_ok = Config(tasks_dir=root, out=root / "x.json", model="m",
+                     aider_bin=str(_fake_aider))
+    check("aider: explicit path is used",
+          _resolve_aider_bin(_cfg_ok) == str(_fake_aider))
+    _missing = _run_aider(Task("t", "p", "c"), root, _cfg_bad)
+    check("aider: unavailable is reported, not raised",
+          "not installed" in _missing.get("detail", ""), f" ({_missing})")
+    files = _aider_files(work)
+    check("aider: workspace files are passed to the chat",
+          "a.txt" in files and all(not f.startswith(".") for f in files),
+          f" ({files})")
+    check("aider: file list is bounded and sorted",
+          files == sorted(files) and len(files) <= 40, f" ({len(files)})")
 
     # ── condition bodies / token parsing / incremental result ──────────────
     direct_body = _hivemind_body(Task("t", "p", "c"), work, duo=False,

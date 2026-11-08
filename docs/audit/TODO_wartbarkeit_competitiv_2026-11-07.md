@@ -1,6 +1,6 @@
 # TODO — Wartbarkeit, Release-Härtung, Wettbewerbsfähigkeit
 
-**Stand:** 2026-11-08 · Branch `dev` @ `3273240` + Batch 16 (F2/F3)
+**Stand:** 2026-11-08 · Branch `dev` @ `95adfd5` + Batch 17 (F4/F5/F8, Aider)
 **Legende:** P0 = blockiert Release · P1 = als Nächstes · P2 = geplant · P3 = strategisch
 **Typ:** BUG / DESIGN / DEBT / TEST / RELEASE / COMPETE
 
@@ -245,16 +245,21 @@ Flake-Report (chronisch/partial).
   behalten den langen Retry. Beide Pfade (`chat`, `chat_stream`) nutzen den
   Helper; 49 Checks inkl. Fake-Client-Integration.
 
-- [ ] **F4 · P3 · PERF — Restliche Sync-I/O auf dem Loop.**
+- [x] **F4 · P3 · PERF — Restliche Sync-I/O auf dem Loop.**
   `os.walk` in `core/duo/_pre_explore.py` und `core/duo_compress_cycle.py`,
   Prefill-Meter liest `llama_server_{port}.log` (Dateien sind seit der Rotation
-  `..._{timestamp}.log`), Telemetrie-Append pro Call. *Akzeptanz:* `to_thread`
-  für die Walks, neueste Log-Datei globben; Telemetrie bewusst belassen.
+  `..._{timestamp}.log`), Telemetrie-Append pro Call.
+  *Erledigt 2026-11-07:* beide Walks als `asyncio.to_thread`-Helper (Auswahl/
+  Cap identisch, Ergebnis sortiert); Prefill-Meter globbt die neueste
+  `llama_server_{port}_*.log` (30-s-Cache, 64-KB-Tail im Thread). Telemetrie
+  bleibt bewusst synchron. 41 Checks in `test_prefill_log_tail.py`.
 
-- [ ] **F5 · P3 · DEBT — `_find_loaded` Orphan-Check gibt den Lock frei und
-  mutiert nach dem Re-Acquire.** Seltener Clobber eines laufenden Loads;
-  *Akzeptanz:* Probe auf Snapshot außerhalb des Locks, Mutation nur nach
-  erneuter `_loading`-Prüfung.
+- [x] **F5 · P3 · DEBT — `_find_loaded` Orphan-Check gibt den Lock frei und
+  mutiert nach dem Re-Acquire.** Seltener Clobber eines laufenden Loads.
+  *Erledigt 2026-11-07:* Snapshot (Port/Modell/Prozess/Dead-Flag) unter Lock,
+  Probe außerhalb; vor jeder Mutation Re-Validierung (`_loading`, Modell,
+  Prozess, Registry-Identität). Bei Änderung Rescan statt Reset; 52 Checks in
+  `test_find_loaded_race.py`.
 
 - [ ] **F6 · P3 · TEST — Drei Pin-Suiten mit hohem Konvertierungswert.**
   `test_voice_card` (~100 String-Pins), `test_ui_context_card`,
@@ -264,12 +269,13 @@ Flake-Report (chronisch/partial).
 - [ ] **F7 · P3 · RELEASE — Wochen-Cron testet bis zum Merge weiter `main`.**
   `windows-full.yml` hat jetzt `ref: dev`, aber geplante Workflows lesen die
   Datei aus dem Default-Branch; wirksam erst nach dem nächsten Release-Merge.
-  *Akzeptanz:* Merge/Release oder dokumentierter manueller Dev-Lauf.
+  *Status:* nicht im Tree lösbar; braucht den nächsten Merge/Release.
 
-- [ ] **F8 · P3 · DEBT — Zwei Snapshot-/Rollback-Klassen mit unterschiedlicher
+- [x] **F8 · P3 · DEBT — Zwei Snapshot-/Rollback-Klassen mit unterschiedlicher
   Capture-Semantik.** `WorkspaceTransaction` (re-capture) vs. `FileTransaction`
-  (first-wins). *Akzeptanz:* Divergenz an beiden Headern dokumentieren; Merge
-  nur mit Pre-Explore-Failure-Tests.
+  (first-wins).
+  *Erledigt 2026-11-07:* Divergenz und Merge-Voraussetzung an beiden
+  Klassen-Headern dokumentiert; kein Code-Merge (Semantik bleibt).
 
 ## D. Wettbewerbsfähigkeit (offen)
 
@@ -320,7 +326,9 @@ Flake-Report (chronisch/partial).
   Report `docs/audit/BENCHMARK_SMOKE_2026-11-08.md`. Dabei gefixt: echter
   `mode=simple`, Modell-Fairness (`direct_model`/duo-Rollen = `--model`) und
   ToolLoop-Usage-Zählung (vorher ~0 Tokens für Tool-Läufe).
-  Offen: Raw-Format-Entscheidung, 5–10 Tasks aus echten Repos, Aider-Lauf.
+  *Aider 2026-11-08:* 0.86.2 in `HiveMind_bench_tools/aider` installiert und
+  per `--aider-bin` verdrahtet; Smoke 1/1 (10,4 s, 833 Tokens).
+  Offen: 5–10 Tasks aus echten Repos und die Phase-2-Baseline.
   **Ablauf/Runbook/Zeitbudget:** `docs/audit/BENCHMARK_ROADMAP_2026-11-08.md`.
 
 - [ ] **D2 · P2 · COMPETE — Kontext-Engine.**
@@ -395,3 +403,6 @@ Flake-Report (chronisch/partial).
 - Batch 16 (2026-11-08): F2 Manager-Lock-Scope (Sleep/Kills außerhalb,
   16 Checks) und F3 5xx-Retry-Policy (500/502/504 max. 3, Overflow nie;
   49 Checks); 339/339.
+- Batch 17 (2026-11-08): F4 Sync-I/O (Walks/Prefill-Meter, 41 Checks),
+  F5 `_find_loaded`-Race (52 Checks), F8 Divergenz dokumentiert; Aider
+  0.86.2 separat installiert, `--aider-bin` verdrahtet, Smoke 1/1; 341/341.

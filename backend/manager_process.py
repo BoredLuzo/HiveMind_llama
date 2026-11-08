@@ -28,6 +28,19 @@ def _slot_in_flight(slot) -> bool:
     return int(getattr(slot, "in_flight", 0) or 0) > 0
 
 
+def _probe_snapshot(slot) -> tuple:
+    """F5-RACE (deep audit 2026-11-07): probe inputs for an orphan slot,
+    captured while the manager lock is still held.
+
+    The unlocked HTTP probe reads ONLY this snapshot (port + model + slot
+    identity); the live slot is re-validated against it under the lock
+    afterwards (`_probe_snapshot_changed`) before anything is mutated.
+    """
+    proc = slot.process
+    dead = proc is not None and proc.poll() is not None
+    return (slot.port, slot.model, proc, dead)
+
+
 class LlamaProcessMixin:
 
     async def _port_alive(self, port: int) -> bool:
@@ -61,6 +74,43 @@ class LlamaProcessMixin:
                 return slot
         return None
 
+    def _rescan_active_slot(self, model: str) -> Optional[ModelSlot]:
+        """Post-probe lookup: any slot that is active for `model` (running or
+        claimed by an in-flight load), scanning the list from the start."""
+        for s2 in self._slots:
+            if _nm(s2.model) == _nm(model) and (s2.is_running or s2._loading):
+                return s2
+        return None
+
+    def _probe_snapshot_changed(self, slot, model: str, snap: tuple) -> bool:
+        """F5-RACE (deep audit 2026-11-07): re-validate a `_probe_snapshot`
+        under the lock, AFTER the unlocked port probe of an orphan slot.
+
+        While the lock was released, another coroutine (ensure_loaded under
+        the lock) could claim or reset the very slot that was probed:
+        `_loading = True`, `model` set/replaced, the process swapped or the
+        slot pulled from the registry. Mutating such a slot clobbers the
+        in-flight load (its ready wait then times out after 240 s), so every
+        post-probe mutation is gated on this check: the slot is still the
+        same registered object, same port, same model, still NOT `_loading`,
+        and still the same process — still dead if it was dead at snapshot
+        time. Any change means: do not mutate, continue the normal lookup.
+        """
+        snap_port, snap_model, snap_process, snap_dead = snap
+        if not any(s is slot for s in self._slots):
+            return True   # slot was removed/replaced in the registry meanwhile
+        if slot.port != snap_port:
+            return True
+        if _nm(slot.model) != _nm(snap_model) or _nm(slot.model) != _nm(model):
+            return True
+        if slot._loading:
+            return True   # claimed for an in-flight load during the probe
+        if slot.process is not snap_process:
+            return True   # a (re)load swapped the process during the probe
+        if snap_process is not None and snap_dead and slot.process.poll() is None:
+            return True   # snapshot-dead process no longer dead
+        return False
+
     async def _find_loaded(self, model: str) -> Optional[ModelSlot]:
 
 
@@ -86,19 +136,22 @@ class LlamaProcessMixin:
                 # Orphan-Slot: re-verify via TCP+API. LOCK-GUARD (audit
                 # 2026-11-03): unlocked callers crashed on release() of an
                 # unheld lock when the matched slot carried an orphan marker.
+                # F5-RACE (deep audit 2026-11-07): probe a snapshot, never the
+                # live slot — the slot can be claimed/reset while the lock is
+                # released; re-validated before any mutation below.
+                _snap = _probe_snapshot(slot)
                 _held = self._lock.locked()
                 if _held:
                     self._lock.release()
                 try:
-                    api_ok = await self._verify_port_api(slot.port)
+                    api_ok = await self._verify_port_api(_snap[0])
                 finally:
                     if _held:
                         await self._lock.acquire()
-                if _nm(slot.model) != _nm(model):
-                    for s2 in self._slots:
-                        if _nm(s2.model) == _nm(model) and (s2.is_running or s2._loading):
-                            return s2
-                    return None
+                if self._probe_snapshot_changed(slot, model, _snap):
+                    # Slot claimed/changed during the probe window — leave it
+                    # untouched and continue the normal lookup path.
+                    return self._rescan_active_slot(model)
                 if api_ok:
                     if not slot._ready_event.is_set():
                         slot._ready_event.set()
@@ -113,19 +166,22 @@ class LlamaProcessMixin:
         for slot in self._slots:
             if _nm(slot.model) == _nm(model) and not slot.is_running and not slot._loading:
                 # LOCK-GUARD (audit 2026-11-03): see the orphan branch above.
+                # F5-RACE (deep audit 2026-11-07): snapshot before the unlocked
+                # probe; a free slot claimed during the probe (loader starts,
+                # binds later) must not be "stale-discarded" below.
+                _snap = _probe_snapshot(slot)
                 _held = self._lock.locked()
                 if _held:
                     self._lock.release()
                 try:
-                    api_ok = await self._verify_port_api(slot.port)
+                    api_ok = await self._verify_port_api(_snap[0])
                 finally:
                     if _held:
                         await self._lock.acquire()
-                if _nm(slot.model) != _nm(model):
-                    for s2 in self._slots:
-                        if _nm(s2.model) == _nm(model) and (s2.is_running or s2._loading):
-                            return s2
-                    return None
+                if self._probe_snapshot_changed(slot, model, _snap):
+                    # Slot claimed/changed during the probe window — leave it
+                    # untouched and continue the normal lookup path.
+                    return self._rescan_active_slot(model)
                 if api_ok:
                     if not slot._ready_event.is_set():
                         slot._ready_event.set()

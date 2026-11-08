@@ -5,6 +5,17 @@ from pathlib import Path
 
 
 class WorkspaceTransaction:
+    """Snapshot/rollback for fix loops.
+
+    CAPTURE SEMANTICS: re-capture the latest pre-modification state (the
+    2026-09-19 RE-CAPTURE fix) - a retry loop must restore the state the
+    last attempt saw, not the first attempt's.
+
+    DIVERGENCE (deep audit 2026-11-07): `hive_functions/pre_explore/tooling.py`
+    .FileTransaction clones this API but is FIRST-WINS on purpose (its
+    rollback must restore the pre-explore original, not an intermediate).
+    Do not merge the two classes without the pre-explore failure-path tests.
+    """
 
 
     def __init__(self):

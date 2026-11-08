@@ -4152,7 +4152,9 @@ async def run_code_duo(ctx) -> AsyncIterator[dict]:
                                 # re-prefill, ctx reload) so the UI shows percent + rate
                                 # instead of a blind elapsed counter.
                                 _hb_ev = {"type": "heartbeat", "elapsed": _hb_total}
-                                _hb_pf = _llama_prefill_progress(_dport)
+                                # F4 (2026-11-07): meter is async now — discovery +
+                                # tail read run via to_thread, off the loop.
+                                _hb_pf = await _llama_prefill_progress(_dport)
                                 if _hb_pf:
                                     _hb_ev["prefill"] = _hb_pf
                                 yield await ctx.emit(_hb_ev)

@@ -66,6 +66,8 @@ class Config:
     # None = use each task's timeout_s; a CLI value overrides the corpus.
     task_timeout_s: int | None = None
     keep_work: bool = False
+    # Optional path to aider (a separate venv is fine; not on PATH).
+    aider_bin: str = ""
 
 
 def load_tasks(tasks_dir: Path) -> list[Task]:
@@ -327,15 +329,41 @@ def _parse_token_count(number: str, suffix: str = "") -> int:
     return int(value * {"k": 1000, "m": 1_000_000}.get((suffix or "").lower(), 1))
 
 
+def _aider_files(work: Path, limit: int = 40) -> list[str]:
+    """Workspace files to put in aider's chat (relative, sorted, bounded)."""
+    files: list[str] = []
+    for path in sorted(work.rglob("*")):
+        if len(files) >= limit:
+            break
+        if not path.is_file() or ".git" in path.parts:
+            continue
+        if path.name.startswith("."):
+            continue
+        files.append(path.relative_to(work).as_posix())
+    return files
+
+
+def _resolve_aider_bin(cfg: Config) -> str:
+    """Explicit path/env wins; otherwise PATH. Empty = not available."""
+    candidate = (cfg.aider_bin or os.environ.get("HIVEMIND_AIDER_BIN") or "").strip()
+    if candidate:
+        return candidate if Path(candidate).is_file() else ""
+    return shutil.which("aider") or ""
+
+
 def _run_aider(task: Task, work: Path, cfg: Config) -> dict:
-    if shutil.which("aider") is None:
-        return {"tokens": 0, "detail": "aider is not installed"}
+    aider_bin = _resolve_aider_bin(cfg)
+    if not aider_bin:
+        return {"tokens": 0,
+                "detail": "aider is not installed (set --aider-bin / HIVEMIND_AIDER_BIN)"}
     cmd = [
-        "aider", "--yes", "--no-git", "--no-auto-commits", "--no-check-update",
+        aider_bin, "--yes-always", "--no-git", "--no-auto-commits",
+        "--no-check-update",
         "--model", f"openai/{cfg.model}",
         "--openai-api-base", cfg.llama_url.rstrip("/") + "/v1",
         "--openai-api-key", "sk-local",
         "--message", task.prompt,
+        *_aider_files(work),
     ]
     env = {**os.environ, "OPENAI_API_KEY": "sk-local",
            "OPENAI_API_BASE": cfg.llama_url.rstrip("/") + "/v1"}
@@ -453,6 +481,9 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--task-timeout", type=int, default=None,
                         help="override every task's timeout_s (default: per task)")
+    parser.add_argument("--aider-bin", default="",
+                        help="path to aider(.exe); default PATH or "
+                             "HIVEMIND_AIDER_BIN")
     parser.add_argument("--keep-work", action="store_true")
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
@@ -478,6 +509,7 @@ def main() -> int:
         llama_url=args.llama, hivemind_url=args.hivemind,
         conditions=conditions, runs=max(1, args.runs),
         task_timeout_s=args.task_timeout, keep_work=args.keep_work,
+        aider_bin=args.aider_bin,
     )
 
     rows: list[dict] = []
@@ -485,8 +517,8 @@ def main() -> int:
     work_root = (Path(__file__).parent / ".work" / stamp) if cfg.keep_work else None
     if work_root is not None:
         work_root.mkdir(parents=True, exist_ok=True)
-    tmp = None if work_root is not None else tempfile.TemporaryDirectory(prefix="hm_bench_")
-    base = work_root if work_root is not None else Path(tmp.name)
+    tmp = None if work_root is not None else tempfile.mkdtemp(prefix="hm_bench_")
+    base = work_root if work_root is not None else Path(tmp)
     try:
         for run_idx in range(cfg.runs):
             for task in tasks:
@@ -502,7 +534,9 @@ def main() -> int:
                           f"{'PASS' if row['ok'] else 'FAIL':4s} {row['seconds']:>6.1f}s")
     finally:
         if tmp is not None:
-            tmp.cleanup()
+            # Windows: aider/servers can still hold a handle for a moment;
+            # cleanup must never kill the run after the results are written.
+            shutil.rmtree(tmp, ignore_errors=True)
 
     summary = aggregate(rows)
     print_summary(summary)
