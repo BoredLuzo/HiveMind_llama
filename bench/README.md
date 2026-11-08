@@ -50,7 +50,9 @@ python bench/runner.py --conditions aider ^
 Aider may live in its own venv (recommended, see
 `HiveMind_bench_tools/aider`); pass `--aider-bin` or set
 `HIVEMIND_AIDER_BIN`. The runner adds the workspace files to Aider's chat
-automatically.
+automatically. Agentic defaults are pinned per request (`until_finished=true`,
+`duo_planner=true`, `duo_chunking=false`), so an install's settings cannot
+silently change what a condition measures.
 
 `--runs N` repeats every task/condition N times; local models are noisy, so
 use 3–5 and compare pass rates, not single runs. Results go to

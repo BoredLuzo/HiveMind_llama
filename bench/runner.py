@@ -272,9 +272,18 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str) -> dict:
         "chat_id": uuid.uuid4().hex,
         "mode": "code_duo" if duo else "simple",
         "direct_model": model,
+        # SETTINGS-FAIRNESS: pin the agentic config to the shipped defaults,
+        # otherwise an install with until_finished=False/planner off measures
+        # a different product than a fresh install (2026-11-08 run showed a
+        # duo coder that answered once without reading a file).
+        "until_finished": True,
     }
     if duo:
         body["duo_agentic_mode"] = True
+        # The engine reads the BODY key "duo_planner" (the settings key is
+        # duo_planner_enabled; _body_or_settings maps them).
+        body["duo_planner"] = True
+        body["duo_chunking"] = False
         # Agentic duo resolves coder/critic/planner from the agent cards; the
         # server patches both the card and the flat key for these overrides.
         body["duo_coder_model"] = model

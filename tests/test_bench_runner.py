@@ -177,10 +177,16 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
     check("body: direct condition forces the same model",
           direct_body.get("direct_model") == "qwen3.5:4b-mtp",
           f" ({direct_body.get('direct_model')})")
+    check("body: agentic config is pinned",
+          direct_body.get("until_finished") is True)
     duo_body = _hivemind_body(Task("t", "p", "c"), work, duo=True,
                               model="qwen3.5:4b-mtp")
     check("body: duo condition is code_duo + agentic",
           duo_body["mode"] == "code_duo" and duo_body.get("duo_agentic_mode") is True)
+    check("body: duo pins planner on and chunking off",
+          duo_body.get("duo_planner") is True
+          and duo_body.get("duo_chunking") is False,
+          f" ({duo_body.get('duo_planner')}/{duo_body.get('duo_chunking')})")
     check("body: duo forces the same model for every role",
           all(duo_body.get(k) == "qwen3.5:4b-mtp"
               for k in ("duo_coder_model", "duo_critic_model", "duo_planner_model")),

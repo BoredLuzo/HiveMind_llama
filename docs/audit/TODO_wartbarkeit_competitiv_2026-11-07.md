@@ -335,7 +335,11 @@ Flake-Report (chronisch/partial).
   ToolLoop-Usage-Zählung (vorher ~0 Tokens für Tool-Läufe).
   *Aider 2026-11-08:* 0.86.2 in `HiveMind_bench_tools/aider` installiert und
   per `--aider-bin` verdrahtet; Smoke 1/1 (10,4 s, 833 Tokens).
-  Offen: 5–10 Tasks aus echten Repos und die Phase-2-Baseline.
+  *Ruhiger Lauf 2026-11-08 (6 Tasks, 4B):* aider 100 % (12,4 s, 970 Tok/Zelle),
+  direct 100 % (20,2 s, 22.554 Tok/Zelle), raw_files 67 %, duo 0 % (4B-Coder
+  editiert nicht; Planner läuft). Report `BENCHMARK_RUN_2026-11-08.md`;
+  Duo braucht den 35B-Lauf, bevor es bewertet wird.
+  Offen: 5–10 Tasks aus echten Repos und der 35B-/3×-Lauf.
   **Ablauf/Runbook/Zeitbudget:** `docs/audit/BENCHMARK_ROADMAP_2026-11-08.md`.
 
 - [ ] **D2 · P2 · COMPETE — Kontext-Engine.**
