@@ -21,7 +21,7 @@ einzubeziehen und die Messkette zu prüfen. Keine statistische Signifikanz.
 | `raw_files` | 12 | **67 %** | 6,0 s | 420 | No-Tool-Baseline |
 | `aider` | 12 | **100 %** | 12,4 s | 970 | günstigste und schnellste 100-%-Bedingung |
 | `hivemind_direct` | 6 | **100 %** | 20,2 s | 22.554 | ~23× Aider-Tokens, ~1,6× Zeit |
-| `hivemind_duo` | 6 | **0 %** | 8,8 s | 745 | 4B-Coder editiert nicht (Planner läuft, Coder 1 s) |
+| `hivemind_duo` | 6 | **0 %** | 8,8 s | 745 | Ursache: `duo_tool_rounds=0` in den Install-Settings; nach Pinnen 2/2 (siehe Korrektur) |
 
 ### Pro Task
 
@@ -34,6 +34,18 @@ einzubeziehen und die Messkette zu prüfen. Keine statistische Signifikanz.
 | multi_move | 0/2 | 2/2 | 1/1 | 0/1 |
 | refactor_extract | 2/2 | 2/2 | 1/1 | 0/1 |
 
+## Korrektur (2026-11-08, nach dem 21-Task-Lauf)
+
+Die 0 % bei `hivemind_duo` waren **kein 4B-Modellproblem**. Die Install-Settings
+hatten `duo_tool_rounds=0`; damit läuft der Coder ohne Tools (Text only). Nach
+dem Pinnen des ausgelieferten Defaults (`duo_tool_rounds=50`) im Benchmark-Body:
+
+- `fix_add` und `fix_off_by_one`: **2/2 PASS**, ~58 s, ~62k Tokens/Zelle.
+- Der Coder liest/schreibt jetzt, der Planner funktioniert.
+
+Die Aussage „Duo ist mit 4B nicht arbeitsfähig" ist damit **widerlegt**; sie
+war ein Messfehler. Ein vollständiger Coder-allein-Lauf gegen Aider folgt.
+
 ## Interpretation
 
 1. **Aider ist auf diesen kleinen Tasks die stärkste Bedingung**: 100 %,
@@ -44,10 +56,8 @@ einzubeziehen und die Messkette zu prüfen. Keine statistische Signifikanz.
    (Prompt-Wiederholung über Tool-Runden). Für kleine Tasks ist der
    Token-Overhead schwer zu rechtfertigen; bei größeren Tasks kann er sich
    durch Kontext-/Tool-Nutzung relativieren.
-3. **Duo ist mit 4B nicht arbeitsfähig**: Der Planner läuft (4–5 s, Plan
-   vorhanden, `read_file_calls=1`), der Coder antwortet danach in ~1 s ohne
-   Edit. 0/6, ~750 Tokens. Das ist **keine Aussage über Duo mit 35B** —
-   dafür braucht es den Qualitätslauf.
+3. **Duo war im ersten Lauf kein Modellproblem:** `duo_tool_rounds=0` schaltete
+   die Tools ab. Nach dem Pinnen läuft der 4B-Coder (2/2 im Smoke).
 4. **Raw-Files-Baseline**: 67 %, scheitert an `fix_mutable_default` und
    `multi_move` (Dateien geschrieben, Check rot). Die Diff-Baseline (`raw`)
    wäre auf denselben Tasks voraussichtlich 0 % — deshalb ist `raw_files`

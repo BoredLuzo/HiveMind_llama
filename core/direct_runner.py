@@ -73,6 +73,7 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
         from tools.definitions import _get_inline_tools as _tools_fn
         from backend.llama_client import manager as _mgr
         from core.tool_loop import ToolLoop, ToolLoopConfig
+        from core.tool_guards import repeat_guard as _repeat_guard
         import httpx as _httpx
     except Exception as _e:
         _direct_log.warning("[Direct-Tools] unavailable: %s", _e)
@@ -178,6 +179,9 @@ async def _run_direct_tools(ctx, model: str, msgs: list, tool_mode: str,
             abort_check=ctx.aborted,
             on_tool_result=_capture_tool_result,
             on_before_post=_capture_msgs,
+            # NO-PROGRESS (2026-11-08): identical repeated tool calls get one
+            # nudge instead of silently burning rounds.
+            on_after_round=_repeat_guard(),
         )
         try:
             async for _ev in _loop.run(msgs):

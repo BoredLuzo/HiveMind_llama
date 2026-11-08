@@ -150,6 +150,7 @@ class _FakeClient:
 
 
 _captured_configs = []
+_captured_after_round = []
 
 
 class _FakeLoop:
@@ -159,6 +160,7 @@ class _FakeLoop:
         self.state = None
         self._on_before_post = kw.get("on_before_post")
         _captured_configs.append(self.config)
+        _captured_after_round.append(kw.get("on_after_round"))
     async def run(self, msgs):
         if self._on_before_post:
             await self._on_before_post(msgs, 0, None)
@@ -204,6 +206,8 @@ try:
     check("tool loop returns token events",
           any(e.get("type") == "token" for e in _events))
     check("tool loop returns final msgs", _res.final_msgs is not None)
+    check("direct tools wire the no-progress guard",
+          callable(_captured_after_round[-1]))
     check("ensure_loaded called with direct model+ctx",
           _fake_mgr.loaded == ("m:9b", 8192), f" ({_fake_mgr.loaded!r})")
     check("direct chat does not require tool calls",

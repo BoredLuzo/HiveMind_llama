@@ -187,6 +187,13 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           duo_body.get("duo_planner") is True
           and duo_body.get("duo_chunking") is False,
           f" ({duo_body.get('duo_planner')}/{duo_body.get('duo_chunking')})")
+    check("body: duo pins tool rounds (install 0 would disable tools)",
+          duo_body.get("duo_tool_rounds") == 50,
+          f" ({duo_body.get('duo_tool_rounds')})")
+    duo_solo = _hivemind_body(Task("t", "p", "c"), work, duo=True,
+                              model="qwen3.5:4b-mtp", duo_planner=False)
+    check("body: coder-alone mode turns the planner off",
+          duo_solo.get("duo_planner") is False)
     check("body: duo forces the same model for every role",
           all(duo_body.get(k) == "qwen3.5:4b-mtp"
               for k in ("duo_coder_model", "duo_critic_model", "duo_planner_model")),

@@ -339,12 +339,19 @@ Flake-Report (chronisch/partial).
   direct 100 % (20,2 s, 22.554 Tok/Zelle), raw_files 67 %, duo 0 % (4B-Coder
   editiert nicht; Planner läuft). Report `BENCHMARK_RUN_2026-11-08.md`;
   Duo braucht den 35B-Lauf, bevor es bewertet wird.
+  *Korrektur 2026-11-08:* Die 0 % waren `duo_tool_rounds=0` (Tools aus), kein
+  4B-Limit. Nach Pinnen auf 50: 2/2 Smoke, ~58 s. Coder-allein-Lauf gegen
+  Aider folgt.
   *21-Task-Lauf 2026-11-08 (3 Läufe, 252 Zellen):* aider 90,5 % [81–96],
   direct 92,1 % [83–97], **McNemar p=1,0** → kein messbarer
   Qualitätsunterschied; direct kostet ~22× Tokens (21.228 vs. 946/Zelle) und
   1,6× Zeit. raw_files 71,4 %, raw 0 %. Kategorien komplementär (direct
   Feature 100 %, aider Multi-File 100 %). Report
   `BENCHMARK_RUN_21TASKS_2026-11-08.md`.
+  *Coder-allein 2026-11-08 (21 Tasks, 1 Lauf):* 95,2 % [77–99], 58,7 s,
+  108.378 Tokens/Zelle. Gleiche 20/21 Tasks wie Direct, McNemar p=1,0;
+  ~114× Aider-Tokens, ~5× Direct. Ursache der früheren 0 % war
+  `duo_tool_rounds=0` (Tools aus), nicht das 4B-Modell.
   Offen: 5–10 Tasks aus echten Repos und der 35B-/Duo-Lauf.
   **Ablauf/Runbook/Zeitbudget:** `docs/audit/BENCHMARK_ROADMAP_2026-11-08.md`.
 

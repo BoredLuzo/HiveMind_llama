@@ -61,9 +61,12 @@ Modell-Fairness wurden dabei gefixt.
   entfernt.
 
 ### Phase 3 — HiveMind-Bedingungen (1 Nacht)
-- **Status 2026-11-08:** `hivemind_direct` 3× erledigt (63 Zellen, 92,1 %);
-  `hivemind_duo` bewusst ausgesetzt, weil der 4B-Coder nicht editiert —
-  braucht den 35B-Lauf.
+- **Status 2026-11-08:** `hivemind_direct` 3× erledigt (63 Zellen, 92,1 %).
+  `hivemind_duo` zunächst 0 %, Ursache war `duo_tool_rounds=0` in den
+  Install-Settings (Tools aus). Nach dem Pinnen (50) läuft der 4B-Coder:
+  Coder-allein 21 Tasks/1 Lauf = 95,2 % [77–99], 58,7 s, 108.378 Tokens/Zelle
+  (gleiche 20/21 Tasks wie Direct, p=1,0). Der Coder ist der teuerste Pfad;
+  echte Repo-Tasks müssen den Mehrwert zeigen.
 - `hivemind_direct` und `hivemind_duo`, je 3 Läufe = 126 Zellen.
 - Messen: Pass-Rate, Delta vs. `raw`, Median-Dauer, Tokens.
 - **Gate:** `hivemind_direct` > `raw` auf dem Gesamtkorpus, sonst zuerst

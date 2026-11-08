@@ -68,6 +68,8 @@ class Config:
     keep_work: bool = False
     # Optional path to aider (a separate venv is fine; not on PATH).
     aider_bin: str = ""
+    # Coder-alone mode for the duo condition (planner off, same model).
+    duo_planner: bool = True
 
 
 def load_tasks(tasks_dir: Path) -> list[Task]:
@@ -254,7 +256,8 @@ async def _run_raw(task: Task, work: Path, cfg: Config, *,
             "tokens": int(usage.get("total_tokens") or 0)}
 
 
-def _hivemind_body(task: Task, work: Path, duo: bool, model: str) -> dict:
+def _hivemind_body(task: Task, work: Path, duo: bool, model: str,
+                   *, duo_planner: bool = True) -> dict:
     """Request body for the two HiveMind conditions.
 
     MODE-FIX (deep audit 2026-11-07): "chat" is NOT a mode the engine knows
@@ -282,8 +285,12 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str) -> dict:
         body["duo_agentic_mode"] = True
         # The engine reads the BODY key "duo_planner" (the settings key is
         # duo_planner_enabled; _body_or_settings maps them).
-        body["duo_planner"] = True
+        body["duo_planner"] = bool(duo_planner)
         body["duo_chunking"] = False
+        # TOOL-ROUNDS (2026-11-08 discovery): an install with
+        # duo_tool_rounds=0 runs the coder WITHOUT tools. Pin the shipped
+        # default (50); otherwise "duo" measures a text-only coder.
+        body["duo_tool_rounds"] = 50
         # Agentic duo resolves coder/critic/planner from the agent cards; the
         # server patches both the card and the flat key for these overrides.
         body["duo_coder_model"] = model
@@ -296,7 +303,8 @@ def _hivemind_body(task: Task, work: Path, duo: bool, model: str) -> dict:
 
 
 async def _run_hivemind(task: Task, work: Path, cfg: Config, duo: bool) -> dict:
-    body = _hivemind_body(task, work, duo, cfg.model)
+    body = _hivemind_body(task, work, duo, cfg.model,
+                          duo_planner=cfg.duo_planner)
     done: dict = {}
     error = ""
     usage_prompt = usage_completion = 0
@@ -493,6 +501,8 @@ def main() -> int:
     parser.add_argument("--aider-bin", default="",
                         help="path to aider(.exe); default PATH or "
                              "HIVEMIND_AIDER_BIN")
+    parser.add_argument("--no-duo-planner", action="store_true",
+                        help="coder-alone mode: duo runs with planner off")
     parser.add_argument("--keep-work", action="store_true")
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
@@ -519,6 +529,7 @@ def main() -> int:
         conditions=conditions, runs=max(1, args.runs),
         task_timeout_s=args.task_timeout, keep_work=args.keep_work,
         aider_bin=args.aider_bin,
+        duo_planner=not args.no_duo_planner,
     )
 
     rows: list[dict] = []
