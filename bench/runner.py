@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
 import json
 import os
 import re
@@ -70,6 +71,67 @@ class Config:
     aider_bin: str = ""
     # Coder-alone mode for the duo condition (planner off, same model).
     duo_planner: bool = True
+
+
+def _file_map(root: Path | None) -> dict[str, str]:
+    """Relative path -> text for a workspace (skip caches/binary-sized files)."""
+    out: dict[str, str] = {}
+    if root is None or not Path(root).is_dir():
+        return out
+    for path in sorted(Path(root).rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root)
+        if any(part in ("__pycache__", ".git", ".pytest_cache") for part in rel.parts):
+            continue
+        if path.name == "model.patch":
+            continue
+        try:
+            if path.stat().st_size > 1_000_000:
+                continue
+            out[rel.as_posix()] = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+    return out
+
+
+def diff_stats(repo: Path | None, work: Path) -> dict:
+    """Code-churn metrics: changed files/lines, new and deleted files.
+
+    Quality is more than a green test: a full-file rewrite that passes is not
+    the same as a surgical edit. Recorded per cell so the next run can compare
+    HiveMind and Aider on churn as well as pass rate.
+    """
+    before = _file_map(repo)
+    after = _file_map(work)
+    changed: list[str] = []
+    new_files: list[str] = []
+    deleted: list[str] = []
+    added = removed = 0
+    for rel in sorted(set(before) | set(after)):
+        old = before.get(rel, "")
+        new = after.get(rel, "")
+        if rel not in before:
+            new_files.append(rel)
+        if rel not in after:
+            deleted.append(rel)
+        if old == new:
+            continue
+        changed.append(rel)
+        for line in difflib.unified_diff(old.splitlines(), new.splitlines(),
+                                         lineterm="", n=0):
+            if line.startswith("+") and not line.startswith("+++"):
+                added += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                removed += 1
+    return {
+        "files_changed": len(changed),
+        "changed_files": changed,
+        "lines_added": added,
+        "lines_removed": removed,
+        "new_files": new_files,
+        "deleted_files": deleted,
+    }
 
 
 def load_tasks(tasks_dir: Path) -> list[Task]:
@@ -423,6 +485,8 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
     except (httpx.HTTPError, OSError, ValueError) as exc:
         extra = {"tokens": 0, "detail": f"{type(exc).__name__}: {exc}"[:800]}
     seconds = round(time.time() - started, 1)
+    # CHURN before hidden tests are installed (agent output only).
+    _churn = diff_stats(task.repo, work)
     ok, check_out = run_check(task, work, cfg.task_timeout_s)
     return {
         "task": task.id,
@@ -432,6 +496,7 @@ async def _one_run(cond: str, task: Task, cfg: Config, base: Path) -> dict:
         "tokens": int(extra.get("tokens") or 0),
         "stop_reason": extra.get("stop_reason", ""),
         "detail": extra.get("detail", "") or check_out,
+        **_churn,
     }
 
 

@@ -59,6 +59,10 @@ tests overwrite same-named agent files immediately before the check.
 - Paired majority verdict per task (more than half of its runs) and exact
   McNemar test for A/B comparisons.
 - Median wall time and tokens per cell.
+- **Code churn:** `files_changed`, `lines_added`, `lines_removed`,
+  `new_files`, `deleted_files` per cell (agent output before hidden tests).
+  A green test with a full-file rewrite is not the same quality as a
+  surgical edit; the next run can compare churn.
 - **Token caveat:** `tokens` is the sum of `usage` prompt+completion across
   every tool round, not unique content and not a local billing unit. Aider's
   number is its own "sent/received" report. See

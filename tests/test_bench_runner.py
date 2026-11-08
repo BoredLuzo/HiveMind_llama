@@ -20,7 +20,7 @@ from bench.runner import (  # noqa: E402
     Config, DEFAULT_CONDITIONS, Task, _aider_files, _extract_patch,
     _hivemind_body, _parse_file_blocks, _parse_token_count, _persist,
     _resolve_aider_bin, _run_aider, _safe_rel_path, aggregate,
-    apply_full_files, apply_patch, load_tasks, prepare_workspace,
+    apply_full_files, apply_patch, diff_stats, load_tasks, prepare_workspace,
     print_summary, run_check,
 )
 from tests._harness import Harness  # noqa: E402
@@ -144,6 +144,27 @@ with tempfile.TemporaryDirectory(prefix="hm_bench_t_") as td:
           not (root / "evil.py").exists())
     check("default conditions keep raw_files opt-in",
           "raw" in DEFAULT_CONDITIONS and "raw_files" not in DEFAULT_CONDITIONS)
+
+    # ── code-churn metrics ─────────────────────────────────────────────────
+    _base = root / "churn_repo"
+    _changed = root / "churn_work"
+    _base.mkdir()
+    _changed.mkdir()
+    (_base / "a.py").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    (_base / "b.py").write_text("old\n", encoding="utf-8")
+    (_changed / "a.py").write_text("one\nTWO\nthree\nfour\n", encoding="utf-8")
+    (_changed / "new.py").write_text("new\n", encoding="utf-8")
+    (_changed / "model.patch").write_text("ignored\n", encoding="utf-8")
+    _churn = diff_stats(_base, _changed)
+    check("churn: changed files are listed",
+          _churn["changed_files"] == ["a.py", "b.py", "new.py"], f" ({_churn})")
+    check("churn: new and deleted files",
+          _churn["new_files"] == ["new.py"] and _churn["deleted_files"] == ["b.py"],
+          f" ({_churn})")
+    check("churn: added/removed lines",
+          _churn["lines_added"] == 3 and _churn["lines_removed"] == 2,
+          f" ({_churn['lines_added']}/{_churn['lines_removed']})")
+    check("churn: model.patch is ignored", "model.patch" not in _churn["changed_files"])
 
     # ── aider discovery ────────────────────────────────────────────────────
     _cfg_bad = Config(tasks_dir=root, out=root / "x.json", model="m",
