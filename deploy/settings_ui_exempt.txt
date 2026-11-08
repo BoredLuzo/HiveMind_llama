@@ -125,6 +125,8 @@ mcp_client_max_calls_per_run
 
 # LSP security: repo .vscode/settings.json forwarding is opt-in.
 lsp_forward_workspace_settings
+# LSP auto-warm on write (settings.json only; default on, silent on failure).
+lsp_auto_warm_on_write
 
 # Automations scheduler kill switch (settings.json only; jobs live in
 # automations.json - a UI control would suggest they are editable here).

@@ -13,7 +13,10 @@ answer instead of `max_tool_rounds`.
 Tools: the coder now defaults to `duo_core` (17 read/edit/run/test tools +
 LSP diagnostics, ~2.8k schema instead of ~5k); `duo_coder_tool_tier=full`
 opts into git/web/MCP/browser/LSP extras. Direct gains a `research` tier
-(web + read/search, no write/exec) and defaults to `readonly`.
+(web + read/search, no write/exec) and defaults to `readonly`. Writes now
+warm the language server in the background (`lsp_auto_warm_on_write`) and
+attach diagnostics autonomously; the 3 s wait is bounded and failures stay
+silent.
 
 Runtime: slot eviction kills off the event loop (`_evict_lru_async`), the
 Windows process-count probe runs in a thread, and `tzdata` moved from the

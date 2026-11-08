@@ -99,6 +99,8 @@ class FakeManager:
 
     async def start_language(self, language_id):
         self.calls.append(("start_language", language_id))
+        if self.start_ok:
+            self.started = True
         return self.start_ok
 
     async def diagnostics(self, path, wait_s=2.0, **kwargs):
@@ -550,9 +552,10 @@ def _auto_key(ws):
 
 
 def _auto_flow(ws, path, *, enabled=True, started=True, published=True,
-               diag=None):
+               diag=None, warm=True):
     async def _go():
-        set_settings(lsp_enabled=enabled, lsp_auto_diagnostics=True)
+        set_settings(lsp_enabled=enabled, lsp_auto_diagnostics=True,
+                     lsp_auto_warm_on_write=warm)
         LH._AUTO_DIAG_CACHE.clear()
         fake = FakeManager(ws)
         fake.started = started
@@ -574,8 +577,12 @@ check("12a auto diagnostics attach a compact block",
 _out = _auto_flow(_auto_ws, "sample.py", enabled=False, diag=DIAGS)
 check("12b lsp_enabled=false disables automatic diagnostics", _out == "")
 _out = _auto_flow(_auto_ws, "sample.py", started=False, diag=DIAGS)
-check("12c a cold server is not started on the write path",
-      _out == "")
+check("12c a cold server is warmed from the write path",
+      _out.startswith("[LSP auto-diagnostics") and "[ERROR]" in _out,
+      f"({_out[:100]})")
+_out = _auto_flow(_auto_ws, "sample.py", started=False, diag=DIAGS,
+                  warm=False)
+check("12c2 lsp_auto_warm_on_write=false keeps writes cold", _out == "")
 _out = _auto_flow(_auto_ws, "sample.py", published=False, diag=DIAGS)
 check("12d no publication yet -> no misleading auto block", _out == "")
 _out = _auto_flow(_auto_ws, "sample.py", diag=[DIAGS[0]])

@@ -5,7 +5,10 @@ LSP-TOOLS (2026-10-31): one broad, generic surface over whatever language
 servers the user has installed. There are NO per-language on/off flags:
   - settings["lsp_enabled"] is the only switch (False -> LSP_DISABLED);
   - a server process starts LAZILY on the first lsp_* tool call for its
-    files - never at boot, and lsp_status never starts one at all;
+    files - never at boot, and lsp_status never starts one at all; with
+    lsp_auto_warm_on_write (default on) a successful write/edit also warms
+    the language server in the background for autonomous post-write
+    diagnostics;
   - a language without a found server command answers LSP_UNAVAILABLE with
     an install hint instead of silently degrading.
 
@@ -43,6 +46,7 @@ _LSP_FALLBACKS: dict = {
     "lsp_idle_timeout_s": 600,
     "lsp_diagnostics_wait_s": 5.0,
     "lsp_auto_diagnostics": True,
+    "lsp_auto_warm_on_write": True,
     "lsp_max_diagnostics": 50,
     "lsp_max_results": 50,
 }
@@ -551,6 +555,29 @@ def _truthy(value, default: bool = True) -> bool:
 # of the same write does not pay the wait twice.
 _AUTO_DIAG_CACHE: dict[str, tuple[int, int]] = {}
 
+# AUTO-WARM (2026-11-08): post-write diagnostics should not depend on the
+# model calling lsp_diagnostics first. One start task per (manager, language);
+# the write waits briefly for it, then leaves it running in the background.
+_LSP_WARM_TASKS: dict[tuple[int, str], asyncio.Task] = {}
+
+
+def _warm_lsp_async(mgr, language: str) -> asyncio.Task:
+    """Start (or join) a language-server warm-up without blocking the loop."""
+    key = (id(mgr), language)
+    task = _LSP_WARM_TASKS.get(key)
+    if task is None or task.done():
+        task = asyncio.create_task(mgr.start_language(language))
+        _LSP_WARM_TASKS[key] = task
+
+        def _done(t, k=key):
+            _LSP_WARM_TASKS.pop(k, None)
+            try:
+                t.result()
+            except (OSError, RuntimeError, ValueError, _lsp.LspError):
+                pass
+        task.add_done_callback(_done)
+    return task
+
 
 async def auto_diagnostics_block(workspace: Path, path: str,
                                  *, max_lines: int = 8) -> str:
@@ -558,9 +585,9 @@ async def auto_diagnostics_block(workspace: Path, path: str,
 
     Called from the shared write dispatcher. It is deliberately cheap:
     - only when lsp_enabled and lsp_auto_diagnostics are on;
-    - only when a server for that language is already running; a write
-      never starts a language server (that would surprise the run and leak
-      a process into tests/headless flows);
+    - a cold server is warmed in the background (lsp_auto_warm_on_write,
+      default on); the write waits at most 3 s for it, then the next write
+      gets the diagnostics;
     - short wait (max 1.5s), hard line cap, every failure is silent.
     """
     if not _lsp_enabled():
@@ -582,15 +609,20 @@ async def auto_diagnostics_block(workspace: Path, path: str,
     key = str(p).lower() if os.name == "nt" else str(p)
     if _AUTO_DIAG_CACHE.get(key) == sig:
         return ""
-    loop = asyncio.get_running_loop()
-    try:
-        ws_key = str(Path(workspace).resolve())
-    except OSError:
-        ws_key = str(workspace)
-    mgr = _MANAGERS.get((ws_key.lower() if os.name == "nt" else ws_key,
-                         id(loop)))
-    if mgr is None or not mgr.is_started(language):
-        return ""
+    mgr = _get_manager(workspace)
+    if not mgr.is_started(language):
+        # AUTONOMOUS-WARM (2026-11-08): start the server from the write path.
+        # Wait at most 3 s; a slower server keeps warming in the background
+        # and the next write gets the diagnostics.
+        if not _truthy(settings.get("lsp_auto_warm_on_write"), True):
+            return ""
+        _warm = _warm_lsp_async(mgr, language)
+        try:
+            await asyncio.wait_for(asyncio.shield(_warm), timeout=3.0)
+        except (asyncio.TimeoutError, _lsp.LspError, OSError, RuntimeError):
+            pass
+        if not mgr.is_started(language):
+            return ""
     wait_s = min(_coerce_float(settings.get("lsp_diagnostics_wait_s"), 5.0),
                  1.5)
     try:

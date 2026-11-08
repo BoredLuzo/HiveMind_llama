@@ -4,7 +4,7 @@ Generated from `settings.py` + `settings_defaults.py` (`DEFAULT_SETTINGS`) by
 `python deploy/gen_settings_docs.py` - do not edit by hand; edit the default (and
 its comment) in either file, then re-run the generator.
 
-**278 settings keys.**
+**279 settings keys.**
 
 | Key | Type | Default | UI | Note |
 |---|---|---|---|---|
@@ -183,7 +183,8 @@ its comment) in either file, then re-run the generator.
 | `llama_gpu_layers_auto` | bool | `False` | - | Auto-fit : omit --n-gpu-layers so llama.cpp fits the layers to the free VRAM itself — it refuses while the flag pins 99. Default keeps the explicit full-offload behavior. |
 | `llama_mlock` | bool | `True` | yes |  |
 | `llama_ubatch_size` | int | `256` | yes |  |
-| `lsp_auto_diagnostics` | bool | `True` | yes | Attach a compact diagnostics block to a successful write/edit when a server for that language is already running. A write never starts a cold server (an explicit lsp_* call does); failures are silent. |
+| `lsp_auto_diagnostics` | bool | `True` | yes | Attach a compact diagnostics block to a successful write/edit. A warm server is used directly; a cold one is started in the background (lsp_auto_warm_on_write) and the write waits at most 3 s for it. Failures are silent - a broken/missing server never fails a write. |
+| `lsp_auto_warm_on_write` | bool | `True` | - |  |
 | `lsp_client_timeout_s` | int | `30` | - | Per-request timeout in seconds for one LSP request; also caps the initialize handshake. A hung server is killed and lazily restarted on the next call. |
 | `lsp_diagnostics_wait_s` | float | `5.0` | yes | How long lsp_diagnostics waits for the server's diagnostics publication after open/change before returning what it has. |
 | `lsp_enabled` | bool | `True` | yes | lsp_enabled is the ONLY switch - there are deliberately no per-language on/off flags. True = the lsp_* tools exist; a language server process still starts LAZILY on the first tool call, never at boot. A language without a found server command answers LSP_UNAVAILABLE (with an… |
