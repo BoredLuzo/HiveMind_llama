@@ -113,8 +113,26 @@ detect_llama_url() {
 serve() {
   [ -x "$PY" ] || die "run setup first"
   if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
-    log "engine already up on :$PORT"
+    log "engine already up on :$PORT (restart it for fit/ubatch changes)"
   else
+    # Benchmark profile for the 80 GB A100: full GPU offload, no CPU experts,
+    # CUDA-friendly prefill chunk. Written before the engine starts because
+    # LLAMA_FIT / LLAMA_UBATCH are read at import time.
+    ( cd "$HM_DIR" && "$PY" - <<'PY'
+import json
+from pathlib import Path
+p = Path("settings.json")
+d = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+d.update({
+    "moe_cpu_experts": {"qwen3.6:35b-a3b": 0},
+    "llama_fit": False,
+    "llama_gpu_layers_auto": False,
+    "duo_ubatch": 1024,
+    "llama_ubatch_size": 1024,
+})
+p.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+PY
+    )
     log "starting HiveMind engine on 127.0.0.1:$PORT (log: $LOG)"
     _cudart_lib="$(find "$HM_DIR/llama" -name 'libcudart.so*' -print -quit 2>/dev/null || true)"
     [ -n "$_cudart_lib" ] && export LD_LIBRARY_PATH="$(dirname "$_cudart_lib"):${LD_LIBRARY_PATH:-}"
@@ -128,12 +146,13 @@ serve() {
     done
     curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 || { tail -40 "$LOG" >&2 || true; die "engine did not become healthy"; }
   fi
-  # A100: keep every MoE expert on the GPU (the shipped profile is tuned for 8 GB).
   curl -fsS -X POST "http://127.0.0.1:$PORT/settings" -H "Content-Type: application/json" \
-    -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b":0}}' >/dev/null \ || \n         log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
+    -d '{"moe_cpu_experts":{"qwen3.6:35b-a3b":0}}' >/dev/null \
+    || log "WARN: moe_cpu_experts override failed - 35B may run with CPU experts"
   log "preloading $HM_MODEL (ctx 32768)"
   curl -fsS -X POST "http://127.0.0.1:$PORT/vram/load" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":32768,\"keep_alive\":\"-1\"}" >/dev/null \ || \n         log "WARN: /vram/load failed; the first HiveMind request will load the model"
+    -d "{\"model\":\"$HM_MODEL\",\"num_ctx\":32768,\"keep_alive\":\"-1\"}" >/dev/null \
+    || log "WARN: /vram/load failed; the first HiveMind request will load the model"
   for _ in $(seq 1 180); do
     if curl -fsS "http://127.0.0.1:8101/health" >/dev/null 2>&1 || curl -fsS "http://127.0.0.1:8102/health" >/dev/null 2>&1; then break; fi
     sleep 2
